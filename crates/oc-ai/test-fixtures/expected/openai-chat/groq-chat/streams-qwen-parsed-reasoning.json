@@ -4,6 +4,30 @@
  "protocol": "groq-chat",
  "provider": "groq",
  "providerMetadataKey": "groq",
+ "request": {
+  "id": null,
+  "model": {
+   "id": "qwen/qwen3.6-27b",
+   "provider": "groq"
+  },
+  "system": [],
+  "messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "parity replay"
+     }
+    ]
+   }
+  ],
+  "tools": [],
+  "toolChoice": null,
+  "generation": {},
+  "providerOptions": {},
+  "promptCache": null
+ },
  "interactions": [
   {
    "events": [
@@ -4829,7 +4853,22 @@
       "totalTokens": 515
      }
     }
-   ]
+   ],
+   "body": {
+    "model": "qwen/qwen3.6-27b",
+    "messages": [
+     {
+      "role": "user",
+      "content": "parity replay"
+     }
+    ],
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    },
+    "reasoning_format": "parsed"
+   },
+   "bodyText": "{\"model\":\"qwen/qwen3.6-27b\",\"messages\":[{\"role\":\"user\",\"content\":\"parity replay\"}],\"stream\":true,\"stream_options\":{\"include_usage\":true},\"reasoning_format\":\"parsed\"}"
   }
  ]
 }

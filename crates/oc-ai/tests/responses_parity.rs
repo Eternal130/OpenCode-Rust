@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde_json::{json, Map, Value};
+use serde_json::Value;
 
 use oc_ai::protocols::open_responses::{
     open_responses_route, OpenResponsesProtocol, OpenResponsesRouteSpec, ParserState,
@@ -24,11 +24,7 @@ use oc_ai::protocols::openai_responses::{
 };
 use oc_ai::route::framing::{Framing, FramingDecoder};
 use oc_ai::route::transport::FailingTransport;
-use oc_ai::schema::media::Asset;
-use oc_ai::schema::{
-    AiError, AiErrorReason, FinishReason, FinishReasonDetails, LLMEvent, LLMRequest,
-    ToolResultValue, Usage,
-};
+use oc_ai::schema::{AiError, AiErrorReason, LLMEvent, LLMRequest};
 
 fn expected_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/expected")
@@ -240,303 +236,13 @@ fn recorded_body(prefix: &str, scenario: &str, interaction: u64) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Event wire serialization (TS LLMEvent field names: camelCase, undefined
-// dropped) — the parity counterpart of `JSON.stringify(event)` in the dump.
+// Event wire serialization — native serde (the LLMEvent tree serializes in
+// the TS contract shape: camelCase fields, None dropped), the parity
+// counterpart of `JSON.stringify(event)` in the dump.
 // ---------------------------------------------------------------------------
 
-fn metadata_wire(metadata: Option<&oc_ai::schema::ProviderMetadata>) -> Option<Value> {
-    metadata.map(|metadata| {
-        Value::Object(
-            metadata
-                .iter()
-                .map(|(key, value)| {
-                    (
-                        key.clone(),
-                        Value::Object(
-                            value
-                                .iter()
-                                .map(|(field, item)| (field.clone(), item.clone()))
-                                .collect(),
-                        ),
-                    )
-                })
-                .collect(),
-        )
-    })
-}
-
-fn usage_wire(usage: Option<&Usage>) -> Option<Value> {
-    usage.map(|usage| {
-        let mut object = Map::new();
-        if let Some(value) = usage.context_tokens {
-            object.insert("contextTokens".into(), json!(value));
-        }
-        if let Some(value) = usage.input_tokens {
-            object.insert("inputTokens".into(), json!(value));
-        }
-        if let Some(value) = usage.output_tokens {
-            object.insert("outputTokens".into(), json!(value));
-        }
-        if let Some(value) = usage.non_cached_input_tokens {
-            object.insert("nonCachedInputTokens".into(), json!(value));
-        }
-        if let Some(value) = usage.cache_read_input_tokens {
-            object.insert("cacheReadInputTokens".into(), json!(value));
-        }
-        if let Some(value) = usage.cache_write_input_tokens {
-            object.insert("cacheWriteInputTokens".into(), json!(value));
-        }
-        if let Some(value) = usage.reasoning_tokens {
-            object.insert("reasoningTokens".into(), json!(value));
-        }
-        if let Some(value) = usage.total_tokens {
-            object.insert("totalTokens".into(), json!(value));
-        }
-        if let Some(value) = metadata_wire(usage.provider_metadata.as_ref()) {
-            object.insert("providerMetadata".into(), value);
-        }
-        Value::Object(object)
-    })
-}
-
-fn reason_wire(reason: &FinishReasonDetails) -> Value {
-    let mut object = Map::new();
-    object.insert(
-        "normalized".into(),
-        json!(match reason.normalized {
-            FinishReason::Stop => "stop",
-            FinishReason::Length => "length",
-            FinishReason::ToolCalls => "tool-calls",
-            FinishReason::ContentFilter => "content-filter",
-            FinishReason::Error => "error",
-            FinishReason::Unknown => "unknown",
-        }),
-    );
-    if let Some(raw) = &reason.raw {
-        object.insert("raw".into(), json!(raw));
-    }
-    if let Some(category) = &reason.category {
-        object.insert("category".into(), json!(category));
-    }
-    if let Some(explanation) = &reason.explanation {
-        object.insert("explanation".into(), json!(explanation));
-    }
-    Value::Object(object)
-}
-
-fn result_wire(result: &ToolResultValue) -> Value {
-    match result {
-        ToolResultValue::Json { value } => json!({ "type": "json", "value": value }),
-        ToolResultValue::Text { value } => json!({ "type": "text", "value": value }),
-        ToolResultValue::Error { value } => json!({ "type": "error", "value": value }),
-        ToolResultValue::Content { value } => {
-            json!({ "type": "content", "value": value.0 })
-        }
-    }
-}
-
-#[allow(clippy::too_many_lines)] // one arm per event variant, mirroring the TS union
 fn event_wire(event: &LLMEvent) -> Value {
-    let mut object = Map::new();
-    object.insert("type".into(), json!(event.kind()));
-    match event {
-        LLMEvent::StepStart { index } => {
-            object.insert("index".into(), json!(index));
-        }
-        LLMEvent::TextStart { id, provider_metadata, .. }
-        | LLMEvent::ReasoningStart { id, provider_metadata, .. } => {
-            object.insert("id".into(), json!(id));
-            if let Some(value) = metadata_wire(provider_metadata.as_ref()) {
-                object.insert("providerMetadata".into(), value);
-            }
-        }
-        LLMEvent::TextDelta { id, text, provider_metadata, .. }
-        | LLMEvent::ReasoningDelta { id, text, provider_metadata, .. } => {
-            object.insert("id".into(), json!(id));
-            object.insert("text".into(), json!(text));
-            if let Some(value) = metadata_wire(provider_metadata.as_ref()) {
-                object.insert("providerMetadata".into(), value);
-            }
-        }
-        LLMEvent::TextEnd { id, text, provider_metadata, .. }
-        | LLMEvent::ReasoningEnd { id, text, provider_metadata, .. } => {
-            object.insert("id".into(), json!(id));
-            if let Some(text) = text {
-                object.insert("text".into(), json!(text));
-            }
-            if let Some(value) = metadata_wire(provider_metadata.as_ref()) {
-                object.insert("providerMetadata".into(), value);
-            }
-        }
-        LLMEvent::ToolInputStart {
-            id,
-            name,
-            namespace,
-            provider_executed,
-            provider_metadata,
-            ..
-        } => {
-            object.insert("id".into(), json!(id));
-            object.insert("name".into(), json!(name));
-            if let Some(namespace) = namespace {
-                object.insert("namespace".into(), json!(namespace));
-            }
-            if let Some(value) = provider_executed {
-                object.insert("providerExecuted".into(), json!(value));
-            }
-            if let Some(value) = metadata_wire(provider_metadata.as_ref()) {
-                object.insert("providerMetadata".into(), value);
-            }
-        }
-        LLMEvent::ToolInputDelta { id, name, namespace, text, input } => {
-            object.insert("id".into(), json!(id));
-            object.insert("name".into(), json!(name));
-            if let Some(namespace) = namespace {
-                object.insert("namespace".into(), json!(namespace));
-            }
-            object.insert("text".into(), json!(text));
-            if let Some(input) = input {
-                object.insert("input".into(), json!(input));
-            }
-        }
-        LLMEvent::ToolInputEnd { id, name, namespace, provider_metadata, .. } => {
-            object.insert("id".into(), json!(id));
-            object.insert("name".into(), json!(name));
-            if let Some(namespace) = namespace {
-                object.insert("namespace".into(), json!(namespace));
-            }
-            if let Some(value) = metadata_wire(provider_metadata.as_ref()) {
-                object.insert("providerMetadata".into(), value);
-            }
-        }
-        LLMEvent::ToolInputError { id, name, namespace, raw } => {
-            object.insert("id".into(), json!(id));
-            object.insert("name".into(), json!(name));
-            if let Some(namespace) = namespace {
-                object.insert("namespace".into(), json!(namespace));
-            }
-            object.insert("raw".into(), json!(raw));
-        }
-        LLMEvent::ToolCall {
-            id,
-            name,
-            namespace,
-            input,
-            provider_executed,
-            provider_metadata,
-            ..
-        } => {
-            object.insert("id".into(), json!(id));
-            object.insert("name".into(), json!(name));
-            if let Some(namespace) = namespace {
-                object.insert("namespace".into(), json!(namespace));
-            }
-            object.insert("input".into(), json!(input));
-            if let Some(value) = provider_executed {
-                object.insert("providerExecuted".into(), json!(value));
-            }
-            if let Some(value) = metadata_wire(provider_metadata.as_ref()) {
-                object.insert("providerMetadata".into(), value);
-            }
-        }
-        LLMEvent::ToolResult {
-            id,
-            name,
-            namespace,
-            result,
-            output,
-            provider_executed,
-            provider_metadata,
-            ..
-        } => {
-            object.insert("id".into(), json!(id));
-            object.insert("name".into(), json!(name));
-            if let Some(namespace) = namespace {
-                object.insert("namespace".into(), json!(namespace));
-            }
-            object.insert("result".into(), result_wire(result));
-            if let Some(output) = output {
-                object.insert(
-                    "output".into(),
-                    json!({ "structured": output.structured, "content": output.content }),
-                );
-            }
-            if let Some(value) = provider_executed {
-                object.insert("providerExecuted".into(), json!(value));
-            }
-            if let Some(value) = metadata_wire(provider_metadata.as_ref()) {
-                object.insert("providerMetadata".into(), value);
-            }
-        }
-        LLMEvent::ToolError { id, name, namespace, message, error, provider_metadata } => {
-            object.insert("id".into(), json!(id));
-            object.insert("name".into(), json!(name));
-            if let Some(namespace) = namespace {
-                object.insert("namespace".into(), json!(namespace));
-            }
-            object.insert("message".into(), json!(message));
-            if let Some(error) = error {
-                object.insert("error".into(), json!(error));
-            }
-            if let Some(value) = metadata_wire(provider_metadata.as_ref()) {
-                object.insert("providerMetadata".into(), value);
-            }
-        }
-        LLMEvent::Media { media, provider_metadata, .. } => {
-            object.insert("media".into(), asset_wire(media));
-            if let Some(value) = metadata_wire(provider_metadata.as_ref()) {
-                object.insert("providerMetadata".into(), value);
-            }
-        }
-        LLMEvent::StepFinish { index, reason, usage, provider_metadata } => {
-            object.insert("index".into(), json!(index));
-            object.insert("reason".into(), reason_wire(reason));
-            if let Some(value) = usage_wire(usage.as_ref()) {
-                object.insert("usage".into(), value);
-            }
-            if let Some(value) = metadata_wire(provider_metadata.as_ref()) {
-                object.insert("providerMetadata".into(), value);
-            }
-        }
-        LLMEvent::Finish { reason, usage, provider_metadata } => {
-            object.insert("reason".into(), reason_wire(reason));
-            if let Some(value) = usage_wire(usage.as_ref()) {
-                object.insert("usage".into(), value);
-            }
-            if let Some(value) = metadata_wire(provider_metadata.as_ref()) {
-                object.insert("providerMetadata".into(), value);
-            }
-        }
-        LLMEvent::ProviderError { message, classification, provider_metadata } => {
-            object.insert("message".into(), json!(message));
-            if let Some(classification) = classification {
-                object.insert("classification".into(), json!(classification));
-            }
-            if let Some(value) = metadata_wire(provider_metadata.as_ref()) {
-                object.insert("providerMetadata".into(), value);
-            }
-        }
-        LLMEvent::Compaction { provider, id, encrypted, text } => {
-            object.insert("provider".into(), json!(provider.0));
-            if let Some(id) = id {
-                object.insert("id".into(), json!(id));
-            }
-            if let Some(encrypted) = encrypted {
-                object.insert("encrypted".into(), json!(encrypted));
-            }
-            if let Some(text) = text {
-                object.insert("text".into(), json!(text));
-            }
-        }
-    }
-    Value::Object(object)
-}
-
-fn asset_wire(asset: &Asset) -> Value {
-    json!({
-        "source": asset.source,
-        "mediaType": asset.media_type,
-    })
+    serde_json::to_value(event).expect("LLMEvent serializes in the TS wire shape")
 }
 
 // ---------------------------------------------------------------------------
@@ -684,7 +390,10 @@ fn open_responses_classification_extraction() {
     });
     match &error.reason {
         AiErrorReason::InvalidRequest { classification, .. } => {
-            assert_eq!(serde_json::to_value(classification).unwrap(), json!("context-overflow"));
+            assert_eq!(
+                serde_json::to_value(classification).unwrap(),
+                serde_json::Value::String("context-overflow".into())
+            );
         }
         other => panic!("unexpected reason {}", other.tag()),
     }

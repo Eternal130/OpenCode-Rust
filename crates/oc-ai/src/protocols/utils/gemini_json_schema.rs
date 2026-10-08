@@ -121,7 +121,13 @@ fn normalize_node(schema: &Value) -> Value {
                     }
                 } else if key == "additionalItems" {
                     if record.get("items").and_then(Value::as_array).is_some() {
+                        // Draft-07 tuple suffix becomes `items` in 2020-12.
                         out.insert("items".to_string(), normalize_node(value));
+                    } else {
+                        // Non-tuple `additionalItems` is legal as-is — keep
+                        // the key and keep recursing (TS falls through to the
+                        // generic `[[key, normalizeNode(value)]]` arm).
+                        out.insert(key.clone(), normalize_node(value));
                     }
                 } else {
                     out.insert(key.clone(), normalize_node(value));
@@ -330,5 +336,47 @@ mod tests {
     #[test]
     fn a_direct_root_self_reference_is_cut() {
         assert_eq!(normalize(&json!({"$ref": "#"})), json!({}));
+    }
+
+    /// Oracle gate 3 finding 2: a non-tuple `items` (object / boolean) with a
+    /// sibling `additionalItems` keeps BOTH keys, recursed — TS only rewrites
+    /// `additionalItems` → `items` when `Array.isArray(schema.items)`.
+    #[test]
+    fn additional_items_survives_when_items_is_not_an_array() {
+        // items: object — additionalItems kept verbatim (recursed)
+        let input = json!({
+            "type": "array",
+            "items": { "type": "string", "minimum": 0, "exclusiveMinimum": true },
+            "additionalItems": { "type": "number" }
+        });
+        assert_eq!(
+            normalize(&input),
+            json!({
+                "type": "array",
+                "items": { "type": "string", "exclusiveMinimum": 0 },
+                "additionalItems": { "type": "number" }
+            })
+        );
+        // items: boolean — same rule
+        assert_eq!(
+            normalize(&json!({"type": "array", "items": true, "additionalItems": false})),
+            json!({"type": "array", "items": true, "additionalItems": false})
+        );
+        // nesting: additionalItems under a property whose items is an object
+        // still gets recursed into (exclusiveMinimum rewrite inside it)
+        assert_eq!(
+            normalize(&json!({
+                "type": "object",
+                "properties": {
+                    "bag": { "type": "array", "items": { "type": "string" }, "additionalItems": { "type": "number", "minimum": 1, "exclusiveMinimum": true } }
+                }
+            })),
+            json!({
+                "type": "object",
+                "properties": {
+                    "bag": { "type": "array", "items": { "type": "string" }, "additionalItems": { "type": "number", "exclusiveMinimum": 1 } }
+                }
+            })
+        );
     }
 }

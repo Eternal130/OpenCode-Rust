@@ -2909,11 +2909,17 @@ mod tests {
         assert!(equal(actual, expected), "value mismatch:\n rust: {actual}\nexpect: {expected}");
     }
 
-    /// Serialize an event/message for wire-shape assertions, renaming the
-    /// Rust `provider_metadata` field to the TS wire key `providerMetadata`
-    /// (the schema layer serializes that one field `snake_case`; flagged for
-    /// the schema lane — the comparison is otherwise exact).
+    /// Serialize an event for wire-shape assertions. The `LLMEvent` tree
+    /// serializes in the TS contract shape natively (`camelCase` fields —
+    /// oracle gate 3 finding 1); no key renaming is needed for events.
     fn wire(value: &impl serde::Serialize) -> Value {
+        serde_json::to_value(value).expect("serializes")
+    }
+
+    /// `ContentPart` (the assembled message tree, NOT the `LLMEvent` tree)
+    /// still serializes `provider_metadata` as `snake_case`; its wire shape is
+    /// owned by the session-persistence lane, so rename per-site here.
+    fn content_wire(value: &impl serde::Serialize) -> Value {
         fn rename(value: &mut Value) {
             match value {
                 Value::Object(map) => {
@@ -4730,7 +4736,7 @@ mod tests {
         let model = model_of("claude-sonnet-4-5");
         let response = generate_with(body, base_request(model.clone())).await.unwrap();
         assert_eq!(
-            wire(&response.message)["content"],
+            content_wire(&response.message)["content"],
             json!([{"type": "reasoning", "text": "", "providerMetadata": {"anthropic": {"signature": "sig_1"}}}])
         );
         // ...and the message round-trips back into a thinking block
@@ -4758,7 +4764,7 @@ mod tests {
         let response =
             generate_with(body, base_request(model_of("claude-sonnet-4-5"))).await.unwrap();
         assert_eq!(
-            wire(&response.message)["content"],
+            content_wire(&response.message)["content"],
             json!([{"type": "reasoning", "text": "", "providerMetadata": {"anthropic": {"signature": "sig_1"}}}])
         );
         let reasoning_end =
@@ -4796,7 +4802,10 @@ mod tests {
         ]);
         let response =
             generate_with(body, base_request(model_of("claude-sonnet-4-5"))).await.unwrap();
-        assert_eq!(wire(&response.message)["content"], json!([{"type": "text", "text": ""}]));
+        assert_eq!(
+            content_wire(&response.message)["content"],
+            json!([{"type": "text", "text": ""}])
+        );
     }
 
     #[tokio::test]
@@ -4819,7 +4828,7 @@ mod tests {
             json!({"anthropic": {"redactedData": "opaque_1"}})
         );
         assert_eq!(
-            wire(&response.message)["content"],
+            content_wire(&response.message)["content"],
             json!([
                 {"type": "reasoning", "text": "", "providerMetadata": {"anthropic": {"redactedData": "opaque_1"}}},
                 {"type": "text", "text": "Hello"},
@@ -5310,7 +5319,7 @@ mod tests {
             ..Default::default()
         });
         let response = replay.generate(request).await.unwrap();
-        let content = wire(&response.message)["content"].clone();
+        let content = content_wire(&response.message)["content"].clone();
         assert_eq!(
             content,
             json!([

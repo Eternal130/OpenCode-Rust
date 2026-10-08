@@ -4,6 +4,30 @@
  "protocol": "openai-chat",
  "provider": "togetherai",
  "providerMetadataKey": "togetherai",
+ "request": {
+  "id": null,
+  "model": {
+   "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+   "provider": "togetherai"
+  },
+  "system": [],
+  "messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "parity replay"
+     }
+    ]
+   }
+  ],
+  "tools": [],
+  "toolChoice": null,
+  "generation": {},
+  "providerOptions": {},
+  "promptCache": null
+ },
  "interactions": [
   {
    "events": [
@@ -74,7 +98,21 @@
       "totalTokens": 48
      }
     }
-   ]
+   ],
+   "body": {
+    "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "messages": [
+     {
+      "role": "user",
+      "content": "parity replay"
+     }
+    ],
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    }
+   },
+   "bodyText": "{\"model\":\"meta-llama/Llama-3.3-70B-Instruct-Turbo\",\"messages\":[{\"role\":\"user\",\"content\":\"parity replay\"}],\"stream\":true,\"stream_options\":{\"include_usage\":true}}"
   }
  ]
 }

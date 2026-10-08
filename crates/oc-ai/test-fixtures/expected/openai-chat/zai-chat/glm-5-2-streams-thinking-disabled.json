@@ -4,6 +4,30 @@
  "protocol": "zai-chat",
  "provider": "zai",
  "providerMetadataKey": "zai",
+ "request": {
+  "id": null,
+  "model": {
+   "id": "glm-5.3",
+   "provider": "zai"
+  },
+  "system": [],
+  "messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "parity replay"
+     }
+    ]
+   }
+  ],
+  "tools": [],
+  "toolChoice": null,
+  "generation": {},
+  "providerOptions": {},
+  "promptCache": null
+ },
  "interactions": [
   {
    "events": [
@@ -78,7 +102,21 @@
       "totalTokens": 26
      }
     }
-   ]
+   ],
+   "body": {
+    "model": "glm-5.3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "parity replay"
+     }
+    ],
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    }
+   },
+   "bodyText": "{\"model\":\"glm-5.3\",\"messages\":[{\"role\":\"user\",\"content\":\"parity replay\"}],\"stream\":true,\"stream_options\":{\"include_usage\":true}}"
   }
  ]
 }

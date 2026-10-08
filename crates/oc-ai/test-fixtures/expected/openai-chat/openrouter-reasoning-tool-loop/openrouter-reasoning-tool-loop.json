@@ -4,6 +4,34 @@
  "protocol": "openrouter-chat",
  "provider": "openrouter",
  "providerMetadataKey": "openrouter",
+ "request": {
+  "id": null,
+  "model": {
+   "id": "anthropic/claude-sonnet-4.6",
+   "provider": "openrouter"
+  },
+  "system": [],
+  "messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "parity replay"
+     }
+    ]
+   }
+  ],
+  "tools": [],
+  "toolChoice": null,
+  "generation": {},
+  "providerOptions": {
+   "reasoning": {
+    "max_tokens": 1024
+   }
+  },
+  "promptCache": null
+ },
  "interactions": [
   {
    "events": [
@@ -198,7 +226,36 @@
       "totalTokens": 718
      }
     }
-   ]
+   ],
+   "body": {
+    "model": "anthropic/claude-sonnet-4.6",
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "parity replay",
+        "cache_control": {
+         "type": "ephemeral"
+        }
+       }
+      ]
+     }
+    ],
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    },
+    "store": false,
+    "usage": {
+     "include": true
+    },
+    "reasoning": {
+     "max_tokens": 1024
+    }
+   },
+   "bodyText": "{\"model\":\"anthropic/claude-sonnet-4.6\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"parity replay\",\"cache_control\":{\"type\":\"ephemeral\"}}]}],\"stream\":true,\"stream_options\":{\"include_usage\":true},\"store\":false,\"usage\":{\"include\":true},\"reasoning\":{\"max_tokens\":1024}}"
   },
   {
    "events": [
@@ -315,7 +372,36 @@
       "totalTokens": 746
      }
     }
-   ]
+   ],
+   "body": {
+    "model": "anthropic/claude-sonnet-4.6",
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "parity replay",
+        "cache_control": {
+         "type": "ephemeral"
+        }
+       }
+      ]
+     }
+    ],
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    },
+    "store": false,
+    "usage": {
+     "include": true
+    },
+    "reasoning": {
+     "max_tokens": 1024
+    }
+   },
+   "bodyText": "{\"model\":\"anthropic/claude-sonnet-4.6\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"parity replay\",\"cache_control\":{\"type\":\"ephemeral\"}}]}],\"stream\":true,\"stream_options\":{\"include_usage\":true},\"store\":false,\"usage\":{\"include\":true},\"reasoning\":{\"max_tokens\":1024}}"
   }
  ]
 }
