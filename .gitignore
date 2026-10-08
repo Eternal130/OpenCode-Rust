@@ -1,0 +1,13 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Deepwork runtime state (see .ignore negations for tooling visibility)
+.slim/deepwork/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
