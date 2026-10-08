@@ -13,7 +13,9 @@
 //! - [`httpdiff`] — runs the same request against two base URLs, normalizes
 //!   both bodies, and reports the first divergence path.
 //! - [`sse`] — subscribes to `GET /api/event` (text/event-stream), parses
-//!   `data:` frames and heartbeat comments, collects N frames with a timeout.
+//!   `data:` frames and heartbeat comments, collects frames (count-based or
+//!   the scenario policy: N frames / quiescence), and compares two frame
+//!   sequences per the canonical grouping policy.
 //! - [`golden`] — golden-file compare with inline update (`PARITY_UPDATE=1`).
 //!
 //! HTTP is performed by a private minimal localhost HTTP/1.1 client

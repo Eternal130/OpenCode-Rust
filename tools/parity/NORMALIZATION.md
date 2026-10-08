@@ -2,9 +2,11 @@
 
 This document defines **the canonical rewrite algorithm** for behavior-parity
 comparisons. It is implemented exactly once, in `tools/parity/src/normalize.rs`
-(`normalize_value` / `normalize_str`). Every payload compared by the parity
-harness — HTTP bodies, SSE frames, goldens — passes through this function on
-**both** sides before any diff. If you change this file, change the module (and
+(`normalize_value` / `normalize_str`; multi-part comparison units use the
+`_with` variants with one shared `IdNumbering` run). Every payload compared by
+the parity harness — HTTP bodies, SSE frames, goldens — passes through this
+function on **both** sides before any diff. If you change this file, change
+the module (and
 vice versa); the unit tests in `normalize.rs` pin the behavior.
 
 ## 1. Purpose
@@ -20,7 +22,7 @@ run-specific, never content that could hide a real behavioral difference.
 
 | Category | Trigger | Token |
 | --- | --- | --- |
-| Instance ids | string content pass (see §5.4) | `<SES_ID>`, `<EVT_ID>`, `<MSG_ID>`, `<USR_ID>`, `<FRM_ID>`, `<WRK_ID>`, `<ACP_ID>`, `<SH_ID>` |
+| Instance ids | string content pass (see §5.4) | `<SES_ID:n>`, `<EVT_ID:n>`, `<MSG_ID:n>`, `<USR_ID:n>`, `<FRM_ID:n>`, `<WRK_ID:n>`, `<ACP_ID:n>`, `<PER_ID:n>`, `<PSV_ID:n>`, `<CRED_ID:n>`, `<CON_ID:n>`, `<SH_ID:n>` |
 | Timestamps (numeric, unix epoch) | key-driven (see §4) | `<TS>` |
 | Timestamps (ISO-8601 strings) | key-driven, or anywhere in text | `<ISO>` |
 | Jittered delays / durations (ms) | key-driven | `<MS>` |
@@ -70,8 +72,26 @@ intentional and part of the spec.
 | `port` | `<PORT>` | — |
 | `pid` | `<PID>` | — |
 | `duration`, `elapsed`, `delay`, `jitter`, `timeout`, `took`, `interval` | `<MS>` | — |
-| `time`, `timestamp`, `created`, `createdAt`, `updatedAt`, `updated`, `modified`, `startedAt`, `endedAt`, `expiresAt`, `lastUsedAt`, `date` | `<TS>` | `<ISO>` (only if the value matches the ISO regex §5.5) |
+| `time`, `timestamp`, `created`, `createdAt`, `updatedAt`, `updated`, `modified`, `startedAt`, `endedAt`, `expiresAt`, `lastUsedAt`, `date`, `started`, `completed`, `streamed`, `ran`, `idle`, `viewed`, `archived`, `at`, `from`, `to`, `next`, `expires`, `published`, `active` | `<TS>` | `<ISO>` (only if the value matches the ISO regex §5.5) |
 | `version` | — | `<VERSION>` (only if the value matches the version regex §5.6) |
+
+The timestamp key list is aligned to **every epoch-millisecond field in the
+ported wire schema** (`crates/oc-schema/src`): the message `time` blocks
+(`created`, `completed`, `streamed`, `ran` — `AssistantTime`/`ToolTime`),
+retry scheduling (`at` — `AssistantRetry`/`session.retry.scheduled`,
+`next` — `SessionStatus` retry), session watermarks (`idle`, `viewed`,
+`archived` — `Session.Time`), `started` (`Shell.Time`,
+`session.step.started`), stats windows (`from`/`to` — `Session.Stats.Range`),
+integration attempts (`expires` — `AttemptTime`), credentials (`expires` —
+`Credential.Value` oauth), projects (`active` — `Project.Time`), and
+web-search results (`published`). The alignment is re-run whenever
+`oc-schema` grows a millis field (the unit test
+`every_ts_key_field_is_masked` enumerates this list).
+
+Deliberately **not** treated as timestamps: `seq` (aggregate log position —
+sequence comparison *orders by it*, masking would destroy the signal),
+`version`, `ordinal`, `attempt` (counters), and `Prompt.Mention`
+`start`/`end` (character offsets into prompt text, not wall-clock).
 
 Keys not listed here are never key-rewritten; their values still get the
 string-content passes below if they are strings.
@@ -103,16 +123,39 @@ An embedded URL **without** an explicit port is left untouched.
 
 ### 5.4 Instance ids (global)
 
-Regex: `\b(evt|ses|msg|usr|frm|wrk|acp|sh)_[0-9A-Za-z]{8,}\b` →
-`<UPPERCASEPREFIX_ID>` (e.g. `evt_11c556f9e001H4T7m94mksITaJ` → `<EVT_ID>`).
+Regex: `\b(evt|ses|msg|usr|frm|wrk|acp|sh|per|psv|cred|con)_[0-9A-Za-z]{8,}\b` →
+`<UPPERCASEPREFIX_ID:n>` (e.g. `evt_11c556f9e001H4T7m94mksITaJ` → `<EVT_ID:1>`).
 
-- Prefixes are verified against the v2.0.24 schema: `evt_` (event), `ses`
-  (session), `msg_` (session message), `frm_` (form), `wrk` (workspace),
-  `sh_` (shell); `usr_` / `acp_` are reserved for port-side namespaces.
+- Prefixes are verified against the v2.0.24 schema (`oc-schema/src/id.rs`):
+  `evt_` (event), `ses` (session), `msg_` (session message), `frm_` (form),
+  `wrk` (workspace), `per_` (permission), `psv_` (persistent-pty permission
+  saved), `cred_` (credential), `con_` (integration attempt), `sh_` (shell);
+  `usr_` / `acp_` are reserved for port-side namespaces.
 - At least 8 identifier characters are required, so ordinary words never
   match. The reference id format is `prefix_` + 26 chars of `[0-9A-Za-z]`.
-- **Identity is preserved within a comparison**: the same id always rewrites
-  to the same token, so id *references* between fields still must agree.
+- **Numbering is first-seen canonical, per prefix, per normalization run**:
+  within one run the first distinct `msg_…` becomes `<MSG_ID:1>`, the second
+  `<MSG_ID:2>`, and so on; counters are independent per prefix. An id seen
+  again reuses its number.
+- A *normalization run* is one whole comparison unit on one side: one HTTP
+  body, or one collected SSE sequence (`frames_to_json`), or one sequence
+  group (§"Sequence comparison"). Both sides run the algorithm
+  independently; their numberings agree exactly when corresponding ids are
+  first-seen in corresponding structural positions (depth-first traversal;
+  arrays in element order, object keys in sorted order).
+- **Referential integrity is preserved and disagreement is detectable**: two
+  positions referencing the same id get the same token, positions referencing
+  *different* ids of the same prefix get *different* tokens — so an event
+  pointing at the wrong message (same prefix, different id) survives
+  normalization as a divergence. Collapsing all same-prefix ids to one token
+  would hide exactly that class of bug and is forbidden.
+- Known limits: first-seen numbering pairs ids structurally, not
+  semantically — if two payloads each contain a *set* of same-prefix ids
+  with no cross-references and no stable order, a consistent permutation of
+  that set normalizes equal (permutation-invariance). Cross-references are
+  what pin identities down. Sequence comparison scopes numbering per group
+  (see below), so cross-*aggregate* references are checked by whole-body
+  compares, not sequence compares.
 - New prefixes are added here first (single source of truth), then to the
   regex in `normalize.rs`.
 
@@ -133,22 +176,22 @@ only under `version` keys; a non-matching `version` value (e.g.
 ## 6. The canonical algorithm (pseudocode)
 
 ```
-normalize(value, env):
+normalize(value, env, ids):        # ids = one IdNumbering per run (§5.4)
   object  → for each (key, value):
               number  → token(key) if key ∈ number-key tables, else number
               string  → keytoken(key, string) if applicable,
-                        else content-passes(string, env)
-              other   → normalize(value, env)          # recurse
-  array   → [ normalize(item, env) … ]                 # order preserved
-  string  → content-passes(string, env)                # bare strings (array
+                        else content-passes(string, env, ids)
+              other   → normalize(value, env, ids)      # recurse
+  array   → [ normalize(item, env, ids) … ]             # order preserved
+  string  → content-passes(string, env, ids)                # bare strings (array
                                                        # elements, roots)
   scalar  → unchanged
 
-content-passes(s, env):        # strictly in this order
+content-passes(s, env, ids):      # strictly in this order
   s ← replace each root in env (longest first) with "<SANDBOX>"
   s ← ORIGIN_URL.replace(s, "<URL>")                    # anchored, §5.2
   s ← EMBEDDED_URL.replace_all(s, "$1<HOST>:<PORT>")    # §5.3
-  s ← ID_RE.replace_all(s, "<PREFIX_ID>")               # §5.4
+  s ← ID_RE.replace_all(s, "<PREFIX_ID:n>")             # §5.4, n from ids
   s ← ISO_RE.replace_all(s, "<ISO>")                    # §5.5
   return s
 ```
@@ -160,14 +203,83 @@ timestamps (disjoint character classes; order kept for determinism).
 ## 7. Token vocabulary
 
 `<SANDBOX>`, `<URL>`, `<HOST>`, `<PORT>`, `<PID>`, `<TS>`, `<ISO>`, `<MS>`,
-`<VERSION>`, `<EVT_ID>`, `<SES_ID>`, `<MSG_ID>`, `<USR_ID>`, `<FRM_ID>`,
-`<WRK_ID>`, `<ACP_ID>`, `<SH_ID>`.
+`<VERSION>`, and id tokens `<PREFIX_ID:n>` where `PREFIX` ∈ {`EVT`, `SES`,
+`MSG`, `USR`, `FRM`, `WRK`, `ACP`, `PER`, `PSV`, `CRED`, `CON`, `SH`} and
+`n ≥ 1` is the first-seen number within the run (§5.4).
 
 Tokens are delimited `<`…`>` so they can never collide with real content
 (JSON strings may not contain unescaped `<`-delimited tokens from this
 closed set in practice; if one ever did, the golden diff would flag it).
 
-## 8. Golden interaction
+## 8. Sequence comparison (SSE event streams)
+
+Frame-sequence parity (Phase 5+) is compared under the canonical policy
+below, implemented by `sse::compare_sequences` and
+`SseStream::collect_scenario`. Global SSE order across independent
+aggregates is **nondeterministic** — two correct servers may interleave the
+same per-aggregate events differently — so raw global order is never the
+contract.
+
+### 8.1 Grouping (per side)
+
+Each **data** frame (heartbeats are transport noise, skipped) is assigned to
+a group keyed by:
+
+1. **`location`** — the envelope's `location` object (`directory`, optional
+   `workspaceID`), plus
+2. **the aggregate id**: `durable.aggregateID` (envelope durable events), or
+   top-level `aggregateID` (`log.synced`), falling back to **`sessionID`
+   inside `data`** (session events without a durable envelope).
+
+Frames with neither location nor aggregate/session id (e.g.
+`server.connected`) share one fixed `"global"` group. Group keys are
+**diagnostics only** — raw ids differ per run, so groups are never paired by
+key across sides.
+
+### 8.2 Canonical order within a group
+
+- If **every** frame of the group carries `seq`: ascending `seq`.
+- Otherwise: arrival order (within one aggregate, arrival order is
+  deterministic; only cross-aggregate interleaving is not). Mixed
+  seq/no-seq groups therefore compare in arrival order.
+
+### 8.3 Normalization scope
+
+Each group is normalized as its **own id-numbering run** (§5.4), encounter
+order = the group's canonical order. This makes id tokens invariant to
+cross-aggregate interleaving. Consequently, *cross-aggregate* id references
+cannot be checked by sequence comparison — they are checked by whole-body
+compares, which use one numbering run per body.
+
+### 8.4 Comparison
+
+The two sides' **multisets of group orderings** are compared: every group
+ordering (normalized canonical frame sequence) on one side must pair with an
+equal ordering on the other side; counts matter (a missing or extra
+aggregate is a divergence), group keys do not (pairing is by content).
+
+**First-divergent-frame reporting**: the first unmatched group (reference
+side first, in first-appearance order, then port side) is reported against
+its best counterpart — the opposite-side leftover with the longest common
+frame prefix — at the first frame index where the two orderings differ
+(absent frames/groups render as `Null` on the missing side).
+
+### 8.5 Collection alignment (N-frame scenarios)
+
+Both sides collect with identical parameters via
+`SseStream::collect_scenario(max_frames, quiescence, overall)`:
+
+- stop at `max_frames` **data** frames (scenario watermark), or
+- stop at **quiescence**: no data frame for `quiescence` (default
+  `sse::DEFAULT_QUIESCENCE` = 2000 ms; heartbeats do not reset the window),
+  or
+- stop at `overall_timeout` (safety bound),
+
+then compare per §8.4. A stream that ends (EOF) is quiescent by definition.
+Fewer than `max_frames` frames may legitimately arrive; that is not an
+error, the shortened sequence is simply compared.
+
+## 9. Golden interaction
 
 Goldens (`goldens/*.json`) always store **normalized** output. A golden
 mismatch that survives normalization is a true behavioral divergence; run

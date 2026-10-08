@@ -2,7 +2,7 @@
   {
     "data": {
       "data": {},
-      "id": "<EVT_ID>",
+      "id": "<EVT_ID:1>",
       "type": "server.connected"
     },
     "index": 0

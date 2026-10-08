@@ -3,6 +3,7 @@
 //! this module is its executable form. Any value compared by this crate must
 //! pass through [`normalize_value`] on **both** sides.
 
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -13,6 +14,41 @@ use serde_json::{Map, Value};
 #[derive(Debug, Clone, Default)]
 pub struct NormEnv {
     roots: Vec<String>,
+}
+
+/// First-seen canonical id numbering state for one normalization run
+/// (spec §5.4). A *run* is one whole comparison unit on one side — one HTTP
+/// body, or one collected SSE sequence. Within a run, the first distinct id
+/// of a prefix seen becomes `<PREFIX_ID:1>`, the second `<PREFIX_ID:2>`, …;
+/// an id seen again reuses its number, so **referential integrity survives**:
+/// two positions referencing the same id get the same token, and positions
+/// referencing *different* ids get different tokens.
+#[derive(Debug, Clone, Default)]
+pub struct IdNumbering {
+    /// Matched id text (e.g. `msg_abc…`) → assigned number.
+    assigned: HashMap<String, usize>,
+    /// Prefix (e.g. `msg`) → highest number handed out so far.
+    last: HashMap<String, usize>,
+}
+
+impl IdNumbering {
+    /// A fresh, empty numbering (numbers start at 1 for each prefix).
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The canonical number for `id` (whose prefix is `prefix`), assigning
+    /// the next number for that prefix on first sight.
+    pub fn number_for(&mut self, prefix: &str, id: &str) -> usize {
+        if let Some(number) = self.assigned.get(id) {
+            return *number;
+        }
+        let number = self.last.get(prefix).map_or(1, |last| last + 1);
+        self.last.insert(prefix.to_string(), number);
+        self.assigned.insert(id.to_string(), number);
+        number
+    }
 }
 
 impl NormEnv {
@@ -43,6 +79,18 @@ const PID_KEYS: &[&str] = &["pid"];
 /// durations must not cause spurious divergence.
 const MS_KEYS: &[&str] = &["duration", "elapsed", "delay", "jitter", "timeout", "took", "interval"];
 /// Field holding a timestamp (number: unix epoch, or ISO-8601 string).
+///
+/// Aligned to every epoch-millisecond field in the ported wire schema
+/// (`crates/oc-schema/src`, cross-checked 2026-10): `time`/`created`/
+/// `updatedAt`-style names plus the message `time` blocks (`completed`,
+/// `streamed`/`ran`, `at`), session watermarks (`idle`, `viewed`,
+/// `archived`), `started` (shell/step), stats `Range` (`from`, `to`),
+/// retry scheduling (`at`, `next`), integration attempts (`expires`),
+/// credentials (`expires`), projects (`active`), and web-search results
+/// (`published`). Deliberately **not** masked: `seq` (aggregate log
+/// position — sequence comparison orders by it), `version`, `ordinal`,
+/// `attempt` (counters), and `Prompt.Mention` `start`/`end` (character
+/// offsets, not timestamps).
 const TS_KEYS: &[&str] = &[
     "time",
     "timestamp",
@@ -56,6 +104,20 @@ const TS_KEYS: &[&str] = &[
     "expiresAt",
     "lastUsedAt",
     "date",
+    "started",
+    "completed",
+    "streamed",
+    "ran",
+    "idle",
+    "viewed",
+    "archived",
+    "at",
+    "from",
+    "to",
+    "next",
+    "expires",
+    "published",
+    "active",
 ];
 /// Field holding a version string (semver or a local dev marker).
 const VERSION_KEYS: &[&str] = &["version"];
@@ -73,11 +135,15 @@ static ORIGIN_URL: LazyLock<Regex> = LazyLock::new(|| {
 static EMBEDDED_URL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(https?://)(?:\[[0-9a-fA-F:]+\]|[A-Za-z0-9._~-]+)(:[0-9]+)").unwrap()
 });
-/// Prefixed opencode identifiers, e.g. `evt_11c556f9...` → `<EVT_ID>`.
-/// Prefixes verified against the v2.0.24 schema (event, session, message,
-/// form, workspace, shell) plus `usr_`/`acp_` reserved for the port.
-static ID_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b(evt|ses|msg|usr|frm|wrk|acp|sh)_[0-9A-Za-z]{8,}\b").unwrap());
+/// Prefixed opencode identifiers, e.g. `evt_11c556f9...` → `<EVT_ID:1>`.
+/// Prefixes verified against the v2.0.24 schema (`crates/oc-schema/src/id.rs`):
+/// `evt_` (event), `ses` (session), `msg_` (session message), `frm_` (form),
+/// `wrk` (workspace), `per_` (permission), `psv_` (persistent-pty permission
+/// saved), `cred_` (credential), `con_` (integration attempt), `sh_` (shell);
+/// `usr_` / `acp_` are reserved for port-side namespaces.
+static ID_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(evt|ses|msg|usr|frm|wrk|acp|sh|per|psv|cred|con)_[0-9A-Za-z]{8,}\b").unwrap()
+});
 /// ISO-8601 timestamps anywhere in text → `<ISO>`.
 static ISO_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?").unwrap()
@@ -112,9 +178,11 @@ fn rewrite_string_by_key(key: &str, value: &str) -> Option<&'static str> {
 }
 
 /// Apply the ordered string-content passes to a single string (spec section
-/// "String-content passes"). Roots are replaced literally, longest first.
+/// "String-content passes"), threading one shared [`IdNumbering`] run so id
+/// tokens stay consistent across the whole comparison unit. Roots are
+/// replaced literally, longest first.
 #[must_use]
-pub fn normalize_str(text: &str, env: &NormEnv) -> String {
+pub fn normalize_str_with(text: &str, env: &NormEnv, ids: &mut IdNumbering) -> String {
     let mut out = text.to_string();
     let mut roots: Vec<&String> = env.roots.iter().collect();
     roots.sort_by_key(|root| std::cmp::Reverse(root.len()));
@@ -128,20 +196,29 @@ pub fn normalize_str(text: &str, env: &NormEnv) -> String {
     out = ID_RE
         .replace_all(&out, |captures: &regex::Captures| {
             let prefix = captures.get(1).map(|m| m.as_str()).unwrap_or_default();
-            format!("<{}_ID>", prefix.to_uppercase())
+            let id = captures.get(0).map(|m| m.as_str()).unwrap_or_default();
+            let number = ids.number_for(prefix, id);
+            format!("<{}_ID:{}>", prefix.to_uppercase(), number)
         })
         .into_owned();
     out = ISO_RE.replace_all(&out, "<ISO>").into_owned();
     out
 }
 
-/// Normalize a parsed JSON value in place per `NORMALIZATION.md`.
-///
-/// Object keys are compared unordered (`serde_json` sorts them); array order
-/// is preserved and significant. Rewritten scalars become string tokens, so a
-/// rewritten number intentionally changes JSON type — see the spec.
+/// [`normalize_str_with`] with a fresh numbering run (one call = one run; see
+/// spec §5.4 — use the `_with` variant when several strings form one
+/// comparison unit).
 #[must_use]
-pub fn normalize_value(value: &Value, env: &NormEnv) -> Value {
+pub fn normalize_str(text: &str, env: &NormEnv) -> String {
+    normalize_str_with(text, env, &mut IdNumbering::new())
+}
+
+/// Normalize a parsed JSON value per `NORMALIZATION.md`, threading one shared
+/// [`IdNumbering`] run: id tokens are assigned first-seen per prefix in
+/// encounter order (depth-first; arrays in element order, object keys in
+/// sorted order — deterministic for a given value).
+#[must_use]
+pub fn normalize_value_with(value: &Value, env: &NormEnv, ids: &mut IdNumbering) -> Value {
     match value {
         Value::Object(map) => {
             let mut out = Map::new();
@@ -153,22 +230,31 @@ pub fn normalize_value(value: &Value, env: &NormEnv) -> Value {
                     },
                     Value::String(text) => match rewrite_string_by_key(key, text) {
                         Some(token) => Value::String(token.to_string()),
-                        None => Value::String(normalize_str(text, env)),
+                        None => Value::String(normalize_str_with(text, env, ids)),
                     },
-                    other => normalize_value(other, env),
+                    other => normalize_value_with(other, env, ids),
                 };
                 out.insert(key.clone(), normalized);
             }
             Value::Object(out)
         }
         Value::Array(items) => {
-            Value::Array(items.iter().map(|item| normalize_value(item, env)).collect())
+            Value::Array(items.iter().map(|item| normalize_value_with(item, env, ids)).collect())
         }
         // Bare strings (array elements included) get the content passes; a
         // bare string has no key, so no key-driven rewrite applies.
-        Value::String(text) => Value::String(normalize_str(text, env)),
+        Value::String(text) => Value::String(normalize_str_with(text, env, ids)),
         scalar => scalar.clone(),
     }
+}
+
+/// [`normalize_value_with`] with a fresh numbering run: **one call = one
+/// normalization run = one id-numbering scope** (spec §5.4). Callers comparing
+/// multi-part units (e.g. an SSE frame sequence) must use the `_with` variant
+/// with a single run for the whole unit.
+#[must_use]
+pub fn normalize_value(value: &Value, env: &NormEnv) -> Value {
+    normalize_value_with(value, env, &mut IdNumbering::new())
 }
 
 /// Parse `text` as JSON and normalize it. Non-JSON input is an error (use
@@ -193,7 +279,16 @@ mod tests {
             "session ses_01JZY0ID0123456789ABCDEFGH and evt_11c556f9e001H4T7m94mksITaJ",
             &env(),
         );
-        assert_eq!(out, "session <SES_ID> and <EVT_ID>");
+        assert_eq!(out, "session <SES_ID:1> and <EVT_ID:1>");
+    }
+
+    #[test]
+    fn rewrites_live_v2_permission_and_integration_prefixes() {
+        let out = normalize_str(
+            "per_01JZY0ID0123456789 psv_01JZY0ID0123456789 cred_01JZY0ID0123456789 con_01JZY0ID0123456789",
+            &NormEnv::new(),
+        );
+        assert_eq!(out, "<PER_ID:1> <PSV_ID:1> <CRED_ID:1> <CON_ID:1>");
     }
 
     #[test]
@@ -202,7 +297,103 @@ mod tests {
             "ses_01JZY0ID0123456789ABCDEFGH -> ses_01JZY0ID0123456789ABCDEFGH",
             &env(),
         );
-        assert_eq!(out, "<SES_ID> -> <SES_ID>");
+        assert_eq!(out, "<SES_ID:1> -> <SES_ID:1>");
+    }
+
+    #[test]
+    fn distinct_ids_get_first_seen_canonical_numbers() {
+        // Two different msg ids referenced by two events: different tokens.
+        let out = normalize_str(
+            "msg_01JZY0ID0123456789AAAA vs msg_01JZY0ID0123456789BBBB",
+            &NormEnv::new(),
+        );
+        assert_eq!(out, "<MSG_ID:1> vs <MSG_ID:2>");
+        // Numbering is per prefix: a ses id after two msg ids is still 1.
+        let out = normalize_str(
+            "msg_01JZY0ID0123456789AAAA msg_01JZY0ID0123456789BBBB ses_01JZY0ID0123456789CCCC",
+            &NormEnv::new(),
+        );
+        assert_eq!(out, "<MSG_ID:1> <MSG_ID:2> <SES_ID:1>");
+    }
+
+    #[test]
+    fn referential_integrity_within_one_run() {
+        // Same id referenced twice inside one run -> same numbered token;
+        // the second distinct id -> the next number. Encounter order is
+        // depth-first with object keys sorted ("a" before "b").
+        let mut ids = IdNumbering::new();
+        let input = json!({
+            "a": "references msg_01JZY0ID0123456789AAAA",
+            "b": "references msg_01JZY0ID0123456789BBBB then msg_01JZY0ID0123456789AAAA again"
+        });
+        let out = normalize_value_with(&input, &NormEnv::new(), &mut ids);
+        assert_eq!(out["a"], json!("references <MSG_ID:1>"));
+        assert_eq!(out["b"], json!("references <MSG_ID:2> then <MSG_ID:1> again"));
+    }
+
+    #[test]
+    fn swapped_references_are_a_detectable_divergence() {
+        // Definitions live in one array; the references under `refs` point
+        // back at them. The port side swaps which message each reference
+        // points at — same set of ids, wrong cross-references. First-seen
+        // numbering (definitions encountered first) keeps the definition
+        // tokens aligned, so the swapped reference tokens must now diverge.
+        let reference = json!({
+            "messages": [
+                {"id": "msg_01JZY0ID0123456789AAAA"},
+                {"id": "msg_01JZY0ID0123456789BBBB"}
+            ],
+            "refs": [
+                {"to": "msg_01JZY0ID0123456789BBBB"},
+                {"to": "msg_01JZY0ID0123456789AAAA"}
+            ]
+        });
+        let port = json!({
+            "messages": [
+                {"id": "msg_01JZY0ID0123456789CCCC"},
+                {"id": "msg_01JZY0ID0123456789DDDD"}
+            ],
+            "refs": [
+                {"to": "msg_01JZY0ID0123456789CCCC"},
+                {"to": "msg_01JZY0ID0123456789DDDD"}
+            ]
+        });
+        let a = normalize_value(&reference, &NormEnv::new());
+        let b = normalize_value(&port, &NormEnv::new());
+        let divergence = crate::httpdiff::deep_diff(&a, &b)
+            .expect("a swapped id reference must survive normalization as a divergence");
+        assert_eq!(divergence.path, "$.refs[0].to");
+        assert_eq!(divergence.left, json!("<MSG_ID:2>"));
+        assert_eq!(divergence.right, json!("<MSG_ID:1>"));
+    }
+
+    #[test]
+    fn correct_references_are_not_a_divergence() {
+        // Mirror of the swap test: references agree structurally -> the two
+        // sides normalize equal despite carrying different raw ids.
+        let reference = json!({
+            "messages": [
+                {"id": "msg_01JZY0ID0123456789AAAA"},
+                {"id": "msg_01JZY0ID0123456789BBBB"}
+            ],
+            "refs": [
+                {"to": "msg_01JZY0ID0123456789BBBB"},
+                {"to": "msg_01JZY0ID0123456789AAAA"}
+            ]
+        });
+        let port = json!({
+            "messages": [
+                {"id": "msg_01JZY0ID0123456789CCCC"},
+                {"id": "msg_01JZY0ID0123456789DDDD"}
+            ],
+            "refs": [
+                {"to": "msg_01JZY0ID0123456789DDDD"},
+                {"to": "msg_01JZY0ID0123456789CCCC"}
+            ]
+        });
+        let a = normalize_value(&reference, &NormEnv::new());
+        let b = normalize_value(&port, &NormEnv::new());
+        assert!(crate::httpdiff::deep_diff(&a, &b).is_none());
     }
 
     #[test]
@@ -280,6 +471,35 @@ mod tests {
     }
 
     #[test]
+    fn every_ts_key_field_is_masked() {
+        // Enumerate the covered key list (single source of truth: TS_KEYS)
+        // against a JSON object carrying every such field with a distinct
+        // large epoch-millis value, and assert each is masked to <TS>.
+        let mut input = Map::new();
+        for (i, key) in TS_KEYS.iter().enumerate() {
+            input.insert(
+                (*key).to_string(),
+                Value::from(1_700_000_000_000_i64 + i64::try_from(i).unwrap()),
+            );
+        }
+        let out = normalize_value(&Value::Object(input), &NormEnv::new());
+        for key in TS_KEYS {
+            assert_eq!(out[key], json!("<TS>"), "key {key} must be masked to <TS>");
+        }
+    }
+
+    #[test]
+    fn non_timestamp_counters_stay_numeric() {
+        // seq/version/ordinal/attempt are counters, not timestamps; seq in
+        // particular drives sequence ordering and must survive normalization.
+        let out = normalize_value(
+            &json!({"seq": 3, "version": 1, "ordinal": 7, "attempt": 2, "count": 9}),
+            &env(),
+        );
+        assert_eq!(out, json!({"seq": 3, "version": 1, "ordinal": 7, "attempt": 2, "count": 9}));
+    }
+
+    #[test]
     fn recursion_preserves_array_order_and_nested_keys() {
         let input = json!({
             "urls": ["http://127.0.0.1:50713"],
@@ -292,9 +512,10 @@ mod tests {
         let out = normalize_value(&input, &env());
         assert_eq!(out["urls"][0], json!("<URL>"));
         assert_eq!(out["paths"]["tmp"], json!("<SANDBOX>/tmp/opencode"));
-        assert_eq!(out["events"][0]["id"], json!("<EVT_ID>"));
+        assert_eq!(out["events"][0]["id"], json!("<EVT_ID:1>"));
         assert_eq!(out["events"][0]["type"], json!("server.connected"));
-        assert_eq!(out["events"][0]["id"], out["events"][1]["id"]);
+        // Distinct ids get distinct tokens (first-seen numbering).
+        assert_eq!(out["events"][1]["id"], json!("<EVT_ID:2>"));
     }
 
     #[test]
