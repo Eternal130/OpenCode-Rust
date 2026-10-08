@@ -1,0 +1,84 @@
+{
+ "group": "zai-chat",
+ "name": "glm-5-2-streams-thinking-disabled",
+ "protocol": "zai-chat",
+ "provider": "zai",
+ "providerMetadataKey": "zai",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "3",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "7887",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 23,
+      "nonCachedInputTokens": 23,
+      "outputTokens": 3,
+      "providerMetadata": {
+       "zai": {
+        "completion_tokens": 3,
+        "prompt_tokens": 23,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 26
+       }
+      },
+      "totalTokens": 26
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 23,
+      "nonCachedInputTokens": 23,
+      "outputTokens": 3,
+      "providerMetadata": {
+       "zai": {
+        "completion_tokens": 3,
+        "prompt_tokens": 23,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 26
+       }
+      },
+      "totalTokens": 26
+     }
+    }
+   ]
+  }
+ ]
+}

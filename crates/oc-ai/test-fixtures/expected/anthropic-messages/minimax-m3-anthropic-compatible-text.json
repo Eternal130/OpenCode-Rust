@@ -1,0 +1,84 @@
+{
+ "scenario": "anthropic-compatible-messages/minimax-m3-anthropic-compatible-text",
+ "provider": "minimax",
+ "providerMetadataKey": "minimax",
+ "model": "MiniMax-M3",
+ "interactions": [
+  {
+   "events": [
+    {
+     "type": "step-start",
+     "index": 0
+    },
+    {
+     "type": "text-start",
+     "id": "text-0"
+    },
+    {
+     "type": "text-delta",
+     "id": "text-0",
+     "text": "Hello"
+    },
+    {
+     "type": "text-delta",
+     "id": "text-0",
+     "text": "!"
+    },
+    {
+     "type": "text-end",
+     "id": "text-0"
+    },
+    {
+     "type": "step-finish",
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "end_turn"
+     },
+     "usage": {
+      "inputTokens": 167,
+      "outputTokens": 2,
+      "nonCachedInputTokens": 53,
+      "cacheReadInputTokens": 114,
+      "cacheWriteInputTokens": 0,
+      "totalTokens": 169,
+      "providerMetadata": {
+       "minimax": {
+        "input_tokens": 53,
+        "output_tokens": 2,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 114,
+        "service_tier": "standard"
+       }
+      }
+     }
+    },
+    {
+     "type": "finish",
+     "reason": {
+      "normalized": "stop",
+      "raw": "end_turn"
+     },
+     "usage": {
+      "inputTokens": 167,
+      "outputTokens": 2,
+      "nonCachedInputTokens": 53,
+      "cacheReadInputTokens": 114,
+      "cacheWriteInputTokens": 0,
+      "totalTokens": 169,
+      "providerMetadata": {
+       "minimax": {
+        "input_tokens": 53,
+        "output_tokens": 2,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 114,
+        "service_tier": "standard"
+       }
+      }
+     }
+    }
+   ],
+   "error": null
+  }
+ ]
+}

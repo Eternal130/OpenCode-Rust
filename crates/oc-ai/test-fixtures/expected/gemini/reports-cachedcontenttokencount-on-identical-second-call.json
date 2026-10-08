@@ -1,0 +1,138 @@
+{
+ "scenario": "gemini-cache/reports-cachedcontenttokencount-on-identical-second-call",
+ "provider": "google",
+ "providerMetadataKey": "google",
+ "model": "gemini-2.5-flash",
+ "interactions": [
+  {
+   "events": [
+    {
+     "type": "step-start",
+     "index": 0
+    },
+    {
+     "type": "text-start",
+     "id": "text-0"
+    },
+    {
+     "type": "text-delta",
+     "id": "text-0",
+     "text": "Hi."
+    },
+    {
+     "type": "text-end",
+     "id": "text-0"
+    },
+    {
+     "type": "step-finish",
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "STOP"
+     },
+     "usage": {
+      "inputTokens": 1200,
+      "outputTokens": 2,
+      "nonCachedInputTokens": 1200,
+      "totalTokens": 1202,
+      "providerMetadata": {
+       "google": {
+        "promptTokenCount": 1200,
+        "candidatesTokenCount": 2,
+        "totalTokenCount": 1202
+       }
+      }
+     }
+    },
+    {
+     "type": "finish",
+     "reason": {
+      "normalized": "stop",
+      "raw": "STOP"
+     },
+     "usage": {
+      "inputTokens": 1200,
+      "outputTokens": 2,
+      "nonCachedInputTokens": 1200,
+      "totalTokens": 1202,
+      "providerMetadata": {
+       "google": {
+        "promptTokenCount": 1200,
+        "candidatesTokenCount": 2,
+        "totalTokenCount": 1202
+       }
+      }
+     }
+    }
+   ],
+   "error": null
+  },
+  {
+   "events": [
+    {
+     "type": "step-start",
+     "index": 0
+    },
+    {
+     "type": "text-start",
+     "id": "text-0"
+    },
+    {
+     "type": "text-delta",
+     "id": "text-0",
+     "text": "Hi."
+    },
+    {
+     "type": "text-end",
+     "id": "text-0"
+    },
+    {
+     "type": "step-finish",
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "STOP"
+     },
+     "usage": {
+      "inputTokens": 1200,
+      "outputTokens": 2,
+      "nonCachedInputTokens": 100,
+      "cacheReadInputTokens": 1100,
+      "totalTokens": 1202,
+      "providerMetadata": {
+       "google": {
+        "cachedContentTokenCount": 1100,
+        "promptTokenCount": 1200,
+        "candidatesTokenCount": 2,
+        "totalTokenCount": 1202
+       }
+      }
+     }
+    },
+    {
+     "type": "finish",
+     "reason": {
+      "normalized": "stop",
+      "raw": "STOP"
+     },
+     "usage": {
+      "inputTokens": 1200,
+      "outputTokens": 2,
+      "nonCachedInputTokens": 100,
+      "cacheReadInputTokens": 1100,
+      "totalTokens": 1202,
+      "providerMetadata": {
+       "google": {
+        "cachedContentTokenCount": 1100,
+        "promptTokenCount": 1200,
+        "candidatesTokenCount": 2,
+        "totalTokenCount": 1202
+       }
+      }
+     }
+    }
+   ],
+   "error": null
+  }
+ ]
+}

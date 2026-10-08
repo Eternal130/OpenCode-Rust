@@ -1,0 +1,998 @@
+{
+ "group": "alibaba-chat",
+ "name": "qwen-3-7-plus-streams-thinking-enabled",
+ "protocol": "alibaba-chat",
+ "provider": "alibaba",
+ "providerMetadataKey": "alibaba",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "Thinking",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " Process:\n\n1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".  Identify",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the core",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " question: Calculate ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "173 *",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 219",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".\n2.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "  Constraint: Reply",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " with *",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "only* the final",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " integer.\n3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".  Perform the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " multiplication:\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "    *   ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "17",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "3 * 2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "00 = ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "3460",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "0\n   ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " *   1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "73 * ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "10 = ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "1730",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n    *  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 173",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " * 9 =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 155",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n    *  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " Sum: 3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "4600",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " + 17",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "30 + ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "1557",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n    *  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 346",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "00 + ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "1730",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " = 36",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "33",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "0\n    *",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "   36",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "330 +",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 155",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7 = 3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7887",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n4. ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " Double check:\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "    *  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 173",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " * 21",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "9\n    *",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "   ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "173 *",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 220",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " = ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "173 *",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 22 *",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 10 =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 380",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "6 * 1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "0 = 3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "8060",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n    *  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 380",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "60 - ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "173 =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 378",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "87.\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "    *   Matches",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".\n5.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "  Format output:",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " Only the integer",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ". \"37",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "88",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7\"\n6",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".  Final verification",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " of",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the constraint: \"",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "Reply with only the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " final integer.\" ->",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " No punctuation, no",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " extra words.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " Just `37",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "88",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7`.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "378",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "87",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 30,
+      "nonCachedInputTokens": 30,
+      "outputTokens": 323,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 323,
+        "completion_tokens_details": {
+         "reasoning_tokens": 315,
+         "text_tokens": 323
+        },
+        "prompt_tokens": 30,
+        "prompt_tokens_details": {
+         "cache_creation": {
+          "ephemeral_5m_input_tokens": 0
+         },
+         "cache_creation_input_tokens": 0,
+         "cache_type": "ephemeral",
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "text_tokens": 30
+        },
+        "total_tokens": 353
+       }
+      },
+      "reasoningTokens": 315,
+      "totalTokens": 353
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 30,
+      "nonCachedInputTokens": 30,
+      "outputTokens": 323,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 323,
+        "completion_tokens_details": {
+         "reasoning_tokens": 315,
+         "text_tokens": 323
+        },
+        "prompt_tokens": 30,
+        "prompt_tokens_details": {
+         "cache_creation": {
+          "ephemeral_5m_input_tokens": 0
+         },
+         "cache_creation_input_tokens": 0,
+         "cache_type": "ephemeral",
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "text_tokens": 30
+        },
+        "total_tokens": 353
+       }
+      },
+      "reasoningTokens": 315,
+      "totalTokens": 353
+     }
+    }
+   ]
+  }
+ ]
+}

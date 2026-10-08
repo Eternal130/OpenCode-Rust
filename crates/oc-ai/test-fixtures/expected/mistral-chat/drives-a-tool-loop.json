@@ -1,0 +1,193 @@
+{
+ "scenario": "mistral-chat/drives-a-tool-loop",
+ "provider": "mistral",
+ "providerMetadataKey": "mistral",
+ "model": "mistral-small-latest",
+ "interactions": [
+  {
+   "events": [
+    {
+     "type": "step-start",
+     "index": 0
+    },
+    {
+     "type": "tool-input-start",
+     "id": "EwgHkPRLW",
+     "name": "lookup_weather"
+    },
+    {
+     "type": "tool-input-delta",
+     "id": "EwgHkPRLW",
+     "name": "lookup_weather",
+     "text": "{\"city\": \"Paris\"}",
+     "input": {
+      "city": "Paris"
+     }
+    },
+    {
+     "type": "tool-input-end",
+     "id": "EwgHkPRLW",
+     "name": "lookup_weather"
+    },
+    {
+     "type": "tool-call",
+     "id": "EwgHkPRLW",
+     "name": "lookup_weather",
+     "input": {
+      "city": "Paris"
+     }
+    },
+    {
+     "type": "step-finish",
+     "index": 0,
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "usage": {
+      "inputTokens": 120,
+      "outputTokens": 12,
+      "nonCachedInputTokens": 120,
+      "cacheReadInputTokens": 0,
+      "totalTokens": 132,
+      "providerMetadata": {
+       "mistral": {
+        "prompt_tokens": 120,
+        "completion_tokens": 12,
+        "total_tokens": 132,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "service_tier": "standard"
+       }
+      }
+     }
+    },
+    {
+     "type": "finish",
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "usage": {
+      "inputTokens": 120,
+      "outputTokens": 12,
+      "nonCachedInputTokens": 120,
+      "cacheReadInputTokens": 0,
+      "totalTokens": 132,
+      "providerMetadata": {
+       "mistral": {
+        "prompt_tokens": 120,
+        "completion_tokens": 12,
+        "total_tokens": 132,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "service_tier": "standard"
+       }
+      }
+     }
+    }
+   ],
+   "error": null
+  },
+  {
+   "events": [
+    {
+     "type": "step-start",
+     "index": 0
+    },
+    {
+     "type": "text-start",
+     "id": "text-0"
+    },
+    {
+     "type": "text-delta",
+     "id": "text-0",
+     "text": "The"
+    },
+    {
+     "type": "text-delta",
+     "id": "text-0",
+     "text": " weather in Paris is"
+    },
+    {
+     "type": "text-delta",
+     "id": "text-0",
+     "text": " currently sunny with a"
+    },
+    {
+     "type": "text-delta",
+     "id": "text-0",
+     "text": " temperature of 1"
+    },
+    {
+     "type": "text-delta",
+     "id": "text-0",
+     "text": "8°C"
+    },
+    {
+     "type": "text-delta",
+     "id": "text-0",
+     "text": "."
+    },
+    {
+     "type": "text-end",
+     "id": "text-0"
+    },
+    {
+     "type": "step-finish",
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "usage": {
+      "inputTokens": 67,
+      "outputTokens": 17,
+      "nonCachedInputTokens": 67,
+      "cacheReadInputTokens": 0,
+      "totalTokens": 84,
+      "providerMetadata": {
+       "mistral": {
+        "prompt_tokens": 67,
+        "completion_tokens": 17,
+        "total_tokens": 84,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "service_tier": "standard"
+       }
+      }
+     }
+    },
+    {
+     "type": "finish",
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "usage": {
+      "inputTokens": 67,
+      "outputTokens": 17,
+      "nonCachedInputTokens": 67,
+      "cacheReadInputTokens": 0,
+      "totalTokens": 84,
+      "providerMetadata": {
+       "mistral": {
+        "prompt_tokens": 67,
+        "completion_tokens": 17,
+        "total_tokens": 84,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "service_tier": "standard"
+       }
+      }
+     }
+    }
+   ],
+   "error": null
+  }
+ ]
+}

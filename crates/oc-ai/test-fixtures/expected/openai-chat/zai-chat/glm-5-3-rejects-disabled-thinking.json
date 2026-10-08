@@ -1,0 +1,15 @@
+{
+ "group": "zai-chat",
+ "name": "glm-5-3-rejects-disabled-thinking",
+ "protocol": "zai-chat",
+ "provider": "zai",
+ "providerMetadataKey": "zai",
+ "interactions": [
+  {
+   "error": {
+    "tag": "InvalidRequest",
+    "message": "This model always engages in thinking and cannot be disabled; please use low, high, or max"
+   }
+  }
+ ]
+}

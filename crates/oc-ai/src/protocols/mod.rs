@@ -3,6 +3,7 @@
 //! Concrete protocol state machines land in later lanes; the empty modules
 //! below are their fixed homes (mirroring `packages/ai/src/protocols/`).
 
+pub mod sanitizer;
 pub mod shared;
 pub mod utils;
 
@@ -20,15 +21,15 @@ pub mod anthropic_messages;
 // openrouter/venice/zai/alibaba) wrap the body builder only.
 pub mod openai_chat;
 
-// TODO(protocol-lane): provider-neutral Responses API baseline (~8 providers
-// build on this) — input items, hosted tool items, function tools, SSE via
-// sse framing or WS channel, ProviderAdapter iface per provider.
+// Open Responses (provider-neutral baseline, ~8 providers build on this) —
+// input items, hosted tool items, function tools, SSE framing, and the
+// `ProviderAdapter` seam. WebSocket channel/continuation deferred (ai-map §10).
 pub mod open_responses;
 
-// TODO(protocol-lane): OpenAI Responses — OpenResponses body + OpenAI
-// extensions (ContextManagement compaction, CompactionTrigger), defaults
+// OpenAI Responses — Open Responses + OpenAI extensions (ContextManagement
+// compaction, CompactionTrigger), defaults
 // {store:false, include:["reasoning.encrypted_content"]}, hosted tools via
-// ToolDefinition.native.openai.
+// `ToolDefinition.native.openai`. SSE parity path; WS channel deferred.
 pub mod openai_responses;
 
 // TODO(protocol-lane): openai-compatible re-badging — pure Route::with()
@@ -36,8 +37,16 @@ pub mod openai_responses;
 // ~25 catalog providers.
 pub mod openai_compatible;
 
-// TODO(protocol-lane): Gemini generateContent — URL embeds the model
-// (/models/${model}:streamGenerateContent?alt=sse), inline functionCall
-// args (object, not string) synthesized into tool-input start/delta/end,
-// JSON-schema sanitizer "gemini", onHalt synthesizes finish.
+// Gemini generateContent — implemented in `gemini.rs` + the shared
+// generate-content utilities and the gemini JSON-Schema projection in
+// `utils/`, plus the ToolSchemaProjection in `sanitizer.rs`.
 pub mod gemini;
+
+// Cohere v2 chat — native typed SSE events (thinking blocks, tool plans),
+// tool accumulation through the shared tool stream; message-end terminal.
+pub mod cohere_chat;
+
+// Mistral chat completions — OpenAI-shaped deltas with fragmentary tool
+// identity normalized through the Mistral tool-id hasher, native thinking
+// blocks, [DONE] terminal over sseWithDone framing.
+pub mod mistral_chat;

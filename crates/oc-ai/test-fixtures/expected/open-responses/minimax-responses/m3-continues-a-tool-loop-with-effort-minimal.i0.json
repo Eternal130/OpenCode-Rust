@@ -1,0 +1,175 @@
+{
+  "group": "minimax-responses",
+  "scenario": "m3-continues-a-tool-loop-with-effort-minimal",
+  "interaction": 0,
+  "machine": "open-responses",
+  "provider": "minimax",
+  "metadataKey": "minimax",
+  "frames": [
+    "{\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"55061b38079b713a03635d4e598c2b16\",\"object\":\"response\",\"created_at\":1789446323,\"model\":\"MiniMax-M3\",\"status\":\"in_progress\",\"output\":[],\"output_text\":null,\"usage\":null,\"error\":null,\"incomplete_details\":null,\"instructions\":null,\"metadata\":{},\"tools\":[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"enum\":[\"Paris\"]}},\"required\":[\"city\"],\"additionalProperties\":false},\"strict\":false}],\"tool_choice\":\"auto\",\"temperature\":1,\"top_p\":0.95,\"text\":{\"format\":{\"type\":\"text\"}},\"reasoning\":{\"effort\":\"minimal\",\"summary\":null},\"max_output_tokens\":1536,\"parallel_tool_calls\":true,\"previous_response_id\":null,\"conversation\":null,\"store\":false,\"service_tier\":\"standard\",\"safety_identifier\":null,\"truncation\":\"disabled\"}}",
+    "{\"type\":\"response.in_progress\",\"sequence_number\":1,\"response\":{\"id\":\"55061b38079b713a03635d4e598c2b16\",\"object\":\"response\",\"created_at\":1789446323,\"model\":\"MiniMax-M3\",\"status\":\"in_progress\",\"output\":[],\"output_text\":null,\"usage\":null,\"error\":null,\"incomplete_details\":null,\"instructions\":null,\"metadata\":{},\"tools\":[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"enum\":[\"Paris\"]}},\"required\":[\"city\"],\"additionalProperties\":false},\"strict\":false}],\"tool_choice\":\"auto\",\"temperature\":1,\"top_p\":0.95,\"text\":{\"format\":{\"type\":\"text\"}},\"reasoning\":{\"effort\":\"minimal\",\"summary\":null},\"max_output_tokens\":1536,\"parallel_tool_calls\":true,\"previous_response_id\":null,\"conversation\":null,\"store\":false,\"service_tier\":\"standard\",\"safety_identifier\":null,\"truncation\":\"disabled\"}}",
+    "{\"type\":\"response.output_item.added\",\"sequence_number\":2,\"item\":{\"status\":\"in_progress\",\"summary\":[],\"content\":[],\"id\":\"55061b38079b713a03635d4e598c2b16_rs\",\"type\":\"reasoning\"},\"output_index\":0}",
+    "{\"type\":\"response.content_part.added\",\"sequence_number\":3,\"part\":{\"type\":\"reasoning_text\",\"text\":\"\"},\"output_index\":0,\"content_index\":0,\"item_id\":\"55061b38079b713a03635d4e598c2b16_rs\"}",
+    "{\"type\":\"response.reasoning_text.delta\",\"sequence_number\":4,\"output_index\":0,\"content_index\":0,\"item_id\":\"55061b38079b713a03635d4e598c2b16_rs\",\"delta\":\"The user wants me\"}",
+    "{\"type\":\"response.reasoning_text.delta\",\"sequence_number\":5,\"output_index\":0,\"content_index\":0,\"item_id\":\"55061b38079b713a03635d4e598c2b16_rs\",\"delta\":\" to look up the current weather in Paris using the get_\"}",
+    "{\"type\":\"response.reasoning_text.delta\",\"sequence_number\":6,\"output_index\":0,\"content_index\":0,\"item_id\":\"55061b38079b713a03635d4e598c2b16_rs\",\"delta\":\"weather function and then report it in one short sentence.\"}",
+    "{\"type\":\"response.reasoning_text.done\",\"sequence_number\":7,\"output_index\":0,\"content_index\":0,\"item_id\":\"55061b38079b713a03635d4e598c2b16_rs\",\"text\":\"The user wants me to look up the current weather in Paris using the get_weather function and then report it in one short sentence.\"}",
+    "{\"type\":\"response.content_part.done\",\"sequence_number\":8,\"part\":{\"type\":\"reasoning_text\",\"text\":\"The user wants me to look up the current weather in Paris using the get_weather function and then report it in one short sentence.\"},\"output_index\":0,\"content_index\":0,\"item_id\":\"55061b38079b713a03635d4e598c2b16_rs\"}",
+    "{\"type\":\"response.output_item.done\",\"sequence_number\":9,\"item\":{\"type\":\"reasoning\",\"status\":\"completed\",\"summary\":[],\"content\":[{\"type\":\"reasoning_text\",\"text\":\"The user wants me to look up the current weather in Paris using the get_weather function and then report it in one short sentence.\"}],\"id\":\"55061b38079b713a03635d4e598c2b16_rs\"},\"output_index\":0}",
+    "{\"type\":\"response.output_item.added\",\"sequence_number\":10,\"item\":{\"id\":\"55061b38079b713a03635d4e598c2b16_fc_0\",\"type\":\"function_call\",\"status\":\"in_progress\",\"call_id\":\"call_08bf7dbf51d348ce8bf25c31\",\"name\":\"get_weather\",\"arguments\":\"\"},\"output_index\":1}",
+    "{\"type\":\"response.function_call_arguments.delta\",\"sequence_number\":11,\"output_index\":1,\"item_id\":\"55061b38079b713a03635d4e598c2b16_fc_0\",\"delta\":\"{\"}",
+    "{\"type\":\"response.function_call_arguments.delta\",\"sequence_number\":12,\"output_index\":1,\"item_id\":\"55061b38079b713a03635d4e598c2b16_fc_0\",\"delta\":\"\\\"city\\\": \\\"Paris\\\"}\"}",
+    "{\"type\":\"response.function_call_arguments.done\",\"sequence_number\":13,\"output_index\":1,\"item_id\":\"55061b38079b713a03635d4e598c2b16_fc_0\",\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\"}",
+    "{\"type\":\"response.output_item.done\",\"sequence_number\":14,\"item\":{\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_08bf7dbf51d348ce8bf25c31\",\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\",\"id\":\"55061b38079b713a03635d4e598c2b16_fc_0\"},\"output_index\":1}",
+    "{\"type\":\"response.completed\",\"sequence_number\":15,\"response\":{\"id\":\"55061b38079b713a03635d4e598c2b16\",\"object\":\"response\",\"created_at\":1789446323,\"model\":\"MiniMax-M3\",\"status\":\"completed\",\"output\":[{\"id\":\"55061b38079b713a03635d4e598c2b16_rs\",\"type\":\"reasoning\",\"status\":\"completed\",\"summary\":[],\"content\":[{\"type\":\"reasoning_text\",\"text\":\"The user wants me to look up the current weather in Paris using the get_weather function and then report it in one short sentence.\"}]},{\"id\":\"55061b38079b713a03635d4e598c2b16_fc_0\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_08bf7dbf51d348ce8bf25c31\",\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\"}],\"output_text\":null,\"usage\":{\"input_tokens\":442,\"output_tokens\":55,\"total_tokens\":497,\"input_tokens_details\":{\"cached_tokens\":128},\"output_tokens_details\":{\"reasoning_tokens\":27}},\"error\":null,\"incomplete_details\":null,\"instructions\":null,\"metadata\":{},\"tools\":[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"enum\":[\"Paris\"]}},\"required\":[\"city\"],\"additionalProperties\":false},\"strict\":false}],\"tool_choice\":\"auto\",\"temperature\":1,\"top_p\":0.95,\"text\":{\"format\":{\"type\":\"text\"}},\"reasoning\":{\"effort\":\"minimal\",\"summary\":null},\"max_output_tokens\":1536,\"parallel_tool_calls\":true,\"previous_response_id\":null,\"conversation\":null,\"store\":false,\"service_tier\":\"standard\",\"safety_identifier\":null,\"truncation\":\"disabled\"}}"
+  ],
+  "events": [
+    {
+      "type": "step-start",
+      "index": 0
+    },
+    {
+      "type": "reasoning-start",
+      "id": "55061b38079b713a03635d4e598c2b16_rs:0",
+      "providerMetadata": {
+        "minimax": {
+          "itemId": "55061b38079b713a03635d4e598c2b16_rs",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "55061b38079b713a03635d4e598c2b16_rs:0",
+      "text": "The user wants me to look up the current weather in Paris using the get_weather function and then report it in one short sentence."
+    },
+    {
+      "type": "reasoning-end",
+      "id": "55061b38079b713a03635d4e598c2b16_rs:0",
+      "text": "The user wants me to look up the current weather in Paris using the get_weather function and then report it in one short sentence.",
+      "providerMetadata": {
+        "minimax": {
+          "itemId": "55061b38079b713a03635d4e598c2b16_rs",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "tool-input-start",
+      "id": "call_08bf7dbf51d348ce8bf25c31",
+      "name": "get_weather",
+      "providerMetadata": {
+        "minimax": {
+          "itemId": "55061b38079b713a03635d4e598c2b16_fc_0"
+        }
+      }
+    },
+    {
+      "type": "tool-input-delta",
+      "id": "call_08bf7dbf51d348ce8bf25c31",
+      "name": "get_weather",
+      "text": "{",
+      "input": {}
+    },
+    {
+      "type": "tool-input-delta",
+      "id": "call_08bf7dbf51d348ce8bf25c31",
+      "name": "get_weather",
+      "text": "\"city\": \"Paris\"}",
+      "input": {
+        "city": "Paris"
+      }
+    },
+    {
+      "type": "tool-input-end",
+      "id": "call_08bf7dbf51d348ce8bf25c31",
+      "name": "get_weather",
+      "providerMetadata": {
+        "minimax": {
+          "itemId": "55061b38079b713a03635d4e598c2b16_fc_0"
+        }
+      }
+    },
+    {
+      "type": "tool-call",
+      "id": "call_08bf7dbf51d348ce8bf25c31",
+      "name": "get_weather",
+      "input": {
+        "city": "Paris"
+      },
+      "providerMetadata": {
+        "minimax": {
+          "itemId": "55061b38079b713a03635d4e598c2b16_fc_0"
+        }
+      }
+    },
+    {
+      "type": "step-finish",
+      "index": 0,
+      "reason": {
+        "normalized": "tool-calls"
+      },
+      "usage": {
+        "inputTokens": 442,
+        "outputTokens": 55,
+        "nonCachedInputTokens": 314,
+        "cacheReadInputTokens": 128,
+        "reasoningTokens": 27,
+        "totalTokens": 497,
+        "providerMetadata": {
+          "minimax": {
+            "input_tokens": 442,
+            "input_tokens_details": {
+              "cached_tokens": 128
+            },
+            "output_tokens": 55,
+            "output_tokens_details": {
+              "reasoning_tokens": 27
+            },
+            "total_tokens": 497
+          }
+        }
+      },
+      "providerMetadata": {
+        "minimax": {
+          "responseId": "55061b38079b713a03635d4e598c2b16",
+          "serviceTier": "standard"
+        }
+      }
+    },
+    {
+      "type": "finish",
+      "reason": {
+        "normalized": "tool-calls"
+      },
+      "usage": {
+        "inputTokens": 442,
+        "outputTokens": 55,
+        "nonCachedInputTokens": 314,
+        "cacheReadInputTokens": 128,
+        "reasoningTokens": 27,
+        "totalTokens": 497,
+        "providerMetadata": {
+          "minimax": {
+            "input_tokens": 442,
+            "input_tokens_details": {
+              "cached_tokens": 128
+            },
+            "output_tokens": 55,
+            "output_tokens_details": {
+              "reasoning_tokens": 27
+            },
+            "total_tokens": 497
+          }
+        }
+      },
+      "providerMetadata": {
+        "minimax": {
+          "responseId": "55061b38079b713a03635d4e598c2b16",
+          "serviceTier": "standard"
+        }
+      }
+    }
+  ],
+  "error": null
+}

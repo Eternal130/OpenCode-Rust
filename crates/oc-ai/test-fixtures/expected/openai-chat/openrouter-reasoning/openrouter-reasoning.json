@@ -1,0 +1,165 @@
+{
+ "group": "openrouter-reasoning",
+ "name": "openrouter-reasoning",
+ "protocol": "openrouter-chat",
+ "provider": "openrouter",
+ "providerMetadataKey": "openrouter",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "openrouter": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "openrouter": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "173",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "openrouter": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " × 219\n\n173 × 200 = 34,600\n173 × 19 = 173 × 20 - 173 = 3,460 - 173 = 3,287\n\n34,600 + 3,287 = 37,887",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "37",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "887",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "openrouter": {
+       "reasoningDetails": [
+        {
+         "format": "anthropic-claude-v1",
+         "index": 0,
+         "signature": "Ev8CCrIBCBIYAipA0W4viH3kgBs43Cl5ewwVBPXTQElvzfbA2TLF4iSbKy9ZZDCSDjjAlF3Bs4ELEnP3vrrTuTioC6OB380lXQdyIDIRY2xhdWRlLXNvbm5ldC00LTY4AEIIdGhpbmtpbmdaJDRjMGYwNDZmLTI1ZmQtNDVmYi1iZmIzLWEwOGE4ZTI0OWNhN3oedXByb2ZfMDExQ2VkSE1TN0tEcTM4Z2JkUkp0bXN3qAH2ye/VBhIMhjcPOnE2wLhs0P05GgwA3z9luwbhnSyRMSQiMDYeIIThirdkJb/n2s2TxUk5EOMrSc1xejAb0RN7BIl66P5KhtwXvcZTiyCkBS8+7Cp6MOinWi+I8U7DhWskSA0pHZqaAncbV7qCIHkoZ5aT8jiPWplAOnlciDo2tLkGsLnzXrnfhI11GTF0kcfyhbrt3tjEDSiPstBbT2u19LJ5IqwV2VKl0pWVdl4PTsDwC09ClbnJj1y0A3AM9gEh4B9mEo4BvT0XVEncux4YAQ==.eyJlbmRwb2ludF9zbHVnIjoiYW50aHJvcGljL2NsYXVkZS00LjYtc29ubmV0LTIwMjYwMjE3fGNsYXVkZS1vbi1hd3MifQ",
+         "text": "173 × 219\n\n173 × 200 = 34,600\n173 × 19 = 173 × 20 - 173 = 3,460 - 173 = 3,287\n\n34,600 + 3,287 = 37,887",
+         "type": "reasoning.text"
+        }
+       ],
+       "reasoningField": "reasoning"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "end_turn"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 61,
+      "nonCachedInputTokens": 61,
+      "outputTokens": 80,
+      "providerMetadata": {
+       "openrouter": {
+        "completion_tokens": 80,
+        "completion_tokens_details": {
+         "audio_tokens": 0,
+         "image_tokens": 0,
+         "reasoning_tokens": 73
+        },
+        "cost": 0.001383,
+        "cost_details": {
+         "upstream_inference_completions_cost": 0.0012,
+         "upstream_inference_cost": 0.001383,
+         "upstream_inference_prompt_cost": 0.000183
+        },
+        "is_byok": false,
+        "prompt_tokens": 61,
+        "prompt_tokens_details": {
+         "audio_tokens": 0,
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "video_tokens": 0
+        },
+        "total_tokens": 141
+       }
+      },
+      "reasoningTokens": 73,
+      "totalTokens": 141
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "end_turn"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 61,
+      "nonCachedInputTokens": 61,
+      "outputTokens": 80,
+      "providerMetadata": {
+       "openrouter": {
+        "completion_tokens": 80,
+        "completion_tokens_details": {
+         "audio_tokens": 0,
+         "image_tokens": 0,
+         "reasoning_tokens": 73
+        },
+        "cost": 0.001383,
+        "cost_details": {
+         "upstream_inference_completions_cost": 0.0012,
+         "upstream_inference_cost": 0.001383,
+         "upstream_inference_prompt_cost": 0.000183
+        },
+        "is_byok": false,
+        "prompt_tokens": 61,
+        "prompt_tokens_details": {
+         "audio_tokens": 0,
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "video_tokens": 0
+        },
+        "total_tokens": 141
+       }
+      },
+      "reasoningTokens": 73,
+      "totalTokens": 141
+     }
+    }
+   ]
+  }
+ ]
+}

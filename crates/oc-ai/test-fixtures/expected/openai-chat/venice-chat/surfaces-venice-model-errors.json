@@ -1,0 +1,15 @@
+{
+ "group": "venice-chat",
+ "name": "surfaces-venice-model-errors",
+ "protocol": "venice-chat",
+ "provider": "venice",
+ "providerMetadataKey": "venice",
+ "interactions": [
+  {
+   "error": {
+    "tag": "InvalidRequest",
+    "message": "Specified model not found: no-such-model-xyz. Did you mean: z-ai-glm-5-3, z-ai-glm-5-3-flash, z-ai-glm-5-turbo?"
+   }
+  }
+ ]
+}

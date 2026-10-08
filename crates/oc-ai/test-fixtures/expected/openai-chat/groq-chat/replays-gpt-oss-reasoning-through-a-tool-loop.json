@@ -1,0 +1,369 @@
+{
+ "group": "groq-chat",
+ "name": "replays-gpt-oss-reasoning-through-a-tool-loop",
+ "protocol": "groq-chat",
+ "provider": "groq",
+ "providerMetadataKey": "groq",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "We",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " need",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " to",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " call",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " function",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " lookup",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "_weather",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " for",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " Paris",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " then",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " report",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "fc_db90d537-d954-4c54-86ed-0fe04424fbb3",
+     "name": "lookup_weather",
+     "type": "tool-input-start"
+    },
+    {
+     "id": "fc_db90d537-d954-4c54-86ed-0fe04424fbb3",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "lookup_weather",
+     "text": "{\"city\":\"Paris\"}",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "fc_db90d537-d954-4c54-86ed-0fe04424fbb3",
+     "name": "lookup_weather",
+     "type": "tool-input-end"
+    },
+    {
+     "id": "fc_db90d537-d954-4c54-86ed-0fe04424fbb3",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "lookup_weather",
+     "type": "tool-call"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "step-finish",
+     "usage": {
+      "inputTokens": 169,
+      "nonCachedInputTokens": 169,
+      "outputTokens": 37,
+      "providerMetadata": {
+       "groq": {
+        "completion_time": 0.0500934,
+        "completion_tokens": 37,
+        "completion_tokens_details": {
+         "reasoning_tokens": 14
+        },
+        "prompt_time": 0.008344781,
+        "prompt_tokens": 169,
+        "queue_time": 0.057877384,
+        "total_time": 0.058438181,
+        "total_tokens": 206
+       }
+      },
+      "reasoningTokens": 14,
+      "totalTokens": 206
+     }
+    },
+    {
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "finish",
+     "usage": {
+      "inputTokens": 169,
+      "nonCachedInputTokens": 169,
+      "outputTokens": 37,
+      "providerMetadata": {
+       "groq": {
+        "completion_time": 0.0500934,
+        "completion_tokens": 37,
+        "completion_tokens_details": {
+         "reasoning_tokens": 14
+        },
+        "prompt_time": 0.008344781,
+        "prompt_tokens": 169,
+        "queue_time": 0.057877384,
+        "total_time": 0.058438181,
+        "total_tokens": 206
+       }
+      },
+      "reasoningTokens": 14,
+      "totalTokens": 206
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "Paris",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " is",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " sunny",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " with",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " a",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " temperature",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " of",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " ",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "18",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "°C",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ".",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "inputTokens": 224,
+      "nonCachedInputTokens": 224,
+      "outputTokens": 15,
+      "providerMetadata": {
+       "groq": {
+        "completion_time": 0.015616316,
+        "completion_tokens": 15,
+        "prompt_time": 0.060486793,
+        "prompt_tokens": 224,
+        "queue_time": 0.128860404,
+        "total_time": 0.076103109,
+        "total_tokens": 239
+       }
+      },
+      "totalTokens": 239
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "inputTokens": 224,
+      "nonCachedInputTokens": 224,
+      "outputTokens": 15,
+      "providerMetadata": {
+       "groq": {
+        "completion_time": 0.015616316,
+        "completion_tokens": 15,
+        "prompt_time": 0.060486793,
+        "prompt_tokens": 224,
+        "queue_time": 0.128860404,
+        "total_time": 0.076103109,
+        "total_tokens": 239
+       }
+      },
+      "totalTokens": 239
+     }
+    }
+   ]
+  }
+ ]
+}

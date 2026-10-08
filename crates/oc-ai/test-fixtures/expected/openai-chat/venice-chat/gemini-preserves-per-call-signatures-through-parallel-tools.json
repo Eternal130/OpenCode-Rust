@@ -1,0 +1,282 @@
+{
+ "group": "venice-chat",
+ "name": "gemini-preserves-per-call-signatures-through-parallel-tools",
+ "protocol": "venice-chat",
+ "provider": "venice",
+ "providerMetadataKey": "venice",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "call_0",
+     "name": "lookup_rate",
+     "type": "tool-input-start"
+    },
+    {
+     "id": "call_0",
+     "input": {
+      "code": "ZEBRA"
+     },
+     "name": "lookup_rate",
+     "text": "{\"code\":\"ZEBRA\"}",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_1",
+     "name": "lookup_rate",
+     "type": "tool-input-start"
+    },
+    {
+     "id": "call_1",
+     "input": {
+      "code": "MOOSE"
+     },
+     "name": "lookup_rate",
+     "text": "{\"code\":\"MOOSE\"}",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_0",
+     "name": "lookup_rate",
+     "providerMetadata": {
+      "venice": {
+       "thoughtSignature": "AY89a1/bp+ihzOXpD71E6UhQv6xnBjHTAdPeNHvLEAevtqznKg46D/3qO3e9Qg7wGmccL6IpLV56PwWIT+6pXoeU6ix8JCCk7nlml/Sz2huX/rNFoSRHpB+YAZK07lHP9cbotXy7FPNMaRhsl18sPSJZLlPK0iTGhJa7MmH72r4v/G3/izffMKUPRos6i5qQ52La10FUWSunPigqNnglEvWEC3Yb+d+PnEq5iOPaVCD0awXjhsIk8L0n4+T6jM4epO+whUSSgvH9PGwgmsP197hb7l5YSjQncNX0oF1G4ch3xrFzXyS/noFFy6SlBfzfN0NJmAyP//4oVqjffUJngigTAtboI4HdDwH1fPHuI5FTfmVcUGVVIEjhAEDAAHtS77uW/XdLH4bsSigjYeCzgRTYmHP8bqFb1HjRjl2HK2Pr1y6ch0JSIgtAKv8Kj4R0PM8rIYxxf7LgrsaVWogt4rq2M4HvcUcBi6IhQ/500JUCoqdhlTGMqCFUHkN6P/qAoPGZXmo50OvtNChQ4vXVGYxWp89IRwdcv8vqjIFk75/R6oZG9BsrUaC1JnQN8i3BbYc1bz/lzFCQ1IC/g1Sm+wPhsaPmoVN77101ZAdNMiP4B5Ow7K/UycMunFKWy4xdpaT7Pb+LLNy6GYy9q2TvoRXTq1lJugLH4Q8TQZj5neWZmiDxqzsj0Xvwew7zLwGSMfkpBB4rgx9XWMx5CwqO068qjhmo+0gUkxMug2RHblEGnPO7i0i9fYj9ltDfUpFxN2adDpyk4dwuIeVSlu4N4oHOgjGms5jWLp0MqkyoKFo="
+      }
+     },
+     "type": "tool-input-end"
+    },
+    {
+     "id": "call_0",
+     "input": {
+      "code": "ZEBRA"
+     },
+     "name": "lookup_rate",
+     "providerMetadata": {
+      "venice": {
+       "thoughtSignature": "AY89a1/bp+ihzOXpD71E6UhQv6xnBjHTAdPeNHvLEAevtqznKg46D/3qO3e9Qg7wGmccL6IpLV56PwWIT+6pXoeU6ix8JCCk7nlml/Sz2huX/rNFoSRHpB+YAZK07lHP9cbotXy7FPNMaRhsl18sPSJZLlPK0iTGhJa7MmH72r4v/G3/izffMKUPRos6i5qQ52La10FUWSunPigqNnglEvWEC3Yb+d+PnEq5iOPaVCD0awXjhsIk8L0n4+T6jM4epO+whUSSgvH9PGwgmsP197hb7l5YSjQncNX0oF1G4ch3xrFzXyS/noFFy6SlBfzfN0NJmAyP//4oVqjffUJngigTAtboI4HdDwH1fPHuI5FTfmVcUGVVIEjhAEDAAHtS77uW/XdLH4bsSigjYeCzgRTYmHP8bqFb1HjRjl2HK2Pr1y6ch0JSIgtAKv8Kj4R0PM8rIYxxf7LgrsaVWogt4rq2M4HvcUcBi6IhQ/500JUCoqdhlTGMqCFUHkN6P/qAoPGZXmo50OvtNChQ4vXVGYxWp89IRwdcv8vqjIFk75/R6oZG9BsrUaC1JnQN8i3BbYc1bz/lzFCQ1IC/g1Sm+wPhsaPmoVN77101ZAdNMiP4B5Ow7K/UycMunFKWy4xdpaT7Pb+LLNy6GYy9q2TvoRXTq1lJugLH4Q8TQZj5neWZmiDxqzsj0Xvwew7zLwGSMfkpBB4rgx9XWMx5CwqO068qjhmo+0gUkxMug2RHblEGnPO7i0i9fYj9ltDfUpFxN2adDpyk4dwuIeVSlu4N4oHOgjGms5jWLp0MqkyoKFo="
+      }
+     },
+     "type": "tool-call"
+    },
+    {
+     "id": "call_1",
+     "name": "lookup_rate",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "tool-input-end"
+    },
+    {
+     "id": "call_1",
+     "input": {
+      "code": "MOOSE"
+     },
+     "name": "lookup_rate",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "tool-call"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "step-finish",
+     "usage": {
+      "inputTokens": 74,
+      "nonCachedInputTokens": 74,
+      "outputTokens": 156,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 156,
+        "prompt_tokens": 74,
+        "total_tokens": 230
+       }
+      },
+      "totalTokens": 230
+     }
+    },
+    {
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "finish",
+     "usage": {
+      "inputTokens": 74,
+      "nonCachedInputTokens": 74,
+      "outputTokens": 156,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 156,
+        "prompt_tokens": 74,
+        "total_tokens": 230
+       }
+      },
+      "totalTokens": 230
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "The retrieved rates are:\n- **",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "ZEBRA:** 23\n- **MOOSE:** 31\n\n### Calculation:\n1. **Add",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " the rates:**  \n   $$23 + 31 = 54$$\n\n2. **Multiply by 7:**  ",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "\n   $$54 \\times 7 = 378$$\n\nThe final result is **378",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "**.",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "providerMetadata": {
+      "venice": {
+       "messageThoughtSignature": "AY89a18wXUWI7m5/5GGqxfoJDqE4MU2X2SR/ZQMCX+JQ/clHQynyEjplK4a8w9tXAi8uuxYPVxYj1ULcb83zUQBsr77tSkJN5R0J2Jgc2HzYtmTW7OYHoFQqmMESnDjvDiO51y3xpXGbVkqRlXwfmap+Tpivfx45hiXlns/hObEQo1gE70NzD7d8CQOseYVz2N7MPMmGDqpAy+5SAHXGAcQ9K2ufHNUdfWM/uUi+sGUcDhGnjPXPlzIuYk7IjUQXNAH9FFqo19dBQPhE106C3aI69QAuMvyZZ/no4ou9XSOUXrstjzQwUM+TOJXsab80F1+C6DghvYm0UZSb827xCKPtj7oCQwtwg+f4sWELhflp42IL3URo2UxpZaDNpt7PYXmmcCvKAN7/PTirCijNWMtlDL0LDbiKj+DfOFEuS2VxVq+yQgWRbKJZF7bl8BCSe7+Qab0bAsu0ZJXKBlxs46ulaXn5cc933y/Yv7O0XGHbVULMzeEpZndzkHqZYs5D+ve+CJFfjWsVk1NKrTdXqt11Ov470+MCpSlHTXdjug7oUd0A0b5AH+bF4yAZAGj4snJ7hi04EQ4Ch7rASB3OB+YB+8SnStAGf0XuimNgY2wzR68qaQ=="
+      }
+     },
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "inputTokens": 206,
+      "nonCachedInputTokens": 206,
+      "outputTokens": 208,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 208,
+        "prompt_tokens": 206,
+        "total_tokens": 414
+       }
+      },
+      "totalTokens": 414
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "inputTokens": 206,
+      "nonCachedInputTokens": 206,
+      "outputTokens": 208,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 208,
+        "prompt_tokens": 206,
+        "total_tokens": 414
+       }
+      },
+      "totalTokens": 414
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "385",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "providerMetadata": {
+      "venice": {
+       "messageThoughtSignature": "AY89a1/DMIB/2qixC5QVQQH1tA2QiQFpEsXnIDd7wlCgwuYQXBGWgSsP1bpTZJUJM/yqKdQh96+/c6c28VMbW5iovCDxxeK56KfmSBSBIPtNW8BUHHLxQw9vdsxQvQyHcGW6rLb4W3gElqx6JFmNkTMvijUS9QDgkPlPipirbv7pqLejFyQ040GD4IVhP8ovyR49EJm61W0JvJOPFT30/gVvaKA6RnRgTKGiHrZWVqLxhKVkb0gC7jI9CNNASOYH67uelFQ2trbcf5Qbhx4q93vAErFsBzvzliSuaELDrxZAF9VCNIiWz4AUtEWI1FLCMYxkgNry/K+iNpwcXu8BxABETbNkEb722wjpt1A2EZK/5qhqKQvUOq+WgSCPCLoI1zfUiGN6UV9D/QGtyS2Iyt3AYlvKjZVVzP217ItWSDacGzigLd4t+4MMW7Dvbs7ffBvBV+EzMCP1dnsLkKCxicfvT3e2EgY+liDSaSZG3sE7Lm4WKCYbI4rrBLMupERSaFfAHWdTlea5HeM="
+      }
+     },
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "inputTokens": 429,
+      "nonCachedInputTokens": 429,
+      "outputTokens": 83,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 83,
+        "prompt_tokens": 429,
+        "total_tokens": 512
+       }
+      },
+      "totalTokens": 512
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "inputTokens": 429,
+      "nonCachedInputTokens": 429,
+      "outputTokens": 83,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 83,
+        "prompt_tokens": 429,
+        "total_tokens": 512
+       }
+      },
+      "totalTokens": 512
+     }
+    }
+   ]
+  }
+ ]
+}

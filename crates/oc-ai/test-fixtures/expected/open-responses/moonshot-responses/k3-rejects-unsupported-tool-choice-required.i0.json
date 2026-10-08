@@ -1,0 +1,11 @@
+{
+  "group": "moonshot-responses",
+  "scenario": "k3-rejects-unsupported-tool-choice-required",
+  "interaction": 0,
+  "machine": "open-responses",
+  "provider": "moonshot",
+  "metadataKey": "moonshot",
+  "frames": [],
+  "events": [],
+  "error": null
+}
