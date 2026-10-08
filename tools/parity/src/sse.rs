@@ -1,6 +1,8 @@
 //! text/event-stream subscription: parse `data:` frames and heartbeat
-//! comments off `GET /api/event`, collect N data frames with a timeout, and
-//! normalize the collected sequence.
+//! comments off `GET /api/event`, collect frames (count-based, or the
+//! scenario policy: N frames / quiescence), normalize the collected
+//! sequence, and compare two sequences per the canonical grouping policy
+//! (`NORMALIZATION.md` §"Sequence comparison").
 
 use std::time::Duration;
 
@@ -8,7 +10,11 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 
 use crate::minih::{self, BodyStream};
-use crate::normalize::{normalize_value, NormEnv};
+use crate::normalize::{normalize_value_with, IdNumbering, NormEnv};
+
+/// Default scenario quiescence window: a sequence is considered complete
+/// when no data frame arrived for this long (spec §"Sequence comparison").
+pub const DEFAULT_QUIESCENCE: Duration = Duration::from_millis(2000);
 
 /// One parsed SSE frame. Comment-only frames (heartbeats) have empty `data`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,44 +175,329 @@ impl SseStream {
         }
         Ok(frames)
     }
+
+    /// Scenario alignment collection (spec §"Sequence comparison" policy b):
+    /// collect data frames until one of
+    ///
+    /// 1. `max_frames` data frames were seen (scenario watermark), or
+    /// 2. **quiescence** — no *data* frame for `quiescence` (heartbeats are
+    ///    transport keep-alive and do not reset the window), or
+    /// 3. `overall_timeout` elapsed,
+    ///
+    /// then return whatever arrived (possibly fewer than `max_frames`).
+    /// Both sides of a scenario comparison use the same parameters.
+    pub async fn collect_scenario(
+        &mut self,
+        max_frames: usize,
+        quiescence: Duration,
+        overall_timeout: Duration,
+    ) -> Result<Vec<Frame>> {
+        let overall_at = tokio::time::Instant::now() + overall_timeout;
+        let mut quiet_at = tokio::time::Instant::now() + quiescence;
+        let mut frames = Vec::with_capacity(max_frames.min(1024));
+        loop {
+            if frames.len() >= max_frames {
+                return Ok(frames);
+            }
+            let now = tokio::time::Instant::now();
+            if now >= quiet_at || now >= overall_at {
+                return Ok(frames);
+            }
+            let wait = quiet_at.min(overall_at) - now;
+            // The inner idle bound is the overall budget; the *outer* timeout
+            // enforces quiescence, so a quiet socket surfaces as Elapsed here
+            // (quiescent), never as a spurious read error.
+            let idle = overall_at - now;
+            match tokio::time::timeout(wait, self.next_frame(idle)).await {
+                // Elapsed: the window lapses; the next loop pass returns.
+                Err(_elapsed) => {}
+                Ok(Err(e)) => return Err(e),
+                Ok(Ok(frame)) => {
+                    if frame.is_data() {
+                        frames.push(frame);
+                        quiet_at = tokio::time::Instant::now() + quiescence;
+                    }
+                    if self.eof {
+                        // Stream ended: nothing more can arrive; the
+                        // scenario is complete by definition.
+                        return Ok(frames);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Render collected frames as a normalized JSON array preserving sequence:
 /// each entry records the dispatch index, optional `event`, optional
 /// `comments`, and the payload (parsed JSON normalized through
-/// [`normalize_value`]; non-JSON payloads stay strings).
+/// [`normalize_value_with`; non-JSON payloads stay strings).
+///
+/// The **whole sequence is one normalization run**: id tokens use one
+/// first-seen numbering across all frames, so an id referenced by frame 1
+/// and frame 9 gets the same `<PREFIX_ID:n>` token (referential integrity
+/// across the sequence, spec §5.4).
 #[must_use]
 pub fn frames_to_json(frames: &[Frame], env: &NormEnv) -> Value {
-    Value::Array(
-        frames
-            .iter()
-            .enumerate()
-            .map(|(index, frame)| {
-                let mut entry = serde_json::Map::new();
-                entry.insert("index".to_string(), Value::from(index));
-                if let Some(event) = &frame.event {
-                    entry.insert("event".to_string(), Value::String(event.clone()));
-                }
-                if !frame.comments.is_empty() {
-                    entry.insert(
-                        "comments".to_string(),
-                        Value::Array(
-                            frame
-                                .comments
-                                .iter()
-                                .map(|comment| Value::String(comment.clone()))
-                                .collect(),
-                        ),
-                    );
-                }
-                let data = serde_json::from_str::<Value>(&frame.data).map_or_else(
-                    |_| Value::String(frame.data.clone()),
-                    |parsed| normalize_value(&parsed, env),
-                );
-                entry.insert("data".to_string(), data);
-                Value::Object(entry)
-            })
-            .collect(),
+    let array = Value::Array(
+        frames.iter().enumerate().map(|(index, frame)| frame_entry(frame, Some(index))).collect(),
+    );
+    normalize_value_with(&array, env, &mut IdNumbering::new())
+}
+
+/// One raw (pre-normalization) frame entry: `{index, event?, comments?,
+/// data}`. The global dispatch `index` is interleaving-dependent and is used
+/// only by [`frames_to_json`]; sequence comparison builds entries without it.
+fn frame_entry(frame: &Frame, index: Option<usize>) -> Value {
+    let mut entry = serde_json::Map::new();
+    if let Some(index) = index {
+        entry.insert("index".to_string(), Value::from(index));
+    }
+    if let Some(event) = &frame.event {
+        entry.insert("event".to_string(), Value::String(event.clone()));
+    }
+    if !frame.comments.is_empty() {
+        entry.insert(
+            "comments".to_string(),
+            Value::Array(frame.comments.iter().map(|c| Value::String(c.clone())).collect()),
+        );
+    }
+    let data = serde_json::from_str::<Value>(&frame.data)
+        .unwrap_or_else(|_| Value::String(frame.data.clone()));
+    entry.insert("data".to_string(), data);
+    Value::Object(entry)
+}
+
+// ---------------------------------------------------------------------------
+// Sequence comparison (spec §"Sequence comparison")
+// ---------------------------------------------------------------------------
+
+/// First divergence between two collected frame sequences, reported per
+/// group at the first divergent frame index (see [`compare_sequences`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SequenceDiff {
+    /// Diagnostic group key (see [`compare_sequences`] for its shape).
+    pub group: String,
+    /// Index of the first frame where the group's canonical orderings
+    /// differ (equals the shorter side's length when one side ran out).
+    pub index: usize,
+    /// Reference-side frame entry at `index` (`Null` when absent).
+    pub left: Value,
+    /// Port-side frame entry at `index` (`Null` when absent).
+    pub right: Value,
+}
+
+impl std::fmt::Display for SequenceDiff {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "sequence divergence in group {} at frame {}: reference={} port={}",
+            self.group, self.index, self.left, self.right
+        )
+    }
+}
+
+/// One side's frames grouped per the canonical policy, with each group's
+/// canonical ordering already normalized (one id-numbering run per group).
+struct GroupedSequence {
+    /// `(group key, normalized canonical ordering)` in first-appearance
+    /// order of the groups.
+    groups: Vec<(String, Vec<Value>)>,
+}
+
+/// Grouping metadata extracted from one frame payload.
+struct FrameMeta {
+    key: String,
+    seq: Option<u64>,
+}
+
+/// Extract the grouping key and optional `seq` from a frame payload.
+///
+/// Key policy (spec): `location` + aggregate id — the aggregate is
+/// `durable.aggregateID` (envelope), or top-level `aggregateID`
+/// (`log.synced`), falling back to `data.sessionID` (the inner payload of
+/// session events). Frames with neither location nor aggregate/session id
+/// (e.g. `server.connected`) share the fixed `"global"` group.
+fn frame_meta(payload: &Value) -> FrameMeta {
+    let obj = payload.as_object();
+    let location = obj.and_then(|o| o.get("location")).and_then(Value::as_object);
+    let directory =
+        location.and_then(|l| l.get("directory")).and_then(Value::as_str).unwrap_or_default();
+    let workspace =
+        location.and_then(|l| l.get("workspaceID")).and_then(Value::as_str).unwrap_or_default();
+    let aggregate = obj
+        .and_then(|o| o.get("durable"))
+        .and_then(Value::as_object)
+        .and_then(|d| d.get("aggregateID"))
+        .and_then(Value::as_str)
+        .or_else(|| obj.and_then(|o| o.get("aggregateID")).and_then(Value::as_str))
+        .or_else(|| {
+            obj.and_then(|o| o.get("data"))
+                .and_then(Value::as_object)
+                .and_then(|d| d.get("sessionID"))
+                .and_then(Value::as_str)
+        });
+    let seq = obj
+        .and_then(|o| o.get("durable"))
+        .and_then(Value::as_object)
+        .and_then(|d| d.get("seq"))
+        .and_then(Value::as_u64)
+        .or_else(|| obj.and_then(|o| o.get("seq")).and_then(Value::as_u64));
+
+    let key = if directory.is_empty() && workspace.is_empty() && aggregate.is_none() {
+        "global".to_string()
+    } else {
+        let ws = if workspace.is_empty() { String::new() } else { format!("+ws={workspace}") };
+        let agg = aggregate.unwrap_or("?");
+        format!("loc={directory}{ws}|agg={agg}")
+    };
+    FrameMeta { key, seq }
+}
+
+/// Group a side's data frames per the canonical policy and normalize each
+/// group's canonical ordering. Heartbeat (non-data) frames are transport
+/// noise and skipped.
+///
+/// Canonical order within a group: **when every frame of the group carries
+/// `seq`, ascending `seq`; otherwise arrival order** (within one aggregate,
+/// arrival order is deterministic — only cross-aggregate interleaving is
+/// not). Each group is normalized as its own id-numbering run, so tokens are
+/// invariant to cross-group interleaving; cross-aggregate references are the
+/// job of whole-body compares, not sequence compares (spec).
+fn group_frames(frames: &[Frame], env: &NormEnv) -> GroupedSequence {
+    let mut order: Vec<String> = Vec::new();
+    let mut buckets: std::collections::BTreeMap<String, Vec<(Option<u64>, Value)>> =
+        std::collections::BTreeMap::new();
+    for frame in frames.iter().filter(|frame| frame.is_data()) {
+        let payload =
+            serde_json::from_str::<Value>(&frame.data).unwrap_or(Value::String(frame.data.clone()));
+        let meta = frame_meta(&payload);
+        if !buckets.contains_key(&meta.key) {
+            order.push(meta.key.clone());
+        }
+        buckets.entry(meta.key).or_default().push((meta.seq, frame_entry(frame, None)));
+    }
+    let groups = order
+        .into_iter()
+        .map(|key| {
+            let mut bucket = buckets.remove(&key).unwrap_or_default();
+            let all_sequenced = bucket.iter().all(|(seq, _)| seq.is_some());
+            if all_sequenced {
+                bucket.sort_by_key(|(seq, _)| seq.unwrap_or_default());
+            }
+            // One id-numbering run per group: encounter order = the group's
+            // canonical order.
+            let normalized = normalize_value_with(
+                &Value::Array(bucket.into_iter().map(|(_, entry)| entry).collect()),
+                env,
+                &mut IdNumbering::new(),
+            );
+            let entries = normalized.as_array().cloned().unwrap_or_default();
+            (key, entries)
+        })
+        .collect();
+    GroupedSequence { groups }
+}
+
+/// Compare two collected frame sequences per the canonical policy (spec
+/// §"Sequence comparison"):
+///
+/// 1. each side is grouped per `location`+aggregate (fallback `sessionID`),
+/// 2. each group's ordering is canonicalized (all-seq → ascending `seq`,
+///    else arrival order) and normalized (ids renumbered first-seen *within
+///    the group*, so independent-aggregate interleaving cannot perturb
+///    tokens),
+/// 3. the two sides' **multisets of group orderings** are compared — group
+///    *keys* are diagnostics only, because raw ids differ per run and groups
+///    are paired by content, not by key,
+/// 4. the first unmatched group (reference side first, in first-appearance
+///    order, then port side) is reported against its best counterpart (the
+///    opposite-side leftover with the longest common frame prefix) at the
+///    **first divergent frame index**.
+///
+/// Returns `None` when the sequences agree.
+#[must_use]
+pub fn compare_sequences(
+    frames_reference: &[Frame],
+    env_reference: &NormEnv,
+    frames_port: &[Frame],
+    env_port: &NormEnv,
+) -> Option<SequenceDiff> {
+    let a = group_frames(frames_reference, env_reference);
+    let b = group_frames(frames_port, env_port);
+
+    // Multiset matching: pair equal orderings, greedily, A order × B order.
+    let mut b_taken = vec![false; b.groups.len()];
+    let mut a_unmatched: Vec<usize> = Vec::new();
+    for (i, (_, a_entries)) in a.groups.iter().enumerate() {
+        let match_at = b.groups.iter().enumerate().find(|(j, (_, b_entries))| {
+            !b_taken[*j] && a_entries.as_slice() == b_entries.as_slice()
+        });
+        match match_at {
+            Some((j, _)) => b_taken[j] = true,
+            None => a_unmatched.push(i),
+        }
+    }
+    let b_unmatched: Vec<usize> =
+        b.groups.iter().enumerate().filter(|(j, _)| !b_taken[*j]).map(|(j, _)| j).collect();
+    if a_unmatched.is_empty() && b_unmatched.is_empty() {
+        return None;
+    }
+
+    // Report the first unmatched group; reference side takes priority.
+    let (report_from_a, report_index) =
+        if let Some(i) = a_unmatched.first() { (true, *i) } else { (false, b_unmatched[0]) };
+    let (group, mine) = if report_from_a {
+        (&a.groups[report_index].0, a.groups[report_index].1.as_slice())
+    } else {
+        (&b.groups[report_index].0, b.groups[report_index].1.as_slice())
+    };
+    // Best counterpart: opposite-side leftover with the longest common
+    // prefix (ties → first).
+    let counterparts: Vec<usize> =
+        if report_from_a { b_unmatched.clone() } else { a_unmatched.clone() };
+    let other = |k: usize| -> &[Value] {
+        if report_from_a {
+            b.groups[k].1.as_slice()
+        } else {
+            a.groups[k].1.as_slice()
+        }
+    };
+    let counterpart = counterparts
+        .iter()
+        .copied()
+        .max_by_key(|k| common_prefix_len(mine, other(*k)))
+        .map(|k| other(k).to_vec());
+
+    let (left, right) = if report_from_a {
+        (Some(mine), counterpart.as_deref())
+    } else {
+        (counterpart.as_deref(), Some(mine))
+    };
+    let (index, left_frame, right_frame) =
+        first_divergent_frame(left.unwrap_or(&[]), right.unwrap_or(&[]));
+    Some(SequenceDiff { group: group.clone(), index, left: left_frame, right: right_frame })
+}
+
+/// Length of the common prefix of two frame-entry sequences.
+fn common_prefix_len(a: &[Value], b: &[Value]) -> usize {
+    a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
+}
+
+/// First index where two canonical orderings differ; the side missing the
+/// frame renders `Null` (absent frames and absent groups both surface as
+/// `Null` on the missing side).
+fn first_divergent_frame(a: &[Value], b: &[Value]) -> (usize, Value, Value) {
+    let shared = common_prefix_len(a, b);
+    let index = shared.min(a.len().min(b.len()));
+    if shared == a.len() && shared == b.len() {
+        // Equal orderings should not reach here; report defensively.
+        return (index, Value::Null, Value::Null);
+    }
+    (
+        index,
+        a.get(index).cloned().unwrap_or(Value::Null),
+        b.get(index).cloned().unwrap_or(Value::Null),
     )
 }
 
@@ -250,12 +541,408 @@ mod tests {
                 data: "{\"id\":\"evt_11c556f9e001H4T7m94mksITaJ\",\"type\":\"server.connected\",\"data\":{}}".to_string(),
                 comments: vec![],
             },
+            Frame {
+                event: None,
+                data: "{\"id\":\"evt_11c556f9e001H4T7m94mksITaJ\",\"type\":\"server.connected\",\"data\":{}}".to_string(),
+                comments: vec![],
+            },
             Frame { event: None, data: "plain text".to_string(), comments: vec!["heartbeat".to_string()] },
         ];
         let out = frames_to_json(&frames, &NormEnv::new());
-        assert_eq!(out[0]["data"]["id"], Value::from("<EVT_ID>"));
+        assert_eq!(out[0]["data"]["id"], Value::from("<EVT_ID:1>"));
         assert_eq!(out[0]["data"]["type"], Value::from("server.connected"));
-        assert_eq!(out[1]["data"], Value::from("plain text"));
-        assert_eq!(out[1]["comments"][0], Value::from("heartbeat"));
+        // One numbering run across the sequence: the same evt id in the
+        // second frame reuses its token (cross-frame reference agreement).
+        assert_eq!(out[1]["data"]["id"], Value::from("<EVT_ID:1>"));
+        assert_eq!(out[2]["data"], Value::from("plain text"));
+        assert_eq!(out[2]["comments"][0], Value::from("heartbeat"));
+    }
+
+    // -- sequence comparison (spec §"Sequence comparison") ------------------
+
+    fn frame(data: impl Into<String>) -> Frame {
+        Frame { event: None, data: data.into(), comments: vec![] }
+    }
+
+    fn env() -> NormEnv {
+        NormEnv::new()
+    }
+
+    /// A durable session event for aggregate `ses`, at `seq`, of `kind`.
+    fn session_event(event_id: &str, ses: &str, seq: u64, kind: &str) -> Frame {
+        frame(format!(
+            r#"{{"id":"{event_id}","created":1760000000000,"type":"session.{kind}","durable":{{"aggregateID":"{ses}","seq":{seq},"version":1}},"data":{{"sessionID":"{ses}","kind":"{kind}"}}}}"#
+        ))
+    }
+
+    /// An ephemeral session event (no `durable`, no `seq`): grouping falls
+    /// back to `data.sessionID`; canonical order is arrival order.
+    fn ephemeral_session_event(event_id: &str, ses: &str, text: &str) -> Frame {
+        frame(format!(
+            r#"{{"id":"{event_id}","created":1760000000000,"type":"tui.prompt.append","location":{{"directory":"/repo"}},"data":{{"sessionID":"{ses}","text":"{text}"}}}}"#
+        ))
+    }
+
+    fn connected(event_id: &str) -> Frame {
+        frame(format!(
+            r#"{{"id":"{event_id}","created":1760000000000,"type":"server.connected","data":{{}}}}"#
+        ))
+    }
+
+    #[test]
+    fn interleaved_aggregates_compare_equal() {
+        // Two independent aggregates with different shapes, interleaved in
+        // different global orders on the two sides (and different raw ids):
+        // the multiset of canonical per-group orderings is identical.
+        let a = vec![
+            session_event(
+                "evt_11c556f9e001AAAAAAAAAAAAAAAA",
+                "ses_01JZY0ID0123456789AAAA",
+                1,
+                "message.updated",
+            ),
+            session_event(
+                "evt_11c556f9e001BBBBBBBBBBBBBBBB",
+                "ses_01JZY0ID0123456789BBBB",
+                1,
+                "idle",
+            ),
+            session_event(
+                "evt_11c556f9e001CCCCCCCCCCCCCCCC",
+                "ses_01JZY0ID0123456789AAAA",
+                2,
+                "message.updated",
+            ),
+            session_event(
+                "evt_11c556f9e001DDDDDDDDDDDDDDDD",
+                "ses_01JZY0ID0123456789BBBB",
+                2,
+                "idle",
+            ),
+        ];
+        let b = vec![
+            session_event(
+                "evt_22c556f9e001EEEEEEEEEEEEEEEE",
+                "ses_01JZY0ID0123456789EEEE",
+                2,
+                "idle",
+            ),
+            session_event(
+                "evt_22c556f9e001FFFFFFFFFFFFFFFF",
+                "ses_01JZY0ID0123456789FFFF",
+                2,
+                "message.updated",
+            ),
+            session_event(
+                "evt_22c556f9e001GGGGGGGGGGGGGGGG",
+                "ses_01JZY0ID0123456789EEEE",
+                1,
+                "idle",
+            ),
+            session_event(
+                "evt_22c556f9e001HHHHHHHHHHHHHHHH",
+                "ses_01JZY0ID0123456789FFFF",
+                1,
+                "message.updated",
+            ),
+        ];
+        assert!(compare_sequences(&a, &env(), &b, &env()).is_none());
+    }
+
+    #[test]
+    fn seq_orders_frames_regardless_of_arrival_order() {
+        // Same aggregate, frames arriving in opposite orders but carrying
+        // seq: canonical (ascending seq) orderings are identical.
+        let a = vec![
+            session_event(
+                "evt_11c556f9e001AAAAAAAAAAAAAAAA",
+                "ses_01JZY0ID0123456789AAAA",
+                1,
+                "started",
+            ),
+            session_event(
+                "evt_11c556f9e001BBBBBBBBBBBBBBBB",
+                "ses_01JZY0ID0123456789AAAA",
+                2,
+                "streamed",
+            ),
+            session_event(
+                "evt_11c556f9e001CCCCCCCCCCCCCCCC",
+                "ses_01JZY0ID0123456789AAAA",
+                3,
+                "completed",
+            ),
+        ];
+        let mut b: Vec<Frame> = a
+            .iter()
+            .map(|f| {
+                let mut f = f.clone();
+                f.data = f.data.replace("evt_11c556f9e001", "evt_99c556f9e001");
+                f
+            })
+            .collect();
+        b.reverse();
+        assert!(compare_sequences(&a, &env(), &b, &env()).is_none());
+    }
+
+    #[test]
+    fn wrong_order_within_unsequenced_group_fails() {
+        // No seq on these frames: canonical order is arrival order, and the
+        // port side emits the two events swapped — a genuine divergence.
+        let a = vec![
+            ephemeral_session_event(
+                "evt_11c556f9e001AAAAAAAAAAAAAAAA",
+                "ses_01JZY0ID0123456789AAAA",
+                "first",
+            ),
+            ephemeral_session_event(
+                "evt_11c556f9e001BBBBBBBBBBBBBBBB",
+                "ses_01JZY0ID0123456789AAAA",
+                "second",
+            ),
+        ];
+        let b = vec![
+            ephemeral_session_event(
+                "evt_22c556f9e001AAAAAAAAAAAAAAAA",
+                "ses_01JZY0ID0123456789BBBB",
+                "second",
+            ),
+            ephemeral_session_event(
+                "evt_22c556f9e001BBBBBBBBBBBBBBBB",
+                "ses_01JZY0ID0123456789BBBB",
+                "first",
+            ),
+        ];
+        let diff =
+            compare_sequences(&a, &env(), &b, &env()).expect("swapped arrival order must diverge");
+        assert_eq!(diff.index, 0);
+        assert_ne!(diff.left, diff.right);
+        assert_eq!(diff.left["data"]["data"]["text"], Value::from("first"));
+    }
+
+    #[test]
+    fn wrong_seq_fails() {
+        // Both sides carry seq, but the port side assigns the middle two
+        // seq numbers to the opposite event kinds: after canonical sorting,
+        // the orderings diverge at the second frame.
+        let a = vec![
+            session_event(
+                "evt_11c556f9e001AAAAAAAAAAAAAAAA",
+                "ses_01JZY0ID0123456789AAAA",
+                1,
+                "started",
+            ),
+            session_event(
+                "evt_11c556f9e001BBBBBBBBBBBBBBBB",
+                "ses_01JZY0ID0123456789AAAA",
+                2,
+                "streamed",
+            ),
+            session_event(
+                "evt_11c556f9e001CCCCCCCCCCCCCCCC",
+                "ses_01JZY0ID0123456789AAAA",
+                3,
+                "completed",
+            ),
+        ];
+        let b = vec![
+            session_event(
+                "evt_22c556f9e001AAAAAAAAAAAAAAAA",
+                "ses_01JZY0ID0123456789BBBB",
+                1,
+                "started",
+            ),
+            session_event(
+                "evt_22c556f9e001BBBBBBBBBBBBBBBB",
+                "ses_01JZY0ID0123456789BBBB",
+                3,
+                "streamed",
+            ),
+            session_event(
+                "evt_22c556f9e001CCCCCCCCCCCCCCCC",
+                "ses_01JZY0ID0123456789BBBB",
+                2,
+                "completed",
+            ),
+        ];
+        let diff =
+            compare_sequences(&a, &env(), &b, &env()).expect("wrong seq assignment must diverge");
+        assert_eq!(diff.index, 1);
+        // At index 1 the reference has the seq-2 "streamed" event; the port
+        // side's canonical order puts "completed" there.
+        assert_eq!(diff.left["data"]["data"]["kind"], Value::from("streamed"));
+        assert_eq!(diff.right["data"]["data"]["kind"], Value::from("completed"));
+    }
+
+    #[test]
+    fn missing_group_reports_null_counterpart() {
+        // The reference produced a second aggregate the port never emitted:
+        // reported with a Null counterpart at frame 0.
+        let a = vec![
+            session_event(
+                "evt_11c556f9e001AAAAAAAAAAAAAAAA",
+                "ses_01JZY0ID0123456789AAAA",
+                1,
+                "started",
+            ),
+            session_event(
+                "evt_11c556f9e001BBBBBBBBBBBBBBBB",
+                "ses_01JZY0ID0123456789BBBB",
+                1,
+                "idle",
+            ),
+        ];
+        let b = vec![session_event(
+            "evt_22c556f9e001AAAAAAAAAAAAAAAA",
+            "ses_01JZY0ID0123456789CCCC",
+            1,
+            "started",
+        )];
+        let diff =
+            compare_sequences(&a, &env(), &b, &env()).expect("a missing aggregate must diverge");
+        assert_eq!(diff.index, 0);
+        assert_ne!(diff.left, Value::Null);
+        assert_eq!(diff.right, Value::Null);
+    }
+
+    #[test]
+    fn global_frames_group_together_by_arrival() {
+        // Frames with no location and no aggregate/session id (e.g.
+        // server.connected) share the "global" group; equal arrival order
+        // compares equal even when interleaved differently against other
+        // groups.
+        let a = vec![
+            connected("evt_11c556f9e001AAAAAAAAAAAAAAAA"),
+            session_event(
+                "evt_11c556f9e001BBBBBBBBBBBBBBBB",
+                "ses_01JZY0ID0123456789AAAA",
+                1,
+                "started",
+            ),
+            connected("evt_11c556f9e001CCCCCCCCCCCCCCCC"),
+        ];
+        let b = vec![
+            connected("evt_22c556f9e001AAAAAAAAAAAAAAAA"),
+            session_event(
+                "evt_22c556f9e001BBBBBBBBBBBBBBBB",
+                "ses_01JZY0ID0123456789BBBB",
+                1,
+                "started",
+            ),
+            connected("evt_22c556f9e001CCCCCCCCCCCCCCCC"),
+        ];
+        assert!(compare_sequences(&a, &env(), &b, &env()).is_none());
+    }
+
+    // -- scenario collection (policy b) -------------------------------------
+
+    /// Serve an SSE endpoint: send a 200 event-stream head, then replay
+    /// `script` (bytes per write, with the given delay before each write),
+    /// then hold the connection open.
+    async fn serve_sse(script: Vec<(std::time::Duration, Vec<u8>)>) -> String {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        const HEAD: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let mut sink = [0u8; 512];
+                let _ = socket.read(&mut sink).await;
+                if socket.write_all(HEAD).await.is_err() {
+                    return;
+                }
+                for (delay, bytes) in script {
+                    tokio::time::sleep(delay).await;
+                    if socket.write_all(&bytes).await.is_err() {
+                        return;
+                    }
+                }
+                // Hold the connection open (quiet server).
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            }
+        });
+        base
+    }
+
+    fn sse_bytes(id: u64) -> Vec<u8> {
+        format!("data: {{\"id\":\"evt_11c556f9e001{id:018}\"}}\n\n").into_bytes()
+    }
+
+    #[tokio::test]
+    async fn collect_scenario_stops_at_quiescence() {
+        let base = serve_sse(vec![
+            (std::time::Duration::from_millis(10), sse_bytes(1)),
+            (std::time::Duration::from_millis(10), sse_bytes(2)),
+            (std::time::Duration::from_millis(10), sse_bytes(3)),
+            // then silence forever
+        ])
+        .await;
+        let mut stream =
+            SseStream::subscribe(&base, "pw", "/api/event", std::time::Duration::from_secs(5))
+                .await
+                .unwrap();
+        let frames = stream
+            .collect_scenario(
+                10,
+                std::time::Duration::from_millis(300),
+                std::time::Duration::from_secs(10),
+            )
+            .await
+            .unwrap();
+        assert_eq!(frames.len(), 3, "quiescence (300ms without data) must end collection");
+    }
+
+    #[tokio::test]
+    async fn collect_scenario_stops_at_frame_watermark() {
+        let base = serve_sse(vec![
+            (std::time::Duration::from_millis(20), sse_bytes(1)),
+            (std::time::Duration::from_millis(20), sse_bytes(2)),
+            (std::time::Duration::from_millis(20), sse_bytes(3)),
+            (std::time::Duration::from_millis(20), sse_bytes(4)),
+            (std::time::Duration::from_millis(20), sse_bytes(5)),
+        ])
+        .await;
+        let mut stream =
+            SseStream::subscribe(&base, "pw", "/api/event", std::time::Duration::from_secs(5))
+                .await
+                .unwrap();
+        let started = std::time::Instant::now();
+        let frames = stream
+            .collect_scenario(
+                3,
+                std::time::Duration::from_secs(30),
+                std::time::Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+        assert_eq!(frames.len(), 3, "the N-frame watermark must end collection");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn collect_scenario_heartbeats_do_not_reset_quiescence() {
+        let base = serve_sse(vec![
+            (std::time::Duration::from_millis(10), sse_bytes(1)),
+            (std::time::Duration::from_millis(100), b": heartbeat\n\n".to_vec()),
+            (std::time::Duration::from_millis(100), b": heartbeat\n\n".to_vec()),
+        ])
+        .await;
+        let mut stream =
+            SseStream::subscribe(&base, "pw", "/api/event", std::time::Duration::from_secs(5))
+                .await
+                .unwrap();
+        let started = std::time::Instant::now();
+        let frames = stream
+            .collect_scenario(
+                10,
+                std::time::Duration::from_millis(400),
+                std::time::Duration::from_secs(10),
+            )
+            .await
+            .unwrap();
+        assert_eq!(frames.len(), 1);
+        // Heartbeats after the single data frame must not hold collection
+        // open: it ends at the quiescence window, not the overall timeout.
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "oc-ai"
-description = "opencode LLM SDK: protocols, streaming events, providers, models.dev catalog"
+description = "opencode LLM SDK: event contract, route composition, protocol state machines, cassette replay"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,4 +8,26 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["reqwest-transport"]
+# Process-agnostic HTTP transport backed by reqwest. The route/protocol layer
+# only sees the `Transport` trait (raw byte streams); nothing reqwest-shaped
+# leaks into protocol or route signatures.
+reqwest-transport = ["dep:reqwest"]
+
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+futures = "0.3"
+async-trait = "0.1"
+async-stream = "0.3"
+bytes = "1"
+reqwest = { version = "0.12", optional = true, default-features = false, features = [
+    "stream",
+    "json",
+    "rustls-tls",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true }
