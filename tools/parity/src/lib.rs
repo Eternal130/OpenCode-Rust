@@ -1,1 +1,29 @@
-//! parity harness vs reference v2.0.24: normalization, golden compare
+//! Parity harness comparing the Rust port of opencode v2.0.24 against the
+//! reference implementation (`/tmp/opencode/ref`, runnable with bun).
+//!
+//! Module map:
+//!
+//! - [`normalize`] — the canonical rewrite algorithm specified by
+//!   `NORMALIZATION.md` (repo-relative: `tools/parity/NORMALIZATION.md`).
+//!   Every value compared by this crate goes through this one function on
+//!   both sides.
+//! - [`reference`] — spawns the reference server (`opencode serve`) on a free
+//!   port inside a sandboxed HOME, waits for readiness, exposes url/password,
+//!   and shuts the whole process group down.
+//! - [`httpdiff`] — runs the same request against two base URLs, normalizes
+//!   both bodies, and reports the first divergence path.
+//! - [`sse`] — subscribes to `GET /api/event` (text/event-stream), parses
+//!   `data:` frames and heartbeat comments, collects N frames with a timeout.
+//! - [`golden`] — golden-file compare with inline update (`PARITY_UPDATE=1`).
+//!
+//! HTTP is performed by a private minimal localhost HTTP/1.1 client
+//! (`minih`, not public API): the harness only ever talks to `127.0.0.1`,
+//! and keeping it dependency-free keeps the harness buildable offline.
+
+pub mod golden;
+pub mod httpdiff;
+pub mod normalize;
+pub mod reference;
+pub mod sse;
+
+mod minih;
