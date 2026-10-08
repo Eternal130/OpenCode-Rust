@@ -4,6 +4,30 @@
  "protocol": "alibaba-chat",
  "provider": "alibaba",
  "providerMetadataKey": "alibaba",
+ "request": {
+  "id": null,
+  "model": {
+   "id": "qwen3-max",
+   "provider": "alibaba"
+  },
+  "system": [],
+  "messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "parity replay"
+     }
+    ]
+   }
+  ],
+  "tools": [],
+  "toolChoice": null,
+  "generation": {},
+  "providerOptions": {},
+  "promptCache": null
+ },
  "interactions": [
   {
    "events": [
@@ -472,7 +496,29 @@
       "totalTokens": 213
      }
     }
-   ]
+   ],
+   "body": {
+    "model": "qwen3-max",
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "parity replay",
+        "cache_control": {
+         "type": "ephemeral"
+        }
+       }
+      ]
+     }
+    ],
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    }
+   },
+   "bodyText": "{\"model\":\"qwen3-max\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"parity replay\",\"cache_control\":{\"type\":\"ephemeral\"}}]}],\"stream\":true,\"stream_options\":{\"include_usage\":true}}"
   }
  ]
 }

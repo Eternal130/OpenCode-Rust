@@ -3442,10 +3442,9 @@ mod tests {
     }
 
     /// Numbers compare as f64 on both sides: TS dumps print JS numbers
-    /// (integers without decimal points) while serde prints f64 tokens.
-    /// `provider_metadata` keys renames to the TS wire `providerMetadata`
-    /// (the shared event serializer still uses the Rust field name; flagged
-    /// for the schema lane).
+    /// (integers without decimal points) while serde prints f64 tokens. The
+    /// `LLMEvent` tree serializes camelCase natively (oracle gate 3 finding 1),
+    /// so no key renaming is needed for event comparisons.
     fn normalize(value: Value) -> Value {
         match value {
             Value::Number(number) => match number.as_f64() {
@@ -3456,17 +3455,7 @@ mod tests {
             },
             Value::Array(items) => Value::Array(items.into_iter().map(normalize).collect()),
             Value::Object(fields) => Value::Object(
-                fields
-                    .into_iter()
-                    .map(|(key, value)| {
-                        let key = if key == "provider_metadata" {
-                            "providerMetadata".to_string()
-                        } else {
-                            key
-                        };
-                        (key, normalize(value))
-                    })
-                    .collect(),
+                fields.into_iter().map(|(key, value)| (key, normalize(value))).collect(),
             ),
             other => other,
         }
@@ -3548,6 +3537,17 @@ mod tests {
                 .cloned()
                 .unwrap_or_default()
                 .into_iter()
+                .map(|interaction| {
+                    // The request-body goldens (`body`/`bodyText`, oracle
+                    // gate 3 finding 4) live in the same entries but are
+                    // owned by tests/body_parity.rs; project them out here.
+                    let mut projected = interaction;
+                    if let Some(object) = projected.as_object_mut() {
+                        object.remove("body");
+                        object.remove("bodyText");
+                    }
+                    projected
+                })
                 .collect::<Vec<_>>();
             for (index, expected) in expected_interactions.iter().enumerate() {
                 let mut request = LLMRequest::new(model.clone());
@@ -5196,10 +5196,10 @@ mod tests {
             events.iter().filter(|event| matches!(event, LLMEvent::ToolCall { .. })).collect();
         json_eq!(calls.len(), 2);
         json_eq!(
-            serde_json::to_value(calls[0]).unwrap()["provider_metadata"],
+            serde_json::to_value(calls[0]).unwrap()["providerMetadata"],
             json!({"openai": {"extraContent": {"google": {"thought_signature": "sig_1"}}}}),
         );
-        assert!(serde_json::to_value(calls[1]).unwrap().get("provider_metadata").is_none());
+        assert!(serde_json::to_value(calls[1]).unwrap().get("providerMetadata").is_none());
     }
 
     #[tokio::test]

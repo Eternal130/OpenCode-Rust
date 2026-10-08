@@ -118,20 +118,32 @@ fn compile_body(route: &Route, request: &LLMRequest) -> Value {
     route.build_body(&prepared).unwrap()
 }
 
-/// Normalize a serialized event for comparison against the TS wire form:
-/// numbers to `f64` (serde `u64`-vs-`f64`), and `provider_metadata` renamed
-/// to the contract's `providerMetadata` (the base-lane `LLMEvent` serializes
-/// that one field `snake_case`; renaming here keeps the shared schema
-/// untouched while comparing against the TS contract shape).
+/// Normalize a serialized event for comparison against the TS wire form.
+/// The `LLMEvent` tree serializes in the contract's `camelCase` shape
+/// natively (oracle gate 3 finding 1); only numbers still need `f64`
+/// coercion (serde `u64`-vs-`f64`).
 fn ts_wire(value: &Value) -> Value {
     match value {
         Value::Number(number) => json!(number.as_f64().unwrap_or_default()),
         Value::Array(items) => Value::Array(items.iter().map(ts_wire).collect()),
+        Value::Object(map) => {
+            Value::Object(map.iter().map(|(key, value)| (key.clone(), ts_wire(value))).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+/// `ContentPart` (the assembled message tree, NOT the `LLMEvent` tree)
+/// still serializes `provider_metadata` as `snake_case`; its wire shape is owned
+/// by the session-persistence lane, so rename per-site here.
+fn content_wire(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(content_wire).collect()),
         Value::Object(map) => Value::Object(
             map.iter()
                 .map(|(key, value)| {
                     let key = if key == "provider_metadata" { "providerMetadata" } else { key };
-                    (key.to_string(), ts_wire(value))
+                    (key.to_string(), content_wire(value))
                 })
                 .collect(),
         ),
@@ -1137,7 +1149,7 @@ async fn gemini_assigns_unique_ids_to_separated_reasoning_blocks() {
     assert_eq!(Value::Array(ids("text-delta")), json!(["text-0", "text-1"]));
     assert_eq!(Value::Array(ids("text-end")), json!(["text-0", "text-1"]));
     assert_eq!(
-        ts_wire(&event_value_of(&response.message.content).unwrap()),
+        content_wire(&ts_wire(&event_value_of(&response.message.content).unwrap())),
         json!([
             { "type": "reasoning", "text": "A", "providerMetadata": { "google": { "thoughtSignature": "reasoning_sig_a" } } },
             { "type": "text", "text": "X", "providerMetadata": { "google": { "thoughtSignature": "text_sig_x" } } },
@@ -1527,7 +1539,7 @@ async fn gemini_separates_text_blocks_around_streamed_tool_calls() {
         ]
     );
     assert_eq!(
-        ts_wire(&event_value_of(&response.message.content).unwrap()),
+        content_wire(&ts_wire(&event_value_of(&response.message.content).unwrap())),
         json!([
             { "type": "text", "text": "before" },
             { "type": "tool-call", "id": "call_1", "name": "lookup", "input": { "query": "weather" } },

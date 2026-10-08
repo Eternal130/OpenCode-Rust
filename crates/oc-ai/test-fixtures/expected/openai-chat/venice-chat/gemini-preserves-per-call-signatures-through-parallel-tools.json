@@ -4,6 +4,30 @@
  "protocol": "venice-chat",
  "provider": "venice",
  "providerMetadataKey": "venice",
+ "request": {
+  "id": null,
+  "model": {
+   "id": "deepseek-v4-flash",
+   "provider": "venice"
+  },
+  "system": [],
+  "messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "parity replay"
+     }
+    ]
+   }
+  ],
+  "tools": [],
+  "toolChoice": null,
+  "generation": {},
+  "providerOptions": {},
+  "promptCache": null
+ },
  "interactions": [
   {
    "events": [
@@ -122,7 +146,24 @@
       "totalTokens": 230
      }
     }
-   ]
+   ],
+   "body": {
+    "model": "deepseek-v4-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "parity replay"
+     }
+    ],
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    },
+    "venice_parameters": {
+     "include_venice_system_prompt": false
+    }
+   },
+   "bodyText": "{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"parity replay\"}],\"stream\":true,\"stream_options\":{\"include_usage\":true},\"venice_parameters\":{\"include_venice_system_prompt\":false}}"
   },
   {
    "events": [
@@ -209,7 +250,24 @@
       "totalTokens": 414
      }
     }
-   ]
+   ],
+   "body": {
+    "model": "deepseek-v4-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "parity replay"
+     }
+    ],
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    },
+    "venice_parameters": {
+     "include_venice_system_prompt": false
+    }
+   },
+   "bodyText": "{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"parity replay\"}],\"stream\":true,\"stream_options\":{\"include_usage\":true},\"venice_parameters\":{\"include_venice_system_prompt\":false}}"
   },
   {
    "events": [
@@ -276,7 +334,24 @@
       "totalTokens": 512
      }
     }
-   ]
+   ],
+   "body": {
+    "model": "deepseek-v4-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "parity replay"
+     }
+    ],
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    },
+    "venice_parameters": {
+     "include_venice_system_prompt": false
+    }
+   },
+   "bodyText": "{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"parity replay\"}],\"stream\":true,\"stream_options\":{\"include_usage\":true},\"venice_parameters\":{\"include_venice_system_prompt\":false}}"
   }
  ]
 }

@@ -4,6 +4,30 @@
  "protocol": "openai-chat",
  "provider": "google",
  "providerMetadataKey": "google",
+ "request": {
+  "id": null,
+  "model": {
+   "id": "gemini-3.8-flash",
+   "provider": "google"
+  },
+  "system": [],
+  "messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "parity replay"
+     }
+    ]
+   }
+  ],
+  "tools": [],
+  "toolChoice": null,
+  "generation": {},
+  "providerOptions": {},
+  "promptCache": null
+ },
  "interactions": [
   {
    "events": [
@@ -133,7 +157,21 @@
       "totalTokens": 148
      }
     }
-   ]
+   ],
+   "body": {
+    "model": "gemini-3.8-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "parity replay"
+     }
+    ],
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    }
+   },
+   "bodyText": "{\"model\":\"gemini-3.8-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"parity replay\"}],\"stream\":true,\"stream_options\":{\"include_usage\":true}}"
   },
   {
    "events": [
@@ -200,7 +238,21 @@
       "totalTokens": 276
      }
     }
-   ]
+   ],
+   "body": {
+    "model": "gemini-3.8-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "parity replay"
+     }
+    ],
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    }
+   },
+   "bodyText": "{\"model\":\"gemini-3.8-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"parity replay\"}],\"stream\":true,\"stream_options\":{\"include_usage\":true}}"
   }
  ]
 }

@@ -3,6 +3,30 @@
  "provider": "google",
  "providerMetadataKey": "google",
  "model": "gemini-2.5-flash",
+ "request": {
+  "id": null,
+  "model": {
+   "id": "gemini-2.5-flash",
+   "provider": "google"
+  },
+  "system": [],
+  "messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "hi"
+     }
+    ]
+   }
+  ],
+  "tools": [],
+  "toolChoice": null,
+  "generation": {},
+  "providerOptions": {},
+  "promptCache": null
+ },
  "interactions": [
   {
    "events": [
@@ -65,7 +89,20 @@
      }
     }
    ],
-   "error": null
+   "error": null,
+   "body": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "hi"
+       }
+      ]
+     }
+    ]
+   },
+   "bodyText": "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"hi\"}]}]}"
   },
   {
    "events": [
@@ -132,7 +169,20 @@
      }
     }
    ],
-   "error": null
+   "error": null,
+   "body": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "hi"
+       }
+      ]
+     }
+    ]
+   },
+   "bodyText": "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"hi\"}]}]}"
   }
  ]
 }
