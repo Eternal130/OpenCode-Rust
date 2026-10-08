@@ -3,6 +3,30 @@
  "provider": "minimax",
  "providerMetadataKey": "minimax",
  "model": "MiniMax-M3",
+ "request": {
+  "id": null,
+  "model": {
+   "id": "MiniMax-M3",
+   "provider": "minimax"
+  },
+  "system": [],
+  "messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "hi"
+     }
+    ]
+   }
+  ],
+  "tools": [],
+  "toolChoice": null,
+  "generation": {},
+  "providerOptions": {},
+  "promptCache": null
+ },
  "interactions": [
   {
    "events": [
@@ -96,7 +120,27 @@
      }
     }
    ],
-   "error": null
+   "error": null,
+   "body": {
+    "model": "MiniMax-M3",
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "hi",
+        "cache_control": {
+         "type": "ephemeral"
+        }
+       }
+      ]
+     }
+    ],
+    "stream": true,
+    "max_tokens": 32000
+   },
+   "bodyText": "{\"model\":\"MiniMax-M3\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi\",\"cache_control\":{\"type\":\"ephemeral\"}}]}],\"stream\":true,\"max_tokens\":32000}"
   },
   {
    "events": [
@@ -172,7 +216,27 @@
      }
     }
    ],
-   "error": null
+   "error": null,
+   "body": {
+    "model": "MiniMax-M3",
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "hi",
+        "cache_control": {
+         "type": "ephemeral"
+        }
+       }
+      ]
+     }
+    ],
+    "stream": true,
+    "max_tokens": 32000
+   },
+   "bodyText": "{\"model\":\"MiniMax-M3\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi\",\"cache_control\":{\"type\":\"ephemeral\"}}]}],\"stream\":true,\"max_tokens\":32000}"
   }
  ]
 }

@@ -4,12 +4,50 @@
  "protocol": "zai-chat",
  "provider": "zai",
  "providerMetadataKey": "zai",
+ "request": {
+  "id": null,
+  "model": {
+   "id": "glm-5.3",
+   "provider": "zai"
+  },
+  "system": [],
+  "messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "parity replay"
+     }
+    ]
+   }
+  ],
+  "tools": [],
+  "toolChoice": null,
+  "generation": {},
+  "providerOptions": {},
+  "promptCache": null
+ },
  "interactions": [
   {
    "error": {
     "tag": "InvalidRequest",
     "message": "This model always engages in thinking and cannot be disabled; please use low, high, or max"
-   }
+   },
+   "body": {
+    "model": "glm-5.3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "parity replay"
+     }
+    ],
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    }
+   },
+   "bodyText": "{\"model\":\"glm-5.3\",\"messages\":[{\"role\":\"user\",\"content\":\"parity replay\"}],\"stream\":true,\"stream_options\":{\"include_usage\":true}}"
   }
  ]
 }

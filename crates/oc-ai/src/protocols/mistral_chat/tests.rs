@@ -55,18 +55,16 @@ fn compile_body(route: &Route, request: &LLMRequest) -> Value {
     route.build_body(&prepared).unwrap()
 }
 
+/// The `LLMEvent` tree serializes in the contract's `camelCase` shape natively
+/// (oracle gate 3 finding 1); only numbers still need `f64` coercion (serde
+/// `u64`-vs-`f64`).
 fn ts_wire(value: &Value) -> Value {
     match value {
         Value::Number(number) => json!(number.as_f64().unwrap_or_default()),
         Value::Array(items) => Value::Array(items.iter().map(ts_wire).collect()),
-        Value::Object(map) => Value::Object(
-            map.iter()
-                .map(|(key, value)| {
-                    let key = if key == "provider_metadata" { "providerMetadata" } else { key };
-                    (key.to_string(), ts_wire(value))
-                })
-                .collect(),
-        ),
+        Value::Object(map) => {
+            Value::Object(map.iter().map(|(key, value)| (key.clone(), ts_wire(value))).collect())
+        }
         other => other.clone(),
     }
 }

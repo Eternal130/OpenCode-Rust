@@ -154,5 +154,46 @@
       }
     }
   ],
-  "error": null
+  "error": null,
+  "request": {
+    "id": null,
+    "model": {
+      "id": "test-model",
+      "provider": "alibaba"
+    },
+    "system": [],
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "hi"
+          }
+        ]
+      }
+    ],
+    "tools": [],
+    "toolChoice": null,
+    "generation": {},
+    "providerOptions": {},
+    "promptCache": null
+  },
+  "body": {
+    "model": "test-model",
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "hi"
+          }
+        ]
+      }
+    ],
+    "stream": true
+  },
+  "bodyText": "{\"model\":\"test-model\",\"input\":[{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"hi\"}]}],\"stream\":true}"
 }

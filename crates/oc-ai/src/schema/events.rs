@@ -1,6 +1,7 @@
 //! The LLM event contract (port of `src/schema/events.ts` — THE wire
-//! contract, oracle gate 2 finding 17). Kebab-case `type` tags, all 19
-//! variants. `Usage` fields are optional `f64` (JS number parity).
+//! contract, oracle gate 2 finding 17). Kebab-case `type` tags, camelCase
+//! fields, all 19 variants. `Usage` fields are optional `f64` (JS number
+//! parity).
 
 use std::collections::BTreeMap;
 
@@ -117,8 +118,14 @@ impl Usage {
 
 /// Provider-neutral streaming event (port of the `LLMEvent` tagged union,
 /// events.ts:307 — all 19 variants).
+///
+/// Wire shape is the TS contract verbatim: kebab-case `type` tags,
+/// camelCase fields throughout the event tree (`providerMetadata`,
+/// `providerExecuted`, nested `Usage` camelCase — oracle gate 3 finding 1).
+/// The (B)-lane bun-subprocess transport reuses the TS event guards on this
+/// JSON, so field names must match `JSON.stringify(event)` in v2 exactly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
+#[serde(tag = "type", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum LLMEvent {
     /// Replacement context marker (a `CompactionPart`).
     #[serde(rename = "compaction")]
@@ -183,7 +190,7 @@ pub enum LLMEvent {
         name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         namespace: Option<String>,
-        #[serde(default, rename = "providerExecuted", skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_executed: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_metadata: Option<ProviderMetadata>,
@@ -224,7 +231,7 @@ pub enum LLMEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         namespace: Option<String>,
         input: Value,
-        #[serde(default, rename = "providerExecuted", skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_executed: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_metadata: Option<ProviderMetadata>,
@@ -239,7 +246,7 @@ pub enum LLMEvent {
         result: ToolResultValue,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<ToolOutput>,
-        #[serde(default, rename = "providerExecuted", skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_executed: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_metadata: Option<ProviderMetadata>,
@@ -912,6 +919,50 @@ mod tests {
     #[test]
     fn unknown_event_type_fails_to_decode() {
         assert!(serde_json::from_value::<LLMEvent>(serde_json::json!({"type": "bogus"})).is_err());
+    }
+
+    /// Oracle gate 3 finding 1: the serialized event tree is the TS wire
+    /// shape verbatim — camelCase fields at every level, `snake_case` keys
+    /// (`provider_metadata`, `provider_executed`) must not leak.
+    #[test]
+    fn event_tree_serializes_camel_case_like_the_ts_contract() {
+        let event = LLMEvent::ToolCall {
+            id: "c1".into(),
+            name: "lookup".into(),
+            namespace: Some("ns".into()),
+            input: serde_json::json!({"q": 1}),
+            provider_executed: Some(true),
+            provider_metadata: Some(ProviderMetadata::from([(
+                "openai".to_string(),
+                BTreeMap::from([("itemId".to_string(), serde_json::json!("i_1"))]),
+            )])),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "tool-call");
+        assert_eq!(json["providerExecuted"], true);
+        assert_eq!(json["providerMetadata"]["openai"]["itemId"], "i_1");
+        let encoded = serde_json::to_string(&event).unwrap();
+        assert!(!encoded.contains("provider_metadata"), "snake_case leaked: {encoded}");
+        assert!(!encoded.contains("provider_executed"), "snake_case leaked: {encoded}");
+        // decodes back from the TS-shaped JSON
+        let back: LLMEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(back, event);
+
+        let finish = LLMEvent::Finish {
+            reason: FinishReasonDetails::new(FinishReason::Stop),
+            usage: Some(Usage {
+                input_tokens: Some(10.0),
+                cache_read_input_tokens: Some(4.0),
+                ..Default::default()
+            }),
+            provider_metadata: None,
+        };
+        let json = serde_json::to_value(&finish).unwrap();
+        assert_eq!(json["usage"]["inputTokens"], 10.0);
+        assert_eq!(json["usage"]["cacheReadInputTokens"], 4.0);
+        assert!(json.get("providerMetadata").is_none(), "None fields are dropped");
+        let back: LLMEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(back, finish);
     }
 
     #[test]
