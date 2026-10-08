@@ -14,7 +14,7 @@ with sandboxed `HOME`/`XDG_*`/`TMPDIR`).
 | `src/normalize.rs` | The canonical rewrite algorithm. **Spec:** [`NORMALIZATION.md`](./NORMALIZATION.md). Both sides of every comparison go through this one function. |
 | `src/reference.rs` | `ReferenceServer`: spawn/ready/stop of the reference server on a free port in a sandboxed HOME; `skip_if_no_bun()` test helper. |
 | `src/httpdiff.rs` | Same request against two bases (`httpdiff::Side`), normalize both, `deep_diff` reports the first divergence path (e.g. `$.urls[0]`). |
-| `src/sse.rs` | `SseStream`: GET /api/event subscription, `data:`/heartbeat parsing, `collect(n, timeout)`, `frames_to_json` normalization. |
+| `src/sse.rs` | `SseStream`: GET /api/event subscription, `data:`/heartbeat parsing, `collect(n, timeout)`, scenario collection (`collect_scenario`: N frames / quiescence), `frames_to_json` normalization, and `compare_sequences` (canonical grouping policy — `NORMALIZATION.md` §8). |
 | `src/golden.rs` | Golden compare with inline update (`PARITY_UPDATE=1`). Goldens live in `goldens/`. |
 | `src/minih.rs` | Private minimal localhost HTTP/1.1 client (Basic auth, Content-Length/chunked, streaming). No heavyweight deps — the harness builds offline. |
 | `tests/reference_info.rs` | The end-to-end sample test proving the whole chain. |
@@ -95,6 +95,10 @@ Not yet implemented (module seams exist):
 - **tui frame compare** — capture TUI frames from both builds at scripted
   checkpoints; requires an output-normalization layer for cursor addressing
   and timing-dependent spinners (extend `NORMALIZATION.md` §5 before use).
-- **SSE sequence parity beyond frame 1** — `SseStream::collect` supports N
-  frames; scenario scripts that trigger identical event sequences on both
-  servers are the missing piece.
+- **SSE scenario scripts** — the sequence *policy* is now spec + code
+  (`NORMALIZATION.md` §8: grouping per `location`+aggregate, per-group seq
+  canonicalization, multiset-of-orderings compare, quiescence collection,
+  first-divergent-frame reporting). The missing piece is the scripted
+  scenario runner that drives both servers through identical request
+  sequences and feeds `SseStream::collect_scenario` +
+  `sse::compare_sequences`.
