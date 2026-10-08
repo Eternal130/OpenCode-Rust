@@ -1,0 +1,102 @@
+{
+ "scenario": "mistral-chat-glm/streams-an-indexed-tool-call",
+ "provider": "mistral",
+ "providerMetadataKey": "mistral",
+ "model": "zai-glm-5-2",
+ "interactions": [
+  {
+   "events": [
+    {
+     "type": "step-start",
+     "index": 0
+    },
+    {
+     "type": "tool-input-start",
+     "id": "jl02amerr",
+     "name": "lookup_weather"
+    },
+    {
+     "type": "tool-input-delta",
+     "id": "jl02amerr",
+     "name": "lookup_weather",
+     "text": "{\"city\": \"",
+     "input": {
+      "city": ""
+     }
+    },
+    {
+     "type": "tool-input-delta",
+     "id": "jl02amerr",
+     "name": "lookup_weather",
+     "text": "Paris\"}",
+     "input": {
+      "city": "Paris"
+     }
+    },
+    {
+     "type": "tool-input-end",
+     "id": "jl02amerr",
+     "name": "lookup_weather"
+    },
+    {
+     "type": "tool-call",
+     "id": "jl02amerr",
+     "name": "lookup_weather",
+     "input": {
+      "city": "Paris"
+     }
+    },
+    {
+     "type": "step-finish",
+     "index": 0,
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "stop"
+     },
+     "usage": {
+      "inputTokens": 171,
+      "outputTokens": 11,
+      "nonCachedInputTokens": 171,
+      "cacheReadInputTokens": 0,
+      "totalTokens": 182,
+      "providerMetadata": {
+       "mistral": {
+        "prompt_tokens": 171,
+        "completion_tokens": 11,
+        "total_tokens": 182,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        }
+       }
+      }
+     }
+    },
+    {
+     "type": "finish",
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "stop"
+     },
+     "usage": {
+      "inputTokens": 171,
+      "outputTokens": 11,
+      "nonCachedInputTokens": 171,
+      "cacheReadInputTokens": 0,
+      "totalTokens": 182,
+      "providerMetadata": {
+       "mistral": {
+        "prompt_tokens": 171,
+        "completion_tokens": 11,
+        "total_tokens": 182,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        }
+       }
+      }
+     }
+    }
+   ],
+   "error": null
+  }
+ ]
+}

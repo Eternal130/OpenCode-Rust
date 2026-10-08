@@ -1,0 +1,861 @@
+{
+ "group": "alibaba-chat",
+ "name": "qwen-3-8-max-replays-reasoning-through-a-tool-loop-and-follow-up",
+ "protocol": "alibaba-chat",
+ "provider": "alibaba",
+ "providerMetadataKey": "alibaba",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "19 × ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "173 =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7,88",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " Since 37",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "887 ≤",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 38,",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "000,",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " it's payable.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " Calling",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " get_weather.\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "21",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "9 trips ×",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " $173",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " = $37",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ",887",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ", which is within",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " the $38",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ",000",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " budget — affordable.",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "\n\n",
+     "type": "text-delta"
+    },
+    {
+     "id": "call_1a3fc0a71cd14b3793237d77",
+     "name": "get_weather",
+     "type": "tool-input-start"
+    },
+    {
+     "id": "call_1a3fc0a71cd14b3793237d77",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "get_weather",
+     "text": "{\"city\": \"Paris",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_1a3fc0a71cd14b3793237d77",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "get_weather",
+     "text": "\"",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_1a3fc0a71cd14b3793237d77",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "get_weather",
+     "text": "}",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "call_1a3fc0a71cd14b3793237d77",
+     "name": "get_weather",
+     "type": "tool-input-end"
+    },
+    {
+     "id": "call_1a3fc0a71cd14b3793237d77",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "get_weather",
+     "type": "tool-call"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 350,
+      "nonCachedInputTokens": 350,
+      "outputTokens": 104,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 104,
+        "completion_tokens_details": {
+         "reasoning_tokens": 42,
+         "text_tokens": 104
+        },
+        "prompt_tokens": 350,
+        "prompt_tokens_details": {
+         "cache_creation": {
+          "ephemeral_5m_input_tokens": 0
+         },
+         "cache_creation_input_tokens": 0,
+         "cache_type": "ephemeral",
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "text_tokens": 350
+        },
+        "total_tokens": 454
+       }
+      },
+      "reasoningTokens": 42,
+      "totalTokens": 454
+     }
+    },
+    {
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 350,
+      "nonCachedInputTokens": 350,
+      "outputTokens": 104,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 104,
+        "completion_tokens_details": {
+         "reasoning_tokens": 42,
+         "text_tokens": 104
+        },
+        "prompt_tokens": 350,
+        "prompt_tokens_details": {
+         "cache_creation": {
+          "ephemeral_5m_input_tokens": 0
+         },
+         "cache_creation_input_tokens": 0,
+         "cache_type": "ephemeral",
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "text_tokens": 350
+        },
+        "total_tokens": 454
+       }
+      },
+      "reasoningTokens": 42,
+      "totalTokens": 454
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "The",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " tool returned sunny",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " weather",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ", 18",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "°C. The system",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " instructs me to",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " report",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " it in a short",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " single",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " sentence. There's",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " a contradiction",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " in the instructions (",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "the hint says to",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " always mention",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " \"partly cloudy",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\")",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " — but the instructions",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " say the weather is",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " sunny. I should",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " report",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the actual results.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "It's",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " sunny in Paris right",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " now with a temperature",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " of ",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "18°C.",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 482,
+      "nonCachedInputTokens": 482,
+      "outputTokens": 80,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 80,
+        "completion_tokens_details": {
+         "reasoning_tokens": 61,
+         "text_tokens": 80
+        },
+        "prompt_tokens": 482,
+        "prompt_tokens_details": {
+         "cache_creation": {
+          "ephemeral_5m_input_tokens": 0
+         },
+         "cache_creation_input_tokens": 0,
+         "cache_type": "ephemeral",
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "text_tokens": 482
+        },
+        "total_tokens": 562
+       }
+      },
+      "reasoningTokens": 61,
+      "totalTokens": 562
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 482,
+      "nonCachedInputTokens": 482,
+      "outputTokens": 80,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 80,
+        "completion_tokens_details": {
+         "reasoning_tokens": 61,
+         "text_tokens": 80
+        },
+        "prompt_tokens": 482,
+        "prompt_tokens_details": {
+         "cache_creation": {
+          "ephemeral_5m_input_tokens": 0
+         },
+         "cache_creation_input_tokens": 0,
+         "cache_type": "ephemeral",
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "text_tokens": 482
+        },
+        "total_tokens": 562
+       }
+      },
+      "reasoningTokens": 61,
+      "totalTokens": 562
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "The",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " tool reported",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 18°C",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "18°C",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 587,
+      "nonCachedInputTokens": 587,
+      "outputTokens": 14,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 14,
+        "completion_tokens_details": {
+         "reasoning_tokens": 8,
+         "text_tokens": 14
+        },
+        "prompt_tokens": 587,
+        "prompt_tokens_details": {
+         "cache_creation": {
+          "ephemeral_5m_input_tokens": 0
+         },
+         "cache_creation_input_tokens": 0,
+         "cache_type": "ephemeral",
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "text_tokens": 587
+        },
+        "total_tokens": 601
+       }
+      },
+      "reasoningTokens": 8,
+      "totalTokens": 601
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 587,
+      "nonCachedInputTokens": 587,
+      "outputTokens": 14,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 14,
+        "completion_tokens_details": {
+         "reasoning_tokens": 8,
+         "text_tokens": 14
+        },
+        "prompt_tokens": 587,
+        "prompt_tokens_details": {
+         "cache_creation": {
+          "ephemeral_5m_input_tokens": 0
+         },
+         "cache_creation_input_tokens": 0,
+         "cache_type": "ephemeral",
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "text_tokens": 587
+        },
+        "total_tokens": 601
+       }
+      },
+      "reasoningTokens": 8,
+      "totalTokens": 601
+     }
+    }
+   ]
+  }
+ ]
+}

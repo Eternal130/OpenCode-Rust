@@ -1,0 +1,386 @@
+{
+ "group": "venice-chat",
+ "name": "claude-opus-4-8-preserves-reasoning-through-a-tool-loop-and-follow-up",
+ "protocol": "venice-chat",
+ "provider": "venice",
+ "providerMetadataKey": "venice",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "I need to find the rate for",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ZEBRA.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "toolu_01KYDseHbTDZXSYg9bNwiwxU",
+     "name": "lookup_rate",
+     "type": "tool-input-start"
+    },
+    {
+     "id": "toolu_01KYDseHbTDZXSYg9bNwiwxU",
+     "input": {},
+     "name": "lookup_rate",
+     "text": "{\"code\"",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "toolu_01KYDseHbTDZXSYg9bNwiwxU",
+     "input": {
+      "code": "ZEBR"
+     },
+     "name": "lookup_rate",
+     "text": ": \"ZEBR",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "toolu_01KYDseHbTDZXSYg9bNwiwxU",
+     "input": {
+      "code": "ZEBRA"
+     },
+     "name": "lookup_rate",
+     "text": "A\"}",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningDetails": [
+        {
+         "format": "anthropic-claude-v1",
+         "id": "toolu_01KYDseHbTDZXSYg9bNwiwxU",
+         "index": 0,
+         "signature": "EsECCrwBCBIYAipASM082xA/ckQU1q1MLSuAGRD/F94kvqoBlyXoEKdxvH2f2kn+ESR0AZfmYtv8VB8ux7LQ+qq4DnODYQ2iBHemajIPY2xhdWRlLW9wdXMtNC04OABCCHRoaW5raW5nWiQ1YzJjNzI5YS0wMzVjLTQ5ZDYtODNiOC03NGNhZTAyMzU2NWRyEOtICOPsjcfgmcoVEjPetDWIAQGaAREKD2NsYXVkZS1vcHVzLTQtOKgB0qWM1gawAQISDFJE1AThUPJ/0OxIBxoMak46jCiQRsOzj1nIIjBV1UQ4WoUBtZX8F6kyFtKyRPkLdWp7WQKQYd+f4VT3GvmEqenUY2ANNJImtDj/BQAqMhz7JVFNqrlemYzJNRbF6ntHDPc2enCrd/tYXBG6nms1qbcfKWc7CYc2ZGogOqiItKNDGAE=",
+         "text": "I need to find the rate for ZEBRA.\n\n",
+         "type": "reasoning.text"
+        }
+       ],
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "toolu_01KYDseHbTDZXSYg9bNwiwxU",
+     "name": "lookup_rate",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "tool-input-end"
+    },
+    {
+     "id": "toolu_01KYDseHbTDZXSYg9bNwiwxU",
+     "input": {
+      "code": "ZEBRA"
+     },
+     "name": "lookup_rate",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "tool-call"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 499,
+      "nonCachedInputTokens": 499,
+      "outputTokens": 74,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 74,
+        "prompt_tokens": 499,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 573
+       }
+      },
+      "totalTokens": 573
+     }
+    },
+    {
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 499,
+      "nonCachedInputTokens": 499,
+      "outputTokens": 74,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 74,
+        "prompt_tokens": 499,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 573
+       }
+      },
+      "totalTokens": 573
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "23 times 17 is ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "391, plus 9 g",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "ives 400.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "400",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningDetails": [
+        {
+         "format": "anthropic-claude-v1",
+         "index": 0,
+         "signature": "ErgCCrwBCBIYAipAzm6Uz1fiUimJZ7ry16/5jOPhPfQ9Zm3zSb449atO4+Dv3KroxOwD17dLjPUhdRWeFNghT/lQsCRlsY9T6SWyMzIPY2xhdWRlLW9wdXMtNC04OABCCHRoaW5raW5nWiQ1YzJjNzI5YS0wMzVjLTQ5ZDYtODNiOC03NGNhZTAyMzU2NWRyEGhpfnmythMRLK5wcAMHasmIAQGaAREKD2NsYXVkZS1vcHVzLTQtOKgB1KWM1gawAQISDA4K+cR55K4LQVXyhhoMBUHsSBuaNQlHp5ZPIjBvSX58DhVBxFRl9sVZYgZwrMDqGzC1/tgyH1wflAP4TkHTPje+Gdbv0yUxBBIQtaEqKSS4Bh4olHSAKxLEG1SyH4Iy46lp50SxdXxGJ/PIwTfHI47SEaE9pEfNGAE=",
+         "text": "23 times 17 is 391, plus 9 gives 400.\n\n",
+         "type": "reasoning.text"
+        }
+       ],
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 183,
+      "nonCachedInputTokens": 183,
+      "outputTokens": 23,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 23,
+        "prompt_tokens": 183,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 206
+       }
+      },
+      "totalTokens": 206
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 183,
+      "nonCachedInputTokens": 183,
+      "outputTokens": 23,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 23,
+        "prompt_tokens": 183,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 206
+       }
+      },
+      "totalTokens": 206
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "407",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 229,
+      "nonCachedInputTokens": 229,
+      "outputTokens": 3,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 3,
+        "prompt_tokens": 229,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 232
+       }
+      },
+      "totalTokens": 232
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 229,
+      "nonCachedInputTokens": 229,
+      "outputTokens": 3,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 3,
+        "prompt_tokens": 229,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 232
+       }
+      },
+      "totalTokens": 232
+     }
+    }
+   ]
+  }
+ ]
+}

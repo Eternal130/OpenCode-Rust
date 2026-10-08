@@ -1,0 +1,176 @@
+{
+  "group": "alibaba-responses",
+  "scenario": "qwen-3-8-max-obeys-named-tool-choice",
+  "interaction": 0,
+  "machine": "open-responses",
+  "provider": "alibaba",
+  "metadataKey": "alibaba",
+  "frames": [
+    "{\"sequence_number\":0,\"type\":\"response.created\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"none\"},\"created_at\":1789446228,\"store\":true,\"tools\":[{\"name\":\"get_weather\",\"description\":\"Get weather in a city\",\"strict\":false,\"type\":\"function\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"enum\":[\"Paris\"]}},\"required\":[\"city\"]}}],\"output\":[],\"top_p\":1.0,\"completed_at\":1789446228,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":{\"mode\":\"required\",\"type\":\"allowed_tools\",\"tools\":[{\"name\":\"get_weather\",\"type\":\"function\"}]},\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_b62a0019-a32d-913c-b729-0e09699e1582\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"queued\"}}",
+    "{\"sequence_number\":1,\"type\":\"response.in_progress\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"none\"},\"created_at\":1789446228,\"store\":true,\"tools\":[{\"name\":\"get_weather\",\"description\":\"Get weather in a city\",\"strict\":false,\"type\":\"function\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"enum\":[\"Paris\"]}},\"required\":[\"city\"]}}],\"output\":[],\"top_p\":1.0,\"completed_at\":1789446228,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":{\"mode\":\"required\",\"type\":\"allowed_tools\",\"tools\":[{\"name\":\"get_weather\",\"type\":\"function\"}]},\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_b62a0019-a32d-913c-b729-0e09699e1582\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"in_progress\"}}",
+    "{\"sequence_number\":2,\"item\":{\"name\":\"get_weather\",\"arguments\":\"\",\"id\":\"msg_fc4c26f8-3eb2-41d4-ae37-1d15d9cbf4cc\",\"type\":\"function_call\",\"call_id\":\"call_4408f6c0652e458192c2cec8\",\"status\":\"in_progress\"},\"output_index\":0,\"type\":\"response.output_item.added\"}",
+    "{\"delta\":\"\",\"sequence_number\":3,\"output_index\":0,\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"msg_fc4c26f8-3eb2-41d4-ae37-1d15d9cbf4cc\"}",
+    "{\"delta\":\"{\\\"city\\\": \\\"Paris\",\"sequence_number\":4,\"output_index\":0,\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"msg_fc4c26f8-3eb2-41d4-ae37-1d15d9cbf4cc\"}",
+    "{\"delta\":\"\\\"\",\"sequence_number\":5,\"output_index\":0,\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"msg_fc4c26f8-3eb2-41d4-ae37-1d15d9cbf4cc\"}",
+    "{\"delta\":\"}\",\"sequence_number\":6,\"output_index\":0,\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"msg_fc4c26f8-3eb2-41d4-ae37-1d15d9cbf4cc\"}",
+    "{\"name\":\"get_weather\",\"sequence_number\":7,\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\",\"output_index\":0,\"type\":\"response.function_call_arguments.done\",\"item_id\":\"msg_fc4c26f8-3eb2-41d4-ae37-1d15d9cbf4cc\"}",
+    "{\"sequence_number\":8,\"item\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\",\"id\":\"msg_fc4c26f8-3eb2-41d4-ae37-1d15d9cbf4cc\",\"type\":\"function_call\",\"call_id\":\"call_4408f6c0652e458192c2cec8\",\"status\":\"completed\"},\"output_index\":0,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":9,\"type\":\"response.completed\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"none\"},\"usage\":{\"total_tokens\":339,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":19,\"input_tokens\":320,\"output_tokens_details\":{\"reasoning_tokens\":0},\"x_details\":[{\"total_tokens\":339,\"x_billing_type\":\"response_api\",\"output_tokens\":19,\"input_tokens\":320,\"prompt_tokens_details\":{\"cached_tokens\":0}}]},\"created_at\":1789446228,\"store\":true,\"tools\":[{\"name\":\"get_weather\",\"description\":\"Get weather in a city\",\"strict\":false,\"type\":\"function\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"enum\":[\"Paris\"]}},\"required\":[\"city\"]}}],\"output\":[{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\",\"id\":\"msg_fc4c26f8-3eb2-41d4-ae37-1d15d9cbf4cc\",\"type\":\"function_call\",\"call_id\":\"call_4408f6c0652e458192c2cec8\",\"status\":\"completed\"}],\"top_p\":1.0,\"completed_at\":1789446228,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":{\"mode\":\"required\",\"type\":\"allowed_tools\",\"tools\":[{\"name\":\"get_weather\",\"type\":\"function\"}]},\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_b62a0019-a32d-913c-b729-0e09699e1582\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"completed\"}}"
+  ],
+  "events": [
+    {
+      "type": "step-start",
+      "index": 0
+    },
+    {
+      "type": "tool-input-start",
+      "id": "call_4408f6c0652e458192c2cec8",
+      "name": "get_weather",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_fc4c26f8-3eb2-41d4-ae37-1d15d9cbf4cc"
+        }
+      }
+    },
+    {
+      "type": "tool-input-delta",
+      "id": "call_4408f6c0652e458192c2cec8",
+      "name": "get_weather",
+      "text": "{\"city\": \"Paris",
+      "input": {
+        "city": "Paris"
+      }
+    },
+    {
+      "type": "tool-input-delta",
+      "id": "call_4408f6c0652e458192c2cec8",
+      "name": "get_weather",
+      "text": "\"",
+      "input": {
+        "city": "Paris"
+      }
+    },
+    {
+      "type": "tool-input-delta",
+      "id": "call_4408f6c0652e458192c2cec8",
+      "name": "get_weather",
+      "text": "}",
+      "input": {
+        "city": "Paris"
+      }
+    },
+    {
+      "type": "tool-input-end",
+      "id": "call_4408f6c0652e458192c2cec8",
+      "name": "get_weather",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_fc4c26f8-3eb2-41d4-ae37-1d15d9cbf4cc"
+        }
+      }
+    },
+    {
+      "type": "tool-call",
+      "id": "call_4408f6c0652e458192c2cec8",
+      "name": "get_weather",
+      "input": {
+        "city": "Paris"
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_fc4c26f8-3eb2-41d4-ae37-1d15d9cbf4cc"
+        }
+      }
+    },
+    {
+      "type": "step-finish",
+      "index": 0,
+      "reason": {
+        "normalized": "tool-calls"
+      },
+      "usage": {
+        "inputTokens": 320,
+        "outputTokens": 19,
+        "nonCachedInputTokens": 320,
+        "cacheReadInputTokens": 0,
+        "reasoningTokens": 0,
+        "totalTokens": 339,
+        "providerMetadata": {
+          "alibaba": {
+            "input_tokens": 320,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 19,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 339,
+            "x_details": [
+              {
+                "total_tokens": 339,
+                "x_billing_type": "response_api",
+                "output_tokens": 19,
+                "input_tokens": 320,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "responseId": "resp_b62a0019-a32d-913c-b729-0e09699e1582",
+          "serviceTier": "default"
+        }
+      }
+    },
+    {
+      "type": "finish",
+      "reason": {
+        "normalized": "tool-calls"
+      },
+      "usage": {
+        "inputTokens": 320,
+        "outputTokens": 19,
+        "nonCachedInputTokens": 320,
+        "cacheReadInputTokens": 0,
+        "reasoningTokens": 0,
+        "totalTokens": 339,
+        "providerMetadata": {
+          "alibaba": {
+            "input_tokens": 320,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 19,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 339,
+            "x_details": [
+              {
+                "total_tokens": 339,
+                "x_billing_type": "response_api",
+                "output_tokens": 19,
+                "input_tokens": 320,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "responseId": "resp_b62a0019-a32d-913c-b729-0e09699e1582",
+          "serviceTier": "default"
+        }
+      }
+    }
+  ],
+  "error": null
+}

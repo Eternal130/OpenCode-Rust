@@ -1,0 +1,601 @@
+{
+ "group": "venice-chat",
+ "name": "deepseek-v4-flash-preserves-reasoning-through-a-tool-loop-and-follow-up",
+ "protocol": "venice-chat",
+ "provider": "venice",
+ "providerMetadataKey": "venice",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "Th",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "e user wants me to look",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " up the conversi",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "on rate fo",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "r code ZEBRA",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ", then mult",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "iply by",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 17 and add 9. Let m",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "e start by lo",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "oking up the rate.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "chatcmpl-tool-ab656a8b683341f2",
+     "name": "lookup_rate",
+     "type": "tool-input-start"
+    },
+    {
+     "id": "chatcmpl-tool-ab656a8b683341f2",
+     "input": {
+      "code": "ZEBRA"
+     },
+     "name": "lookup_rate",
+     "text": "{\"code\": \"ZEBRA\"}",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "chatcmpl-tool-ab656a8b683341f2",
+     "name": "lookup_rate",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "tool-input-end"
+    },
+    {
+     "id": "chatcmpl-tool-ab656a8b683341f2",
+     "input": {
+      "code": "ZEBRA"
+     },
+     "name": "lookup_rate",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "tool-call"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 256,
+      "inputTokens": 357,
+      "nonCachedInputTokens": 101,
+      "outputTokens": 83,
+      "providerMetadata": {
+       "venice": {
+        "cache_read_input_tokens": 256,
+        "completion_tokens": 83,
+        "prompt_tokens": 357,
+        "prompt_tokens_details": {
+         "cached_tokens": 256
+        },
+        "total_tokens": 440
+       }
+      },
+      "totalTokens": 440
+     }
+    },
+    {
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 256,
+      "inputTokens": 357,
+      "nonCachedInputTokens": 101,
+      "outputTokens": 83,
+      "providerMetadata": {
+       "venice": {
+        "cache_read_input_tokens": 256,
+        "completion_tokens": 83,
+        "prompt_tokens": 357,
+        "prompt_tokens_details": {
+         "cached_tokens": 256
+        },
+        "total_tokens": 440
+       }
+      },
+      "totalTokens": 440
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "We have the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " rate: 2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "3. Mul",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "tiply by",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 17: 2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "3 * 17",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " = 391.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " Then ad",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "d 9:",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 391 + 9 = 400.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " So the answer is 400.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "400",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 128,
+      "nonCachedInputTokens": 128,
+      "outputTokens": 46,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 46,
+        "prompt_tokens": 128,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 174
+       }
+      },
+      "totalTokens": 174
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 128,
+      "nonCachedInputTokens": 128,
+      "outputTokens": 46,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 46,
+        "prompt_tokens": 128,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 174
+       }
+      },
+      "totalTokens": 174
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "We need to add",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 7 to t",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "h",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "e previous ans",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "wer,",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " which",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " was 400. S",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "o 400+7=407. Reply wi",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "th just the number.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "407",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 148,
+      "nonCachedInputTokens": 148,
+      "outputTokens": 33,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 33,
+        "prompt_tokens": 148,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 181
+       }
+      },
+      "totalTokens": 181
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 148,
+      "nonCachedInputTokens": 148,
+      "outputTokens": 33,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 33,
+        "prompt_tokens": 148,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 181
+       }
+      },
+      "totalTokens": 181
+     }
+    }
+   ]
+  }
+ ]
+}

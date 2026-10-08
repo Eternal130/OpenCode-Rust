@@ -1,0 +1,75 @@
+{
+ "scenario": "gemini/gemini-2-5-flash-image",
+ "provider": "google",
+ "providerMetadataKey": "google",
+ "model": "gemini-2.5-flash",
+ "interactions": [
+  {
+   "events": [
+    {
+     "type": "step-start",
+     "index": 0
+    },
+    {
+     "type": "text-start",
+     "id": "text-0"
+    },
+    {
+     "type": "text-delta",
+     "id": "text-0",
+     "text": "jiggling restroom prison"
+    },
+    {
+     "type": "text-end",
+     "id": "text-0"
+    },
+    {
+     "type": "step-finish",
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "STOP"
+     },
+     "usage": {
+      "inputTokens": 291,
+      "outputTokens": 111,
+      "nonCachedInputTokens": 291,
+      "reasoningTokens": 106,
+      "totalTokens": 402,
+      "providerMetadata": {
+       "google": {
+        "thoughtsTokenCount": 106,
+        "promptTokenCount": 291,
+        "candidatesTokenCount": 5,
+        "totalTokenCount": 402
+       }
+      }
+     }
+    },
+    {
+     "type": "finish",
+     "reason": {
+      "normalized": "stop",
+      "raw": "STOP"
+     },
+     "usage": {
+      "inputTokens": 291,
+      "outputTokens": 111,
+      "nonCachedInputTokens": 291,
+      "reasoningTokens": 106,
+      "totalTokens": 402,
+      "providerMetadata": {
+       "google": {
+        "thoughtsTokenCount": 106,
+        "promptTokenCount": 291,
+        "candidatesTokenCount": 5,
+        "totalTokenCount": 402
+       }
+      }
+     }
+    }
+   ],
+   "error": null
+  }
+ ]
+}

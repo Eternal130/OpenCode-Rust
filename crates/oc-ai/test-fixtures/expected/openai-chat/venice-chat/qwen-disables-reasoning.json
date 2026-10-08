@@ -1,0 +1,84 @@
+{
+ "group": "venice-chat",
+ "name": "qwen-disables-reasoning",
+ "protocol": "venice-chat",
+ "provider": "venice",
+ "providerMetadataKey": "venice",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "4",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "0",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "0",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "inputTokens": 32,
+      "nonCachedInputTokens": 32,
+      "outputTokens": 4,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 4,
+        "prompt_tokens": 32,
+        "total_tokens": 36
+       }
+      },
+      "totalTokens": 36
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "inputTokens": 32,
+      "nonCachedInputTokens": 32,
+      "outputTokens": 4,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 4,
+        "prompt_tokens": 32,
+        "total_tokens": 36
+       }
+      },
+      "totalTokens": 36
+     }
+    }
+   ]
+  }
+ ]
+}

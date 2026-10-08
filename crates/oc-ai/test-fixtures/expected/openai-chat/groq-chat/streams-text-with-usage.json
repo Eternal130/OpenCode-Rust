@@ -1,0 +1,87 @@
+{
+ "group": "groq-chat",
+ "name": "streams-text-with-usage",
+ "protocol": "groq-chat",
+ "provider": "groq",
+ "providerMetadataKey": "groq",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "hello",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "inputTokens": 78,
+      "nonCachedInputTokens": 78,
+      "outputTokens": 20,
+      "providerMetadata": {
+       "groq": {
+        "completion_time": 0.020459983,
+        "completion_tokens": 20,
+        "completion_tokens_details": {
+         "reasoning_tokens": 10
+        },
+        "prompt_time": 0.003693734,
+        "prompt_tokens": 78,
+        "queue_time": 0.10886435,
+        "total_time": 0.024153717,
+        "total_tokens": 98
+       }
+      },
+      "reasoningTokens": 10,
+      "totalTokens": 98
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "inputTokens": 78,
+      "nonCachedInputTokens": 78,
+      "outputTokens": 20,
+      "providerMetadata": {
+       "groq": {
+        "completion_time": 0.020459983,
+        "completion_tokens": 20,
+        "completion_tokens_details": {
+         "reasoning_tokens": 10
+        },
+        "prompt_time": 0.003693734,
+        "prompt_tokens": 78,
+        "queue_time": 0.10886435,
+        "total_time": 0.024153717,
+        "total_tokens": 98
+       }
+      },
+      "reasoningTokens": 10,
+      "totalTokens": 98
+     }
+    }
+   ]
+  }
+ ]
+}

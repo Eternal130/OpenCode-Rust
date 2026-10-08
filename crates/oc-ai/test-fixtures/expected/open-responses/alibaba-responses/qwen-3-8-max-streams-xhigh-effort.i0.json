@@ -1,0 +1,208 @@
+{
+  "group": "alibaba-responses",
+  "scenario": "qwen-3-8-max-streams-xhigh-effort",
+  "interaction": 0,
+  "machine": "open-responses",
+  "provider": "alibaba",
+  "metadataKey": "alibaba",
+  "frames": [
+    "{\"sequence_number\":0,\"type\":\"response.created\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"xhigh\"},\"created_at\":1789446185,\"store\":true,\"tools\":[],\"output\":[],\"top_p\":1.0,\"completed_at\":1789446185,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_b23e5fab-dc81-95a8-abf9-89ac1c37497e\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"queued\"}}",
+    "{\"sequence_number\":1,\"type\":\"response.in_progress\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"xhigh\"},\"created_at\":1789446185,\"store\":true,\"tools\":[],\"output\":[],\"top_p\":1.0,\"completed_at\":1789446185,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_b23e5fab-dc81-95a8-abf9-89ac1c37497e\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"in_progress\"}}",
+    "{\"sequence_number\":2,\"item\":{\"summary\":[],\"type\":\"reasoning\",\"id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"},\"output_index\":0,\"type\":\"response.output_item.added\"}",
+    "{\"delta\":\"We\",\"sequence_number\":3,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\" need answer user's\",\"sequence_number\":4,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\" simple multiplication with\",\"sequence_number\":5,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\" only final integer.\",\"sequence_number\":6,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\" Compute 17\",\"sequence_number\":7,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"3\",\"sequence_number\":8,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"*219\",\"sequence_number\":9,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\". 17\",\"sequence_number\":10,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"3*20\",\"sequence_number\":11,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"0=34\",\"sequence_number\":12,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"600;\",\"sequence_number\":13,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\" 173\",\"sequence_number\":14,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"*\",\"sequence_number\":15,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"19=3\",\"sequence_number\":16,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"287 (\",\"sequence_number\":17,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"173*\",\"sequence_number\":18,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"20=3\",\"sequence_number\":19,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"460-\",\"sequence_number\":20,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"173=\",\"sequence_number\":21,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"3287\",\"sequence_number\":22,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"). Sum=3\",\"sequence_number\":23,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"7\",\"sequence_number\":24,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"887.\",\"sequence_number\":25,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\" Final only integer.\",\"sequence_number\":26,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\" Ensure no extra.\",\"sequence_number\":27,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"\\n\",\"sequence_number\":28,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"delta\":\"\",\"sequence_number\":29,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"sequence_number\":30,\"text\":\"We need answer user's simple multiplication with only final integer. Compute 173*219. 173*200=34600; 173*19=3287 (173*20=3460-173=3287). Sum=37887. Final only integer. Ensure no extra.\\n\",\"output_index\":0,\"type\":\"response.reasoning_text.done\",\"content_index\":0,\"item_id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"}",
+    "{\"sequence_number\":31,\"item\":{\"summary\":[{\"type\":\"summary_text\",\"text\":\"We need answer user's simple multiplication with only final integer. Compute 173*219. 173*200=34600; 173*19=3287 (173*20=3460-173=3287). Sum=37887. Final only integer. Ensure no extra.\\n\"}],\"type\":\"reasoning\",\"id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"},\"output_index\":0,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":32,\"item\":{\"id\":\"msg_dbce0b73-9fd7-4878-96ce-40c0cb657d4f\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[],\"status\":\"in_progress\"},\"output_index\":1,\"type\":\"response.output_item.added\"}",
+    "{\"sequence_number\":33,\"output_index\":1,\"type\":\"response.content_part.added\",\"content_index\":0,\"item_id\":\"msg_dbce0b73-9fd7-4878-96ce-40c0cb657d4f\",\"part\":{\"type\":\"output_text\",\"annotations\":[],\"text\":\"\"}}",
+    "{\"sequence_number\":34,\"content_index\":0,\"item_id\":\"msg_dbce0b73-9fd7-4878-96ce-40c0cb657d4f\",\"delta\":\"37\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":35,\"content_index\":0,\"item_id\":\"msg_dbce0b73-9fd7-4878-96ce-40c0cb657d4f\",\"delta\":\"887\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":36,\"content_index\":0,\"item_id\":\"msg_dbce0b73-9fd7-4878-96ce-40c0cb657d4f\",\"delta\":\"\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":37,\"content_index\":0,\"item_id\":\"msg_dbce0b73-9fd7-4878-96ce-40c0cb657d4f\",\"text\":\"37887\",\"output_index\":1,\"type\":\"response.output_text.done\",\"logprobs\":[]}",
+    "{\"sequence_number\":38,\"output_index\":1,\"type\":\"response.content_part.done\",\"content_index\":0,\"item_id\":\"msg_dbce0b73-9fd7-4878-96ce-40c0cb657d4f\",\"part\":{\"type\":\"output_text\",\"annotations\":[],\"text\":\"37887\"}}",
+    "{\"sequence_number\":39,\"item\":{\"id\":\"msg_dbce0b73-9fd7-4878-96ce-40c0cb657d4f\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"37887\"}],\"status\":\"completed\"},\"output_index\":1,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":40,\"type\":\"response.completed\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"xhigh\"},\"usage\":{\"total_tokens\":199,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":95,\"input_tokens\":104,\"output_tokens_details\":{\"reasoning_tokens\":87},\"x_details\":[{\"total_tokens\":199,\"x_billing_type\":\"response_api\",\"output_tokens\":95,\"input_tokens\":104,\"output_tokens_details\":{\"reasoning_tokens\":87},\"prompt_tokens_details\":{\"cached_tokens\":0}}]},\"created_at\":1789446185,\"store\":true,\"tools\":[],\"output\":[{\"summary\":[{\"type\":\"summary_text\",\"text\":\"We need answer user's simple multiplication with only final integer. Compute 173*219. 173*200=34600; 173*19=3287 (173*20=3460-173=3287). Sum=37887. Final only integer. Ensure no extra.\\n\"}],\"type\":\"reasoning\",\"id\":\"msg_10704c22-0fe8-49a5-824a-06fccf0fc704\"},{\"id\":\"msg_dbce0b73-9fd7-4878-96ce-40c0cb657d4f\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"37887\"}],\"status\":\"completed\"}],\"top_p\":1.0,\"completed_at\":1789446187,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_b23e5fab-dc81-95a8-abf9-89ac1c37497e\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"completed\"}}"
+  ],
+  "events": [
+    {
+      "type": "step-start",
+      "index": 0
+    },
+    {
+      "type": "reasoning-start",
+      "id": "msg_10704c22-0fe8-49a5-824a-06fccf0fc704:0",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_10704c22-0fe8-49a5-824a-06fccf0fc704",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "msg_10704c22-0fe8-49a5-824a-06fccf0fc704:0",
+      "text": "We need answer user's simple multiplication with only final integer. Compute 173*219. 173*200=34600; 173*19=3287 (173*20=3460-173=3287). Sum=37887. Final only integer. Ensure no extra.\n"
+    },
+    {
+      "type": "reasoning-end",
+      "id": "msg_10704c22-0fe8-49a5-824a-06fccf0fc704:0",
+      "text": "We need answer user's simple multiplication with only final integer. Compute 173*219. 173*200=34600; 173*19=3287 (173*20=3460-173=3287). Sum=37887. Final only integer. Ensure no extra.\n",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_10704c22-0fe8-49a5-824a-06fccf0fc704",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "text-start",
+      "id": "msg_dbce0b73-9fd7-4878-96ce-40c0cb657d4f",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_dbce0b73-9fd7-4878-96ce-40c0cb657d4f"
+        }
+      }
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_dbce0b73-9fd7-4878-96ce-40c0cb657d4f",
+      "text": "37"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_dbce0b73-9fd7-4878-96ce-40c0cb657d4f",
+      "text": "887"
+    },
+    {
+      "type": "text-end",
+      "id": "msg_dbce0b73-9fd7-4878-96ce-40c0cb657d4f",
+      "text": "37887",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_dbce0b73-9fd7-4878-96ce-40c0cb657d4f"
+        }
+      }
+    },
+    {
+      "type": "step-finish",
+      "index": 0,
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 104,
+        "outputTokens": 95,
+        "nonCachedInputTokens": 104,
+        "cacheReadInputTokens": 0,
+        "reasoningTokens": 87,
+        "totalTokens": 199,
+        "providerMetadata": {
+          "alibaba": {
+            "input_tokens": 104,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 95,
+            "output_tokens_details": {
+              "reasoning_tokens": 87
+            },
+            "total_tokens": 199,
+            "x_details": [
+              {
+                "total_tokens": 199,
+                "x_billing_type": "response_api",
+                "output_tokens": 95,
+                "input_tokens": 104,
+                "output_tokens_details": {
+                  "reasoning_tokens": 87
+                },
+                "prompt_tokens_details": {
+                  "cached_tokens": 0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "responseId": "resp_b23e5fab-dc81-95a8-abf9-89ac1c37497e",
+          "serviceTier": "default"
+        }
+      }
+    },
+    {
+      "type": "finish",
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 104,
+        "outputTokens": 95,
+        "nonCachedInputTokens": 104,
+        "cacheReadInputTokens": 0,
+        "reasoningTokens": 87,
+        "totalTokens": 199,
+        "providerMetadata": {
+          "alibaba": {
+            "input_tokens": 104,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 95,
+            "output_tokens_details": {
+              "reasoning_tokens": 87
+            },
+            "total_tokens": 199,
+            "x_details": [
+              {
+                "total_tokens": 199,
+                "x_billing_type": "response_api",
+                "output_tokens": 95,
+                "input_tokens": 104,
+                "output_tokens_details": {
+                  "reasoning_tokens": 87
+                },
+                "prompt_tokens_details": {
+                  "cached_tokens": 0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "responseId": "resp_b23e5fab-dc81-95a8-abf9-89ac1c37497e",
+          "serviceTier": "default"
+        }
+      }
+    }
+  ],
+  "error": null
+}

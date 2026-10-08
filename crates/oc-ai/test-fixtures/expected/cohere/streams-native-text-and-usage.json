@@ -1,0 +1,85 @@
+{
+ "scenario": "cohere/streams-native-text-and-usage",
+ "provider": "cohere",
+ "providerMetadataKey": "cohere",
+ "model": "command-a-03-2025",
+ "interactions": [
+  {
+   "events": [
+    {
+     "type": "step-start",
+     "index": 0
+    },
+    {
+     "type": "text-start",
+     "id": "0"
+    },
+    {
+     "type": "text-delta",
+     "id": "0",
+     "text": "OK"
+    },
+    {
+     "type": "text-end",
+     "id": "0"
+    },
+    {
+     "type": "step-finish",
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "COMPLETE"
+     },
+     "usage": {
+      "inputTokens": 499,
+      "outputTokens": 4,
+      "nonCachedInputTokens": 35,
+      "cacheReadInputTokens": 464,
+      "totalTokens": 503,
+      "providerMetadata": {
+       "cohere": {
+        "tokens": {
+         "input_tokens": 499,
+         "output_tokens": 4
+        },
+        "billed_units": {
+         "input_tokens": 4,
+         "output_tokens": 1
+        },
+        "cached_tokens": 464
+       }
+      }
+     }
+    },
+    {
+     "type": "finish",
+     "reason": {
+      "normalized": "stop",
+      "raw": "COMPLETE"
+     },
+     "usage": {
+      "inputTokens": 499,
+      "outputTokens": 4,
+      "nonCachedInputTokens": 35,
+      "cacheReadInputTokens": 464,
+      "totalTokens": 503,
+      "providerMetadata": {
+       "cohere": {
+        "tokens": {
+         "input_tokens": 499,
+         "output_tokens": 4
+        },
+        "billed_units": {
+         "input_tokens": 4,
+         "output_tokens": 1
+        },
+        "cached_tokens": 464
+       }
+      }
+     }
+    }
+   ],
+   "error": null
+  }
+ ]
+}

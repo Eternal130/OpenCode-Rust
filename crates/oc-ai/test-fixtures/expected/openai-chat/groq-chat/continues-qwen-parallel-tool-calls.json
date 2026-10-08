@@ -1,0 +1,350 @@
+{
+ "group": "groq-chat",
+ "name": "continues-qwen-parallel-tool-calls",
+ "protocol": "groq-chat",
+ "provider": "groq",
+ "providerMetadataKey": "groq",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "ymftvsqar",
+     "name": "lookup_weather",
+     "type": "tool-input-start"
+    },
+    {
+     "id": "ymftvsqar",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "lookup_weather",
+     "text": "{\"city\":\"Paris\"}",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "968mxnfem",
+     "name": "lookup_weather",
+     "type": "tool-input-start"
+    },
+    {
+     "id": "968mxnfem",
+     "input": {
+      "city": "London"
+     },
+     "name": "lookup_weather",
+     "text": "{\"city\":\"London\"}",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "ymftvsqar",
+     "name": "lookup_weather",
+     "type": "tool-input-end"
+    },
+    {
+     "id": "ymftvsqar",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "lookup_weather",
+     "type": "tool-call"
+    },
+    {
+     "id": "968mxnfem",
+     "name": "lookup_weather",
+     "type": "tool-input-end"
+    },
+    {
+     "id": "968mxnfem",
+     "input": {
+      "city": "London"
+     },
+     "name": "lookup_weather",
+     "type": "tool-call"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "step-finish",
+     "usage": {
+      "inputTokens": 326,
+      "nonCachedInputTokens": 326,
+      "outputTokens": 54,
+      "providerMetadata": {
+       "groq": {
+        "completion_time": 0.119909051,
+        "completion_tokens": 54,
+        "prompt_time": 0.027692693,
+        "prompt_tokens": 326,
+        "queue_time": 0.389970164,
+        "total_time": 0.147601744,
+        "total_tokens": 380
+       }
+      },
+      "totalTokens": 380
+     }
+    },
+    {
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "finish",
+     "usage": {
+      "inputTokens": 326,
+      "nonCachedInputTokens": 326,
+      "outputTokens": 54,
+      "providerMetadata": {
+       "groq": {
+        "completion_time": 0.119909051,
+        "completion_tokens": 54,
+        "prompt_time": 0.027692693,
+        "prompt_tokens": 326,
+        "queue_time": 0.389970164,
+        "total_time": 0.147601744,
+        "total_tokens": 380
+       }
+      },
+      "totalTokens": 380
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "The",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " current",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " weather",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " in",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " Paris",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " is",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " sunny",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " with",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " a",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " temperature",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " of",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " ",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "1",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "8",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "°C",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ",",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " and",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " in",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " London",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ",",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " it",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " is",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " also",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " sunny",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " with",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " a",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " temperature",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " of",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " ",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "1",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "8",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "°C",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ".",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "inputTokens": 426,
+      "nonCachedInputTokens": 426,
+      "outputTokens": 34,
+      "providerMetadata": {
+       "groq": {
+        "completion_time": 0.075566029,
+        "completion_tokens": 34,
+        "prompt_time": 0.037660105,
+        "prompt_tokens": 426,
+        "queue_time": 0.321437176,
+        "total_time": 0.113226134,
+        "total_tokens": 460
+       }
+      },
+      "totalTokens": 460
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "inputTokens": 426,
+      "nonCachedInputTokens": 426,
+      "outputTokens": 34,
+      "providerMetadata": {
+       "groq": {
+        "completion_time": 0.075566029,
+        "completion_tokens": 34,
+        "prompt_time": 0.037660105,
+        "prompt_tokens": 426,
+        "queue_time": 0.321437176,
+        "total_time": 0.113226134,
+        "total_tokens": 460
+       }
+      },
+      "totalTokens": 460
+     }
+    }
+   ]
+  }
+ ]
+}

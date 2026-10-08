@@ -1,0 +1,163 @@
+{
+  "group": "minimax-responses",
+  "scenario": "m3-continues-a-tool-loop-with-effort-minimal",
+  "interaction": 1,
+  "machine": "open-responses",
+  "provider": "minimax",
+  "metadataKey": "minimax",
+  "frames": [
+    "{\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"a7732d89f126b10d88b2d68926a66252\",\"object\":\"response\",\"created_at\":1789446324,\"model\":\"MiniMax-M3\",\"status\":\"in_progress\",\"output\":[],\"output_text\":null,\"usage\":null,\"error\":null,\"incomplete_details\":null,\"instructions\":null,\"metadata\":{},\"tools\":[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"enum\":[\"Paris\"]}},\"required\":[\"city\"],\"additionalProperties\":false},\"strict\":false}],\"tool_choice\":\"none\",\"temperature\":1,\"top_p\":0.95,\"text\":{\"format\":{\"type\":\"text\"}},\"reasoning\":{\"effort\":\"minimal\",\"summary\":null},\"max_output_tokens\":1536,\"parallel_tool_calls\":true,\"previous_response_id\":null,\"conversation\":null,\"store\":false,\"service_tier\":\"standard\",\"safety_identifier\":null,\"truncation\":\"disabled\"}}",
+    "{\"type\":\"response.in_progress\",\"sequence_number\":1,\"response\":{\"id\":\"a7732d89f126b10d88b2d68926a66252\",\"object\":\"response\",\"created_at\":1789446324,\"model\":\"MiniMax-M3\",\"status\":\"in_progress\",\"output\":[],\"output_text\":null,\"usage\":null,\"error\":null,\"incomplete_details\":null,\"instructions\":null,\"metadata\":{},\"tools\":[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"enum\":[\"Paris\"]}},\"required\":[\"city\"],\"additionalProperties\":false},\"strict\":false}],\"tool_choice\":\"none\",\"temperature\":1,\"top_p\":0.95,\"text\":{\"format\":{\"type\":\"text\"}},\"reasoning\":{\"effort\":\"minimal\",\"summary\":null},\"max_output_tokens\":1536,\"parallel_tool_calls\":true,\"previous_response_id\":null,\"conversation\":null,\"store\":false,\"service_tier\":\"standard\",\"safety_identifier\":null,\"truncation\":\"disabled\"}}",
+    "{\"type\":\"response.output_item.added\",\"sequence_number\":2,\"item\":{\"id\":\"a7732d89f126b10d88b2d68926a66252_rs\",\"type\":\"reasoning\",\"status\":\"in_progress\",\"summary\":[],\"content\":[]},\"output_index\":0}",
+    "{\"type\":\"response.content_part.added\",\"sequence_number\":3,\"part\":{\"type\":\"reasoning_text\",\"text\":\"\"},\"output_index\":0,\"content_index\":0,\"item_id\":\"a7732d89f126b10d88b2d68926a66252_rs\"}",
+    "{\"type\":\"response.reasoning_text.delta\",\"sequence_number\":4,\"output_index\":0,\"content_index\":0,\"item_id\":\"a7732d89f126b10d88b2d68926a66252_rs\",\"delta\":\"The weather in\"}",
+    "{\"type\":\"response.reasoning_text.delta\",\"sequence_number\":5,\"output_index\":0,\"content_index\":0,\"item_id\":\"a7732d89f126b10d88b2d68926a66252_rs\",\"delta\":\" Paris is currently sunny with a temperature of 18\"}",
+    "{\"type\":\"response.reasoning_text.delta\",\"sequence_number\":6,\"output_index\":0,\"content_index\":0,\"item_id\":\"a7732d89f126b10d88b2d68926a66252_rs\",\"delta\":\"°C. I should report this in one short sentence.\"}",
+    "{\"type\":\"response.reasoning_text.done\",\"sequence_number\":7,\"output_index\":0,\"content_index\":0,\"item_id\":\"a7732d89f126b10d88b2d68926a66252_rs\",\"text\":\"The weather in Paris is currently sunny with a temperature of 18°C. I should report this in one short sentence.\"}",
+    "{\"type\":\"response.content_part.done\",\"sequence_number\":8,\"part\":{\"type\":\"reasoning_text\",\"text\":\"The weather in Paris is currently sunny with a temperature of 18°C. I should report this in one short sentence.\"},\"output_index\":0,\"content_index\":0,\"item_id\":\"a7732d89f126b10d88b2d68926a66252_rs\"}",
+    "{\"type\":\"response.output_item.done\",\"sequence_number\":9,\"item\":{\"content\":[{\"type\":\"reasoning_text\",\"text\":\"The weather in Paris is currently sunny with a temperature of 18°C. I should report this in one short sentence.\"}],\"id\":\"a7732d89f126b10d88b2d68926a66252_rs\",\"type\":\"reasoning\",\"status\":\"completed\",\"summary\":[]},\"output_index\":0}",
+    "{\"type\":\"response.output_item.added\",\"sequence_number\":10,\"item\":{\"role\":\"assistant\",\"content\":[],\"id\":\"a7732d89f126b10d88b2d68926a66252_msg_1\",\"type\":\"message\",\"status\":\"in_progress\"},\"output_index\":1}",
+    "{\"type\":\"response.content_part.added\",\"sequence_number\":11,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]},\"output_index\":1,\"content_index\":0,\"item_id\":\"a7732d89f126b10d88b2d68926a66252_msg_1\"}",
+    "{\"type\":\"response.output_text.delta\",\"sequence_number\":12,\"output_index\":1,\"content_index\":0,\"item_id\":\"a7732d89f126b10d88b2d68926a66252_msg_1\",\"delta\":\"The\"}",
+    "{\"type\":\"response.output_text.delta\",\"sequence_number\":13,\"output_index\":1,\"content_index\":0,\"item_id\":\"a7732d89f126b10d88b2d68926a66252_msg_1\",\"delta\":\" weather in Paris is currently sunny with a temperature of 18°C\"}",
+    "{\"type\":\"response.output_text.delta\",\"sequence_number\":14,\"output_index\":1,\"content_index\":0,\"item_id\":\"a7732d89f126b10d88b2d68926a66252_msg_1\",\"delta\":\".\"}",
+    "{\"type\":\"response.output_text.done\",\"sequence_number\":15,\"output_index\":1,\"content_index\":0,\"item_id\":\"a7732d89f126b10d88b2d68926a66252_msg_1\",\"text\":\"The weather in Paris is currently sunny with a temperature of 18°C.\"}",
+    "{\"type\":\"response.content_part.done\",\"sequence_number\":16,\"part\":{\"type\":\"output_text\",\"text\":\"The weather in Paris is currently sunny with a temperature of 18°C.\",\"annotations\":[]},\"output_index\":1,\"content_index\":0,\"item_id\":\"a7732d89f126b10d88b2d68926a66252_msg_1\"}",
+    "{\"type\":\"response.output_item.done\",\"sequence_number\":17,\"item\":{\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"The weather in Paris is currently sunny with a temperature of 18°C.\",\"annotations\":[]}],\"id\":\"a7732d89f126b10d88b2d68926a66252_msg_1\",\"type\":\"message\",\"status\":\"completed\"},\"output_index\":1}",
+    "{\"type\":\"response.completed\",\"sequence_number\":18,\"response\":{\"id\":\"a7732d89f126b10d88b2d68926a66252\",\"object\":\"response\",\"created_at\":1789446324,\"model\":\"MiniMax-M3\",\"status\":\"completed\",\"output\":[{\"id\":\"a7732d89f126b10d88b2d68926a66252_rs\",\"type\":\"reasoning\",\"status\":\"completed\",\"summary\":[],\"content\":[{\"type\":\"reasoning_text\",\"text\":\"The weather in Paris is currently sunny with a temperature of 18°C. I should report this in one short sentence.\"}]},{\"id\":\"a7732d89f126b10d88b2d68926a66252_msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"The weather in Paris is currently sunny with a temperature of 18°C.\",\"annotations\":null}]}],\"output_text\":\"The weather in Paris is currently sunny with a temperature of 18°C.\",\"usage\":{\"input_tokens\":286,\"output_tokens\":40,\"total_tokens\":326,\"input_tokens_details\":{\"cached_tokens\":128},\"output_tokens_details\":{\"reasoning_tokens\":24}},\"error\":null,\"incomplete_details\":null,\"instructions\":null,\"metadata\":{},\"tools\":[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"enum\":[\"Paris\"]}},\"required\":[\"city\"],\"additionalProperties\":false},\"strict\":false}],\"tool_choice\":\"none\",\"temperature\":1,\"top_p\":0.95,\"text\":{\"format\":{\"type\":\"text\"}},\"reasoning\":{\"effort\":\"minimal\",\"summary\":null},\"max_output_tokens\":1536,\"parallel_tool_calls\":true,\"previous_response_id\":null,\"conversation\":null,\"store\":false,\"service_tier\":\"standard\",\"safety_identifier\":null,\"truncation\":\"disabled\"}}"
+  ],
+  "events": [
+    {
+      "type": "step-start",
+      "index": 0
+    },
+    {
+      "type": "reasoning-start",
+      "id": "a7732d89f126b10d88b2d68926a66252_rs:0",
+      "providerMetadata": {
+        "minimax": {
+          "itemId": "a7732d89f126b10d88b2d68926a66252_rs",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "a7732d89f126b10d88b2d68926a66252_rs:0",
+      "text": "The weather in Paris is currently sunny with a temperature of 18°C. I should report this in one short sentence."
+    },
+    {
+      "type": "reasoning-end",
+      "id": "a7732d89f126b10d88b2d68926a66252_rs:0",
+      "text": "The weather in Paris is currently sunny with a temperature of 18°C. I should report this in one short sentence.",
+      "providerMetadata": {
+        "minimax": {
+          "itemId": "a7732d89f126b10d88b2d68926a66252_rs",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "text-start",
+      "id": "a7732d89f126b10d88b2d68926a66252_msg_1",
+      "providerMetadata": {
+        "minimax": {
+          "itemId": "a7732d89f126b10d88b2d68926a66252_msg_1"
+        }
+      }
+    },
+    {
+      "type": "text-delta",
+      "id": "a7732d89f126b10d88b2d68926a66252_msg_1",
+      "text": "The"
+    },
+    {
+      "type": "text-delta",
+      "id": "a7732d89f126b10d88b2d68926a66252_msg_1",
+      "text": " weather in Paris is currently sunny with a temperature of 18°C"
+    },
+    {
+      "type": "text-delta",
+      "id": "a7732d89f126b10d88b2d68926a66252_msg_1",
+      "text": "."
+    },
+    {
+      "type": "text-end",
+      "id": "a7732d89f126b10d88b2d68926a66252_msg_1",
+      "text": "The weather in Paris is currently sunny with a temperature of 18°C.",
+      "providerMetadata": {
+        "minimax": {
+          "itemId": "a7732d89f126b10d88b2d68926a66252_msg_1"
+        }
+      }
+    },
+    {
+      "type": "step-finish",
+      "index": 0,
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 286,
+        "outputTokens": 40,
+        "nonCachedInputTokens": 158,
+        "cacheReadInputTokens": 128,
+        "reasoningTokens": 24,
+        "totalTokens": 326,
+        "providerMetadata": {
+          "minimax": {
+            "input_tokens": 286,
+            "input_tokens_details": {
+              "cached_tokens": 128
+            },
+            "output_tokens": 40,
+            "output_tokens_details": {
+              "reasoning_tokens": 24
+            },
+            "total_tokens": 326
+          }
+        }
+      },
+      "providerMetadata": {
+        "minimax": {
+          "responseId": "a7732d89f126b10d88b2d68926a66252",
+          "serviceTier": "standard"
+        }
+      }
+    },
+    {
+      "type": "finish",
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 286,
+        "outputTokens": 40,
+        "nonCachedInputTokens": 158,
+        "cacheReadInputTokens": 128,
+        "reasoningTokens": 24,
+        "totalTokens": 326,
+        "providerMetadata": {
+          "minimax": {
+            "input_tokens": 286,
+            "input_tokens_details": {
+              "cached_tokens": 128
+            },
+            "output_tokens": 40,
+            "output_tokens_details": {
+              "reasoning_tokens": 24
+            },
+            "total_tokens": 326
+          }
+        }
+      },
+      "providerMetadata": {
+        "minimax": {
+          "responseId": "a7732d89f126b10d88b2d68926a66252",
+          "serviceTier": "standard"
+        }
+      }
+    }
+  ],
+  "error": null
+}

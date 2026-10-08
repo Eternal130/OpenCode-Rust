@@ -1,0 +1,89 @@
+{
+ "group": "openai-compatible-chat",
+ "name": "togetherai-streams-tool-call",
+ "protocol": "openai-chat",
+ "provider": "togetherai",
+ "providerMetadataKey": "togetherai",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "call_yu1mxtmex7x48nximi9c8jpo",
+     "name": "get_weather",
+     "type": "tool-input-start"
+    },
+    {
+     "id": "call_yu1mxtmex7x48nximi9c8jpo",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "get_weather",
+     "text": "{\"city\":\"Paris\"}",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_yu1mxtmex7x48nximi9c8jpo",
+     "name": "get_weather",
+     "type": "tool-input-end"
+    },
+    {
+     "id": "call_yu1mxtmex7x48nximi9c8jpo",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "get_weather",
+     "type": "tool-call"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 194,
+      "nonCachedInputTokens": 194,
+      "outputTokens": 19,
+      "providerMetadata": {
+       "togetherai": {
+        "cached_tokens": 0,
+        "completion_tokens": 19,
+        "prompt_tokens": 194,
+        "total_tokens": 213
+       }
+      },
+      "totalTokens": 213
+     }
+    },
+    {
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 194,
+      "nonCachedInputTokens": 194,
+      "outputTokens": 19,
+      "providerMetadata": {
+       "togetherai": {
+        "cached_tokens": 0,
+        "completion_tokens": 19,
+        "prompt_tokens": 194,
+        "total_tokens": 213
+       }
+      },
+      "totalTokens": 213
+     }
+    }
+   ]
+  }
+ ]
+}
