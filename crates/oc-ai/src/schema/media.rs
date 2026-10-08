@@ -26,6 +26,7 @@ pub enum Kind {
 }
 
 /// Bucket a media (MIME) type into a [`Kind`] (port of `kindOf`).
+#[must_use]
 pub fn kind_of(media_type: &str) -> Kind {
     let lower = media_type.to_ascii_lowercase();
     if lower.starts_with("image/") {
@@ -65,8 +66,14 @@ pub struct Info {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Source {
-    Bytes { data: BytesPayload, media_type: String },
-    Base64 { data: String, media_type: String },
+    Bytes {
+        data: BytesPayload,
+        media_type: String,
+    },
+    Base64 {
+        data: String,
+        media_type: String,
+    },
     Url {
         url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -75,7 +82,7 @@ pub enum Source {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expires_at: Option<f64>,
     },
-    /// A provider-side handle: OpenAI `file_id`, Gemini file URI, `gs://`, …
+    /// A provider-side handle: `OpenAI` `file_id`, Gemini file URI, `gs://`, …
     Ref {
         provider: ProviderId,
         id: String,
@@ -117,11 +124,13 @@ pub struct Asset {
 
 impl Asset {
     /// Derived kind bucket.
+    #[must_use]
     pub fn kind(&self) -> Kind {
         kind_of(&self.media_type)
     }
 
     /// Inline payload for `bytes`/`base64` sources; `None` for `url`/`ref`.
+    #[must_use]
     pub fn inline(&self) -> Option<Inline> {
         match &self.source {
             Source::Bytes { data, media_type } => {
@@ -131,13 +140,18 @@ impl Asset {
             }
             Source::Base64 { data, media_type } => {
                 let mime = media_type.to_ascii_lowercase();
-                Some(Inline { data_url: format!("data:{mime};base64,{data}"), mime, base64: data.clone() })
+                Some(Inline {
+                    data_url: format!("data:{mime};base64,{data}"),
+                    mime,
+                    base64: data.clone(),
+                })
             }
             _ => None,
         }
     }
 
     /// The remote URL of a `url` source, if this is one.
+    #[must_use]
     pub fn url(&self) -> Option<&str> {
         match &self.source {
             Source::Url { url, .. } => Some(url),
@@ -147,17 +161,23 @@ impl Asset {
 }
 
 /// Constructors mirroring `Media.bytes/base64/url/ref`.
+#[must_use]
 pub fn bytes(data: Vec<u8>, media_type: Option<String>) -> Asset {
     let media_type = media_type.unwrap_or_else(|| "application/octet-stream".into());
-    Asset { source: Source::Bytes { data: BytesPayload(data), media_type }, media_type, info: None, expires_at: None, provider_metadata: None }
-        .with_derived()
+    Asset {
+        media_type: media_type.clone(),
+        source: Source::Bytes { data: BytesPayload(data), media_type },
+        info: None,
+        expires_at: None,
+        provider_metadata: None,
+    }
 }
 
 pub fn base64(data: impl Into<String>, media_type: impl Into<String>) -> Asset {
     let media_type = media_type.into();
     Asset {
-        source: Source::Base64 { data: data.into(), media_type: media_type.clone() },
-        media_type,
+        media_type: media_type.clone(),
+        source: Source::Base64 { data: data.into(), media_type },
         info: None,
         expires_at: None,
         provider_metadata: None,
@@ -175,7 +195,11 @@ pub fn url(value: impl Into<String>, media_type: Option<String>, expires_at: Opt
     }
 }
 
-pub fn reference(provider: impl Into<String>, id: impl Into<String>, media_type: Option<String>) -> Asset {
+pub fn reference(
+    provider: impl Into<String>,
+    id: impl Into<String>,
+    media_type: Option<String>,
+) -> Asset {
     Asset {
         media_type: media_type.clone().unwrap_or_else(|| "application/octet-stream".into()),
         expires_at: None,
@@ -185,18 +209,12 @@ pub fn reference(provider: impl Into<String>, id: impl Into<String>, media_type:
     }
 }
 
-impl Asset {
-    fn with_derived(self) -> Self {
-        self
-    }
-}
-
 /// Parse a `data:<mime>;base64,<data>` URL; `None` when not a base64 data URL.
+#[must_use]
 pub fn parse_data_url(value: &str) -> Option<Asset> {
     let rest = value.strip_prefix("data:")?;
-    let mut comma = rest.splitn(2, ',');
-    let meta = comma.next()?;
-    let data = comma.next()?;
+    let (meta, data) = rest.split_once(',')?;
+
     if !meta.contains(";base64") {
         return None;
     }
@@ -208,6 +226,7 @@ pub fn parse_data_url(value: &str) -> Option<Asset> {
 }
 
 /// Extra fields tolerated on asset JSON (matches TS's lenient encoded form).
+#[must_use]
 pub fn asset_from_json(value: &Value) -> Option<Asset> {
     serde_json::from_value(value.clone()).ok()
 }

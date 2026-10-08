@@ -21,6 +21,7 @@ impl ModelId {
         Self(value.into())
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -42,6 +43,7 @@ impl ProviderId {
         Self(value.into())
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -69,9 +71,6 @@ mod tests {
     #[test]
     fn ids_are_transparent_on_the_wire() {
         assert_eq!(serde_json::to_string(&ModelId::new("m1")).unwrap(), "\"m1\"");
-        assert_eq!(
-            serde_json::from_str::<ProviderId>("\"p1\"").unwrap(),
-            ProviderId::new("p1")
-        );
+        assert_eq!(serde_json::from_str::<ProviderId>("\"p1\"").unwrap(), ProviderId::new("p1"));
     }
 }

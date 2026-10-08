@@ -42,7 +42,11 @@ pub trait Protocol: Send + Sync {
 
     /// Translate one decoded frame into emitted events plus the next state
     /// (port of `stream.step`). Pure: same state + frame ⇒ same output.
-    fn step(&self, state: ProtocolState, frame: &str) -> Result<(ProtocolState, Vec<LLMEvent>), AiError>;
+    fn step(
+        &self,
+        state: ProtocolState,
+        frame: &str,
+    ) -> Result<(ProtocolState, Vec<LLMEvent>), AiError>;
 
     /// Optional request-completion signal for transports that do not end
     /// naturally (port of `stream.terminal`); `false` by default.

@@ -25,7 +25,7 @@ pub enum MessageRole {
 
 /// System-prompt part (`type: "text"` in the system array).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename = "text")]
 pub struct SystemPart {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -43,20 +43,58 @@ impl SystemPart {
 /// Tool result payload: `json`/`text`/`error` carry an unknown value;
 /// `content` carries a `Tool.Content` array (kept as JSON here).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum ToolResultValue {
-    Json { value: Value },
-    Text { value: Value },
-    Error { value: Value },
-    Content { value: Vec<Value> },
+    Json {
+        value: Value,
+    },
+    Text {
+        value: Value,
+    },
+    Error {
+        value: Value,
+    },
+    /// `value` items are `Tool.Content` entries (see [`ToolContentItems`]).
+    Content {
+        value: ToolContentItems,
+    },
+}
+
+/// `Tool.Content` array with minimal wire validation matching the TS schema
+/// guard: items must be objects, and `text` items must carry a string
+/// `text`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolContentItems(pub Vec<Value>);
+
+impl Serialize for ToolContentItems {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ToolContentItems {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let items = Vec::<Value>::deserialize(deserializer)?;
+        for item in &items {
+            let Some(object) = item.as_object() else {
+                return Err(serde::de::Error::custom("content items must be objects"));
+            };
+            let kind = object.get("type").and_then(|value| value.as_str()).unwrap_or_default();
+            if kind == "text" && !object.get("text").is_some_and(serde_json::Value::is_string) {
+                return Err(serde::de::Error::custom("text content items require a string `text`"));
+            }
+        }
+        Ok(ToolContentItems(items))
+    }
 }
 
 impl ToolResultValue {
     /// Normalize arbitrary result input (port of `ToolResultValue.make`).
+    #[must_use]
     pub fn make(value: Value, kind: &str) -> Self {
         match kind {
             "content" => ToolResultValue::Content {
-                value: value.as_array().cloned().unwrap_or_default(),
+                value: ToolContentItems(value.as_array().cloned().unwrap_or_default()),
             },
             "text" => ToolResultValue::Text { value },
             "error" => ToolResultValue::Error { value },
@@ -64,6 +102,7 @@ impl ToolResultValue {
         }
     }
 
+    #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
             ToolResultValue::Json { .. } => "json",
@@ -180,6 +219,7 @@ impl ContentPart {
     }
 
     /// Inline cache hint, when this part carries one.
+    #[must_use]
     pub fn cache(&self) -> Option<&CacheHint> {
         match self {
             ContentPart::Text { cache, .. }
@@ -191,6 +231,7 @@ impl ContentPart {
         }
     }
 
+    #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
             ContentPart::Text { .. } => "text",
@@ -208,7 +249,9 @@ impl ContentPart {
 /// summary (which may be `null`), never both.
 pub fn validate_compaction(encrypted: Option<&str>, text: Option<&String>) -> Result<(), String> {
     match (encrypted, text) {
-        (Some(_), Some(_)) => Err("Compaction requires either encrypted content or a summary, not both".into()),
+        (Some(_), Some(_)) => {
+            Err("Compaction requires either encrypted content or a summary, not both".into())
+        }
         (None, None) => Err("Compaction requires either encrypted content or a summary".into()),
         _ => Ok(()),
     }
@@ -246,6 +289,7 @@ pub struct Message {
 }
 
 impl Message {
+    #[must_use]
     pub fn new(role: MessageRole, content: Vec<ContentPart>) -> Self {
         Self { id: None, role, content, metadata: None, provider_metadata: None, native: None }
     }
@@ -254,6 +298,7 @@ impl Message {
         Self::new(MessageRole::User, vec![ContentPart::text(text)])
     }
 
+    #[must_use]
     pub fn assistant(content: Vec<ContentPart>) -> Self {
         Self::new(MessageRole::Assistant, content)
     }
@@ -265,10 +310,12 @@ impl Message {
     }
 
     /// Effort-change marker: `previous` → `effort`; `None` is the model default.
+    #[must_use]
     pub fn effort(effort: Option<String>, previous: Option<String>) -> Self {
         Self::new(MessageRole::System, vec![ContentPart::Effort { effort, previous }])
     }
 
+    #[must_use]
     pub fn tool(part: ContentPart) -> Self {
         Self::new(MessageRole::Tool, vec![part])
     }
@@ -306,7 +353,7 @@ impl Message {
 
 /// A tool definition (port of `ToolDefinition`; `type: "tool"` on the wire).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename = "tool", rename_all = "camelCase")]
 pub struct ToolDefinition {
     pub name: String,
     pub description: String,
@@ -326,7 +373,11 @@ pub struct ToolDefinition {
 }
 
 impl ToolDefinition {
-    pub fn new(name: impl Into<String>, description: impl Into<String>, input_schema: Value) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: Value,
+    ) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
@@ -341,7 +392,7 @@ impl ToolDefinition {
 
 /// Namespaced tool group; leaf names join their namespace path later.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename = "namespace")]
 pub struct ToolNamespace {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -351,7 +402,7 @@ pub struct ToolNamespace {
 
 /// A flat tool or a namespace (port of `ToolEntry`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum ToolEntry {
     #[serde(rename = "tool")]
     Definition(ToolDefinition),
@@ -360,10 +411,20 @@ pub enum ToolEntry {
 }
 
 impl ToolEntry {
+    #[must_use]
     pub fn name(&self) -> &str {
         match self {
             ToolEntry::Definition(tool) => &tool.name,
             ToolEntry::Namespace(namespace) => &namespace.name,
+        }
+    }
+
+    /// The flat tool definition, when this entry is one.
+    #[must_use]
+    pub fn as_definition(&self) -> Option<&ToolDefinition> {
+        match self {
+            ToolEntry::Definition(tool) => Some(tool),
+            ToolEntry::Namespace(_) => None,
         }
     }
 }
@@ -374,33 +435,48 @@ impl ToolEntry {
 pub enum ToolChoice {
     #[serde(rename = "auto")]
     Auto {
-        #[serde(default, rename = "disableParallelToolUse", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            rename = "disableParallelToolUse",
+            skip_serializing_if = "Option::is_none"
+        )]
         disable_parallel_tool_use: Option<bool>,
     },
     #[serde(rename = "none")]
     None {},
     #[serde(rename = "required")]
     Required {
-        #[serde(default, rename = "disableParallelToolUse", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            rename = "disableParallelToolUse",
+            skip_serializing_if = "Option::is_none"
+        )]
         disable_parallel_tool_use: Option<bool>,
     },
     #[serde(rename = "tool")]
     Named {
         name: String,
-        #[serde(default, rename = "disableParallelToolUse", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            rename = "disableParallelToolUse",
+            skip_serializing_if = "Option::is_none"
+        )]
         disable_parallel_tool_use: Option<bool>,
     },
 }
 
 impl ToolChoice {
+    #[must_use]
     pub fn auto() -> Self {
         ToolChoice::Auto { disable_parallel_tool_use: None }
     }
 
+    #[must_use]
     pub fn none() -> Self {
         ToolChoice::None {}
     }
 
+    #[must_use]
     pub fn required() -> Self {
         ToolChoice::Required { disable_parallel_tool_use: None }
     }
@@ -444,6 +520,7 @@ impl std::fmt::Debug for LLMRequest {
 }
 
 impl LLMRequest {
+    #[must_use]
     pub fn new(model: LanguageModelRef) -> Self {
         Self {
             id: None,
@@ -471,16 +548,19 @@ impl LLMRequest {
         self
     }
 
+    #[must_use]
     pub fn with_message(mut self, message: Message) -> Self {
         self.messages.push(message);
         self
     }
 
+    #[must_use]
     pub fn with_tool(mut self, tool: ToolDefinition) -> Self {
         self.tools.push(ToolEntry::Definition(tool));
         self
     }
 
+    #[must_use]
     pub fn with_generation(mut self, generation: GenerationOptions) -> Self {
         self.generation = Some(generation);
         self
@@ -488,6 +568,7 @@ impl LLMRequest {
 
     /// Immutable patch; `None` fields keep their current value (port of
     /// `LLMRequest.update`).
+    #[must_use]
     pub fn update(&self, patch: LLMRequestPatch) -> Self {
         let mut next = self.clone();
         let LLMRequestPatch {
@@ -566,7 +647,10 @@ mod tests {
             (serde_json::json!({"type": "json", "value": {"ok": true}}), true),
             (serde_json::json!({"type": "text", "value": "done"}), true),
             (serde_json::json!({"type": "error", "value": "failed"}), true),
-            (serde_json::json!({"type": "content", "value": [{"type": "text", "text": "done"}]}), true),
+            (
+                serde_json::json!({"type": "content", "value": [{"type": "text", "text": "done"}]}),
+                true,
+            ),
             (serde_json::json!({"type": "content", "value": [{"type": "text"}]}), false),
             (serde_json::json!({"type": "content", "value": "done"}), false),
             (serde_json::json!({"type": "json"}), false),
@@ -575,7 +659,7 @@ mod tests {
         // "rejects" cases here mean serde fails to produce a ToolResultValue
         // or the value does not equal a canonical decode.
         for (value, expected) in cases {
-            let decoded = serde_json::from_value::<ToolResultValue>(value).is_ok();
+            let decoded = serde_json::from_value::<ToolResultValue>(value.clone()).is_ok();
             assert_eq!(decoded, expected, "mismatch for {value}");
         }
     }
@@ -598,7 +682,8 @@ mod tests {
         let back: ContentPart = serde_json::from_value(json).unwrap();
         assert_eq!(back, part);
 
-        let effort = ContentPart::Effort { effort: Some("low".into()), previous: Some("high".into()) };
+        let effort =
+            ContentPart::Effort { effort: Some("low".into()), previous: Some("high".into()) };
         let json = serde_json::to_value(&effort).unwrap();
         assert_eq!(json["type"], "effort");
         assert_eq!(json["effort"], "low");
@@ -617,7 +702,13 @@ mod tests {
         let message = Message::new(
             MessageRole::Assistant,
             vec![
-                ContentPart::Reasoning { text: "thinking".into(), encrypted: Some("sig".into()), cache: None, metadata: None, provider_metadata: None },
+                ContentPart::Reasoning {
+                    text: "thinking".into(),
+                    encrypted: Some("sig".into()),
+                    cache: None,
+                    metadata: None,
+                    provider_metadata: None,
+                },
                 ContentPart::text("answer"),
             ],
         );
@@ -631,7 +722,8 @@ mod tests {
 
     #[test]
     fn tool_definition_wire_shape_uses_input_schema_camel_case() {
-        let tool = ToolDefinition::new("bash", "Run a command", serde_json::json!({"type": "object"}));
+        let tool =
+            ToolDefinition::new("bash", "Run a command", serde_json::json!({"type": "object"}));
         let json = serde_json::to_value(&tool).unwrap();
         assert_eq!(json["type"], "tool");
         assert_eq!(json["inputSchema"]["type"], "object");
