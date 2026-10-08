@@ -15,9 +15,10 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
 
-use crate::schema::{
-    AiError, AiErrorReason, HttpContext, ReasonFields, TransportDelivery, TransportOperation,
-    TransportPhase, TransportRecovery, TransportType,
+use crate::schema::{AiError, AiErrorReason, HttpContext, ReasonFields};
+
+pub use crate::schema::{
+    TransportDelivery, TransportOperation, TransportPhase, TransportRecovery, TransportType,
 };
 
 /// A raw byte stream from a response body. Items are `Result` so read
@@ -66,12 +67,14 @@ impl TransportError {
         self
     }
 
+    #[must_use]
     pub fn with_http(mut self, http: HttpContext) -> Self {
         self.http = Some(http);
         self
     }
 
     /// Map into the AI error taxonomy.
+    #[must_use]
     pub fn into_ai_error(self) -> AiError {
         AiError::new(AiErrorReason::Transport {
             fields: ReasonFields::new(self.message),
@@ -116,19 +119,29 @@ impl TransportRequest {
 }
 
 /// A transport response: status, headers, and the raw body byte stream.
-#[derive(Debug)]
 pub struct TransportResponse {
     pub status: u16,
     pub headers: BTreeMap<String, String>,
     pub body: ByteStream,
 }
 
+impl std::fmt::Debug for TransportResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransportResponse")
+            .field("status", &self.status)
+            .field("headers", &self.headers)
+            .finish_non_exhaustive()
+    }
+}
+
 impl TransportResponse {
+    #[must_use]
     pub fn header(&self, name: &str) -> Option<&str> {
-        self.headers.get(&name.to_ascii_lowercase()).map(|v| v.as_str())
+        self.headers.get(&name.to_ascii_lowercase()).map(std::string::String::as_str)
     }
 
     /// HTTP context for diagnostics.
+    #[must_use]
     pub fn http_context(&self, url: &str) -> HttpContext {
         HttpContext { url: url.to_string(), status: self.status, headers: self.headers.clone() }
     }
@@ -139,7 +152,8 @@ impl TransportResponse {
 /// across threads (`Arc<dyn Transport>`).
 #[async_trait]
 pub trait Transport: Send + Sync {
-    async fn execute(&self, request: TransportRequest) -> Result<TransportResponse, TransportError>;
+    async fn execute(&self, request: TransportRequest)
+        -> Result<TransportResponse, TransportError>;
 }
 
 /// Read a whole response body into a string (bounded by `limit` bytes) — used
@@ -163,6 +177,7 @@ pub async fn read_body_limited(
 
 /// Wrap a transport read failure into the AI error taxonomy with HTTP context
 /// attached (port of `responseStream`'s error mapping).
+#[must_use]
 pub fn transport_read_error(error: TransportError) -> AiError {
     error.into_ai_error()
 }
@@ -176,7 +191,10 @@ pub struct FailingTransport {
 
 #[async_trait]
 impl Transport for FailingTransport {
-    async fn execute(&self, _request: TransportRequest) -> Result<TransportResponse, TransportError> {
+    async fn execute(
+        &self,
+        _request: TransportRequest,
+    ) -> Result<TransportResponse, TransportError> {
         Err(TransportError::connection(self.message, TransportOperation::Request))
     }
 }
@@ -184,8 +202,11 @@ impl Transport for FailingTransport {
 /// Reqwest-backed transport behind the default `reqwest-transport` feature.
 #[cfg(feature = "reqwest-transport")]
 pub mod reqwest_transport {
-    use super::*;
-    use futures::StreamExt as _;
+    use super::{
+        async_trait, BTreeMap, ByteStream, Transport, TransportError, TransportOperation,
+        TransportRequest, TransportResponse,
+    };
+    use futures::TryStreamExt as _;
 
     /// Transport backed by a shared reqwest client. Timeouts are the
     /// caller's concern (route-level headers/chunk budgets wrap the frame
@@ -202,10 +223,12 @@ pub mod reqwest_transport {
     }
 
     impl ReqwestTransport {
+        #[must_use]
         pub fn new() -> Self {
             Self { client: reqwest::Client::new() }
         }
 
+        #[must_use]
         pub fn with_client(client: reqwest::Client) -> Self {
             Self { client }
         }
@@ -213,9 +236,18 @@ pub mod reqwest_transport {
 
     #[async_trait]
     impl Transport for ReqwestTransport {
-        async fn execute(&self, request: TransportRequest) -> Result<TransportResponse, TransportError> {
-            let method = reqwest::Method::from_bytes(request.method.as_bytes())
-                .map_err(|error| TransportError::connection(format!("invalid method: {error}"), TransportOperation::Prepare).with_url(&request.url))?;
+        async fn execute(
+            &self,
+            request: TransportRequest,
+        ) -> Result<TransportResponse, TransportError> {
+            let method =
+                reqwest::Method::from_bytes(request.method.as_bytes()).map_err(|error| {
+                    TransportError::connection(
+                        format!("invalid method: {error}"),
+                        TransportOperation::Request,
+                    )
+                    .with_url(&request.url)
+                })?;
             let mut builder = self.client.request(method, &request.url);
             for (name, value) in &request.headers {
                 builder = builder.header(name, value);
@@ -223,21 +255,24 @@ pub mod reqwest_transport {
             if !request.body.is_empty() {
                 builder = builder.body(request.body.clone());
             }
-            let response = builder
-                .send()
-                .await
-                .map_err(|error| {
-                    let code = error.is_timeout().then_some("Timeout").map(str::to_string);
-                    TransportError::connection(describe_reqwest_error(&error), TransportOperation::Request)
-                        .with_url(&request.url)
-                        .with_code(code.unwrap_or_else(|| "RequestFailed".into()))
-                })?;
+            let response = builder.send().await.map_err(|error| {
+                let code = error.is_timeout().then_some("Timeout").map(str::to_string);
+                TransportError::connection(
+                    describe_reqwest_error(&error),
+                    TransportOperation::Request,
+                )
+                .with_url(&request.url)
+                .with_code(code.unwrap_or_else(|| "RequestFailed".into()))
+            })?;
             let status = response.status().as_u16();
             let headers: BTreeMap<String, String> = response
                 .headers()
                 .iter()
                 .map(|(name, value)| {
-                    (name.as_str().to_ascii_lowercase(), value.to_str().unwrap_or_default().to_string())
+                    (
+                        name.as_str().to_ascii_lowercase(),
+                        value.to_str().unwrap_or_default().to_string(),
+                    )
                 })
                 .collect();
             let stream = response.bytes_stream();

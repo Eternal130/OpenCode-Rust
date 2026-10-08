@@ -14,6 +14,7 @@ pub struct Headers {
 }
 
 impl Headers {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -26,6 +27,7 @@ impl Headers {
         headers
     }
 
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<&str> {
         self.entries.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
     }
@@ -44,6 +46,7 @@ impl Headers {
         self.entries.retain(|(k, _)| !k.eq_ignore_ascii_case(name));
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -98,10 +101,9 @@ impl Secret {
     fn load(&self, source: &str) -> Result<String, AuthError> {
         let value = match self {
             Secret::Value(value) => value.clone(),
-            Secret::Env(name) => std::env::var(name)
-                .map_err(|_| AuthError::not_set(name))?
-                .trim()
-                .to_string(),
+            Secret::Env(name) => {
+                std::env::var(name).map_err(|_| AuthError::not_set(name))?.trim().to_string()
+            }
         };
         if value.is_empty() {
             return Err(AuthError::new(source));
@@ -130,7 +132,9 @@ fn to_ai_error(error: AuthError) -> AiError {
 }
 
 impl Definition {
-    pub fn new(apply: impl Fn(&AuthInput<'_>) -> Result<Headers, AuthError> + Send + Sync + 'static) -> Self {
+    pub fn new(
+        apply: impl Fn(&AuthInput<'_>) -> Result<Headers, AuthError> + Send + Sync + 'static,
+    ) -> Self {
         Self { apply: Arc::new(apply) }
     }
 
@@ -141,6 +145,7 @@ impl Definition {
 
     /// Sequence: apply `self`, then `that` over the updated input
     /// (port of `andThen`).
+    #[must_use]
     pub fn and_then(&self, that: Definition) -> Definition {
         let this = self.clone();
         Definition::new(move |input| {
@@ -157,14 +162,18 @@ impl Definition {
     }
 
     /// Fallback: apply `that` when `self` fails (port of `orElse`).
+    #[must_use]
     pub fn or_else(&self, that: Definition) -> Definition {
         let this = self.clone();
         Definition::new(move |input| (this.apply)(input).or_else(|_| (that.apply)(input)))
     }
 
     /// `Authorization: Bearer <secret>`.
+    #[must_use]
     pub fn bearer(secret: Secret) -> Definition {
-        Definition::credential(secret, |value| vec![("authorization".to_string(), format!("Bearer {value}"))])
+        Definition::credential(secret, |value| {
+            vec![("authorization".to_string(), format!("Bearer {value}"))]
+        })
     }
 
     /// `<name>: <secret>`.
@@ -187,7 +196,10 @@ impl Definition {
         })
     }
 
-    fn credential(secret: Secret, render: impl Fn(String) -> Vec<(String, String)> + Send + Sync + 'static) -> Definition {
+    fn credential(
+        secret: Secret,
+        render: impl Fn(String) -> Vec<(String, String)> + Send + Sync + 'static,
+    ) -> Definition {
         Definition::new(move |input| {
             let value = secret.load("value")?;
             let mut headers = input.headers.clone();
@@ -199,6 +211,7 @@ impl Definition {
     }
 
     /// Leave headers untouched (port of `Auth.none` / `passthrough`).
+    #[must_use]
     pub fn none() -> Definition {
         Definition::new(|input| Ok(input.headers.clone()))
     }
@@ -246,6 +259,7 @@ impl Credential {
         Err(last)
     }
 
+    #[must_use]
     pub fn bearer(&self) -> Definition {
         self.render(|value| vec![("authorization".to_string(), format!("Bearer {value}"))])
     }
@@ -255,7 +269,10 @@ impl Credential {
         self.render(move |value| vec![(name.clone(), value)])
     }
 
-    fn render(&self, render: impl Fn(String) -> Vec<(String, String)> + Send + Sync + 'static) -> Definition {
+    fn render(
+        &self,
+        render: impl Fn(String) -> Vec<(String, String)> + Send + Sync + 'static,
+    ) -> Definition {
         let credential = self.clone();
         Definition::new(move |input| {
             let value = credential.load("value")?;
@@ -274,6 +291,7 @@ pub fn config(name: impl Into<String>) -> Credential {
 }
 
 /// Optional literal credential (port of `Auth.optional`).
+#[must_use]
 pub fn optional(secret: Option<Secret>) -> Credential {
     Credential { sources: vec![secret.unwrap_or(Secret::Value(String::new()))] }
 }
@@ -284,6 +302,7 @@ pub fn value(secret: impl Into<String>) -> Credential {
 }
 
 /// Chain credential sources (port of `credential.orElse`).
+#[must_use]
 pub fn or_else(first: &Credential, second: &Credential) -> Credential {
     Credential { sources: first.sources.iter().chain(second.sources.iter()).cloned().collect() }
 }
@@ -291,6 +310,7 @@ pub fn or_else(first: &Credential, second: &Credential) -> Credential {
 /// Standard bearer-auth resolution for providers (port of
 /// `AuthOptions.bearer`): honor an explicit auth override, otherwise resolve
 /// `apiKey` (option > env vars) and apply as a bearer token.
+#[must_use]
 pub fn bearer_from_options(
     auth: Option<&Definition>,
     api_key: Option<Secret>,
@@ -300,7 +320,7 @@ pub fn bearer_from_options(
         return auth.clone();
     }
     let mut sources: Vec<Secret> = api_key.into_iter().collect();
-    sources.extend(env_vars.iter().map(|name| Secret::Env((*name).to_string()));
+    sources.extend(env_vars.iter().map(|name| Secret::Env((*name).to_string())));
     Credential { sources }.bearer()
 }
 
@@ -346,37 +366,44 @@ mod tests {
 
     #[test]
     fn renders_a_direct_secret_as_a_custom_header() {
-        let headers = Definition::header("api-key", Secret::Value("direct-key".into())).apply(&input()).unwrap();
+        let headers = Definition::header("api-key", Secret::Value("direct-key".into()))
+            .apply(&input())
+            .unwrap();
         assert_eq!(headers.get("api-key"), Some("direct-key"));
     }
 
     #[test]
     fn renders_bearer_auth_into_a_custom_header() {
-        let headers =
-            Definition::bearer_header("cf-aig-authorization", Secret::Value("gateway-token".into()))
-                .apply(&input())
-                .unwrap();
+        let headers = Definition::bearer_header(
+            "cf-aig-authorization",
+            Secret::Value("gateway-token".into()),
+        )
+        .apply(&input())
+        .unwrap();
         assert_eq!(headers.get("cf-aig-authorization"), Some("Bearer gateway-token"));
     }
 
     #[test]
     fn renders_a_custom_scheme_into_authorization() {
-        let headers = Definition::scheme("Key", Secret::Value("k-1".into())).apply(&input()).unwrap();
+        let headers =
+            Definition::scheme("Key", Secret::Value("k-1".into())).apply(&input()).unwrap();
         assert_eq!(headers.get("authorization"), Some("Key k-1"));
     }
 
     #[test]
     fn falls_back_between_full_auth_values() {
-        let auth = Definition::bearer(Secret::Env("OC_AI_TEST_OPENAI_API_KEY".into()))
-            .or_else(Definition::headers([("authorization".to_string(), "Bearer supplied".to_string())]));
+        let auth = Definition::bearer(Secret::Env("OC_AI_TEST_OPENAI_API_KEY".into())).or_else(
+            Definition::headers([("authorization".to_string(), "Bearer supplied".to_string())]),
+        );
         let headers = auth.apply(&input()).unwrap();
         assert_eq!(headers.get("authorization"), Some("Bearer supplied"));
     }
 
     #[test]
     fn reports_a_missing_config_credential_as_authentication_naming_the_variable() {
-        let error =
-            Definition::bearer(Secret::Env("OC_AI_TEST_MISSING_KEY".into())).apply(&input()).unwrap_err();
+        let error = Definition::bearer(Secret::Env("OC_AI_TEST_MISSING_KEY".into()))
+            .apply(&input())
+            .unwrap_err();
         assert!(matches!(error.reason, AiErrorReason::Authentication { .. }));
         assert!(error.message().contains("OC_AI_TEST_MISSING_KEY"));
     }
@@ -405,7 +432,11 @@ mod tests {
     #[test]
     fn bearer_from_options_prefers_explicit_auth_over_keys() {
         let explicit = Definition::header("x-api-key", Secret::Value("explicit".into()));
-        let auth = bearer_from_options(Some(&explicit), Some(Secret::Value("ignored".into())), &["OC_AI_TEST_X"]);
+        let auth = bearer_from_options(
+            Some(&explicit),
+            Some(Secret::Value("ignored".into())),
+            &["OC_AI_TEST_X"],
+        );
         let headers = auth.apply(&input()).unwrap();
         assert_eq!(headers.get("x-api-key"), Some("explicit"));
         assert_eq!(headers.get("authorization"), None);

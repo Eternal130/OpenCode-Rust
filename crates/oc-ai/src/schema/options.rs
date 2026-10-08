@@ -24,7 +24,7 @@ pub type ProviderOptions = serde_json::Map<String, Value>;
 /// Escape hatch for fields this contract does not normalize, keyed by
 /// provider name (`{ openai: … }`, `{ anthropic: … }`).
 ///
-/// Note: key order is sorted (BTreeMap) — byte-exact *values* round-trip, but
+/// Note: key order is sorted (`BTreeMap`) — byte-exact *values* round-trip, but
 /// re-serialized key order is not insertion-stable vs TS. Known non-goal
 /// (oracle gate 2, finding 9).
 pub type ProviderMetadata = BTreeMap<String, BTreeMap<String, Value>>;
@@ -36,6 +36,7 @@ fn is_record(value: &Value) -> bool {
 /// Deep-merge JSON records: later items win per key; record values merge
 /// recursively (port of `mergeJsonRecords`). Returns `None` when no input is
 /// defined or the merged result is empty.
+#[must_use]
 pub fn merge_json_records(items: &[Option<&JsonRecord>]) -> Option<JsonRecord> {
     let defined: Vec<&JsonRecord> = items.iter().flatten().copied().collect();
     if defined.is_empty() {
@@ -49,7 +50,10 @@ pub fn merge_json_records(items: &[Option<&JsonRecord>]) -> Option<JsonRecord> {
         for (key, value) in item {
             let merged = match (result.get(key), value) {
                 (Some(existing), value) if is_record(existing) && is_record(value) => {
-                    let nested = merge_json_records(&[Some(existing.as_object().unwrap()), Some(value.as_object().unwrap())]);
+                    let nested = merge_json_records(&[
+                        Some(existing.as_object().unwrap()),
+                        Some(value.as_object().unwrap()),
+                    ]);
                     Value::Object(nested.unwrap_or_default())
                 }
                 _ => value.clone(),
@@ -65,7 +69,10 @@ pub fn merge_json_records(items: &[Option<&JsonRecord>]) -> Option<JsonRecord> {
 }
 
 /// Shallow-merge string records; later items win (port of `mergeStringRecords`).
-pub fn merge_string_records(items: &[Option<&BTreeMap<String, String>>]) -> Option<BTreeMap<String, String>> {
+#[must_use]
+pub fn merge_string_records(
+    items: &[Option<&BTreeMap<String, String>>],
+) -> Option<BTreeMap<String, String>> {
     let defined: Vec<&BTreeMap<String, String>> = items.iter().flatten().copied().collect();
     if defined.is_empty() {
         return None;
@@ -85,6 +92,7 @@ pub fn merge_string_records(items: &[Option<&BTreeMap<String, String>>]) -> Opti
 }
 
 /// Merge provider options (deep record merge, `None` when nothing defined).
+#[must_use]
 pub fn merge_provider_options(items: &[Option<&ProviderOptions>]) -> Option<ProviderOptions> {
     merge_json_records(items)
 }
@@ -110,7 +118,7 @@ impl<'de> Deserialize<'de> for HttpTimeout {
         let value = Value::deserialize(deserializer)?;
         match value {
             Value::Bool(false) => Ok(HttpTimeout::Disabled),
-            Value::Number(n) if n.as_f64().map(|v| v > 0.0).unwrap_or(false) => {
+            Value::Number(n) if n.as_f64().is_some_and(|v| v > 0.0) => {
                 Ok(HttpTimeout::Ms(n.as_f64().unwrap()))
             }
             _ => Err(serde::de::Error::custom("expected a positive number or false")),
@@ -146,27 +154,33 @@ pub struct HttpOptions {
 /// Merge HTTP options: maps merge, timeouts take the **last** defined value
 /// (port of `mergeHttpOptions`, `findLast` semantics). `None` when nothing
 /// is defined.
+#[must_use]
 pub fn merge_http_options(items: &[Option<&HttpOptions>]) -> Option<HttpOptions> {
-    let body = merge_json_records(&items.iter().map(|o| o.and_then(|o| o.body.as_ref())).collect::<Vec<_>>());
-    let headers = merge_string_records(&items.iter().map(|o| o.and_then(|o| o.headers.as_ref())).collect::<Vec<_>>());
-    let query = merge_string_records(&items.iter().map(|o| o.and_then(|o| o.query.as_ref())).collect::<Vec<_>>());
+    let body = merge_json_records(
+        &items.iter().map(|o| o.and_then(|o| o.body.as_ref())).collect::<Vec<_>>(),
+    );
+    let headers = merge_string_records(
+        &items.iter().map(|o| o.and_then(|o| o.headers.as_ref())).collect::<Vec<_>>(),
+    );
+    let query = merge_string_records(
+        &items.iter().map(|o| o.and_then(|o| o.query.as_ref())).collect::<Vec<_>>(),
+    );
     let timeout = items.iter().flatten().rev().find_map(|o| o.timeout).map(|v| match v {
         HttpTimeout::Ms(ms) => HttpTimeout::Ms(ms),
         HttpTimeout::Disabled => HttpTimeout::Disabled,
     });
     let header_timeout = items.iter().flatten().rev().find_map(|o| o.header_timeout);
     let chunk_timeout = items.iter().flatten().rev().find_map(|o| o.chunk_timeout);
-    if body.is_none() && headers.is_none() && query.is_none() && timeout.is_none() && header_timeout.is_none() && chunk_timeout.is_none() {
+    if body.is_none()
+        && headers.is_none()
+        && query.is_none()
+        && timeout.is_none()
+        && header_timeout.is_none()
+        && chunk_timeout.is_none()
+    {
         return None;
     }
-    Some(HttpOptions {
-        body,
-        headers,
-        query,
-        timeout,
-        header_timeout,
-        chunk_timeout,
-    })
+    Some(HttpOptions { body, headers, query, timeout, header_timeout, chunk_timeout })
 }
 
 /// Sampling/generation knobs (port of `GenerationOptions`). Numbers are `f64`
@@ -193,6 +207,7 @@ pub struct GenerationOptions {
 }
 
 impl GenerationOptions {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
@@ -200,6 +215,7 @@ impl GenerationOptions {
 
 /// Merge generation options per key; each key takes the **last** defined
 /// value (port of `mergeGenerationOptions`). `None` when every field is unset.
+#[must_use]
 pub fn merge_generation_options(items: &[Option<&GenerationOptions>]) -> Option<GenerationOptions> {
     let last = |get: fn(&GenerationOptions) -> Option<f64>| -> Option<f64> {
         items.iter().flatten().rev().find_map(|o| get(o))
@@ -237,11 +253,13 @@ pub struct LanguageModelDefaults {
 
 /// Known reasoning-effort values; providers may send any string
 /// (TS `OpenString<Known>`).
-pub const REASONING_EFFORTS: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+pub const REASONING_EFFORTS: [&str; 7] =
+    ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /// Tool-schema sanitizer for a model family; `None` opts out of protocol and
 /// model-name defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SanitizerCompatibility {
     Gemini,
     Moonshot,
@@ -343,11 +361,13 @@ impl LanguageModel {
         }
     }
 
+    #[must_use]
     pub fn with_defaults(mut self, defaults: LanguageModelDefaults) -> Self {
         self.defaults = Some(defaults);
         self
     }
 
+    #[must_use]
     pub fn with_compatibility(mut self, compatibility: LanguageModelCompatibility) -> Self {
         self.compatibility = Some(compatibility);
         self
@@ -355,6 +375,7 @@ impl LanguageModel {
 
     /// Immutable update; empty patches return the same value conceptually
     /// (a clone — Rust has no reference identity to preserve).
+    #[must_use]
     pub fn update(&self, patch: LanguageModelPatch) -> Self {
         let mut next = self.clone();
         if let Some(id) = patch.id {
@@ -394,24 +415,60 @@ pub enum CacheHintKind {
 }
 
 impl CacheHint {
+    #[must_use]
     pub fn ephemeral() -> Self {
         Self { kind: CacheHintKind::Ephemeral, ttl_seconds: None }
     }
 
+    #[must_use]
     pub fn ephemeral_ttl(ttl_seconds: f64) -> Self {
         Self { kind: CacheHintKind::Ephemeral, ttl_seconds: Some(ttl_seconds) }
     }
 }
 
-/// Where auto cache breakpoints land on conversation messages.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+/// Where auto cache breakpoints land on conversation messages:
+/// `"latest-user-message"`, `"latest-assistant"`, or `{"tail": n}`.
+///
+/// Serialization is manual: `untagged` cannot rename unit variants.
+#[derive(Debug, Clone, PartialEq)]
 pub enum CachePolicyMessages {
-    #[serde(rename = "latest-user-message")]
     LatestUserMessage,
-    #[serde(rename = "latest-assistant")]
     LatestAssistant,
     Tail { tail: u32 },
+}
+
+impl Serialize for CachePolicyMessages {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            CachePolicyMessages::LatestUserMessage => {
+                serializer.serialize_str("latest-user-message")
+            }
+            CachePolicyMessages::LatestAssistant => serializer.serialize_str("latest-assistant"),
+            CachePolicyMessages::Tail { tail } => {
+                use serde::ser::SerializeStruct;
+                let mut state = serializer.serialize_struct("CachePolicyMessages", 1)?;
+                state.serialize_field("tail", tail)?;
+                state.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CachePolicyMessages {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        match value {
+            Value::String(text) if text == "latest-user-message" => Ok(CachePolicyMessages::LatestUserMessage),
+            Value::String(text) if text == "latest-assistant" => Ok(CachePolicyMessages::LatestAssistant),
+            Value::Object(object) => {
+                let tail = object.get("tail").cloned().unwrap_or(Value::Null);
+                u32::deserialize(tail).map(|tail| CachePolicyMessages::Tail { tail }).map_err(serde::de::Error::custom)
+            }
+            other => Err(serde::de::Error::custom(format!(
+                "expected \"latest-user-message\", \"latest-assistant\", or {{\"tail\": n}}, got {other}"
+            ))),
+        }
+    }
 }
 
 /// Granular object form of a [`CachePolicy`].
@@ -429,6 +486,7 @@ pub struct CachePolicyObject {
 }
 
 impl CachePolicyObject {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
@@ -437,14 +495,40 @@ impl CachePolicyObject {
 /// Auto-placement policy for prompt caching. `"auto"` places breakpoints at
 /// the last tool definition, first/last distinct system parts, and the
 /// conversation tail; `"none"` opts out; the object form overrides choices.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+///
+/// Serialization is manual: `untagged` cannot rename unit variants, and the
+/// wire forms are exactly `"auto"` / `"none"` / the object shape.
+#[derive(Debug, Clone, PartialEq)]
 pub enum CachePolicy {
-    #[serde(rename = "auto")]
     Auto,
-    #[serde(rename = "none")]
     None,
     Object(CachePolicyObject),
+}
+
+impl Serialize for CachePolicy {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            CachePolicy::Auto => serializer.serialize_str("auto"),
+            CachePolicy::None => serializer.serialize_str("none"),
+            CachePolicy::Object(object) => object.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CachePolicy {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        match value {
+            Value::String(text) if text == "auto" => Ok(CachePolicy::Auto),
+            Value::String(text) if text == "none" => Ok(CachePolicy::None),
+            Value::Object(_) => CachePolicyObject::deserialize(value)
+                .map(CachePolicy::Object)
+                .map_err(serde::de::Error::custom),
+            other => Err(serde::de::Error::custom(format!(
+                "expected \"auto\", \"none\", or a cache-policy object, got {other}"
+            ))),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -457,9 +541,12 @@ mod tests {
 
     #[test]
     fn merge_json_records_deep_merges_with_later_items_winning() {
-        let nested = JsonRecord::from([("x".to_string(), Value::from(1)), ("keep".to_string(), Value::from(true))]);
+        let nested: JsonRecord =
+            [("x".to_string(), Value::from(1)), ("keep".to_string(), Value::from(true))]
+                .into_iter()
+                .collect();
         let a = record(&[("model", Value::from("gpt")), ("nested", Value::Object(nested))]);
-        let b_nested = JsonRecord::from([("x".to_string(), Value::from(2))]);
+        let b_nested: JsonRecord = [("x".to_string(), Value::from(2))].into_iter().collect();
         let b = record(&[
             ("model", Value::from("gpt-4")),
             ("nested", Value::Object(b_nested)),
@@ -477,10 +564,20 @@ mod tests {
 
     #[test]
     fn merge_generation_options_takes_the_last_defined_value_per_key() {
-        let route = GenerationOptions { max_tokens: Some(1024.0), temperature: Some(0.5), ..Default::default() };
-        let model = GenerationOptions { temperature: Some(0.9), top_p: Some(0.1), ..Default::default() };
-        let request = GenerationOptions { temperature: None, stop: Some(vec!["END".into()]), ..Default::default() };
-        let merged = merge_generation_options(&[Some(&route), Some(&model), Some(&request)]).unwrap();
+        let route = GenerationOptions {
+            max_tokens: Some(1024.0),
+            temperature: Some(0.5),
+            ..Default::default()
+        };
+        let model =
+            GenerationOptions { temperature: Some(0.9), top_p: Some(0.1), ..Default::default() };
+        let request = GenerationOptions {
+            temperature: None,
+            stop: Some(vec!["END".into()]),
+            ..Default::default()
+        };
+        let merged =
+            merge_generation_options(&[Some(&route), Some(&model), Some(&request)]).unwrap();
         assert_eq!(merged.max_tokens, Some(1024.0)); // only route defines it
         assert_eq!(merged.temperature, Some(0.9)); // model wins over route (later)
         assert_eq!(merged.top_p, Some(0.1));
@@ -513,8 +610,14 @@ mod tests {
     fn http_timeout_serializes_as_number_or_false() {
         assert_eq!(serde_json::to_value(HttpTimeout::Ms(1.5)).unwrap(), serde_json::json!(1.5));
         assert_eq!(serde_json::to_value(HttpTimeout::Disabled).unwrap(), serde_json::json!(false));
-        assert_eq!(serde_json::from_value::<HttpTimeout>(serde_json::json!(30_000)).unwrap(), HttpTimeout::Ms(30_000.0));
-        assert_eq!(serde_json::from_value::<HttpTimeout>(serde_json::json!(false)).unwrap(), HttpTimeout::Disabled);
+        assert_eq!(
+            serde_json::from_value::<HttpTimeout>(serde_json::json!(30_000)).unwrap(),
+            HttpTimeout::Ms(30_000.0)
+        );
+        assert_eq!(
+            serde_json::from_value::<HttpTimeout>(serde_json::json!(false)).unwrap(),
+            HttpTimeout::Disabled
+        );
         assert!(serde_json::from_value::<HttpTimeout>(serde_json::json!(true)).is_err());
         assert!(serde_json::from_value::<HttpTimeout>(serde_json::json!(0)).is_err());
     }
@@ -530,17 +633,20 @@ mod tests {
             ttl_seconds: None,
         };
         assert_eq!(
-            serde_json::to_value(&CachePolicy::Object(object)).unwrap(),
+            serde_json::to_value(CachePolicy::Object(object)).unwrap(),
             serde_json::json!({"tools": true, "system": false, "messages": {"tail": 1}})
         );
         let decoded: CachePolicy =
             serde_json::from_value(serde_json::json!({"messages": "latest-user-message"})).unwrap();
-        assert_eq!(decoded, CachePolicy::Object(CachePolicyObject {
-            tools: None,
-            system: None,
-            messages: Some(CachePolicyMessages::LatestUserMessage),
-            ttl_seconds: None,
-        }));
+        assert_eq!(
+            decoded,
+            CachePolicy::Object(CachePolicyObject {
+                tools: None,
+                system: None,
+                messages: Some(CachePolicyMessages::LatestUserMessage),
+                ttl_seconds: None,
+            })
+        );
     }
 
     #[test]

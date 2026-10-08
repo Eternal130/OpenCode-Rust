@@ -19,7 +19,7 @@ pub const MAX_EVENT_BYTES: usize = 10 * 1024 * 1024;
 pub enum FramingKind {
     /// Server-Sent Events; drops `[DONE]`, `data: null`, and `: keepalive`
     /// data markers. Optionally restricted to a set of `event:` names
-    /// (Anthropic) and/or retaining `[DONE]` (OpenAI chat).
+    /// (Anthropic) and/or retaining `[DONE]` (`OpenAI` chat).
     Sse { include_done: bool, events: Option<BTreeSet<String>> },
     /// Newline-delimited JSON (NDJSON); blank lines dropped.
     Lines,
@@ -37,11 +37,13 @@ pub struct Framing {
 
 impl Framing {
     /// Server-Sent Events framing used by every JSON-streaming HTTP provider.
+    #[must_use]
     pub fn sse() -> Self {
         Self { id: "sse", kind: FramingKind::Sse { include_done: false, events: None } }
     }
 
     /// SSE framing that retains the conventional `[DONE]` sentinel.
+    #[must_use]
     pub fn sse_with_done() -> Self {
         Self { id: "sse", kind: FramingKind::Sse { include_done: true, events: None } }
     }
@@ -50,16 +52,21 @@ impl Framing {
     pub fn sse_events(names: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
             id: "sse",
-            kind: FramingKind::Sse { include_done: false, events: Some(names.into_iter().map(Into::into).collect()) },
+            kind: FramingKind::Sse {
+                include_done: false,
+                events: Some(names.into_iter().map(Into::into).collect()),
+            },
         }
     }
 
     /// Newline-delimited JSON.
+    #[must_use]
     pub fn lines() -> Self {
         Self { id: "lines", kind: FramingKind::Lines }
     }
 
     /// One frame for the whole body.
+    #[must_use]
     pub fn document() -> Self {
         Self { id: "document", kind: FramingKind::Document }
     }
@@ -90,7 +97,9 @@ impl Utf8Decoder {
                     Ok(text)
                 } else {
                     Err(AiError::new(AiErrorReason::InvalidProviderOutput {
-                        fields: ReasonFields::new(format!("Invalid UTF-8 in provider stream: {error}")),
+                        fields: ReasonFields::new(format!(
+                            "Invalid UTF-8 in provider stream: {error}"
+                        )),
                         classification: None,
                         route: Some("sse".into()),
                     }))
@@ -129,6 +138,7 @@ pub struct FramingDecoder {
 }
 
 impl FramingDecoder {
+    #[must_use]
     pub fn new(framing: Framing) -> Self {
         Self {
             kind: framing.kind,
@@ -153,7 +163,11 @@ impl FramingDecoder {
             FramingKind::Lines => {
                 let text = self.utf8.feed(chunk)?;
                 self.partial_line.push_str(&text);
-                Ok(self.take_complete_lines())
+                Ok(self
+                    .take_complete_lines()
+                    .into_iter()
+                    .filter(|line| !line.trim().is_empty())
+                    .collect())
             }
             FramingKind::Sse { .. } => {
                 let text = self.utf8.feed(chunk)?;
@@ -259,12 +273,15 @@ impl FramingDecoder {
     /// (framing.ts:47-61). Resets the pending buffers.
     fn dispatch(&mut self) -> Vec<String> {
         self.buffered_bytes = 0;
-        let name = if self.event_name.is_empty() { "message" } else { self.event_name.as_str() };
+        let name = if self.event_name.is_empty() {
+            "message".to_string()
+        } else {
+            std::mem::take(&mut self.event_name)
+        };
         let data = std::mem::take(&mut self.data_lines).join("\n");
-        self.event_name.clear();
         let mut frames = Vec::new();
         if let FramingKind::Sse { include_done, events } = &self.kind {
-            let named_ok = events.as_ref().map(|set| set.contains(name)).unwrap_or(true);
+            let named_ok = events.as_ref().is_none_or(|set| set.contains(name.as_str()));
             let passes = named_ok
                 && !data.is_empty()
                 // Some OpenAI-compatible proxies serialize an empty flush as a
@@ -368,17 +385,22 @@ mod tests {
 
     #[test]
     fn sse_ignores_retry_directives_without_ending_the_stream() {
-        let chunks = ["retry: 1000\n\n", "data: {\"first\":true}\n\n", "retry: 2000\n\n", "data: {\"second\":true}\n\n"];
-        assert_eq!(decode_chunks(Framing::sse(), &chunks), vec!["{\"first\":true}", "{\"second\":true}"]);
+        let chunks = [
+            "retry: 1000\n\n",
+            "data: {\"first\":true}\n\n",
+            "retry: 2000\n\n",
+            "data: {\"second\":true}\n\n",
+        ];
+        assert_eq!(
+            decode_chunks(Framing::sse(), &chunks),
+            vec!["{\"first\":true}", "{\"second\":true}"]
+        );
     }
 
     #[test]
     fn sse_preserves_event_data_around_retry_directives() {
         let chunks = ["event: update\ndata: first\n", "retry: 1000\n", "data: second\n\n"];
-        assert_eq!(
-            decode_chunks(Framing::sse_events(["update"]), &chunks),
-            vec!["first\nsecond"]
-        );
+        assert_eq!(decode_chunks(Framing::sse_events(["update"]), &chunks), vec!["first\nsecond"]);
     }
 
     #[test]
@@ -414,14 +436,15 @@ mod tests {
 
     #[test]
     fn crlf_and_lone_cr_line_endings_terminate_lines() {
-        let input = "event: ping\r\ndata: one\r\rdata: two\n\n";
+        let input = "event: ping\r\ndata: one\r\revent: ping\rdata: two\n\n";
         assert_eq!(decode_all(Framing::sse_events(["ping"]), input), vec!["one", "two"]);
     }
 
     #[test]
     fn chunk_boundaries_mid_frame_and_mid_utf8_preserve_frames() {
         // deterministic permutations of one byte-at-a-time and boundary splits
-        let input = "event: ping\ndata: {\"snowman\":\"☃\"}\n\n: c\ndata: ☃☃\n\n".to_string();
+        let input =
+            "event: ping\ndata: {\"snowman\":\"☃\"}\n\n: c\nevent: ping\ndata: ☃☃\n\n".to_string();
         let whole = decode_all(Framing::sse_events(["ping"]), &input);
         assert_eq!(whole, vec!["{\"snowman\":\"☃\"}", "☃☃"]);
 
@@ -464,7 +487,8 @@ mod tests {
     #[test]
     fn invalid_utf8_maps_to_invalid_provider_output() {
         let mut decoder = FramingDecoder::new(Framing::sse());
-        let error = decoder.feed(&[0x64, 0x61, 0x74, 0x61, 0x3a, 0x20, 0xff, 0x0a, 0x0a]).unwrap_err();
+        let error =
+            decoder.feed(&[0x64, 0x61, 0x74, 0x61, 0x3a, 0x20, 0xff, 0x0a, 0x0a]).unwrap_err();
         assert!(matches!(error.reason, AiErrorReason::InvalidProviderOutput { .. }));
     }
 
@@ -477,7 +501,10 @@ mod tests {
     #[test]
     fn ndjson_lines_drop_blank_lines() {
         let input = "{\"a\":1}\n\n{\"b\":2}\n   \n{\"c\":3}";
-        assert_eq!(decode_all(Framing::lines(), input), vec!["{\"a\":1}", "{\"b\":2}", "{\"c\":3}"]);
+        assert_eq!(
+            decode_all(Framing::lines(), input),
+            vec!["{\"a\":1}", "{\"b\":2}", "{\"c\":3}"]
+        );
     }
 
     #[test]
@@ -492,7 +519,7 @@ mod tests {
     fn frame_stream_maps_transport_read_errors_to_ai_errors() {
         use futures::StreamExt;
         let error = crate::route::transport::TransportError::connection(
-            "socket disconnected".into(),
+            String::from("socket disconnected"),
             crate::route::transport::TransportOperation::Read,
         );
         let stream = frame_stream(Framing::sse(), futures::stream::iter(vec![Err(error)]));
@@ -501,7 +528,10 @@ mod tests {
         let error = collected[0].as_ref().unwrap_err();
         assert!(matches!(
             error.reason,
-            AiErrorReason::Transport { operation: crate::schema::errors::TransportOperation::Read, .. }
+            AiErrorReason::Transport {
+                operation: crate::schema::errors::TransportOperation::Read,
+                ..
+            }
         ));
     }
 }

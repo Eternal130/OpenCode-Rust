@@ -10,9 +10,7 @@ use serde_json::Value;
 use super::errors::ProviderFailureClassification;
 use super::ids::ProviderId;
 use super::media::Asset;
-use super::messages::{
-    ContentPart, Message, MessageRole, ToolOutput, ToolResultValue,
-};
+use super::messages::{ContentPart, Message, MessageRole, ToolOutput, ToolResultValue};
 use super::options::ProviderMetadata;
 
 /// Normalized stop reason (port of `LLM.FinishReason`).
@@ -48,6 +46,7 @@ pub struct FinishReasonDetails {
 }
 
 impl FinishReasonDetails {
+    #[must_use]
     pub fn new(normalized: FinishReason) -> Self {
         Self { normalized, raw: None, category: None, explanation: None }
     }
@@ -55,7 +54,7 @@ impl FinishReasonDetails {
 
 /// Token usage reported by an LLM provider (port of `AI.Usage`).
 ///
-/// **Inclusive totals** (AI SDK / OpenAI / LangChain convention):
+/// **Inclusive totals** (AI SDK / `OpenAI` / `LangChain` convention):
 /// `input_tokens` includes cached reads/writes; `output_tokens` includes
 /// reasoning; `total_tokens` is the provider total or `input + output`.
 ///
@@ -65,7 +64,7 @@ impl FinishReasonDetails {
 /// `non_cached + cache_read + cache_write = input_tokens`.
 ///
 /// Direction semantics by provider (oracle gate 2, finding 17):
-/// OpenAI Chat/Responses/Gemini report inclusive input; mappers *subtract*
+/// `OpenAI` Chat/Responses/Gemini report inclusive input; mappers *subtract*
 /// down ([`crate::protocols::shared::subtract_to_non_cached`]). Anthropic and
 /// Bedrock report the breakdown natively; mappers *sum* up
 /// ([`crate::protocols::shared::sum_non_cached_to_inclusive`]). Every
@@ -98,15 +97,18 @@ pub struct Usage {
 impl Usage {
     /// Non-reasoning output tokens, clamped to zero when a provider reports
     /// `reasoning_tokens > output_tokens` (port of `visibleOutputTokens`).
+    #[must_use]
     pub fn visible_output_tokens(&self) -> f64 {
         (self.output_tokens.unwrap_or(0.0) - self.reasoning_tokens.unwrap_or(0.0)).max(0.0)
     }
 
+    #[must_use]
     pub fn with_input_tokens(mut self, input_tokens: f64) -> Self {
         self.input_tokens = Some(input_tokens);
         self
     }
 
+    #[must_use]
     pub fn with_output_tokens(mut self, output_tokens: f64) -> Self {
         self.output_tokens = Some(output_tokens);
         self
@@ -289,6 +291,7 @@ pub enum LLMEvent {
 
 impl LLMEvent {
     /// The kebab-case `type` tag (matches TS `LLMEvent.guards` keys).
+    #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
             LLMEvent::Compaction { .. } => "compaction",
@@ -313,23 +316,28 @@ impl LLMEvent {
         }
     }
 
+    #[must_use]
     pub fn is_finish(&self) -> bool {
         matches!(self, LLMEvent::Finish { .. })
     }
 
+    #[must_use]
     pub fn is_provider_error(&self) -> bool {
         matches!(self, LLMEvent::ProviderError { .. })
     }
 
     /// Terminal for stream bookkeeping: `finish` or `provider-error`.
+    #[must_use]
     pub fn is_terminal(&self) -> bool {
         self.is_finish() || self.is_provider_error()
     }
 
+    #[must_use]
     pub fn step_start(index: f64) -> Self {
         LLMEvent::StepStart { index }
     }
 
+    #[must_use]
     pub fn finish(reason: FinishReasonDetails) -> Self {
         LLMEvent::Finish { reason, usage: None, provider_metadata: None }
     }
@@ -355,20 +363,19 @@ fn join_fragments<'a>(
             }
             *parts.entry(id.to_string()).or_default() += text;
         }
-        if let Some((id, text)) = is_end(event) {
-            if let Some(text) = text {
-                if !parts.contains_key(id) {
-                    order.push(id.to_string());
-                }
-                parts.insert(id.to_string(), text.to_string());
+        if let Some((id, Some(text))) = is_end(event) {
+            if !parts.contains_key(id) {
+                order.push(id.to_string());
             }
+            parts.insert(id.to_string(), text.to_string());
         }
     }
-    order.into_iter().filter_map(|id| parts.get(&id).cloned()).collect::<Vec<_>>().join("")
+    order.into_iter().filter_map(|id| parts.get(&id).cloned()).collect::<String>()
 }
 
 /// Concatenated assistant text; each fragment's `text-end` replaces its
 /// accumulated deltas when present.
+#[must_use]
 pub fn response_text(events: &[LLMEvent]) -> String {
     join_fragments(
         events,
@@ -384,6 +391,7 @@ pub fn response_text(events: &[LLMEvent]) -> String {
 }
 
 /// Concatenated reasoning text; same replacement rule per fragment.
+#[must_use]
 pub fn response_reasoning(events: &[LLMEvent]) -> String {
     join_fragments(
         events,
@@ -399,6 +407,7 @@ pub fn response_reasoning(events: &[LLMEvent]) -> String {
 }
 
 /// Latest usage-bearing event's usage.
+#[must_use]
 pub fn response_usage(events: &[LLMEvent]) -> Option<Usage> {
     events.iter().rev().find_map(|event| match event {
         LLMEvent::StepFinish { usage, .. } | LLMEvent::Finish { usage, .. } => usage.clone(),
@@ -417,7 +426,7 @@ pub struct LLMResponse {
 
 /// Reducer state for assembling one provider attempt (port of
 /// `LLMResponse.State`).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ResponseState {
     pub events: Vec<LLMEvent>,
     pub message: Message,
@@ -444,18 +453,34 @@ struct ToolInputAssembly {
     provider_metadata: Option<ProviderMetadata>,
 }
 
+impl Default for ResponseState {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 impl ResponseState {
     /// Initial reducer state.
+    #[must_use]
     pub fn empty() -> Self {
-        Self { message: Message::new(MessageRole::Assistant, Vec::new()), ..Default::default() }
+        Self {
+            events: Vec::new(),
+            message: Message::new(MessageRole::Assistant, Vec::new()),
+            usage: None,
+            finish_reason: None,
+            text_parts: BTreeMap::new(),
+            reasoning_parts: BTreeMap::new(),
+            tool_inputs: BTreeMap::new(),
+        }
     }
 
     /// Purely fold one provider-neutral event into the assembly state
     /// (port of `LLMResponse.reduce`).
+    #[must_use]
     pub fn reduce(mut self, event: LLMEvent) -> Self {
         self.events.push(event.clone());
         match &event {
-            LLMEvent::Finish { reason, usage } => {
+            LLMEvent::Finish { reason, usage, .. } => {
                 if usage.is_some() {
                     self.usage = usage.clone();
                 }
@@ -479,25 +504,41 @@ impl ResponseState {
                 self.ensure_text(id, None);
                 if let Some(current) = self.text_parts.get(id).cloned() {
                     let next_text = format!("{}{}", current.text, text);
-                    self.replace_content(current.content_index, ContentPart::Text {
-                        text: next_text.clone(),
-                        cache: None,
-                        metadata: None,
-                        provider_metadata: provider_metadata.clone().or(current.provider_metadata),
-                    });
-                    self.text_parts.insert(id.clone(), AssemblyPart { text: next_text, provider_metadata: provider_metadata.clone().or(current.provider_metadata), ..current });
+                    let metadata =
+                        provider_metadata.clone().or_else(|| current.provider_metadata.clone());
+                    self.replace_content(
+                        current.content_index,
+                        ContentPart::Text {
+                            text: next_text.clone(),
+                            cache: None,
+                            metadata: None,
+                            provider_metadata: metadata.clone(),
+                        },
+                    );
+                    self.text_parts.insert(
+                        id.clone(),
+                        AssemblyPart { text: next_text, provider_metadata: metadata, ..current },
+                    );
                 }
             }
             LLMEvent::TextEnd { id, text, provider_metadata, .. } => {
                 if let Some(current) = self.text_parts.get(id).cloned() {
                     let next_text = text.clone().unwrap_or_else(|| current.text.clone());
-                    self.replace_content(current.content_index, ContentPart::Text {
-                        text: next_text.clone(),
-                        cache: None,
-                        metadata: None,
-                        provider_metadata: provider_metadata.clone().or(current.provider_metadata),
-                    });
-                    self.text_parts.insert(id.clone(), AssemblyPart { text: next_text, provider_metadata: provider_metadata.clone().or(current.provider_metadata), ..current });
+                    let metadata =
+                        provider_metadata.clone().or_else(|| current.provider_metadata.clone());
+                    self.replace_content(
+                        current.content_index,
+                        ContentPart::Text {
+                            text: next_text.clone(),
+                            cache: None,
+                            metadata: None,
+                            provider_metadata: metadata.clone(),
+                        },
+                    );
+                    self.text_parts.insert(
+                        id.clone(),
+                        AssemblyPart { text: next_text, provider_metadata: metadata, ..current },
+                    );
                 }
             }
             LLMEvent::ReasoningStart { id, provider_metadata, .. } => {
@@ -507,53 +548,74 @@ impl ResponseState {
                 self.ensure_reasoning(id, None);
                 if let Some(current) = self.reasoning_parts.get(id).cloned() {
                     let next_text = format!("{}{}", current.text, text);
-                    self.replace_content(current.content_index, ContentPart::Reasoning {
-                        text: next_text.clone(),
-                        encrypted: None,
-                        cache: None,
-                        metadata: None,
-                        provider_metadata: provider_metadata.clone().or(current.provider_metadata),
-                    });
-                    self.reasoning_parts.insert(id.clone(), AssemblyPart { text: next_text, provider_metadata: provider_metadata.clone().or(current.provider_metadata), ..current });
+                    let metadata =
+                        provider_metadata.clone().or_else(|| current.provider_metadata.clone());
+                    self.replace_content(
+                        current.content_index,
+                        ContentPart::Reasoning {
+                            text: next_text.clone(),
+                            encrypted: None,
+                            cache: None,
+                            metadata: None,
+                            provider_metadata: metadata.clone(),
+                        },
+                    );
+                    self.reasoning_parts.insert(
+                        id.clone(),
+                        AssemblyPart { text: next_text, provider_metadata: metadata, ..current },
+                    );
                 }
             }
             LLMEvent::ReasoningEnd { id, text, provider_metadata, .. } => {
                 if let Some(current) = self.reasoning_parts.get(id).cloned() {
                     let next_text = text.clone().unwrap_or_else(|| current.text.clone());
-                    self.replace_content(current.content_index, ContentPart::Reasoning {
-                        text: next_text.clone(),
-                        encrypted: None,
-                        cache: None,
-                        metadata: None,
-                        provider_metadata: provider_metadata.clone().or(current.provider_metadata),
-                    });
-                    self.reasoning_parts.insert(id.clone(), AssemblyPart { text: next_text, provider_metadata: provider_metadata.clone().or(current.provider_metadata), ..current });
+                    let metadata =
+                        provider_metadata.clone().or_else(|| current.provider_metadata.clone());
+                    self.replace_content(
+                        current.content_index,
+                        ContentPart::Reasoning {
+                            text: next_text.clone(),
+                            encrypted: None,
+                            cache: None,
+                            metadata: None,
+                            provider_metadata: metadata.clone(),
+                        },
+                    );
+                    self.reasoning_parts.insert(
+                        id.clone(),
+                        AssemblyPart { text: next_text, provider_metadata: metadata, ..current },
+                    );
                 }
             }
             LLMEvent::ToolInputStart { id, name, namespace, provider_metadata, .. } => {
-                self.tool_inputs.insert(id.clone(), ToolInputAssembly {
-                    name: name.clone(),
-                    namespace: namespace.clone(),
-                    text: String::new(),
-                    provider_metadata: provider_metadata.clone(),
-                });
+                self.tool_inputs.insert(
+                    id.clone(),
+                    ToolInputAssembly {
+                        name: name.clone(),
+                        namespace: namespace.clone(),
+                        text: String::new(),
+                        provider_metadata: provider_metadata.clone(),
+                    },
+                );
             }
             LLMEvent::ToolInputDelta { id, name, namespace, text, .. } => {
-                let entry = self.tool_inputs.entry(id.clone()).or_insert_with(|| ToolInputAssembly {
-                    name: name.clone(),
-                    namespace: namespace.clone(),
-                    text: String::new(),
-                    provider_metadata: None,
-                });
+                let entry =
+                    self.tool_inputs.entry(id.clone()).or_insert_with(|| ToolInputAssembly {
+                        name: name.clone(),
+                        namespace: namespace.clone(),
+                        text: String::new(),
+                        provider_metadata: None,
+                    });
                 entry.text += text;
             }
             LLMEvent::ToolInputEnd { id, name, namespace, provider_metadata, .. } => {
-                let entry = self.tool_inputs.entry(id.clone()).or_insert_with(|| ToolInputAssembly {
-                    name: name.clone(),
-                    namespace: namespace.clone(),
-                    text: String::new(),
-                    provider_metadata: None,
-                });
+                let entry =
+                    self.tool_inputs.entry(id.clone()).or_insert_with(|| ToolInputAssembly {
+                        name: name.clone(),
+                        namespace: namespace.clone(),
+                        text: String::new(),
+                        provider_metadata: None,
+                    });
                 entry.name = name.clone();
                 entry.namespace = namespace.clone();
                 if provider_metadata.is_some() {
@@ -563,7 +625,15 @@ impl ResponseState {
             LLMEvent::ToolInputError { id, .. } => {
                 self.tool_inputs.remove(id);
             }
-            LLMEvent::ToolCall { id, name, namespace, input, provider_executed, provider_metadata, .. } => {
+            LLMEvent::ToolCall {
+                id,
+                name,
+                namespace,
+                input,
+                provider_executed,
+                provider_metadata,
+                ..
+            } => {
                 self.tool_inputs.remove(id);
                 self.push_content(ContentPart::ToolCall {
                     id: id.clone(),
@@ -576,7 +646,16 @@ impl ResponseState {
                     provider_metadata: provider_metadata.clone(),
                 });
             }
-            LLMEvent::ToolResult { id, name, namespace, result, output: _, provider_executed, provider_metadata, .. } => {
+            LLMEvent::ToolResult {
+                id,
+                name,
+                namespace,
+                result,
+                output: _,
+                provider_executed,
+                provider_metadata,
+                ..
+            } => {
                 self.push_content(ContentPart::ToolResult {
                     id: id.clone(),
                     name: name.clone(),
@@ -604,6 +683,7 @@ impl ResponseState {
 
     /// A completed response only after a terminal finish or provider error
     /// (port of `LLMResponse.complete`).
+    #[must_use]
     pub fn complete(&self) -> Option<LLMResponse> {
         self.finish_reason.as_ref().map(|reason| LLMResponse {
             message: self.message.clone(),
@@ -634,7 +714,10 @@ impl ResponseState {
             metadata: None,
             provider_metadata: provider_metadata.clone(),
         });
-        self.text_parts.insert(id.to_string(), AssemblyPart { content_index, text: String::new(), provider_metadata });
+        self.text_parts.insert(
+            id.to_string(),
+            AssemblyPart { content_index, text: String::new(), provider_metadata },
+        );
     }
 
     fn ensure_reasoning(&mut self, id: &str, provider_metadata: Option<ProviderMetadata>) {
@@ -649,7 +732,10 @@ impl ResponseState {
             metadata: None,
             provider_metadata: provider_metadata.clone(),
         });
-        self.reasoning_parts.insert(id.to_string(), AssemblyPart { content_index, text: String::new(), provider_metadata });
+        self.reasoning_parts.insert(
+            id.to_string(),
+            AssemblyPart { content_index, text: String::new(), provider_metadata },
+        );
     }
 }
 
@@ -667,16 +753,19 @@ fn event_to_compaction_part(event: &LLMEvent) -> ContentPart {
 
 impl LLMResponse {
     /// Concatenated assistant text.
+    #[must_use]
     pub fn text(&self) -> String {
         response_text(&self.events)
     }
 
     /// Concatenated reasoning text.
+    #[must_use]
     pub fn reasoning(&self) -> String {
         response_reasoning(&self.events)
     }
 
     /// Completed tool calls emitted by the provider.
+    #[must_use]
     pub fn tool_calls(&self) -> Vec<&LLMEvent> {
         self.events.iter().filter(|e| matches!(e, LLMEvent::ToolCall { .. })).collect()
     }
@@ -721,25 +810,94 @@ mod tests {
         ];
         // one instance per variant
         let samples = vec![
-            LLMEvent::Compaction { provider: ProviderId::new("p"), id: None, encrypted: Some("e".into()), text: None },
+            LLMEvent::Compaction {
+                provider: ProviderId::new("p"),
+                id: None,
+                encrypted: Some("e".into()),
+                text: None,
+            },
             LLMEvent::StepStart { index: 0.0 },
             LLMEvent::TextStart { id: "t1".into(), provider_metadata: None },
             LLMEvent::TextDelta { id: "t1".into(), text: "hi".into(), provider_metadata: None },
             LLMEvent::TextEnd { id: "t1".into(), text: None, provider_metadata: None },
             LLMEvent::ReasoningStart { id: "r1".into(), provider_metadata: None },
-            LLMEvent::ReasoningDelta { id: "r1".into(), text: "hm".into(), provider_metadata: None },
+            LLMEvent::ReasoningDelta {
+                id: "r1".into(),
+                text: "hm".into(),
+                provider_metadata: None,
+            },
             LLMEvent::ReasoningEnd { id: "r1".into(), text: None, provider_metadata: None },
-            LLMEvent::ToolInputStart { id: "c1".into(), name: "lookup".into(), namespace: None, provider_executed: None, provider_metadata: None },
-            LLMEvent::ToolInputDelta { id: "c1".into(), name: "lookup".into(), namespace: None, text: "{}".into(), input: None },
-            LLMEvent::ToolInputEnd { id: "c1".into(), name: "lookup".into(), namespace: None, provider_metadata: None },
-            LLMEvent::ToolInputError { id: "c1".into(), name: "lookup".into(), namespace: None, raw: "{".into() },
-            LLMEvent::ToolCall { id: "c1".into(), name: "lookup".into(), namespace: None, input: serde_json::json!({}), provider_executed: None, provider_metadata: None },
-            LLMEvent::ToolResult { id: "c1".into(), name: "lookup".into(), namespace: None, result: ToolResultValue::Json { value: serde_json::json!(1) }, output: None, provider_executed: None, provider_metadata: None },
-            LLMEvent::ToolError { id: "c1".into(), name: "lookup".into(), namespace: None, message: "boom".into(), error: None, provider_metadata: None },
-            LLMEvent::Media { media: crate::schema::media::base64("AQID", "image/png"), provider_metadata: None },
-            LLMEvent::StepFinish { index: 0.0, reason: FinishReasonDetails::new(FinishReason::Stop), usage: None, provider_metadata: None },
-            LLMEvent::Finish { reason: FinishReasonDetails::new(FinishReason::Stop), usage: None, provider_metadata: None },
-            LLMEvent::ProviderError { message: "nope".into(), classification: None, provider_metadata: None },
+            LLMEvent::ToolInputStart {
+                id: "c1".into(),
+                name: "lookup".into(),
+                namespace: None,
+                provider_executed: None,
+                provider_metadata: None,
+            },
+            LLMEvent::ToolInputDelta {
+                id: "c1".into(),
+                name: "lookup".into(),
+                namespace: None,
+                text: "{}".into(),
+                input: None,
+            },
+            LLMEvent::ToolInputEnd {
+                id: "c1".into(),
+                name: "lookup".into(),
+                namespace: None,
+                provider_metadata: None,
+            },
+            LLMEvent::ToolInputError {
+                id: "c1".into(),
+                name: "lookup".into(),
+                namespace: None,
+                raw: "{".into(),
+            },
+            LLMEvent::ToolCall {
+                id: "c1".into(),
+                name: "lookup".into(),
+                namespace: None,
+                input: serde_json::json!({}),
+                provider_executed: None,
+                provider_metadata: None,
+            },
+            LLMEvent::ToolResult {
+                id: "c1".into(),
+                name: "lookup".into(),
+                namespace: None,
+                result: ToolResultValue::Json { value: serde_json::json!(1) },
+                output: None,
+                provider_executed: None,
+                provider_metadata: None,
+            },
+            LLMEvent::ToolError {
+                id: "c1".into(),
+                name: "lookup".into(),
+                namespace: None,
+                message: "boom".into(),
+                error: None,
+                provider_metadata: None,
+            },
+            LLMEvent::Media {
+                media: crate::schema::media::base64("AQID", "image/png"),
+                provider_metadata: None,
+            },
+            LLMEvent::StepFinish {
+                index: 0.0,
+                reason: FinishReasonDetails::new(FinishReason::Stop),
+                usage: None,
+                provider_metadata: None,
+            },
+            LLMEvent::Finish {
+                reason: FinishReasonDetails::new(FinishReason::Stop),
+                usage: None,
+                provider_metadata: None,
+            },
+            LLMEvent::ProviderError {
+                message: "nope".into(),
+                classification: None,
+                provider_metadata: None,
+            },
         ];
         assert_eq!(samples.len(), 19, "exactly 19 variants");
         for (event, tag) in samples.iter().zip(expected) {
@@ -758,9 +916,20 @@ mod tests {
 
     #[test]
     fn visible_output_tokens_clamps_reasoning_above_output_to_zero() {
-        assert_eq!(Usage { output_tokens: Some(10.0), reasoning_tokens: Some(4.0), ..Default::default() }.visible_output_tokens(), 6.0);
-        assert_eq!(Usage { output_tokens: Some(10.0), ..Default::default() }.visible_output_tokens(), 10.0);
-        assert_eq!(Usage { output_tokens: Some(4.0), reasoning_tokens: Some(10.0), ..Default::default() }.visible_output_tokens(), 0.0);
+        assert_eq!(
+            Usage { output_tokens: Some(10.0), reasoning_tokens: Some(4.0), ..Default::default() }
+                .visible_output_tokens(),
+            6.0
+        );
+        assert_eq!(
+            Usage { output_tokens: Some(10.0), ..Default::default() }.visible_output_tokens(),
+            10.0
+        );
+        assert_eq!(
+            Usage { output_tokens: Some(4.0), reasoning_tokens: Some(10.0), ..Default::default() }
+                .visible_output_tokens(),
+            0.0
+        );
         assert_eq!(Usage::default().visible_output_tokens(), 0.0);
     }
 
@@ -788,7 +957,11 @@ mod tests {
     fn authoritative_end_values_replace_accumulated_deltas() {
         let events = vec![
             delta("t1", "hello "),
-            LLMEvent::TextEnd { id: "t1".into(), text: Some("WORLD".into()), provider_metadata: None },
+            LLMEvent::TextEnd {
+                id: "t1".into(),
+                text: Some("WORLD".into()),
+                provider_metadata: None,
+            },
             delta("t2", "second"),
             LLMEvent::TextEnd { id: "t2".into(), text: None, provider_metadata: None },
         ];
@@ -798,9 +971,21 @@ mod tests {
     #[test]
     fn reasoning_end_replaces_only_its_own_fragment() {
         let events = vec![
-            LLMEvent::ReasoningDelta { id: "r1".into(), text: "think ".into(), provider_metadata: None },
-            LLMEvent::ReasoningDelta { id: "r2".into(), text: "other ".into(), provider_metadata: None },
-            LLMEvent::ReasoningEnd { id: "r1".into(), text: Some("THINK".into()), provider_metadata: None },
+            LLMEvent::ReasoningDelta {
+                id: "r1".into(),
+                text: "think ".into(),
+                provider_metadata: None,
+            },
+            LLMEvent::ReasoningDelta {
+                id: "r2".into(),
+                text: "other ".into(),
+                provider_metadata: None,
+            },
+            LLMEvent::ReasoningEnd {
+                id: "r1".into(),
+                text: Some("THINK".into()),
+                provider_metadata: None,
+            },
             LLMEvent::ReasoningEnd { id: "r2".into(), text: None, provider_metadata: None },
         ];
         assert_eq!(response_reasoning(&events), "THINKother ");
@@ -811,13 +996,26 @@ mod tests {
         let events = vec![
             LLMEvent::StepStart { index: 0.0 },
             LLMEvent::ReasoningStart { id: "r1".into(), provider_metadata: None },
-            LLMEvent::ReasoningDelta { id: "r1".into(), text: "thinking".into(), provider_metadata: None },
+            LLMEvent::ReasoningDelta {
+                id: "r1".into(),
+                text: "thinking".into(),
+                provider_metadata: None,
+            },
             LLMEvent::ReasoningEnd { id: "r1".into(), text: None, provider_metadata: None },
             LLMEvent::TextStart { id: "t1".into(), provider_metadata: None },
             LLMEvent::TextDelta { id: "t1".into(), text: "answer".into(), provider_metadata: None },
             LLMEvent::TextEnd { id: "t1".into(), text: None, provider_metadata: None },
-            LLMEvent::StepFinish { index: 0.0, reason: FinishReasonDetails::new(FinishReason::Stop), usage: Some(Usage { input_tokens: Some(5.0), ..Default::default() }), provider_metadata: None },
-            LLMEvent::Finish { reason: FinishReasonDetails::new(FinishReason::Stop), usage: None, provider_metadata: None },
+            LLMEvent::StepFinish {
+                index: 0.0,
+                reason: FinishReasonDetails::new(FinishReason::Stop),
+                usage: Some(Usage { input_tokens: Some(5.0), ..Default::default() }),
+                provider_metadata: None,
+            },
+            LLMEvent::Finish {
+                reason: FinishReasonDetails::new(FinishReason::Stop),
+                usage: None,
+                provider_metadata: None,
+            },
         ];
         let response = LLMResponse::from_events(events).expect("terminal finish present");
         assert_eq!(response.text(), "answer");
@@ -826,7 +1024,7 @@ mod tests {
         // message content preserves emission order: reasoning then text
         assert_eq!(response.message.content[0].kind(), "reasoning");
         assert_eq!(response.message.content[1].kind(), "text");
-        assert_eq!(matches!(response.message.role, MessageRole::Assistant), true);
+        assert!(matches!(response.message.role, MessageRole::Assistant));
     }
 
     #[test]
@@ -838,7 +1036,14 @@ mod tests {
 
     #[test]
     fn provider_error_completes_with_error_reason_but_keeps_partial_content() {
-        let events = vec![delta("t1", "partial"), LLMEvent::ProviderError { message: "boom".into(), classification: None, provider_metadata: None }];
+        let events = vec![
+            delta("t1", "partial"),
+            LLMEvent::ProviderError {
+                message: "boom".into(),
+                classification: None,
+                provider_metadata: None,
+            },
+        ];
         let response = LLMResponse::from_events(events).expect("provider error is terminal");
         assert_eq!(response.finish_reason.normalized, FinishReason::Error);
         assert_eq!(response.text(), "partial");
@@ -847,10 +1052,33 @@ mod tests {
     #[test]
     fn tool_calls_assemble_only_after_the_completed_tool_call_event() {
         let events = vec![
-            LLMEvent::ToolInputStart { id: "c1".into(), name: "lookup".into(), namespace: None, provider_executed: None, provider_metadata: None },
-            LLMEvent::ToolInputDelta { id: "c1".into(), name: "lookup".into(), namespace: None, text: "{\"q\":".into(), input: None },
-            LLMEvent::ToolCall { id: "c1".into(), name: "lookup".into(), namespace: None, input: serde_json::json!({"q": 1}), provider_executed: None, provider_metadata: None },
-            LLMEvent::Finish { reason: FinishReasonDetails::new(FinishReason::ToolCalls), usage: None, provider_metadata: None },
+            LLMEvent::ToolInputStart {
+                id: "c1".into(),
+                name: "lookup".into(),
+                namespace: None,
+                provider_executed: None,
+                provider_metadata: None,
+            },
+            LLMEvent::ToolInputDelta {
+                id: "c1".into(),
+                name: "lookup".into(),
+                namespace: None,
+                text: "{\"q\":".into(),
+                input: None,
+            },
+            LLMEvent::ToolCall {
+                id: "c1".into(),
+                name: "lookup".into(),
+                namespace: None,
+                input: serde_json::json!({"q": 1}),
+                provider_executed: None,
+                provider_metadata: None,
+            },
+            LLMEvent::Finish {
+                reason: FinishReasonDetails::new(FinishReason::ToolCalls),
+                usage: None,
+                provider_metadata: None,
+            },
         ];
         let response = LLMResponse::from_events(events).unwrap();
         assert_eq!(response.tool_calls().len(), 1);
