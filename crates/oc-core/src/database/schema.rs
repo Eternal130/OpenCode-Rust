@@ -621,6 +621,33 @@ impl EventRow {
 }
 
 // ---------------------------------------------------------------------------
+// Additive row helpers (session lane) — public positional decoders so other
+// modules can map ad-hoc `SELECT *` queries through the same constructor
+// the macro keeps private.
+// ---------------------------------------------------------------------------
+
+impl SessionRow {
+    /// Positional `SELECT *` row decoder.
+    pub fn decode_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Self::from_row(row)
+    }
+}
+
+impl SessionMessageRow {
+    /// Positional `SELECT *` row decoder.
+    pub fn decode_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Self::from_row(row)
+    }
+}
+
+impl SessionInboxRow {
+    /// Positional `SELECT *` row decoder.
+    pub fn decode_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Self::from_row(row)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Domain-shaped helpers on Tx
 // ---------------------------------------------------------------------------
 
