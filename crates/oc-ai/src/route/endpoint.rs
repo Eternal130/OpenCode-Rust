@@ -63,6 +63,7 @@ impl Endpoint {
         self
     }
 
+    #[must_use]
     pub fn with_query(mut self, query: BTreeMap<String, String>) -> Self {
         self.query = Some(query);
         self
@@ -70,6 +71,7 @@ impl Endpoint {
 
     /// Merge a patch: base/path replace wholesale, query merges per key
     /// (patch wins), so provider overrides can keep inherited params.
+    #[must_use]
     pub fn merge(base: &Endpoint, patch: EndpointPatch) -> Endpoint {
         Endpoint {
             base_url: patch.base_url.or_else(|| base.base_url.clone()),
@@ -88,6 +90,7 @@ impl Endpoint {
 }
 
 /// Strip trailing slashes from a base URL (port of `trimBaseUrl`).
+#[must_use]
 pub fn trim_base_url(value: &str) -> &str {
     value.trim_end_matches('/')
 }
@@ -97,8 +100,18 @@ fn percent_encode_path_segment(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
         match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'!' | b'~' | b'*'
-            | b'\'' | b'(' | b')' => out.push(byte as char),
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'!'
+            | b'~'
+            | b'*'
+            | b'\''
+            | b'('
+            | b')' => out.push(byte as char),
             _ => out.push_str(&format!("%{byte:02X}")),
         }
     }
@@ -107,6 +120,7 @@ fn percent_encode_path_segment(value: &str) -> String {
 
 /// Percent-encode a path segment like `encodeURIComponent`
 /// (exported for endpoint path functions).
+#[must_use]
 pub fn encode_segment(value: &str) -> String {
     percent_encode_path_segment(value)
 }
@@ -120,19 +134,17 @@ pub struct RenderedUrl {
     pub query: Vec<(String, String)>,
 }
 
-impl RenderedUrl {
-    /// Full URL string with query parameters in stable (sorted) order.
-    pub fn to_string(&self) -> String {
+impl std::fmt::Display for RenderedUrl {
+    /// Full URL string with query parameters in insertion order
+    /// (`searchParams.set` semantics).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.base)?;
         if self.query.is_empty() {
-            return self.base.clone();
+            return Ok(());
         }
-        let query = self
-            .query
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join("&");
-        format!("{}?{}", self.base, query)
+        let query =
+            self.query.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&");
+        write!(f, "?{query}")
     }
 }
 
@@ -142,6 +154,7 @@ impl RenderedUrl {
 /// set; endpoint `query` entries then overwrite per key (URL
 /// `searchParams.set` semantics). Caller `http.query` is applied later by the
 /// transport and wins over both.
+#[must_use]
 pub fn render(endpoint: &Endpoint, input: &EndpointInput<'_>) -> RenderedUrl {
     let raw_path = match &endpoint.path {
         EndpointPart::Static(path) => path.clone(),
@@ -153,7 +166,7 @@ pub fn render(endpoint: &Endpoint, input: &EndpointInput<'_>) -> RenderedUrl {
     };
     let base = format!("{}{}", trim_base_url(endpoint.base_url.as_deref().unwrap_or("")), path);
     let mut query: Vec<(String, String)> = Vec::new();
-    let mut set = |key: String, value: String, query: &mut Vec<(String, String)>| {
+    let set = |key: String, value: String, query: &mut Vec<(String, String)>| {
         if let Some(entry) = query.iter_mut().find(|(k, _)| *k == key) {
             entry.1 = value;
         } else {
@@ -187,7 +200,8 @@ mod tests {
     #[test]
     fn appends_a_static_path_to_the_base_url() {
         let endpoint = Endpoint::path("/chat").with_base_url("https://api.example.test/v1/");
-        let url = render(&endpoint, &EndpointInput { request: &request(), body: &serde_json::json!({}) });
+        let url =
+            render(&endpoint, &EndpointInput { request: &request(), body: &serde_json::json!({}) });
         assert_eq!(url.to_string(), "https://api.example.test/v1/chat");
     }
 
@@ -201,9 +215,13 @@ mod tests {
             path: EndpointPart::Static("/chat?alt=sse".into()),
             query: Some(query),
         };
-        let url = render(&endpoint, &EndpointInput { request: &request(), body: &serde_json::json!({}) });
+        let url =
+            render(&endpoint, &EndpointInput { request: &request(), body: &serde_json::json!({}) });
         // `alt=sse` embedded in the path is overwritten by the endpoint query
-        assert_eq!(url.to_string(), "https://custom.example.test/root/chat?alt=json&api-version=2026-01-01");
+        assert_eq!(
+            url.to_string(),
+            "https://custom.example.test/root/chat?alt=json&api-version=2026-01-01"
+        );
     }
 
     #[test]
@@ -231,14 +249,20 @@ mod tests {
         let base = Endpoint {
             base_url: Some("https://api.example.test/v1".into()),
             path: EndpointPart::Static("/chat/completions".into()),
-            query: Some(BTreeMap::from([("keep".to_string(), "base".into()), ("base".to_string(), "1".into())])),
+            query: Some(BTreeMap::from([
+                ("keep".to_string(), "base".into()),
+                ("base".to_string(), "1".into()),
+            ])),
         };
         let merged = Endpoint::merge(
             &base,
             EndpointPatch {
                 base_url: None,
                 path: None,
-                query: Some(BTreeMap::from([("keep".to_string(), "patch".into()), ("patch".to_string(), "1".into())])),
+                query: Some(BTreeMap::from([
+                    ("keep".to_string(), "patch".into()),
+                    ("patch".to_string(), "1".into()),
+                ])),
             },
         );
         assert_eq!(merged.base_url.as_deref(), Some("https://api.example.test/v1"));

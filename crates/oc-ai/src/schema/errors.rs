@@ -41,7 +41,7 @@ pub struct HttpContext {
 
 /// Rate-limit telemetry parsed from response headers.
 ///
-/// `limit` / `remaining` / `reset` are keyed by bucket name: OpenAI
+/// `limit` / `remaining` / `reset` are keyed by bucket name: `OpenAI`
 /// `x-ratelimit-{limit,remaining,reset}-<bucket>` and Anthropic
 /// `anthropic-ratelimit-<bucket>-{limit,remaining,reset}`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -259,6 +259,7 @@ pub enum AiErrorReason {
 
 impl AiErrorReason {
     /// The `_tag` value this reason serializes to (matches TS).
+    #[must_use]
     pub fn tag(&self) -> &'static str {
         match self {
             Self::InvalidRequest { .. } => "InvalidRequest",
@@ -277,6 +278,7 @@ impl AiErrorReason {
         }
     }
 
+    #[must_use]
     pub fn message(&self) -> &str {
         match self {
             Self::InvalidRequest { fields, .. }
@@ -311,12 +313,13 @@ impl AiErrorReason {
             | Self::Timeout { fields, .. } => fields,
             Self::ProviderConfiguration { .. } => {
                 static EMPTY: std::sync::OnceLock<ReasonFields> = std::sync::OnceLock::new();
-                EMPTY.get_or_init(ReasonFields::new)
+                EMPTY.get_or_init(|| ReasonFields::new(""))
             }
         }
     }
 
     /// HTTP context observed for the failure, if any.
+    #[must_use]
     pub fn http(&self) -> Option<&HttpContext> {
         self.fields().http.as_ref()
     }
@@ -330,14 +333,17 @@ pub struct AiError {
 }
 
 impl AiError {
+    #[must_use]
     pub fn new(reason: AiErrorReason) -> Self {
         Self { reason }
     }
 
+    #[must_use]
     pub fn message(&self) -> &str {
         self.reason.message()
     }
 
+    #[must_use]
     pub fn tag(&self) -> &'static str {
         self.reason.tag()
     }
@@ -360,7 +366,11 @@ impl From<AiErrorReason> for AiError {
 /// Constructors mirroring the TS tagged-error classes.
 impl AiError {
     pub fn invalid_request(message: impl Into<String>) -> Self {
-        Self::new(AiErrorReason::InvalidRequest { fields: ReasonFields::new(message), parameter: None, classification: None })
+        Self::new(AiErrorReason::InvalidRequest {
+            fields: ReasonFields::new(message),
+            parameter: None,
+            classification: None,
+        })
     }
 
     pub fn unsupported_operation(operation: impl Into<String>, message: impl Into<String>) -> Self {
@@ -392,7 +402,11 @@ mod tests {
     #[test]
     fn reasons_round_trip_through_their_ts_tags() {
         let reasons = vec![
-            AiErrorReason::InvalidRequest { fields: ReasonFields::new("Invalid request"), parameter: None, classification: None },
+            AiErrorReason::InvalidRequest {
+                fields: ReasonFields::new("Invalid request"),
+                parameter: None,
+                classification: None,
+            },
             AiErrorReason::UnsupportedOperation {
                 fields: ReasonFields::new("Unsupported operation"),
                 operation: "compact".into(),
@@ -413,7 +427,10 @@ mod tests {
             },
             AiErrorReason::QuotaExceeded { fields: ReasonFields::new("Quota exceeded") },
             AiErrorReason::ContentPolicy { fields: ReasonFields::new("Content blocked") },
-            AiErrorReason::ProviderInternal { fields: ReasonFields::new("Provider failed"), retry_after_ms: None },
+            AiErrorReason::ProviderInternal {
+                fields: ReasonFields::new("Provider failed"),
+                retry_after_ms: None,
+            },
             AiErrorReason::Transport {
                 fields: ReasonFields::new("Connection failed"),
                 transport: TransportType::Http,

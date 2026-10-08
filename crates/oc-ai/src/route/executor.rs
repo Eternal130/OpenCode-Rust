@@ -14,6 +14,7 @@ pub const MAX_BODY_CHARS: usize = 2000;
 
 /// Parse `retry-after-ms` or `retry-after` (seconds or HTTP-date) into
 /// milliseconds, clamped to `>= 0` (port of `retryAfterMs`).
+#[must_use]
 pub fn retry_after_ms(headers: &BTreeMap<String, String>) -> Option<f64> {
     let get = |name: &str| -> Option<&String> {
         headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v)
@@ -43,15 +44,39 @@ pub fn retry_after_ms(headers: &BTreeMap<String, String>) -> Option<f64> {
 /// `retry-after`.
 fn parse_http_date(value: &str) -> Option<f64> {
     let value = value.trim();
-    let utc_now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_millis() as f64;
-    let (date_part, time_part) = match value.rsplit_once(' ') {
-        Some((date_part, time_part)) if time_part.matches(':').count() == 2 => (date_part, time_part),
-        _ => return None,
-    };
-    let mut fields = date_part.split(|c: char| c == ',' || c == ' ').filter(|p| !p.is_empty());
-    let day: u32 = fields.next()?.parse().ok()?;
-    let month = month_index(fields.next()?)?;
-    let year: i64 = fields.next()?.parse().ok()?;
+    let utc_now =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_millis() as f64;
+    // tokenize: weekday names (with optional comma) and the trailing zone
+    // name are ignored; find the time (two colons), day, month, year
+    let mut time_part: Option<&str> = None;
+    let mut day: Option<u32> = None;
+    let mut month: Option<u32> = None;
+    let mut year: Option<i64> = None;
+    for token in value.split_whitespace() {
+        let token = token.trim_matches(',');
+        if token.matches(':').count() == 2 {
+            time_part = Some(token);
+            continue;
+        }
+        if month_index(token).is_some() && month.is_none() {
+            month = month_index(token);
+            continue;
+        }
+        if let Ok(parsed) = token.parse::<u32>() {
+            if token.len() <= 2 && day.is_none() {
+                day = Some(parsed);
+                continue;
+            }
+        }
+        if let Ok(parsed) = token.parse::<i64>() {
+            year = Some(parsed);
+        }
+        // weekday or zone names fall through
+    }
+    let time_part = time_part?;
+    let day = day?;
+    let month = month?;
+    let year = year?;
     let mut time = time_part.split(':');
     let hour: i64 = time.next()?.parse().ok()?;
     let minute: i64 = time.next()?.parse().ok()?;
@@ -60,10 +85,10 @@ fn parse_http_date(value: &str) -> Option<f64> {
     let y = if month <= 2 { year - 1 } else { year };
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = y - era * 400;
-    let mp = (month as i64 + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day as i64 - 1;
+    let mp = (i64::from(month) + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + i64::from(day) - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe - 719468;
+    let days = era * 146_097 + doe - 719_468;
     let epoch_seconds = days * 86400 + hour * 3600 + minute * 60 + second;
     Some(epoch_seconds as f64 * 1000.0 - utc_now)
 }
@@ -80,8 +105,9 @@ fn month_index(name: &str) -> Option<u32> {
 }
 
 /// Extract rate-limit telemetry from response headers (port of
-/// `rateLimitDetails`): OpenAI `x-ratelimit-{limit,remaining,reset}-<bucket>`
+/// `rateLimitDetails`): `OpenAI` `x-ratelimit-{limit,remaining,reset}-<bucket>`
 /// and Anthropic `anthropic-ratelimit-<bucket>-{limit,remaining,reset}`.
+#[must_use]
 pub fn rate_limit_details(
     headers: &BTreeMap<String, String>,
     retry_after: Option<f64>,
@@ -90,7 +116,7 @@ pub fn rate_limit_details(
     let mut remaining: BTreeMap<String, String> = BTreeMap::new();
     let mut reset: BTreeMap<String, String> = BTreeMap::new();
 
-    let mut add = |target: &mut BTreeMap<String, String>, key: &str, value: &str| {
+    let add = |target: &mut BTreeMap<String, String>, key: &str, value: &str| {
         if !key.is_empty() {
             target.insert(key.to_string(), value.to_string());
         }
@@ -131,13 +157,17 @@ pub fn rate_limit_details(
 /// Summary message for a failed provider response (port of `providerMessage`):
 /// prefer a recognized message from the body; never show gateway HTML pages;
 /// truncate everything else to [`MAX_BODY_CHARS`].
+#[must_use]
 pub fn provider_message(status: u16, body: Option<&str>) -> String {
     let fallback = format!("Provider request failed with HTTP {status}");
     let text = body.unwrap_or("").trim();
     if let Some(message) = provider_error_message(text) {
         return message;
     }
-    if text.is_empty() || text.to_ascii_lowercase().starts_with("<!doctype") || text.to_ascii_lowercase().starts_with("<html") {
+    if text.is_empty()
+        || text.to_ascii_lowercase().starts_with("<!doctype")
+        || text.to_ascii_lowercase().starts_with("<html")
+    {
         return fallback;
     }
     if text.len() > MAX_BODY_CHARS {
@@ -150,12 +180,10 @@ pub fn provider_message(status: u16, body: Option<&str>) -> String {
 
 /// Build a typed AI error from an HTTP failure (port of `httpFailure`):
 /// normalizes headers, parses retry/rate-limit telemetry, and classifies.
+#[must_use]
 pub fn http_failure(input: HttpFailureInput<'_>) -> AiError {
-    let headers: BTreeMap<String, String> = input
-        .response_headers
-        .iter()
-        .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
-        .collect();
+    let headers: BTreeMap<String, String> =
+        input.response_headers.iter().map(|(k, v)| (k.to_ascii_lowercase(), v.clone())).collect();
     let retry_after = retry_after_ms(&headers);
     let rate_limit = rate_limit_details(&headers, retry_after);
     let http = match (input.status, input.url) {
@@ -165,9 +193,9 @@ pub fn http_failure(input: HttpFailureInput<'_>) -> AiError {
         _ => None,
     };
     AiError::new(classify_provider_failure(ProviderFailure {
-        message: input.message.to_string(),
+        message: input.message,
         status: input.status,
-        raw_body: input.response_body.map(str::to_string),
+        raw_body: input.response_body,
         data: input.data,
         retry_after_ms: retry_after,
         rate_limit,
@@ -247,7 +275,9 @@ mod tests {
 
     #[test]
     fn rate_limit_details_none_without_signals() {
-        assert!(rate_limit_details(&headers(&[("content-type", "text/event-stream")]), None).is_none());
+        assert!(
+            rate_limit_details(&headers(&[("content-type", "text/event-stream")]), None).is_none()
+        );
     }
 
     #[test]
@@ -256,9 +286,15 @@ mod tests {
             provider_message(401, Some("{\"error\":{\"message\":\"Invalid API Key\"}}")),
             "Invalid API Key"
         );
-        assert_eq!(provider_message(502, Some("<!doctype html><html>gateway</html>")), "Provider request failed with HTTP 502");
+        assert_eq!(
+            provider_message(502, Some("<!doctype html><html>gateway</html>")),
+            "Provider request failed with HTTP 502"
+        );
         assert_eq!(provider_message(500, None), "Provider request failed with HTTP 500");
-        assert_eq!(provider_message(500, Some("boom")), "Provider request failed with HTTP 500: boom");
+        assert_eq!(
+            provider_message(500, Some("boom")),
+            "Provider request failed with HTTP 500: boom"
+        );
     }
 
     #[test]
