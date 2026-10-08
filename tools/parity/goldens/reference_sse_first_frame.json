@@ -1,0 +1,10 @@
+[
+  {
+    "data": {
+      "data": {},
+      "id": "<EVT_ID>",
+      "type": "server.connected"
+    },
+    "index": 0
+  }
+]
