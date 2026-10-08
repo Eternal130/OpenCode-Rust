@@ -52,7 +52,9 @@ pub mod sink;
 mod tests;
 
 pub use registry::{
-    by_type_latest, by_versioned_type, definitions, is_session_event, DurableMeta, EventDefinition,
+    by_type, by_type_latest, by_versioned_type, config_updated, definitions, is_session_event,
+    location_shutdown, non_session_definitions, permission_asked, permission_replied,
+    project_updated, DurableMeta, EventDefinition,
 };
 pub use sink::PermissionBusSink;
 
@@ -906,13 +908,14 @@ impl Bus {
                                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                             )
                             .optional()?;
-                        let encoded = event.data.to_string();
                         let created_i64 = i64::try_from(event.created).unwrap_or(0);
                         let identical = stored.is_some_and(|(id, type_, created, data)| {
                             id == event.id.as_str()
                                 && type_ == type_version
                                 && created == created_i64
-                                && data == encoded
+                                // Deep-equal (v2 replay identity): string equality is only stable without key reordering.
+                                && serde_json::from_str::<serde_json::Value>(&data).ok()
+                                    == Some(event.data.clone())
                         });
                         if identical {
                             if let Some(owner) = &input.owner_id {

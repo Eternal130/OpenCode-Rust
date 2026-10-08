@@ -2,18 +2,27 @@
 //! `LocationServiceMap` / `LocationActivity`, core-deep-map §5).
 //!
 //! - [`GlobalServices`] carries the process-wide services every location
-//!   graph shares (global subgraph constructed once per process).
+//!   graph shares (global subgraph constructed once per process) — the
+//!   **concrete** [`Arc<Database>`](crate::database::Database) +
+//!   [`Arc<Bus>`](crate::bus::Bus) + [`Arc<Catalog>`](crate::provider_catalog::Catalog)
+//!   handles plus the per-location trait seams (graph v2, oracle gate 4
+//!   finding 1).
 //! - [`LocationServiceMap`] is `DashMap<LocationRef, Arc<LocationGraph>>`
 //!   with build / invalidate / reload semantics. Invalidation never mutates
 //!   a live graph: it removes the entry and runs the shutdown sequence;
 //!   a **new** graph is built on the next `get_or_build` (or immediately by
 //!   [`LocationServiceMap::reload`]). Borrowers keep their `Arc` clone —
 //!   old-graph survival.
+//! - **Boot failure evicts + invalidates (retry possible)**:
+//!   [`LocationServiceMap::get_or_build`] is fallible
+//!   ([`BootError`]); a failed build never publishes a graph, so the next
+//!   call retries.
 //! - [`LocationActivity`] + [`spawn_activity_sweeper`] implement the v2
 //!   activity TTL: default 60-minute idle expiry, 1-minute sweep, touched
 //!   on session activity; expiry interrupts active executions with reason
 //!   `"inactivity"` and then invalidates the location.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,11 +30,14 @@ use std::time::Duration;
 use dashmap::DashMap;
 use oc_util::determinism::Clock;
 
-use crate::hooks::RpcPort;
+use crate::bus::Bus;
+use crate::database::Database;
+use crate::hooks::{PluginSupervisor, RpcPort};
 use crate::location::{
-    ConfigCache, DatabasePort, EventBusSink, FormsPort, LocationGraph, LocationRef,
-    PermissionPending, ProjectStore, SessionInterruptor,
+    BootError, ConfigCache, FormsPort, LocationGraph, LocationRef, PermissionPending,
+    SessionInterruptor,
 };
+use crate::project::ProjectStore;
 use crate::provider_catalog::Catalog;
 
 /// Default idle TTL for an inactive location (v2: 60 minutes).
@@ -43,19 +55,23 @@ pub const INACTIVITY_REASON: &str = "inactivity";
 
 /// Process-wide services shared (by `Arc`) with every [`LocationGraph`].
 ///
-/// The trait-object fields are the seams this lane needs; the sibling lanes
-/// plug their concrete types in — `TODO(lane-integration)`.
+/// The database/bus/catalog handles are the **concrete** types (graph v2:
+/// the trait seams bought nothing — every consumer lives in this crate);
+/// the per-location trait fields remain the seams their owning lanes fill
+/// (`TODO(lane-integration)`).
 pub struct GlobalServices {
-    /// Database port (global `Db` node).
-    pub db: Arc<dyn DatabasePort>,
-    /// Event-bus publish sink (global `Bus` node).
-    pub events: Arc<dyn EventBusSink>,
-    /// Project store (global `Project` node).
+    /// Database (global `Db` node), shared with the bus.
+    pub db: Arc<Database>,
+    /// Event bus (global `Bus` node).
+    pub bus: Arc<Bus>,
+    /// Project store (global `Project` node; sqlite-backed in production).
     pub projects: Arc<dyn ProjectStore>,
     /// Provider catalog (global `ModelsDev` node).
     pub catalog: Arc<Catalog>,
     /// Wall clock (injectable for tests; oc-util `Clock`).
     pub clock: Arc<dyn Clock>,
+    /// Home directory (`~` expansion for the per-location file boundary).
+    pub home: PathBuf,
     /// Session interruptor (activity-expiry interrupt + await settlement).
     pub interruptor: Arc<dyn SessionInterruptor>,
     /// Config hot-reload handles, resolved per location by the config lane.
@@ -69,37 +85,45 @@ pub struct GlobalServices {
     pub rpc: Arc<dyn RpcPort>,
     /// Location activity tracker (feeds the TTL sweeper).
     pub activity: Arc<LocationActivity>,
+    /// Internal plugin slots (boot order pre → host → post).
+    pub plugins: PluginSupervisor,
 }
 
 impl GlobalServices {
-    /// Assemble globals. Per-location trait handles are supplied once here;
-    /// concrete lanes may swap in per-location dispatch internally.
+    /// Assemble globals. The database handle is cloned into the bus by the
+    /// caller (the bus owns its connection share); per-location trait
+    /// handles are supplied once here — concrete lanes may swap in
+    /// per-location dispatch internally.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        db: Arc<dyn DatabasePort>,
-        events: Arc<dyn EventBusSink>,
+        db: Arc<Database>,
+        bus: Arc<Bus>,
         projects: Arc<dyn ProjectStore>,
         catalog: Arc<Catalog>,
         clock: Arc<dyn Clock>,
+        home: PathBuf,
         interruptor: Arc<dyn SessionInterruptor>,
         config_cache: Arc<dyn ConfigCache>,
         permissions: Arc<dyn PermissionPending>,
         forms: Arc<dyn FormsPort>,
         rpc: Arc<dyn RpcPort>,
+        plugins: PluginSupervisor,
     ) -> Self {
         let activity = Arc::new(LocationActivity::new(Arc::clone(&clock)));
         Self {
             db,
-            events,
+            bus,
             projects,
             catalog,
             clock,
+            home,
             interruptor,
             config_cache,
             permissions,
             forms,
             rpc,
             activity,
+            plugins,
         }
     }
 }
@@ -181,8 +205,9 @@ impl LocationActivity {
 ///
 /// - **idleTimeToLive infinity** — only explicit invalidation evicts
 ///   (the TTL sweeper is the one caller doing time-based eviction);
-/// - **boot failure evicts + invalidates** (retry possible) — `build` is
-///   infallible here because the port seams cannot fail construction;
+/// - **boot failure evicts + invalidates** (retry possible) —
+///   [`LocationServiceMap::get_or_build`] returns [`BootError`] and never
+///   publishes a half-built graph;
 /// - **invalidate = remove → shutdown sequence** with old-graph survival for
 ///   running borrows (see [`LocationGraph::shutdown`]);
 /// - **reload = invalidate + build a NEW graph** and swap the entry — the
@@ -219,22 +244,27 @@ impl LocationServiceMap {
     }
 
     /// Get or build the graph for a location. Repeated calls return the
-    /// same graph (`Arc::ptr_eq`) until invalidated.
-    #[must_use]
-    pub fn get_or_build(&self, location: LocationRef) -> Arc<LocationGraph> {
+    /// same graph (`Arc::ptr_eq`) until invalidated. Building is fallible
+    /// (missing directory / database probe — v2 "boot failure evicts +
+    /// invalidates, retry possible"); a failed boot leaves the map
+    /// untouched so the next call retries.
+    pub async fn get_or_build(
+        &self,
+        location: LocationRef,
+    ) -> Result<Arc<LocationGraph>, BootError> {
         if let Some(existing) = self.get(&location) {
-            return existing;
+            return Ok(existing);
         }
         let generation = self.generation.fetch_add(1, Ordering::SeqCst);
-        let graph = LocationGraph::build(location.clone(), &self.globals, generation);
+        let graph = LocationGraph::build(location.clone(), &self.globals, generation).await?;
         match self.map.entry(location) {
             dashmap::mapref::entry::Entry::Occupied(existing) => {
                 // raced with another builder — the existing graph wins
-                Arc::clone(existing.get())
+                Ok(Arc::clone(existing.get()))
             }
             dashmap::mapref::entry::Entry::Vacant(slot) => {
                 slot.insert(Arc::clone(&graph));
-                graph
+                Ok(graph)
             }
         }
     }
@@ -250,20 +280,28 @@ impl LocationServiceMap {
     }
 
     /// Invalidate + build a fresh graph and swap it in (config/plugin
-    /// hot path). Returns the new graph; never mutates the old graph.
-    pub async fn reload(&self, location: LocationRef) -> Arc<LocationGraph> {
+    /// hot path). Returns the new graph; never mutates the old graph. A
+    /// failed rebuild leaves the location absent (retry on the next
+    /// `get_or_build`).
+    pub async fn reload(&self, location: LocationRef) -> Result<Arc<LocationGraph>, BootError> {
         self.invalidate(&location).await;
-        self.get_or_build(location)
+        self.get_or_build(location).await
     }
 
-    /// Reload every live location (`LocationServiceMap.reload` — invalidate
-    /// + rebuild all).
-    pub async fn reload_all(&self) {
+    /// Reload every live location (`LocationServiceMap.reload` —
+    /// invalidate, then rebuild all). Every location is attempted; failed
+    /// rebuilds are reported, and those locations stay absent until the
+    /// next `get_or_build` (the v2 boot-failure semantics).
+    pub async fn reload_all(&self) -> Vec<(LocationRef, BootError)> {
         let locations: Vec<LocationRef> =
             self.map.iter().map(|entry| entry.key().clone()).collect();
+        let mut failures = Vec::new();
         for location in locations {
-            self.reload(location).await;
+            if let Err(error) = self.reload(location.clone()).await {
+                failures.push((location, error));
+            }
         }
+        failures
     }
 
     /// Number of live graphs.
@@ -338,15 +376,18 @@ pub fn spawn_activity_sweeper(
 
 #[cfg(test)]
 mod tests {
+    // The `assert!(x.is_empty())` spelling reads better than the lint's
+    // suggested `assert_eq!(x, [])` form.
+    #![allow(clippy::assert_is_empty)]
+
     use super::*;
-    use crate::hooks::EventEnvelope;
+    use crate::hooks::PluginSupervisor;
     use crate::location::LOCATION_SHUTDOWN_EVENT;
     use async_trait::async_trait;
+    use futures::StreamExt;
     use oc_schema::prompt::Prompt;
     use oc_util::determinism::Clock;
     use parking_lot::Mutex;
-    use serde_json::Value;
-    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     // -- fakes ---------------------------------------------------------------
@@ -383,23 +424,16 @@ mod tests {
         }
     }
 
-    struct RecordingBus(Mutex<Vec<String>>);
-
-    #[async_trait]
-    impl EventBusSink for RecordingBus {
-        async fn publish(&self, event: EventEnvelope) {
-            self.0.lock().push(event.r#type);
-        }
-    }
-
     struct RecordingPermission(Mutex<Vec<&'static str>>);
 
     #[async_trait]
     impl PermissionPending for RecordingPermission {
+        #[allow(clippy::unused_async, reason = "test fake")]
         async fn close(&self) -> Vec<String> {
             self.0.lock().push("permission.close");
             vec!["per_1".into()]
         }
+        #[allow(clippy::unused_async, reason = "test fake")]
         async fn pending_count(&self) -> usize {
             0
         }
@@ -409,6 +443,7 @@ mod tests {
 
     #[async_trait]
     impl FormsPort for RecordingForms {
+        #[allow(clippy::unused_async, reason = "test fake")]
         async fn close(&self) -> Vec<String> {
             self.0.lock().push("forms.close");
             vec![]
@@ -419,6 +454,7 @@ mod tests {
 
     #[async_trait]
     impl RpcPort for RecordingRpc {
+        #[allow(clippy::unused_async, clippy::unused_async_trait_impl, reason = "test fake")]
         async fn register(
             &self,
             _definition: crate::hooks::RpcDefinition,
@@ -426,14 +462,16 @@ mod tests {
         ) -> Result<crate::hooks::Registration, crate::hooks::RpcError> {
             Err(crate::hooks::RpcError("placeholder".into()))
         }
+        #[allow(clippy::unused_async, clippy::unused_async_trait_impl, reason = "test fake")]
         async fn emit(
             &self,
             _rpc_id: &str,
             _event: &str,
-            _data: Value,
+            _data: serde_json::Value,
         ) -> Result<(), crate::hooks::RpcError> {
             Ok(())
         }
+        #[allow(clippy::unused_async, clippy::unused_async_trait_impl, reason = "test fake")]
         async fn close(&self) {
             self.0.lock().push("rpc.close");
         }
@@ -443,27 +481,9 @@ mod tests {
 
     #[async_trait]
     impl SessionInterruptor for RecordingInterruptor {
+        #[allow(clippy::unused_async, reason = "test fake")]
         async fn interrupt(&self, location: &LocationRef, reason: &str) {
             self.0.lock().push((location.to_string(), reason.to_string()));
-        }
-    }
-
-    struct FakeDb;
-    #[async_trait]
-    impl DatabasePort for FakeDb {
-        async fn healthy(&self) -> bool {
-            true
-        }
-    }
-
-    struct FakeProjects;
-    #[async_trait]
-    impl ProjectStore for FakeProjects {
-        async fn project_for(
-            &self,
-            _directory: &std::path::Path,
-        ) -> Option<crate::location::ProjectIdentity> {
-            None
         }
     }
 
@@ -476,30 +496,41 @@ mod tests {
 
     struct Harness {
         map: Arc<LocationServiceMap>,
-        bus: Arc<RecordingBus>,
+        bus: Arc<Bus>,
         permissions: Arc<RecordingPermission>,
         forms: Arc<RecordingForms>,
         rpc: Arc<RecordingRpc>,
         interruptor: Arc<RecordingInterruptor>,
+        dir: tempfile::TempDir,
     }
 
-    fn harness(clock: &Arc<MutableClock>) -> Harness {
-        let bus = Arc::new(RecordingBus(Mutex::new(Vec::new())));
+    async fn harness(clock: &Arc<MutableClock>) -> Harness {
         let permissions = Arc::new(RecordingPermission(Mutex::new(Vec::new())));
         let forms = Arc::new(RecordingForms(Mutex::new(Vec::new())));
         let rpc = Arc::new(RecordingRpc(Mutex::new(Vec::new())));
         let interruptor = Arc::new(RecordingInterruptor(Mutex::new(Vec::new())));
+        let db = Arc::new(Database::open_in_memory().await.expect("database"));
+        let bus = Arc::new(Bus::new(
+            (*db).clone(),
+            crate::bus::BusOptions {
+                clock: Arc::clone(clock) as Arc<dyn Clock>,
+                ..crate::bus::BusOptions::deterministic()
+            },
+        ));
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("temp dir under /tmp/opencode");
         let globals = GlobalServices::new(
-            Arc::new(FakeDb),
-            Arc::clone(&bus) as Arc<dyn EventBusSink>,
-            Arc::new(FakeProjects),
-            Arc::new(Catalog::empty()),
+            db,
+            bus.clone(),
+            Arc::new(crate::project::MemoryProjectStore::new()),
+            Arc::new(crate::provider_catalog::Catalog::empty()),
             Arc::clone(clock) as Arc<dyn Clock>,
+            dir.path().join("home"),
             Arc::clone(&interruptor) as Arc<dyn SessionInterruptor>,
             Arc::new(FixedConfig(1)),
             Arc::clone(&permissions) as Arc<dyn PermissionPending>,
             Arc::clone(&forms) as Arc<dyn FormsPort>,
             Arc::clone(&rpc) as Arc<dyn RpcPort>,
+            PluginSupervisor::new(),
         );
         Harness {
             map: Arc::new(LocationServiceMap::new(Arc::new(globals))),
@@ -508,20 +539,37 @@ mod tests {
             forms,
             rpc,
             interruptor,
+            dir,
         }
     }
 
-    fn loc(path: &str) -> LocationRef {
-        LocationRef::new(PathBuf::from(path), None)
+    fn loc_under(dir: &std::path::Path, name: &str) -> LocationRef {
+        let path = dir.join(name);
+        std::fs::create_dir_all(&path).expect("location dir");
+        LocationRef::new(path, None)
+    }
+
+    /// Reads every buffered event off a subscription created BEFORE the
+    /// action under test (mpsc subscriptions see only future events).
+    async fn drain(subscription: &mut crate::bus::Subscription) -> Vec<String> {
+        let mut types = Vec::new();
+        while let Ok(Some(event)) =
+            tokio::time::timeout(Duration::from_millis(50), subscription.next()).await
+        {
+            types.push(event.type_);
+        }
+        types
     }
 
     #[tokio::test]
     async fn location_map_build_invalidate_shutdown_sequence() {
-        let harness = harness(&MutableClock::at(1_000));
-        let location = loc("/repo");
-        let graph = harness.map.get_or_build(location.clone());
-        assert!(Arc::ptr_eq(&graph, &harness.map.get_or_build(location.clone())));
+        let harness = harness(&MutableClock::at(1_000)).await;
+        let mut live = harness.bus.subscribe();
+        let location = loc_under(harness.dir.path(), "repo");
+        let graph = harness.map.get_or_build(location.clone()).await.expect("boot");
+        assert!(Arc::ptr_eq(&graph, &harness.map.get_or_build(location.clone()).await.unwrap()));
         assert_eq!(harness.map.len(), 1);
+        assert!(graph.plugin_failures.is_empty());
 
         let old = harness.map.invalidate(&location).await.expect("graph was live");
         assert!(Arc::ptr_eq(&old, &graph));
@@ -533,21 +581,41 @@ mod tests {
         );
         assert_eq!(*harness.forms.0.lock(), vec!["forms.close"], "forms close second");
         assert_eq!(*harness.rpc.0.lock(), vec!["rpc.close"], "rpc closes third");
-        assert_eq!(*harness.bus.0.lock(), vec![LOCATION_SHUTDOWN_EVENT.to_string()]);
+        assert_eq!(
+            drain(&mut live).await,
+            vec![LOCATION_SHUTDOWN_EVENT.to_string()],
+            "shutdown publishes location.shutdown (data {{}}, via the bus)"
+        );
+    }
+
+    #[tokio::test]
+    async fn location_map_missing_directory_is_typed_boot_error() {
+        let harness = harness(&MutableClock::at(1_000)).await;
+        let location = LocationRef::new(harness.dir.path().join("missing"), None);
+        let error = harness
+            .map
+            .get_or_build(location.clone())
+            .await
+            .expect_err("missing directory fails the boot");
+        assert!(matches!(error, BootError::MissingDirectory(_)));
+        assert!(harness.map.get(&location).is_none(), "failed boot never publishes");
+        // Retry possible once the directory appears.
+        std::fs::create_dir_all(harness.dir.path().join("missing")).unwrap();
+        assert!(harness.map.get_or_build(location).await.is_ok());
     }
 
     #[tokio::test]
     async fn location_old_graph_survives_invalidation() {
-        let harness = harness(&MutableClock::at(1_000));
-        let location = loc("/repo");
-        let graph = harness.map.get_or_build(location.clone());
+        let harness = harness(&MutableClock::at(1_000)).await;
+        let location = loc_under(harness.dir.path(), "repo");
+        let graph = harness.map.get_or_build(location.clone()).await.expect("boot");
 
         // a running step borrows the graph (Arc clone) across invalidation
         let borrow = Arc::clone(&graph);
         let step = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(50)).await;
             // still fully usable after the map entry is gone
-            assert!(borrow.db.healthy().await);
+            borrow.db.migration_ids().await.expect("database usable on old graph");
             let event = crate::hooks::SessionPromptEvent {
                 session_id: oc_schema::id::SessionId::new(),
                 message_id: oc_schema::id::MessageId::new(),
@@ -555,8 +623,7 @@ mod tests {
                 metadata: None,
                 delivery: oc_schema::session_inbox::Delivery::Queue,
             };
-            let handled = borrow.hooks.dispatch_session_prompt(event).await;
-            handled.is_ok()
+            borrow.hooks.dispatch_session_prompt(event).await.is_ok()
         });
 
         harness.map.invalidate(&location).await;
@@ -566,38 +633,42 @@ mod tests {
 
     #[tokio::test]
     async fn location_reload_swaps_in_new_graph() {
-        let harness = harness(&MutableClock::at(1_000));
-        let location = loc("/repo");
-        let first = harness.map.get_or_build(location.clone());
-        let second = harness.map.reload(location.clone()).await;
+        let harness = harness(&MutableClock::at(1_000)).await;
+        let mut live = harness.bus.subscribe();
+        let location = loc_under(harness.dir.path(), "repo");
+        let first = harness.map.get_or_build(location.clone()).await.expect("boot");
+        let second = harness.map.reload(location.clone()).await.expect("rebuild");
         assert!(!Arc::ptr_eq(&first, &second), "reload builds a NEW graph");
         assert!(Arc::ptr_eq(&second, &harness.map.get(&location).unwrap()));
         assert!(second.built_at_generation > first.built_at_generation);
         // reload published exactly one shutdown for the old graph
-        assert_eq!(*harness.bus.0.lock(), vec![LOCATION_SHUTDOWN_EVENT.to_string()]);
+        assert_eq!(drain(&mut live).await, vec![LOCATION_SHUTDOWN_EVENT.to_string()]);
     }
 
     #[tokio::test]
     async fn location_reload_all_rebuilds_every_location() {
-        let harness = harness(&MutableClock::at(1_000));
-        let a = loc("/a");
-        let b = loc("/b");
-        let first_a = harness.map.get_or_build(a.clone());
-        let first_b = harness.map.get_or_build(b.clone());
-        harness.map.reload_all().await;
+        let harness = harness(&MutableClock::at(1_000)).await;
+        let mut live = harness.bus.subscribe();
+        let a = loc_under(harness.dir.path(), "a");
+        let b = loc_under(harness.dir.path(), "b");
+        let first_a = harness.map.get_or_build(a.clone()).await.expect("boot");
+        let first_b = harness.map.get_or_build(b.clone()).await.expect("boot");
+        let failures = harness.map.reload_all().await;
+        assert!(failures.is_empty(), "{failures:?}");
         let next_a = harness.map.get(&a).unwrap();
         let next_b = harness.map.get(&b).unwrap();
         assert!(!Arc::ptr_eq(&first_a, &next_a));
         assert!(!Arc::ptr_eq(&first_b, &next_b));
-        assert_eq!(*harness.bus.0.lock(), vec![LOCATION_SHUTDOWN_EVENT.to_string(); 2]);
+        assert_eq!(drain(&mut live).await, vec![LOCATION_SHUTDOWN_EVENT.to_string(); 2]);
     }
 
     #[tokio::test]
     async fn location_ttl_sweeper_expires_idle_locations() {
         let clock = MutableClock::at(10_000);
-        let harness = harness(&clock);
-        let location = loc("/idle");
-        let _ = harness.map.get_or_build(location.clone());
+        let harness = harness(&clock).await;
+        let mut live = harness.bus.subscribe();
+        let location = loc_under(harness.dir.path(), "idle");
+        let _ = harness.map.get_or_build(location.clone()).await.expect("boot");
         harness.map.globals().activity.touch(&location);
 
         let sweeper = spawn_activity_sweeper(
@@ -627,19 +698,19 @@ mod tests {
         let interrupts = harness.interruptor.0.lock().clone();
         assert_eq!(
             interrupts,
-            vec![("/idle".to_string(), "inactivity".to_string())],
+            vec![(location.directory.to_string_lossy().into_owned(), "inactivity".to_string())],
             "expiry interrupts active executions with reason inactivity"
         );
-        assert_eq!(*harness.bus.0.lock(), vec![LOCATION_SHUTDOWN_EVENT.to_string()]);
+        assert_eq!(drain(&mut live).await, vec![LOCATION_SHUTDOWN_EVENT.to_string()]);
         assert!(harness.map.globals().activity.is_empty(), "activity entry dropped");
     }
 
     #[tokio::test]
     async fn location_ttl_sweeper_spares_touched_locations() {
         let clock = MutableClock::at(10_000);
-        let harness = harness(&clock);
-        let location = loc("/busy");
-        let _ = harness.map.get_or_build(location.clone());
+        let harness = harness(&clock).await;
+        let location = loc_under(harness.dir.path(), "busy");
+        let _ = harness.map.get_or_build(location.clone()).await.expect("boot");
 
         let activity = Arc::clone(&harness.map.globals().activity);
         let sweeper = spawn_activity_sweeper(
@@ -659,5 +730,23 @@ mod tests {
         }
         assert_eq!(harness.map.len(), 1, "active location survives");
         sweeper.abort();
+    }
+
+    #[tokio::test]
+    async fn location_graph_carries_concrete_handles_and_services() {
+        let harness = harness(&MutableClock::at(1_000)).await;
+        let location = loc_under(harness.dir.path(), "repo");
+        let graph = harness.map.get_or_build(location.clone()).await.expect("boot");
+        // Concrete global handles (graph v2).
+        assert!(Arc::ptr_eq(&graph.db, &harness.map.globals().db));
+        assert!(Arc::ptr_eq(&graph.bus, &harness.map.globals().bus));
+        assert_eq!(graph.location, location);
+        // Per-location service nodes are live and empty at boot.
+        assert!(graph.agents.is_empty());
+        assert!(graph.tools.is_empty());
+        assert_eq!(graph.shell.directory(), location.as_path());
+        assert_eq!(graph.files.directory(), location.as_path());
+        assert!(graph.instructions.slots().is_empty());
+        assert_eq!(graph.hooks.total_hooks(), 0);
     }
 }
