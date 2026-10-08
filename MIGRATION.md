@@ -91,11 +91,11 @@ opencode-rust/
 
 v2 插件是**进程内 JS/TS ESM 模块**（Bun 动态 import + npm 解析 + watch 热重载），Context 约 20 域。Rust 等同支持：
 
-- **运行时选型（Phase 1-2 spike 定夺，硬决策门在 Phase 3 前）**：两个候选 head-to-head——
-  - (A) `deno_core`（V8）+ 自建 ESM 加载器 + oxc/swc 转译 + node 内建 shim 层：风险在 node 兼容面（`node:fs`/`child_process` 等 shim 工作量、`aisdk:` 动态 provider 加载 npm 包）。
-  - (B) `bun` 子进程宿主：100% Bun 生态兼容（社区插件 npm 依赖直接可用），代价是宿主↔插件 IPC 协议 + 同步 editor 回调/TUI slot 的桥接时延。
-  - spike 验收（两候选各跑）：真实社区插件（npm 依赖含 node 内建）；`aisdk:` provider 加载；同步 editor 回调往返；热重载 digest 扫描（oxc 依赖扫描 ≈ `Bun.Transpiler.scan`）；TUI slot 渲染。**未过 spike 前不写任何 core/插件胶水代码。**
-- **codemode 归 oc-plugin-host**：v2 中 MCP 工具默认经 codemode（JS `execute` 解释器）分发，与插件运行时是同一个 JS 引擎决策，不是两个问题。
+- **运行时选型（已 spike，预选 (B) 待门 2 确认）**：head-to-head 结论 ——
+  - (A) `deno_core`：同步回调 0.8µs 极快，但 **结构性失败**：CJS 依赖（lodash 等）ESM link 即死、node 内建兼容面是多年工程；V8 体积 54MB/260 crates。
+  - (B) `bun` 子进程宿主（**推荐**）：社区插件/CJS/node 内建原生全通（v2 语义同源）；同步回调经阻塞 RPC 实测 49-54µs avg / 0.5ms p99（预算内）；宿主协议注意：写锁与阻塞回复的死锁规则成文。分发注意：运行期依赖系统 bun（缺失时插件功能降级并明示，不阻塞核心功能）。
+  - 证据：spike-plugin-runtime.md（A 2.5/5 vs B 5/5 通过 oracle 五项标准）。
+- **codemode 归 oc-plugin-host**：v2 中 MCP 工具默认经 codemode（JS `execute` 解释器）分发，与插件运行时是同一个 JS 引擎决策——选 (B) 后 codemode 跑在 bun 宿主内，降级阶梯第 2 级解除。
 - **宿主桥（Rust 侧语义）**：有序 hook 注册表（注册序顺序执行、可变事件对象）、transform 域（同步 editor 回调 + reload 失效）、作用域化 Registration/dispose、plugin-scoped KV storage、事件流 AsyncIterable、RPC 端口（`/api/rpc/{id}/{method}` + `rpc.*` 事件）。
 - **core 缝隙（Phase 3 即建）**：oc-core 定义 `HookRegistry`/扩展点 trait 集（session.prompt / tool.execute.before|after / permission.evaluate / shell.create.before / http.request|response 等）；内置工具按 v2 方式写成 internal plugin 走同一注册表；oc-plugin-host 实现 trait 并在组合根（server/cli/sdk）注入。Phase 4 验收要求：即使无 JS 运行时，hook 路径也经注册表全通。
 - **API 面**：以 Promise API（`{id, setup(ctx)}`）为插件作者面；V1+V2 双格式按 v2.0.24 文档兼容。
