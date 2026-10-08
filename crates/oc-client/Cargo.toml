@@ -1,0 +1,11 @@
+[package]
+name = "oc-client"
+description = "opencode generated Rust HTTP/SSE client SDK"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

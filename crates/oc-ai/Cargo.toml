@@ -1,0 +1,11 @@
+[package]
+name = "oc-ai"
+description = "opencode LLM SDK: protocols, streaming events, providers, models.dev catalog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

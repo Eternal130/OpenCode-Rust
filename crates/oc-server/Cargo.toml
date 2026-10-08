@@ -1,0 +1,11 @@
+[package]
+name = "oc-server"
+description = "opencode HTTP server: openapi routes, SSE, auth, pty ws, static assets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

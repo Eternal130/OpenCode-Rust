@@ -1,0 +1,11 @@
+[package]
+name = "oc-plugin-host"
+description = "opencode plugin host: JS runtime, context bridge, hot reload, codemode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

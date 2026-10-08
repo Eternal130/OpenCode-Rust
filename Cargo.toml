@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/oc-util",
+    "crates/oc-schema",
+    "crates/oc-theme",
+    "crates/oc-ai",
+    "crates/oc-core",
+    "crates/oc-plugin-host",
+    "crates/oc-server",
+    "crates/oc-client",
+    "crates/oc-tui",
+    "crates/oc-cli",
+    "tools/openapi-gen",
+    "tools/parity",
+]
+
+[workspace.package]
+version = "2.0.24"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+oc-util = { path = "crates/oc-util" }
+oc-schema = { path = "crates/oc-schema" }
+oc-theme = { path = "crates/oc-theme" }
+oc-ai = { path = "crates/oc-ai" }
+oc-core = { path = "crates/oc-core" }
+oc-plugin-host = { path = "crates/oc-plugin-host" }
+oc-server = { path = "crates/oc-server" }
+oc-client = { path = "crates/oc-client" }
+oc-tui = { path = "crates/oc-tui" }
+
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "0.8"
+thiserror = "2"
+anyhow = "1"
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
