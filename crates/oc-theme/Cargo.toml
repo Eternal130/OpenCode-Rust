@@ -1,0 +1,11 @@
+[package]
+name = "oc-theme"
+description = "opencode theme token schema, resolve pipeline, v1 migration, builtins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

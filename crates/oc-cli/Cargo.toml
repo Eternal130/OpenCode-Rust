@@ -1,0 +1,15 @@
+[package]
+name = "oc-cli"
+description = "opencode CLI entry binary"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "opencode"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
