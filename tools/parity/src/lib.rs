@@ -17,6 +17,10 @@
 //!   the scenario policy: N frames / quiescence), and compares two frame
 //!   sequences per the canonical grouping policy.
 //! - [`golden`] — golden-file compare with inline update (`PARITY_UPDATE=1`).
+//! - [`scenario`] — scripted SSE scenario runner: boot the reference,
+//!   subscribe from t0, drive a scripted API flow, collect to quiescence,
+//!   and golden the normalized frame-sequence groups (Phase 5 replays the
+//!   same scripts against the port).
 //!
 //! HTTP is performed by a private minimal localhost HTTP/1.1 client
 //! (`minih`, not public API): the harness only ever talks to `127.0.0.1`,
@@ -26,6 +30,7 @@ pub mod golden;
 pub mod httpdiff;
 pub mod normalize;
 pub mod reference;
+pub mod scenario;
 pub mod sse;
 
 mod minih;

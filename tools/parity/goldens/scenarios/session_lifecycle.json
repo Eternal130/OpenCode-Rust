@@ -1,0 +1,200 @@
+{
+  "description": "POST /api/session (create) -> PATCH rename -> GET list -> DELETE; session lifecycle frames",
+  "groups": [
+    [
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "canonical": "<SANDBOX>/project",
+            "id": "<PRJ_ID:1>",
+            "sandboxes": [],
+            "time": {
+              "active": "<TS>",
+              "created": "<TS>",
+              "updated": "<TS>"
+            }
+          },
+          "id": "<EVT_ID:1>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "project.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:2>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "integration.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:3>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "provider.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:4>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "model.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:5>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "agent.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:6>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "command.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:7>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "skill.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:8>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "websearch.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:9>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "reference.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:10>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "plugin.updated"
+        }
+      }
+    ],
+    [
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "location": {
+              "directory": "<SANDBOX>/project"
+            },
+            "projectID": "<PRJ_ID:1>",
+            "sessionID": "<SES_ID:1>",
+            "slug": "<SLUG>",
+            "subpath": "",
+            "title": "parity lifecycle",
+            "version": "<VERSION>"
+          },
+          "durable": {
+            "aggregateID": "<SES_ID:1>",
+            "seq": 0,
+            "version": 1
+          },
+          "id": "<EVT_ID:1>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "session.created"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "sessionID": "<SES_ID:1>",
+            "title": "parity renamed"
+          },
+          "durable": {
+            "aggregateID": "<SES_ID:1>",
+            "seq": 1,
+            "version": 1
+          },
+          "id": "<EVT_ID:2>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "session.renamed"
+        }
+      }
+    ],
+    [
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "sessionID": "<SES_ID:1>"
+          },
+          "durable": {
+            "aggregateID": "<SES_ID:1>",
+            "seq": 2,
+            "version": 2
+          },
+          "id": "<EVT_ID:1>",
+          "type": "session.deleted"
+        }
+      }
+    ],
+    [
+      {
+        "data": {
+          "data": {},
+          "id": "<EVT_ID:1>",
+          "type": "server.connected"
+        }
+      }
+    ]
+  ],
+  "scenario": "session_lifecycle"
+}

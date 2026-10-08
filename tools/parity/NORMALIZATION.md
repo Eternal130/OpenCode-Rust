@@ -23,6 +23,9 @@ run-specific, never content that could hide a real behavioral difference.
 | Category | Trigger | Token |
 | --- | --- | --- |
 | Instance ids | string content pass (see §5.4) | `<SES_ID:n>`, `<EVT_ID:n>`, `<MSG_ID:n>`, `<USR_ID:n>`, `<FRM_ID:n>`, `<WRK_ID:n>`, `<ACP_ID:n>`, `<PER_ID:n>`, `<PSV_ID:n>`, `<CRED_ID:n>`, `<CON_ID:n>`, `<SH_ID:n>` |
+| Bare project ids (sha1) | key-gated (see §4) | `<PRJ_ID:n>` |
+| Session slugs (generated) | key-gated (`slug`) | `<SLUG>` |
+| Whole-string sha256 digests | string content pass (see §5.7) | `<SHA256>` |
 | Timestamps (numeric, unix epoch) | key-driven (see §4) | `<TS>` |
 | Timestamps (ISO-8601 strings) | key-driven, or anywhere in text | `<ISO>` |
 | Jittered delays / durations (ms) | key-driven | `<MS>` |
@@ -74,6 +77,22 @@ intentional and part of the spec.
 | `duration`, `elapsed`, `delay`, `jitter`, `timeout`, `took`, `interval` | `<MS>` | — |
 | `time`, `timestamp`, `created`, `createdAt`, `updatedAt`, `updated`, `modified`, `startedAt`, `endedAt`, `expiresAt`, `lastUsedAt`, `date`, `started`, `completed`, `streamed`, `ran`, `idle`, `viewed`, `archived`, `at`, `from`, `to`, `next`, `expires`, `published`, `active` | `<TS>` | `<ISO>` (only if the value matches the ISO regex §5.5) |
 | `version` | — | `<VERSION>` (only if the value matches the version regex §5.6) |
+| `slug` | — | `<SLUG>` (only if the value matches the slug regex §5.7: `^[a-z]+-[a-z]+$`) |
+| `projectID`, `id`, `previous` | — | `<PRJ_ID:n>` (only if the value matches the bare sha1 regex §5.7: `^[0-9a-f]{40}$`) |
+
+#### Key-gated hash and slug rewrites (reference v2.0.24)
+
+- **Project ids** are not prefixed ids: the reference computes them as
+  `Hash.fast("directory:<dir>")` — a bare sha1 hex digest of the project
+  directory. Sandbox project directories differ per run, so the id does
+  too. Only the exact keys `projectID`, `id`, and `previous` with a
+  40-lowercase-hex value are rewritten (to numbered `<PRJ_ID:n>` tokens
+  through the same first-seen numbering as §5.4, namespace `prj`); the
+  fixed project id `"global"` and every other value stay literal, and
+  prefixed ids (`evt_…` under `id`) keep flowing through §5.4.
+- **Session slugs** (`Slug.create()`) are random adjective-noun pairs
+  (`"brave-comet"`); the API cannot set them, so a `slug` value matching
+  `^[a-z]+-[a-z]+$` is always generated and collapses to `<SLUG>`.
 
 The timestamp key list is aligned to **every epoch-millisecond field in the
 ported wire schema** (`crates/oc-schema/src`): the message `time` blocks
@@ -173,6 +192,30 @@ optional `v` and pre-release/build suffix, or a local dev marker. Applied
 only under `version` keys; a non-matching `version` value (e.g.
 `custom-build-thing`) stays literal.
 
+### 5.7 Bare hex digests and slugs (shape-gated)
+
+Three value shapes are rewritten when the *whole string* matches:
+
+| Shape | Regex | Where | Token |
+| --- | --- | --- | --- |
+| sha256 digest | `^[0-9a-f]{64}$` | any string (content pass) | `<SHA256>` |
+| project id (sha1) | `^[0-9a-f]{40}$` | keys `projectID`/`id`/`previous` (§4) | `<PRJ_ID:n>` |
+| generated slug | `^[a-z]+-[a-z]+$` | key `slug` (§4) | `<SLUG>` |
+
+- **sha256**: content-addressed hashes whose *inputs* embed run-specific
+  state. The motivating case is `session.instructions.updated`, whose
+  `delta` maps instruction-entry ids to sha256 hashes of the rendered
+  instruction text — that text embeds sandbox paths and dates, so the same
+  logical instruction yields a different digest every run. Equality within
+  a run is preserved (identical digests → the same token), difference is
+  not (any two digests compare equal) — deliberate, because the frame
+  carries only the digest, never the content, so digest inequality carries
+  no comparable signal between two runs. Digests *embedded* in longer text
+  stay literal (the pass is whole-string anchored).
+- **sha1 project ids** are keyed, not global, because bare 40-hex strings
+  could legitimately appear as content (git SHAs); only the three id keys
+  are rewritten, and only with the exact digest shape.
+
 ## 6. The canonical algorithm (pseudocode)
 
 ```
@@ -192,20 +235,25 @@ content-passes(s, env, ids):      # strictly in this order
   s ← ORIGIN_URL.replace(s, "<URL>")                    # anchored, §5.2
   s ← EMBEDDED_URL.replace_all(s, "$1<HOST>:<PORT>")    # §5.3
   s ← ID_RE.replace_all(s, "<PREFIX_ID:n>")             # §5.4, n from ids
+  s ← "<SHA256>" if s matches ^[0-9a-f]{64}$            # §5.7, whole string
   s ← ISO_RE.replace_all(s, "<ISO>")                    # §5.5
   return s
 ```
 
 Order rationale: paths before URLs (a sandbox path inside a URL rewrites as a
 path first), URLs before ids (ids never occur inside hosts/ports), ids before
-timestamps (disjoint character classes; order kept for determinism).
+timestamps (disjoint character classes; order kept for determinism). The
+§5.7 hash pass sits after ids so a prefixed id can never be mistaken for a
+bare digest (and vice versa); it is whole-string anchored, so it only ever
+consumes a value that is exactly a digest.
 
 ## 7. Token vocabulary
 
 `<SANDBOX>`, `<URL>`, `<HOST>`, `<PORT>`, `<PID>`, `<TS>`, `<ISO>`, `<MS>`,
-`<VERSION>`, and id tokens `<PREFIX_ID:n>` where `PREFIX` ∈ {`EVT`, `SES`,
-`MSG`, `USR`, `FRM`, `WRK`, `ACP`, `PER`, `PSV`, `CRED`, `CON`, `SH`} and
-`n ≥ 1` is the first-seen number within the run (§5.4).
+`<VERSION>`, `<SLUG>`, `<SHA256>`, and id tokens `<PREFIX_ID:n>` where
+`PREFIX` ∈ {`EVT`, `SES`, `MSG`, `USR`, `FRM`, `WRK`, `ACP`, `PER`, `PSV`,
+`CRED`, `CON`, `SH`, `PRJ`} and `n ≥ 1` is the first-seen number within the
+run (§5.4).
 
 Tokens are delimited `<`…`>` so they can never collide with real content
 (JSON strings may not contain unescaped `<`-delimited tokens from this
@@ -278,6 +326,20 @@ Both sides collect with identical parameters via
 then compare per §8.4. A stream that ends (EOF) is quiescent by definition.
 Fewer than `max_frames` frames may legitimately arrive; that is not an
 error, the shortened sequence is simply compared.
+
+### 8.6 Scenario goldens (capture form)
+
+A scenario golden (`goldens/scenarios/<name>.json`) stores
+`sse::scenario_capture`: each side's groups per §8.1, canonicalized per
+§8.2 and normalized per §8.3, with **group keys dropped** (raw aggregate
+ids and location paths are per-run diagnostics) and the groups **sorted by
+canonical serialization** — a deterministic serialization of the §8.4
+multiset (two captures produce equal vectors iff their multisets of group
+orderings are equal). Run mode compares a fresh capture against the golden
+via `sse::compare_scenario_captures` (multiset semantics; the first
+unmatched group is reported against its best counterpart — the opposite
+side's leftover with the longest common frame prefix — at the first
+divergent frame index).
 
 ## 9. Golden interaction
 

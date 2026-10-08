@@ -121,6 +121,17 @@ const TS_KEYS: &[&str] = &[
 ];
 /// Field holding a version string (semver or a local dev marker).
 const VERSION_KEYS: &[&str] = &["version"];
+/// Field holding a machine-generated session slug (adjective-noun pair,
+/// `Slug.create()` in the reference): random per run, shape-stable.
+const SLUG_KEYS: &[&str] = &["slug"];
+/// Fields whose string value may be a bare **project id**: sha1-hex of the
+/// project directory (`Hash.fast("directory:<dir>")`, 40 lowercase hex
+/// chars). Sandbox project directories differ per run, so these ids are
+/// per-run values; they are rewritten to numbered `<PRJ_ID:n>` tokens
+/// through the shared id numbering (spec §5.4 "Bare project ids"). Only
+/// exact-key matches with the 40-hex shape are rewritten — event/session/
+/// message ids keep flowing through the prefix content pass.
+const PROJECT_ID_KEYS: &[&str] = &["projectID", "id", "previous"];
 
 // ---------------------------------------------------------------------------
 // String regexes (spec section "String-content passes", applied in order)
@@ -152,6 +163,14 @@ static ISO_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// or a local dev build marker.
 static VERSION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(?:v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?|v?local)$").unwrap());
+/// Machine-generated session slugs (`adjective-noun`, both lowercase words).
+static SLUG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-z]+-[a-z]+$").unwrap());
+/// Bare project ids: sha1 hex digests (40 lowercase hex chars).
+static PROJECT_ID_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[0-9a-f]{40}$").unwrap());
+/// Bare sha256 hex digests (64 lowercase hex chars): content-addressed
+/// hashes whose input embeds run-specific state (instruction entry hashes
+/// in `session.instructions.updated`, worktree fingerprints).
+static SHA256_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[0-9a-f]{64}$").unwrap());
 
 fn rewrite_number_by_key(key: &str) -> Option<&'static str> {
     if PORT_KEYS.contains(&key) {
@@ -167,12 +186,19 @@ fn rewrite_number_by_key(key: &str) -> Option<&'static str> {
     }
 }
 
-fn rewrite_string_by_key(key: &str, value: &str) -> Option<&'static str> {
+fn rewrite_string_by_key(key: &str, value: &str, ids: &mut IdNumbering) -> Option<String> {
     if TS_KEYS.contains(&key) && ISO_RE.is_match(value) {
-        return Some("<ISO>");
+        return Some("<ISO>".to_string());
     }
     if VERSION_KEYS.contains(&key) && VERSION_RE.is_match(value) {
-        return Some("<VERSION>");
+        return Some("<VERSION>".to_string());
+    }
+    if SLUG_KEYS.contains(&key) && SLUG_RE.is_match(value) {
+        return Some("<SLUG>".to_string());
+    }
+    if PROJECT_ID_KEYS.contains(&key) && PROJECT_ID_RE.is_match(value) {
+        let number = ids.number_for("prj", value);
+        return Some(format!("<PRJ_ID:{number}>"));
     }
     None
 }
@@ -201,6 +227,11 @@ pub fn normalize_str_with(text: &str, env: &NormEnv, ids: &mut IdNumbering) -> S
             format!("<{}_ID:{}>", prefix.to_uppercase(), number)
         })
         .into_owned();
+    // Whole-string sha256 digests (spec §5.7): opaque content hashes whose
+    // inputs embed run-specific state.
+    if SHA256_RE.is_match(&out) {
+        out = "<SHA256>".to_string();
+    }
     out = ISO_RE.replace_all(&out, "<ISO>").into_owned();
     out
 }
@@ -228,8 +259,8 @@ pub fn normalize_value_with(value: &Value, env: &NormEnv, ids: &mut IdNumbering)
                         Some(token) => Value::String(token.to_string()),
                         None => Value::Number(number.clone()),
                     },
-                    Value::String(text) => match rewrite_string_by_key(key, text) {
-                        Some(token) => Value::String(token.to_string()),
+                    Value::String(text) => match rewrite_string_by_key(key, text, ids) {
+                        Some(token) => Value::String(token),
                         None => Value::String(normalize_str_with(text, env, ids)),
                     },
                     other => normalize_value_with(other, env, ids),
@@ -522,5 +553,82 @@ mod tests {
     fn booleans_and_nulls_pass_through() {
         let input = json!({"ok": true, "nothing": null, "zero": 0});
         assert_eq!(normalize_value(&input, &env()), input);
+    }
+
+    #[test]
+    fn session_slugs_collapse_to_slug_token() {
+        // Session slugs are random adjective-noun pairs ("brave-comet");
+        // the shape gate must not eat titles or other hyphenated text.
+        let out = normalize_value(
+            &json!({"slug": "brave-comet", "title": "brave-comet", "name": "e2e-check"}),
+            &env(),
+        );
+        assert_eq!(out["slug"], json!("<SLUG>"));
+        assert_eq!(out["title"], json!("brave-comet"));
+        assert_eq!(out["name"], json!("e2e-check"));
+        // Multi-word or capitalized values stay literal (not the generator).
+        let out = normalize_value(&json!({"slug": "Not-Generated"}), &env());
+        assert_eq!(out["slug"], json!("Not-Generated"));
+    }
+
+    #[test]
+    fn bare_project_ids_get_numbered_tokens() {
+        // Project ids are sha1-hex of the project directory — per-run values
+        // under sandbox paths. Same id → same token, different ids →
+        // different tokens (referential integrity, like prefixed ids).
+        let a = "3da5b7c9f01e2a6d8c4b9e7f5a3d1c2b4e6f8a0d";
+        let b = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c";
+        let out = normalize_value(
+            &json!({
+                "projectID": a,
+                "nested": {"id": a, "previous": b},
+                "global": "global"
+            }),
+            &env(),
+        );
+        assert_eq!(out["projectID"], json!("<PRJ_ID:1>"));
+        assert_eq!(out["nested"]["id"], json!("<PRJ_ID:1>"));
+        assert_eq!(out["nested"]["previous"], json!("<PRJ_ID:2>"));
+        // Non-hash values under the same keys stay literal (project ids may
+        // also be the fixed "global" project).
+        assert_eq!(out["global"], json!("global"));
+    }
+
+    #[test]
+    fn short_hex_strings_are_not_project_ids() {
+        // 39/41 chars, uppercase, or prefixed ids must not be mistaken for
+        // bare project ids.
+        let out = normalize_value(
+            &json!({"id": "3da5b7c9f01e2a6d8c4b9e7f5a3d1c2b4e6f8a0", "projectID": "ABCDEF0123456789ABCDEF0123456789ABCDEF01"}),
+            &env(),
+        );
+        assert_eq!(out["id"], json!("3da5b7c9f01e2a6d8c4b9e7f5a3d1c2b4e6f8a0"));
+        assert_eq!(out["projectID"], json!("ABCDEF0123456789ABCDEF0123456789ABCDEF01"));
+    }
+
+    #[test]
+    fn whole_string_sha256_digests_collapse() {
+        // Instruction-entry hashes (session.instructions.updated `delta`
+        // maps) are sha256 digests of content that embeds run-specific
+        // values (paths, dates) — the digest differs per run even for the
+        // "same" logical instruction. Whole-string 64-hex values collapse
+        // to <SHA256>; embedded digests inside longer text stay literal.
+        let digest = "3a6c896ca4366410e84edccbf179835337f464e16493a692c18b854a528ce2e1";
+        let out = normalize_value(
+            &json!({
+                "delta": { "core/environment": digest, "core/date": digest },
+                "note": format!("see {digest} inline"),
+                "text": "Parity fake says hello."
+            }),
+            &env(),
+        );
+        assert_eq!(out["delta"]["core/environment"], json!("<SHA256>"));
+        assert_eq!(out["delta"]["core/date"], json!("<SHA256>"));
+        assert_eq!(out["note"], json!(format!("see {digest} inline")));
+        assert_eq!(out["text"], json!("Parity fake says hello."));
+        // 63/65 chars and uppercase stay literal.
+        let out = normalize_value(&json!({"a": &digest[..63], "b": format!("{digest}f")}), &env());
+        assert_eq!(out["a"], json!(&digest[..63]));
+        assert_eq!(out["b"], json!(format!("{digest}f")));
     }
 }

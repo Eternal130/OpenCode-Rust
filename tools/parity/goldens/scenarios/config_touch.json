@@ -1,0 +1,389 @@
+{
+  "description": "boot project location -> create opencode.json -> modify it; config.updated frames",
+  "groups": [
+    [
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "canonical": "<SANDBOX>/project",
+            "id": "<PRJ_ID:1>",
+            "sandboxes": [],
+            "time": {
+              "active": "<TS>",
+              "created": "<TS>",
+              "updated": "<TS>"
+            }
+          },
+          "id": "<EVT_ID:1>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "project.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:2>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "integration.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:3>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "provider.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:4>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "model.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:5>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "agent.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:6>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "command.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:7>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "skill.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:8>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "websearch.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:9>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "reference.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:10>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "plugin.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:11>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "config.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:12>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "reference.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:13>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "integration.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:14>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "websearch.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:15>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "provider.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:16>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "model.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:17>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "provider.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:18>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "model.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:19>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "skill.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:20>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "command.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:21>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "agent.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:22>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "skill.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:23>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "config.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:24>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "provider.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:25>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "model.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:26>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "websearch.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:27>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "integration.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:28>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "reference.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:29>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "provider.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:30>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "model.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:31>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "skill.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:32>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "command.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:33>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "agent.updated"
+        }
+      }
+    ],
+    [
+      {
+        "data": {
+          "data": {},
+          "id": "<EVT_ID:1>",
+          "type": "server.connected"
+        }
+      }
+    ]
+  ],
+  "scenario": "config_touch"
+}
