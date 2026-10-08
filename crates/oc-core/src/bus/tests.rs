@@ -1280,7 +1280,7 @@ async fn bus_permission_sink_adapter_publishes() {
                 message: None,
             },
         });
-    sink.publish(asked);
+    sink.publish(asked).await;
 
     let received = timeout_next(&mut local).await;
     assert_eq!(received.type_, "permission.asked");
@@ -1296,19 +1296,21 @@ async fn bus_permission_sink_bridge_from_broadcast() {
     let _bridge = super::sink::bridge_permission_sink(bus.clone(), &broadcast, None);
     let mut live = bus.subscribe();
 
-    broadcast.publish(oc_schema::misc_events::PermissionEvent::Replied(
-        oc_schema::event::EphemeralEnvelope {
-            id: EventId::parse("evt_reply").unwrap(),
-            created: 2,
-            metadata: None,
-            location: None,
-            data: oc_schema::misc_events::PermissionReplied {
-                session_id: SessionId::parse("ses_1").unwrap(),
-                request_id: PermissionId::parse("per_1").unwrap(),
-                reply: oc_schema::permission::Reply::Once,
+    broadcast
+        .publish(oc_schema::misc_events::PermissionEvent::Replied(
+            oc_schema::event::EphemeralEnvelope {
+                id: EventId::parse("evt_reply").unwrap(),
+                created: 2,
+                metadata: None,
+                location: None,
+                data: oc_schema::misc_events::PermissionReplied {
+                    session_id: SessionId::parse("ses_1").unwrap(),
+                    request_id: PermissionId::parse("per_1").unwrap(),
+                    reply: oc_schema::permission::Reply::Once,
+                },
             },
-        },
-    ));
+        ))
+        .await;
 
     let received = timeout_next(&mut live).await;
     assert_eq!(received.type_, "permission.replied");

@@ -260,11 +260,17 @@ pub trait RuleResolver: Send + Sync {
 
 /// Ephemeral event sink for `permission.asked` / `permission.replied`.
 ///
-/// TODO(bus-lane): route through the real bus publish path (location-scoped
-/// ephemeral routing). This trait only carries the events the permission
-/// engine emits.
+/// **Async by contract** (oracle gate 4, finding 2): v2 awaits
+/// `bus.publish(Permission.Event.Replied)` BEFORE resolving the deferred
+/// (`permission.ts:270-306`), so the sink's publish is awaited at every
+/// call site — the parked `assert` never wakes before the event is on the
+/// bus. Fire-and-forget publication would flake the
+/// `permission_saved`-style golden ordering under load.
+#[async_trait]
 pub trait EventSink: Send + Sync {
-    fn publish(&self, event: PermissionEvent);
+    /// Publish one ephemeral permission event; resolves once the event is
+    /// delivered (bus publish awaited).
+    async fn publish(&self, event: PermissionEvent);
 }
 
 /// In-memory broadcast [`EventSink`] (capacity-bounded, lossy when full).
@@ -285,8 +291,14 @@ impl BroadcastEventSink {
     }
 }
 
+#[async_trait]
 impl EventSink for BroadcastEventSink {
-    fn publish(&self, event: PermissionEvent) {
+    #[allow(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "async surface parity; broadcast send is sync"
+    )]
+    async fn publish(&self, event: PermissionEvent) {
         // Losing a subscriber (lag) is fine for ephemeral events.
         let _ = self.tx.send(event);
     }
@@ -376,19 +388,23 @@ impl Permission {
         PermissionId(self.inner.ids.new_id("per"))
     }
 
-    fn publish_asked(&self, request: &Request) {
+    async fn publish_asked(&self, request: &Request) {
         let event = PermissionEvent::Asked(EphemeralEnvelope {
             id: EventId(self.inner.ids.new_id("evt")),
             created: self.now_ms(),
             metadata: None,
-            // TODO(bus-lane): stamp the location ref when the bus lane lands.
             location: None,
             data: request.clone(),
         });
-        self.inner.events.publish(event);
+        self.inner.events.publish(event).await;
     }
 
-    fn publish_replied(&self, session_id: &SessionId, request_id: &PermissionId, reply: Reply) {
+    async fn publish_replied(
+        &self,
+        session_id: &SessionId,
+        request_id: &PermissionId,
+        reply: Reply,
+    ) {
         let event = PermissionEvent::Replied(EphemeralEnvelope {
             id: EventId(self.inner.ids.new_id("evt")),
             created: self.now_ms(),
@@ -400,7 +416,7 @@ impl Permission {
                 reply,
             },
         });
-        self.inner.events.publish(event);
+        self.inner.events.publish(event).await;
     }
 
     /// Steps 1–4 of §4a. The hook is NOT triggered on the deny short-circuit.
@@ -461,7 +477,7 @@ impl Permission {
     /// `permission.asked`. When the engine is closed the ticket resolves to
     /// [`DeclinedError`] immediately without registering. Duplicate pending
     /// ids are a defect (v2 `Effect.die`).
-    fn create(&self, request: Request, agent: Option<AgentId>) -> PendingTicket {
+    async fn create(&self, request: Request, agent: Option<AgentId>) -> PendingTicket {
         let (tx, rx) = oneshot::channel();
         let id = request.id.clone();
         if self.inner.closed.load(Ordering::Acquire) {
@@ -474,7 +490,7 @@ impl Permission {
             pending.insert(id.clone(), Pending { request, agent, tx });
         }
         let request = self.get(&id).expect("just inserted");
-        self.publish_asked(&request);
+        self.publish_asked(&request).await;
         PendingTicket { id, rx }
     }
 
@@ -490,7 +506,7 @@ impl Permission {
         let result = self.evaluate_input(&input).await?;
         let value = self.build_request(&input, result.message.clone());
         if result.effect == Effect::Ask {
-            let _ = self.create(value.clone(), input.agent.clone());
+            let _ = self.create(value.clone(), input.agent.clone()).await;
         }
         Ok(AskResult { id: value.id, effect: result.effect })
     }
@@ -512,10 +528,9 @@ impl Permission {
             }
             .into()),
             Effect::Ask => {
-                let ticket = self.create(
-                    self.build_request(&input, result.message.clone()),
-                    input.agent.clone(),
-                );
+                let ticket = self
+                    .create(self.build_request(&input, result.message.clone()), input.agent.clone())
+                    .await;
                 let outcome = match ticket.rx.await {
                     Ok(outcome) => outcome,
                     // Sender dropped without answering — treat as a decline.
@@ -536,19 +551,21 @@ impl Permission {
         self.inner.pending.lock().remove(id)
     }
 
-    /// `Permission.reply` — exact v2 ordering:
+    /// `Permission.reply` — exact v2 ordering (`permission.ts:270-306`):
     ///
-    /// 1. publish `permission.replied` FIRST,
+    /// 1. **await** publish `permission.replied` FIRST,
     /// 2. `reject`: fail this deferred (`Corrected` with feedback, else
-    ///    `Declined`) and batch-reject every **same-session** pending sibling,
+    ///    `Declined`) and batch-reject every **same-session** pending sibling
+    ///    (each with its own awaited `replied reject` first),
     /// 3. `always` + `save`: persist the grant (project-scoped), succeed this
     ///    deferred, then batch-approve **all** remaining pending requests that
-    ///    re-evaluate to allow (publishing `replied always` for each).
+    ///    re-evaluate to allow (publishing `replied always` for each, awaited
+    ///    before resolving its deferred).
     pub async fn reply(&self, input: ReplyInput) -> Result<(), NotFoundError> {
         let Some(existing) = self.take_pending(&input.request_id) else {
             return Err(NotFoundError { request_id: input.request_id });
         };
-        self.publish_replied(&existing.request.session_id, &existing.request.id, input.reply);
+        self.publish_replied(&existing.request.session_id, &existing.request.id, input.reply).await;
 
         if input.reply == Reply::Reject {
             let _ = existing.tx.send(PendingReply::reject(input.message.as_deref()));
@@ -563,7 +580,8 @@ impl Permission {
                 .collect();
             for id in siblings {
                 if let Some(item) = self.take_pending(&id) {
-                    self.publish_replied(&item.request.session_id, &item.request.id, Reply::Reject);
+                    self.publish_replied(&item.request.session_id, &item.request.id, Reply::Reject)
+                        .await;
                     let _ = item.tx.send(PendingReply::reject(input.message.as_deref()));
                 }
             }
@@ -611,7 +629,8 @@ impl Permission {
                 continue;
             }
             if let Some(item) = self.take_pending(&id) {
-                self.publish_replied(&item.request.session_id, &item.request.id, Reply::Always);
+                self.publish_replied(&item.request.session_id, &item.request.id, Reply::Always)
+                    .await;
                 let _ = item.tx.send(PendingReply::Approved);
             }
         }
@@ -640,14 +659,15 @@ impl Permission {
     }
 
     /// `Permission.close` (shutdown): mark closed, then reject every pending
-    /// request (`replied reject` + `DeclinedError`). Later `assert`s decline
-    /// immediately.
-    pub fn close(&self) {
+    /// request — each `replied reject` **awaited** before its deferred fails
+    /// (the same publish-then-resolve ordering as `reply`). Later `assert`s
+    /// decline immediately.
+    pub async fn close(&self) {
         self.inner.closed.store(true, Ordering::Release);
         let items: Vec<Pending> =
             std::mem::take(&mut *self.inner.pending.lock()).into_values().collect();
         for item in items {
-            self.publish_replied(&item.request.session_id, &item.request.id, Reply::Reject);
+            self.publish_replied(&item.request.session_id, &item.request.id, Reply::Reject).await;
             let _ = item.tx.send(PendingReply::Declined);
         }
     }
@@ -1142,7 +1162,7 @@ mod tests {
     #[tokio::test]
     async fn permission_assert_closed_declines_as_defect() {
         let h = plain_engine();
-        h.perm.close();
+        h.perm.close().await;
         let err = h.perm.assert(input("edit", &["src/a.rs"])).await.unwrap_err();
         assert!(matches!(err, PermissionError::Declined(DeclinedError)));
     }
@@ -1150,7 +1170,7 @@ mod tests {
     #[tokio::test]
     async fn permission_ask_closed_returns_deny_without_parking() {
         let h = plain_engine();
-        h.perm.close();
+        h.perm.close().await;
         let result = h
             .perm
             .ask(AssertInput {
@@ -1357,7 +1377,7 @@ mod tests {
         wait_asked(&mut h.rx).await;
         wait_asked(&mut h.rx).await;
 
-        h.perm.close();
+        h.perm.close().await;
 
         assert!(matches!(a.await.unwrap().unwrap_err(), PermissionError::Declined(DeclinedError)));
         assert!(matches!(b.await.unwrap().unwrap_err(), PermissionError::Declined(DeclinedError)));

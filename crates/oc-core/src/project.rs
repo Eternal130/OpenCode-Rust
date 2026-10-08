@@ -7,14 +7,16 @@
 //! first root commit; canonical directory = the main worktree. Hg identity =
 //! cached id ?? first root node (`hg` shelled out, graceful when absent).
 //! No VCS: identity hashes `"directory:<path>"`. Persistence goes through
-//! the [`ProjectStore`] trait (the sqlite implementation lands with the
-//! database lane; [`MemoryProjectStore`] serves tests).
+//! the async [`ProjectStore`] trait — [`MemoryProjectStore`] for tests,
+//! [`SqliteProjectStore`] over the `project`/`worktree` tables for
+//! production (graph v2).
 
 use crate::config::unpoison;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 
 /// `Hash.fast` (v2 uses sha1; any stable content hash preserves identity
@@ -86,22 +88,23 @@ pub struct WorktreeResolved {
     pub previous: String,
 }
 
-/// Persistence boundary for project resolution.
+/// Persistence boundary for project resolution. Async since the sqlite
+/// implementation shares the serialized database connection with the bus
+/// and event machinery (`SqliteProjectStore`).
+#[async_trait]
 pub trait ProjectStore: Send + Sync {
-    fn project(&self, id: &str) -> Option<ProjectRow>;
+    async fn project(&self, id: &str) -> Option<ProjectRow>;
     /// Insert-or-update: only the vcs label refreshes; the canonical
     /// directory is deliberately preserved (clones share the id).
-    fn upsert_project(&self, row: &ProjectRow);
-    fn reassign_canonical(&self, id: &str, canonical: &Path);
-    fn worktree(&self, project_id: &str, directory: &Path) -> Option<WorktreeRow>;
-    fn insert_worktree(&self, row: &WorktreeRow);
-    #[must_use]
-    fn list_projects(&self) -> Vec<ProjectRow>;
-    #[must_use]
-    fn list_worktrees(&self) -> Vec<WorktreeRow>;
+    async fn upsert_project(&self, row: &ProjectRow);
+    async fn reassign_canonical(&self, id: &str, canonical: &Path);
+    async fn worktree(&self, project_id: &str, directory: &Path) -> Option<WorktreeRow>;
+    async fn insert_worktree(&self, row: &WorktreeRow);
+    async fn list_projects(&self) -> Vec<ProjectRow>;
+    async fn list_worktrees(&self) -> Vec<WorktreeRow>;
 }
 
-/// In-memory store (tests; sqlite impl TODO(database-lane)).
+/// In-memory store (tests).
 #[derive(Default)]
 pub struct MemoryProjectStore {
     projects: std::sync::Mutex<Vec<ProjectRow>>,
@@ -115,12 +118,18 @@ impl MemoryProjectStore {
     }
 }
 
+#[async_trait]
+#[allow(
+    clippy::unused_async,
+    clippy::unused_async_trait_impl,
+    reason = "async surface parity with the sqlite store; memory table is sync"
+)]
 impl ProjectStore for MemoryProjectStore {
-    fn project(&self, id: &str) -> Option<ProjectRow> {
+    async fn project(&self, id: &str) -> Option<ProjectRow> {
         self.projects.lock().unwrap_or_else(unpoison).iter().find(|row| row.id == id).cloned()
     }
 
-    fn upsert_project(&self, row: &ProjectRow) {
+    async fn upsert_project(&self, row: &ProjectRow) {
         let mut projects = self.projects.lock().unwrap_or_else(unpoison);
         match projects.iter_mut().find(|existing| existing.id == row.id) {
             Some(existing) => existing.vcs.clone_from(&row.vcs),
@@ -128,14 +137,14 @@ impl ProjectStore for MemoryProjectStore {
         }
     }
 
-    fn reassign_canonical(&self, id: &str, canonical: &Path) {
+    async fn reassign_canonical(&self, id: &str, canonical: &Path) {
         let mut projects = self.projects.lock().unwrap_or_else(unpoison);
         if let Some(row) = projects.iter_mut().find(|row| row.id == id) {
             row.canonical = canonical.to_path_buf();
         }
     }
 
-    fn worktree(&self, project_id: &str, directory: &Path) -> Option<WorktreeRow> {
+    async fn worktree(&self, project_id: &str, directory: &Path) -> Option<WorktreeRow> {
         self.worktrees
             .lock()
             .unwrap_or_else(unpoison)
@@ -144,7 +153,7 @@ impl ProjectStore for MemoryProjectStore {
             .cloned()
     }
 
-    fn insert_worktree(&self, row: &WorktreeRow) {
+    async fn insert_worktree(&self, row: &WorktreeRow) {
         let mut worktrees = self.worktrees.lock().unwrap_or_else(unpoison);
         if !worktrees.iter().any(|existing| {
             existing.project_id == row.project_id && existing.directory == row.directory
@@ -153,12 +162,282 @@ impl ProjectStore for MemoryProjectStore {
         }
     }
 
-    fn list_projects(&self) -> Vec<ProjectRow> {
+    async fn list_projects(&self) -> Vec<ProjectRow> {
         self.projects.lock().unwrap_or_else(unpoison).clone()
     }
 
-    fn list_worktrees(&self) -> Vec<WorktreeRow> {
+    async fn list_worktrees(&self) -> Vec<WorktreeRow> {
         self.worktrees.lock().unwrap_or_else(unpoison).clone()
+    }
+}
+
+// =============================================================================
+// Sqlite-backed project store (graph v2, oracle gate 4 finding 5)
+// =============================================================================
+
+/// Sqlite-backed [`ProjectStore`] over the `project` / `worktree` tables
+/// (schema per `database/schema.rs`; DDL in the bootstrap). The
+/// deprecated-but-present `project_directory` table is readable for
+/// legacy databases; v2's resolver writes only `worktree` rows
+/// (`project.ts:193-199`).
+///
+/// Row mapping: the local [`ProjectRow::canonical`] is the `worktree`
+/// column (`project/sql.ts` `upsertProject`), and the upsert mirrors v2 —
+/// on id conflict only the `vcs` label refreshes (canonical preserved,
+/// clones share the id).
+pub struct SqliteProjectStore {
+    db: crate::database::Database,
+}
+
+impl SqliteProjectStore {
+    /// Store over an open database.
+    #[must_use]
+    pub fn new(db: crate::database::Database) -> Self {
+        Self { db }
+    }
+
+    fn db_worktree(row: &ProjectRow) -> Result<crate::database::schema::ProjectRow, String> {
+        crate::database::schema::ProjectRow::new(
+            row.id.clone(),
+            &row.canonical.to_string_lossy(),
+            row.vcs.as_deref(),
+        )
+        .map_err(|error| error.to_string())
+    }
+}
+
+#[async_trait]
+impl ProjectStore for SqliteProjectStore {
+    async fn project(&self, id: &str) -> Option<ProjectRow> {
+        let id = id.to_string();
+        self.db
+            .transaction(move |tx| {
+                let row = tx.conn().query_row(
+                    "SELECT id, worktree, vcs FROM project WHERE id = ?1",
+                    rusqlite::params![id],
+                    |row| {
+                        Ok(ProjectRow {
+                            id: row.get(0)?,
+                            canonical: PathBuf::from(row.get::<_, String>(1)?),
+                            vcs: row.get(2)?,
+                        })
+                    },
+                );
+                Ok(row.ok())
+            })
+            .await
+            .ok()
+            .flatten()
+    }
+
+    async fn upsert_project(&self, row: &ProjectRow) {
+        // Non-absolute canonical: degrade like v2's driver rejection.
+        let Ok(db_row) = Self::db_worktree(row) else { return };
+        let _ = self
+            .db
+            .transaction(move |tx| {
+                // v2 upsertProject: on id conflict only the vcs label
+                // refreshes (set when it differs or was null; a None vcs
+                // clears a stale label). Canonical preserved.
+                tx.execute(
+                    "INSERT INTO project (id, worktree, vcs, name, icon_url, \
+                     icon_url_override, icon_color, time_created, time_updated, \
+                     time_initialized, time_active, sandboxes, commands) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
+                     ON CONFLICT (id) DO UPDATE SET vcs = excluded.vcs \
+                     WHERE project.vcs IS NOT excluded.vcs",
+                    rusqlite::params![
+                        db_row.id,
+                        db_row.worktree,
+                        db_row.vcs,
+                        db_row.name,
+                        db_row.icon_url,
+                        db_row.icon_url_override,
+                        db_row.icon_color,
+                        db_row.time_created,
+                        db_row.time_updated,
+                        db_row.time_initialized,
+                        db_row.time_active,
+                        db_row.sandboxes,
+                        db_row.commands,
+                    ],
+                )?;
+                Ok(())
+            })
+            .await;
+    }
+
+    async fn reassign_canonical(&self, id: &str, canonical: &Path) {
+        let id = id.to_string();
+        let Ok(canonical) = crate::database::schema::absolute_storage(&canonical.to_string_lossy())
+        else {
+            return;
+        };
+        let now = crate::database::migrations::now_ms();
+        let _ = self
+            .db
+            .transaction(move |tx| {
+                tx.execute(
+                    "UPDATE project SET worktree = ?2, time_updated = ?3 WHERE id = ?1",
+                    rusqlite::params![id, canonical, now],
+                )?;
+                Ok(())
+            })
+            .await;
+    }
+
+    async fn worktree(&self, project_id: &str, directory: &Path) -> Option<WorktreeRow> {
+        let project_id = project_id.to_string();
+        let directory =
+            crate::database::schema::directory_storage(&directory.to_string_lossy()).ok()?;
+        self.db
+            .transaction(move |tx| {
+                let row = tx.conn().query_row(
+                    "SELECT project_id, directory, strategy FROM worktree \
+                     WHERE project_id = ?1 AND directory = ?2",
+                    rusqlite::params![project_id, directory],
+                    |row| {
+                        Ok(WorktreeRow {
+                            project_id: row.get(0)?,
+                            directory: PathBuf::from(row.get::<_, String>(1)?),
+                            strategy: row.get(2)?,
+                        })
+                    },
+                );
+                Ok(row.ok())
+            })
+            .await
+            .ok()
+            .flatten()
+    }
+
+    async fn insert_worktree(&self, row: &WorktreeRow) {
+        let directory =
+            crate::database::schema::directory_storage(&row.directory.to_string_lossy());
+        let Ok(directory) = directory else { return };
+        let project_id = row.project_id.clone();
+        let strategy = row.strategy.clone();
+        let now = crate::database::migrations::now_ms();
+        let _ = self
+            .db
+            .transaction(move |tx| {
+                // v2 commits the row with the Worktree.Resolved event
+                // (onConflictDoNothing over the (project_id, directory) pk).
+                tx.execute(
+                    "INSERT OR IGNORE INTO worktree (project_id, directory, strategy, time_created) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![project_id, directory, strategy, now],
+                )?;
+                Ok(())
+            })
+            .await;
+    }
+
+    async fn list_projects(&self) -> Vec<ProjectRow> {
+        self.db
+            .transaction(|tx| {
+                let mut statement =
+                    tx.conn().prepare("SELECT id, worktree, vcs FROM project ORDER BY id")?;
+                let rows = statement
+                    .query_map([], |row| {
+                        Ok(ProjectRow {
+                            id: row.get(0)?,
+                            canonical: PathBuf::from(row.get::<_, String>(1)?),
+                            vcs: row.get(2)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .unwrap_or_default()
+    }
+
+    async fn list_worktrees(&self) -> Vec<WorktreeRow> {
+        self.db
+            .transaction(|tx| {
+                let mut statement = tx
+                    .conn()
+                    .prepare("SELECT project_id, directory, strategy FROM worktree ORDER BY project_id, directory")?;
+                let rows = statement
+                    .query_map([], |row| {
+                        Ok(WorktreeRow {
+                            project_id: row.get(0)?,
+                            directory: PathBuf::from(row.get::<_, String>(1)?),
+                            strategy: row.get(2)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .unwrap_or_default()
+    }
+}
+
+impl SqliteProjectStore {
+    /// Legacy `project_directory` rows (deprecated by `worktree`; kept for
+    /// databases written by older versions).
+    pub async fn list_project_directories(
+        &self,
+    ) -> Vec<(String, PathBuf, Option<String>, Option<String>)> {
+        self.db
+            .transaction(|tx| {
+                let mut statement = tx.conn().prepare(
+                    "SELECT project_id, directory, type, strategy FROM project_directory \
+                     ORDER BY project_id, directory",
+                )?;
+                let rows = statement
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            PathBuf::from(row.get::<_, String>(1)?),
+                            row.get(2)?,
+                            row.get(3)?,
+                        ))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .unwrap_or_default()
+    }
+
+    /// Insert-or-ignore a `workspace` binding row.
+    pub async fn insert_workspace(&self, id: &str, provider: &str, binding: Option<&str>) {
+        let id = id.to_string();
+        let provider = provider.to_string();
+        let binding = binding.map(str::to_string);
+        let now = crate::database::migrations::now_ms();
+        let _ = self
+            .db
+            .transaction(move |tx| {
+                tx.execute(
+                    "INSERT OR IGNORE INTO workspace (id, provider, binding, created_at, last_used_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?4)",
+                    rusqlite::params![id, provider, binding, now],
+                )?;
+                Ok(())
+            })
+            .await;
+    }
+
+    /// `workspace` rows (`(id, provider, binding JSON, created, last used)`).
+    pub async fn list_workspaces(&self) -> Vec<(String, String, Option<String>, i64, i64)> {
+        self.db
+            .transaction(|tx| {
+                let mut statement = tx.conn().prepare(
+                    "SELECT id, provider, binding, created_at, last_used_at FROM workspace ORDER BY id",
+                )?;
+                let rows = statement
+                    .query_map([], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .unwrap_or_default()
     }
 }
 
@@ -203,13 +482,12 @@ impl Resolver {
     }
 
     /// Resolves and persists the owning project for `input`.
-    #[must_use]
-    pub fn resolve(&self, input: &Path) -> Resolved {
+    pub async fn resolve(&self, input: &Path) -> Resolved {
         let directory = crate::config::resolve_path(input);
         let marker = walk_to_marker(&directory);
         if let Some((dir, _)) = marker.as_ref().filter(|(_, marker)| *marker == ".git") {
             if let Some(resolved) = Self::resolve_git(dir) {
-                return self.persist(resolved);
+                return self.persist(resolved).await;
             }
         }
         if let Some((dir, _)) = marker.filter(|(_, marker)| *marker == ".hg") {
@@ -219,13 +497,15 @@ impl Resolver {
                 .clone()
                 .or_else(|| hg_root_node(&dir))
                 .unwrap_or_else(|| "global".to_string());
-            return self.persist(Resolved {
-                previous,
-                id,
-                directory: dir.clone(),
-                canonical: dir,
-                vcs: Some(Vcs::Hg { store }),
-            });
+            return self
+                .persist(Resolved {
+                    previous,
+                    id,
+                    directory: dir.clone(),
+                    canonical: dir,
+                    vcs: Some(Vcs::Hg { store }),
+                })
+                .await;
         }
         let id = hash_fast(&format!("directory:{}", directory.display()));
         self.persist(Resolved {
@@ -235,6 +515,7 @@ impl Resolver {
             canonical: directory,
             vcs: None,
         })
+        .await
     }
 
     fn resolve_git(worktree: &Path) -> Option<Resolved> {
@@ -266,19 +547,21 @@ impl Resolver {
         })
     }
 
-    fn persist(&self, project: Resolved) -> Resolved {
-        let previous_canonical = self.store.project(&project.id).map(|row| row.canonical);
-        self.store.upsert_project(&ProjectRow {
-            id: project.id.clone(),
-            canonical: project.canonical.clone(),
-            vcs: project.vcs.as_ref().map(|vcs| vcs.kind().to_string()),
-        });
+    async fn persist(&self, project: Resolved) -> Resolved {
+        let previous_canonical = self.store.project(&project.id).await.map(|row| row.canonical);
+        self.store
+            .upsert_project(&ProjectRow {
+                id: project.id.clone(),
+                canonical: project.canonical.clone(),
+                vcs: project.vcs.as_ref().map(|vcs| vcs.kind().to_string()),
+            })
+            .await;
         // Clones share a project id; only replace a canonical directory that
         // is gone.
         if let Some(previous) = &previous_canonical {
             if *previous != project.canonical && !previous.exists() {
-                self.store.reassign_canonical(&project.id, &project.canonical);
-                if let Some(row) = self.store.project(&project.id) {
+                self.store.reassign_canonical(&project.id, &project.canonical).await;
+                if let Some(row) = self.store.project(&project.id).await {
                     self.events.project_updated(&row);
                 }
             }
@@ -294,15 +577,17 @@ impl Resolver {
             ));
         }
         for (directory, strategy) in directories {
-            if self.store.worktree(&project.id, &directory).is_some() {
+            if self.store.worktree(&project.id, &directory).await.is_some() {
                 continue;
             }
             let resolved_directory = crate::config::resolve_path(&directory);
-            self.store.insert_worktree(&WorktreeRow {
-                project_id: project.id.clone(),
-                directory: resolved_directory,
-                strategy,
-            });
+            self.store
+                .insert_worktree(&WorktreeRow {
+                    project_id: project.id.clone(),
+                    directory: resolved_directory,
+                    strategy,
+                })
+                .await;
             self.events.worktree_resolved(&WorktreeResolved {
                 project_id: project.id.clone(),
                 directory,
@@ -483,8 +768,8 @@ mod tests {
         hash_fast(&format!("git-remote:{normalized}"))
     }
 
-    #[test]
-    fn config_project_normalize_remote_urls() {
+    #[tokio::test]
+    async fn config_project_normalize_remote_urls() {
         assert_eq!(
             normalize_remote_url("https://github.com/owner/repo.git").as_deref(),
             Some("github.com/owner/repo")
@@ -506,15 +791,15 @@ mod tests {
         assert_eq!(normalize_remote_url("/local/path"), None);
     }
 
-    #[test]
-    fn config_project_markerless_directory_identity_is_deterministic() {
+    #[tokio::test]
+    async fn config_project_markerless_directory_identity_is_deterministic() {
         let dir = tempdir("project-markerless");
         let nested = dir.join("notes").join("drafts");
         fs::create_dir_all(&nested).unwrap();
         let resolver = resolver();
-        let result = resolver.resolve(&dir);
-        let repeated = resolver.resolve(&dir.join("."));
-        let child = resolver.resolve(&nested);
+        let result = resolver.resolve(&dir).await;
+        let repeated = resolver.resolve(&dir.join(".")).await;
+        let child = resolver.resolve(&nested).await;
         assert_ne!(result.id, "global");
         assert_eq!(repeated.id, result.id);
         assert_ne!(child.id, result.id);
@@ -524,26 +809,26 @@ mod tests {
         assert_eq!(result.vcs, None);
     }
 
-    #[test]
-    fn config_project_remote_identity_wins_with_https_scp_equivalence() {
+    #[tokio::test]
+    async fn config_project_remote_identity_wins_with_https_scp_equivalence() {
         let ssh = tempdir("project-remote-ssh");
         let https = tempdir("project-remote-https");
         init_repo(&ssh, true, Some("git@github.com:owner/repo.git"));
         init_repo(&https, true, Some("https://github.com/owner/repo.git"));
         let resolver = resolver();
-        let a = resolver.resolve(&ssh);
-        let b = resolver.resolve(&https);
+        let a = resolver.resolve(&ssh).await;
+        let b = resolver.resolve(&https).await;
         assert_eq!(a.id, remote_identity("github.com/owner/repo"));
         assert_eq!(b.id, a.id);
         assert_eq!(a.vcs.as_ref().map(Vcs::kind), Some("git"));
     }
 
-    #[test]
-    fn config_project_falls_back_to_root_commit_without_remote() {
+    #[tokio::test]
+    async fn config_project_falls_back_to_root_commit_without_remote() {
         let dir = tempdir("project-root-commit");
         init_repo(&dir, true, None);
         let resolver = resolver();
-        let result = resolver.resolve(&dir);
+        let result = resolver.resolve(&dir).await;
         // Same oid the git CLI reports for `rev-list --max-parents=0 HEAD`.
         let repo = git2::Repository::open(&dir).unwrap();
         assert_eq!(result.id, repo.head().unwrap().target().unwrap().to_string());
@@ -551,79 +836,79 @@ mod tests {
         assert_eq!(result.canonical, result.directory);
     }
 
-    #[test]
-    fn config_project_file_remote_ignored() {
+    #[tokio::test]
+    async fn config_project_file_remote_ignored() {
         let dir = tempdir("project-file-remote");
         init_repo(&dir, true, Some(&format!("file://{}", dir.display())));
-        let result = resolver().resolve(&dir);
+        let result = resolver().resolve(&dir).await;
         let repo = git2::Repository::open(&dir).unwrap();
         assert_eq!(result.id, repo.head().unwrap().target().unwrap().to_string());
     }
 
-    #[test]
-    fn config_project_global_for_empty_repo() {
+    #[tokio::test]
+    async fn config_project_global_for_empty_repo() {
         let dir = tempdir("project-empty-repo");
         init_repo(&dir, false, None);
-        let result = resolver().resolve(&dir);
+        let result = resolver().resolve(&dir).await;
         assert_eq!(result.id, "global");
         assert_eq!(result.vcs.as_ref().map(Vcs::kind), Some("git"));
     }
 
-    #[test]
-    fn config_project_cached_commondir_id_reported_as_previous() {
+    #[tokio::test]
+    async fn config_project_cached_commondir_id_reported_as_previous() {
         let dir = tempdir("project-cached");
         init_repo(&dir, true, Some("git@github.com:owner/repo.git"));
         let store = common_directory(&git2::Repository::open(&dir).unwrap());
         fs::write(store.join("opencode"), "old-id\n").unwrap();
-        let result = resolver().resolve(&dir);
+        let result = resolver().resolve(&dir).await;
         assert_eq!(result.previous.as_deref(), Some("old-id"));
         assert_eq!(result.id, remote_identity("github.com/owner/repo"));
         // Resolution never writes the cache.
         assert_eq!(fs::read_to_string(store.join("opencode")).unwrap(), "old-id\n");
     }
 
-    #[test]
-    fn config_project_resolves_from_nested_directories() {
+    #[tokio::test]
+    async fn config_project_resolves_from_nested_directories() {
         let dir = tempdir("project-nested");
         init_repo(&dir, true, None);
         let nested = dir.join("a").join("b");
         fs::create_dir_all(&nested).unwrap();
-        let result = resolver().resolve(&nested);
+        let result = resolver().resolve(&nested).await;
         assert_eq!(result.directory, crate::config::resolve_path(&dir));
     }
 
-    #[test]
-    fn config_project_git_preferred_over_hg_in_same_dir() {
+    #[tokio::test]
+    async fn config_project_git_preferred_over_hg_in_same_dir() {
         let dir = tempdir("project-git-hg");
         init_repo(&dir, true, None);
         fs::create_dir_all(dir.join(".hg")).unwrap();
-        let result = resolver().resolve(&dir);
+        let result = resolver().resolve(&dir).await;
         assert_eq!(result.vcs.as_ref().map(Vcs::kind), Some("git"));
     }
 
-    #[test]
-    fn config_project_nearest_marker_wins() {
+    #[tokio::test]
+    async fn config_project_nearest_marker_wins() {
         let dir = tempdir("project-nearest");
         let nested = dir.join("nested");
         init_repo(&dir, true, None);
         fs::create_dir_all(nested.join(".hg")).unwrap();
         fs::create_dir_all(nested.join("app")).unwrap();
-        let result = resolver().resolve(&nested.join("app"));
+        let result = resolver().resolve(&nested.join("app")).await;
         assert_eq!(result.vcs.as_ref().map(Vcs::kind), Some("hg"));
         assert_eq!(result.directory, crate::config::resolve_path(&nested));
     }
 
-    #[test]
-    fn config_project_unreadable_hg_falls_back_to_global() {
+    #[tokio::test]
+    async fn config_project_unreadable_hg_falls_back_to_global() {
         let dir = tempdir("project-hg-global");
         fs::create_dir_all(dir.join(".hg")).unwrap();
-        let result = resolver().resolve(&dir);
+        let result = resolver().resolve(&dir).await;
         assert_eq!(result.vcs.as_ref().map(Vcs::kind), Some("hg"));
         assert_eq!(result.id, "global");
     }
 
-    #[test]
-    fn config_project_persists_project_and_worktree_rows() {
+    #[tokio::test]
+    async fn config_project_persists_project_and_worktree_rows() {
         struct Recorder {
             resolved: std::sync::Mutex<Vec<WorktreeResolved>>,
         }
@@ -637,20 +922,20 @@ mod tests {
         let store = Arc::new(MemoryProjectStore::new());
         let events = Arc::new(Recorder { resolved: std::sync::Mutex::new(Vec::new()) });
         let resolver = Resolver::new(store.clone(), events.clone());
-        let first = resolver.resolve(&dir);
+        let first = resolver.resolve(&dir).await;
         let id = remote_identity("github.com/owner/repo");
         assert_eq!(first.id, id);
-        assert_eq!(store.list_projects().len(), 1);
-        assert_eq!(store.list_worktrees().len(), 1);
-        assert_eq!(store.list_worktrees()[0].directory, crate::config::resolve_path(&dir));
+        assert_eq!(store.list_projects().await.len(), 1);
+        assert_eq!(store.list_worktrees().await.len(), 1);
+        assert_eq!(store.list_worktrees().await[0].directory, crate::config::resolve_path(&dir));
         // Repeated resolution publishes nothing new.
-        let _ = resolver.resolve(&dir);
+        let _ = resolver.resolve(&dir).await;
         assert_eq!(events.resolved.lock().unwrap().len(), 1);
-        assert_eq!(store.list_projects().len(), 1);
+        assert_eq!(store.list_projects().await.len(), 1);
     }
 
-    #[test]
-    fn config_project_repoints_canonical_only_when_stored_one_vanished() {
+    #[tokio::test]
+    async fn config_project_repoints_canonical_only_when_stored_one_vanished() {
         struct Updated {
             count: std::sync::Mutex<usize>,
         }
@@ -667,24 +952,24 @@ mod tests {
         let store = Arc::new(MemoryProjectStore::new());
         let events = Arc::new(Updated { count: std::sync::Mutex::new(0) });
         let resolver = Resolver::new(store.clone(), events.clone());
-        let initial = resolver.resolve(&before);
+        let initial = resolver.resolve(&before).await;
         assert_eq!(*events.count.lock().unwrap(), 0);
 
         // Rename the canonical checkout and resolve the new path (same repo:
         // the remote, hence the identity, is unchanged by the rename).
         fs::rename(&before, &after).unwrap();
-        let renamed = resolver.resolve(&after);
+        let renamed = resolver.resolve(&after).await;
         assert_eq!(renamed.id, initial.id);
         assert_eq!(renamed.canonical, crate::config::resolve_path(&after));
         assert_eq!(*events.count.lock().unwrap(), 1, "canonical re-point announced");
         assert_eq!(
-            store.project(&initial.id).unwrap().canonical,
+            store.project(&initial.id).await.unwrap().canonical,
             crate::config::resolve_path(&after)
         );
     }
 
-    #[test]
-    fn config_project_root_finds_nearest_vcs_ancestor() {
+    #[tokio::test]
+    async fn config_project_root_finds_nearest_vcs_ancestor() {
         let dir = tempdir("project-root-fn");
         let repo = dir.join("repo");
         init_repo(&repo, true, None);
@@ -692,5 +977,136 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
         assert_eq!(root(&nested), Some(crate::config::resolve_path(&repo)));
         assert_eq!(root(&dir), None);
+    }
+
+    // ------------------------------------------------- sqlite store
+
+    use crate::database::Database;
+
+    async fn sqlite_dir(tag: &str) -> (crate::database::Database, PathBuf) {
+        let root = std::env::temp_dir()
+            .join("oc-core-config-tests")
+            .join(format!("{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let db = Database::open_file(root.join("opencode.db")).await.unwrap();
+        (db, root)
+    }
+
+    #[tokio::test]
+    async fn project_sql_store_upsert_preserves_canonical_and_refreshes_vcs() {
+        let (db, _root) = sqlite_dir("project-sql-upsert").await;
+        let store = SqliteProjectStore::new(db);
+        let id = remote_identity("github.com/owner/repo");
+        store
+            .upsert_project(&ProjectRow {
+                id: id.clone(),
+                canonical: PathBuf::from("/gone/checkout"),
+                vcs: Some("git".into()),
+            })
+            .await;
+        // Clone shares the id: canonical preserved, vcs refreshed only.
+        store
+            .upsert_project(&ProjectRow {
+                id: id.clone(),
+                canonical: PathBuf::from("/new/checkout"),
+                vcs: Some("git".into()),
+            })
+            .await;
+        let row = store.project(&id).await.expect("row");
+        assert_eq!(row.canonical, PathBuf::from("/gone/checkout"), "canonical preserved");
+        assert_eq!(row.vcs.as_deref(), Some("git"));
+        assert_eq!(store.list_projects().await.len(), 1);
+
+        // A vcs label change refreshes; explicit reassign moves the canonical.
+        store
+            .upsert_project(&ProjectRow { id: id.clone(), canonical: row.canonical, vcs: None })
+            .await;
+        assert_eq!(store.project(&id).await.unwrap().vcs, None, "stale label cleared");
+        store.reassign_canonical(&id, Path::new("/moved")).await;
+        assert_eq!(store.project(&id).await.unwrap().canonical, PathBuf::from("/moved"));
+    }
+
+    #[tokio::test]
+    async fn project_sql_store_worktree_rows_and_legacy_directories() {
+        let (db, _root) = sqlite_dir("project-sql-worktree").await;
+        let store = SqliteProjectStore::new(db);
+        store
+            .upsert_project(&ProjectRow {
+                id: "p1".into(),
+                canonical: PathBuf::from("/repo"),
+                vcs: Some("git".into()),
+            })
+            .await;
+        store
+            .insert_worktree(&WorktreeRow {
+                project_id: "p1".into(),
+                directory: crate::config::resolve_path(&PathBuf::from("/repo")),
+                strategy: None,
+            })
+            .await;
+        // Conflict-do-nothing over the (project_id, directory) pk.
+        store
+            .insert_worktree(&WorktreeRow {
+                project_id: "p1".into(),
+                directory: crate::config::resolve_path(&PathBuf::from("/repo")),
+                strategy: Some("git".into()),
+            })
+            .await;
+        assert!(store
+            .worktree("p1", &crate::config::resolve_path(&PathBuf::from("/repo")))
+            .await
+            .is_some());
+        let worktrees = store.list_worktrees().await;
+        assert_eq!(worktrees.len(), 1, "duplicate insert ignored");
+        assert_eq!(worktrees[0].strategy, None, "first row kept");
+        assert!(store.worktree("p1", Path::new("/elsewhere")).await.is_none());
+        assert!(store.list_project_directories().await.is_empty(), "legacy table unwritten");
+    }
+
+    #[tokio::test]
+    async fn project_sql_store_workspace_rows() {
+        let (db, _root) = sqlite_dir("project-sql-workspace").await;
+        let store = SqliteProjectStore::new(db);
+        store.insert_workspace("wrk_1", "driver", Some(r#"{"kind":"x"}"#)).await;
+        store.insert_workspace("wrk_1", "driver", None).await; // ignored
+        let rows = store.list_workspaces().await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "wrk_1");
+        assert_eq!(rows[0].2.as_deref(), Some(r#"{"kind":"x"}"#));
+    }
+
+    #[tokio::test]
+    async fn project_sql_store_survives_restart() {
+        let (db, root) = sqlite_dir("project-sql-restart").await;
+        let store = SqliteProjectStore::new(db.clone());
+        store
+            .upsert_project(&ProjectRow {
+                id: "p1".into(),
+                canonical: PathBuf::from("/repo"),
+                vcs: Some("git".into()),
+            })
+            .await;
+        store
+            .insert_worktree(&WorktreeRow {
+                project_id: "p1".into(),
+                directory: crate::config::resolve_path(&PathBuf::from("/repo")),
+                strategy: None,
+            })
+            .await;
+        drop(store);
+        drop(db);
+
+        let db = Database::open_file(root.join("opencode.db")).await.unwrap();
+        let store = SqliteProjectStore::new(db);
+        assert_eq!(store.project("p1").await.unwrap().vcs.as_deref(), Some("git"));
+        assert_eq!(store.list_worktrees().await.len(), 1);
+        // The resolver drives the sqlite store end-to-end and persists
+        // across a restart.
+        let dir = tempdir("project-sql-resolver");
+        init_repo(&dir, true, Some("git@github.com:owner/repo.git"));
+        let resolver = Resolver::new(Arc::new(store), Arc::new(NoEvents));
+        let outcome = resolver.resolve(&dir).await;
+        assert_eq!(outcome.id, remote_identity("github.com/owner/repo"));
     }
 }

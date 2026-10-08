@@ -269,6 +269,97 @@ pub fn definitions() -> &'static [EventDefinition] {
     &DEFINITIONS
 }
 
+// ---------------------------------------------------------------------------
+// Non-session events v2 publishes ad-hoc
+// ---------------------------------------------------------------------------
+// v2's `EventManifest.ServerDefinitions`/`Definitions` aggregate many
+// per-domain ephemeral inventories (location-event.ts, config.ts,
+// permission.ts, project.ts, …). Phase 5 (SSE) needs a single lookup for
+// every type the server can emit, so the non-session types oc-core
+// actually publishes today are centralized here — every one of them
+// ephemeral, exactly like v2:
+//
+// - `location.shutdown` — `location-event.ts:6` (published by the location
+//   shutdown sequence, `location-lifecycle.ts`),
+// - `config.updated` — `config.ts:133-135`,
+// - `permission.asked` / `permission.replied` — `permission.ts:44-49`,
+// - `project.updated` — `project.ts:60-61`.
+//
+// `worktree.resolved` is already part of [`DEFINITIONS`] (durable v1).
+
+/// Type of the location shutdown event (`location-event.ts`).
+pub const LOCATION_SHUTDOWN: &str = "location.shutdown";
+/// Type of the config hot-reload event (`config.ts`).
+pub const CONFIG_UPDATED: &str = "config.updated";
+/// Type of the permission prompt event (`permission.ts`).
+pub const PERMISSION_ASKED: &str = "permission.asked";
+/// Type of the permission answer event (`permission.ts`).
+pub const PERMISSION_REPLIED: &str = "permission.replied";
+/// Type of the project registry event (`project.ts`).
+pub const PROJECT_UPDATED: &str = "project.updated";
+
+static NON_SESSION: LazyLock<Vec<EventDefinition>> = LazyLock::new(|| {
+    vec![
+        EventDefinition::ephemeral(LOCATION_SHUTDOWN),
+        EventDefinition::ephemeral(CONFIG_UPDATED),
+        EventDefinition::ephemeral(PERMISSION_ASKED),
+        EventDefinition::ephemeral(PERMISSION_REPLIED),
+        EventDefinition::ephemeral(PROJECT_UPDATED),
+    ]
+});
+
+static BY_NON_SESSION_TYPE: LazyLock<HashMap<String, usize>> = LazyLock::new(|| {
+    NON_SESSION.iter().enumerate().map(|(index, def)| (def.type_.clone(), index)).collect()
+});
+
+/// The non-session definitions oc-core publishes (all ephemeral). Session +
+/// `worktree.resolved` definitions live in [`definitions`].
+#[must_use]
+pub fn non_session_definitions() -> &'static [EventDefinition] {
+    &NON_SESSION
+}
+
+/// The `location.shutdown` definition (location shutdown sequence).
+#[must_use]
+pub fn location_shutdown() -> &'static EventDefinition {
+    &NON_SESSION[0]
+}
+
+/// The `config.updated` definition (config hot reload).
+#[must_use]
+pub fn config_updated() -> &'static EventDefinition {
+    &NON_SESSION[1]
+}
+
+/// The `permission.asked` definition.
+#[must_use]
+pub fn permission_asked() -> &'static EventDefinition {
+    &NON_SESSION[2]
+}
+
+/// The `permission.replied` definition.
+#[must_use]
+pub fn permission_replied() -> &'static EventDefinition {
+    &NON_SESSION[3]
+}
+
+/// The `project.updated` definition.
+#[must_use]
+pub fn project_updated() -> &'static EventDefinition {
+    &NON_SESSION[4]
+}
+
+/// Single lookup across the whole known inventory — session events
+/// (highest version, `Event.latest`), `worktree.resolved`, and the
+/// non-session ephemeral types. This is the lookup the Phase 5 SSE encoder
+/// uses to map a wire `type` to its definition; unknown types return
+/// `None` (encoded verbatim, like v2's untagged server events).
+#[must_use]
+pub fn by_type(type_: &str) -> Option<&'static EventDefinition> {
+    by_type_latest(type_)
+        .or_else(|| BY_NON_SESSION_TYPE.get(type_).map(|&index| &NON_SESSION[index]))
+}
+
 /// The durable manifest lookup (v2 `Durable.get`): decodes stored
 /// `event.type` values. Returns `None` for ephemeral and unknown types.
 #[must_use]
