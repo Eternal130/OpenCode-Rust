@@ -1306,6 +1306,201 @@ pub trait RpcPort: Send + Sync {
 }
 
 // =============================================================================
+// Internal plugin slots + supervisor (graph v2, oracle gate 4 finding 4)
+// =============================================================================
+
+/// Internal-plugin registration failure.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("plugin {id} failed to register: {error}")]
+pub struct PluginFailure {
+    pub id: String,
+    pub error: String,
+}
+
+/// One internal plugin's boot outcome (contained failures; boot continues).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginBootOutcome {
+    /// Ids that registered successfully, in boot order.
+    pub registered: Vec<String>,
+    /// Contained failures (registration errors + duplicate ids).
+    pub failures: Vec<PluginFailure>,
+}
+
+/// Whether `id` is reserved for internal plugins. Every id under the
+/// `"opencode."` namespace is internal (v2 `PluginInternal.guarded`
+/// protects the built-ins from removal, `internal.ts:271`; the Rust port
+/// reserves the whole namespace so a host plugin can never shadow or
+/// disable a built-in).
+#[must_use]
+pub fn is_reserved_plugin_id(id: &str) -> bool {
+    id.starts_with("opencode.")
+}
+
+/// A built-in plugin: an id plus a registration closure run at location
+/// boot with the fresh [`HookRegistry`] and the graph's
+/// [`LocationPorts`](crate::location::LocationPorts) — the Rust shape of
+/// v2 `InternalPlugin { id, effect }` (`internal.ts`). The 14 tools, the
+/// agent seeds, config watchers, … hand-register through these slots;
+/// `oc-plugin-host` plugs guest plugins into the supervisor's host slot
+/// later (`TODO(plugin-lane)`).
+pub struct InternalPlugin {
+    id: String,
+    #[allow(clippy::type_complexity)]
+    register: Arc<
+        dyn for<'a> Fn(&HookRegistry, &crate::location::LocationPorts<'a>) -> Result<(), String>
+            + Send
+            + Sync,
+    >,
+}
+
+impl fmt::Debug for InternalPlugin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "InternalPlugin({})", self.id)
+    }
+}
+
+impl InternalPlugin {
+    /// A plugin registering through `register`. Registration is a sync
+    /// closure: v2 internal plugins only touch registries (hook lists,
+    /// transform domains, tool tables), and the host lane implements its
+    /// own blocking bridge for guest effects (see the module docs).
+    pub fn new(
+        id: impl Into<String>,
+        register: impl for<'a> Fn(&HookRegistry, &crate::location::LocationPorts<'a>) -> Result<(), String>
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
+        Self { id: id.into(), register: Arc::new(register) }
+    }
+
+    /// The plugin id (`"opencode.*"` for the built-ins).
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn register_at(
+        &self,
+        hooks: &HookRegistry,
+        ports: &crate::location::LocationPorts<'_>,
+    ) -> Result<(), String> {
+        (self.register)(hooks, ports)
+    }
+}
+
+/// Boots the per-location plugin set in the v2 supervisor order
+/// (`supervisor.ts:125-150`): internal **pre** plugins → host plugins
+/// (sdk + instance + packages; placeholder slot until the plugin lane) →
+/// internal **post** plugins.
+///
+/// - **Dedup**: the first occurrence in boot order wins; later duplicates
+///   are reported as failures (v2: "Registry activation dies on a
+///   duplicate ID … keep the first occurrence and report later ones").
+/// - **Error containment**: one plugin's registration failure is recorded
+///   and the boot continues with the remaining plugins.
+/// - **Reserved ids**: internal slots may carry `"opencode."` ids; the
+///   host lane rejects them for guest plugins via
+///   [`is_reserved_plugin_id`].
+pub struct PluginSupervisor {
+    pre: Vec<InternalPlugin>,
+    post: Vec<InternalPlugin>,
+    /// Host-plugin slot (`TODO(plugin-lane)`): sdk plugins, instance-bound
+    /// plugins and config package plugins boot between pre and post.
+    host_slot: (),
+}
+
+impl fmt::Debug for PluginSupervisor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PluginSupervisor")
+            .field("pre", &self.pre)
+            .field("post", &self.post)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for PluginSupervisor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PluginSupervisor {
+    /// Empty supervisor (no internal plugins).
+    #[must_use]
+    pub fn new() -> Self {
+        Self { pre: Vec::new(), post: Vec::new(), host_slot: () }
+    }
+
+    /// Supervisor with the internal pre/post slots (v2
+    /// `PluginInternal.list() → { pre, post }`).
+    #[must_use]
+    pub fn with_internal(pre: Vec<InternalPlugin>, post: Vec<InternalPlugin>) -> Self {
+        Self { pre, post, host_slot: () }
+    }
+
+    /// The internal pre plugins (boot order reference).
+    #[must_use]
+    pub fn pre(&self) -> &[InternalPlugin] {
+        &self.pre
+    }
+
+    /// The internal post plugins (boot order reference).
+    #[must_use]
+    pub fn post(&self) -> &[InternalPlugin] {
+        &self.post
+    }
+
+    /// Runs one plugin with dedup + containment; returns whether it
+    /// registered.
+    fn boot_one(
+        plugin: &InternalPlugin,
+        hooks: &HookRegistry,
+        ports: &crate::location::LocationPorts<'_>,
+        seen: &mut Vec<String>,
+        outcome: &mut PluginBootOutcome,
+    ) {
+        if seen.contains(&plugin.id) {
+            // First occurrence in boot order wins; report the duplicate.
+            outcome.failures.push(PluginFailure {
+                id: plugin.id.clone(),
+                error: format!("Duplicate plugin ID: {}", plugin.id),
+            });
+            return;
+        }
+        seen.push(plugin.id.clone());
+        match plugin.register_at(hooks, ports) {
+            Ok(()) => outcome.registered.push(plugin.id.clone()),
+            Err(error) => outcome.failures.push(PluginFailure { id: plugin.id.clone(), error }),
+        }
+    }
+
+    /// Boot every plugin into a fresh [`HookRegistry`] in supervisor order
+    /// (pre → host placeholder → post). Never fails the location: failures
+    /// are contained in the outcome (v2 reports them as failed plugin
+    /// states and activates the rest).
+    #[must_use]
+    pub fn boot(
+        &self,
+        hooks: &HookRegistry,
+        ports: &crate::location::LocationPorts<'_>,
+    ) -> PluginBootOutcome {
+        let mut outcome = PluginBootOutcome::default();
+        let mut seen: Vec<String> = Vec::new();
+        for plugin in &self.pre {
+            Self::boot_one(plugin, hooks, ports, &mut seen, &mut outcome);
+        }
+        // Host slot: sdk + instance + package plugins register here
+        // (`TODO(plugin-lane)`); nothing to boot in Wave 0.
+        let () = self.host_slot;
+        for plugin in &self.post {
+            Self::boot_one(plugin, hooks, ports, &mut seen, &mut outcome);
+        }
+        outcome
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -1609,5 +1804,182 @@ mod tests {
         scope.close().await;
         assert!(scope.is_empty());
         assert!(!registry.has_aisdk_language(None));
+    }
+
+    // ------------------------------------------------- plugin supervisor
+
+    use crate::bus::{Bus, BusOptions};
+    use crate::database::Database;
+    use crate::location::{
+        AgentRegistry, FileAccessState, InstructionSlots, LocationPorts, LocationRef, ShellEnv,
+        ToolRegistryState,
+    };
+    use crate::provider_catalog::Catalog;
+    use oc_util::determinism::FixedClock;
+    use std::path::PathBuf;
+
+    /// Real per-location state bundle backing a [`LocationPorts`] (the
+    /// graph lane tests cover the full graph; the supervisor tests only
+    /// need the ports surface).
+    struct PortsBundle {
+        db: Arc<Database>,
+        bus: Arc<Bus>,
+        catalog: Arc<Catalog>,
+        agents: Arc<AgentRegistry>,
+        tools: Arc<ToolRegistryState>,
+        shell: Arc<ShellEnv>,
+        files: Arc<FileAccessState>,
+        instructions: Arc<InstructionSlots>,
+        location: LocationRef,
+        hooks: Arc<HookRegistry>,
+    }
+
+    impl PortsBundle {
+        async fn new() -> Self {
+            let db = Arc::new(Database::open_in_memory().await.expect("database"));
+            let bus = Arc::new(Bus::new(
+                (*db).clone(),
+                BusOptions { clock: Arc::new(FixedClock::epoch()), ..BusOptions::deterministic() },
+            ));
+            Self {
+                db,
+                bus,
+                catalog: Arc::new(Catalog::empty()),
+                agents: Arc::new(AgentRegistry::new()),
+                tools: Arc::new(ToolRegistryState::new()),
+                shell: Arc::new(ShellEnv::new(PathBuf::from("/repo"))),
+                files: Arc::new(FileAccessState::new(
+                    PathBuf::from("/repo"),
+                    PathBuf::from("/repo"),
+                    PathBuf::from("/home/u"),
+                )),
+                instructions: Arc::new(InstructionSlots::new()),
+                location: LocationRef::new(PathBuf::from("/repo"), None),
+                hooks: Arc::new(HookRegistry::new()),
+            }
+        }
+
+        fn ports(&self) -> LocationPorts<'_> {
+            LocationPorts {
+                location: &self.location,
+                db: &self.db,
+                bus: &self.bus,
+                catalog: &self.catalog,
+                agents: &self.agents,
+                tools: &self.tools,
+                shell: &self.shell,
+                files: &self.files,
+                instructions: &self.instructions,
+            }
+        }
+    }
+
+    fn recording_plugin(id: &'static str, trace: Arc<Mutex<Vec<String>>>) -> InternalPlugin {
+        InternalPlugin::new(id, move |_hooks, _ports| {
+            trace.lock().push(id.to_string());
+            Ok(())
+        })
+    }
+
+    #[tokio::test]
+    async fn plugins_boot_order_pre_host_post() {
+        let trace: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let supervisor = PluginSupervisor::with_internal(
+            vec![
+                recording_plugin("opencode.pre-one", Arc::clone(&trace)),
+                recording_plugin("opencode.pre-two", Arc::clone(&trace)),
+            ],
+            vec![recording_plugin("opencode.post-one", Arc::clone(&trace))],
+        );
+        let bundle = PortsBundle::new().await;
+        let outcome = supervisor.boot(&bundle.hooks, &bundle.ports());
+        assert!(outcome.failures.is_empty());
+        // pre (in order) → host (nothing yet) → post.
+        assert_eq!(
+            *trace.lock(),
+            vec!["opencode.pre-one", "opencode.pre-two", "opencode.post-one"]
+        );
+        assert_eq!(outcome.registered.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn plugins_registration_failure_is_contained() {
+        let trace: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let supervisor = PluginSupervisor::with_internal(
+            vec![InternalPlugin::new("opencode.boom", |_hooks, _ports| {
+                Err("setup exploded".into())
+            })],
+            vec![recording_plugin("opencode.post", Arc::clone(&trace))],
+        );
+        let bundle = PortsBundle::new().await;
+        let outcome = supervisor.boot(&bundle.hooks, &bundle.ports());
+        assert_eq!(
+            outcome.failures,
+            vec![PluginFailure { id: "opencode.boom".into(), error: "setup exploded".into() }],
+            "one failure, contained"
+        );
+        // The boot continued with the remaining plugins.
+        assert_eq!(*trace.lock(), vec!["opencode.post"]);
+        assert_eq!(outcome.registered.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn plugins_duplicate_ids_keep_first_and_report_later() {
+        let trace: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let supervisor = PluginSupervisor::with_internal(
+            vec![
+                recording_plugin("opencode.dup", Arc::clone(&trace)),
+                recording_plugin("opencode.dup", Arc::clone(&trace)),
+            ],
+            vec![recording_plugin("opencode.dup", Arc::clone(&trace))],
+        );
+        let bundle = PortsBundle::new().await;
+        let outcome = supervisor.boot(&bundle.hooks, &bundle.ports());
+        assert_eq!(*trace.lock(), vec!["opencode.dup"], "first occurrence only");
+        assert_eq!(outcome.registered, vec!["opencode.dup".to_string()]);
+        assert_eq!(outcome.failures.len(), 2, "pre + post duplicates reported");
+        assert!(outcome.failures.iter().all(|failure| failure.id == "opencode.dup"));
+    }
+
+    #[test]
+    fn plugins_reserved_id_namespace() {
+        // v2 guards the built-ins from removal (internal.ts guarded set);
+        // the port reserves the whole "opencode." namespace.
+        assert!(is_reserved_plugin_id("opencode.provider.opencode"));
+        assert!(is_reserved_plugin_id("opencode.config.policy"));
+        assert!(is_reserved_plugin_id("opencode."));
+        assert!(!is_reserved_plugin_id("my-plugin"));
+        assert!(!is_reserved_plugin_id("community.tools"));
+    }
+
+    #[tokio::test]
+    async fn plugins_register_into_hook_registry_and_state() {
+        // A plugin that actually touches its ports: registers a hook AND
+        // seeds an agent (the v2 `opencode.agent` plugin shape).
+        let supervisor = PluginSupervisor::with_internal(
+            vec![InternalPlugin::new("opencode.agent", |hooks, ports| {
+                ports.agents.set(oc_schema::agent::Info::default_for(
+                    oc_schema::id::AgentId::parse("build"),
+                ));
+                // Registration closures are sync; the registry's async
+                // surface resolves immediately (futures::executor avoids
+                // any runtime dependency).
+                let registration = futures::executor::block_on(hooks.register_shell_create_before(
+                    fn_hook(|event: &mut ShellCreateBeforeEvent| {
+                        event.env.insert("SEED".into(), Some("1".into()));
+                        Ok(())
+                    }),
+                    HookOptions::default(),
+                ));
+                assert!(hooks.has_shell_create_before(None));
+                drop(registration); // disposal on drop
+                Ok(())
+            })],
+            vec![],
+        );
+        let bundle = PortsBundle::new().await;
+        let outcome = supervisor.boot(&bundle.hooks, &bundle.ports());
+        assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
+        assert_eq!(bundle.agents.select(None).id.0, "build", "agent seeded through ports");
     }
 }

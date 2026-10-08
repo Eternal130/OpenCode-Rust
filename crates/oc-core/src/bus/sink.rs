@@ -1,19 +1,24 @@
 //! Permission-engine event sink adapter — wires
 //! [`crate::permission::EventSink`] (and its in-memory
-//! [`BroadcastEventSink`]) to the bus without touching `permission.rs`.
+//! [`BroadcastEventSink`]) to the bus.
 //!
 //! `permission.asked` / `permission.replied` are **ephemeral** events: the
 //! adapter publishes them through the normal bus path (routing + unisolated
-//! listener notification) without any database write. Because
-//! [`crate::permission::EventSink::publish`] is synchronous, the async
-//! publish is spawned onto the current runtime; outside a runtime the event
-//! is logged and dropped (the permission engine never blocks on delivery).
+//! listener notification) without any database write.
+//!
+//! The [`EventSink`] trait is async (oracle gate 4, finding 2): the adapter
+//! **awaits** the bus publish, so the engine's reply/assert call sites
+//! resolve their deferreds only after the event is on the bus — v2
+//! `permission.ts:270-306` ordering. The definitions come from the
+//! centralized non-session registry (`bus::registry`).
 
 use oc_schema::location;
 use oc_schema::misc_events::PermissionEvent;
 
+use super::registry;
 use super::{Bus, EventDefinition, PublishOptions};
 use crate::permission::EventSink;
+use async_trait::async_trait;
 
 /// [`EventSink`] publishing permission events into a [`Bus`].
 #[derive(Clone)]
@@ -36,14 +41,15 @@ impl std::fmt::Debug for PermissionBusSink {
     }
 }
 
+#[async_trait]
 impl EventSink for PermissionBusSink {
-    fn publish(&self, event: PermissionEvent) {
-        let (type_, data) = match &event {
+    async fn publish(&self, event: PermissionEvent) {
+        let (definition, data) = match &event {
             PermissionEvent::Asked(envelope) => {
-                ("permission.asked", serde_json::to_value(&envelope.data))
+                (registry::permission_asked(), serde_json::to_value(&envelope.data))
             }
             PermissionEvent::Replied(envelope) => {
-                ("permission.replied", serde_json::to_value(&envelope.data))
+                (registry::permission_replied(), serde_json::to_value(&envelope.data))
             }
         };
         let data = match data {
@@ -53,19 +59,13 @@ impl EventSink for PermissionBusSink {
                 return;
             }
         };
-        let definition = EventDefinition::ephemeral(type_);
+        let definition: &EventDefinition = definition;
         let options =
             PublishOptions { location: self.location.clone(), ..PublishOptions::default() };
-        let bus = self.bus.clone();
-        let spawned = tokio::runtime::Handle::try_current().map(|handle| {
-            handle.spawn(async move {
-                if let Err(err) = bus.publish(&definition, data, options).await {
-                    eprintln!("[bus] permission event publish failed: {err}");
-                }
-            });
-        });
-        if let Err(err) = spawned {
-            eprintln!("[bus] permission event dropped (no runtime): {type_} ({err})");
+        // Awaited by contract: the engine resolves its deferreds only after
+        // this future completes (v2 permission.ts:270-306 ordering).
+        if let Err(err) = self.bus.publish(definition, data, options).await {
+            eprintln!("[bus] permission event publish failed: {err}");
         }
     }
 }
@@ -86,7 +86,7 @@ pub fn bridge_permission_sink(
     let adapter = PermissionBusSink::new(bus, location);
     tokio::spawn(async move {
         while let Ok(event) = rx.recv().await {
-            adapter.publish(event);
+            adapter.publish(event).await;
         }
     })
 }
