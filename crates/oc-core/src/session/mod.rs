@@ -22,6 +22,7 @@ pub mod execution;
 pub mod inbox;
 pub mod message_updater;
 pub mod projector;
+pub mod runner;
 pub mod store;
 #[cfg(test)]
 mod tests;
@@ -35,6 +36,10 @@ pub use execution::{
 pub use inbox::{InboxError, Promotable, Scope, SessionInbox};
 pub use message_updater::SessionMessageUpdater;
 pub use projector::{install_projectors, SessionAlreadyProjected};
+pub use runner::{
+    CompactMechanism, CompactOutcome, LlmClient, LlmEventStream, ModelError, ModelResolver,
+    RecordedUsage, ResolvedModel, RouteLlmClient, SessionUsage,
+};
 pub use store::{
     CreateInput, CreateOutcome, ListAnchor, ListDirection, ListInput, ListOrder, MessagesInput,
     ResolvedProject, SessionStore,
