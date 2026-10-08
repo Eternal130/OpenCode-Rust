@@ -484,6 +484,90 @@ fn common_prefix_len(a: &[Value], b: &[Value]) -> usize {
     a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
 }
 
+/// Golden form of a scenario capture: the captured data frames grouped per
+/// the canonical policy (§8.1), each group canonicalized (§8.2) and
+/// normalized as its own id-numbering run (§8.3), with the group **keys
+/// dropped** (raw ids and sandbox paths are per-run diagnostics) and the
+/// groups **sorted by canonical serialization** — a deterministic
+/// serialization of the §8.4 multiset: two captures produce equal vectors
+/// iff their multisets of group orderings are equal.
+///
+/// This is exactly what a scenario golden stores, and what a fresh capture
+/// is compared against in run mode (`scenario::assert_golden`).
+#[must_use]
+pub fn scenario_capture(frames: &[Frame], env: &NormEnv) -> Vec<Value> {
+    let grouped = group_frames(frames, env);
+    let mut groups: Vec<Value> =
+        grouped.groups.into_iter().map(|(_, entries)| Value::Array(entries)).collect();
+    groups.sort_by_key(std::string::ToString::to_string);
+    groups
+}
+
+/// First divergence between a golden capture and a fresh capture, both in
+/// the [`scenario_capture`] form (sorted group orderings). Multiset
+/// semantics: groups are paired greedily by equality (order in the sorted
+/// vectors is canonical, so positional pairing is exact); the first
+/// unmatched position is reported against its best counterpart — the
+/// opposite-side leftover with the longest common frame prefix — at the
+/// first divergent frame index, mirroring [`compare_sequences`]'s report.
+#[must_use]
+pub fn compare_scenario_captures(golden: &[Value], actual: &[Value]) -> Option<SequenceDiff> {
+    if golden == actual {
+        return None;
+    }
+    let mut golden_taken = vec![false; golden.len()];
+    let mut actual_taken = vec![false; actual.len()];
+    for (i, g) in golden.iter().enumerate() {
+        if let Some((j, _)) = actual.iter().enumerate().find(|(j, a)| !actual_taken[*j] && *a == g)
+        {
+            golden_taken[i] = true;
+            actual_taken[j] = true;
+        }
+    }
+    let golden_leftovers: Vec<usize> =
+        golden.iter().enumerate().filter(|(i, _)| !golden_taken[*i]).map(|(i, _)| i).collect();
+    let actual_leftovers: Vec<usize> =
+        actual.iter().enumerate().filter(|(j, _)| !actual_taken[*j]).map(|(j, _)| j).collect();
+    // Golden side takes priority; its counterpart is the actual leftover
+    // with the longest common frame prefix (mirrors compare_sequences).
+    let (index_golden, index_actual) = match (golden_leftovers.first(), actual_leftovers.first()) {
+        (Some(&g), Some(&_)) => {
+            let g_frames = golden[g].as_array().map_or::<&[Value], _>(&[], Vec::as_slice);
+            let best = actual_leftovers
+                .iter()
+                .copied()
+                .max_by_key(|&a| {
+                    common_prefix_len(
+                        g_frames,
+                        actual[a].as_array().map_or::<&[Value], _>(&[], Vec::as_slice),
+                    )
+                })
+                .unwrap_or(usize::MAX);
+            (g, best)
+        }
+        // A count imbalance reports the present side against an absent
+        // (empty) counterpart.
+        (Some(&g), None) => (g, usize::MAX),
+        (None, Some(&a)) => (usize::MAX, a),
+        (None, None) => return None,
+    };
+    let group = if index_golden == usize::MAX {
+        format!("capture group #{index_actual}")
+    } else {
+        format!("golden group #{index_golden}")
+    };
+    let left = golden
+        .get(index_golden)
+        .and_then(Value::as_array)
+        .map_or::<&[Value], _>(&[], Vec::as_slice);
+    let right = actual
+        .get(index_actual)
+        .and_then(Value::as_array)
+        .map_or::<&[Value], _>(&[], Vec::as_slice);
+    let (frame, left_frame, right_frame) = first_divergent_frame(left, right);
+    Some(SequenceDiff { group, index: frame, left: left_frame, right: right_frame })
+}
+
 /// First index where two canonical orderings differ; the side missing the
 /// frame renders `Null` (absent frames and absent groups both surface as
 /// `Null` on the missing side).
@@ -832,6 +916,118 @@ mod tests {
             connected("evt_22c556f9e001CCCCCCCCCCCCCCCC"),
         ];
         assert!(compare_sequences(&a, &env(), &b, &env()).is_none());
+    }
+
+    // -- scenario capture (golden form) -------------------------------------
+
+    #[test]
+    fn scenario_capture_is_interleaving_invariant_and_keyless() {
+        // Same two aggregates, interleaved differently: the capture vectors
+        // (sorted group orderings) are identical — cross-aggregate
+        // interleaving must not leak into a golden.
+        let a = vec![
+            session_event(
+                "evt_11c556f9e001AAAAAAAAAAAAAAAA",
+                "ses_01JZY0ID0123456789AAAA",
+                1,
+                "started",
+            ),
+            session_event(
+                "evt_11c556f9e001BBBBBBBBBBBBBBBB",
+                "ses_01JZY0ID0123456789BBBB",
+                1,
+                "idle",
+            ),
+            session_event(
+                "evt_11c556f9e001CCCCCCCCCCCCCCCC",
+                "ses_01JZY0ID0123456789AAAA",
+                2,
+                "streamed",
+            ),
+        ];
+        let mut b: Vec<Frame> = a
+            .iter()
+            .map(|f| {
+                let mut f = f.clone();
+                f.data = f.data.replace("evt_11c556f9e001", "evt_99c556f9e001");
+                f
+            })
+            .collect();
+        b.reverse();
+        let capture_a = scenario_capture(&a, &env());
+        let capture_b = scenario_capture(&b, &env());
+        assert_eq!(capture_a, capture_b);
+        assert_eq!(capture_a.len(), 2, "two aggregates → two groups");
+        // Each group is a bare array of frame entries (no group keys: raw
+        // ids are per-run diagnostics).
+        for group in &capture_a {
+            assert!(group.is_array());
+        }
+    }
+
+    #[test]
+    fn scenario_capture_compare_detects_frame_and_count_divergence() {
+        let base = vec![
+            session_event(
+                "evt_11c556f9e001AAAAAAAAAAAAAAAA",
+                "ses_01JZY0ID0123456789AAAA",
+                1,
+                "started",
+            ),
+            session_event(
+                "evt_11c556f9e001BBBBBBBBBBBBBBBB",
+                "ses_01JZY0ID0123456789AAAA",
+                2,
+                "idle",
+            ),
+        ];
+        let golden = scenario_capture(&base, &env());
+
+        // 1. Same sequence, different raw ids: no divergence.
+        let same: Vec<Frame> = base
+            .iter()
+            .map(|f| {
+                let mut f = f.clone();
+                f.data = f.data.replace("evt_11c556f9e001", "evt_99c556f9e001");
+                f
+            })
+            .collect();
+        assert!(compare_scenario_captures(&golden, &scenario_capture(&same, &env())).is_none());
+
+        // 2. One frame changed: divergence reported at that frame.
+        let changed = vec![
+            session_event(
+                "evt_11c556f9e001AAAAAAAAAAAAAAAA",
+                "ses_01JZY0ID0123456789AAAA",
+                1,
+                "started",
+            ),
+            session_event(
+                "evt_11c556f9e001BBBBBBBBBBBBBBBB",
+                "ses_01JZY0ID0123456789AAAA",
+                2,
+                "deleted",
+            ),
+        ];
+        let diff = compare_scenario_captures(&golden, &scenario_capture(&changed, &env()))
+            .expect("a changed frame must diverge");
+        assert_eq!(diff.index, 1, "first divergent frame index");
+
+        // 3. An extra aggregate on the capture side: count divergence with
+        // an absent golden counterpart.
+        let extra = vec![
+            base[0].clone(),
+            base[1].clone(),
+            session_event(
+                "evt_11c556f9e001DDDDDDDDDDDDDDDD",
+                "ses_01JZY0ID0123456789CCCC",
+                1,
+                "idle",
+            ),
+        ];
+        let diff = compare_scenario_captures(&golden, &scenario_capture(&extra, &env()))
+            .expect("an extra group must diverge");
+        assert!(diff.group.contains("capture"), "extra group is reported on the capture side");
     }
 
     // -- scenario collection (policy b) -------------------------------------

@@ -1,0 +1,427 @@
+{
+  "description": "config-seeded openai-compatible provider -> fake local LLM -> prompt/message flow frames",
+  "groups": [
+    [
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "canonical": "<SANDBOX>/project",
+            "id": "<PRJ_ID:1>",
+            "sandboxes": [],
+            "time": {
+              "active": "<TS>",
+              "created": "<TS>",
+              "updated": "<TS>"
+            }
+          },
+          "id": "<EVT_ID:1>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "project.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:2>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "integration.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:3>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "provider.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:4>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "model.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:5>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "agent.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:6>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "command.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:7>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "skill.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:8>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "websearch.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:9>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "reference.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {},
+          "id": "<EVT_ID:10>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "plugin.updated"
+        }
+      }
+    ],
+    [
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "location": {
+              "directory": "<SANDBOX>/project"
+            },
+            "model": {
+              "id": "fake-model",
+              "providerID": "parityfake"
+            },
+            "projectID": "<PRJ_ID:1>",
+            "sessionID": "<SES_ID:1>",
+            "slug": "<SLUG>",
+            "subpath": "",
+            "title": "parity prompt",
+            "version": "<VERSION>"
+          },
+          "durable": {
+            "aggregateID": "<SES_ID:1>",
+            "seq": 0,
+            "version": 1
+          },
+          "id": "<EVT_ID:1>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "session.created"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "inboxID": "<MSG_ID:1>",
+            "item": {
+              "delivery": "steer",
+              "payload": {
+                "text": "Say hello."
+              },
+              "type": "user"
+            },
+            "sessionID": "<SES_ID:1>"
+          },
+          "durable": {
+            "aggregateID": "<SES_ID:1>",
+            "seq": 1,
+            "version": 1
+          },
+          "id": "<EVT_ID:2>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "session.inbox.enqueued"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "delta": {
+              "core/codemode": "<SHA256>",
+              "core/date": "<SHA256>",
+              "core/environment": "<SHA256>",
+              "core/skill-guidance": "<SHA256>"
+            },
+            "sessionID": "<SES_ID:1>"
+          },
+          "durable": {
+            "aggregateID": "<SES_ID:1>",
+            "seq": 3,
+            "version": 2
+          },
+          "id": "<EVT_ID:3>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "metadata": {
+            "instructions": {
+              "initial": true
+            }
+          },
+          "type": "session.instructions.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "inboxID": "<MSG_ID:1>",
+            "sessionID": "<SES_ID:1>"
+          },
+          "durable": {
+            "aggregateID": "<SES_ID:1>",
+            "seq": 4,
+            "version": 1
+          },
+          "id": "<EVT_ID:4>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "session.inbox.delivered"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "agent": "build",
+            "assistantMessageID": "<MSG_ID:2>",
+            "model": {
+              "id": "fake-model",
+              "providerID": "parityfake",
+              "variant": "default"
+            },
+            "sessionID": "<SES_ID:1>",
+            "started": "<TS>"
+          },
+          "durable": {
+            "aggregateID": "<SES_ID:1>",
+            "seq": 5,
+            "version": 1
+          },
+          "id": "<EVT_ID:5>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "session.step.started"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "assistantMessageID": "<MSG_ID:2>",
+            "ordinal": 0,
+            "sessionID": "<SES_ID:1>"
+          },
+          "durable": {
+            "aggregateID": "<SES_ID:1>",
+            "seq": 6,
+            "version": 1
+          },
+          "id": "<EVT_ID:6>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "session.text.started"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "assistantMessageID": "<MSG_ID:2>",
+            "delta": "Parity fake says hello.",
+            "ordinal": 0,
+            "sessionID": "<SES_ID:1>"
+          },
+          "id": "<EVT_ID:7>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "session.text.delta"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "assistantMessageID": "<MSG_ID:2>",
+            "ordinal": 0,
+            "sessionID": "<SES_ID:1>",
+            "text": "Parity fake says hello."
+          },
+          "durable": {
+            "aggregateID": "<SES_ID:1>",
+            "seq": 7,
+            "version": 1
+          },
+          "id": "<EVT_ID:8>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "session.text.ended"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "assistantMessageID": "<MSG_ID:2>",
+            "sessionID": "<SES_ID:1>"
+          },
+          "durable": {
+            "aggregateID": "<SES_ID:1>",
+            "seq": 8,
+            "version": 1
+          },
+          "id": "<EVT_ID:9>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "session.step.streamed"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "assistantMessageID": "<MSG_ID:2>",
+            "cost": 0,
+            "finish": "stop",
+            "rawFinish": "stop",
+            "sessionID": "<SES_ID:1>",
+            "tokens": {
+              "cache": {
+                "read": 0,
+                "write": 0
+              },
+              "input": 11,
+              "output": 7,
+              "reasoning": 0
+            }
+          },
+          "durable": {
+            "aggregateID": "<SES_ID:1>",
+            "seq": 9,
+            "version": 1
+          },
+          "id": "<EVT_ID:10>",
+          "location": {
+            "directory": "<SANDBOX>/project"
+          },
+          "type": "session.step.ended"
+        }
+      }
+    ],
+    [
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "sessionID": "<SES_ID:1>"
+          },
+          "durable": {
+            "aggregateID": "<SES_ID:1>",
+            "seq": 2,
+            "version": 1
+          },
+          "id": "<EVT_ID:1>",
+          "type": "session.execution.started"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "cost": 0,
+            "sessionID": "<SES_ID:1>",
+            "tokens": {
+              "cache": {
+                "read": 0,
+                "write": 0
+              },
+              "input": 11,
+              "output": 7,
+              "reasoning": 0
+            }
+          },
+          "id": "<EVT_ID:2>",
+          "type": "session.usage.updated"
+        }
+      },
+      {
+        "data": {
+          "created": "<TS>",
+          "data": {
+            "sessionID": "<SES_ID:1>"
+          },
+          "durable": {
+            "aggregateID": "<SES_ID:1>",
+            "seq": 10,
+            "version": 1
+          },
+          "id": "<EVT_ID:3>",
+          "type": "session.execution.succeeded"
+        }
+      }
+    ],
+    [
+      {
+        "data": {
+          "data": {},
+          "id": "<EVT_ID:1>",
+          "type": "server.connected"
+        }
+      }
+    ]
+  ],
+  "scenario": "prompt_fake_llm"
+}

@@ -205,7 +205,14 @@ fn prepare_sandbox(sandbox: &Path) -> Result<(PathBuf, PathBuf)> {
 }
 
 /// Build the hermetic bun command line (see module docs).
-fn build_command(bun: &Path, root: &Path, port: u16, home: &Path, tmp: &Path) -> Command {
+fn build_command(
+    bun: &Path,
+    root: &Path,
+    port: u16,
+    home: &Path,
+    tmp: &Path,
+    extra_env: &[(&str, &str)],
+) -> Command {
     let mut command = Command::new(bun);
     command
         .current_dir(root)
@@ -235,11 +242,11 @@ fn build_command(bun: &Path, root: &Path, port: u16, home: &Path, tmp: &Path) ->
         .env("TMPDIR", tmp)
         .env("OPENCODE_PASSWORD", REF_PASSWORD)
         .env("OPENCODE_VERSION", "2.0.24")
-        .env("OPENCODE_DISABLE_MODELS_FETCH", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+        .env("OPENCODE_DISABLE_MODELS_FETCH", "1");
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     // New process group so shutdown can signal bun's nested child too.
     command.process_group(0);
     command
@@ -264,6 +271,14 @@ fn tee_to_log(pipe: impl tokio::io::AsyncRead + Send + Unpin + 'static, path: Pa
 /// Fails (rather than hangs) if the process exits during boot; stdout/stderr
 /// are teed into `<sandbox>/logs/` for diagnosis.
 pub async fn spawn() -> Result<ReferenceServer> {
+    spawn_with_env(&[]).await
+}
+
+/// [`spawn`] with additional child environment entries (applied after the
+/// hermetic base, so they can override it). Used by scenario experiments —
+/// e.g. `OPENCODE_SIMULATE=1` (see `tools/parity/src/scenario.rs` docs for
+/// what simulation mode does and does not provide).
+pub async fn spawn_with_env(extra_env: &[(&str, &str)]) -> Result<ReferenceServer> {
     let bun = bun_path().ok_or_else(|| anyhow!("bun not found (set PARITY_BUN)"))?;
     let root = ref_root();
     let port = free_port()?;
@@ -273,7 +288,7 @@ pub async fn spawn() -> Result<ReferenceServer> {
     let url = format!("http://127.0.0.1:{port}");
     let auth = minih::basic_auth("opencode", REF_PASSWORD);
 
-    let mut child = build_command(&bun, &root, port, &home, &tmp)
+    let mut child = build_command(&bun, &root, port, &home, &tmp, extra_env)
         .spawn()
         .with_context(|| format!("spawn {}", bun.display()))?;
 

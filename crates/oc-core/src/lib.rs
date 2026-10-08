@@ -1,5 +1,6 @@
 //! opencode core engine: db, bus, session runner, tools, permissions, hooks
 
+pub mod bus;
 pub mod config;
 pub mod database;
 pub mod file_access;
