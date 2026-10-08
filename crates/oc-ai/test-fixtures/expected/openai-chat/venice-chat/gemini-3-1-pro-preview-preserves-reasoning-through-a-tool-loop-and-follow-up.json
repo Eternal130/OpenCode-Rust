@@ -1,0 +1,370 @@
+{
+ "group": "venice-chat",
+ "name": "gemini-3-1-pro-preview-preserves-reasoning-through-a-tool-loop-and-follow-up",
+ "protocol": "venice-chat",
+ "provider": "venice",
+ "providerMetadataKey": "venice",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "**Calculating ZEBRA Conversion**\n\nI'm currently processing the calculation involving ZEBRA's conversion rate. My next step is to use the `lookup_rate` tool with the code \"ZEBRA\" to fetch the necessary value, which will then be used in the full equation.\n\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "call_4908320",
+     "name": "lookup_rate",
+     "type": "tool-input-start"
+    },
+    {
+     "id": "call_4908320",
+     "input": {
+      "code": "ZEBRA"
+     },
+     "name": "lookup_rate",
+     "text": "{\"code\":\"ZEBRA\"}",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningDetails": [
+        {
+         "format": "google-gemini-v1",
+         "index": 0,
+         "text": "**Calculating ZEBRA Conversion**\n\nI'm currently processing the calculation involving ZEBRA's conversion rate. My next step is to use the `lookup_rate` tool with the code \"ZEBRA\" to fetch the necessary value, which will then be used in the full equation.\n\n",
+         "type": "reasoning.text"
+        },
+        {
+         "data": "AY89a19Tkd2zuyuB3m6as2cMeOoFk8xFfcBdsUI+RBkTCE1GVBd5hMIfNsjOj+YTucPL1hYoWodr2oZsMKDnPuYee0AmGYl8jHzVKgQFSXzgIeWEhG+hOMvTEa4BoruFowcHzbLhym48OlBys47Tlo7WF4tK4s8Z7q8cpbqGsA0NkUqPt8P7Uk3ZaRTUJBbIE08+JgNUUwiJkT4AVSO635aMUYTcIkt+8TVbqOLITfSdDtkxhAmrInfn7FqGlNop3RH1TUcb3xnUOsnHXoreWLlAyWTlWNvOa7hjUH8vUwILPmtG6ixKZdf4i/UIgm551Z5tgE05SJBcR/m7ALagyOyEilWqxGkyf+5jvNycUlk/mBkNHLV45amgUG5zhboVEAEVFYPRa+Nnfzxi+DEdM1ntDURrB5dl4Jbotx67627EbsZm4z2sKUZ4jo/eBj9fI3MUqjTYKtMXBSyuen/m/Uw2Ji9iIQIlWUt/G86kOjQUYFY60g6TxEO4BLouwLZJ0fXxWdolvtMnH90+skJ+I7aFQjGrnwdjGsT0oXA0/vG3W8GhRSokdICVQBq14EFvjcVvI1kEgj7NTtKkB/+UWRtRbRhSA5F25/dHvqAT4ioYy/5sRwYFXMwJmM52I8DpLiaBrp8wTidLNjTpD9KlImbd2r89LS9GG5NeqNWksF9XbEQAMannsu19HC9xf+CCz5FBz5PjpR0+pvybIJLmph94u4I0cdLsbycbbdIaihqeIc593sQv3nvm9VYZMJcgnQWIKmXofSlV4zi6p0wRPvmgeiPo+Lv6DrtPTtcaRLkkyGrg8uvkq2Is9H6me8y8HCXGIze3np22MjWM5r2+UYMia+xY+E3neBC1AZrlN+GJarvf0THgHInLLnE78f+w3mJByFgXMy6OOEs4QI0+F8yxF9GembhqebXYKWGWUkuArnLfV6TZ13v8s1J9IiNObPU0AJjq+wmlg2ChAIs082sh8Q==",
+         "format": "google-gemini-v1",
+         "id": "call_4908320",
+         "index": 0,
+         "type": "reasoning.encrypted"
+        }
+       ],
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "call_4908320",
+     "name": "lookup_rate",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "tool-input-end"
+    },
+    {
+     "id": "call_4908320",
+     "input": {
+      "code": "ZEBRA"
+     },
+     "name": "lookup_rate",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "tool-call"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "STOP"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 96,
+      "nonCachedInputTokens": 96,
+      "outputTokens": 169,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 169,
+        "completion_tokens_details": {
+         "audio_tokens": 0,
+         "image_tokens": 0,
+         "reasoning_tokens": 152
+        },
+        "prompt_tokens": 96,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 265
+       }
+      },
+      "reasoningTokens": 152,
+      "totalTokens": 265
+     }
+    },
+    {
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "STOP"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 96,
+      "nonCachedInputTokens": 96,
+      "outputTokens": 169,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 169,
+        "completion_tokens_details": {
+         "audio_tokens": 0,
+         "image_tokens": 0,
+         "reasoning_tokens": 152
+        },
+        "prompt_tokens": 96,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 265
+       }
+      },
+      "reasoningTokens": 152,
+      "totalTokens": 265
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "400",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningDetails": [
+        {
+         "format": "google-gemini-v1",
+         "index": 0,
+         "signature": "AY89a1+fQ9YpZF71EoH4pNDO6g5NeqvLRAav/WG6sv9V/5fpifhK6ZDc6m89qgCpOEBhjTJ+a+ux1dFog+eB2nR/G8VVKt1Zr2+2NKXO3Q3ksKE+E51IRRzK/ywpDYpE8AlE6Kb7EG2x/ZVMpy24TOLY+LL8JNsrz8uHBC1PtPtiZe/gP+Kvu0Yqk+VNYv16wAubtiA0oy0c+wyRzd80jRvqCZpBIGPlLAU515MPpjXNGu0A5ft4uu3oGPJHl5G/Ry4Fm5fvWKl759+Jwx9m7d50+vcttr5SpHm//MvNsUTnqjYkraw1S69+9oB57HoBn8d8pwTHpud/6FARun33EjfPW86Xx2fS448QtKc3c9nxSdGyZgTV0TpA63Uz7n0nGd9fRYrghp3lQv5QyoRIgNg+YeBf/WDNzSW2MO6Y2HLFoo3K0vJh1KMfWhjECNxP1Qfjfz+VjwSV7+OzF9CNw23f8R2udRBr1EUYhTu13ckjFLWjCD5fGjvmLhsae3CgmuFV2Rvaxqrf/H79Tz+X9W/Tw8PuQ0E1pCCpiMe1gR1CT+LJPWxjV96DPHQ0r+1lnekrr5NkO7UAZ64HVALHJRpACdJsVhwI1TBi4f89b1by1s7OaWlQTw7thX7CLRV2W3HoMUccJaofszVEfbD8+SaeZtZgyw9mkYvxgYtu3Odxx2YGHgs=",
+         "type": "reasoning.text"
+        }
+       ]
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "STOP"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 233,
+      "nonCachedInputTokens": 233,
+      "outputTokens": 129,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 129,
+        "completion_tokens_details": {
+         "audio_tokens": 0,
+         "image_tokens": 0,
+         "reasoning_tokens": 126
+        },
+        "prompt_tokens": 233,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 362
+       }
+      },
+      "reasoningTokens": 126,
+      "totalTokens": 362
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "STOP"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 233,
+      "nonCachedInputTokens": 233,
+      "outputTokens": 129,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 129,
+        "completion_tokens_details": {
+         "audio_tokens": 0,
+         "image_tokens": 0,
+         "reasoning_tokens": 126
+        },
+        "prompt_tokens": 233,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 362
+       }
+      },
+      "reasoningTokens": 126,
+      "totalTokens": 362
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "407",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningDetails": [
+        {
+         "format": "google-gemini-v1",
+         "index": 0,
+         "signature": "AY89a1/t2vneT6Dy8hJmYd66cSC0Fk3bKHK7hJI5vTtBcKe38EQ6JXMwTlxi2K47pfmvruV0B6Ks0CZCF9N7rEOT+fXTleU1WPEAHHJPX7KkncEJK4KNIeJsTzyEjSPn5t8kb/vNruIV2KE2/l0kylycTNOubuO8DGlkKOp478zuwZppB0vFaoLp1byEUtyT/MHdN/KckvvKY99ZB2ksWrc51/5Z7jx7GeXGpTl3jHEKzdLWrfsYYyjPOv4h0ZHN8ANmYMTWpGUm8jqxB0pHQFBVS0U5YhF+fuU6Nk3lUNuLnEydq6UH6VydtTxDjUDALIfHhkasmTRXnL/7X3/z3rLhRXRGhga9lHnSnEhmjdLj9iOn/73wjA4QxnT14P+8F45z4ePO19ZGKr/j5WBvBMem92Yqv9HweDo9IreBa8EbqPwlsnjbXvJB7MuBp2TJd4szb7azQ+zaPU7pf5B3fjKC3K8p26qF0C+TkGd72PezZw662/FMkkC/b88sgDgMfgSK7dMqVvv7swafRzFL1IZzTFoJJ3Ouk/VCKGWCHOx+c2EPtvv+IzGhQ1k9dn44bq953wBamkzDjQWcP46+VKp2PPz5yV9AgGCmdi1SRYNU361FiUGlU40cImBLK1MoIqa/YnYaaXMtK9L7/35uOjyg/hae3REIw5N4Y1fiSx9UCKi7eYviBwrY3kZJYdy4UdsN63ahHb2SO1gfZKAg1G36Gn5TIiYGO4dNWE9c",
+         "type": "reasoning.text"
+        }
+       ]
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "STOP"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 99,
+      "nonCachedInputTokens": 99,
+      "outputTokens": 119,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 119,
+        "completion_tokens_details": {
+         "audio_tokens": 0,
+         "image_tokens": 0,
+         "reasoning_tokens": 116
+        },
+        "prompt_tokens": 99,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 218
+       }
+      },
+      "reasoningTokens": 116,
+      "totalTokens": 218
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "STOP"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 99,
+      "nonCachedInputTokens": 99,
+      "outputTokens": 119,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 119,
+        "completion_tokens_details": {
+         "audio_tokens": 0,
+         "image_tokens": 0,
+         "reasoning_tokens": 116
+        },
+        "prompt_tokens": 99,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 218
+       }
+      },
+      "reasoningTokens": 116,
+      "totalTokens": 218
+     }
+    }
+   ]
+  }
+ ]
+}

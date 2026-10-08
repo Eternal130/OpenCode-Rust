@@ -1,0 +1,345 @@
+{
+  "group": "moonshot-responses",
+  "scenario": "kimi-k3-preserves-reasoning-through-a-tool-loop-and-follow-up",
+  "interaction": 0,
+  "machine": "open-responses",
+  "provider": "moonshot",
+  "metadataKey": "moonshot",
+  "frames": [
+    "{\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp_2f2e0e0c9fb33c830afc389e4\",\"object\":\"response\",\"created_at\":1789446151,\"completed_at\":null,\"status\":\"in_progress\",\"error\":null,\"incomplete_details\":null,\"output\":[],\"usage\":null,\"store\":false,\"background\":false,\"previous_response_id\":null,\"conversation\":null,\"instructions\":null,\"reasoning\":null,\"text\":{\"format\":{\"type\":\"text\"}},\"tools\":[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"city\":{\"enum\":[\"Paris\"],\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"},\"strict\":false}],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true,\"max_output_tokens\":null,\"max_tool_calls\":null,\"metadata\":null,\"model\":\"kimi-k3\",\"temperature\":1,\"top_p\":0.95,\"presence_penalty\":0,\"frequency_penalty\":0,\"top_logprobs\":0,\"truncation\":\"disabled\",\"prompt_cache_key\":null,\"safety_identifier\":null,\"service_tier\":\"default\"}}",
+    "{\"type\":\"response.in_progress\",\"sequence_number\":1,\"response\":{\"id\":\"resp_2f2e0e0c9fb33c830afc389e4\",\"object\":\"response\",\"created_at\":1789446151,\"completed_at\":null,\"status\":\"in_progress\",\"error\":null,\"incomplete_details\":null,\"output\":[],\"usage\":null,\"store\":false,\"background\":false,\"previous_response_id\":null,\"conversation\":null,\"instructions\":null,\"reasoning\":null,\"text\":{\"format\":{\"type\":\"text\"}},\"tools\":[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"city\":{\"enum\":[\"Paris\"],\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"},\"strict\":false}],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true,\"max_output_tokens\":null,\"max_tool_calls\":null,\"metadata\":null,\"model\":\"kimi-k3\",\"temperature\":1,\"top_p\":0.95,\"presence_penalty\":0,\"frequency_penalty\":0,\"top_logprobs\":0,\"truncation\":\"disabled\",\"prompt_cache_key\":null,\"safety_identifier\":null,\"service_tier\":\"default\"}}",
+    "{\"type\":\"response.output_item.added\",\"sequence_number\":2,\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"status\":\"in_progress\",\"summary\":[]}}",
+    "{\"type\":\"response.reasoning_summary_part.added\",\"sequence_number\":3,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"part\":{\"text\":\"\",\"type\":\"summary_text\"}}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":4,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\"The\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":5,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" user\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":6,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" wants\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":7,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" me\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":8,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" to\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":9,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" call\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":10,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" get\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":11,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\"_we\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":12,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\"ather\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":13,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" for\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":14,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" Paris\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":15,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\",\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":16,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" then\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":17,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" report\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":18,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" in\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":19,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" one\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":20,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" short\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":21,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" sentence\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":22,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\".\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":23,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" I'll\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":24,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" call\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":25,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" the\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":26,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\" tool\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":27,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"delta\":\".\"}",
+    "{\"type\":\"response.reasoning_summary_text.done\",\"sequence_number\":28,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"text\":\"The user wants me to call get_weather for Paris, then report in one short sentence. I'll call the tool.\"}",
+    "{\"type\":\"response.reasoning_summary_part.done\",\"sequence_number\":29,\"item_id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"output_index\":0,\"summary_index\":0,\"part\":{\"text\":\"The user wants me to call get_weather for Paris, then report in one short sentence. I'll call the tool.\",\"type\":\"summary_text\"}}",
+    "{\"type\":\"response.output_item.done\",\"sequence_number\":30,\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"status\":\"completed\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"The user wants me to call get_weather for Paris, then report in one short sentence. I'll call the tool.\"}]}}",
+    "{\"type\":\"response.output_item.added\",\"sequence_number\":31,\"output_index\":1,\"item\":{\"type\":\"function_call\",\"id\":\"fc_RL0UKS2wzOVldhjBgETPmv9y\",\"status\":\"in_progress\",\"call_id\":\"get_weather_0_70690bd1\",\"name\":\"get_weather\",\"arguments\":\"\"}}",
+    "{\"type\":\"response.function_call_arguments.delta\",\"sequence_number\":32,\"item_id\":\"fc_RL0UKS2wzOVldhjBgETPmv9y\",\"output_index\":1,\"delta\":\"{\"}",
+    "{\"type\":\"response.function_call_arguments.delta\",\"sequence_number\":33,\"item_id\":\"fc_RL0UKS2wzOVldhjBgETPmv9y\",\"output_index\":1,\"delta\":\"\\\"city\\\": \\\"\"}",
+    "{\"type\":\"response.function_call_arguments.delta\",\"sequence_number\":34,\"item_id\":\"fc_RL0UKS2wzOVldhjBgETPmv9y\",\"output_index\":1,\"delta\":\"Paris\"}",
+    "{\"type\":\"response.function_call_arguments.delta\",\"sequence_number\":35,\"item_id\":\"fc_RL0UKS2wzOVldhjBgETPmv9y\",\"output_index\":1,\"delta\":\"\\\"\"}",
+    "{\"type\":\"response.function_call_arguments.delta\",\"sequence_number\":36,\"item_id\":\"fc_RL0UKS2wzOVldhjBgETPmv9y\",\"output_index\":1,\"delta\":\"}\"}",
+    "{\"type\":\"response.function_call_arguments.done\",\"sequence_number\":37,\"item_id\":\"fc_RL0UKS2wzOVldhjBgETPmv9y\",\"output_index\":1,\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\",\"name\":\"get_weather\"}",
+    "{\"type\":\"response.output_item.done\",\"sequence_number\":38,\"output_index\":1,\"item\":{\"type\":\"function_call\",\"id\":\"fc_RL0UKS2wzOVldhjBgETPmv9y\",\"status\":\"completed\",\"call_id\":\"get_weather_0_70690bd1\",\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\"}}",
+    "{\"type\":\"response.completed\",\"sequence_number\":39,\"response\":{\"id\":\"resp_2f2e0e0c9fb33c830afc389e4\",\"object\":\"response\",\"created_at\":1789446151,\"completed_at\":1789446156,\"status\":\"completed\",\"error\":null,\"incomplete_details\":null,\"output\":[{\"type\":\"reasoning\",\"id\":\"rs_nvKc73RJDdXDESGLCeDxWMuM\",\"status\":\"completed\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"The user wants me to call get_weather for Paris, then report in one short sentence. I'll call the tool.\"}]},{\"type\":\"function_call\",\"id\":\"fc_RL0UKS2wzOVldhjBgETPmv9y\",\"status\":\"completed\",\"call_id\":\"get_weather_0_70690bd1\",\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\"}],\"usage\":{\"input_tokens\":200,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0},\"output_tokens\":74,\"output_tokens_details\":{\"reasoning_tokens\":24},\"total_tokens\":274},\"store\":false,\"background\":false,\"previous_response_id\":null,\"conversation\":null,\"instructions\":null,\"reasoning\":null,\"text\":{\"format\":{\"type\":\"text\"}},\"tools\":[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"city\":{\"enum\":[\"Paris\"],\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"},\"strict\":false}],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true,\"max_output_tokens\":null,\"max_tool_calls\":null,\"metadata\":null,\"model\":\"kimi-k3\",\"temperature\":1,\"top_p\":0.95,\"presence_penalty\":0,\"frequency_penalty\":0,\"top_logprobs\":0,\"truncation\":\"disabled\",\"prompt_cache_key\":null,\"safety_identifier\":null,\"service_tier\":\"default\"}}"
+  ],
+  "events": [
+    {
+      "type": "step-start",
+      "index": 0
+    },
+    {
+      "type": "reasoning-start",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "providerMetadata": {
+        "moonshot": {
+          "itemId": "rs_nvKc73RJDdXDESGLCeDxWMuM",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": "The"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " user"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " wants"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " me"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " to"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " call"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " get"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": "_we"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": "ather"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " for"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " Paris"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": ","
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " then"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " report"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " in"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " one"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " short"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " sentence"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": "."
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " I'll"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " call"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " the"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": " tool"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": "."
+    },
+    {
+      "type": "reasoning-end",
+      "id": "rs_nvKc73RJDdXDESGLCeDxWMuM:0",
+      "text": "The user wants me to call get_weather for Paris, then report in one short sentence. I'll call the tool.",
+      "providerMetadata": {
+        "moonshot": {
+          "itemId": "rs_nvKc73RJDdXDESGLCeDxWMuM",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "tool-input-start",
+      "id": "get_weather_0_70690bd1",
+      "name": "get_weather",
+      "providerMetadata": {
+        "moonshot": {
+          "itemId": "fc_RL0UKS2wzOVldhjBgETPmv9y"
+        }
+      }
+    },
+    {
+      "type": "tool-input-delta",
+      "id": "get_weather_0_70690bd1",
+      "name": "get_weather",
+      "text": "{",
+      "input": {}
+    },
+    {
+      "type": "tool-input-delta",
+      "id": "get_weather_0_70690bd1",
+      "name": "get_weather",
+      "text": "\"city\": \"",
+      "input": {
+        "city": ""
+      }
+    },
+    {
+      "type": "tool-input-delta",
+      "id": "get_weather_0_70690bd1",
+      "name": "get_weather",
+      "text": "Paris",
+      "input": {
+        "city": "Paris"
+      }
+    },
+    {
+      "type": "tool-input-delta",
+      "id": "get_weather_0_70690bd1",
+      "name": "get_weather",
+      "text": "\"",
+      "input": {
+        "city": "Paris"
+      }
+    },
+    {
+      "type": "tool-input-delta",
+      "id": "get_weather_0_70690bd1",
+      "name": "get_weather",
+      "text": "}",
+      "input": {
+        "city": "Paris"
+      }
+    },
+    {
+      "type": "tool-input-end",
+      "id": "get_weather_0_70690bd1",
+      "name": "get_weather",
+      "providerMetadata": {
+        "moonshot": {
+          "itemId": "fc_RL0UKS2wzOVldhjBgETPmv9y"
+        }
+      }
+    },
+    {
+      "type": "tool-call",
+      "id": "get_weather_0_70690bd1",
+      "name": "get_weather",
+      "input": {
+        "city": "Paris"
+      },
+      "providerMetadata": {
+        "moonshot": {
+          "itemId": "fc_RL0UKS2wzOVldhjBgETPmv9y"
+        }
+      }
+    },
+    {
+      "type": "step-finish",
+      "index": 0,
+      "reason": {
+        "normalized": "tool-calls"
+      },
+      "usage": {
+        "inputTokens": 200,
+        "outputTokens": 74,
+        "nonCachedInputTokens": 200,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "reasoningTokens": 24,
+        "totalTokens": 274,
+        "providerMetadata": {
+          "moonshot": {
+            "input_tokens": 200,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 74,
+            "output_tokens_details": {
+              "reasoning_tokens": 24
+            },
+            "total_tokens": 274
+          }
+        }
+      },
+      "providerMetadata": {
+        "moonshot": {
+          "responseId": "resp_2f2e0e0c9fb33c830afc389e4",
+          "serviceTier": "default"
+        }
+      }
+    },
+    {
+      "type": "finish",
+      "reason": {
+        "normalized": "tool-calls"
+      },
+      "usage": {
+        "inputTokens": 200,
+        "outputTokens": 74,
+        "nonCachedInputTokens": 200,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "reasoningTokens": 24,
+        "totalTokens": 274,
+        "providerMetadata": {
+          "moonshot": {
+            "input_tokens": 200,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 74,
+            "output_tokens_details": {
+              "reasoning_tokens": 24
+            },
+            "total_tokens": 274
+          }
+        }
+      },
+      "providerMetadata": {
+        "moonshot": {
+          "responseId": "resp_2f2e0e0c9fb33c830afc389e4",
+          "serviceTier": "default"
+        }
+      }
+    }
+  ],
+  "error": null
+}

@@ -1,0 +1,146 @@
+{
+  "group": "alibaba-responses",
+  "scenario": "qwen-3-8-max-continues-a-stored-response",
+  "interaction": 1,
+  "machine": "open-responses",
+  "provider": "alibaba",
+  "metadataKey": "alibaba",
+  "frames": [
+    "{\"sequence_number\":0,\"type\":\"response.created\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"none\"},\"created_at\":1789446230,\"store\":true,\"tools\":[],\"output\":[],\"top_p\":1.0,\"completed_at\":1789446230,\"previous_response_id\":\"resp_69640198-a315-9e88-9b70-679d545ee9ca\",\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_2c1473fa-ac55-9733-817f-30994dd0a4e9\",\"max_output_tokens\":1024,\"object\":\"response\",\"status\":\"queued\"}}",
+    "{\"sequence_number\":1,\"type\":\"response.in_progress\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"none\"},\"created_at\":1789446230,\"store\":true,\"tools\":[],\"output\":[],\"top_p\":1.0,\"completed_at\":1789446230,\"previous_response_id\":\"resp_69640198-a315-9e88-9b70-679d545ee9ca\",\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_2c1473fa-ac55-9733-817f-30994dd0a4e9\",\"max_output_tokens\":1024,\"object\":\"response\",\"status\":\"in_progress\"}}",
+    "{\"sequence_number\":2,\"item\":{\"id\":\"msg_7162b038-5ed9-4abc-86d2-0620bfa653ad\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[],\"status\":\"in_progress\"},\"output_index\":0,\"type\":\"response.output_item.added\"}",
+    "{\"sequence_number\":3,\"output_index\":0,\"type\":\"response.content_part.added\",\"content_index\":0,\"item_id\":\"msg_7162b038-5ed9-4abc-86d2-0620bfa653ad\",\"part\":{\"type\":\"output_text\",\"annotations\":[],\"text\":\"\"}}",
+    "{\"sequence_number\":4,\"content_index\":0,\"item_id\":\"msg_7162b038-5ed9-4abc-86d2-0620bfa653ad\",\"delta\":\"ap\",\"output_index\":0,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":5,\"content_index\":0,\"item_id\":\"msg_7162b038-5ed9-4abc-86d2-0620bfa653ad\",\"delta\":\"ricot\",\"output_index\":0,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":6,\"content_index\":0,\"item_id\":\"msg_7162b038-5ed9-4abc-86d2-0620bfa653ad\",\"delta\":\"\",\"output_index\":0,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":7,\"content_index\":0,\"item_id\":\"msg_7162b038-5ed9-4abc-86d2-0620bfa653ad\",\"text\":\"apricot\",\"output_index\":0,\"type\":\"response.output_text.done\",\"logprobs\":[]}",
+    "{\"sequence_number\":8,\"output_index\":0,\"type\":\"response.content_part.done\",\"content_index\":0,\"item_id\":\"msg_7162b038-5ed9-4abc-86d2-0620bfa653ad\",\"part\":{\"type\":\"output_text\",\"annotations\":[],\"text\":\"apricot\"}}",
+    "{\"sequence_number\":9,\"item\":{\"id\":\"msg_7162b038-5ed9-4abc-86d2-0620bfa653ad\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"apricot\"}],\"status\":\"completed\"},\"output_index\":0,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":10,\"type\":\"response.completed\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"none\"},\"usage\":{\"total_tokens\":92,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":3,\"input_tokens\":89,\"output_tokens_details\":{\"reasoning_tokens\":0},\"x_details\":[{\"total_tokens\":92,\"x_billing_type\":\"response_api\",\"output_tokens\":3,\"input_tokens\":89,\"prompt_tokens_details\":{\"cached_tokens\":0}}]},\"created_at\":1789446230,\"store\":true,\"tools\":[],\"output\":[{\"id\":\"msg_7162b038-5ed9-4abc-86d2-0620bfa653ad\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"apricot\"}],\"status\":\"completed\"}],\"top_p\":1.0,\"completed_at\":1789446230,\"previous_response_id\":\"resp_69640198-a315-9e88-9b70-679d545ee9ca\",\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_2c1473fa-ac55-9733-817f-30994dd0a4e9\",\"max_output_tokens\":1024,\"object\":\"response\",\"status\":\"completed\"}}"
+  ],
+  "events": [
+    {
+      "type": "step-start",
+      "index": 0
+    },
+    {
+      "type": "text-start",
+      "id": "msg_7162b038-5ed9-4abc-86d2-0620bfa653ad",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_7162b038-5ed9-4abc-86d2-0620bfa653ad"
+        }
+      }
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_7162b038-5ed9-4abc-86d2-0620bfa653ad",
+      "text": "ap"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_7162b038-5ed9-4abc-86d2-0620bfa653ad",
+      "text": "ricot"
+    },
+    {
+      "type": "text-end",
+      "id": "msg_7162b038-5ed9-4abc-86d2-0620bfa653ad",
+      "text": "apricot",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_7162b038-5ed9-4abc-86d2-0620bfa653ad"
+        }
+      }
+    },
+    {
+      "type": "step-finish",
+      "index": 0,
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 89,
+        "outputTokens": 3,
+        "nonCachedInputTokens": 89,
+        "cacheReadInputTokens": 0,
+        "reasoningTokens": 0,
+        "totalTokens": 92,
+        "providerMetadata": {
+          "alibaba": {
+            "input_tokens": 89,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 3,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 92,
+            "x_details": [
+              {
+                "total_tokens": 92,
+                "x_billing_type": "response_api",
+                "output_tokens": 3,
+                "input_tokens": 89,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "responseId": "resp_2c1473fa-ac55-9733-817f-30994dd0a4e9",
+          "serviceTier": "default"
+        }
+      }
+    },
+    {
+      "type": "finish",
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 89,
+        "outputTokens": 3,
+        "nonCachedInputTokens": 89,
+        "cacheReadInputTokens": 0,
+        "reasoningTokens": 0,
+        "totalTokens": 92,
+        "providerMetadata": {
+          "alibaba": {
+            "input_tokens": 89,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 3,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 92,
+            "x_details": [
+              {
+                "total_tokens": 92,
+                "x_billing_type": "response_api",
+                "output_tokens": 3,
+                "input_tokens": 89,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "responseId": "resp_2c1473fa-ac55-9733-817f-30994dd0a4e9",
+          "serviceTier": "default"
+        }
+      }
+    }
+  ],
+  "error": null
+}

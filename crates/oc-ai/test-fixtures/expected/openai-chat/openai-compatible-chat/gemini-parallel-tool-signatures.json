@@ -1,0 +1,206 @@
+{
+ "group": "openai-compatible-chat",
+ "name": "gemini-parallel-tool-signatures",
+ "protocol": "openai-chat",
+ "provider": "google",
+ "providerMetadataKey": "google",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "call_723181",
+     "name": "get_weather",
+     "providerMetadata": {
+      "google": {
+       "extraContent": {
+        "google": {
+         "thought_signature": "ErYCCrMCAWkUfRNGh+/Zbc8YUSzk1yfWAfROcjA4HyF1x69jz6167w8zd4n6kZQQ5FDeBZ5HZMEbEkQ4ENOpzsQL8roCR6wONkhXpiduWrTD6XwbP8KGNkf6D1tX/JlBh7G5Cl+0rdjiSOl/mdY1lcjbkfyCRFs5T8odNWMG7WD3rCrXJDFQ/5QfOl+tqVTceKGz2yyXBhOhvsQDU33ulR9tHQJo/Fmx3HNyDdwvmyKUXm+kgqHsYZnkdv6y6xZwy9zBXGUO4QwxelMw3Rrc24Mp2rNbEDZS3YEeP72Jn/hIP5a8XWOx6+zop/4/CjYxxSfN/tJRY5d48NAKRNFzUN1Az8SvAs/N5X2I3/5ZMaDnQWW/BVdS9fm2KFYJ2baqtBiRRnJxMq4ELArkKjGZzHpd97XG8YjV6g=="
+        }
+       }
+      }
+     },
+     "type": "tool-input-start"
+    },
+    {
+     "id": "call_723181",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "get_weather",
+     "text": "{\"city\":\"Paris\"}",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_723184",
+     "name": "get_weather",
+     "type": "tool-input-start"
+    },
+    {
+     "id": "call_723184",
+     "input": {
+      "city": "Tokyo"
+     },
+     "name": "get_weather",
+     "text": "{\"city\":\"Tokyo\"}",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_723181",
+     "name": "get_weather",
+     "providerMetadata": {
+      "google": {
+       "extraContent": {
+        "google": {
+         "thought_signature": "ErYCCrMCAWkUfRNGh+/Zbc8YUSzk1yfWAfROcjA4HyF1x69jz6167w8zd4n6kZQQ5FDeBZ5HZMEbEkQ4ENOpzsQL8roCR6wONkhXpiduWrTD6XwbP8KGNkf6D1tX/JlBh7G5Cl+0rdjiSOl/mdY1lcjbkfyCRFs5T8odNWMG7WD3rCrXJDFQ/5QfOl+tqVTceKGz2yyXBhOhvsQDU33ulR9tHQJo/Fmx3HNyDdwvmyKUXm+kgqHsYZnkdv6y6xZwy9zBXGUO4QwxelMw3Rrc24Mp2rNbEDZS3YEeP72Jn/hIP5a8XWOx6+zop/4/CjYxxSfN/tJRY5d48NAKRNFzUN1Az8SvAs/N5X2I3/5ZMaDnQWW/BVdS9fm2KFYJ2baqtBiRRnJxMq4ELArkKjGZzHpd97XG8YjV6g=="
+        }
+       }
+      }
+     },
+     "type": "tool-input-end"
+    },
+    {
+     "id": "call_723181",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "get_weather",
+     "providerMetadata": {
+      "google": {
+       "extraContent": {
+        "google": {
+         "thought_signature": "ErYCCrMCAWkUfRNGh+/Zbc8YUSzk1yfWAfROcjA4HyF1x69jz6167w8zd4n6kZQQ5FDeBZ5HZMEbEkQ4ENOpzsQL8roCR6wONkhXpiduWrTD6XwbP8KGNkf6D1tX/JlBh7G5Cl+0rdjiSOl/mdY1lcjbkfyCRFs5T8odNWMG7WD3rCrXJDFQ/5QfOl+tqVTceKGz2yyXBhOhvsQDU33ulR9tHQJo/Fmx3HNyDdwvmyKUXm+kgqHsYZnkdv6y6xZwy9zBXGUO4QwxelMw3Rrc24Mp2rNbEDZS3YEeP72Jn/hIP5a8XWOx6+zop/4/CjYxxSfN/tJRY5d48NAKRNFzUN1Az8SvAs/N5X2I3/5ZMaDnQWW/BVdS9fm2KFYJ2baqtBiRRnJxMq4ELArkKjGZzHpd97XG8YjV6g=="
+        }
+       }
+      }
+     },
+     "type": "tool-call"
+    },
+    {
+     "id": "call_723184",
+     "name": "get_weather",
+     "type": "tool-input-end"
+    },
+    {
+     "id": "call_723184",
+     "input": {
+      "city": "Tokyo"
+     },
+     "name": "get_weather",
+     "type": "tool-call"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "inputTokens": 74,
+      "nonCachedInputTokens": 74,
+      "outputTokens": 32,
+      "providerMetadata": {
+       "google": {
+        "completion_tokens": 32,
+        "prompt_tokens": 74,
+        "total_tokens": 148
+       }
+      },
+      "totalTokens": 148
+     }
+    },
+    {
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "inputTokens": 74,
+      "nonCachedInputTokens": 74,
+      "outputTokens": 32,
+      "providerMetadata": {
+       "google": {
+        "completion_tokens": 32,
+        "prompt_tokens": 74,
+        "total_tokens": 148
+       }
+      },
+      "totalTokens": 148
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "It is currently sunny and 22°C in Paris,",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " while Tokyo is 0°C.",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "inputTokens": 192,
+      "nonCachedInputTokens": 192,
+      "outputTokens": 21,
+      "providerMetadata": {
+       "google": {
+        "completion_tokens": 21,
+        "prompt_tokens": 192,
+        "total_tokens": 276
+       }
+      },
+      "totalTokens": 276
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "inputTokens": 192,
+      "nonCachedInputTokens": 192,
+      "outputTokens": 21,
+      "providerMetadata": {
+       "google": {
+        "completion_tokens": 21,
+        "prompt_tokens": 192,
+        "total_tokens": 276
+       }
+      },
+      "totalTokens": 276
+     }
+    }
+   ]
+  }
+ ]
+}

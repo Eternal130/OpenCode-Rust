@@ -1,0 +1,105 @@
+{
+ "group": "alibaba-chat",
+ "name": "qwen-3-8-max-streams-none-effort",
+ "protocol": "alibaba-chat",
+ "provider": "alibaba",
+ "providerMetadataKey": "alibaba",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "3",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "78",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "87",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 32,
+      "nonCachedInputTokens": 32,
+      "outputTokens": 5,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 5,
+        "prompt_tokens": 32,
+        "prompt_tokens_details": {
+         "cache_creation": {
+          "ephemeral_5m_input_tokens": 0
+         },
+         "cache_creation_input_tokens": 0,
+         "cache_type": "ephemeral",
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "text_tokens": 32
+        },
+        "total_tokens": 37
+       }
+      },
+      "totalTokens": 37
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 32,
+      "nonCachedInputTokens": 32,
+      "outputTokens": 5,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 5,
+        "prompt_tokens": 32,
+        "prompt_tokens_details": {
+         "cache_creation": {
+          "ephemeral_5m_input_tokens": 0
+         },
+         "cache_creation_input_tokens": 0,
+         "cache_type": "ephemeral",
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "text_tokens": 32
+        },
+        "total_tokens": 37
+       }
+      },
+      "totalTokens": 37
+     }
+    }
+   ]
+  }
+ ]
+}

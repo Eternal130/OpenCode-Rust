@@ -1,0 +1,321 @@
+{
+ "group": "openrouter-reasoning-tool-loop",
+ "name": "openrouter-reasoning-tool-loop",
+ "protocol": "openrouter-chat",
+ "provider": "openrouter",
+ "providerMetadataKey": "openrouter",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "openrouter": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "openrouter": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "The user wants",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "openrouter": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " to know the weather in Paris. I'll use the get_weather tool.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "Sure! Let me check the weather in Paris for you right now!",
+     "type": "text-delta"
+    },
+    {
+     "id": "toolu_01PaChhcyw3yu2P2bDS2bgAA",
+     "name": "get_weather",
+     "type": "tool-input-start"
+    },
+    {
+     "id": "toolu_01PaChhcyw3yu2P2bDS2bgAA",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "get_weather",
+     "text": "{\"city\": \"Paris",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "toolu_01PaChhcyw3yu2P2bDS2bgAA",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "get_weather",
+     "text": "\"}",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "openrouter": {
+       "reasoningDetails": [
+        {
+         "format": "anthropic-claude-v1",
+         "index": 0,
+         "signature": "ErkCCosBCA8YAipAjKnRKpxkZ4eHrMPJ63IWEOYPSzb+XSHyG+vLK+2ks2O9T4N9M37Xn2kausQSH1rfsrdmKxgUlBg6yUFRgMVR7DIRY2xhdWRlLXNvbm5ldC00LTY4AEIIdGhpbmtpbmdaJDRjMGYwNDZmLTI1ZmQtNDVmYi1iZmIzLWEwOGE4ZTI0OWNhNxIMNFb5O6pb4nX0HojdGgyL5h+CAIpsxpdM1QgiMGm/i3ST6F5mAhxB+Uez0Cm95ra9yvQkrzHaA/AmWoXpdmPlczSn1S1RDk2IqeA57Spbf7JT44jygtLQt6yZmGzoTBHn3VkwaNZsuuAtbdo4B5QJXooa/AoKKs54QZ2kfS640vsv5flQVCg7CoQCFuLKjIeLMO7MnxVyuskXJr1DgesTa7I0ScF53U9JGhgB",
+         "text": "The user wants to know the weather in Paris. I'll use the get_weather tool.",
+         "type": "reasoning.text"
+        }
+       ],
+       "reasoningField": "reasoning"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "toolu_01PaChhcyw3yu2P2bDS2bgAA",
+     "name": "get_weather",
+     "type": "tool-input-end"
+    },
+    {
+     "id": "toolu_01PaChhcyw3yu2P2bDS2bgAA",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "get_weather",
+     "type": "tool-call"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_use"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 623,
+      "nonCachedInputTokens": 623,
+      "outputTokens": 95,
+      "providerMetadata": {
+       "openrouter": {
+        "cache_creation": {
+         "ephemeral_1h_input_tokens": 0,
+         "ephemeral_5m_input_tokens": 0
+        },
+        "completion_tokens": 95,
+        "completion_tokens_details": {
+         "audio_tokens": 0,
+         "image_tokens": 0,
+         "reasoning_tokens": 19
+        },
+        "cost": 0.003294,
+        "cost_details": {
+         "upstream_inference_completions_cost": 0.001425,
+         "upstream_inference_cost": 0.003294,
+         "upstream_inference_prompt_cost": 0.001869
+        },
+        "is_byok": false,
+        "prompt_tokens": 623,
+        "prompt_tokens_details": {
+         "audio_tokens": 0,
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "video_tokens": 0
+        },
+        "total_tokens": 718
+       }
+      },
+      "reasoningTokens": 19,
+      "totalTokens": 718
+     }
+    },
+    {
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_use"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 623,
+      "nonCachedInputTokens": 623,
+      "outputTokens": 95,
+      "providerMetadata": {
+       "openrouter": {
+        "cache_creation": {
+         "ephemeral_1h_input_tokens": 0,
+         "ephemeral_5m_input_tokens": 0
+        },
+        "completion_tokens": 95,
+        "completion_tokens_details": {
+         "audio_tokens": 0,
+         "image_tokens": 0,
+         "reasoning_tokens": 19
+        },
+        "cost": 0.003294,
+        "cost_details": {
+         "upstream_inference_completions_cost": 0.001425,
+         "upstream_inference_cost": 0.003294,
+         "upstream_inference_prompt_cost": 0.001869
+        },
+        "is_byok": false,
+        "prompt_tokens": 623,
+        "prompt_tokens_details": {
+         "audio_tokens": 0,
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "video_tokens": 0
+        },
+        "total_tokens": 718
+       }
+      },
+      "reasoningTokens": 19,
+      "totalTokens": 718
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "Paris",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " is sunny.",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "end_turn"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 739,
+      "nonCachedInputTokens": 739,
+      "outputTokens": 7,
+      "providerMetadata": {
+       "openrouter": {
+        "cache_creation": {
+         "ephemeral_1h_input_tokens": 0,
+         "ephemeral_5m_input_tokens": 0
+        },
+        "completion_tokens": 7,
+        "completion_tokens_details": {
+         "audio_tokens": 0,
+         "image_tokens": 0,
+         "reasoning_tokens": 0
+        },
+        "cost": 0.002322,
+        "cost_details": {
+         "upstream_inference_completions_cost": 0.000105,
+         "upstream_inference_cost": 0.002322,
+         "upstream_inference_prompt_cost": 0.002217
+        },
+        "is_byok": false,
+        "prompt_tokens": 739,
+        "prompt_tokens_details": {
+         "audio_tokens": 0,
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "video_tokens": 0
+        },
+        "total_tokens": 746
+       }
+      },
+      "reasoningTokens": 0,
+      "totalTokens": 746
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "end_turn"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 739,
+      "nonCachedInputTokens": 739,
+      "outputTokens": 7,
+      "providerMetadata": {
+       "openrouter": {
+        "cache_creation": {
+         "ephemeral_1h_input_tokens": 0,
+         "ephemeral_5m_input_tokens": 0
+        },
+        "completion_tokens": 7,
+        "completion_tokens_details": {
+         "audio_tokens": 0,
+         "image_tokens": 0,
+         "reasoning_tokens": 0
+        },
+        "cost": 0.002322,
+        "cost_details": {
+         "upstream_inference_completions_cost": 0.000105,
+         "upstream_inference_cost": 0.002322,
+         "upstream_inference_prompt_cost": 0.002217
+        },
+        "is_byok": false,
+        "prompt_tokens": 739,
+        "prompt_tokens_details": {
+         "audio_tokens": 0,
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "video_tokens": 0
+        },
+        "total_tokens": 746
+       }
+      },
+      "reasoningTokens": 0,
+      "totalTokens": 746
+     }
+    }
+   ]
+  }
+ ]
+}

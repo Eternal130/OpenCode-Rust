@@ -1,0 +1,920 @@
+{
+ "group": "zai-chat",
+ "name": "glm-5-3-preserves-reasoning-through-a-tool-loop-and-follow-up",
+ "protocol": "zai-chat",
+ "provider": "zai",
+ "providerMetadataKey": "zai",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "19",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "173",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "37",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "88",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " That",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "'s",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ≤",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "38",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "000",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " affordable",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " Then",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " call",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " weather",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "The",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " total",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " cost",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " is",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " ",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "2",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "19",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " ×",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " $",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "173",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " =",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " $",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "38",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ",",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "78",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "7",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "...",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " let",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " me",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " rec",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "alculate",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ":",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " ",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "2",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "19",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " ×",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " ",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "173",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " =",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " $",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "37",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ",",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "88",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "7",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ",",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " which",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " is",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " under",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " the",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " $",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "38",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ",",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "000",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " budget",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ".",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " It",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "'s",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " affordable",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ",",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " so",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " I",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "'ll",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " check",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " the",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " Paris",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " weather",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " now",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ".",
+     "type": "text-delta"
+    },
+    {
+     "id": "call_e98551e6b421426f8cc46bbd",
+     "name": "get_weather",
+     "type": "tool-input-start"
+    },
+    {
+     "id": "call_e98551e6b421426f8cc46bbd",
+     "input": {},
+     "name": "get_weather",
+     "text": "{\"",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_e98551e6b421426f8cc46bbd",
+     "input": {},
+     "name": "get_weather",
+     "text": "city",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_e98551e6b421426f8cc46bbd",
+     "input": {
+      "city": ""
+     },
+     "name": "get_weather",
+     "text": "\":\"",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_e98551e6b421426f8cc46bbd",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "get_weather",
+     "text": "Paris\"",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_e98551e6b421426f8cc46bbd",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "get_weather",
+     "text": "}",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "call_e98551e6b421426f8cc46bbd",
+     "name": "get_weather",
+     "type": "tool-input-end"
+    },
+    {
+     "id": "call_e98551e6b421426f8cc46bbd",
+     "input": {
+      "city": "Paris"
+     },
+     "name": "get_weather",
+     "type": "tool-call"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 222,
+      "nonCachedInputTokens": 222,
+      "outputTokens": 96,
+      "providerMetadata": {
+       "zai": {
+        "completion_tokens": 96,
+        "completion_tokens_details": {
+         "reasoning_tokens": 26
+        },
+        "prompt_tokens": 222,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 318
+       }
+      },
+      "reasoningTokens": 26,
+      "totalTokens": 318
+     }
+    },
+    {
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 222,
+      "nonCachedInputTokens": 222,
+      "outputTokens": 96,
+      "providerMetadata": {
+       "zai": {
+        "completion_tokens": 96,
+        "completion_tokens_details": {
+         "reasoning_tokens": 26
+        },
+        "prompt_tokens": 222,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 318
+       }
+      },
+      "reasoningTokens": 26,
+      "totalTokens": 318
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "It",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "'s",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " currently",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " sunny",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " and",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " ",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "18",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "°C",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " in",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": " Paris",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": ".",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 333,
+      "nonCachedInputTokens": 333,
+      "outputTokens": 13,
+      "providerMetadata": {
+       "zai": {
+        "completion_tokens": 13,
+        "completion_tokens_details": {
+         "reasoning_tokens": 0
+        },
+        "prompt_tokens": 333,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 346
+       }
+      },
+      "reasoningTokens": 0,
+      "totalTokens": 346
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 333,
+      "nonCachedInputTokens": 333,
+      "outputTokens": 13,
+      "providerMetadata": {
+       "zai": {
+        "completion_tokens": 13,
+        "completion_tokens_details": {
+         "reasoning_tokens": 0
+        },
+        "prompt_tokens": 333,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 346
+       }
+      },
+      "reasoningTokens": 0,
+      "totalTokens": 346
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "18",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "°C",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 361,
+      "nonCachedInputTokens": 361,
+      "outputTokens": 4,
+      "providerMetadata": {
+       "zai": {
+        "completion_tokens": 4,
+        "completion_tokens_details": {
+         "reasoning_tokens": 0
+        },
+        "prompt_tokens": 361,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 365
+       }
+      },
+      "reasoningTokens": 0,
+      "totalTokens": 365
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 361,
+      "nonCachedInputTokens": 361,
+      "outputTokens": 4,
+      "providerMetadata": {
+       "zai": {
+        "completion_tokens": 4,
+        "completion_tokens_details": {
+         "reasoning_tokens": 0
+        },
+        "prompt_tokens": 361,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 365
+       }
+      },
+      "reasoningTokens": 0,
+      "totalTokens": 365
+     }
+    }
+   ]
+  }
+ ]
+}

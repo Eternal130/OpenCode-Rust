@@ -1,0 +1,4835 @@
+{
+ "group": "groq-chat",
+ "name": "streams-qwen-parsed-reasoning",
+ "protocol": "groq-chat",
+ "provider": "groq",
+ "providerMetadataKey": "groq",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "Here",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "'s",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " a",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " thinking",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " process",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ":",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " **",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "Ident",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "ify",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " task",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "**:",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " Multiply",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " by",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " **",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "Perform",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " multiplication",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "**:",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " I",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " can",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " use",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " standard",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " multiplication",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " algorithm",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " or",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " break",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " it",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " down",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " (",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " +",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " +",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ")",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "4",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "6",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "5",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "5",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " Sum",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ":",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "4",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "6",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " +",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "6",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "6",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " +",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "5",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "5",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "8",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "8",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " **",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "Verify",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " calculation",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "**:",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " Let",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "'s",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " do",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " it",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " another",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " way",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ":",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "5",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "6",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "5",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " Sum",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ":",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " +",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "5",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " +",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "6",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "5",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "8",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "8",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " Both",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " methods",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " give",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "8",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "8",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " Let",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "'s",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " do",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " standard",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " column",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " multiplication",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " to",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " be",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " absolutely",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " sure",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ":",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "      ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "    ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "    ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -----",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "     ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "5",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "5",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " (",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ")",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "     ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " (",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ")",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "    ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "4",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "6",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " (",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "0",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ")",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "    ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -----",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "    ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "8",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "8",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " Matches",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "4",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " **",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "Format",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " output",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "**:",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " The",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " user",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " requested",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " \"",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "only",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " final",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " integer",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " -",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " Output",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ":",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "8",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "8",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "All",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " steps",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " verified",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": " Ready",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "✅",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "text": "\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "3",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "7",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "8",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "8",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "7",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "groq": {
+       "reasoningField": "reasoning"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "inputTokens": 36,
+      "nonCachedInputTokens": 36,
+      "outputTokens": 479,
+      "providerMetadata": {
+       "groq": {
+        "completion_time": 0.994580735,
+        "completion_tokens": 479,
+        "completion_tokens_details": {
+         "reasoning_tokens": 471
+        },
+        "prompt_time": 0.002856801,
+        "prompt_tokens": 36,
+        "queue_time": 0.131043222,
+        "total_time": 0.997437536,
+        "total_tokens": 515
+       }
+      },
+      "reasoningTokens": 471,
+      "totalTokens": 515
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "inputTokens": 36,
+      "nonCachedInputTokens": 36,
+      "outputTokens": 479,
+      "providerMetadata": {
+       "groq": {
+        "completion_time": 0.994580735,
+        "completion_tokens": 479,
+        "completion_tokens_details": {
+         "reasoning_tokens": 471
+        },
+        "prompt_time": 0.002856801,
+        "prompt_tokens": 36,
+        "queue_time": 0.131043222,
+        "total_time": 0.997437536,
+        "total_tokens": 515
+       }
+      },
+      "reasoningTokens": 471,
+      "totalTokens": 515
+     }
+    }
+   ]
+  }
+ ]
+}

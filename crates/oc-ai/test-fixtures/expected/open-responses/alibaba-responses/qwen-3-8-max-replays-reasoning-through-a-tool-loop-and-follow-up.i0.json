@@ -1,0 +1,531 @@
+{
+  "group": "alibaba-responses",
+  "scenario": "qwen-3-8-max-replays-reasoning-through-a-tool-loop-and-follow-up",
+  "interaction": 0,
+  "machine": "open-responses",
+  "provider": "alibaba",
+  "metadataKey": "alibaba",
+  "frames": [
+    "{\"sequence_number\":0,\"type\":\"response.created\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"medium\"},\"created_at\":1789446191,\"store\":false,\"tools\":[{\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"strict\":false,\"type\":\"function\",\"parameters\":{\"additionalProperties\":false,\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"enum\":[\"Paris\"]}},\"required\":[\"city\"]}}],\"output\":[],\"top_p\":1.0,\"completed_at\":1789446191,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_f544585b-3b33-916b-9295-83c501ba757b\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"queued\"}}",
+    "{\"sequence_number\":1,\"type\":\"response.in_progress\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"medium\"},\"created_at\":1789446191,\"store\":false,\"tools\":[{\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"strict\":false,\"type\":\"function\",\"parameters\":{\"additionalProperties\":false,\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"enum\":[\"Paris\"]}},\"required\":[\"city\"]}}],\"output\":[],\"top_p\":1.0,\"completed_at\":1789446191,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_f544585b-3b33-916b-9295-83c501ba757b\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"in_progress\"}}",
+    "{\"sequence_number\":2,\"item\":{\"summary\":[],\"type\":\"reasoning\",\"id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"},\"output_index\":0,\"type\":\"response.output_item.added\"}",
+    "{\"delta\":\"Thinking\",\"sequence_number\":3,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" Process\",\"sequence_number\":4,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\":\\n\\n1.\",\"sequence_number\":5,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"  **Analyze\",\"sequence_number\":6,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" the Request:**\\n\",\"sequence_number\":7,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"    *   Budget\",\"sequence_number\":8,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\": $38\",\"sequence_number\":9,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\",000\",\"sequence_number\":10,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"\\n    *  \",\"sequence_number\":11,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" Trips: \",\"sequence_number\":12,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"2\",\"sequence_number\":13,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"19\\n   \",\"sequence_number\":14,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" *   Cost per\",\"sequence_number\":15,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" trip: $1\",\"sequence_number\":16,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"73\\n   \",\"sequence_number\":17,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" *   Task \",\"sequence_number\":18,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"1: Calculate if\",\"sequence_number\":19,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" it's affordable (\",\"sequence_number\":20,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"Total cost = \",\"sequence_number\":21,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"219\",\"sequence_number\":22,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" * 17\",\"sequence_number\":23,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"3).\\n   \",\"sequence_number\":24,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" *   Task \",\"sequence_number\":25,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"2: If affordable\",\"sequence_number\":26,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\", call `get\",\"sequence_number\":27,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"_weather` for Paris\",\"sequence_number\":28,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\".\\n    *\",\"sequence_number\":29,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"   Task 3\",\"sequence_number\":30,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\": Report the weather\",\"sequence_number\":31,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" in one\",\"sequence_number\":32,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" short sentence.\\n\\n\",\"sequence_number\":33,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"2.  **\",\"sequence_number\":34,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"Perform Calculation (Task\",\"sequence_number\":35,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" 1\",\"sequence_number\":36,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"):**\\n    *\",\"sequence_number\":37,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"   Total cost =\",\"sequence_number\":38,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" 219\",\"sequence_number\":39,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" * 17\",\"sequence_number\":40,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"3\\n    *\",\"sequence_number\":41,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"   20\",\"sequence_number\":42,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"0 * 1\",\"sequence_number\":43,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"73 = \",\"sequence_number\":44,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"34,6\",\"sequence_number\":45,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"00\\n   \",\"sequence_number\":46,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" *   1\",\"sequence_number\":47,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"9 * 1\",\"sequence_number\":48,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"73 = \",\"sequence_number\":49,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"19 * \",\"sequence_number\":50,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"100 +\",\"sequence_number\":51,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" 19 *\",\"sequence_number\":52,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" 70 +\",\"sequence_number\":53,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" 19 *\",\"sequence_number\":54,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" 3 = \",\"sequence_number\":55,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"1900\",\"sequence_number\":56,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" + 13\",\"sequence_number\":57,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"30 + \",\"sequence_number\":58,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"57 = \",\"sequence_number\":59,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"3287\",\"sequence_number\":60,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"\\n   \",\"sequence_number\":61,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" *   3\",\"sequence_number\":62,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"4,6\",\"sequence_number\":63,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"00 + \",\"sequence_number\":64,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"3,28\",\"sequence_number\":65,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"7 = 3\",\"sequence_number\":66,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"7,88\",\"sequence_number\":67,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"7\\n    *\",\"sequence_number\":68,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"   Total cost =\",\"sequence_number\":69,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" $37,\",\"sequence_number\":70,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"887.\",\"sequence_number\":71,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"\\n    *  \",\"sequence_number\":72,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" Is $37\",\"sequence_number\":73,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\",\",\"sequence_number\":74,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"887 <=\",\"sequence_number\":75,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" $38,\",\"sequence_number\":76,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"000?\",\"sequence_number\":77,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" Yes. It is\",\"sequence_number\":78,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" affordable.\\n\\n\",\"sequence_number\":79,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"3.  **\",\"sequence_number\":80,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"Execute Tool Call (\",\"sequence_number\":81,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"Task 2):**\",\"sequence_number\":82,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"\\n    *  \",\"sequence_number\":83,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" Since it is affordable\",\"sequence_number\":84,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\", call `\",\"sequence_number\":85,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"get_weather` with\",\"sequence_number\":86,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" `city=\\\"Paris\",\"sequence_number\":87,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"\\\"`.\\n\\n\",\"sequence_number\":88,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"4.  **\",\"sequence_number\":89,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"Format Output (Task\",\"sequence_number\":90,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" 3):**\\n\",\"sequence_number\":91,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"    *   After\",\"sequence_number\":92,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" receiving the tool result\",\"sequence_number\":93,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\", report the\",\"sequence_number\":94,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" weather in exactly one\",\"sequence_number\":95,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" short sentence.\",\"sequence_number\":96,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" (Need to wait\",\"sequence_number\":97,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" for the\",\"sequence_number\":98,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" tool response first,\",\"sequence_number\":99,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" but since I'm\",\"sequence_number\":100,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" generating the\",\"sequence_number\":101,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" tool call now,\",\"sequence_number\":102,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" I'll\",\"sequence_number\":103,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" structure it appropriately).\",\"sequence_number\":104,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"\\n\\n*\",\"sequence_number\":105,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"Self-Correction\",\"sequence_number\":106,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"/Refinement during\",\"sequence_number\":107,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" thought process:*\\n\",\"sequence_number\":108,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"Wait, I need\",\"sequence_number\":109,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" to output the tool\",\"sequence_number\":110,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" call *first*\",\"sequence_number\":111,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" and\",\"sequence_number\":112,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" wait for the response\",\"sequence_number\":113,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\", or write the\",\"sequence_number\":114,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" final\",\"sequence_number\":115,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" response if I am\",\"sequence_number\":116,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" simulating a multi\",\"sequence_number\":117,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"-turn interaction\",\"sequence_number\":118,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\". Actually, I\",\"sequence_number\":119,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" should just invoke the\",\"sequence_number\":120,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" tool now and\",\"sequence_number\":121,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" provide the calculation in\",\"sequence_number\":122,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" the text preceding it\",\"sequence_number\":123,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" or wait for the\",\"sequence_number\":124,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" tool\",\"sequence_number\":125,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" output to write everything\",\"sequence_number\":126,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\".\\nStandard format\",\"sequence_number\":127,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\": I will state\",\"sequence_number\":128,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" the calculation and\",\"sequence_number\":129,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" then make the tool\",\"sequence_number\":130,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" call.\",\"sequence_number\":131,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"\\n\\nText to include\",\"sequence_number\":132,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\":\\n\\\"2\",\"sequence_number\":133,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"19 trips\",\"sequence_number\":134,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" at $17\",\"sequence_number\":135,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"3 each costs $\",\"sequence_number\":136,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"37,8\",\"sequence_number\":137,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"87, which\",\"sequence_number\":138,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" is within your $\",\"sequence_number\":139,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"38,0\",\"sequence_number\":140,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"00 budget.\\\"\",\"sequence_number\":141,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"\\nTool call:\",\"sequence_number\":142,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" get\",\"sequence_number\":143,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"_weather(Paris)\",\"sequence_number\":144,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"\\n\\nLet\",\"sequence_number\":145,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" me write the response\",\"sequence_number\":146,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" up\",\"sequence_number\":147,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" to the tool call\",\"sequence_number\":148,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\".\\nWait,\",\"sequence_number\":149,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" if\",\"sequence_number\":150,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" I just make the\",\"sequence_number\":151,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" tool call,\",\"sequence_number\":152,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" I can include the\",\"sequence_number\":153,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" calculation in the\",\"sequence_number\":154,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" text.\\nActually\",\"sequence_number\":155,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\", I'll output\",\"sequence_number\":156,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" the calculation, make\",\"sequence_number\":157,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" the tool call,\",\"sequence_number\":158,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" and then when the\",\"sequence_number\":159,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" system\",\"sequence_number\":160,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" returns the tool output\",\"sequence_number\":161,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\", I will write\",\"sequence_number\":162,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" the final sentence.\",\"sequence_number\":163,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" But\",\"sequence_number\":164,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" since this is a\",\"sequence_number\":165,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" single prompt\",\"sequence_number\":166,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"/response for the tool\",\"sequence_number\":167,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"-c\",\"sequence_number\":168,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"alling turn:\\n\\n\",\"sequence_number\":169,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"```xml\\nThe\",\"sequence_number\":170,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" total cost for \",\"sequence_number\":171,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"219\",\"sequence_number\":172,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" trips at $1\",\"sequence_number\":173,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"73 each is\",\"sequence_number\":174,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" $37,\",\"sequence_number\":175,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"887.\",\"sequence_number\":176,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" Since $37\",\"sequence_number\":177,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\",8\",\"sequence_number\":178,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"87 is less\",\"sequence_number\":179,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" than your budget of\",\"sequence_number\":180,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" $38\",\"sequence_number\":181,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\",000\",\"sequence_number\":182,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\", it is affordable\",\"sequence_number\":183,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\".\\n```\\n\",\"sequence_number\":184,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"Then make\",\"sequence_number\":185,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\" the tool call.\",\"sequence_number\":186,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"delta\":\"\",\"sequence_number\":187,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"sequence_number\":188,\"text\":\"Thinking Process:\\n\\n1.  **Analyze the Request:**\\n    *   Budget: $38,000\\n    *   Trips: 219\\n    *   Cost per trip: $173\\n    *   Task 1: Calculate if it's affordable (Total cost = 219 * 173).\\n    *   Task 2: If affordable, call `get_weather` for Paris.\\n    *   Task 3: Report the weather in one short sentence.\\n\\n2.  **Perform Calculation (Task 1):**\\n    *   Total cost = 219 * 173\\n    *   200 * 173 = 34,600\\n    *   19 * 173 = 19 * 100 + 19 * 70 + 19 * 3 = 1900 + 1330 + 57 = 3287\\n    *   34,600 + 3,287 = 37,887\\n    *   Total cost = $37,887.\\n    *   Is $37,887 <= $38,000? Yes. It is affordable.\\n\\n3.  **Execute Tool Call (Task 2):**\\n    *   Since it is affordable, call `get_weather` with `city=\\\"Paris\\\"`.\\n\\n4.  **Format Output (Task 3):**\\n    *   After receiving the tool result, report the weather in exactly one short sentence. (Need to wait for the tool response first, but since I'm generating the tool call now, I'll structure it appropriately).\\n\\n*Self-Correction/Refinement during thought process:*\\nWait, I need to output the tool call *first* and wait for the response, or write the final response if I am simulating a multi-turn interaction. Actually, I should just invoke the tool now and provide the calculation in the text preceding it or wait for the tool output to write everything.\\nStandard format: I will state the calculation and then make the tool call.\\n\\nText to include:\\n\\\"219 trips at $173 each costs $37,887, which is within your $38,000 budget.\\\"\\nTool call: get_weather(Paris)\\n\\nLet me write the response up to the tool call.\\nWait, if I just make the tool call, I can include the calculation in the text.\\nActually, I'll output the calculation, make the tool call, and then when the system returns the tool output, I will write the final sentence. But since this is a single prompt/response for the tool-calling turn:\\n\\n```xml\\nThe total cost for 219 trips at $173 each is $37,887. Since $37,887 is less than your budget of $38,000, it is affordable.\\n```\\nThen make the tool call.\",\"output_index\":0,\"type\":\"response.reasoning_text.done\",\"content_index\":0,\"item_id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"}",
+    "{\"sequence_number\":189,\"item\":{\"summary\":[{\"type\":\"summary_text\",\"text\":\"Thinking Process:\\n\\n1.  **Analyze the Request:**\\n    *   Budget: $38,000\\n    *   Trips: 219\\n    *   Cost per trip: $173\\n    *   Task 1: Calculate if it's affordable (Total cost = 219 * 173).\\n    *   Task 2: If affordable, call `get_weather` for Paris.\\n    *   Task 3: Report the weather in one short sentence.\\n\\n2.  **Perform Calculation (Task 1):**\\n    *   Total cost = 219 * 173\\n    *   200 * 173 = 34,600\\n    *   19 * 173 = 19 * 100 + 19 * 70 + 19 * 3 = 1900 + 1330 + 57 = 3287\\n    *   34,600 + 3,287 = 37,887\\n    *   Total cost = $37,887.\\n    *   Is $37,887 <= $38,000? Yes. It is affordable.\\n\\n3.  **Execute Tool Call (Task 2):**\\n    *   Since it is affordable, call `get_weather` with `city=\\\"Paris\\\"`.\\n\\n4.  **Format Output (Task 3):**\\n    *   After receiving the tool result, report the weather in exactly one short sentence. (Need to wait for the tool response first, but since I'm generating the tool call now, I'll structure it appropriately).\\n\\n*Self-Correction/Refinement during thought process:*\\nWait, I need to output the tool call *first* and wait for the response, or write the final response if I am simulating a multi-turn interaction. Actually, I should just invoke the tool now and provide the calculation in the text preceding it or wait for the tool output to write everything.\\nStandard format: I will state the calculation and then make the tool call.\\n\\nText to include:\\n\\\"219 trips at $173 each costs $37,887, which is within your $38,000 budget.\\\"\\nTool call: get_weather(Paris)\\n\\nLet me write the response up to the tool call.\\nWait, if I just make the tool call, I can include the calculation in the text.\\nActually, I'll output the calculation, make the tool call, and then when the system returns the tool output, I will write the final sentence. But since this is a single prompt/response for the tool-calling turn:\\n\\n```xml\\nThe total cost for 219 trips at $173 each is $37,887. Since $37,887 is less than your budget of $38,000, it is affordable.\\n```\\nThen make the tool call.\"}],\"type\":\"reasoning\",\"id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"},\"output_index\":0,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":190,\"item\":{\"id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[],\"status\":\"in_progress\"},\"output_index\":1,\"type\":\"response.output_item.added\"}",
+    "{\"sequence_number\":191,\"output_index\":1,\"type\":\"response.content_part.added\",\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"part\":{\"type\":\"output_text\",\"annotations\":[],\"text\":\"\"}}",
+    "{\"sequence_number\":192,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\"The\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":193,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\" total cost for \",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":194,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\"219 trips\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":195,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\" at $17\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":196,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\"3 each is $\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":197,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\"37,8\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":198,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\"87. Since\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":199,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\" $37,\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":200,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\"887 is\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":201,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\" less than your budget\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":202,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\" of $38\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":203,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\",000\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":204,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\", it is affordable\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":205,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\". \\n\\nLet me\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":206,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\" look up the weather\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":207,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\" in Paris for you\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":208,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\".\\n\\n\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":209,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"delta\":\"\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":210,\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"text\":\"The total cost for 219 trips at $173 each is $37,887. Since $37,887 is less than your budget of $38,000, it is affordable. \\n\\nLet me look up the weather in Paris for you.\\n\\n\",\"output_index\":1,\"type\":\"response.output_text.done\",\"logprobs\":[]}",
+    "{\"sequence_number\":211,\"output_index\":1,\"type\":\"response.content_part.done\",\"content_index\":0,\"item_id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"part\":{\"type\":\"output_text\",\"annotations\":[],\"text\":\"The total cost for 219 trips at $173 each is $37,887. Since $37,887 is less than your budget of $38,000, it is affordable. \\n\\nLet me look up the weather in Paris for you.\\n\\n\"}}",
+    "{\"sequence_number\":212,\"item\":{\"id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"The total cost for 219 trips at $173 each is $37,887. Since $37,887 is less than your budget of $38,000, it is affordable. \\n\\nLet me look up the weather in Paris for you.\\n\\n\"}],\"status\":\"completed\"},\"output_index\":1,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":213,\"item\":{\"name\":\"get_weather\",\"arguments\":\"\",\"id\":\"msg_66400a32-0a29-4d0f-8ab0-1282b7645e96\",\"type\":\"function_call\",\"call_id\":\"call_320249e22515412c98197b4b\",\"status\":\"in_progress\"},\"output_index\":2,\"type\":\"response.output_item.added\"}",
+    "{\"delta\":\"\",\"sequence_number\":214,\"output_index\":2,\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"msg_66400a32-0a29-4d0f-8ab0-1282b7645e96\"}",
+    "{\"delta\":\"{\\\"city\\\": \",\"sequence_number\":215,\"output_index\":2,\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"msg_66400a32-0a29-4d0f-8ab0-1282b7645e96\"}",
+    "{\"delta\":\"\\\"Paris\",\"sequence_number\":216,\"output_index\":2,\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"msg_66400a32-0a29-4d0f-8ab0-1282b7645e96\"}",
+    "{\"delta\":\"\\\"\",\"sequence_number\":217,\"output_index\":2,\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"msg_66400a32-0a29-4d0f-8ab0-1282b7645e96\"}",
+    "{\"delta\":\"}\",\"sequence_number\":218,\"output_index\":2,\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"msg_66400a32-0a29-4d0f-8ab0-1282b7645e96\"}",
+    "{\"name\":\"get_weather\",\"sequence_number\":219,\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\",\"output_index\":2,\"type\":\"response.function_call_arguments.done\",\"item_id\":\"msg_66400a32-0a29-4d0f-8ab0-1282b7645e96\"}",
+    "{\"sequence_number\":220,\"item\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\",\"id\":\"msg_66400a32-0a29-4d0f-8ab0-1282b7645e96\",\"type\":\"function_call\",\"call_id\":\"call_320249e22515412c98197b4b\",\"status\":\"completed\"},\"output_index\":2,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":221,\"type\":\"response.completed\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"medium\"},\"usage\":{\"total_tokens\":1116,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":748,\"input_tokens\":368,\"output_tokens_details\":{\"reasoning_tokens\":657},\"x_details\":[{\"total_tokens\":1116,\"x_billing_type\":\"response_api\",\"output_tokens\":748,\"input_tokens\":368,\"output_tokens_details\":{\"reasoning_tokens\":657},\"prompt_tokens_details\":{\"cached_tokens\":0}}]},\"created_at\":1789446191,\"store\":false,\"tools\":[{\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"strict\":false,\"type\":\"function\",\"parameters\":{\"additionalProperties\":false,\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"enum\":[\"Paris\"]}},\"required\":[\"city\"]}}],\"output\":[{\"summary\":[{\"type\":\"summary_text\",\"text\":\"Thinking Process:\\n\\n1.  **Analyze the Request:**\\n    *   Budget: $38,000\\n    *   Trips: 219\\n    *   Cost per trip: $173\\n    *   Task 1: Calculate if it's affordable (Total cost = 219 * 173).\\n    *   Task 2: If affordable, call `get_weather` for Paris.\\n    *   Task 3: Report the weather in one short sentence.\\n\\n2.  **Perform Calculation (Task 1):**\\n    *   Total cost = 219 * 173\\n    *   200 * 173 = 34,600\\n    *   19 * 173 = 19 * 100 + 19 * 70 + 19 * 3 = 1900 + 1330 + 57 = 3287\\n    *   34,600 + 3,287 = 37,887\\n    *   Total cost = $37,887.\\n    *   Is $37,887 <= $38,000? Yes. It is affordable.\\n\\n3.  **Execute Tool Call (Task 2):**\\n    *   Since it is affordable, call `get_weather` with `city=\\\"Paris\\\"`.\\n\\n4.  **Format Output (Task 3):**\\n    *   After receiving the tool result, report the weather in exactly one short sentence. (Need to wait for the tool response first, but since I'm generating the tool call now, I'll structure it appropriately).\\n\\n*Self-Correction/Refinement during thought process:*\\nWait, I need to output the tool call *first* and wait for the response, or write the final response if I am simulating a multi-turn interaction. Actually, I should just invoke the tool now and provide the calculation in the text preceding it or wait for the tool output to write everything.\\nStandard format: I will state the calculation and then make the tool call.\\n\\nText to include:\\n\\\"219 trips at $173 each costs $37,887, which is within your $38,000 budget.\\\"\\nTool call: get_weather(Paris)\\n\\nLet me write the response up to the tool call.\\nWait, if I just make the tool call, I can include the calculation in the text.\\nActually, I'll output the calculation, make the tool call, and then when the system returns the tool output, I will write the final sentence. But since this is a single prompt/response for the tool-calling turn:\\n\\n```xml\\nThe total cost for 219 trips at $173 each is $37,887. Since $37,887 is less than your budget of $38,000, it is affordable.\\n```\\nThen make the tool call.\"}],\"type\":\"reasoning\",\"id\":\"msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88\"},{\"id\":\"msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"The total cost for 219 trips at $173 each is $37,887. Since $37,887 is less than your budget of $38,000, it is affordable. \\n\\nLet me look up the weather in Paris for you.\\n\\n\"}],\"status\":\"completed\"},{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\",\"id\":\"msg_66400a32-0a29-4d0f-8ab0-1282b7645e96\",\"type\":\"function_call\",\"call_id\":\"call_320249e22515412c98197b4b\",\"status\":\"completed\"}],\"top_p\":1.0,\"completed_at\":1789446206,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_f544585b-3b33-916b-9295-83c501ba757b\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"completed\"}}"
+  ],
+  "events": [
+    {
+      "type": "step-start",
+      "index": 0
+    },
+    {
+      "type": "reasoning-start",
+      "id": "msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88:0",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88:0",
+      "text": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Budget: $38,000\n    *   Trips: 219\n    *   Cost per trip: $173\n    *   Task 1: Calculate if it's affordable (Total cost = 219 * 173).\n    *   Task 2: If affordable, call `get_weather` for Paris.\n    *   Task 3: Report the weather in one short sentence.\n\n2.  **Perform Calculation (Task 1):**\n    *   Total cost = 219 * 173\n    *   200 * 173 = 34,600\n    *   19 * 173 = 19 * 100 + 19 * 70 + 19 * 3 = 1900 + 1330 + 57 = 3287\n    *   34,600 + 3,287 = 37,887\n    *   Total cost = $37,887.\n    *   Is $37,887 <= $38,000? Yes. It is affordable.\n\n3.  **Execute Tool Call (Task 2):**\n    *   Since it is affordable, call `get_weather` with `city=\"Paris\"`.\n\n4.  **Format Output (Task 3):**\n    *   After receiving the tool result, report the weather in exactly one short sentence. (Need to wait for the tool response first, but since I'm generating the tool call now, I'll structure it appropriately).\n\n*Self-Correction/Refinement during thought process:*\nWait, I need to output the tool call *first* and wait for the response, or write the final response if I am simulating a multi-turn interaction. Actually, I should just invoke the tool now and provide the calculation in the text preceding it or wait for the tool output to write everything.\nStandard format: I will state the calculation and then make the tool call.\n\nText to include:\n\"219 trips at $173 each costs $37,887, which is within your $38,000 budget.\"\nTool call: get_weather(Paris)\n\nLet me write the response up to the tool call.\nWait, if I just make the tool call, I can include the calculation in the text.\nActually, I'll output the calculation, make the tool call, and then when the system returns the tool output, I will write the final sentence. But since this is a single prompt/response for the tool-calling turn:\n\n```xml\nThe total cost for 219 trips at $173 each is $37,887. Since $37,887 is less than your budget of $38,000, it is affordable.\n```\nThen make the tool call."
+    },
+    {
+      "type": "reasoning-end",
+      "id": "msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88:0",
+      "text": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Budget: $38,000\n    *   Trips: 219\n    *   Cost per trip: $173\n    *   Task 1: Calculate if it's affordable (Total cost = 219 * 173).\n    *   Task 2: If affordable, call `get_weather` for Paris.\n    *   Task 3: Report the weather in one short sentence.\n\n2.  **Perform Calculation (Task 1):**\n    *   Total cost = 219 * 173\n    *   200 * 173 = 34,600\n    *   19 * 173 = 19 * 100 + 19 * 70 + 19 * 3 = 1900 + 1330 + 57 = 3287\n    *   34,600 + 3,287 = 37,887\n    *   Total cost = $37,887.\n    *   Is $37,887 <= $38,000? Yes. It is affordable.\n\n3.  **Execute Tool Call (Task 2):**\n    *   Since it is affordable, call `get_weather` with `city=\"Paris\"`.\n\n4.  **Format Output (Task 3):**\n    *   After receiving the tool result, report the weather in exactly one short sentence. (Need to wait for the tool response first, but since I'm generating the tool call now, I'll structure it appropriately).\n\n*Self-Correction/Refinement during thought process:*\nWait, I need to output the tool call *first* and wait for the response, or write the final response if I am simulating a multi-turn interaction. Actually, I should just invoke the tool now and provide the calculation in the text preceding it or wait for the tool output to write everything.\nStandard format: I will state the calculation and then make the tool call.\n\nText to include:\n\"219 trips at $173 each costs $37,887, which is within your $38,000 budget.\"\nTool call: get_weather(Paris)\n\nLet me write the response up to the tool call.\nWait, if I just make the tool call, I can include the calculation in the text.\nActually, I'll output the calculation, make the tool call, and then when the system returns the tool output, I will write the final sentence. But since this is a single prompt/response for the tool-calling turn:\n\n```xml\nThe total cost for 219 trips at $173 each is $37,887. Since $37,887 is less than your budget of $38,000, it is affordable.\n```\nThen make the tool call.",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_9df3b7f8-43d8-4352-bc5b-3f6b31301a88",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "text-start",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b"
+        }
+      }
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": "The"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": " total cost for "
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": "219 trips"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": " at $17"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": "3 each is $"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": "37,8"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": "87. Since"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": " $37,"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": "887 is"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": " less than your budget"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": " of $38"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": ",000"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": ", it is affordable"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": ". \n\nLet me"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": " look up the weather"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": " in Paris for you"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": ".\n\n"
+    },
+    {
+      "type": "text-end",
+      "id": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b",
+      "text": "The total cost for 219 trips at $173 each is $37,887. Since $37,887 is less than your budget of $38,000, it is affordable. \n\nLet me look up the weather in Paris for you.\n\n",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_ffc19b4d-03ae-4571-b6ae-5e6a456b8b1b"
+        }
+      }
+    },
+    {
+      "type": "tool-input-start",
+      "id": "call_320249e22515412c98197b4b",
+      "name": "get_weather",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_66400a32-0a29-4d0f-8ab0-1282b7645e96"
+        }
+      }
+    },
+    {
+      "type": "tool-input-delta",
+      "id": "call_320249e22515412c98197b4b",
+      "name": "get_weather",
+      "text": "{\"city\": ",
+      "input": {}
+    },
+    {
+      "type": "tool-input-delta",
+      "id": "call_320249e22515412c98197b4b",
+      "name": "get_weather",
+      "text": "\"Paris",
+      "input": {
+        "city": "Paris"
+      }
+    },
+    {
+      "type": "tool-input-delta",
+      "id": "call_320249e22515412c98197b4b",
+      "name": "get_weather",
+      "text": "\"",
+      "input": {
+        "city": "Paris"
+      }
+    },
+    {
+      "type": "tool-input-delta",
+      "id": "call_320249e22515412c98197b4b",
+      "name": "get_weather",
+      "text": "}",
+      "input": {
+        "city": "Paris"
+      }
+    },
+    {
+      "type": "tool-input-end",
+      "id": "call_320249e22515412c98197b4b",
+      "name": "get_weather",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_66400a32-0a29-4d0f-8ab0-1282b7645e96"
+        }
+      }
+    },
+    {
+      "type": "tool-call",
+      "id": "call_320249e22515412c98197b4b",
+      "name": "get_weather",
+      "input": {
+        "city": "Paris"
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_66400a32-0a29-4d0f-8ab0-1282b7645e96"
+        }
+      }
+    },
+    {
+      "type": "step-finish",
+      "index": 0,
+      "reason": {
+        "normalized": "tool-calls"
+      },
+      "usage": {
+        "inputTokens": 368,
+        "outputTokens": 748,
+        "nonCachedInputTokens": 368,
+        "cacheReadInputTokens": 0,
+        "reasoningTokens": 657,
+        "totalTokens": 1116,
+        "providerMetadata": {
+          "alibaba": {
+            "input_tokens": 368,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 748,
+            "output_tokens_details": {
+              "reasoning_tokens": 657
+            },
+            "total_tokens": 1116,
+            "x_details": [
+              {
+                "total_tokens": 1116,
+                "x_billing_type": "response_api",
+                "output_tokens": 748,
+                "input_tokens": 368,
+                "output_tokens_details": {
+                  "reasoning_tokens": 657
+                },
+                "prompt_tokens_details": {
+                  "cached_tokens": 0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "responseId": "resp_f544585b-3b33-916b-9295-83c501ba757b",
+          "serviceTier": "default"
+        }
+      }
+    },
+    {
+      "type": "finish",
+      "reason": {
+        "normalized": "tool-calls"
+      },
+      "usage": {
+        "inputTokens": 368,
+        "outputTokens": 748,
+        "nonCachedInputTokens": 368,
+        "cacheReadInputTokens": 0,
+        "reasoningTokens": 657,
+        "totalTokens": 1116,
+        "providerMetadata": {
+          "alibaba": {
+            "input_tokens": 368,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 748,
+            "output_tokens_details": {
+              "reasoning_tokens": 657
+            },
+            "total_tokens": 1116,
+            "x_details": [
+              {
+                "total_tokens": 1116,
+                "x_billing_type": "response_api",
+                "output_tokens": 748,
+                "input_tokens": 368,
+                "output_tokens_details": {
+                  "reasoning_tokens": 657
+                },
+                "prompt_tokens_details": {
+                  "cached_tokens": 0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "responseId": "resp_f544585b-3b33-916b-9295-83c501ba757b",
+          "serviceTier": "default"
+        }
+      }
+    }
+  ],
+  "error": null
+}

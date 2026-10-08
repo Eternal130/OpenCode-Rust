@@ -1,0 +1,408 @@
+{
+ "group": "alibaba-chat",
+ "name": "qwen-3-8-max-streams-minimal-effort",
+ "protocol": "alibaba-chat",
+ "provider": "alibaba",
+ "providerMetadataKey": "alibaba",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "Let",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " me calculate 1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "73 × ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "219.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n\n173",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " × 21",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "9:\n1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "73",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " × 20",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "0 = 3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "4,60",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "0\n17",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "3 × 1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "9 = 1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "73 × ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "20 - ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "173 =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 3,4",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "60 - ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "173 =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 3,2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "87\n\n3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "4,6",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "00 + ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "3,28",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7 = 3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7,88",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "3788",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "7",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 69,
+      "nonCachedInputTokens": 69,
+      "outputTokens": 111,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 111,
+        "completion_tokens_details": {
+         "reasoning_tokens": 103,
+         "text_tokens": 111
+        },
+        "prompt_tokens": 69,
+        "prompt_tokens_details": {
+         "cache_creation": {
+          "ephemeral_5m_input_tokens": 0
+         },
+         "cache_creation_input_tokens": 0,
+         "cache_type": "ephemeral",
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "text_tokens": 69
+        },
+        "total_tokens": 180
+       }
+      },
+      "reasoningTokens": 103,
+      "totalTokens": 180
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 69,
+      "nonCachedInputTokens": 69,
+      "outputTokens": 111,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 111,
+        "completion_tokens_details": {
+         "reasoning_tokens": 103,
+         "text_tokens": 111
+        },
+        "prompt_tokens": 69,
+        "prompt_tokens_details": {
+         "cache_creation": {
+          "ephemeral_5m_input_tokens": 0
+         },
+         "cache_creation_input_tokens": 0,
+         "cache_type": "ephemeral",
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "text_tokens": 69
+        },
+        "total_tokens": 180
+       }
+      },
+      "reasoningTokens": 103,
+      "totalTokens": 180
+     }
+    }
+   ]
+  }
+ ]
+}

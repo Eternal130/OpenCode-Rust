@@ -1,0 +1,87 @@
+{
+ "group": "zai-chat",
+ "name": "glm-5-3-flash-reads-image-bytes",
+ "protocol": "zai-chat",
+ "provider": "zai",
+ "providerMetadataKey": "zai",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "jiggling restroom prison",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 145,
+      "nonCachedInputTokens": 145,
+      "outputTokens": 7,
+      "providerMetadata": {
+       "zai": {
+        "completion_tokens": 7,
+        "completion_tokens_details": {
+         "reasoning_tokens": 0
+        },
+        "prompt_tokens": 145,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 152
+       }
+      },
+      "reasoningTokens": 0,
+      "totalTokens": 152
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 145,
+      "nonCachedInputTokens": 145,
+      "outputTokens": 7,
+      "providerMetadata": {
+       "zai": {
+        "completion_tokens": 7,
+        "completion_tokens_details": {
+         "reasoning_tokens": 0
+        },
+        "prompt_tokens": 145,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 152
+       }
+      },
+      "reasoningTokens": 0,
+      "totalTokens": 152
+     }
+    }
+   ]
+  }
+ ]
+}

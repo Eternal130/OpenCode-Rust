@@ -1,0 +1,453 @@
+{
+  "group": "moonshot-responses",
+  "scenario": "kimi-k3-preserves-reasoning-through-a-tool-loop-and-follow-up",
+  "interaction": 2,
+  "machine": "open-responses",
+  "provider": "moonshot",
+  "metadataKey": "moonshot",
+  "frames": [
+    "{\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp_2f2e0c5a8278578e5ac24029c\",\"object\":\"response\",\"created_at\":1789446163,\"completed_at\":null,\"status\":\"in_progress\",\"error\":null,\"incomplete_details\":null,\"output\":[],\"usage\":null,\"store\":false,\"background\":false,\"previous_response_id\":null,\"conversation\":null,\"instructions\":null,\"reasoning\":null,\"text\":{\"format\":{\"type\":\"text\"}},\"tools\":[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"city\":{\"enum\":[\"Paris\"],\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"},\"strict\":false}],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true,\"max_output_tokens\":null,\"max_tool_calls\":null,\"metadata\":null,\"model\":\"kimi-k3\",\"temperature\":1,\"top_p\":0.95,\"presence_penalty\":0,\"frequency_penalty\":0,\"top_logprobs\":0,\"truncation\":\"disabled\",\"prompt_cache_key\":null,\"safety_identifier\":null,\"service_tier\":\"default\"}}",
+    "{\"type\":\"response.in_progress\",\"sequence_number\":1,\"response\":{\"id\":\"resp_2f2e0c5a8278578e5ac24029c\",\"object\":\"response\",\"created_at\":1789446163,\"completed_at\":null,\"status\":\"in_progress\",\"error\":null,\"incomplete_details\":null,\"output\":[],\"usage\":null,\"store\":false,\"background\":false,\"previous_response_id\":null,\"conversation\":null,\"instructions\":null,\"reasoning\":null,\"text\":{\"format\":{\"type\":\"text\"}},\"tools\":[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"city\":{\"enum\":[\"Paris\"],\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"},\"strict\":false}],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true,\"max_output_tokens\":null,\"max_tool_calls\":null,\"metadata\":null,\"model\":\"kimi-k3\",\"temperature\":1,\"top_p\":0.95,\"presence_penalty\":0,\"frequency_penalty\":0,\"top_logprobs\":0,\"truncation\":\"disabled\",\"prompt_cache_key\":null,\"safety_identifier\":null,\"service_tier\":\"default\"}}",
+    "{\"type\":\"response.output_item.added\",\"sequence_number\":2,\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"status\":\"in_progress\",\"summary\":[]}}",
+    "{\"type\":\"response.reasoning_summary_part.added\",\"sequence_number\":3,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"part\":{\"text\":\"\",\"type\":\"summary_text\"}}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":4,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\"Need\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":5,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" answer\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":6,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" only\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":7,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" temperature\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":8,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" from\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":9,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" tool\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":10,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\":\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":11,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" \"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":12,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\"18\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":13,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\"C\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":14,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\".\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":15,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" Need\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":16,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" final\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":17,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" only\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":18,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" temperature\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":19,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\".\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":20,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" Ensure\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":21,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" no\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":22,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" extra\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":23,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" words\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":24,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\".\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":25,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" Use\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":26,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" \"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":27,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\"18\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":28,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\"C\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":29,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" exactly\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":30,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" as\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":31,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" reported\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":32,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" (\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":33,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\"not\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":34,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" \"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":35,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\"18\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":36,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\"°C\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":37,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" maybe\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":38,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" tool\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":39,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" reported\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":40,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" \"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":41,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\"18\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":42,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\"C\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":43,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\").\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":44,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" User\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":45,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" asks\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":46,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" only\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":47,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" temperature\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":48,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\".\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":49,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" final\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":50,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\" \"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":51,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\"18\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":52,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\"C\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":53,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"delta\":\".\"}",
+    "{\"type\":\"response.reasoning_summary_text.done\",\"sequence_number\":54,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"text\":\"Need answer only temperature from tool: 18C. Need final only temperature. Ensure no extra words. Use 18C exactly as reported (not 18°C maybe tool reported 18C). User asks only temperature. final 18C.\"}",
+    "{\"type\":\"response.reasoning_summary_part.done\",\"sequence_number\":55,\"item_id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"output_index\":0,\"summary_index\":0,\"part\":{\"text\":\"Need answer only temperature from tool: 18C. Need final only temperature. Ensure no extra words. Use 18C exactly as reported (not 18°C maybe tool reported 18C). User asks only temperature. final 18C.\",\"type\":\"summary_text\"}}",
+    "{\"type\":\"response.output_item.done\",\"sequence_number\":56,\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"status\":\"completed\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"Need answer only temperature from tool: 18C. Need final only temperature. Ensure no extra words. Use 18C exactly as reported (not 18°C maybe tool reported 18C). User asks only temperature. final 18C.\"}]}}",
+    "{\"type\":\"response.output_item.added\",\"sequence_number\":57,\"output_index\":1,\"item\":{\"type\":\"message\",\"id\":\"msg_cWbAfUfDr9wZ6NKlQYPUauaV\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}",
+    "{\"type\":\"response.content_part.added\",\"sequence_number\":58,\"item_id\":\"msg_cWbAfUfDr9wZ6NKlQYPUauaV\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}",
+    "{\"type\":\"response.output_text.delta\",\"sequence_number\":59,\"item_id\":\"msg_cWbAfUfDr9wZ6NKlQYPUauaV\",\"output_index\":1,\"content_index\":0,\"delta\":\"18\",\"logprobs\":[]}",
+    "{\"type\":\"response.output_text.delta\",\"sequence_number\":60,\"item_id\":\"msg_cWbAfUfDr9wZ6NKlQYPUauaV\",\"output_index\":1,\"content_index\":0,\"delta\":\"C\",\"logprobs\":[]}",
+    "{\"type\":\"response.output_text.done\",\"sequence_number\":61,\"item_id\":\"msg_cWbAfUfDr9wZ6NKlQYPUauaV\",\"output_index\":1,\"content_index\":0,\"text\":\"18C\",\"logprobs\":[]}",
+    "{\"type\":\"response.content_part.done\",\"sequence_number\":62,\"item_id\":\"msg_cWbAfUfDr9wZ6NKlQYPUauaV\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"18C\",\"annotations\":[]}}",
+    "{\"type\":\"response.output_item.done\",\"sequence_number\":63,\"output_index\":1,\"item\":{\"type\":\"message\",\"id\":\"msg_cWbAfUfDr9wZ6NKlQYPUauaV\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"18C\",\"annotations\":[]}]}}",
+    "{\"type\":\"response.completed\",\"sequence_number\":64,\"response\":{\"id\":\"resp_2f2e0c5a8278578e5ac24029c\",\"object\":\"response\",\"created_at\":1789446163,\"completed_at\":1789446167,\"status\":\"completed\",\"error\":null,\"incomplete_details\":null,\"output\":[{\"type\":\"reasoning\",\"id\":\"rs_jMdf0Alr7NcYktYom1GlfcF1\",\"status\":\"completed\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"Need answer only temperature from tool: 18C. Need final only temperature. Ensure no extra words. Use 18C exactly as reported (not 18°C maybe tool reported 18C). User asks only temperature. final 18C.\"}]},{\"type\":\"message\",\"id\":\"msg_cWbAfUfDr9wZ6NKlQYPUauaV\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"18C\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":380,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":256},\"output_tokens\":65,\"output_tokens_details\":{\"reasoning_tokens\":50},\"total_tokens\":445},\"store\":false,\"background\":false,\"previous_response_id\":null,\"conversation\":null,\"instructions\":null,\"reasoning\":null,\"text\":{\"format\":{\"type\":\"text\"}},\"tools\":[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"city\":{\"enum\":[\"Paris\"],\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"},\"strict\":false}],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true,\"max_output_tokens\":null,\"max_tool_calls\":null,\"metadata\":null,\"model\":\"kimi-k3\",\"temperature\":1,\"top_p\":0.95,\"presence_penalty\":0,\"frequency_penalty\":0,\"top_logprobs\":0,\"truncation\":\"disabled\",\"prompt_cache_key\":null,\"safety_identifier\":null,\"service_tier\":\"default\"}}"
+  ],
+  "events": [
+    {
+      "type": "step-start",
+      "index": 0
+    },
+    {
+      "type": "reasoning-start",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "providerMetadata": {
+        "moonshot": {
+          "itemId": "rs_jMdf0Alr7NcYktYom1GlfcF1",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "Need"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " answer"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " only"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " temperature"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " from"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " tool"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": ":"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " "
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "18"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "C"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "."
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " Need"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " final"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " only"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " temperature"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "."
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " Ensure"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " no"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " extra"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " words"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "."
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " Use"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " "
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "18"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "C"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " exactly"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " as"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " reported"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " ("
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "not"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " "
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "18"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "°C"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " maybe"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " tool"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " reported"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " "
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "18"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "C"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": ")."
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " User"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " asks"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " only"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " temperature"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "."
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " final"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": " "
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "18"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "C"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "."
+    },
+    {
+      "type": "reasoning-end",
+      "id": "rs_jMdf0Alr7NcYktYom1GlfcF1:0",
+      "text": "Need answer only temperature from tool: 18C. Need final only temperature. Ensure no extra words. Use 18C exactly as reported (not 18°C maybe tool reported 18C). User asks only temperature. final 18C.",
+      "providerMetadata": {
+        "moonshot": {
+          "itemId": "rs_jMdf0Alr7NcYktYom1GlfcF1",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "text-start",
+      "id": "msg_cWbAfUfDr9wZ6NKlQYPUauaV",
+      "providerMetadata": {
+        "moonshot": {
+          "itemId": "msg_cWbAfUfDr9wZ6NKlQYPUauaV"
+        }
+      }
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_cWbAfUfDr9wZ6NKlQYPUauaV",
+      "text": "18"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_cWbAfUfDr9wZ6NKlQYPUauaV",
+      "text": "C"
+    },
+    {
+      "type": "text-end",
+      "id": "msg_cWbAfUfDr9wZ6NKlQYPUauaV",
+      "text": "18C",
+      "providerMetadata": {
+        "moonshot": {
+          "itemId": "msg_cWbAfUfDr9wZ6NKlQYPUauaV"
+        }
+      }
+    },
+    {
+      "type": "step-finish",
+      "index": 0,
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 380,
+        "outputTokens": 65,
+        "nonCachedInputTokens": 124,
+        "cacheReadInputTokens": 256,
+        "cacheWriteInputTokens": 0,
+        "reasoningTokens": 50,
+        "totalTokens": 445,
+        "providerMetadata": {
+          "moonshot": {
+            "input_tokens": 380,
+            "input_tokens_details": {
+              "cached_tokens": 256,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 65,
+            "output_tokens_details": {
+              "reasoning_tokens": 50
+            },
+            "total_tokens": 445
+          }
+        }
+      },
+      "providerMetadata": {
+        "moonshot": {
+          "responseId": "resp_2f2e0c5a8278578e5ac24029c",
+          "serviceTier": "default"
+        }
+      }
+    },
+    {
+      "type": "finish",
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 380,
+        "outputTokens": 65,
+        "nonCachedInputTokens": 124,
+        "cacheReadInputTokens": 256,
+        "cacheWriteInputTokens": 0,
+        "reasoningTokens": 50,
+        "totalTokens": 445,
+        "providerMetadata": {
+          "moonshot": {
+            "input_tokens": 380,
+            "input_tokens_details": {
+              "cached_tokens": 256,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 65,
+            "output_tokens_details": {
+              "reasoning_tokens": 50
+            },
+            "total_tokens": 445
+          }
+        }
+      },
+      "providerMetadata": {
+        "moonshot": {
+          "responseId": "resp_2f2e0c5a8278578e5ac24029c",
+          "serviceTier": "default"
+        }
+      }
+    }
+  ],
+  "error": null
+}

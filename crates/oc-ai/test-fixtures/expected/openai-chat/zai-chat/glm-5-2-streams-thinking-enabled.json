@@ -1,0 +1,445 @@
+{
+ "group": "zai-chat",
+ "name": "glm-5-2-streams-thinking-enabled",
+ "protocol": "zai-chat",
+ "provider": "zai",
+ "providerMetadataKey": "zai",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "The",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " user wants to",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " multiply 173 by ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "219 and wants only",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the final integer as the response",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".\n\n173 * 219",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n= 173 *",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " (200 + 10 + 9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ")\n= 34600 + ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "1730 + 1557\n=",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 36330 + 1557",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n= 37887\n\nLet",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "'s do standard multiplication:\n  ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 173\n  x2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "19\n  ----\n  155",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7  (9 * 173)\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "  1730  (10",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " * 173)\n 34",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "600  (200 * 173",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ")\n  ----\n 3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7887\n\nSum:\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7+0+0 = 7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n5+3+0 = ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "8\n5+7+6",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " = 18 (8,",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " carry 1)\n1+1",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "+4+1 = 7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n0+0+3 =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 3\n\nResult: 378",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "87.\n\nDouble check:\n173",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " * 220 = 380",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "60\n38060 - ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "173 = 37887\n\nCorrect",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "37887",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 29,
+      "nonCachedInputTokens": 29,
+      "outputTokens": 220,
+      "providerMetadata": {
+       "zai": {
+        "completion_tokens": 220,
+        "completion_tokens_details": {
+         "reasoning_tokens": 216
+        },
+        "prompt_tokens": 29,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 249
+       }
+      },
+      "reasoningTokens": 216,
+      "totalTokens": 249
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 29,
+      "nonCachedInputTokens": 29,
+      "outputTokens": 220,
+      "providerMetadata": {
+       "zai": {
+        "completion_tokens": 220,
+        "completion_tokens_details": {
+         "reasoning_tokens": 216
+        },
+        "prompt_tokens": 29,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 249
+       }
+      },
+      "reasoningTokens": 216,
+      "totalTokens": 249
+     }
+    }
+   ]
+  }
+ ]
+}

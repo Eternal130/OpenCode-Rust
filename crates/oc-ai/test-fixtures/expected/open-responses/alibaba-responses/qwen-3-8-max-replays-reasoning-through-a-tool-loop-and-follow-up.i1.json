@@ -1,0 +1,254 @@
+{
+  "group": "alibaba-responses",
+  "scenario": "qwen-3-8-max-replays-reasoning-through-a-tool-loop-and-follow-up",
+  "interaction": 1,
+  "machine": "open-responses",
+  "provider": "alibaba",
+  "metadataKey": "alibaba",
+  "frames": [
+    "{\"sequence_number\":0,\"type\":\"response.created\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"medium\"},\"created_at\":1789446208,\"store\":false,\"tools\":[{\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"strict\":false,\"type\":\"function\",\"parameters\":{\"additionalProperties\":false,\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"enum\":[\"Paris\"]}},\"required\":[\"city\"]}}],\"output\":[],\"top_p\":1.0,\"completed_at\":1789446208,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_518dc14e-c4a9-9a00-9a5d-a36dd0487fde\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"queued\"}}",
+    "{\"sequence_number\":1,\"type\":\"response.in_progress\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"medium\"},\"created_at\":1789446208,\"store\":false,\"tools\":[{\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"strict\":false,\"type\":\"function\",\"parameters\":{\"additionalProperties\":false,\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"enum\":[\"Paris\"]}},\"required\":[\"city\"]}}],\"output\":[],\"top_p\":1.0,\"completed_at\":1789446208,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_518dc14e-c4a9-9a00-9a5d-a36dd0487fde\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"in_progress\"}}",
+    "{\"sequence_number\":2,\"item\":{\"summary\":[],\"type\":\"reasoning\",\"id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"},\"output_index\":0,\"type\":\"response.output_item.added\"}",
+    "{\"delta\":\"Thinking\",\"sequence_number\":3,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" Process:\\n\\n1\",\"sequence_number\":4,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\".  **An\",\"sequence_number\":5,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"alyze the Request\",\"sequence_number\":6,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\":**\\n    *\",\"sequence_number\":7,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"   The user provided\",\"sequence_number\":8,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" the result of the\",\"sequence_number\":9,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" `get\",\"sequence_number\":10,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"_weather` tool call\",\"sequence_number\":11,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\": `{\\\"condition\",\"sequence_number\":12,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"\\\":\\\"sunny\\\",\\\"\",\"sequence_number\":13,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"temperature\\\":\\\"18\",\"sequence_number\":14,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"C\\\"}`.\",\"sequence_number\":15,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"\\n    *  \",\"sequence_number\":16,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" Constraint from the original\",\"sequence_number\":17,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" prompt: \\\"After\",\"sequence_number\":18,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" receiving the result,\",\"sequence_number\":19,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" report the weather in\",\"sequence_number\":20,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" one short sentence.\\\"\",\"sequence_number\":21,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"\\n2. \",\"sequence_number\":22,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" **\",\"sequence_number\":23,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"Formulate the Output\",\"sequence_number\":24,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\":**\\n    *\",\"sequence_number\":25,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"   Condition: Sunny\",\"sequence_number\":26,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"\\n   \",\"sequence_number\":27,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" *   Temperature:\",\"sequence_number\":28,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" 18C\",\"sequence_number\":29,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" (18 degrees\",\"sequence_number\":30,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" Celsius\",\"sequence_number\":31,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\")\\n    *\",\"sequence_number\":32,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"   Sentence constraint:\",\"sequence_number\":33,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" *\",\"sequence_number\":34,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"exactly* one\",\"sequence_number\":35,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" short sentence.\",\"sequence_number\":36,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"\\n    *  \",\"sequence_number\":37,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" Draft 1:\",\"sequence_number\":38,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" The weather in Paris\",\"sequence_number\":39,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" is\",\"sequence_number\":40,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" currently sunny and \",\"sequence_number\":41,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"18°C.\",\"sequence_number\":42,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"\\n    *\",\"sequence_number\":43,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"   Draft 2\",\"sequence_number\":44,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\": It is currently\",\"sequence_number\":45,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" a sunny 1\",\"sequence_number\":46,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"8 degrees\",\"sequence_number\":47,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" Celsius in Paris.\",\"sequence_number\":48,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"\\n3. \",\"sequence_number\":49,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" **Refine and\",\"sequence_number\":50,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" Select:**\\n   \",\"sequence_number\":51,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" *   \\\"\",\"sequence_number\":52,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"The weather in Paris\",\"sequence_number\":53,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" is currently sunny and\",\"sequence_number\":54,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" 18°C\",\"sequence_number\":55,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\".\\\" (Perfectly\",\"sequence_number\":56,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" short and accurate).\",\"sequence_number\":57,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"\\n4\",\"sequence_number\":58,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\".  **Final\",\"sequence_number\":59,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" Output Generation:** Output\",\"sequence_number\":60,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" just the requested short\",\"sequence_number\":61,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\" sentence.\",\"sequence_number\":62,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"delta\":\"\",\"sequence_number\":63,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"sequence_number\":64,\"text\":\"Thinking Process:\\n\\n1.  **Analyze the Request:**\\n    *   The user provided the result of the `get_weather` tool call: `{\\\"condition\\\":\\\"sunny\\\",\\\"temperature\\\":\\\"18C\\\"}`.\\n    *   Constraint from the original prompt: \\\"After receiving the result, report the weather in one short sentence.\\\"\\n2.  **Formulate the Output:**\\n    *   Condition: Sunny\\n    *   Temperature: 18C (18 degrees Celsius)\\n    *   Sentence constraint: *exactly* one short sentence.\\n    *   Draft 1: The weather in Paris is currently sunny and 18°C.\\n    *   Draft 2: It is currently a sunny 18 degrees Celsius in Paris.\\n3.  **Refine and Select:**\\n    *   \\\"The weather in Paris is currently sunny and 18°C.\\\" (Perfectly short and accurate).\\n4.  **Final Output Generation:** Output just the requested short sentence.\",\"output_index\":0,\"type\":\"response.reasoning_text.done\",\"content_index\":0,\"item_id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"}",
+    "{\"sequence_number\":65,\"item\":{\"summary\":[{\"type\":\"summary_text\",\"text\":\"Thinking Process:\\n\\n1.  **Analyze the Request:**\\n    *   The user provided the result of the `get_weather` tool call: `{\\\"condition\\\":\\\"sunny\\\",\\\"temperature\\\":\\\"18C\\\"}`.\\n    *   Constraint from the original prompt: \\\"After receiving the result, report the weather in one short sentence.\\\"\\n2.  **Formulate the Output:**\\n    *   Condition: Sunny\\n    *   Temperature: 18C (18 degrees Celsius)\\n    *   Sentence constraint: *exactly* one short sentence.\\n    *   Draft 1: The weather in Paris is currently sunny and 18°C.\\n    *   Draft 2: It is currently a sunny 18 degrees Celsius in Paris.\\n3.  **Refine and Select:**\\n    *   \\\"The weather in Paris is currently sunny and 18°C.\\\" (Perfectly short and accurate).\\n4.  **Final Output Generation:** Output just the requested short sentence.\"}],\"type\":\"reasoning\",\"id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"},\"output_index\":0,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":66,\"item\":{\"id\":\"msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[],\"status\":\"in_progress\"},\"output_index\":1,\"type\":\"response.output_item.added\"}",
+    "{\"sequence_number\":67,\"output_index\":1,\"type\":\"response.content_part.added\",\"content_index\":0,\"item_id\":\"msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b\",\"part\":{\"type\":\"output_text\",\"annotations\":[],\"text\":\"\"}}",
+    "{\"sequence_number\":68,\"content_index\":0,\"item_id\":\"msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b\",\"delta\":\"The weather in\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":69,\"content_index\":0,\"item_id\":\"msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b\",\"delta\":\" Paris is currently sunny\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":70,\"content_index\":0,\"item_id\":\"msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b\",\"delta\":\" and 18\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":71,\"content_index\":0,\"item_id\":\"msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b\",\"delta\":\"°C.\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":72,\"content_index\":0,\"item_id\":\"msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b\",\"delta\":\"\",\"output_index\":1,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":73,\"content_index\":0,\"item_id\":\"msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b\",\"text\":\"The weather in Paris is currently sunny and 18°C.\",\"output_index\":1,\"type\":\"response.output_text.done\",\"logprobs\":[]}",
+    "{\"sequence_number\":74,\"output_index\":1,\"type\":\"response.content_part.done\",\"content_index\":0,\"item_id\":\"msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b\",\"part\":{\"type\":\"output_text\",\"annotations\":[],\"text\":\"The weather in Paris is currently sunny and 18°C.\"}}",
+    "{\"sequence_number\":75,\"item\":{\"id\":\"msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"The weather in Paris is currently sunny and 18°C.\"}],\"status\":\"completed\"},\"output_index\":1,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":76,\"type\":\"response.completed\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"medium\"},\"usage\":{\"total_tokens\":1371,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":227,\"input_tokens\":1144,\"output_tokens_details\":{\"reasoning_tokens\":211},\"x_details\":[{\"total_tokens\":1371,\"x_billing_type\":\"response_api\",\"output_tokens\":227,\"input_tokens\":1144,\"output_tokens_details\":{\"reasoning_tokens\":211},\"prompt_tokens_details\":{\"cached_tokens\":0}}]},\"created_at\":1789446208,\"store\":false,\"tools\":[{\"name\":\"get_weather\",\"description\":\"Get the current weather in a city\",\"strict\":false,\"type\":\"function\",\"parameters\":{\"additionalProperties\":false,\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"enum\":[\"Paris\"]}},\"required\":[\"city\"]}}],\"output\":[{\"summary\":[{\"type\":\"summary_text\",\"text\":\"Thinking Process:\\n\\n1.  **Analyze the Request:**\\n    *   The user provided the result of the `get_weather` tool call: `{\\\"condition\\\":\\\"sunny\\\",\\\"temperature\\\":\\\"18C\\\"}`.\\n    *   Constraint from the original prompt: \\\"After receiving the result, report the weather in one short sentence.\\\"\\n2.  **Formulate the Output:**\\n    *   Condition: Sunny\\n    *   Temperature: 18C (18 degrees Celsius)\\n    *   Sentence constraint: *exactly* one short sentence.\\n    *   Draft 1: The weather in Paris is currently sunny and 18°C.\\n    *   Draft 2: It is currently a sunny 18 degrees Celsius in Paris.\\n3.  **Refine and Select:**\\n    *   \\\"The weather in Paris is currently sunny and 18°C.\\\" (Perfectly short and accurate).\\n4.  **Final Output Generation:** Output just the requested short sentence.\"}],\"type\":\"reasoning\",\"id\":\"msg_dafd7983-c809-4446-aa67-1e6ad519f7dd\"},{\"id\":\"msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"The weather in Paris is currently sunny and 18°C.\"}],\"status\":\"completed\"}],\"top_p\":1.0,\"completed_at\":1789446213,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_518dc14e-c4a9-9a00-9a5d-a36dd0487fde\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"completed\"}}"
+  ],
+  "events": [
+    {
+      "type": "step-start",
+      "index": 0
+    },
+    {
+      "type": "reasoning-start",
+      "id": "msg_dafd7983-c809-4446-aa67-1e6ad519f7dd:0",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_dafd7983-c809-4446-aa67-1e6ad519f7dd",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "msg_dafd7983-c809-4446-aa67-1e6ad519f7dd:0",
+      "text": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   The user provided the result of the `get_weather` tool call: `{\"condition\":\"sunny\",\"temperature\":\"18C\"}`.\n    *   Constraint from the original prompt: \"After receiving the result, report the weather in one short sentence.\"\n2.  **Formulate the Output:**\n    *   Condition: Sunny\n    *   Temperature: 18C (18 degrees Celsius)\n    *   Sentence constraint: *exactly* one short sentence.\n    *   Draft 1: The weather in Paris is currently sunny and 18°C.\n    *   Draft 2: It is currently a sunny 18 degrees Celsius in Paris.\n3.  **Refine and Select:**\n    *   \"The weather in Paris is currently sunny and 18°C.\" (Perfectly short and accurate).\n4.  **Final Output Generation:** Output just the requested short sentence."
+    },
+    {
+      "type": "reasoning-end",
+      "id": "msg_dafd7983-c809-4446-aa67-1e6ad519f7dd:0",
+      "text": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   The user provided the result of the `get_weather` tool call: `{\"condition\":\"sunny\",\"temperature\":\"18C\"}`.\n    *   Constraint from the original prompt: \"After receiving the result, report the weather in one short sentence.\"\n2.  **Formulate the Output:**\n    *   Condition: Sunny\n    *   Temperature: 18C (18 degrees Celsius)\n    *   Sentence constraint: *exactly* one short sentence.\n    *   Draft 1: The weather in Paris is currently sunny and 18°C.\n    *   Draft 2: It is currently a sunny 18 degrees Celsius in Paris.\n3.  **Refine and Select:**\n    *   \"The weather in Paris is currently sunny and 18°C.\" (Perfectly short and accurate).\n4.  **Final Output Generation:** Output just the requested short sentence.",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_dafd7983-c809-4446-aa67-1e6ad519f7dd",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "text-start",
+      "id": "msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b"
+        }
+      }
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b",
+      "text": "The weather in"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b",
+      "text": " Paris is currently sunny"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b",
+      "text": " and 18"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b",
+      "text": "°C."
+    },
+    {
+      "type": "text-end",
+      "id": "msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b",
+      "text": "The weather in Paris is currently sunny and 18°C.",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_1b717bfa-aa03-4310-bcd5-8d92b8fe891b"
+        }
+      }
+    },
+    {
+      "type": "step-finish",
+      "index": 0,
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 1144,
+        "outputTokens": 227,
+        "nonCachedInputTokens": 1144,
+        "cacheReadInputTokens": 0,
+        "reasoningTokens": 211,
+        "totalTokens": 1371,
+        "providerMetadata": {
+          "alibaba": {
+            "input_tokens": 1144,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 227,
+            "output_tokens_details": {
+              "reasoning_tokens": 211
+            },
+            "total_tokens": 1371,
+            "x_details": [
+              {
+                "total_tokens": 1371,
+                "x_billing_type": "response_api",
+                "output_tokens": 227,
+                "input_tokens": 1144,
+                "output_tokens_details": {
+                  "reasoning_tokens": 211
+                },
+                "prompt_tokens_details": {
+                  "cached_tokens": 0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "responseId": "resp_518dc14e-c4a9-9a00-9a5d-a36dd0487fde",
+          "serviceTier": "default"
+        }
+      }
+    },
+    {
+      "type": "finish",
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 1144,
+        "outputTokens": 227,
+        "nonCachedInputTokens": 1144,
+        "cacheReadInputTokens": 0,
+        "reasoningTokens": 211,
+        "totalTokens": 1371,
+        "providerMetadata": {
+          "alibaba": {
+            "input_tokens": 1144,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 227,
+            "output_tokens_details": {
+              "reasoning_tokens": 211
+            },
+            "total_tokens": 1371,
+            "x_details": [
+              {
+                "total_tokens": 1371,
+                "x_billing_type": "response_api",
+                "output_tokens": 227,
+                "input_tokens": 1144,
+                "output_tokens_details": {
+                  "reasoning_tokens": 211
+                },
+                "prompt_tokens_details": {
+                  "cached_tokens": 0
+                }
+              }
+            ]
+          }
+        }
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "responseId": "resp_518dc14e-c4a9-9a00-9a5d-a36dd0487fde",
+          "serviceTier": "default"
+        }
+      }
+    }
+  ],
+  "error": null
+}

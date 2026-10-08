@@ -1,0 +1,899 @@
+{
+  "group": "alibaba-responses",
+  "scenario": "qwen-3-8-max-uses-hosted-web-search-and-extraction",
+  "interaction": 0,
+  "machine": "open-responses",
+  "provider": "alibaba",
+  "metadataKey": "alibaba",
+  "frames": [
+    "{\"sequence_number\":0,\"type\":\"response.created\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"low\"},\"created_at\":1789446231,\"store\":false,\"tools\":[{\"type\":\"web_search\"},{\"type\":\"web_extractor\"}],\"output\":[],\"top_p\":1.0,\"completed_at\":1789446231,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_9cc472b4-dca0-947c-97fd-7b4153d73dc1\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"queued\"}}",
+    "{\"sequence_number\":1,\"type\":\"response.in_progress\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"low\"},\"created_at\":1789446231,\"store\":false,\"tools\":[{\"type\":\"web_search\"},{\"type\":\"web_extractor\"}],\"output\":[],\"top_p\":1.0,\"completed_at\":1789446231,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_9cc472b4-dca0-947c-97fd-7b4153d73dc1\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"in_progress\"}}",
+    "{\"sequence_number\":2,\"item\":{\"summary\":[],\"type\":\"reasoning\",\"id\":\"msg_ab416d78-80c6-4685-815c-7f07679762b3\"},\"output_index\":0,\"type\":\"response.output_item.added\"}",
+    "{\"delta\":\"Search\",\"sequence_number\":3,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_ab416d78-80c6-4685-815c-7f07679762b3\"}",
+    "{\"delta\":\" the\",\"sequence_number\":4,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_ab416d78-80c6-4685-815c-7f07679762b3\"}",
+    "{\"delta\":\" documentation\",\"sequence_number\":5,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_ab416d78-80c6-4685-815c-7f07679762b3\"}",
+    "{\"delta\":\" for\",\"sequence_number\":6,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_ab416d78-80c6-4685-815c-7f07679762b3\"}",
+    "{\"delta\":\" Alibaba Cloud Model Studio\",\"sequence_number\":7,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_ab416d78-80c6-4685-815c-7f07679762b3\"}",
+    "{\"delta\":\".\",\"sequence_number\":8,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_ab416d78-80c6-4685-815c-7f07679762b3\"}",
+    "{\"delta\":\"\",\"sequence_number\":9,\"output_index\":0,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_ab416d78-80c6-4685-815c-7f07679762b3\"}",
+    "{\"sequence_number\":10,\"text\":\"Search the documentation for Alibaba Cloud Model Studio.\",\"output_index\":0,\"type\":\"response.reasoning_text.done\",\"content_index\":0,\"item_id\":\"msg_ab416d78-80c6-4685-815c-7f07679762b3\"}",
+    "{\"sequence_number\":11,\"item\":{\"summary\":[{\"type\":\"summary_text\",\"text\":\"Search the documentation for Alibaba Cloud Model Studio.\"}],\"type\":\"reasoning\",\"id\":\"msg_ab416d78-80c6-4685-815c-7f07679762b3\"},\"output_index\":0,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":12,\"item\":{\"action\":{\"type\":\"search\",\"queries\":[\"Alibaba Cloud Model Studio official documentation\",\"Model Studio Alibaba Cloud product overview\"]},\"id\":\"msg_2a679543-848b-4eeb-aae9-654c735f7842\",\"type\":\"web_search_call\",\"status\":\"in_progress\"},\"output_index\":1,\"type\":\"response.output_item.added\"}",
+    "{\"sequence_number\":13,\"output_index\":1,\"type\":\"response.web_search_call.in_progress\",\"item_id\":\"msg_2a679543-848b-4eeb-aae9-654c735f7842\"}",
+    "{\"sequence_number\":14,\"output_index\":1,\"type\":\"response.web_search_call.searching\",\"item_id\":\"msg_2a679543-848b-4eeb-aae9-654c735f7842\"}",
+    "{\"sequence_number\":15,\"output_index\":1,\"type\":\"response.web_search_call.completed\",\"item_id\":\"msg_2a679543-848b-4eeb-aae9-654c735f7842\"}",
+    "{\"sequence_number\":16,\"item\":{\"action\":{\"sources\":[{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/what-is-model-studio\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/get-started-with-models/\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/qwen-api-reference/\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/model-api-reference/\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/models\"},{\"type\":\"url\",\"url\":\"https://help.aliyun.com/en/model-studio/what-is-model-studio\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/rag-knowledge-base\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/qwen-code\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/faq-about-alibaba-cloud-model-studio\"},{\"type\":\"url\",\"url\":\"https://modelstudio.alibabacloud.com/\"},{\"type\":\"url\",\"url\":\"https://modelstudio.console.alibabacloud.com/\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/what-is-model-studio\"},{\"type\":\"url\",\"url\":\"https://help.aliyun.com/en/model-studio/what-is-model-studio\"},{\"type\":\"url\",\"url\":\"https://www.gartner.com/reviews/product/alibaba-cloud-model-studio\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/models\"},{\"type\":\"url\",\"url\":\"https://www.youtube.com/watch?v=gfqytnlfx2s\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/rag-knowledge-base\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/en?_p_lc=5\"}],\"type\":\"search\",\"queries\":[\"Alibaba Cloud Model Studio official documentation\",\"Model Studio Alibaba Cloud product overview\"],\"query\":\"Alibaba Cloud Model Studio official documentation\"},\"id\":\"msg_2a679543-848b-4eeb-aae9-654c735f7842\",\"type\":\"web_search_call\",\"status\":\"completed\"},\"output_index\":1,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":17,\"item\":{\"summary\":[],\"type\":\"reasoning\",\"id\":\"msg_def4b034-285a-47a5-ab58-b97faed952eb\"},\"output_index\":2,\"type\":\"response.output_item.added\"}",
+    "{\"delta\":\"Use\",\"sequence_number\":18,\"output_index\":2,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_def4b034-285a-47a5-ab58-b97faed952eb\"}",
+    "{\"delta\":\" web_extractor to read\",\"sequence_number\":19,\"output_index\":2,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_def4b034-285a-47a5-ab58-b97faed952eb\"}",
+    "{\"delta\":\" the main \\\"\",\"sequence_number\":20,\"output_index\":2,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_def4b034-285a-47a5-ab58-b97faed952eb\"}",
+    "{\"delta\":\"What is Model Studio\",\"sequence_number\":21,\"output_index\":2,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_def4b034-285a-47a5-ab58-b97faed952eb\"}",
+    "{\"delta\":\"\\\" documentation page.\",\"sequence_number\":22,\"output_index\":2,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_def4b034-285a-47a5-ab58-b97faed952eb\"}",
+    "{\"delta\":\"\",\"sequence_number\":23,\"output_index\":2,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_def4b034-285a-47a5-ab58-b97faed952eb\"}",
+    "{\"sequence_number\":24,\"text\":\"Use web_extractor to read the main \\\"What is Model Studio\\\" documentation page.\",\"output_index\":2,\"type\":\"response.reasoning_text.done\",\"content_index\":0,\"item_id\":\"msg_def4b034-285a-47a5-ab58-b97faed952eb\"}",
+    "{\"sequence_number\":25,\"item\":{\"summary\":[{\"type\":\"summary_text\",\"text\":\"Use web_extractor to read the main \\\"What is Model Studio\\\" documentation page.\"}],\"type\":\"reasoning\",\"id\":\"msg_def4b034-285a-47a5-ab58-b97faed952eb\"},\"output_index\":2,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":26,\"item\":{\"urls\":[\"https://www.alibabacloud.com/help/en/model-studio/what-is-model-studio\"],\"goal\":\"Summarize what Alibaba Cloud Model Studio is, its key features, capabilities, and main use cases\",\"id\":\"msg_caad43f4-33a8-4e30-8138-50b01b9517d7\",\"type\":\"web_extractor_call\",\"status\":\"in_progress\"},\"output_index\":3,\"type\":\"response.output_item.added\"}",
+    "{\"sequence_number\":27,\"item\":{\"output\":\"The useful information in https://www.alibabacloud.com/help/en/model-studio/what-is-model-studio for user goal Summarize what Alibaba Cloud Model Studio is, its key features, capabilities, and main use cases as follows: \\n\\nEvidence in page: \\n### Models\\n\\nEmpowering AI innovation for both enterprises and developers with Alibaba Cloud’s best-in-class Qwen models, AI-native apps, and AI solutions.\\n\\n**Alibaba Cloud Model Studio** \\nEnterprise-grade large model service and application development platform.\\n\\n#### Models\\n\\n**Qwen3.8-Flash** \\nFast multimodal model with 1M context, powering coding, agentic workflows, and visual analysis **HappyHorse-1.1-T2V** \\nCinematic creative generation, ultimate dynamic details **Qwen3.7-Plus** \\nNative multimodal, 1M context, agentic coding **Wan2.7-I2V** \\nCinematic I2V with emotional depth and visceral impact\\n\\n**Qwen3.8-Max** \\nComprehensive leap in coding and professional work, empowering complex reasoning tasks **Qwen3.7-Max** \\nVersatile agent foundation, long-horizon reasoning & cross-framework flexibility **Qwen-Image-3.0** \\nProfessional infographics, exquisite photorealism **Wan2.7-VideoEdit** \\nSupports both localized and global editing with prompt\\n\\n**Qwen3.7-Flash** \\nCost-efficient native vision-language model **DeepSeek-V4-Pro** \\nFlagship MoE model with 1M context, powering advanced reasoning, coding, and agentic workflows **Wan2.7-T2V** \\nHigh-fidelity T2V, 15s duration, advanced camera control\\n\\n**Wan3.0-I2V** \\nAll-in-one video model with 30s output, enabling reference, editing, replication, and driving **DeepSeek-v4-Flash** \\nCost-efficient model with enhanced agentic capabilities for diverse automation scenarios **Qwen3-VL-Plus** \\nNative VL, spatial reasoning, 1M-context video analysis\\n\\n#### GenAI Application\\n\\n**QwenWork** \\nAll-in-one AI productivity platform **Qoder** \\nIntelligent coding assistant, available for enterprise-dedicated deployment. **Qoder CN** \\nAI-powered coding assistant that boosts developer productivity with intelligent code completion, AI chat, multi-file editing, and task automation.\\n\\n## Alibaba Cloud Model Studio is a one-stop model service platform. It provides the full Qwen series and mainstream third-party LLMs through official Qwen APIs and OpenAI-compatible APIs, with multimodal support across text, image, and audio/video. Call models on demand — no infrastructure to manage.\\n\\nGenerate content and summaries with a few lines of code.\\n\\n> Model Studio is OpenAI-compatible. Update the API key, base URL, and model name to migrate existing OpenAI code.\\n\\n## Model service\\n\\nModel Studio provides ready-to-use model services, including the proprietary Qwen series and third-party models such as DeepSeek, Kimi, and GLM. See Recommended models.\\n\\n- **Qwen flagship models**:\\n  - Qwen-Max: The highest-performing model in the Qwen series, suited for complex, multi-step tasks.\\n  - Qwen-Plus: Balances performance, speed, and cost — **recommended** for most scenarios.\\n  - Qwen-Flash: Low-cost and low-latency — suited for simple tasks that require fast responses.\\n- **Multimodal coverage**: Includes text generation, visual understanding, image generation, video generation, speech recognition and synthesis, and embedding.\\n\\n- **Domain-specific models**: Models for long-text processing, translation, data mining, intent recognition, role-playing, and deep research.\\n\\nSummary: \\nAlibaba Cloud Model Studio is a one-stop, enterprise-grade model service platform that provides access to the Qwen series of models and other mainstream third-party LLMs like DeepSeek and GLM. Its key features include ready-to-use services, multimodal support for text, image, video, and audio, and OpenAI-compatible APIs for easy migration. The platform offers various capabilities, including text generation, visual understanding, image and video generation, speech recognition, and specialized models for tasks like long-text processing and data mining. Main use cases involve empowering developers with AI-native applications and solutions, supporting complex reasoning tasks, enabling coding assistance (e.g., Qoder), and serving as a comprehensive GenAI application platform (e.g., QwenWork).\",\"urls\":[\"https://www.alibabacloud.com/help/en/model-studio/what-is-model-studio\"],\"goal\":\"Summarize what Alibaba Cloud Model Studio is, its key features, capabilities, and main use cases\",\"id\":\"msg_caad43f4-33a8-4e30-8138-50b01b9517d7\",\"type\":\"web_extractor_call\",\"status\":\"completed\"},\"output_index\":3,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":28,\"item\":{\"summary\":[],\"type\":\"reasoning\",\"id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"},\"output_index\":4,\"type\":\"response.output_item.added\"}",
+    "{\"delta\":\"Note\",\"sequence_number\":29,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\": The extracted\",\"sequence_number\":30,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\" content mentions\",\"sequence_number\":31,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\" models such\",\"sequence_number\":32,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\" as Qwen3\",\"sequence_number\":33,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\".8\",\"sequence_number\":34,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\", DeepSeek-V\",\"sequence_number\":35,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\"4\",\"sequence_number\":36,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\", and Wan3\",\"sequence_number\":37,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\".0\",\"sequence_number\":38,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\", and given that\",\"sequence_number\":39,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\" the current time\",\"sequence_number\":40,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\" is September 2\",\"sequence_number\":41,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\"02\",\"sequence_number\":42,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\"6, that's\",\"sequence_number\":43,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\" plausible. I\",\"sequence_number\":44,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\"'ll provide a concise\",\"sequence_number\":45,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\" summary with\",\"sequence_number\":46,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\" sources attached.\\n\",\"sequence_number\":47,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"delta\":\"\",\"sequence_number\":48,\"output_index\":4,\"type\":\"response.reasoning_text.delta\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"sequence_number\":49,\"text\":\"Note: The extracted content mentions models such as Qwen3.8, DeepSeek-V4, and Wan3.0, and given that the current time is September 2026, that's plausible. I'll provide a concise summary with sources attached.\\n\",\"output_index\":4,\"type\":\"response.reasoning_text.done\",\"content_index\":0,\"item_id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"}",
+    "{\"sequence_number\":50,\"item\":{\"summary\":[{\"type\":\"summary_text\",\"text\":\"Note: The extracted content mentions models such as Qwen3.8, DeepSeek-V4, and Wan3.0, and given that the current time is September 2026, that's plausible. I'll provide a concise summary with sources attached.\\n\"}],\"type\":\"reasoning\",\"id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"},\"output_index\":4,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":51,\"item\":{\"id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[],\"status\":\"in_progress\"},\"output_index\":5,\"type\":\"response.output_item.added\"}",
+    "{\"sequence_number\":52,\"output_index\":5,\"type\":\"response.content_part.added\",\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"part\":{\"type\":\"output_text\",\"annotations\":[],\"text\":\"\"}}",
+    "{\"sequence_number\":53,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"## Summary: Alibaba\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":54,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" Cloud Model\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":55,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" Studio\\n\\n**Al\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":56,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"ibaba Cloud Model Studio\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":57,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"** is a one\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":58,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"-stop, enterprise\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":59,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"-grade model service and\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":60,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" AI application development platform\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":61,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\".\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":62,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" Key points from the\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":63,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" official documentation:\\n\\n\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":64,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"- **Model access\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":65,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"**: Provides the full\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":66,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" Qwen\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":67,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" series plus mainstream third\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":68,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"-party LLM\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":69,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"s (e.g\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":70,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"., DeepSeek\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":71,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\", Kimi,\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":72,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" GLM) through\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":73,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" official Qwen APIs\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":74,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" — no infrastructure to\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":75,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" manage\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":76,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\", with pay-as\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":77,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"-you-go\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":78,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\", on-demand usage\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":79,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\".\\n- **\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":80,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"Flagship tiers**:\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":81,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" Q\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":82,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"wen-Max (\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":83,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"highest performance for complex\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":84,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" multi-step tasks),\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":85,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" Qwen-Plus\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":86,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" (balanced performance/s\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":87,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"peed/cost,\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":88,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" recommended for most scenarios\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":89,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"), and Qwen\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":90,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"-Flash (low\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":91,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"-cost, low-lat\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":92,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"ency for simple tasks\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":93,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\").\\n- **\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":94,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"Multimodal support\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":95,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"**: Text generation,\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":96,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" visual understanding, image\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":97,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" generation, video generation\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":98,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" (\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":99,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"Wan series),\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":100,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" speech\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":101,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" recognition/synthesis,\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":102,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" and embeddings.\\n\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":103,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"- **OpenAI\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":104,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" compatibility**: Drop-in\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":105,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" migration\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":106,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" for existing OpenAI\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":107,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" code\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":108,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" — just update the\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":109,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" API key, base\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":110,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" URL, and model\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":111,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" name.\\n-\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":112,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" **Domain-specific models\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":113,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"**: For long-text\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":114,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" processing,\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":115,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" translation, data mining\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":116,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\", intent recognition,\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":117,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" role-playing, and\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":118,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" deep research.\\n\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":119,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"- **GenAI\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":120,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" applications**: Includes AI\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":121,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"-native tools\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":122,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" such as Qwen\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":123,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"Work (productivity\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":124,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" platform) and\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":125,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" Qoder (AI\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":126,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" coding assistant with enterprise\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":127,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" deployment\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":128,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" options).\\n\\n**\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":129,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"Source**: https://\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":130,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"www.alibaba\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":131,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"cloud.com/help/en\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":132,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"/model-studio/\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":133,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"what-is-model-st\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":134,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"udio\\n\\nRelated official\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":135,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" docs: [API\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":136,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" Reference](https://\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":137,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"www.alibabacloud.com\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":138,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"/help/en/model-st\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":139,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"udio/model-api-reference\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":140,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"/), [Supported\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":141,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" Models\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":142,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" Overview](https://\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":143,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"www.alibabacloud.com\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":144,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"/help/en/model-st\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":145,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"udio/models), and\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":146,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\" [Getting Started](\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":147,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"https://\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":148,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"www.alibabacloud.com\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":149,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"/help/en/model-st\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":150,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"udio/get-started\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":151,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"-with-models/\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":152,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\").\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":153,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"delta\":\"\",\"output_index\":5,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":154,\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"text\":\"## Summary: Alibaba Cloud Model Studio\\n\\n**Alibaba Cloud Model Studio** is a one-stop, enterprise-grade model service and AI application development platform. Key points from the official documentation:\\n\\n- **Model access**: Provides the full Qwen series plus mainstream third-party LLMs (e.g., DeepSeek, Kimi, GLM) through official Qwen APIs — no infrastructure to manage, with pay-as-you-go, on-demand usage.\\n- **Flagship tiers**: Qwen-Max (highest performance for complex multi-step tasks), Qwen-Plus (balanced performance/speed/cost, recommended for most scenarios), and Qwen-Flash (low-cost, low-latency for simple tasks).\\n- **Multimodal support**: Text generation, visual understanding, image generation, video generation (Wan series), speech recognition/synthesis, and embeddings.\\n- **OpenAI compatibility**: Drop-in migration for existing OpenAI code — just update the API key, base URL, and model name.\\n- **Domain-specific models**: For long-text processing, translation, data mining, intent recognition, role-playing, and deep research.\\n- **GenAI applications**: Includes AI-native tools such as QwenWork (productivity platform) and Qoder (AI coding assistant with enterprise deployment options).\\n\\n**Source**: https://www.alibabacloud.com/help/en/model-studio/what-is-model-studio\\n\\nRelated official docs: [API Reference](https://www.alibabacloud.com/help/en/model-studio/model-api-reference/), [Supported Models Overview](https://www.alibabacloud.com/help/en/model-studio/models), and [Getting Started](https://www.alibabacloud.com/help/en/model-studio/get-started-with-models/).\",\"output_index\":5,\"type\":\"response.output_text.done\",\"logprobs\":[]}",
+    "{\"sequence_number\":155,\"output_index\":5,\"type\":\"response.content_part.done\",\"content_index\":0,\"item_id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"part\":{\"type\":\"output_text\",\"annotations\":[],\"text\":\"## Summary: Alibaba Cloud Model Studio\\n\\n**Alibaba Cloud Model Studio** is a one-stop, enterprise-grade model service and AI application development platform. Key points from the official documentation:\\n\\n- **Model access**: Provides the full Qwen series plus mainstream third-party LLMs (e.g., DeepSeek, Kimi, GLM) through official Qwen APIs — no infrastructure to manage, with pay-as-you-go, on-demand usage.\\n- **Flagship tiers**: Qwen-Max (highest performance for complex multi-step tasks), Qwen-Plus (balanced performance/speed/cost, recommended for most scenarios), and Qwen-Flash (low-cost, low-latency for simple tasks).\\n- **Multimodal support**: Text generation, visual understanding, image generation, video generation (Wan series), speech recognition/synthesis, and embeddings.\\n- **OpenAI compatibility**: Drop-in migration for existing OpenAI code — just update the API key, base URL, and model name.\\n- **Domain-specific models**: For long-text processing, translation, data mining, intent recognition, role-playing, and deep research.\\n- **GenAI applications**: Includes AI-native tools such as QwenWork (productivity platform) and Qoder (AI coding assistant with enterprise deployment options).\\n\\n**Source**: https://www.alibabacloud.com/help/en/model-studio/what-is-model-studio\\n\\nRelated official docs: [API Reference](https://www.alibabacloud.com/help/en/model-studio/model-api-reference/), [Supported Models Overview](https://www.alibabacloud.com/help/en/model-studio/models), and [Getting Started](https://www.alibabacloud.com/help/en/model-studio/get-started-with-models/).\"}}",
+    "{\"sequence_number\":156,\"item\":{\"id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"## Summary: Alibaba Cloud Model Studio\\n\\n**Alibaba Cloud Model Studio** is a one-stop, enterprise-grade model service and AI application development platform. Key points from the official documentation:\\n\\n- **Model access**: Provides the full Qwen series plus mainstream third-party LLMs (e.g., DeepSeek, Kimi, GLM) through official Qwen APIs — no infrastructure to manage, with pay-as-you-go, on-demand usage.\\n- **Flagship tiers**: Qwen-Max (highest performance for complex multi-step tasks), Qwen-Plus (balanced performance/speed/cost, recommended for most scenarios), and Qwen-Flash (low-cost, low-latency for simple tasks).\\n- **Multimodal support**: Text generation, visual understanding, image generation, video generation (Wan series), speech recognition/synthesis, and embeddings.\\n- **OpenAI compatibility**: Drop-in migration for existing OpenAI code — just update the API key, base URL, and model name.\\n- **Domain-specific models**: For long-text processing, translation, data mining, intent recognition, role-playing, and deep research.\\n- **GenAI applications**: Includes AI-native tools such as QwenWork (productivity platform) and Qoder (AI coding assistant with enterprise deployment options).\\n\\n**Source**: https://www.alibabacloud.com/help/en/model-studio/what-is-model-studio\\n\\nRelated official docs: [API Reference](https://www.alibabacloud.com/help/en/model-studio/model-api-reference/), [Supported Models Overview](https://www.alibabacloud.com/help/en/model-studio/models), and [Getting Started](https://www.alibabacloud.com/help/en/model-studio/get-started-with-models/).\"}],\"status\":\"completed\"},\"output_index\":5,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":157,\"type\":\"response.completed\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"reasoning\":{\"effort\":\"low\"},\"usage\":{\"input_tokens_details\":{\"cached_tokens\":0},\"x_details\":[{\"plugins\":{\"web_extractor\":{\"count\":1},\"web_search\":{\"count\":1}},\"prompt_tokens_details\":{\"cached_tokens\":0},\"total_tokens\":5426,\"x_billing_type\":\"response_api\",\"output_tokens\":557,\"input_tokens\":4869,\"output_tokens_details\":{\"reasoning_tokens\":79}}],\"total_tokens\":5426,\"output_tokens\":557,\"x_tools\":{\"web_extractor\":{\"count\":1},\"web_search\":{\"count\":1}},\"input_tokens\":4869,\"output_tokens_details\":{\"reasoning_tokens\":79}},\"created_at\":1789446231,\"store\":false,\"tools\":[{\"type\":\"web_search\"},{\"type\":\"web_extractor\"}],\"output\":[{\"summary\":[{\"type\":\"summary_text\",\"text\":\"Search the documentation for Alibaba Cloud Model Studio.\"}],\"type\":\"reasoning\",\"id\":\"msg_ab416d78-80c6-4685-815c-7f07679762b3\"},{\"action\":{\"sources\":[{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/what-is-model-studio\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/get-started-with-models/\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/qwen-api-reference/\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/model-api-reference/\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/models\"},{\"type\":\"url\",\"url\":\"https://help.aliyun.com/en/model-studio/what-is-model-studio\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/rag-knowledge-base\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/qwen-code\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/faq-about-alibaba-cloud-model-studio\"},{\"type\":\"url\",\"url\":\"https://modelstudio.alibabacloud.com/\"},{\"type\":\"url\",\"url\":\"https://modelstudio.console.alibabacloud.com/\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/what-is-model-studio\"},{\"type\":\"url\",\"url\":\"https://help.aliyun.com/en/model-studio/what-is-model-studio\"},{\"type\":\"url\",\"url\":\"https://www.gartner.com/reviews/product/alibaba-cloud-model-studio\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/models\"},{\"type\":\"url\",\"url\":\"https://www.youtube.com/watch?v=gfqytnlfx2s\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/help/en/model-studio/rag-knowledge-base\"},{\"type\":\"url\",\"url\":\"https://www.alibabacloud.com/en?_p_lc=5\"}],\"type\":\"search\",\"queries\":[\"Alibaba Cloud Model Studio official documentation\",\"Model Studio Alibaba Cloud product overview\"],\"query\":\"Alibaba Cloud Model Studio official documentation\"},\"id\":\"msg_2a679543-848b-4eeb-aae9-654c735f7842\",\"type\":\"web_search_call\",\"status\":\"completed\"},{\"summary\":[{\"type\":\"summary_text\",\"text\":\"Use web_extractor to read the main \\\"What is Model Studio\\\" documentation page.\"}],\"type\":\"reasoning\",\"id\":\"msg_def4b034-285a-47a5-ab58-b97faed952eb\"},{\"output\":\"The useful information in https://www.alibabacloud.com/help/en/model-studio/what-is-model-studio for user goal Summarize what Alibaba Cloud Model Studio is, its key features, capabilities, and main use cases as follows: \\n\\nEvidence in page: \\n### Models\\n\\nEmpowering AI innovation for both enterprises and developers with Alibaba Cloud’s best-in-class Qwen models, AI-native apps, and AI solutions.\\n\\n**Alibaba Cloud Model Studio** \\nEnterprise-grade large model service and application development platform.\\n\\n#### Models\\n\\n**Qwen3.8-Flash** \\nFast multimodal model with 1M context, powering coding, agentic workflows, and visual analysis **HappyHorse-1.1-T2V** \\nCinematic creative generation, ultimate dynamic details **Qwen3.7-Plus** \\nNative multimodal, 1M context, agentic coding **Wan2.7-I2V** \\nCinematic I2V with emotional depth and visceral impact\\n\\n**Qwen3.8-Max** \\nComprehensive leap in coding and professional work, empowering complex reasoning tasks **Qwen3.7-Max** \\nVersatile agent foundation, long-horizon reasoning & cross-framework flexibility **Qwen-Image-3.0** \\nProfessional infographics, exquisite photorealism **Wan2.7-VideoEdit** \\nSupports both localized and global editing with prompt\\n\\n**Qwen3.7-Flash** \\nCost-efficient native vision-language model **DeepSeek-V4-Pro** \\nFlagship MoE model with 1M context, powering advanced reasoning, coding, and agentic workflows **Wan2.7-T2V** \\nHigh-fidelity T2V, 15s duration, advanced camera control\\n\\n**Wan3.0-I2V** \\nAll-in-one video model with 30s output, enabling reference, editing, replication, and driving **DeepSeek-v4-Flash** \\nCost-efficient model with enhanced agentic capabilities for diverse automation scenarios **Qwen3-VL-Plus** \\nNative VL, spatial reasoning, 1M-context video analysis\\n\\n#### GenAI Application\\n\\n**QwenWork** \\nAll-in-one AI productivity platform **Qoder** \\nIntelligent coding assistant, available for enterprise-dedicated deployment. **Qoder CN** \\nAI-powered coding assistant that boosts developer productivity with intelligent code completion, AI chat, multi-file editing, and task automation.\\n\\n## Alibaba Cloud Model Studio is a one-stop model service platform. It provides the full Qwen series and mainstream third-party LLMs through official Qwen APIs and OpenAI-compatible APIs, with multimodal support across text, image, and audio/video. Call models on demand — no infrastructure to manage.\\n\\nGenerate content and summaries with a few lines of code.\\n\\n> Model Studio is OpenAI-compatible. Update the API key, base URL, and model name to migrate existing OpenAI code.\\n\\n## Model service\\n\\nModel Studio provides ready-to-use model services, including the proprietary Qwen series and third-party models such as DeepSeek, Kimi, and GLM. See Recommended models.\\n\\n- **Qwen flagship models**:\\n  - Qwen-Max: The highest-performing model in the Qwen series, suited for complex, multi-step tasks.\\n  - Qwen-Plus: Balances performance, speed, and cost — **recommended** for most scenarios.\\n  - Qwen-Flash: Low-cost and low-latency — suited for simple tasks that require fast responses.\\n- **Multimodal coverage**: Includes text generation, visual understanding, image generation, video generation, speech recognition and synthesis, and embedding.\\n\\n- **Domain-specific models**: Models for long-text processing, translation, data mining, intent recognition, role-playing, and deep research.\\n\\nSummary: \\nAlibaba Cloud Model Studio is a one-stop, enterprise-grade model service platform that provides access to the Qwen series of models and other mainstream third-party LLMs like DeepSeek and GLM. Its key features include ready-to-use services, multimodal support for text, image, video, and audio, and OpenAI-compatible APIs for easy migration. The platform offers various capabilities, including text generation, visual understanding, image and video generation, speech recognition, and specialized models for tasks like long-text processing and data mining. Main use cases involve empowering developers with AI-native applications and solutions, supporting complex reasoning tasks, enabling coding assistance (e.g., Qoder), and serving as a comprehensive GenAI application platform (e.g., QwenWork).\",\"urls\":[\"https://www.alibabacloud.com/help/en/model-studio/what-is-model-studio\"],\"goal\":\"Summarize what Alibaba Cloud Model Studio is, its key features, capabilities, and main use cases\",\"id\":\"msg_caad43f4-33a8-4e30-8138-50b01b9517d7\",\"type\":\"web_extractor_call\",\"status\":\"completed\"},{\"summary\":[{\"type\":\"summary_text\",\"text\":\"Note: The extracted content mentions models such as Qwen3.8, DeepSeek-V4, and Wan3.0, and given that the current time is September 2026, that's plausible. I'll provide a concise summary with sources attached.\\n\"}],\"type\":\"reasoning\",\"id\":\"msg_85beb821-b52b-4a45-88d2-a7d43106e522\"},{\"id\":\"msg_f660daae-c572-4023-b983-e7e324cccca3\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"## Summary: Alibaba Cloud Model Studio\\n\\n**Alibaba Cloud Model Studio** is a one-stop, enterprise-grade model service and AI application development platform. Key points from the official documentation:\\n\\n- **Model access**: Provides the full Qwen series plus mainstream third-party LLMs (e.g., DeepSeek, Kimi, GLM) through official Qwen APIs — no infrastructure to manage, with pay-as-you-go, on-demand usage.\\n- **Flagship tiers**: Qwen-Max (highest performance for complex multi-step tasks), Qwen-Plus (balanced performance/speed/cost, recommended for most scenarios), and Qwen-Flash (low-cost, low-latency for simple tasks).\\n- **Multimodal support**: Text generation, visual understanding, image generation, video generation (Wan series), speech recognition/synthesis, and embeddings.\\n- **OpenAI compatibility**: Drop-in migration for existing OpenAI code — just update the API key, base URL, and model name.\\n- **Domain-specific models**: For long-text processing, translation, data mining, intent recognition, role-playing, and deep research.\\n- **GenAI applications**: Includes AI-native tools such as QwenWork (productivity platform) and Qoder (AI coding assistant with enterprise deployment options).\\n\\n**Source**: https://www.alibabacloud.com/help/en/model-studio/what-is-model-studio\\n\\nRelated official docs: [API Reference](https://www.alibabacloud.com/help/en/model-studio/model-api-reference/), [Supported Models Overview](https://www.alibabacloud.com/help/en/model-studio/models), and [Getting Started](https://www.alibabacloud.com/help/en/model-studio/get-started-with-models/).\"}],\"status\":\"completed\"}],\"top_p\":1.0,\"completed_at\":1789446257,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-max\",\"service_tier\":\"default\",\"id\":\"resp_9cc472b4-dca0-947c-97fd-7b4153d73dc1\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"completed\"}}"
+  ],
+  "events": [
+    {
+      "type": "step-start",
+      "index": 0
+    },
+    {
+      "type": "reasoning-start",
+      "id": "msg_ab416d78-80c6-4685-815c-7f07679762b3:0",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_ab416d78-80c6-4685-815c-7f07679762b3",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "msg_ab416d78-80c6-4685-815c-7f07679762b3:0",
+      "text": "Search the documentation for Alibaba Cloud Model Studio."
+    },
+    {
+      "type": "reasoning-end",
+      "id": "msg_ab416d78-80c6-4685-815c-7f07679762b3:0",
+      "text": "Search the documentation for Alibaba Cloud Model Studio.",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_ab416d78-80c6-4685-815c-7f07679762b3",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "reasoning-start",
+      "id": "msg_def4b034-285a-47a5-ab58-b97faed952eb:0",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_def4b034-285a-47a5-ab58-b97faed952eb",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "msg_def4b034-285a-47a5-ab58-b97faed952eb:0",
+      "text": "Use web_extractor to read the main \"What is Model Studio\" documentation page."
+    },
+    {
+      "type": "reasoning-end",
+      "id": "msg_def4b034-285a-47a5-ab58-b97faed952eb:0",
+      "text": "Use web_extractor to read the main \"What is Model Studio\" documentation page.",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_def4b034-285a-47a5-ab58-b97faed952eb",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "reasoning-start",
+      "id": "msg_85beb821-b52b-4a45-88d2-a7d43106e522:0",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_85beb821-b52b-4a45-88d2-a7d43106e522",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "msg_85beb821-b52b-4a45-88d2-a7d43106e522:0",
+      "text": "Note: The extracted content mentions models such as Qwen3.8, DeepSeek-V4, and Wan3.0, and given that the current time is September 2026, that's plausible. I'll provide a concise summary with sources attached.\n"
+    },
+    {
+      "type": "reasoning-end",
+      "id": "msg_85beb821-b52b-4a45-88d2-a7d43106e522:0",
+      "text": "Note: The extracted content mentions models such as Qwen3.8, DeepSeek-V4, and Wan3.0, and given that the current time is September 2026, that's plausible. I'll provide a concise summary with sources attached.\n",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_85beb821-b52b-4a45-88d2-a7d43106e522",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "text-start",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_f660daae-c572-4023-b983-e7e324cccca3"
+        }
+      }
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "## Summary: Alibaba"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " Cloud Model"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " Studio\n\n**Al"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "ibaba Cloud Model Studio"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "** is a one"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "-stop, enterprise"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "-grade model service and"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " AI application development platform"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "."
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " Key points from the"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " official documentation:\n\n"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "- **Model access"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "**: Provides the full"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " Qwen"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " series plus mainstream third"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "-party LLM"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "s (e.g"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "., DeepSeek"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": ", Kimi,"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " GLM) through"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " official Qwen APIs"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " — no infrastructure to"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " manage"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": ", with pay-as"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "-you-go"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": ", on-demand usage"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": ".\n- **"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "Flagship tiers**:"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " Q"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "wen-Max ("
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "highest performance for complex"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " multi-step tasks),"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " Qwen-Plus"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " (balanced performance/s"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "peed/cost,"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " recommended for most scenarios"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "), and Qwen"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "-Flash (low"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "-cost, low-lat"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "ency for simple tasks"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": ").\n- **"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "Multimodal support"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "**: Text generation,"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " visual understanding, image"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " generation, video generation"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " ("
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "Wan series),"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " speech"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " recognition/synthesis,"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " and embeddings.\n"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "- **OpenAI"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " compatibility**: Drop-in"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " migration"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " for existing OpenAI"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " code"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " — just update the"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " API key, base"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " URL, and model"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " name.\n-"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " **Domain-specific models"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "**: For long-text"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " processing,"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " translation, data mining"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": ", intent recognition,"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " role-playing, and"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " deep research.\n"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "- **GenAI"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " applications**: Includes AI"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "-native tools"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " such as Qwen"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "Work (productivity"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " platform) and"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " Qoder (AI"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " coding assistant with enterprise"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " deployment"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " options).\n\n**"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "Source**: https://"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "www.alibaba"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "cloud.com/help/en"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "/model-studio/"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "what-is-model-st"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "udio\n\nRelated official"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " docs: [API"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " Reference](https://"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "www.alibabacloud.com"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "/help/en/model-st"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "udio/model-api-reference"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "/), [Supported"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " Models"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " Overview](https://"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "www.alibabacloud.com"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "/help/en/model-st"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "udio/models), and"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": " [Getting Started]("
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "https://"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "www.alibabacloud.com"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "/help/en/model-st"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "udio/get-started"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "-with-models/"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": ")."
+    },
+    {
+      "type": "text-end",
+      "id": "msg_f660daae-c572-4023-b983-e7e324cccca3",
+      "text": "## Summary: Alibaba Cloud Model Studio\n\n**Alibaba Cloud Model Studio** is a one-stop, enterprise-grade model service and AI application development platform. Key points from the official documentation:\n\n- **Model access**: Provides the full Qwen series plus mainstream third-party LLMs (e.g., DeepSeek, Kimi, GLM) through official Qwen APIs — no infrastructure to manage, with pay-as-you-go, on-demand usage.\n- **Flagship tiers**: Qwen-Max (highest performance for complex multi-step tasks), Qwen-Plus (balanced performance/speed/cost, recommended for most scenarios), and Qwen-Flash (low-cost, low-latency for simple tasks).\n- **Multimodal support**: Text generation, visual understanding, image generation, video generation (Wan series), speech recognition/synthesis, and embeddings.\n- **OpenAI compatibility**: Drop-in migration for existing OpenAI code — just update the API key, base URL, and model name.\n- **Domain-specific models**: For long-text processing, translation, data mining, intent recognition, role-playing, and deep research.\n- **GenAI applications**: Includes AI-native tools such as QwenWork (productivity platform) and Qoder (AI coding assistant with enterprise deployment options).\n\n**Source**: https://www.alibabacloud.com/help/en/model-studio/what-is-model-studio\n\nRelated official docs: [API Reference](https://www.alibabacloud.com/help/en/model-studio/model-api-reference/), [Supported Models Overview](https://www.alibabacloud.com/help/en/model-studio/models), and [Getting Started](https://www.alibabacloud.com/help/en/model-studio/get-started-with-models/).",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_f660daae-c572-4023-b983-e7e324cccca3"
+        }
+      }
+    },
+    {
+      "type": "step-finish",
+      "index": 0,
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 4869,
+        "outputTokens": 557,
+        "nonCachedInputTokens": 4869,
+        "cacheReadInputTokens": 0,
+        "reasoningTokens": 79,
+        "totalTokens": 5426,
+        "providerMetadata": {
+          "alibaba": {
+            "input_tokens": 4869,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 557,
+            "output_tokens_details": {
+              "reasoning_tokens": 79
+            },
+            "total_tokens": 5426,
+            "x_details": [
+              {
+                "plugins": {
+                  "web_extractor": {
+                    "count": 1
+                  },
+                  "web_search": {
+                    "count": 1
+                  }
+                },
+                "prompt_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "total_tokens": 5426,
+                "x_billing_type": "response_api",
+                "output_tokens": 557,
+                "input_tokens": 4869,
+                "output_tokens_details": {
+                  "reasoning_tokens": 79
+                }
+              }
+            ],
+            "x_tools": {
+              "web_extractor": {
+                "count": 1
+              },
+              "web_search": {
+                "count": 1
+              }
+            }
+          }
+        }
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "responseId": "resp_9cc472b4-dca0-947c-97fd-7b4153d73dc1",
+          "serviceTier": "default"
+        }
+      }
+    },
+    {
+      "type": "finish",
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 4869,
+        "outputTokens": 557,
+        "nonCachedInputTokens": 4869,
+        "cacheReadInputTokens": 0,
+        "reasoningTokens": 79,
+        "totalTokens": 5426,
+        "providerMetadata": {
+          "alibaba": {
+            "input_tokens": 4869,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 557,
+            "output_tokens_details": {
+              "reasoning_tokens": 79
+            },
+            "total_tokens": 5426,
+            "x_details": [
+              {
+                "plugins": {
+                  "web_extractor": {
+                    "count": 1
+                  },
+                  "web_search": {
+                    "count": 1
+                  }
+                },
+                "prompt_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "total_tokens": 5426,
+                "x_billing_type": "response_api",
+                "output_tokens": 557,
+                "input_tokens": 4869,
+                "output_tokens_details": {
+                  "reasoning_tokens": 79
+                }
+              }
+            ],
+            "x_tools": {
+              "web_extractor": {
+                "count": 1
+              },
+              "web_search": {
+                "count": 1
+              }
+            }
+          }
+        }
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "responseId": "resp_9cc472b4-dca0-947c-97fd-7b4153d73dc1",
+          "serviceTier": "default"
+        }
+      }
+    }
+  ],
+  "error": null
+}

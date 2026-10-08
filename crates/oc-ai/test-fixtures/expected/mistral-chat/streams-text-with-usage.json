@@ -1,0 +1,81 @@
+{
+ "scenario": "mistral-chat/streams-text-with-usage",
+ "provider": "mistral",
+ "providerMetadataKey": "mistral",
+ "model": "mistral-small-latest",
+ "interactions": [
+  {
+   "events": [
+    {
+     "type": "step-start",
+     "index": 0
+    },
+    {
+     "type": "text-start",
+     "id": "text-0"
+    },
+    {
+     "type": "text-delta",
+     "id": "text-0",
+     "text": "Hi"
+    },
+    {
+     "type": "text-end",
+     "id": "text-0"
+    },
+    {
+     "type": "step-finish",
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "usage": {
+      "inputTokens": 22,
+      "outputTokens": 2,
+      "nonCachedInputTokens": 22,
+      "cacheReadInputTokens": 0,
+      "totalTokens": 24,
+      "providerMetadata": {
+       "mistral": {
+        "prompt_tokens": 22,
+        "completion_tokens": 2,
+        "total_tokens": 24,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "service_tier": "standard"
+       }
+      }
+     }
+    },
+    {
+     "type": "finish",
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "usage": {
+      "inputTokens": 22,
+      "outputTokens": 2,
+      "nonCachedInputTokens": 22,
+      "cacheReadInputTokens": 0,
+      "totalTokens": 24,
+      "providerMetadata": {
+       "mistral": {
+        "prompt_tokens": 22,
+        "completion_tokens": 2,
+        "total_tokens": 24,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "service_tier": "standard"
+       }
+      }
+     }
+    }
+   ],
+   "error": null
+  }
+ ]
+}

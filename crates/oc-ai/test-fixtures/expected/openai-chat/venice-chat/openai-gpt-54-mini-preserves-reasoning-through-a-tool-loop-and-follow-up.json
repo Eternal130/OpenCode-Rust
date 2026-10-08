@@ -1,0 +1,2439 @@
+{
+ "group": "venice-chat",
+ "name": "openai-gpt-54-mini-preserves-reasoning-through-a-tool-loop-and-follow-up",
+ "protocol": "venice-chat",
+ "provider": "venice",
+ "providerMetadataKey": "venice",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "**Calculating private data**\n\nI",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " need",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " to",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " follow",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " developer",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "'s",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " instructions",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " and",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " use",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " provided",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " tool",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " to",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " handle",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " private",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " data",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " First",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " I",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " should",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " look",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " up",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " rate",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " for",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " \"",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "Z",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "EB",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "RA",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\"",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " before",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " I",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " answer",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " After",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " that",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " I",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "’ll",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " multiply",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " rate",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " by",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 17",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " and",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " then",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " add",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " to",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " get",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " required",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " number",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " It",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "’s",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " important",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " to",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " give",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " only",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " requested",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " number",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " and",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " avoid",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " making",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " another",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " tool",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " call",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " I",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "’ll",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " likely",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " use",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " commentary",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " channel",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " for",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " this",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " tool",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " call",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "call_onp7EArhOgXu0hGRF6Y5WHLu",
+     "name": "lookup_rate",
+     "type": "tool-input-start"
+    },
+    {
+     "id": "call_onp7EArhOgXu0hGRF6Y5WHLu",
+     "input": {},
+     "name": "lookup_rate",
+     "text": "{\"",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_onp7EArhOgXu0hGRF6Y5WHLu",
+     "input": {},
+     "name": "lookup_rate",
+     "text": "code",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_onp7EArhOgXu0hGRF6Y5WHLu",
+     "input": {
+      "code": ""
+     },
+     "name": "lookup_rate",
+     "text": "\":\"",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_onp7EArhOgXu0hGRF6Y5WHLu",
+     "input": {
+      "code": "Z"
+     },
+     "name": "lookup_rate",
+     "text": "Z",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_onp7EArhOgXu0hGRF6Y5WHLu",
+     "input": {
+      "code": "ZEB"
+     },
+     "name": "lookup_rate",
+     "text": "EB",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_onp7EArhOgXu0hGRF6Y5WHLu",
+     "input": {
+      "code": "ZEBRA"
+     },
+     "name": "lookup_rate",
+     "text": "RA",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "call_onp7EArhOgXu0hGRF6Y5WHLu",
+     "input": {
+      "code": "ZEBRA"
+     },
+     "name": "lookup_rate",
+     "text": "\"}",
+     "type": "tool-input-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "encryptedReasoningContent": "**Calculating private data**\n\nI need to follow the developer's instructions and use the provided tool to handle private data. First, I should look up the rate for \"ZEBRA\" before I answer. After that, I’ll multiply the rate by 17 and then add 9 to get the required number. It’s important to give only the requested number and avoid making another tool call. I’ll likely use the commentary channel for this tool call.\n\n__ENCRYPTED_REASONING__id=rs_014406f0f45e19c6016ac312f01d2487d2a5f2bdb7fbc42f76\ngAAAAABqwxLxEN4vtmI2WcZ_aDDttdmPwAHgnV2gLZBo_f_mmTdGm4oZzE2JVzcj72AeXHyABmmo2VQN4nXaZK9GSSUZRlYL8mECMxKTj9AMgL8zlnuN5WDexxU-e9SduGP36RN9nH56-go4dz8eu5DEMvMf_TMoTnxz5AnC_UWbty63Vp8jEgkD-DoRjd0cg9LjthP_FLyMvP2Wj9qMJxEuO7Mw2_Pu4I3YeChnygLvmRfRR2QkamL5vjb9yHkl0Lb502vEGB2DW_czNEpHxisifvwRBjA7vk0mbn2dlhiR80aNHO71hC-QqrtUfPXx2HIbVLfbPdJf0saI0wD7ZuCJSQCBfB7fMCnj2ZLQeXa67lgXwsZDLBg4HmSJFvsMinx1IHIjUk7iebsKvmYx40cjqpXL3wj7htZWk2hO9OyGGUwlRsn5THdhTsgwg2SPbuHxb-sLPQnEFZ7bRp5lsVm31X2dlHDa1uZ7KLJZyy9g2CLIKsBwFFoCK7jY3HBXfL21ac5TAkOzVmz-XKl6OMPSl-PSdByOO15uHHpyOcJvJvuaea5Tj1nihtuDlhUP5EQPi7MiWpJMFo9AhDCafAbaQOEF5W8AQPeb_GXvPTzhySRAC8PxrhraEcZ4fjpjLqkv6mi_A1YHwbHEHHWjcK5VEKc3dadlIM_s6djclFBocVXrvnQQElVhWBDM-RtK9sgR07BFj5LVk6fYvg0b6gQnbDuQH18jhtPoj0SX0lN921XEQ1ebMCWGLANND2ew_wyNShYouJohefLULicWG57xh_yV1KEG1ufBedq2CPvCHA9Hm5UssbeJx5yBriyUA2Yh4D7j2UBT_KDWEHydDLQ4mWEyLTfQn0ZB3ZOqkU79z3HpK2w_VHUnkl5nEYEU2bmF5lsG33B4gtbQIBtZT76-fizXsvVZx__taOWXg96VMi3CD3DY0TS76B4U92KFmAFJ4aeiM8bkPuzf1Qd202EWE39CotUDoxAM6mzQu0NObTDnGQE776P6kzUoIKUmP8sDwYG5xot8ZTuXcBYysvj4-pFC_fvqMhsdfgonbke78SIjHtmePsOkfHBnCjSSUFKEbaM0nm8jJ6nYVwiYFuXBKD31QD462TAC7ORVIn32sWSgV2t3Sd7vq4ws2Yy7nUoILRAt_NYQUEXt7_R8J5YWj1L6Ruagk7Vtt-CAWxT6FhVyU4JhMb6-tJrYHgdmtunYrjpHBiOVdQR25aOmLbc_WlDvpO4azcRazpgkASAjPaaDycYceKcheiyUDBgFrvcSYrS1fJb6YZrTzOKw1Ztd0YsklS4nc3jffLNLrBQVvnkajj0OHjGcW8wkP93TCMJyt8tfIH0Rd5hIZLY5EqUWj9yZgXO7CuDKQZIEI0oZXef3mjfQqH8Q9rZsSgS3DI3mCF3CN003R_ZKKLGWkG8VzwlvdocNxaV_Z-ujp_O0YMyOcmEoTJI-j3JP3nefNboyP7EWND6VWDjJbqg64dvu0PK0EW5L0lnAu0l-WVb2qmXLYao_7bOlD8JLFZOyUgHAWmetmnm0NuxzevJEVBkNUu1jQatPzf2Jzf9SGKM_3bM_z0TM5McCZ2Pikzwp96QlaiEEWV_j2g02PT5Y3td-lfpoKxoFD5tltGNY9TlPzK-4a9Iz0hloiCprxWMLGKw2JzctrPF1xr42PKGNgPE84xAQ3sQ4mQ==",
+       "reasoningDetails": [
+        {
+         "data": "gAAAAABqwxLxEN4vtmI2WcZ_aDDttdmPwAHgnV2gLZBo_f_mmTdGm4oZzE2JVzcj72AeXHyABmmo2VQN4nXaZK9GSSUZRlYL8mECMxKTj9AMgL8zlnuN5WDexxU-e9SduGP36RN9nH56-go4dz8eu5DEMvMf_TMoTnxz5AnC_UWbty63Vp8jEgkD-DoRjd0cg9LjthP_FLyMvP2Wj9qMJxEuO7Mw2_Pu4I3YeChnygLvmRfRR2QkamL5vjb9yHkl0Lb502vEGB2DW_czNEpHxisifvwRBjA7vk0mbn2dlhiR80aNHO71hC-QqrtUfPXx2HIbVLfbPdJf0saI0wD7ZuCJSQCBfB7fMCnj2ZLQeXa67lgXwsZDLBg4HmSJFvsMinx1IHIjUk7iebsKvmYx40cjqpXL3wj7htZWk2hO9OyGGUwlRsn5THdhTsgwg2SPbuHxb-sLPQnEFZ7bRp5lsVm31X2dlHDa1uZ7KLJZyy9g2CLIKsBwFFoCK7jY3HBXfL21ac5TAkOzVmz-XKl6OMPSl-PSdByOO15uHHpyOcJvJvuaea5Tj1nihtuDlhUP5EQPi7MiWpJMFo9AhDCafAbaQOEF5W8AQPeb_GXvPTzhySRAC8PxrhraEcZ4fjpjLqkv6mi_A1YHwbHEHHWjcK5VEKc3dadlIM_s6djclFBocVXrvnQQElVhWBDM-RtK9sgR07BFj5LVk6fYvg0b6gQnbDuQH18jhtPoj0SX0lN921XEQ1ebMCWGLANND2ew_wyNShYouJohefLULicWG57xh_yV1KEG1ufBedq2CPvCHA9Hm5UssbeJx5yBriyUA2Yh4D7j2UBT_KDWEHydDLQ4mWEyLTfQn0ZB3ZOqkU79z3HpK2w_VHUnkl5nEYEU2bmF5lsG33B4gtbQIBtZT76-fizXsvVZx__taOWXg96VMi3CD3DY0TS76B4U92KFmAFJ4aeiM8bkPuzf1Qd202EWE39CotUDoxAM6mzQu0NObTDnGQE776P6kzUoIKUmP8sDwYG5xot8ZTuXcBYysvj4-pFC_fvqMhsdfgonbke78SIjHtmePsOkfHBnCjSSUFKEbaM0nm8jJ6nYVwiYFuXBKD31QD462TAC7ORVIn32sWSgV2t3Sd7vq4ws2Yy7nUoILRAt_NYQUEXt7_R8J5YWj1L6Ruagk7Vtt-CAWxT6FhVyU4JhMb6-tJrYHgdmtunYrjpHBiOVdQR25aOmLbc_WlDvpO4azcRazpgkASAjPaaDycYceKcheiyUDBgFrvcSYrS1fJb6YZrTzOKw1Ztd0YsklS4nc3jffLNLrBQVvnkajj0OHjGcW8wkP93TCMJyt8tfIH0Rd5hIZLY5EqUWj9yZgXO7CuDKQZIEI0oZXef3mjfQqH8Q9rZsSgS3DI3mCF3CN003R_ZKKLGWkG8VzwlvdocNxaV_Z-ujp_O0YMyOcmEoTJI-j3JP3nefNboyP7EWND6VWDjJbqg64dvu0PK0EW5L0lnAu0l-WVb2qmXLYao_7bOlD8JLFZOyUgHAWmetmnm0NuxzevJEVBkNUu1jQatPzf2Jzf9SGKM_3bM_z0TM5McCZ2Pikzwp96QlaiEEWV_j2g02PT5Y3td-lfpoKxoFD5tltGNY9TlPzK-4a9Iz0hloiCprxWMLGKw2JzctrPF1xr42PKGNgPE84xAQ3sQ4mQ==",
+         "format": "openai-responses-v1",
+         "id": "rs_014406f0f45e19c6016ac312f01d2487d2a5f2bdb7fbc42f76",
+         "index": 0,
+         "type": "reasoning.encrypted"
+        }
+       ],
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "call_onp7EArhOgXu0hGRF6Y5WHLu",
+     "name": "lookup_rate",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "tool-input-end"
+    },
+    {
+     "id": "call_onp7EArhOgXu0hGRF6Y5WHLu",
+     "input": {
+      "code": "ZEBRA"
+     },
+     "name": "lookup_rate",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "tool-call"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "step-finish",
+     "usage": {
+      "inputTokens": 121,
+      "nonCachedInputTokens": 121,
+      "outputTokens": 85,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 85,
+        "completion_tokens_details": {
+         "reasoning_tokens": 63
+        },
+        "prompt_tokens": 121,
+        "total_tokens": 206
+       }
+      },
+      "reasoningTokens": 63,
+      "totalTokens": 206
+     }
+    },
+    {
+     "reason": {
+      "normalized": "tool-calls",
+      "raw": "tool_calls"
+     },
+     "type": "finish",
+     "usage": {
+      "inputTokens": 121,
+      "nonCachedInputTokens": 121,
+      "outputTokens": 85,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 85,
+        "completion_tokens_details": {
+         "reasoning_tokens": 63
+        },
+        "prompt_tokens": 121,
+        "total_tokens": 206
+       }
+      },
+      "reasoningTokens": 63,
+      "totalTokens": 206
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "**Calculating a simple math problem**\n\nI'm",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " working",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " through",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " math",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ":",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " first",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " I",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " multiply",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 23",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " by",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 17",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " and",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " that",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " gives",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " me",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 391",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " Then",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " I",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " add",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " resulting",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " in",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 400",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " It",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " seems",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " like",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " user",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " only",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " wanted",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " final",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " number",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " which",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " is",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " just",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 400",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " Keeping",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " it",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " straightforward",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " is",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " important",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " so",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " I",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "’ll",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " make",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " sure",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " to",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " present",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " that",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " number",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " clearly",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "400",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "encryptedReasoningContent": "**Calculating a simple math problem**\n\nI'm working through the math: first, I multiply 23 by 17, and that gives me 391. Then, I add 9, resulting in 400. It seems like the user only wanted the final number, which is just 400. Keeping it straightforward is important, so I’ll make sure to present that number clearly.\n\n__ENCRYPTED_REASONING__id=rs_014406f0f45e19c6016ac312f26e4887d2af2f777fa50f9801\ngAAAAABqwxL0Nl6Jl5EZuOS3A9KuObO5gPHpF1y4xbTEmtnZFQ3yz-u6TiK9EQuW1YliegqQQP8kUdRi0d3cYSCpD_LhB0e21fnC7ThMJanFTO3QNA28EHfzp3AO4rNujfMpvdYBhvjnxFIaLUYXGKv6XNEJG6sm7FO11jDzuTlHrNGLYBgQU40tTATGgpckEZ6Wr5VK9w45M8V5HcBUWLPQE0eCYjRfibNopDeNlfy6eVhslTGCAtEzBrDVFNVqO3DJPUwDCVq0sQRoLlJ6dg0JKA1OpV2BQDlA0Ke_55Cm8o-ja6bqxinxezc-vgMtGF9ovlEcJaaHUabtiBiTFKbHD5K_5mkLY1gz3GJ_JPXEJpawFz9euCkB7mkITf9LhoFZWnbLvT7HLL5CTni0CreebWo5eokZlnrUv1lPd5rKELwW044PNc8fyFye5huCCmaxQyiLzfkSXWEl_d4hDCs9U3-q_wp620lrgWicyNP4Pv2P2hLN-1ZVY7BOhhPZ2Jrvuheab-PaWAtQeueN18QrbB2BcJkqlH1x9Hy2xCzawFwdr63OYnx8SdQ43ixKGtXWvgfCi8PQo_5JQAxCdgXnNCGK3ffXXulnxJzX8U219NN8atcxTEpGXwcwFzcvZ-Qfjm_VODaihpubSWc4Lk3QBiWH6WtC_VukI7J9uOc0kPjIdlaOrdeePpzdYpPxlZR8HhMDNisSizTI3ueJyeVF43yVlCZiUR4k-EzJbh4QH_Jwr7lnqtmdXjEY_kqzs5hTbsPy2-YmTZRWa4mV-G8jcjt5MoNv9X6D8wozlJJ0eJdFbvsv-oWcKRpnUXM8InQTCrWe_GUb0QtFRpFKvDEWPbOEc0bPOrTTwZ89p59kWmRidlESfHCNpwxh72Fj1VzIS5CEewb_gBV0ZdN9P60nEpcFyFaQWjo71vWVjgmv_a1G9ZXJSfTIRzrTMQQH3D8vwmmTTfSsPgdfd6WnN823_Id2akZ9zu9sxD8drVe30cCVNXtdF2--B_73UQ6dHi-PrYf58HzbMlqQFSs-P3CsQfhcrby9Uh01xq4pGKlgjaI5E5WdTw6ntznePQWR2hrtYgHxA5VsJJ1R0ivuZ8c6GRivKm9Y8X0oWsrHqV1mLzo-CWBZr2G2N2Mi1HuCFlIkRBHMnkaqAn43_oHFduTmqR1RambzhZx0ytCOY9bDhDSyw3eQXLEXRwb9UCuMBfnC7Sih3PnDH55bqPytcVRpW-13NLgG6aOHDUvjpITGd5oDq1-e56IlKrpXziCwkkdnWaxg5g2RrIwzTxtTTlupD-hj9qSBjl2QXAAgZCxkIYp10FkHFntSGD9TsMs_PhBwZ6RuuX1fIpARG-aaZQ3PjqxNOs7LFte4Pq53_vPJuZAQY6iyUH54DgvmIdYQ6oh0McMb3K9BhMoREUe8225oVYZGYDOMuw==",
+       "reasoningDetails": [
+        {
+         "data": "gAAAAABqwxL0Nl6Jl5EZuOS3A9KuObO5gPHpF1y4xbTEmtnZFQ3yz-u6TiK9EQuW1YliegqQQP8kUdRi0d3cYSCpD_LhB0e21fnC7ThMJanFTO3QNA28EHfzp3AO4rNujfMpvdYBhvjnxFIaLUYXGKv6XNEJG6sm7FO11jDzuTlHrNGLYBgQU40tTATGgpckEZ6Wr5VK9w45M8V5HcBUWLPQE0eCYjRfibNopDeNlfy6eVhslTGCAtEzBrDVFNVqO3DJPUwDCVq0sQRoLlJ6dg0JKA1OpV2BQDlA0Ke_55Cm8o-ja6bqxinxezc-vgMtGF9ovlEcJaaHUabtiBiTFKbHD5K_5mkLY1gz3GJ_JPXEJpawFz9euCkB7mkITf9LhoFZWnbLvT7HLL5CTni0CreebWo5eokZlnrUv1lPd5rKELwW044PNc8fyFye5huCCmaxQyiLzfkSXWEl_d4hDCs9U3-q_wp620lrgWicyNP4Pv2P2hLN-1ZVY7BOhhPZ2Jrvuheab-PaWAtQeueN18QrbB2BcJkqlH1x9Hy2xCzawFwdr63OYnx8SdQ43ixKGtXWvgfCi8PQo_5JQAxCdgXnNCGK3ffXXulnxJzX8U219NN8atcxTEpGXwcwFzcvZ-Qfjm_VODaihpubSWc4Lk3QBiWH6WtC_VukI7J9uOc0kPjIdlaOrdeePpzdYpPxlZR8HhMDNisSizTI3ueJyeVF43yVlCZiUR4k-EzJbh4QH_Jwr7lnqtmdXjEY_kqzs5hTbsPy2-YmTZRWa4mV-G8jcjt5MoNv9X6D8wozlJJ0eJdFbvsv-oWcKRpnUXM8InQTCrWe_GUb0QtFRpFKvDEWPbOEc0bPOrTTwZ89p59kWmRidlESfHCNpwxh72Fj1VzIS5CEewb_gBV0ZdN9P60nEpcFyFaQWjo71vWVjgmv_a1G9ZXJSfTIRzrTMQQH3D8vwmmTTfSsPgdfd6WnN823_Id2akZ9zu9sxD8drVe30cCVNXtdF2--B_73UQ6dHi-PrYf58HzbMlqQFSs-P3CsQfhcrby9Uh01xq4pGKlgjaI5E5WdTw6ntznePQWR2hrtYgHxA5VsJJ1R0ivuZ8c6GRivKm9Y8X0oWsrHqV1mLzo-CWBZr2G2N2Mi1HuCFlIkRBHMnkaqAn43_oHFduTmqR1RambzhZx0ytCOY9bDhDSyw3eQXLEXRwb9UCuMBfnC7Sih3PnDH55bqPytcVRpW-13NLgG6aOHDUvjpITGd5oDq1-e56IlKrpXziCwkkdnWaxg5g2RrIwzTxtTTlupD-hj9qSBjl2QXAAgZCxkIYp10FkHFntSGD9TsMs_PhBwZ6RuuX1fIpARG-aaZQ3PjqxNOs7LFte4Pq53_vPJuZAQY6iyUH54DgvmIdYQ6oh0McMb3K9BhMoREUe8225oVYZGYDOMuw==",
+         "format": "openai-responses-v1",
+         "id": "rs_014406f0f45e19c6016ac312f26e4887d2af2f777fa50f9801",
+         "index": 0,
+         "type": "reasoning.encrypted"
+        }
+       ],
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "inputTokens": 173,
+      "nonCachedInputTokens": 173,
+      "outputTokens": 37,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 37,
+        "completion_tokens_details": {
+         "reasoning_tokens": 30
+        },
+        "prompt_tokens": 173,
+        "total_tokens": 210
+       }
+      },
+      "reasoningTokens": 30,
+      "totalTokens": 210
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "inputTokens": 173,
+      "nonCachedInputTokens": 173,
+      "outputTokens": 37,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 37,
+        "completion_tokens_details": {
+         "reasoning_tokens": 30
+        },
+        "prompt_tokens": 173,
+        "total_tokens": 210
+       }
+      },
+      "reasoningTokens": 30,
+      "totalTokens": 210
+     }
+    }
+   ]
+  },
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "**Calculating a simple addition**\n\nThe",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " user",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " wants",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " me",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " to",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " add",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " to",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " previous",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " final",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " answer",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " which",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " was",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 400",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " This",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " means",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " I",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " simply",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " need",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " to",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " do",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " math",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ":",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 400",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " plus",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " equals",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 407",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " There's",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " no",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " need",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " for",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " any",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " tools",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " or",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " complicated",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " processes",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " here",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ",",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " just",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " a",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " straightforward",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " calculation",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " I'll",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " provide",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " the",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " answer",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " as",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 407",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "!",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "407",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "\n\n",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "venice": {
+       "encryptedReasoningContent": "**Calculating a simple addition**\n\nThe user wants me to add 7 to the previous final answer, which was 400. This means I simply need to do the math: 400 plus 7 equals 407. There's no need for any tools or complicated processes here, just a straightforward calculation. I'll provide the answer as 407!\n\n__ENCRYPTED_REASONING__id=rs_014406f0f45e19c6016ac312f4e99887d2b9c8c820d5e078c9\ngAAAAABqwxL2s7RKHoOP95Fkym7ikKzN-DEIDdKIvEaCL9uxm3gpgY3MBOf5vMOPJi2RVbKfFS49l3GwW81fRPBXnPiy3K7DtRfyHwb-35BPHoDw7ZOAuCTvbDRr_6fnTpEhs4ORLvyuh1aSyYiA-Tfq2Mt17tsMVcxU7vaibl3WcA3oc8L3lpMPPB511o2GkeNM7rqrsuuoTnVziSL-4IrOBK4BMldPTUPGezYVW5r1hG_TcaE9yWK5qIMHzRTTpoaak_qU9OdJshz5ANP34OSX0Cv6IsfHgWeA-I-c6tvqFcUbHwk79lIhgV5JK_oBg-gOGaxyWoCY0OK1sNgrKTNwXI4u63htkg7TUlBnqeZIISHe2mweEtq2nQ90p9_WUFBlBiDroW_Fp1TYmgw1Qby18NosCrx6xH0JjndRcPlnhiOjpFIPz-NqkR2yVtU4wDUiXUuKu6NeQXY2tdhAYOrA8ruuWgX3JmlOJs4zapDcCSd5hXLCNwVcx0SMoLlHLKEZENtJAZXupUTy8ypVdZt7M0P4-sIe0hePMFlRiwuzUEN5wHstbuiMz1UMAlThD4dQYNGAx82slwIevudHX9Q3XbscuwmNGDZKXU7MQk_UtfK9HDLhuoPMOqjiPKlaCIVFWDkeKaK6lktQ-EuNgU3ic0ycBpO-IJHxJdEVWsJgLW0x2eh59iocMzgpnuUU-mMIWyuLAgcG6wX16S-d_v_3sOoaPcxVlVHrGuXMvbvvUsSwzFy5nt6KPd9OLRR1cjCdDfGdhNJsrtvAFcWFv427a84oMFAS1xPJM9qQc6ZQfFZInmgmZ-LI9xQgahig_Ya8Uu1sqPAqm1CGNGQWc81n_IfwnYbq6joS6UApebbwo7yLPUVQ30WAFlP7dnEy0Tzt-eQBWd7d7HK_2SX2laH4hbe2JvqJ8EiTinMUhk40fwfi6yxGfT0ec0poeKpcM7UiCEk-lU2iO3Ts1TQ0EpRw_xm2ZWbCXSzLWTDm83_QDhvnX5Pok1295gdFR7cp0DrQkKjNSAJ26FYToWKMYZ3Q6a1dZtliU-FJV-_4HKB1flLVi-dZGPUooA1d_IFuPlC1OyDgGNc27XgPeCBcK972c3315m0LhP-h6yKc-AGNmH78oqPcOhw1uRe6ZuQFWj9oy9tv3vfbZaf6Bp4jewaQqemG72eCqnDegHcHbu0YuSoRxXWmkkKUCNX4_Z9hyz72bv3BcJBiGJPWL3zpU7C7zUiva4HS8FAWgm69YmzayhZi_GInmRcgJ5mxI7nI8PWG56vRkLhR3pf2nxD8-bkHobB6Vp2B4H4Wr3q1NyW3ymJiK2GmBJD962YwAurVuQ0bwjT1mSQRbIXJo0WvUfWqo8oQQU8_ruRWLycOqiXoLH_QGjwJNWx22RkIt4tB3mqjlU6U2HU2csAJnPIo6rVf4xrUUTsf8U3yZkhEPlQjC4CtKgj5HVLMlJoNKKhpL2965TsfPdkl_dRZ_t1sXhN4TmW66T8M_w==",
+       "reasoningDetails": [
+        {
+         "data": "gAAAAABqwxL2s7RKHoOP95Fkym7ikKzN-DEIDdKIvEaCL9uxm3gpgY3MBOf5vMOPJi2RVbKfFS49l3GwW81fRPBXnPiy3K7DtRfyHwb-35BPHoDw7ZOAuCTvbDRr_6fnTpEhs4ORLvyuh1aSyYiA-Tfq2Mt17tsMVcxU7vaibl3WcA3oc8L3lpMPPB511o2GkeNM7rqrsuuoTnVziSL-4IrOBK4BMldPTUPGezYVW5r1hG_TcaE9yWK5qIMHzRTTpoaak_qU9OdJshz5ANP34OSX0Cv6IsfHgWeA-I-c6tvqFcUbHwk79lIhgV5JK_oBg-gOGaxyWoCY0OK1sNgrKTNwXI4u63htkg7TUlBnqeZIISHe2mweEtq2nQ90p9_WUFBlBiDroW_Fp1TYmgw1Qby18NosCrx6xH0JjndRcPlnhiOjpFIPz-NqkR2yVtU4wDUiXUuKu6NeQXY2tdhAYOrA8ruuWgX3JmlOJs4zapDcCSd5hXLCNwVcx0SMoLlHLKEZENtJAZXupUTy8ypVdZt7M0P4-sIe0hePMFlRiwuzUEN5wHstbuiMz1UMAlThD4dQYNGAx82slwIevudHX9Q3XbscuwmNGDZKXU7MQk_UtfK9HDLhuoPMOqjiPKlaCIVFWDkeKaK6lktQ-EuNgU3ic0ycBpO-IJHxJdEVWsJgLW0x2eh59iocMzgpnuUU-mMIWyuLAgcG6wX16S-d_v_3sOoaPcxVlVHrGuXMvbvvUsSwzFy5nt6KPd9OLRR1cjCdDfGdhNJsrtvAFcWFv427a84oMFAS1xPJM9qQc6ZQfFZInmgmZ-LI9xQgahig_Ya8Uu1sqPAqm1CGNGQWc81n_IfwnYbq6joS6UApebbwo7yLPUVQ30WAFlP7dnEy0Tzt-eQBWd7d7HK_2SX2laH4hbe2JvqJ8EiTinMUhk40fwfi6yxGfT0ec0poeKpcM7UiCEk-lU2iO3Ts1TQ0EpRw_xm2ZWbCXSzLWTDm83_QDhvnX5Pok1295gdFR7cp0DrQkKjNSAJ26FYToWKMYZ3Q6a1dZtliU-FJV-_4HKB1flLVi-dZGPUooA1d_IFuPlC1OyDgGNc27XgPeCBcK972c3315m0LhP-h6yKc-AGNmH78oqPcOhw1uRe6ZuQFWj9oy9tv3vfbZaf6Bp4jewaQqemG72eCqnDegHcHbu0YuSoRxXWmkkKUCNX4_Z9hyz72bv3BcJBiGJPWL3zpU7C7zUiva4HS8FAWgm69YmzayhZi_GInmRcgJ5mxI7nI8PWG56vRkLhR3pf2nxD8-bkHobB6Vp2B4H4Wr3q1NyW3ymJiK2GmBJD962YwAurVuQ0bwjT1mSQRbIXJo0WvUfWqo8oQQU8_ruRWLycOqiXoLH_QGjwJNWx22RkIt4tB3mqjlU6U2HU2csAJnPIo6rVf4xrUUTsf8U3yZkhEPlQjC4CtKgj5HVLMlJoNKKhpL2965TsfPdkl_dRZ_t1sXhN4TmW66T8M_w==",
+         "format": "openai-responses-v1",
+         "id": "rs_014406f0f45e19c6016ac312f4e99887d2b9c8c820d5e078c9",
+         "index": 0,
+         "type": "reasoning.encrypted"
+        }
+       ],
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "providerMetadata": {
+      "venice": {}
+     },
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "inputTokens": 134,
+      "nonCachedInputTokens": 134,
+      "outputTokens": 43,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 43,
+        "completion_tokens_details": {
+         "reasoning_tokens": 36
+        },
+        "prompt_tokens": 134,
+        "total_tokens": 177
+       }
+      },
+      "reasoningTokens": 36,
+      "totalTokens": 177
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "inputTokens": 134,
+      "nonCachedInputTokens": 134,
+      "outputTokens": 43,
+      "providerMetadata": {
+       "venice": {
+        "completion_tokens": 43,
+        "completion_tokens_details": {
+         "reasoning_tokens": 36
+        },
+        "prompt_tokens": 134,
+        "total_tokens": 177
+       }
+      },
+      "reasoningTokens": 36,
+      "totalTokens": 177
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,369 @@
+{
+  "group": "moonshot-responses",
+  "scenario": "k3-returns-native-structured-output",
+  "interaction": 0,
+  "machine": "open-responses",
+  "provider": "moonshot",
+  "metadataKey": "moonshot",
+  "frames": [
+    "{\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp_2f2e03b8021e26cb0b900a4b6\",\"object\":\"response\",\"created_at\":1789446369,\"completed_at\":null,\"status\":\"in_progress\",\"error\":null,\"incomplete_details\":null,\"output\":[],\"usage\":null,\"store\":false,\"background\":false,\"previous_response_id\":null,\"conversation\":null,\"instructions\":null,\"reasoning\":null,\"text\":{\"format\":{\"type\":\"json_schema\",\"name\":\"location\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"city\":{\"enum\":[\"Paris\"],\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"},\"strict\":true}},\"tools\":[],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true,\"max_output_tokens\":null,\"max_tool_calls\":null,\"metadata\":null,\"model\":\"kimi-k3\",\"temperature\":1,\"top_p\":0.95,\"presence_penalty\":0,\"frequency_penalty\":0,\"top_logprobs\":0,\"truncation\":\"disabled\",\"prompt_cache_key\":null,\"safety_identifier\":null,\"service_tier\":\"default\"}}",
+    "{\"type\":\"response.in_progress\",\"sequence_number\":1,\"response\":{\"id\":\"resp_2f2e03b8021e26cb0b900a4b6\",\"object\":\"response\",\"created_at\":1789446369,\"completed_at\":null,\"status\":\"in_progress\",\"error\":null,\"incomplete_details\":null,\"output\":[],\"usage\":null,\"store\":false,\"background\":false,\"previous_response_id\":null,\"conversation\":null,\"instructions\":null,\"reasoning\":null,\"text\":{\"format\":{\"type\":\"json_schema\",\"name\":\"location\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"city\":{\"enum\":[\"Paris\"],\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"},\"strict\":true}},\"tools\":[],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true,\"max_output_tokens\":null,\"max_tool_calls\":null,\"metadata\":null,\"model\":\"kimi-k3\",\"temperature\":1,\"top_p\":0.95,\"presence_penalty\":0,\"frequency_penalty\":0,\"top_logprobs\":0,\"truncation\":\"disabled\",\"prompt_cache_key\":null,\"safety_identifier\":null,\"service_tier\":\"default\"}}",
+    "{\"type\":\"response.output_item.added\",\"sequence_number\":2,\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"status\":\"in_progress\",\"summary\":[]}}",
+    "{\"type\":\"response.reasoning_summary_part.added\",\"sequence_number\":3,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"part\":{\"text\":\"\",\"type\":\"summary_text\"}}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":4,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\"User\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":5,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" asks\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":6,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" return\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":7,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" JSON\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":8,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" object\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":9,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" containing\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":10,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" capital\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":11,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" city\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":12,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" of\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":13,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" France\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":14,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\".\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":15,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" Need\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":16,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" raw\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":17,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" JSON\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":18,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" only\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":19,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" matching\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":20,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" schema\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":21,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" exactly\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":22,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\":\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":23,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" {\\\"\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":24,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\"city\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":25,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\"\\\":\\\"\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":26,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\"Paris\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":27,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\"\\\"\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":28,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\"}.\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":29,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" Ensure\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":30,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" no\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":31,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" markdown\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":32,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\".\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":33,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" Final\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":34,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" only\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":35,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\" JSON\"}",
+    "{\"type\":\"response.reasoning_summary_text.delta\",\"sequence_number\":36,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"delta\":\".\"}",
+    "{\"type\":\"response.reasoning_summary_text.done\",\"sequence_number\":37,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"text\":\"User asks return JSON object containing capital city of France. Need raw JSON only matching schema exactly: {\\\"city\\\":\\\"Paris\\\"}. Ensure no markdown. Final only JSON.\"}",
+    "{\"type\":\"response.reasoning_summary_part.done\",\"sequence_number\":38,\"item_id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"output_index\":0,\"summary_index\":0,\"part\":{\"text\":\"User asks return JSON object containing capital city of France. Need raw JSON only matching schema exactly: {\\\"city\\\":\\\"Paris\\\"}. Ensure no markdown. Final only JSON.\",\"type\":\"summary_text\"}}",
+    "{\"type\":\"response.output_item.done\",\"sequence_number\":39,\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"status\":\"completed\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"User asks return JSON object containing capital city of France. Need raw JSON only matching schema exactly: {\\\"city\\\":\\\"Paris\\\"}. Ensure no markdown. Final only JSON.\"}]}}",
+    "{\"type\":\"response.output_item.added\",\"sequence_number\":40,\"output_index\":1,\"item\":{\"type\":\"message\",\"id\":\"msg_w8NqQ5mMsAXu2dXTebyGBnBg\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}",
+    "{\"type\":\"response.content_part.added\",\"sequence_number\":41,\"item_id\":\"msg_w8NqQ5mMsAXu2dXTebyGBnBg\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}",
+    "{\"type\":\"response.output_text.delta\",\"sequence_number\":42,\"item_id\":\"msg_w8NqQ5mMsAXu2dXTebyGBnBg\",\"output_index\":1,\"content_index\":0,\"delta\":\"{\\\"\",\"logprobs\":[]}",
+    "{\"type\":\"response.output_text.delta\",\"sequence_number\":43,\"item_id\":\"msg_w8NqQ5mMsAXu2dXTebyGBnBg\",\"output_index\":1,\"content_index\":0,\"delta\":\"city\",\"logprobs\":[]}",
+    "{\"type\":\"response.output_text.delta\",\"sequence_number\":44,\"item_id\":\"msg_w8NqQ5mMsAXu2dXTebyGBnBg\",\"output_index\":1,\"content_index\":0,\"delta\":\"\\\":\\\"\",\"logprobs\":[]}",
+    "{\"type\":\"response.output_text.delta\",\"sequence_number\":45,\"item_id\":\"msg_w8NqQ5mMsAXu2dXTebyGBnBg\",\"output_index\":1,\"content_index\":0,\"delta\":\"Paris\",\"logprobs\":[]}",
+    "{\"type\":\"response.output_text.delta\",\"sequence_number\":46,\"item_id\":\"msg_w8NqQ5mMsAXu2dXTebyGBnBg\",\"output_index\":1,\"content_index\":0,\"delta\":\"\\\"}\",\"logprobs\":[]}",
+    "{\"type\":\"response.output_text.done\",\"sequence_number\":47,\"item_id\":\"msg_w8NqQ5mMsAXu2dXTebyGBnBg\",\"output_index\":1,\"content_index\":0,\"text\":\"{\\\"city\\\":\\\"Paris\\\"}\",\"logprobs\":[]}",
+    "{\"type\":\"response.content_part.done\",\"sequence_number\":48,\"item_id\":\"msg_w8NqQ5mMsAXu2dXTebyGBnBg\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"{\\\"city\\\":\\\"Paris\\\"}\",\"annotations\":[]}}",
+    "{\"type\":\"response.output_item.done\",\"sequence_number\":49,\"output_index\":1,\"item\":{\"type\":\"message\",\"id\":\"msg_w8NqQ5mMsAXu2dXTebyGBnBg\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"{\\\"city\\\":\\\"Paris\\\"}\",\"annotations\":[]}]}}",
+    "{\"type\":\"response.completed\",\"sequence_number\":50,\"response\":{\"id\":\"resp_2f2e03b8021e26cb0b900a4b6\",\"object\":\"response\",\"created_at\":1789446369,\"completed_at\":1789446370,\"status\":\"completed\",\"error\":null,\"incomplete_details\":null,\"output\":[{\"type\":\"reasoning\",\"id\":\"rs_Q9EmpwfJZyvxYKh2iTRL03Ql\",\"status\":\"completed\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"User asks return JSON object containing capital city of France. Need raw JSON only matching schema exactly: {\\\"city\\\":\\\"Paris\\\"}. Ensure no markdown. Final only JSON.\"}]},{\"type\":\"message\",\"id\":\"msg_w8NqQ5mMsAXu2dXTebyGBnBg\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"{\\\"city\\\":\\\"Paris\\\"}\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":184,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0},\"output_tokens\":51,\"output_tokens_details\":{\"reasoning_tokens\":33},\"total_tokens\":235},\"store\":false,\"background\":false,\"previous_response_id\":null,\"conversation\":null,\"instructions\":null,\"reasoning\":null,\"text\":{\"format\":{\"type\":\"json_schema\",\"name\":\"location\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"city\":{\"enum\":[\"Paris\"],\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"},\"strict\":true}},\"tools\":[],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true,\"max_output_tokens\":null,\"max_tool_calls\":null,\"metadata\":null,\"model\":\"kimi-k3\",\"temperature\":1,\"top_p\":0.95,\"presence_penalty\":0,\"frequency_penalty\":0,\"top_logprobs\":0,\"truncation\":\"disabled\",\"prompt_cache_key\":null,\"safety_identifier\":null,\"service_tier\":\"default\"}}"
+  ],
+  "events": [
+    {
+      "type": "step-start",
+      "index": 0
+    },
+    {
+      "type": "reasoning-start",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "providerMetadata": {
+        "moonshot": {
+          "itemId": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": "User"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " asks"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " return"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " JSON"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " object"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " containing"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " capital"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " city"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " of"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " France"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": "."
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " Need"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " raw"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " JSON"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " only"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " matching"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " schema"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " exactly"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": ":"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " {\""
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": "city"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": "\":\""
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": "Paris"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": "\""
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": "}."
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " Ensure"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " no"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " markdown"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": "."
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " Final"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " only"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": " JSON"
+    },
+    {
+      "type": "reasoning-delta",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": "."
+    },
+    {
+      "type": "reasoning-end",
+      "id": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql:0",
+      "text": "User asks return JSON object containing capital city of France. Need raw JSON only matching schema exactly: {\"city\":\"Paris\"}. Ensure no markdown. Final only JSON.",
+      "providerMetadata": {
+        "moonshot": {
+          "itemId": "rs_Q9EmpwfJZyvxYKh2iTRL03Ql",
+          "reasoningEncryptedContent": null
+        }
+      }
+    },
+    {
+      "type": "text-start",
+      "id": "msg_w8NqQ5mMsAXu2dXTebyGBnBg",
+      "providerMetadata": {
+        "moonshot": {
+          "itemId": "msg_w8NqQ5mMsAXu2dXTebyGBnBg"
+        }
+      }
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_w8NqQ5mMsAXu2dXTebyGBnBg",
+      "text": "{\""
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_w8NqQ5mMsAXu2dXTebyGBnBg",
+      "text": "city"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_w8NqQ5mMsAXu2dXTebyGBnBg",
+      "text": "\":\""
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_w8NqQ5mMsAXu2dXTebyGBnBg",
+      "text": "Paris"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_w8NqQ5mMsAXu2dXTebyGBnBg",
+      "text": "\"}"
+    },
+    {
+      "type": "text-end",
+      "id": "msg_w8NqQ5mMsAXu2dXTebyGBnBg",
+      "text": "{\"city\":\"Paris\"}",
+      "providerMetadata": {
+        "moonshot": {
+          "itemId": "msg_w8NqQ5mMsAXu2dXTebyGBnBg"
+        }
+      }
+    },
+    {
+      "type": "step-finish",
+      "index": 0,
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 184,
+        "outputTokens": 51,
+        "nonCachedInputTokens": 184,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "reasoningTokens": 33,
+        "totalTokens": 235,
+        "providerMetadata": {
+          "moonshot": {
+            "input_tokens": 184,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 51,
+            "output_tokens_details": {
+              "reasoning_tokens": 33
+            },
+            "total_tokens": 235
+          }
+        }
+      },
+      "providerMetadata": {
+        "moonshot": {
+          "responseId": "resp_2f2e03b8021e26cb0b900a4b6",
+          "serviceTier": "default"
+        }
+      }
+    },
+    {
+      "type": "finish",
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 184,
+        "outputTokens": 51,
+        "nonCachedInputTokens": 184,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "reasoningTokens": 33,
+        "totalTokens": 235,
+        "providerMetadata": {
+          "moonshot": {
+            "input_tokens": 184,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 51,
+            "output_tokens_details": {
+              "reasoning_tokens": 33
+            },
+            "total_tokens": 235
+          }
+        }
+      },
+      "providerMetadata": {
+        "moonshot": {
+          "responseId": "resp_2f2e03b8021e26cb0b900a4b6",
+          "serviceTier": "default"
+        }
+      }
+    }
+  ],
+  "error": null
+}

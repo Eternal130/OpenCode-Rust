@@ -1,0 +1,80 @@
+{
+ "group": "openai-compatible-chat",
+ "name": "togetherai-streams-text",
+ "protocol": "openai-chat",
+ "provider": "togetherai",
+ "providerMetadataKey": "togetherai",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "Hello",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "!",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 45,
+      "nonCachedInputTokens": 45,
+      "outputTokens": 3,
+      "providerMetadata": {
+       "togetherai": {
+        "cached_tokens": 0,
+        "completion_tokens": 3,
+        "prompt_tokens": 45,
+        "total_tokens": 48
+       }
+      },
+      "totalTokens": 48
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 45,
+      "nonCachedInputTokens": 45,
+      "outputTokens": 3,
+      "providerMetadata": {
+       "togetherai": {
+        "cached_tokens": 0,
+        "completion_tokens": 3,
+        "prompt_tokens": 45,
+        "total_tokens": 48
+       }
+      },
+      "totalTokens": 48
+     }
+    }
+   ]
+  }
+ ]
+}

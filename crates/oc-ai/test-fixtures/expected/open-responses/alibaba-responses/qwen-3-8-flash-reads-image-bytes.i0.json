@@ -1,0 +1,158 @@
+{
+  "group": "alibaba-responses",
+  "scenario": "qwen-3-8-flash-reads-image-bytes",
+  "interaction": 0,
+  "machine": "open-responses",
+  "provider": "alibaba",
+  "metadataKey": "alibaba",
+  "frames": [
+    "{\"sequence_number\":0,\"type\":\"response.created\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"created_at\":1789446227,\"store\":true,\"tools\":[],\"output\":[],\"top_p\":1.0,\"completed_at\":1789446227,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-flash\",\"service_tier\":\"default\",\"id\":\"resp_43f17ad2-dd49-9e6b-b756-d6c98470ce3d\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"queued\"}}",
+    "{\"sequence_number\":1,\"type\":\"response.in_progress\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"created_at\":1789446227,\"store\":true,\"tools\":[],\"output\":[],\"top_p\":1.0,\"completed_at\":1789446227,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-flash\",\"service_tier\":\"default\",\"id\":\"resp_43f17ad2-dd49-9e6b-b756-d6c98470ce3d\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"in_progress\"}}",
+    "{\"sequence_number\":2,\"item\":{\"id\":\"msg_5d9990e1-460d-4697-bcaa-d62340f54e7e\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[],\"status\":\"in_progress\"},\"output_index\":0,\"type\":\"response.output_item.added\"}",
+    "{\"sequence_number\":3,\"output_index\":0,\"type\":\"response.content_part.added\",\"content_index\":0,\"item_id\":\"msg_5d9990e1-460d-4697-bcaa-d62340f54e7e\",\"part\":{\"type\":\"output_text\",\"annotations\":[],\"text\":\"\"}}",
+    "{\"sequence_number\":4,\"content_index\":0,\"item_id\":\"msg_5d9990e1-460d-4697-bcaa-d62340f54e7e\",\"delta\":\"j\",\"output_index\":0,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":5,\"content_index\":0,\"item_id\":\"msg_5d9990e1-460d-4697-bcaa-d62340f54e7e\",\"delta\":\"iggling restroom prison\",\"output_index\":0,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":6,\"content_index\":0,\"item_id\":\"msg_5d9990e1-460d-4697-bcaa-d62340f54e7e\",\"delta\":\"\",\"output_index\":0,\"type\":\"response.output_text.delta\",\"logprobs\":[]}",
+    "{\"sequence_number\":7,\"content_index\":0,\"item_id\":\"msg_5d9990e1-460d-4697-bcaa-d62340f54e7e\",\"text\":\"jiggling restroom prison\",\"output_index\":0,\"type\":\"response.output_text.done\",\"logprobs\":[]}",
+    "{\"sequence_number\":8,\"output_index\":0,\"type\":\"response.content_part.done\",\"content_index\":0,\"item_id\":\"msg_5d9990e1-460d-4697-bcaa-d62340f54e7e\",\"part\":{\"type\":\"output_text\",\"annotations\":[],\"text\":\"jiggling restroom prison\"}}",
+    "{\"sequence_number\":9,\"item\":{\"id\":\"msg_5d9990e1-460d-4697-bcaa-d62340f54e7e\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"jiggling restroom prison\"}],\"status\":\"completed\"},\"output_index\":0,\"type\":\"response.output_item.done\"}",
+    "{\"sequence_number\":10,\"type\":\"response.completed\",\"response\":{\"top_logprobs\":0,\"metadata\":{},\"presence_penalty\":0.0,\"usage\":{\"total_tokens\":152,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":6,\"input_tokens\":146,\"output_tokens_details\":{\"reasoning_tokens\":0},\"x_details\":[{\"input_tokens_details\":{\"image_tokens\":82,\"text_tokens\":64},\"prompt_tokens_details\":{\"cached_tokens\":0},\"total_tokens\":152,\"x_billing_type\":\"response_api\",\"output_tokens\":6,\"input_tokens\":146,\"output_tokens_details\":{},\"image_tokens\":82}]},\"created_at\":1789446227,\"store\":true,\"tools\":[],\"output\":[{\"id\":\"msg_5d9990e1-460d-4697-bcaa-d62340f54e7e\",\"role\":\"assistant\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"jiggling restroom prison\"}],\"status\":\"completed\"}],\"top_p\":1.0,\"completed_at\":1789446227,\"frequency_penalty\":0.0,\"parallel_tool_calls\":true,\"background\":false,\"temperature\":1.0,\"tool_choice\":\"auto\",\"model\":\"qwen3.8-flash\",\"service_tier\":\"default\",\"id\":\"resp_43f17ad2-dd49-9e6b-b756-d6c98470ce3d\",\"max_output_tokens\":4096,\"object\":\"response\",\"status\":\"completed\"}}"
+  ],
+  "events": [
+    {
+      "type": "step-start",
+      "index": 0
+    },
+    {
+      "type": "text-start",
+      "id": "msg_5d9990e1-460d-4697-bcaa-d62340f54e7e",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_5d9990e1-460d-4697-bcaa-d62340f54e7e"
+        }
+      }
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_5d9990e1-460d-4697-bcaa-d62340f54e7e",
+      "text": "j"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_5d9990e1-460d-4697-bcaa-d62340f54e7e",
+      "text": "iggling restroom prison"
+    },
+    {
+      "type": "text-end",
+      "id": "msg_5d9990e1-460d-4697-bcaa-d62340f54e7e",
+      "text": "jiggling restroom prison",
+      "providerMetadata": {
+        "alibaba": {
+          "itemId": "msg_5d9990e1-460d-4697-bcaa-d62340f54e7e"
+        }
+      }
+    },
+    {
+      "type": "step-finish",
+      "index": 0,
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 146,
+        "outputTokens": 6,
+        "nonCachedInputTokens": 146,
+        "cacheReadInputTokens": 0,
+        "reasoningTokens": 0,
+        "totalTokens": 152,
+        "providerMetadata": {
+          "alibaba": {
+            "input_tokens": 146,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 6,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 152,
+            "x_details": [
+              {
+                "input_tokens_details": {
+                  "image_tokens": 82,
+                  "text_tokens": 64
+                },
+                "prompt_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "total_tokens": 152,
+                "x_billing_type": "response_api",
+                "output_tokens": 6,
+                "input_tokens": 146,
+                "output_tokens_details": {},
+                "image_tokens": 82
+              }
+            ]
+          }
+        }
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "responseId": "resp_43f17ad2-dd49-9e6b-b756-d6c98470ce3d",
+          "serviceTier": "default"
+        }
+      }
+    },
+    {
+      "type": "finish",
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 146,
+        "outputTokens": 6,
+        "nonCachedInputTokens": 146,
+        "cacheReadInputTokens": 0,
+        "reasoningTokens": 0,
+        "totalTokens": 152,
+        "providerMetadata": {
+          "alibaba": {
+            "input_tokens": 146,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 6,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 152,
+            "x_details": [
+              {
+                "input_tokens_details": {
+                  "image_tokens": 82,
+                  "text_tokens": 64
+                },
+                "prompt_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "total_tokens": 152,
+                "x_billing_type": "response_api",
+                "output_tokens": 6,
+                "input_tokens": 146,
+                "output_tokens_details": {},
+                "image_tokens": 82
+              }
+            ]
+          }
+        }
+      },
+      "providerMetadata": {
+        "alibaba": {
+          "responseId": "resp_43f17ad2-dd49-9e6b-b756-d6c98470ce3d",
+          "serviceTier": "default"
+        }
+      }
+    }
+  ],
+  "error": null
+}

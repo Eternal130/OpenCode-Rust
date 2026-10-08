@@ -1,0 +1,175 @@
+{
+ "scenario": "anthropic-messages-cache/keeps-a-long-tool-turn-inside-the-cache-lookback",
+ "provider": "anthropic",
+ "providerMetadataKey": "anthropic",
+ "model": "claude-sonnet-4-5",
+ "interactions": [
+  {
+   "events": [
+    {
+     "type": "step-start",
+     "index": 0
+    },
+    {
+     "type": "text-start",
+     "id": "text-0"
+    },
+    {
+     "type": "text-delta",
+     "id": "text-0",
+     "text": "Fixture"
+    },
+    {
+     "type": "text-delta",
+     "id": "text-0",
+     "text": " lookups complete. Results:\n\n- Index 0: Fixture"
+    },
+    {
+     "type": "text-end",
+     "id": "text-0"
+    },
+    {
+     "type": "step-finish",
+     "index": 0,
+     "reason": {
+      "normalized": "length",
+      "raw": "max_tokens"
+     },
+     "usage": {
+      "inputTokens": 12293,
+      "outputTokens": 16,
+      "nonCachedInputTokens": 5,
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 12288,
+      "totalTokens": 12309,
+      "providerMetadata": {
+       "anthropic": {
+        "input_tokens": 5,
+        "output_tokens": 16,
+        "cache_creation_input_tokens": 12288,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+         "ephemeral_5m_input_tokens": 12288,
+         "ephemeral_1h_input_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "not_available"
+       }
+      }
+     }
+    },
+    {
+     "type": "finish",
+     "reason": {
+      "normalized": "length",
+      "raw": "max_tokens"
+     },
+     "usage": {
+      "inputTokens": 12293,
+      "outputTokens": 16,
+      "nonCachedInputTokens": 5,
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 12288,
+      "totalTokens": 12309,
+      "providerMetadata": {
+       "anthropic": {
+        "input_tokens": 5,
+        "output_tokens": 16,
+        "cache_creation_input_tokens": 12288,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+         "ephemeral_5m_input_tokens": 12288,
+         "ephemeral_1h_input_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "not_available"
+       }
+      }
+     }
+    }
+   ],
+   "error": null
+  },
+  {
+   "events": [
+    {
+     "type": "step-start",
+     "index": 0
+    },
+    {
+     "type": "text-start",
+     "id": "text-0"
+    },
+    {
+     "type": "text-delta",
+     "id": "text-0",
+     "text": "OK"
+    },
+    {
+     "type": "text-end",
+     "id": "text-0"
+    },
+    {
+     "type": "step-finish",
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "end_turn"
+     },
+     "usage": {
+      "inputTokens": 12310,
+      "outputTokens": 4,
+      "nonCachedInputTokens": 3,
+      "cacheReadInputTokens": 12288,
+      "cacheWriteInputTokens": 19,
+      "totalTokens": 12314,
+      "providerMetadata": {
+       "anthropic": {
+        "input_tokens": 3,
+        "output_tokens": 4,
+        "cache_creation_input_tokens": 19,
+        "cache_read_input_tokens": 12288,
+        "cache_creation": {
+         "ephemeral_5m_input_tokens": 19,
+         "ephemeral_1h_input_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "not_available"
+       }
+      }
+     }
+    },
+    {
+     "type": "finish",
+     "reason": {
+      "normalized": "stop",
+      "raw": "end_turn"
+     },
+     "usage": {
+      "inputTokens": 12310,
+      "outputTokens": 4,
+      "nonCachedInputTokens": 3,
+      "cacheReadInputTokens": 12288,
+      "cacheWriteInputTokens": 19,
+      "totalTokens": 12314,
+      "providerMetadata": {
+       "anthropic": {
+        "input_tokens": 3,
+        "output_tokens": 4,
+        "cache_creation_input_tokens": 19,
+        "cache_read_input_tokens": 12288,
+        "cache_creation": {
+         "ephemeral_5m_input_tokens": 19,
+         "ephemeral_1h_input_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "not_available"
+       }
+      }
+     }
+    }
+   ],
+   "error": null
+  }
+ ]
+}

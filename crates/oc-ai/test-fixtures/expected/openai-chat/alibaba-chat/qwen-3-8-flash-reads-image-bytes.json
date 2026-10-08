@@ -1,0 +1,95 @@
+{
+ "group": "alibaba-chat",
+ "name": "qwen-3-8-flash-reads-image-bytes",
+ "protocol": "alibaba-chat",
+ "provider": "alibaba",
+ "providerMetadataKey": "alibaba",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "j",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "igg",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "ling restroom prison",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 123,
+      "nonCachedInputTokens": 123,
+      "outputTokens": 6,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 6,
+        "completion_tokens_details": {},
+        "prompt_tokens": 123,
+        "prompt_tokens_details": {
+         "cached_tokens": 0,
+         "image_tokens": 82,
+         "text_tokens": 41
+        },
+        "total_tokens": 129
+       }
+      },
+      "totalTokens": 129
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 123,
+      "nonCachedInputTokens": 123,
+      "outputTokens": 6,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 6,
+        "completion_tokens_details": {},
+        "prompt_tokens": 123,
+        "prompt_tokens_details": {
+         "cached_tokens": 0,
+         "image_tokens": 82,
+         "text_tokens": 41
+        },
+        "total_tokens": 129
+       }
+      },
+      "totalTokens": 129
+     }
+    }
+   ]
+  }
+ ]
+}

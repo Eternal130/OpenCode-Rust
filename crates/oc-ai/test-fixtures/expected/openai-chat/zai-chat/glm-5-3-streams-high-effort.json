@@ -1,0 +1,440 @@
+{
+ "group": "zai-chat",
+ "name": "glm-5-3-streams-high-effort",
+ "protocol": "zai-chat",
+ "provider": "zai",
+ "providerMetadataKey": "zai",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "173",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "19",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "173",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "200",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " +",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "173",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ×",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "19",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "34",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "6",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "00",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " +",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "28",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " =",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "78",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "87",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ".",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "3",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "7887",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "zai": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 29,
+      "nonCachedInputTokens": 29,
+      "outputTokens": 38,
+      "providerMetadata": {
+       "zai": {
+        "completion_tokens": 38,
+        "completion_tokens_details": {
+         "reasoning_tokens": 33
+        },
+        "prompt_tokens": 29,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 67
+       }
+      },
+      "reasoningTokens": 33,
+      "totalTokens": 67
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "inputTokens": 29,
+      "nonCachedInputTokens": 29,
+      "outputTokens": 38,
+      "providerMetadata": {
+       "zai": {
+        "completion_tokens": 38,
+        "completion_tokens_details": {
+         "reasoning_tokens": 33
+        },
+        "prompt_tokens": 29,
+        "prompt_tokens_details": {
+         "cached_tokens": 0
+        },
+        "total_tokens": 67
+       }
+      },
+      "reasoningTokens": 33,
+      "totalTokens": 67
+     }
+    }
+   ]
+  }
+ ]
+}

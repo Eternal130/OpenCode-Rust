@@ -1,0 +1,478 @@
+{
+ "group": "alibaba-chat",
+ "name": "qwen-3-8-max-streams-xhigh-effort",
+ "protocol": "alibaba-chat",
+ "provider": "alibaba",
+ "providerMetadataKey": "alibaba",
+ "interactions": [
+  {
+   "events": [
+    {
+     "index": 0,
+     "type": "step-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-start"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "We",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " need answer user",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "'s simple arithmetic",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ": 17",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "3 * 2",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "19",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ". Need final only",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " integer. Compute:",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " 173",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "*200",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "=346",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "00; ",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "173*",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "19=3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "287 (",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "173*",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "20=3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "460-",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "173=",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "3287",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "); sum=3",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "78",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "87. Check",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": ": 21",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "9",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "*173",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " = 21",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "9*(17",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "0+",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "3)=37",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "230+",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "657=",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "3788",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": "7. Final only",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "text": " integer.",
+     "type": "reasoning-delta"
+    },
+    {
+     "id": "text-0",
+     "type": "text-start"
+    },
+    {
+     "id": "text-0",
+     "text": "378",
+     "type": "text-delta"
+    },
+    {
+     "id": "text-0",
+     "text": "87",
+     "type": "text-delta"
+    },
+    {
+     "id": "reasoning-0",
+     "providerMetadata": {
+      "alibaba": {
+       "reasoningField": "reasoning_content"
+      }
+     },
+     "type": "reasoning-end"
+    },
+    {
+     "id": "text-0",
+     "type": "text-end"
+    },
+    {
+     "index": 0,
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "step-finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 81,
+      "nonCachedInputTokens": 81,
+      "outputTokens": 132,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 132,
+        "completion_tokens_details": {
+         "reasoning_tokens": 124,
+         "text_tokens": 132
+        },
+        "prompt_tokens": 81,
+        "prompt_tokens_details": {
+         "cache_creation": {
+          "ephemeral_5m_input_tokens": 0
+         },
+         "cache_creation_input_tokens": 0,
+         "cache_type": "ephemeral",
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "text_tokens": 81
+        },
+        "total_tokens": 213
+       }
+      },
+      "reasoningTokens": 124,
+      "totalTokens": 213
+     }
+    },
+    {
+     "reason": {
+      "normalized": "stop",
+      "raw": "stop"
+     },
+     "type": "finish",
+     "usage": {
+      "cacheReadInputTokens": 0,
+      "cacheWriteInputTokens": 0,
+      "inputTokens": 81,
+      "nonCachedInputTokens": 81,
+      "outputTokens": 132,
+      "providerMetadata": {
+       "alibaba": {
+        "completion_tokens": 132,
+        "completion_tokens_details": {
+         "reasoning_tokens": 124,
+         "text_tokens": 132
+        },
+        "prompt_tokens": 81,
+        "prompt_tokens_details": {
+         "cache_creation": {
+          "ephemeral_5m_input_tokens": 0
+         },
+         "cache_creation_input_tokens": 0,
+         "cache_type": "ephemeral",
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "text_tokens": 81
+        },
+        "total_tokens": 213
+       }
+      },
+      "reasoningTokens": 124,
+      "totalTokens": 213
+     }
+    }
+   ]
+  }
+ ]
+}

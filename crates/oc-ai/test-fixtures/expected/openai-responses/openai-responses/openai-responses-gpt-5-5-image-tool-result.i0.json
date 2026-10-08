@@ -1,0 +1,147 @@
+{
+  "group": "openai-responses",
+  "scenario": "openai-responses-gpt-5-5-image-tool-result",
+  "interaction": 0,
+  "machine": "openai-responses",
+  "provider": "openai",
+  "metadataKey": "openai",
+  "frames": [
+    "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_03c1d75034b03b6b016aa8c8da598087d1a7161f931c2cc271\",\"object\":\"response\",\"created_at\":1789446362,\"status\":\"in_progress\",\"background\":false,\"completed_at\":null,\"error\":null,\"frequency_penalty\":0.0,\"incomplete_details\":null,\"instructions\":\"Read images carefully. Reply only with the visible text, lowercase, no punctuation.\",\"max_output_tokens\":40,\"max_tool_calls\":null,\"model\":\"gpt-5.5-2026-04-23\",\"moderation\":null,\"output\":[],\"parallel_tool_calls\":true,\"presence_penalty\":0.0,\"previous_response_id\":null,\"prompt_cache_key\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"current_turn\",\"effort\":\"medium\",\"mode\":\"standard\",\"summary\":\"detailed\"},\"safety_identifier\":null,\"service_tier\":\"auto\",\"store\":false,\"temperature\":1.0,\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"low\"},\"tool_choice\":\"auto\",\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}},\"tools\":[{\"type\":\"function\",\"description\":\"Capture a screenshot of the current screen.\",\"name\":\"read_screenshot\",\"output_schema\":null,\"parameters\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"strict\":false}],\"top_logprobs\":0,\"top_p\":0.98,\"truncation\":\"disabled\",\"usage\":null,\"user\":null,\"metadata\":{}},\"sequence_number\":0}",
+    "{\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_03c1d75034b03b6b016aa8c8da598087d1a7161f931c2cc271\",\"object\":\"response\",\"created_at\":1789446362,\"status\":\"in_progress\",\"background\":false,\"completed_at\":null,\"error\":null,\"frequency_penalty\":0.0,\"incomplete_details\":null,\"instructions\":\"Read images carefully. Reply only with the visible text, lowercase, no punctuation.\",\"max_output_tokens\":40,\"max_tool_calls\":null,\"model\":\"gpt-5.5-2026-04-23\",\"moderation\":null,\"output\":[],\"parallel_tool_calls\":true,\"presence_penalty\":0.0,\"previous_response_id\":null,\"prompt_cache_key\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"current_turn\",\"effort\":\"medium\",\"mode\":\"standard\",\"summary\":\"detailed\"},\"safety_identifier\":null,\"service_tier\":\"auto\",\"store\":false,\"temperature\":1.0,\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"low\"},\"tool_choice\":\"auto\",\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}},\"tools\":[{\"type\":\"function\",\"description\":\"Capture a screenshot of the current screen.\",\"name\":\"read_screenshot\",\"output_schema\":null,\"parameters\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"strict\":false}],\"top_logprobs\":0,\"top_p\":0.98,\"truncation\":\"disabled\",\"usage\":null,\"user\":null,\"metadata\":{}},\"sequence_number\":1}",
+    "{\"type\":\"response.output_item.added\",\"item\":{\"id\":\"msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036\",\"type\":\"message\",\"status\":\"in_progress\",\"content\":[],\"phase\":\"final_answer\",\"role\":\"assistant\"},\"output_index\":0,\"sequence_number\":2}",
+    "{\"type\":\"response.content_part.added\",\"content_index\":0,\"item_id\":\"msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036\",\"output_index\":0,\"part\":{\"type\":\"output_text\",\"annotations\":[],\"logprobs\":[],\"text\":\"\"},\"sequence_number\":3}",
+    "{\"type\":\"response.output_text.delta\",\"content_index\":0,\"delta\":\"j\",\"item_id\":\"msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036\",\"logprobs\":[],\"obfuscation\":\"xWt6tyKjFoqM7NL\",\"output_index\":0,\"sequence_number\":4}",
+    "{\"type\":\"response.output_text.delta\",\"content_index\":0,\"delta\":\"igg\",\"item_id\":\"msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036\",\"logprobs\":[],\"obfuscation\":\"3RfuIOHyRt1Hy\",\"output_index\":0,\"sequence_number\":5}",
+    "{\"type\":\"response.output_text.delta\",\"content_index\":0,\"delta\":\"ling\",\"item_id\":\"msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036\",\"logprobs\":[],\"obfuscation\":\"CmIbNuLAmRuE\",\"output_index\":0,\"sequence_number\":6}",
+    "{\"type\":\"response.output_text.delta\",\"content_index\":0,\"delta\":\" restroom\",\"item_id\":\"msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036\",\"logprobs\":[],\"obfuscation\":\"50aPEH4\",\"output_index\":0,\"sequence_number\":7}",
+    "{\"type\":\"response.output_text.delta\",\"content_index\":0,\"delta\":\" prison\",\"item_id\":\"msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036\",\"logprobs\":[],\"obfuscation\":\"AQpMPDtIp\",\"output_index\":0,\"sequence_number\":8}",
+    "{\"type\":\"response.output_text.done\",\"content_index\":0,\"item_id\":\"msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036\",\"logprobs\":[],\"output_index\":0,\"sequence_number\":9,\"text\":\"jiggling restroom prison\"}",
+    "{\"type\":\"response.content_part.done\",\"content_index\":0,\"item_id\":\"msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036\",\"output_index\":0,\"part\":{\"type\":\"output_text\",\"annotations\":[],\"logprobs\":[],\"text\":\"jiggling restroom prison\"},\"sequence_number\":10}",
+    "{\"type\":\"response.output_item.done\",\"item\":{\"id\":\"msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036\",\"type\":\"message\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"logprobs\":[],\"text\":\"jiggling restroom prison\"}],\"phase\":\"final_answer\",\"role\":\"assistant\"},\"output_index\":0,\"sequence_number\":11}",
+    "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_03c1d75034b03b6b016aa8c8da598087d1a7161f931c2cc271\",\"object\":\"response\",\"created_at\":1789446362,\"status\":\"completed\",\"background\":false,\"completed_at\":1789446363,\"error\":null,\"frequency_penalty\":0.0,\"incomplete_details\":null,\"instructions\":\"Read images carefully. Reply only with the visible text, lowercase, no punctuation.\",\"max_output_tokens\":40,\"max_tool_calls\":null,\"model\":\"gpt-5.5-2026-04-23\",\"moderation\":null,\"output\":[{\"id\":\"msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036\",\"type\":\"message\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"logprobs\":[],\"text\":\"jiggling restroom prison\"}],\"phase\":\"final_answer\",\"role\":\"assistant\"}],\"parallel_tool_calls\":true,\"presence_penalty\":0.0,\"previous_response_id\":null,\"prompt_cache_key\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"current_turn\",\"effort\":\"medium\",\"mode\":\"standard\",\"summary\":\"detailed\"},\"safety_identifier\":null,\"service_tier\":\"default\",\"store\":false,\"temperature\":1.0,\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"low\"},\"tool_choice\":\"auto\",\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}},\"tools\":[{\"type\":\"function\",\"description\":\"Capture a screenshot of the current screen.\",\"name\":\"read_screenshot\",\"output_schema\":null,\"parameters\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"strict\":false}],\"top_logprobs\":0,\"top_p\":0.98,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":227,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0},\"output_tokens\":9,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":236},\"user\":null,\"metadata\":{}},\"sequence_number\":12}"
+  ],
+  "events": [
+    {
+      "type": "step-start",
+      "index": 0
+    },
+    {
+      "type": "text-start",
+      "id": "msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036",
+      "providerMetadata": {
+        "openai": {
+          "itemId": "msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036",
+          "phase": "final_answer"
+        }
+      }
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036",
+      "text": "j"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036",
+      "text": "igg"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036",
+      "text": "ling"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036",
+      "text": " restroom"
+    },
+    {
+      "type": "text-delta",
+      "id": "msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036",
+      "text": " prison"
+    },
+    {
+      "type": "text-end",
+      "id": "msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036",
+      "text": "jiggling restroom prison",
+      "providerMetadata": {
+        "openai": {
+          "itemId": "msg_03c1d75034b03b6b016aa8c8daf82087d186de5aa58eb2d036",
+          "phase": "final_answer"
+        }
+      }
+    },
+    {
+      "type": "step-finish",
+      "index": 0,
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 227,
+        "outputTokens": 9,
+        "nonCachedInputTokens": 227,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "reasoningTokens": 0,
+        "totalTokens": 236,
+        "providerMetadata": {
+          "openai": {
+            "input_tokens": 227,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 9,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 236
+          }
+        }
+      },
+      "providerMetadata": {
+        "openai": {
+          "responseId": "resp_03c1d75034b03b6b016aa8c8da598087d1a7161f931c2cc271",
+          "serviceTier": "default"
+        }
+      }
+    },
+    {
+      "type": "finish",
+      "reason": {
+        "normalized": "stop"
+      },
+      "usage": {
+        "inputTokens": 227,
+        "outputTokens": 9,
+        "nonCachedInputTokens": 227,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "reasoningTokens": 0,
+        "totalTokens": 236,
+        "providerMetadata": {
+          "openai": {
+            "input_tokens": 227,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 9,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 236
+          }
+        }
+      },
+      "providerMetadata": {
+        "openai": {
+          "responseId": "resp_03c1d75034b03b6b016aa8c8da598087d1a7161f931c2cc271",
+          "serviceTier": "default"
+        }
+      }
+    }
+  ],
+  "error": null
+}
