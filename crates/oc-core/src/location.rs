@@ -355,6 +355,37 @@ pub struct ToolRegistration {
     pub codemode: bool,
 }
 
+/// A locally executed tool call's terminal success (Wave C owns the full
+/// decode → execute → encode pipeline; Wave B's runner carries this shape).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolRunResult {
+    /// Non-empty content parts (`Tool.NormalizedResult.content`).
+    pub content: Vec<oc_schema::tool::Content>,
+    /// Optional tool metadata (`Tool.NormalizedResult.metadata`).
+    pub metadata: Option<oc_schema::common::Record>,
+}
+
+/// A local tool execution failure (session-runner lane, step.ts §2).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolRunFailure {
+    /// `Tool.Error` — settles through `session.tool.failed` with the mapped
+    /// error.
+    Error { message: String, metadata: Option<oc_schema::common::Record> },
+    /// `Permission.DeclinedError` / `QuestionTool.CancelledError` — declines
+    /// end the step as an interrupt.
+    Declined { message: String },
+}
+
+/// The local execute seam (Wave C replaces this with the full tool
+/// pipeline; Wave B's runner + tests register stub executors here).
+#[async_trait::async_trait]
+pub trait ToolExecute: Send + Sync {
+    async fn execute(&self, input: &serde_json::Value) -> Result<ToolRunResult, ToolRunFailure>;
+}
+
+/// One boxed tool executor (test/registry storage).
+pub type ToolExecutorHandle = Arc<dyn ToolExecute>;
+
 impl ToolRegistration {
     /// Minimal registration (codemode-enabled, no namespace).
     pub fn new(
@@ -391,10 +422,15 @@ pub fn wholly_denied(action: &str, rules: &oc_schema::permission::Ruleset) -> bo
 /// table plus the `snapshot(permissions)` **skeleton**: wholly-denied tools
 /// are dropped from the snapshot exactly like v2 (`tool.ts:225-233`).
 /// Definitions sort by name (`BTreeMap`), direct-vs-CodeMode splitting and
-/// the execute-tool wrapper land with Wave C.
+/// the execute-tool wrapper land with Wave C. Wave B adds the
+/// **execute-handle storage** the session runner's step fibers use
+/// (`runner/step.rs` §2).
 #[derive(Default)]
 pub struct ToolRegistryState {
     tools: Mutex<std::collections::BTreeMap<String, ToolRegistration>>,
+    /// Local executors keyed by bare name (Wave C folds these into the full
+    /// pipeline; the runner resolves them at tool-call time).
+    executors: Mutex<std::collections::BTreeMap<String, ToolExecutorHandle>>,
 }
 
 impl fmt::Debug for ToolRegistryState {
@@ -463,6 +499,22 @@ impl ToolRegistryState {
             .filter(|tool| !wholly_denied(tool.permission_action(), rules))
             .cloned()
             .collect()
+    }
+
+    /// Registers a local executor under a bare name (Wave B runner seam).
+    pub fn register_executor(&self, name: impl Into<String>, executor: ToolExecutorHandle) {
+        self.executors.lock().insert(name.into(), executor);
+    }
+
+    /// Removes a local executor.
+    pub fn remove_executor(&self, name: &str) {
+        self.executors.lock().remove(name);
+    }
+
+    /// The registered local executor for a bare name.
+    #[must_use]
+    pub fn executor(&self, name: &str) -> Option<ToolExecutorHandle> {
+        self.executors.lock().get(name).cloned()
     }
 }
 
