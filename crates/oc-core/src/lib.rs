@@ -10,3 +10,4 @@ pub mod location_services;
 pub mod permission;
 pub mod project;
 pub mod provider_catalog;
+pub mod session;
