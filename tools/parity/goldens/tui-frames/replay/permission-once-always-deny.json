@@ -1,0 +1,92 @@
+{
+  "id": "permission-once-always-deny",
+  "description": "Permission prompt replies: the prompt lists Allow once / Always allow (when the request carries save patterns) / Reject with 'once' selected; Enter replies once, left/right move the selection, Escape opens the reject stage whose free-text reason Enter confirms",
+  "source": "test/cli/tui/input-scope.test.tsx (Enter → {decision:'once'}; Escape → reject stage keeping the reason draft) + src/routes/session/permission.tsx SessionQuestion (left/h, right/l, escapeKey=reject; app.exit shadowed while open)",
+  "keys": "kitty",
+  "steps": [
+    {
+      "keys": [],
+      "expect": {
+        "frameIncludes": [
+          "Permission required",
+          "Allow once",
+          "Always allow",
+          "Reject"
+        ],
+        "focus": "dialog"
+      }
+    },
+    {
+      "keys": [
+        "right"
+      ],
+      "expect": {
+        "frameIncludes": [
+          "Always allow"
+        ],
+        "focus": "dialog"
+      }
+    },
+    {
+      "keys": [
+        "left",
+        "enter"
+      ],
+      "expect": {
+        "frameExcludes": [
+          "Permission required"
+        ],
+        "focus": "prompt"
+      }
+    },
+    {
+      "keys": [],
+      "expect": {
+        "frameIncludes": [
+          "Permission required"
+        ],
+        "focus": "dialog"
+      }
+    },
+    {
+      "keys": [
+        "escape"
+      ],
+      "expect": {
+        "frameIncludes": [
+          "Reject"
+        ],
+        "focus": "dialog"
+      }
+    },
+    {
+      "keys": [
+        "c",
+        "h",
+        "o",
+        "o",
+        "s",
+        "e",
+        " ",
+        "a",
+        "n",
+        "o",
+        "t",
+        "h",
+        "e",
+        "r",
+        " ",
+        "w",
+        "a",
+        "y",
+        "enter"
+      ],
+      "expect": {
+        "frameExcludes": [
+          "Permission required"
+        ],
+        "focus": "prompt"
+      }
+    }
+  ]
+}

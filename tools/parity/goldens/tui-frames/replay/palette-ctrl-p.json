@@ -1,0 +1,52 @@
+{
+  "id": "palette-ctrl-p",
+  "description": "Command palette flow: ctrl+p opens the palette (suggested commands visible), typed text fuzzy-filters the list, Enter runs the selected command — here 'Rename session', which replaces the palette with the rename dialog",
+  "source": "test/cli/tui/command-palette.test.tsx (open → filter → enter select) + src/app.tsx COMMAND_PALETTE_COMMAND via command.palette.show (default ctrl+p)",
+  "keys": "kitty",
+  "steps": [
+    {
+      "keys": [
+        "ctrl+p"
+      ],
+      "expect": {
+        "frameIncludes": [
+          "New session"
+        ],
+        "dialogs": 1,
+        "focus": "dialog"
+      }
+    },
+    {
+      "keys": [
+        "r",
+        "e",
+        "n",
+        "a",
+        "m",
+        "e"
+      ],
+      "expect": {
+        "frameIncludes": [
+          "Rename session"
+        ],
+        "frameExcludes": [
+          "New session"
+        ],
+        "dialogs": 1,
+        "focus": "dialog"
+      }
+    },
+    {
+      "keys": [
+        "enter"
+      ],
+      "expect": {
+        "frameIncludes": [
+          "Rename session"
+        ],
+        "dialogs": 1,
+        "focus": "dialog"
+      }
+    }
+  ]
+}

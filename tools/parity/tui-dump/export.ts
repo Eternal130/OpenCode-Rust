@@ -66,6 +66,12 @@ interface ManifestEntry {
   class: ScenarioTier
   /** Style comparison depth this scenario is judged at. */
   comparisonDepth: ComparisonDepth
+  /**
+   * Virtual-scroll scenarios (gate-9 addition a): the pinned scroll offset
+   * this scenario's frame records; the `vscroll-*` family shares one
+   * fixture, one scenario per offset.
+   */
+  scrollOffset?: "top" | "middle" | "bottom" | "stick-to-bottom"
   variants: {
     width: number
     height: number
@@ -76,6 +82,18 @@ interface ManifestEntry {
   }[]
   /** width-edge only: measured-width sidecar pinning string-width ground truth. */
   widths?: { file: string; bytes: number; sha256: string; samples: number }
+}
+
+/** Non-frame replay script entry (gate-8 non-frame acceptance track). */
+interface ManifestReplayEntry {
+  id: string
+  description: string
+  source: string
+  keys: string
+  steps: number
+  file: string
+  bytes: number
+  sha256: string
 }
 
 interface Manifest {
@@ -89,6 +107,8 @@ interface Manifest {
   /** Set on superseded legacy corpora kept for diffing reference only. */
   superseded?: boolean
   scenarios: ManifestEntry[]
+  /** Keypress-replay scripts (non-frame acceptance) under replay/. */
+  replay?: ManifestReplayEntry[]
 }
 
 async function main() {
@@ -113,6 +133,10 @@ async function main() {
     await import("./scenarios/session_ui"),
     await import("./scenarios/diff_viewer"),
     await import("./scenarios/width_edge"),
+    await import("./scenarios/composer"),
+    await import("./scenarios/markdown_frame"),
+    await import("./scenarios/spinner_frozen"),
+    await import("./scenarios/session_app"),
   ]
   const all = modules.flatMap((m) => m.scenarios)
   const selected = only ? all.filter((s) => only.includes(s.id)) : all
@@ -132,6 +156,7 @@ async function main() {
       componentClass: scenario.componentClass,
       class: tier,
       comparisonDepth: TIER_COMPARISON_DEPTH[tier],
+      ...(scenario.scrollOffset ? { scrollOffset: scenario.scrollOffset } : {}),
       variants: [],
     }
     for (const variant of scenario.variants) {
@@ -176,6 +201,30 @@ async function main() {
     if (entry.variants.length > 0) entries.push(entry)
   }
 
+  // Keypress-replay scripts (non-frame acceptance): deterministic JSON
+  // fixtures, always written from the static module (no rendering).
+  const replayEntries: ManifestReplayEntry[] = []
+  const replayScripts = (await import("./replay_scripts")).replayScripts
+  for (const script of replayScripts) {
+    const bytes = `${JSON.stringify(script, null, 2)}\n`
+    const file = `replay/${script.id}.json`
+    if (!verify) {
+      mkdirSync(path.join(outDir, "replay"), { recursive: true })
+      writeFileSync(path.join(outDir, file), bytes)
+    }
+    replayEntries.push({
+      id: script.id,
+      description: script.description,
+      source: script.source,
+      keys: script.keys,
+      steps: script.steps.length,
+      file,
+      bytes: Buffer.byteLength(bytes),
+      sha256: sha256(bytes),
+    })
+    console.log(`[tui-dump]   ✓ replay ${script.id} steps=${script.steps.length}`)
+  }
+
   const manifest: Manifest = {
     format: "tui-frame-golden/2",
     generator: "tui-dump (bun) @ opencode v2.0.24 reference",
@@ -183,6 +232,7 @@ async function main() {
     theme: { ...scenarioMod.CORPUS_THEME },
     comparisonDepthDefault: "truecolor-canonical",
     scenarios: entries,
+    ...(replayEntries.length > 0 ? { replay: replayEntries } : {}),
   }
 
   if (failures.length > 0 && entries.length < 15) {
@@ -223,6 +273,19 @@ async function main() {
         }
       }
     }
+    for (const replay of existing.replay ?? []) {
+      const onDisk = existsSync(path.join(outDir, replay.file))
+        ? readFileSync(path.join(outDir, replay.file), "utf8")
+        : undefined
+      const regenerated = replayScripts.find((script) => script.id === replay.id)
+      const bytes = regenerated ? `${JSON.stringify(regenerated, null, 2)}\n` : undefined
+      const ok = onDisk !== undefined && bytes !== undefined && onDisk === bytes && sha256(bytes) === replay.sha256
+      if (ok) console.log(`[verify] ✓ replay ${replay.id} stable`)
+      else {
+        console.error(`[verify] ✗ replay ${replay.id} diverged`)
+        mismatch++
+      }
+    }
     if (mismatch > 0) {
       console.error(`[verify] FAILED: ${mismatch} variants not byte-stable`)
       process.exit(1)
@@ -239,6 +302,7 @@ async function main() {
     scenarios: entries.length,
     variants: entries.reduce((n, e) => n + e.variants.length, 0),
     widthSidecars: entries.filter((e) => e.widths).length,
+    replayScripts: replayEntries.length,
     failures: failures.map((f) => `${f.variant}: ${f.error instanceof Error ? f.error.message : String(f.error)}`),
     manifestSha256: sha256(manifestBytes),
   }

@@ -2,6 +2,12 @@
 //! it to a [`Frame`] (absorbed from the wave-7.0 spike, generalized from
 //! the single tool-wrap fixture to any paint list).
 //!
+//! Wave 0 (gate-9): placed lines carry per-run styles
+//! ([`crate::layout::PlacedLine`]); painting walks each run's clusters
+//! (the same [`crate::wrap::flatten`] seam as layout) and stamps every
+//! cell with its run's style — so the canonical ANSI (cells carry
+//! style) is unchanged while styled-segment leaves gain per-cell color.
+//!
 //! Paint coordinates are bounded by terminal dimensions (far below
 //! 2^16), so the pedantic usize→u16 cast lints carry no real risk.
 
@@ -10,10 +16,10 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use unicode_width::UnicodeWidthChar;
 
 use crate::layout::Placed;
 use crate::render::{Cell, CellColor, Frame};
+use crate::wrap::flatten;
 
 /// Paint `placed` runs over `size`, first filling the whole area with
 /// `background` (the reference renderer fills the frame with the theme
@@ -37,15 +43,19 @@ fn paint_run(buffer: &mut Buffer, item: &Placed, width: u16, height: u16) {
             break;
         }
         let mut x = item.x as u16;
-        for ch in line.chars() {
-            if x >= width {
-                break;
+        for run in &line.runs {
+            // Per-cell styles from segments: each run paints its clusters
+            // (never splitting one across cells) under the run's style.
+            for atom in flatten(&run.text, run.style) {
+                if x >= width {
+                    break;
+                }
+                if let Some(cell) = buffer.cell_mut((x, y)) {
+                    cell.set_symbol(&atom.text);
+                    cell.set_style(run.style);
+                }
+                x += atom.width.max(1) as u16;
             }
-            if let Some(cell) = buffer.cell_mut((x, y)) {
-                cell.set_symbol(ch.encode_utf8(&mut [0u8; 4]));
-                cell.set_style(item.style);
-            }
-            x += ch.width().unwrap_or(1).max(1) as u16;
         }
     }
 }
