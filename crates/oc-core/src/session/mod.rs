@@ -22,8 +22,11 @@ pub mod execution;
 pub mod inbox;
 pub mod message_updater;
 pub mod projector;
+pub mod revert;
 pub mod runner;
 pub mod store;
+pub mod subagent_completion;
+pub mod subagent_job;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
