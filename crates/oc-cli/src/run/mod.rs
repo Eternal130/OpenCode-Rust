@@ -327,10 +327,23 @@ async fn run_inner(input: RunInput) -> Result<i32, String> {
     if input.fork && !input.continue_ && input.session.is_none() {
         return Err("--fork requires --continue or --session".to_owned());
     }
-    let root = std::env::var("PWD").unwrap_or_default();
-    if !root.is_empty() {
-        let _ = std::env::set_current_dir(&root);
-    }
+    // v2 chdirs to `$PWD ?? cwd()` (the shell's logical path) before
+    // continuing (`run.ts:73`). Under a shell `$PWD` always names the
+    // current directory (the chdir is a logical-path no-op), but a spawned
+    // process can inherit a STALE `$PWD` (nextest, CI) that would silently
+    // relocate this run — and its standalone child — away from the project
+    // config. So: honor `$PWD` only when it already IS the current
+    // directory, which makes the physical chdir unnecessary.
+    let root = match std::env::var("PWD") {
+        Ok(stated)
+            if std::env::current_dir().is_ok_and(|current| {
+                std::fs::canonicalize(&stated).ok() == current.canonicalize().ok()
+            }) =>
+        {
+            stated
+        }
+        _ => std::env::current_dir().map(|path| path.display().to_string()).unwrap_or_default(),
+    };
     let Some(local) = std::env::current_dir().ok() else {
         return Err(format!("Failed to change directory to {root}"));
     };
