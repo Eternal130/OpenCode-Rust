@@ -381,10 +381,18 @@ pub struct Loader {
 impl Loader {
     #[must_use]
     pub fn new(location: PathBuf, globals: GlobalDirs) -> Self {
+        // `OPENCODE_CONFIG` (v2 `Config.file`) is the explicit-file source
+        // for EVERY load — boot-time provider seeding, location assembly,
+        // and the config surfaces must see the same document. An explicit
+        // `Options::file` still wins.
+        let mut options = Options::default();
+        if let Some(explicit) = std::env::var_os("OPENCODE_CONFIG") {
+            options.file = Some(PathBuf::from(explicit));
+        }
         Self {
             location,
             globals,
-            options: Options::default(),
+            options,
             wellknown: Arc::new(NoWellknown),
             env: Arc::new(|name| std::env::var(name).ok()),
         }

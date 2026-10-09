@@ -470,7 +470,10 @@ impl Engine {
         let project = project_resolver.resolve(location.as_path()).await;
         let worktree = project.canonical.clone();
 
-        // The config snapshot for this location.
+        // The config snapshot for this location. `OPENCODE_CONFIG` (the
+        // explicit file source, v2 `Config.file`) applies to every load —
+        // the boot-time provider seeding and the location config must see
+        // the same document.
         let global_dirs = GlobalDirs {
             config: self.home.join(".config").join("opencode"),
             home: self.home.clone(),
@@ -524,10 +527,14 @@ impl Engine {
         let mcp = McpRegistry::new((*self.bus).clone(), (*self.db).clone())
             .with_config_source(mcp_source);
 
-        // AGENTS.md injection + skill table.
+        // AGENTS.md injection + skill table. The session-scoped services
+        // (inbox, instructions, runner) publish through the
+        // location-scoped bus handle so their frames carry the location
+        // envelope (v2 `Bus.layer(ref)`); execution/usage stay global.
+        let scoped_bus = (*self.bus).scoped(schema_location(location));
         let instructions = Arc::new(instructions::SessionInstructions::new(
             (*self.db).clone(),
-            (*self.bus).clone(),
+            scoped_bus.clone(),
             worktree.clone(),
         ));
         let skills =
@@ -626,7 +633,7 @@ impl Engine {
 
         // Runner stack over the graph's registries.
         let store = SessionStore::new((*self.db).clone());
-        let inbox = SessionInbox::new((*self.db).clone(), (*self.bus).clone());
+        let inbox = SessionInbox::new((*self.db).clone(), scoped_bus.clone());
         let deps = ContextDeps {
             clock: Arc::clone(&self.clock),
             discovery: {
@@ -681,7 +688,7 @@ impl Engine {
         };
         let context = Arc::new(SessionContext::new(
             (*self.db).clone(),
-            (*self.bus).clone(),
+            scoped_bus.clone(),
             location.clone(),
             Arc::clone(&graph.agents),
             Arc::clone(&graph.tools),
@@ -727,7 +734,7 @@ impl Engine {
         let runner = Arc::new(
             SessionRunner::new(
                 (*self.db).clone(),
-                (*self.bus).clone(),
+                scoped_bus.clone(),
                 inbox.clone(),
                 store.clone(),
                 context,
@@ -1508,7 +1515,12 @@ const PROMPT_TITLE: &str = "You are a title generator. You output ONLY a thread 
 /// Seeds the v2 builtin agents (`opencode.agent` plugin): build (default),
 /// general + explore (subagents), compaction, title (hidden).
 fn seed_builtin_agents(agents: &Arc<crate::location::AgentRegistry>) {
-    let mut build = agent_info("build", "Build", oc_schema::agent::Mode::Primary, false);
+    // The default agent starts from `Agent.Info.default` (v2's schema
+    // defaults: allow everything, ask for external_directory outside the
+    // sandbox globs, ask for env files) — the permission goldens pin
+    // these rules.
+    let mut build = oc_schema::agent::Info::default_for(oc_schema::id::AgentId::parse("build"));
+    build.name = oc_schema::id::AgentName::parse("Build");
     build.description =
         Some("The default agent. Executes tools based on configured permissions.".into());
     build.permissions.push(rule("question", "*", oc_schema::permission::Effect::Allow));
@@ -1676,8 +1688,17 @@ impl crate::permission::RuleResolver for SessionRuleResolver {
             .permission
             .as_deref()
             .and_then(|raw| serde_json::from_str::<oc_schema::permission::Ruleset>(raw).ok());
-        let agent_rules =
-            agent.and_then(|agent| self.agents.get(agent)).map(|info| info.permissions);
+        // The agent ruleset: the explicit ask agent, else the session's
+        // own agent, else the registry's selected default (v2 resolves
+        // `session.agent ?? Agent.select(undefined)` — a missing agent is
+        // NOT deny-all at the HTTP ask boundary).
+        let agent_id = agent
+            .cloned()
+            .or_else(|| {
+                row.agent.as_deref().map(|raw| oc_schema::id::AgentId::parse(raw.to_owned()))
+            })
+            .or_else(|| self.agents.selected_default().map(|info| info.id.clone()));
+        let agent_rules = agent_id.and_then(|id| self.agents.get(&id)).map(|info| info.permissions);
         Ok((agent_rules, session_rules))
     }
 }

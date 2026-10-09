@@ -1,0 +1,40 @@
+   Parity fake says hello.         New session                   ⠙ New session                   +
+
+     Switched variant to default                                                                                        New session - 2026-10-09T12:53:46.
+                                                                                                                        824Z
+  ┃
+  ┃  Say hello.
+  ┃
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                                          ⬖ Getting started                ✕
+
+                                                                                                                            OpenCode includes free models so
+                                                                                                                            you can start immediately.
+
+                                                                                                                            Connect from 75+ providers to
+                                                                                                                            use other models, including
+  ┃                                                                                                                         Claude, GPT, Gemini etc
+  ┃
+  ┃                                                                                                                         Connect provider        /connect
+  ┃  Build · fake-model parityfake
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   ⬝⬝⬝⬝⬝■■■ esc interrupt                                                          shift+tab agents  ctrl+p commands    /tmp/opencode/ref/packages/cli
+
+ ✓ Server  ○ UI  Theme  Tools  Experiments

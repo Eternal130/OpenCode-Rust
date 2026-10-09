@@ -25,7 +25,6 @@ pub(crate) fn publisher(harness: &Harness, message: &str) -> LlmEventPublisher {
             variant: None,
         },
         "parityfake",
-        None,
         0,
     )
 }

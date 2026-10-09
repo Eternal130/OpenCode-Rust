@@ -7,6 +7,8 @@ use std::path::PathBuf;
 
 use dashmap::DashMap;
 use oc_core::engine::Engine;
+use oc_core::persistent_pty::PersistentPty;
+use oc_core::pty::PtyService;
 use oc_util::determinism::{Clock, IdGen};
 
 /// Readiness lifecycle (server/src/service-status.ts semantics).
@@ -47,7 +49,7 @@ pub struct AppState {
     pub readiness_rx: tokio::sync::watch::Receiver<Readiness>,
     /// Bound address once listening (feeds /api/info `urls`).
     pub local_addr: parking_lot::RwLock<Option<SocketAddr>>,
-    /// OpenCode version string reported by /api/info and registration.
+    /// `OpenCode` version string reported by /api/info and registration.
     pub version: String,
     pub ids: std::sync::Arc<dyn IdGen>,
     pub clock: std::sync::Arc<dyn Clock>,
@@ -62,6 +64,13 @@ pub struct AppState {
     pub assets: dashmap::DashMap<String, Vec<u8>>,
     /// Global tmp path reported by /api/info.
     pub tmp_dir: PathBuf,
+    /// The PTY machine (bus-backed; v2 mounts it in the route builder's
+    /// DI graph — here it rides the shared state).
+    pub pty: PtyService,
+    /// The persistent-PTY machine (bus-backed).
+    pub persistent_pty: PersistentPty,
+    /// The location announcer (boot/reload/config-change frames).
+    pub announce: crate::announce::Announcer,
 }
 
 impl AppState {
@@ -74,6 +83,9 @@ impl AppState {
     ) -> Self {
         let (tx, rx) = tokio::sync::watch::channel(Readiness::Starting);
         let tmp_dir = oc_util::global_roots::resolve().tmp.clone();
+        let bus = engine.bus.as_ref().clone();
+        let pty = PtyService::new(bus.clone());
+        let persistent_pty = PersistentPty::new(bus);
         Self {
             engine,
             auth,
@@ -88,6 +100,9 @@ impl AppState {
             cors_origins: Vec::new(),
             assets: dashmap::DashMap::new(),
             tmp_dir,
+            pty,
+            persistent_pty,
+            announce: crate::announce::Announcer::new(),
         }
     }
 

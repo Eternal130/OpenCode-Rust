@@ -124,13 +124,15 @@ const VERSION_KEYS: &[&str] = &["version"];
 /// Field holding a machine-generated session slug (adjective-noun pair,
 /// `Slug.create()` in the reference): random per run, shape-stable.
 const SLUG_KEYS: &[&str] = &["slug"];
-/// Fields whose string value may be a bare **project id**: sha1-hex of the
-/// project directory (`Hash.fast("directory:<dir>")`, 40 lowercase hex
-/// chars). Sandbox project directories differ per run, so these ids are
-/// per-run values; they are rewritten to numbered `<PRJ_ID:n>` tokens
-/// through the shared id numbering (spec §5.4 "Bare project ids"). Only
-/// exact-key matches with the 40-hex shape are rewritten — event/session/
-/// message ids keep flowing through the prefix content pass.
+/// Fields whose string value may be a bare **project id**: a hex digest
+/// of the project directory (`Hash.fast("directory:<dir>")` — 40
+/// lowercase hex chars on the reference, which uses sha1; the Rust port's
+/// oc-core `hash_fast` uses sha256, 64 hex chars). Sandbox project
+/// directories differ per run, so these ids are per-run values; they are
+/// rewritten to numbered `<PRJ_ID:n>` tokens through the shared id
+/// numbering (spec §5.4 "Bare project ids"). Only exact-key matches with
+/// the 40-or-64-hex shape are rewritten — event/session/message ids keep
+/// flowing through the prefix content pass.
 const PROJECT_ID_KEYS: &[&str] = &["projectID", "id", "previous"];
 
 // ---------------------------------------------------------------------------
@@ -165,8 +167,11 @@ static VERSION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(?:v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?|v?local)$").unwrap());
 /// Machine-generated session slugs (`adjective-noun`, both lowercase words).
 static SLUG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-z]+-[a-z]+$").unwrap());
-/// Bare project ids: sha1 hex digests (40 lowercase hex chars).
-static PROJECT_ID_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[0-9a-f]{40}$").unwrap());
+/// Bare project ids: hex digests (40 = sha1/reference, 64 = sha256/Rust
+/// port's `hash_fast` — the key gates the rewrite, either length is a
+/// project id).
+static PROJECT_ID_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$").unwrap());
 /// Bare sha256 hex digests (64 lowercase hex chars): content-addressed
 /// hashes whose input embeds run-specific state (instruction entry hashes
 /// in `session.instructions.updated`, worktree fingerprints).
