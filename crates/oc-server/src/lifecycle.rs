@@ -1423,10 +1423,13 @@ pub async fn serve(
     let addr = listener.local_addr()?;
     *state.local_addr.write() = Some(addr);
 
-    let (shutdown, shutdown_rx) = watch::channel(false);
+    // The shutdown latch lives on the shared state (gate-6 F2) so stream
+    // bodies (SSE, PTY WS) can select on it; the ServeHandle keeps a clone
+    // as the graceful-drain trigger.
+    let shutdown = state.shutdown.clone();
+    let mut graceful_rx = shutdown.subscribe();
     let graceful = async move {
-        let mut rx = shutdown_rx;
-        let _ = rx.wait_for(|flag| *flag).await;
+        let _ = graceful_rx.wait_for(|flag| *flag).await;
     };
     let task = tokio::spawn(async move {
         axum::serve(listener, router)

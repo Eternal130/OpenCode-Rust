@@ -1,6 +1,9 @@
 //! fs handlers (v2 `handlers/fs.ts`, 55 LOC): read (binary octet-stream,
-//! core-detected mime), list/find (dirs-first, locale-compare, trailing `/`
-//! on dirs), and the deliberately-escaping write (raw body, path query).
+//! core-detected mime; v2 resolve containment — lexical normalize, then
+//! canonicalize vs the location root, escapes die 500), list/find
+//! (dirs-first, locale-compare, trailing `/` on dirs; list entries are
+//! location-relative like v2, find keeps the registered absolute-shape
+//! gap), and the deliberately-escaping write (raw body, path query).
 
 #![allow(clippy::must_use_candidate, clippy::similar_names)]
 use axum::extract::{Path, State};
@@ -65,14 +68,77 @@ fn mime_from_path(path: &std::path::Path) -> String {
     .to_string()
 }
 
-/// Containment: the resolved path must stay under the location directory
-/// (violations die 500, deep-map §3).
-fn contained(location: &oc_core::location::LocationRef, path: &std::path::Path) -> bool {
-    path.starts_with(location.as_path())
+/// Node `path.resolve` semantics (v2 `FileSystem.resolve` first fence):
+/// make `input` absolute against `base` (an absolute input REPLACES the
+/// base), then lexically resolve `.`/`..` components without touching the
+/// filesystem. At a root, `..` stays the root (`path.resolve("/..") === "/"`).
+fn lexical_resolve(base: &std::path::Path, input: &str) -> std::path::PathBuf {
+    let joined = if std::path::Path::new(input).is_absolute() {
+        std::path::PathBuf::from(input)
+    } else {
+        base.join(input)
+    };
+    let mut normalized = std::path::PathBuf::new();
+    for component in joined.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
+/// `FSUtil.contains` on string paths (component-prefix, not textual).
+fn contains(parent: &std::path::Path, child: &std::path::Path) -> bool {
+    oc_util::pathx::contains_directory(&parent.to_string_lossy(), &child.to_string_lossy())
+}
+
+/// The boot-resolved location root (v2 `FileSystem` layer root): the
+/// canonicalized location directory for plain locations; the configured
+/// directory as-is for workspace-placed ones (the #44568 boot-only skip).
+/// Resolved lazily per request — the directory exists by the time services
+/// resolved, so the canonical identity matches the boot-time probe.
+fn location_root(location: &oc_core::location::LocationRef) -> std::path::PathBuf {
+    if location.workspace_id.is_some() {
+        return location.as_path().to_path_buf();
+    }
+    std::fs::canonicalize(location.as_path()).unwrap_or_else(|_| location.as_path().to_path_buf())
+}
+
+/// v2 `FileSystem.resolve` for `fs.read`: the double fence. Errors mirror
+/// the reference — a lexical or canonical escape dies (500
+/// `UnknownError`); a missing path fails `NotFound` (404
+/// `FileNotFoundError`).
+async fn resolve_contained(
+    location: &oc_core::location::LocationRef,
+    relative: &str,
+) -> Result<std::path::PathBuf, ApiError> {
+    let absolute = lexical_resolve(location.as_path(), relative);
+    if !contains(location.as_path(), &absolute) {
+        return Err(ApiError::unknown_ref());
+    }
+    let real = match tokio::fs::canonicalize(&absolute).await {
+        Ok(real) => real,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                || error.kind() == std::io::ErrorKind::NotADirectory =>
+        {
+            return Err(ApiError::file_not_found(relative));
+        }
+        Err(_) => return Err(ApiError::unknown_ref()),
+    };
+    if !contains(&location_root(location), &real) {
+        return Err(ApiError::unknown_ref());
+    }
+    Ok(real)
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/fs/read/*path — raw bytes, core-detected mime
+// GET /api/fs/read/*path — raw bytes, core-detected mime (contained; the
+// list/find/write escapes are deliberate v2 behavior, deep-map §3)
 // ---------------------------------------------------------------------------
 
 async fn read(
@@ -84,18 +150,20 @@ async fn read(
     let location = resolve_location_for_fs(&uri, &headers)?;
     let _services = services(&state, &location).await?;
     let relative = percent_decode(&path);
-    let absolute = location.as_path().join(&relative);
-    if !contained(&location, &absolute) {
+    let real = resolve_contained(&location, &relative).await?;
+    let metadata =
+        tokio::fs::metadata(&real).await.map_err(|_| ApiError::file_not_found(&relative))?;
+    if !metadata.is_file() {
+        // `Path is not a file` dies in v2 (500).
         return Err(ApiError::unknown_ref());
     }
-    let bytes =
-        tokio::fs::read(&absolute).await.map_err(|_| ApiError::file_not_found(&relative))?;
+    let bytes = tokio::fs::read(&real).await.map_err(|_| ApiError::file_not_found(&relative))?;
     let mime = detect_mime(&bytes).map_or_else(
         || {
             if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) || utf8_valid(&bytes) {
                 "text/plain".to_owned()
             } else {
-                mime_from_path(&absolute)
+                mime_from_path(&real)
             }
         },
         String::from,
@@ -112,9 +180,28 @@ fn utf8_valid(bytes: &[u8]) -> bool {
 // GET /api/fs/list, /api/fs/find — dirs-first, locale-compare, trailing /
 // ---------------------------------------------------------------------------
 
-fn entry_json(path: &std::path::Path, is_dir: bool) -> Value {
+/// Node `path.relative(base, target)` for absolute inputs: common-prefix
+/// split, then `..` per remaining base component + the target remainder.
+fn path_relative(base: &std::path::Path, target: &std::path::Path) -> String {
+    let base: Vec<_> = base.components().collect();
+    let target: Vec<_> = target.components().collect();
+    let mut shared = 0;
+    while shared < base.len() && shared < target.len() && base[shared] == target[shared] {
+        shared += 1;
+    }
+    let mut out = std::path::PathBuf::new();
+    for _ in shared..base.len() {
+        out.push("..");
+    }
+    for component in &target[shared..] {
+        out.push(component.as_os_str());
+    }
+    out.to_string_lossy().into_owned()
+}
+
+fn entry_json(path: &str, is_dir: bool) -> Value {
     json!({
-        "path": path.to_string_lossy(),
+        "path": path,
         "type": if is_dir { "directory" } else { "file" },
     })
 }
@@ -137,12 +224,16 @@ async fn list(
     while let Ok(Some(entry)) = read_dir.next_entry().await {
         let is_dir = entry.file_type().await.is_ok_and(|kind| kind.is_dir());
         let name = entry.file_name().to_string_lossy().into_owned();
-        let mut child = absolute.join(&name);
+        // v2 (filesystem.ts list): entries carry paths RELATIVE to the
+        // location directory (`.` for the location root itself), dirs with
+        // a trailing separator.
+        let child = absolute.join(&name);
+        let relative = path_relative(location.as_path(), &child);
+        let mut path = if relative.is_empty() { ".".to_owned() } else { relative };
         if is_dir {
-            // Dirs carry a trailing separator on the wire (§3).
-            child = std::path::PathBuf::from(format!("{}/", child.to_string_lossy()));
+            path.push('/');
         }
-        entries.push((!is_dir, name.to_lowercase(), entry_json(&child, is_dir)));
+        entries.push((!is_dir, name.to_lowercase(), entry_json(&path, is_dir)));
     }
     // Dirs first, then locale-compare names.
     entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
@@ -173,8 +264,10 @@ async fn find(
     let mut matches = Vec::new();
     walk(&root, &lowered, want_files, want_dirs, limit, &mut matches);
 
-    let data: Vec<Value> =
-        matches.into_iter().map(|(path, is_dir)| entry_json(&path, is_dir)).collect();
+    let data: Vec<Value> = matches
+        .into_iter()
+        .map(|(path, is_dir)| entry_json(&path.to_string_lossy(), is_dir))
+        .collect();
     Ok(super::common::json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
 }
 
