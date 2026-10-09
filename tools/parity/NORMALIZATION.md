@@ -352,3 +352,33 @@ Goldens (`goldens/*.json`) always store **normalized** output. A golden
 mismatch that survives normalization is a true behavioral divergence; run
 with `PARITY_UPDATE=1` only after establishing the change is intentional,
 and record the reason next to the golden update.
+
+## 10. TUI golden frames: comparison depth (gate-8 finding 5)
+
+TUI frame goldens (`goldens/tui-frames/`) are compared **without** the
+§1–§8 normalization — frames are already deterministic; the only lossy
+step is an explicit, per-tier **comparison depth**
+(`parity::tui_frame::ComparisonDepth`):
+
+- **`truecolor-canonical`** (Tier A, C1, width-edge, and the corpus
+  default): the canonical streams are compared byte-for-byte exactly as
+  exported. The goldens are captured headless (TERM-free truecolor), so
+  this is an instrument definition, not a claim about raw wire bytes on a
+  real terminal (init/teardown/cursor/alt-screen live in the tmux raw-line
+  smoke lane).
+- **`degraded-256`** (Tier B until oc-theme token parity lands): both
+  sides are degraded to the xterm-256 palette
+  (`nearest_ansi256`, low→high walk, basic-16 wins ties) before the style
+  comparison, tolerating exact hue drift while still failing color-class
+  drift. **The degradation is our approximation of the reference's native
+  `TERM=xterm-256color` rendering, not a capture of it** — the reference
+  goldens never passed through a 256-color terminal. Acceptable for
+  Tier-B "same perceived color" acceptance; not a byte-parity claim.
+
+The manifest pins the depth per corpus (`comparisonDepthDefault`) and per
+scenario (`class` tier mapping: tier-a/c1/width-edge →
+truecolor-canonical, tier-b → degraded-256); the corpus theme is pinned
+as `theme: { id: "opencode", mode: "dark" }` (gate-8 P1 — pre-P1
+mixed-style corpora must be marked `superseded` and are diffing reference
+only).
+

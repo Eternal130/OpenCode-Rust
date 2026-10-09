@@ -1,0 +1,55 @@
+{
+  "id": "width-edge-combining",
+  "measuredBy": "string-width@7.2.0 (bundled by @opentui/core; ambiguousIsNarrow=true, emoji=2)",
+  "widthMethod": "unicode",
+  "samples": [
+    {
+      "text": "precomposed: école déjà naïve café",
+      "utf16": 34,
+      "codepoints": 34,
+      "width": 34
+    },
+    {
+      "text": "NFD: école déjà à côtê (e + U+0301)",
+      "utf16": 41,
+      "codepoints": 41,
+      "width": 35
+    },
+    {
+      "text": "ambiguous narrow: ±0.5 · ratio · ellipsis… · ○ △ ▽ ※",
+      "utf16": 52,
+      "codepoints": 52,
+      "width": 52
+    },
+    {
+      "text": "circled/roman: ① ② ③ ⅓ Ⅷ Ⅻ Ⅺ",
+      "utf16": 28,
+      "codepoints": 28,
+      "width": 28
+    },
+    {
+      "text": "box drawing: ─│┌┐└┘ ├┤┬┴┼ ═ ║ □ ■",
+      "utf16": 33,
+      "codepoints": 33,
+      "width": 33
+    },
+    {
+      "text": "devanagari: हिन्दी में लिखा matras combine",
+      "utf16": 42,
+      "codepoints": 42,
+      "width": 34
+    },
+    {
+      "text": "thai: สวัสดีครับ vowel marks above",
+      "utf16": 34,
+      "codepoints": 34,
+      "width": 31
+    },
+    {
+      "text": "flags: 🇺🇸🇯🇵🇩🇪 regional indicator pairs",
+      "utf16": 44,
+      "codepoints": 38,
+      "width": 38
+    }
+  ]
+}

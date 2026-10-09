@@ -10,6 +10,11 @@ workspace = true
 
 [dependencies]
 oc-util = { workspace = true }
+oc-theme = { workspace = true }
+oc-client = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
 ratatui = "0.29"
 taffy = { version = "0.9", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
 crossterm = "0.28"
@@ -17,3 +22,4 @@ unicode-width = "0.2"
 
 [dev-dependencies]
 parity = { path = "../../tools/parity" }
+tokio = { workspace = true }

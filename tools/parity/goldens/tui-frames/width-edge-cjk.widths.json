@@ -1,0 +1,55 @@
+{
+  "id": "width-edge-cjk",
+  "measuredBy": "string-width@7.2.0 (bundled by @opentui/core; ambiguousIsNarrow=true, emoji=2)",
+  "widthMethod": "unicode",
+  "samples": [
+    {
+      "text": "搜索 packages/opencode/src 中的数据库配置（共 151 处匹配）",
+      "utf16": 43,
+      "codepoints": 43,
+      "width": 58
+    },
+    {
+      "text": "读取 packages/opencode/src/index.ts ［offset=1, limit=100］成功",
+      "utf16": 57,
+      "codepoints": 57,
+      "width": 63
+    },
+    {
+      "text": "错误：数据库连接失败，请检查网络后重试。",
+      "utf16": 20,
+      "codepoints": 20,
+      "width": 40
+    },
+    {
+      "text": "中文没有空格时可以在任意字符之间换行——此时最长词的宽度为一格",
+      "utf16": 31,
+      "codepoints": 31,
+      "width": 60
+    },
+    {
+      "text": "全角标点：，。！？；：「」『』（）《》……——",
+      "utf16": 23,
+      "codepoints": 23,
+      "width": 42
+    },
+    {
+      "text": "混排 abc123 与中文、日本語とハングル 한국어 交替",
+      "utf16": 29,
+      "codepoints": 29,
+      "width": 48
+    },
+    {
+      "text": "ＡＢＣ１２３ fullwidth letters/digits ｛｝［］",
+      "utf16": 36,
+      "codepoints": 36,
+      "width": 46
+    },
+    {
+      "text": "重复长句触发换行：数据库连接池已满，任务队列积压，请扩容后重试",
+      "utf16": 31,
+      "codepoints": 31,
+      "width": 62
+    }
+  ]
+}

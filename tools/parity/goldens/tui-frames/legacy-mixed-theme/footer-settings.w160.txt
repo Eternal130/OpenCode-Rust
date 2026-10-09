@@ -1,0 +1,16 @@
+  Settings                                                                                                                             left/right change · esc  
+  Search                                                                                                                                                        
+  Verbosity                                                                                                                                            Default  
+  Thinking                                                                                                                                                show  
+  Tools                                                                                                                                                   hide  
+  Shell                                                                                                                                                   hide  
+  Turn summary                                                                                                                                            show  
+  Footer details                                                                                                                                          show  
+  Splash                                                                                                                                                  show  
+  Monochrome UI                                                                                                                                            off  
+  ▪ Work spinner                                                                                                                                    soft slide  
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                

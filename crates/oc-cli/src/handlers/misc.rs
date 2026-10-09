@@ -71,9 +71,10 @@ pub fn uninstall(dry_run: bool, keep_config: bool, keep_data: bool) -> i32 {
     0
 }
 
-/// `opencode acp` — REGISTERED interim (wave 6b).
+/// `opencode acp` — REGISTERED interim (deferred until after the phase-7 TUI
+/// foundation; see MIGRATION.md phase 6/7 notes).
 pub fn acp() -> i32 {
-    eprintln!("Error: acp is not yet implemented (wave 6b)");
+    eprintln!("Error: acp is not yet implemented (deferred; see MIGRATION.md)");
     1
 }
 
