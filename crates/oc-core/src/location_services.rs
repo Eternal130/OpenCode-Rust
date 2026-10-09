@@ -718,7 +718,19 @@ mod tests {
             vec![(location.directory.to_string_lossy().into_owned(), "inactivity".to_string())],
             "expiry interrupts active executions with reason inactivity"
         );
-        assert_eq!(drain(&mut live).await, vec![LOCATION_SHUTDOWN_EVENT.to_string()]);
+        // The location.shutdown publish trails the invalidation by a tick
+        // (async shutdown sequence) — poll-drain instead of asserting an
+        // immediate snapshot (load-flake hardening, gate-8 note).
+        let shutdown_seen = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if drain(&mut live).await.contains(&LOCATION_SHUTDOWN_EVENT.to_string()) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(shutdown_seen.is_ok(), "location.shutdown published after expiry");
         assert!(harness.map.globals().activity.is_empty(), "activity entry dropped");
     }
 
