@@ -139,7 +139,7 @@ v2 插件是**进程内 JS/TS ESM 模块**（Bun 动态 import + npm 解析 + wa
 | 6 | CLI | oc-cli：clap 全命令树（root/**upgrade no-op**/**uninstall no-op**/acp/api/debug×3/auth×6/mcp×4/plugin×5/models/stats/mini/run/session×4/service×6/reload/pair/serve）、service ensure/replace、askpass 隐藏入口、**自动升级默认禁用** | `--help` 树对照；service 管理行为 parity；run/api 端到端 |
 | 7 | TUI 基座 | oc-tui：响应 store、taffy 布局层、keymap 引擎（leader/序列/层）、主题接线（**discovery/system 终端检测在此 crate**）、tabs 模型、home/session 路由骨架、SSE 数据层；golden 帧**此前已导出** | 组件级 golden 帧起步（先 5 个核心组件，含 ANSI 样式字节）；键位表与 v2 默认完全一致 |
 | 8 | TUI 全量 | composer（textarea+自动补全+历史+stash）、消息流（虚拟滚动/分组/markdown/工具渲染）、20+ 对话框、命令面板、sidebar、diff-viewer、mini 模式、剪贴板/外编($EDITOR)/注意力（bell）；**终端矩阵（xterm-256/screen/tmux）+ resize + 按键回放 harness** | 23 个 v2 快照测试复刻通过 + storybook 场景集 |
-| 9 | 插件 | oc-plugin-host（按 Phase 2 决策实现）：运行时+ESM/转译、20 域 Context、hook 顺序/可变对象、transform+reload、KV、RPC、TUI slot 桥（覆盖面=文档化 slot+ui API；renderer-direct 声明为例外）、npm 安装、V1/V2 双格式、codemode、内置插件等同物 | 插件兼容套件（v2 官方测试+社区样本+≥1 真实 TUI 插件）双实现同行为 |
+| 9 | 插件 | oc-plugin-host（按 Phase 2 决策实现）：bun 子进程宿主+NDJSON RPC 协议（死锁规范+fuzz）、20 域 Context、hook 顺序/可变对象（copy-in/copy-out 例外已文档化）、transform+reload（digest 扫描+require.cache 失效）、KV、RPC 端口、TUI slot 桥（覆盖面=文档化 slot+ui API；renderer-direct 声明为例外）、npm 安装（钉版本）、V1/V2 双格式、codemode、内置插件等同物 | **旗舰验收=oh-my-opencode-slim v3.0.3**（真实复杂插件：agents+skills+presets+@ai-sdk/ast-grep 依赖树；沙箱副本加载→注册全部 agent/skill/command/hook→跑一个 skill 端到端）；v2 官方插件测试移植；≥1 真实 TUI slot 插件；插件兼容套件双实现同行为 |
 | 10 | 加固 | openapi 等价门、全量 parity 回归、DB 互通、跨版本 service 顶替（rust↔TS 互替换）、打包（release 二进制+安装脚本）、文档 | 全部门禁绿；oracle 终审 |
 
 **执行纪律**：每阶段内部再分并行 fixer 泳道（按 crate/目录划分写所有权）；TUI 视觉工作路由 @designer/具备设计判断的泳道；阶段收尾 = 验证证据 + 进度文件 + oracle 门 + git 提交。

@@ -13,3 +13,27 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+oc-core = { workspace = true }
+oc-schema = { workspace = true }
+oc-util = { workspace = true }
+oc-client = { workspace = true }
+oc-server = { workspace = true }
+oc-ai = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = "0.1"
+futures = "0.3"
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+base64 = "0.22"
+rand = "0.8"
+dirs = "5"
+libc = "0.2"
+dialoguer = "0.11"
+unicode-width = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
