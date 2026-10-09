@@ -1813,10 +1813,15 @@ name = "oc-tui"
 version = "2.0.24"
 dependencies = [
  "crossterm",
+ "oc-client",
+ "oc-theme",
  "oc-util",
  "parity",
  "ratatui",
+ "serde",
+ "serde_json",
  "taffy",
+ "tokio",
  "unicode-width 0.2.0",
 ]
 

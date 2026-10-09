@@ -108,6 +108,7 @@ export const scenarios: Scenario[] = (
   source: "test/component/session-tabs-status.test.tsx",
   description: `SessionTabs ${orientation} bar/rail with two tabs; first tab carries an unread-activity indicator`,
   componentClass: "session-tabs",
+  tier: "tier-a",
   variants: [
     { width: 80, height },
     { width: 160, height },

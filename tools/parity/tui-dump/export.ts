@@ -6,10 +6,20 @@
  * representative scenarios at two widths, and serializes each frame as
  *   (a) a text grid  — exact captureCharFrame() bytes
  *   (b) an ANSI byte stream — canonical per-span SGR serialization (frame.ts)
+ * plus, for width-edge scenarios,
+ *   (c) a widths sidecar — the same probe strings measured with the
+ *       `string-width` build bundled by @opentui/core (the renderer's
+ *       "unicode" width method; ambiguous chars narrow, emoji 2 cells).
+ *
+ * CORPUS THEME (gate-8 hard precondition P1): every scenario mounts under
+ * the reference's default theme — the built-in `opencode` v2 theme resolved
+ * in dark mode (see scenario.ts CORPUS_THEME). The pre-P1 corpus (mixed
+ * style bases) is kept under goldens/tui-frames/legacy-mixed-theme/.
  *
  * Each scenario is mounted TWICE per run and the two captures must be
- * byte-identical (in-run determinism). `--verify` re-renders everything and
- * compares SHA-256s against the existing manifest (cross-run determinism).
+ * byte-identical (in-run determinism). `--verify` re-renders everything,
+ * re-measures the sidecars, and compares SHA-256s against the existing
+ * manifest (cross-run determinism).
  *
  * Usage:
  *   bun /tmp/opencode/tui-dump/export.ts [--out DIR] [--only id ...] [--verify] [--json]
@@ -36,11 +46,26 @@ interface CapturedVariant {
   ansi: string
 }
 
+type ScenarioTier = "tier-a" | "tier-b" | "tier-c1" | "width-edge"
+type ComparisonDepth = "truecolor-canonical" | "degraded-256"
+
+/** gate-8 approval table: tier → style comparison depth */
+const TIER_COMPARISON_DEPTH: Record<ScenarioTier, ComparisonDepth> = {
+  "tier-a": "truecolor-canonical",
+  "tier-b": "degraded-256",
+  "tier-c1": "truecolor-canonical",
+  "width-edge": "truecolor-canonical",
+}
+
 interface ManifestEntry {
   id: string
   source: string
   description: string
   componentClass: string
+  /** Acceptance tier (gate-8 approval table). */
+  class: ScenarioTier
+  /** Style comparison depth this scenario is judged at. */
+  comparisonDepth: ComparisonDepth
   variants: {
     width: number
     height: number
@@ -49,12 +74,20 @@ interface ManifestEntry {
     txt: { bytes: number; sha256: string }
     ansi: { bytes: number; sha256: string }
   }[]
+  /** width-edge only: measured-width sidecar pinning string-width ground truth. */
+  widths?: { file: string; bytes: number; sha256: string; samples: number }
 }
 
 interface Manifest {
-  format: "tui-frame-golden/1"
+  format: "tui-frame-golden/2"
   generator: string
   ansiFormat: string
+  /** Corpus theme: every scenario renders under this theme (gate-8 P1). */
+  theme: { id: string; label: string; mode: "dark" | "light" }
+  /** Default style comparison depth when a scenario does not override. */
+  comparisonDepthDefault: ComparisonDepth
+  /** Set on superseded legacy corpora kept for diffing reference only. */
+  superseded?: boolean
   scenarios: ManifestEntry[]
 }
 
@@ -69,7 +102,8 @@ async function main() {
 
   await ensureLinks()
 
-  const { sha256, serializeAnsi } = await import("./frame")
+  const { sha256 } = await import("./frame")
+  const stringWidth = (await import("string-width")).default
   const scenarioMod = await import("./scenario")
   const cleanup = scenarioMod.cleanup
   const modules = [
@@ -78,8 +112,9 @@ async function main() {
     await import("./scenarios/footer"),
     await import("./scenarios/session_ui"),
     await import("./scenarios/diff_viewer"),
+    await import("./scenarios/width_edge"),
   ]
-  const all: Scenario[] = modules.flatMap((m) => m.scenarios)
+  const all = modules.flatMap((m) => m.scenarios)
   const selected = only ? all.filter((s) => only.includes(s.id)) : all
   if (selected.length === 0) throw new Error(`no scenarios matched: ${only?.join(", ")}`)
 
@@ -89,11 +124,14 @@ async function main() {
   const failures: { id: string; variant: string; error: unknown }[] = []
 
   for (const scenario of selected) {
+    const tier: ScenarioTier = scenario.tier
     const entry: ManifestEntry = {
       id: scenario.id,
       source: scenario.source,
       description: scenario.description,
       componentClass: scenario.componentClass,
+      class: tier,
+      comparisonDepth: TIER_COMPARISON_DEPTH[tier],
       variants: [],
     }
     for (const variant of scenario.variants) {
@@ -117,20 +155,33 @@ async function main() {
           writeFileSync(path.join(outDir, `${scenario.id}.w${variant.width}.txt`), first.txt)
           writeFileSync(path.join(outDir, `${scenario.id}.w${variant.width}.ansi`), first.ansi)
         }
-        staged.set(tag, first)
+        stagedFrames.set(tag, first)
         console.log(`[tui-dump]   ✓ ${tag} txt=${first.txt.length}B ansi=${first.ansi.length}B`)
       } catch (error) {
         failures.push({ id: scenario.id, variant: tag, error })
         console.error(`[tui-dump]   ✗ ${tag}: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
+    if (scenario.widthSamples) {
+      const sidecar = widthsSidecar(scenario.id, scenario.widthSamples, stringWidth)
+      stagedSidecars.set(scenario.id, sidecar)
+      if (!verify) writeFileSync(path.join(outDir, `${scenario.id}.widths.json`), sidecar)
+      entry.widths = {
+        file: `${scenario.id}.widths.json`,
+        bytes: Buffer.byteLength(sidecar),
+        sha256: sha256(sidecar),
+        samples: scenario.widthSamples.length,
+      }
+    }
     if (entry.variants.length > 0) entries.push(entry)
   }
 
   const manifest: Manifest = {
-    format: "tui-frame-golden/1",
+    format: "tui-frame-golden/2",
     generator: "tui-dump (bun) @ opencode v2.0.24 reference",
     ansiFormat: "canonical span SGR: ESC[0;attrs;fg;bgm per style change, see frame.ts / tools/parity/src/tui_frame.rs",
+    theme: { ...scenarioMod.CORPUS_THEME },
+    comparisonDepthDefault: "truecolor-canonical",
     scenarios: entries,
   }
 
@@ -145,7 +196,7 @@ async function main() {
     for (const entry of existing.scenarios) {
       for (const variant of entry.variants) {
         const tag = `${entry.id}@${variant.width}x${variant.height}`
-        const fresh = staged.get(tag)
+        const fresh = stagedFrames.get(tag)
         if (!fresh) {
           console.error(`[verify] ✗ ${tag}: not re-rendered`)
           mismatch++
@@ -156,6 +207,18 @@ async function main() {
         if (txtOk && ansiOk) console.log(`[verify] ✓ ${tag} byte-stable`)
         else {
           console.error(`[verify] ✗ ${tag} diverged (txt=${txtOk} ansi=${ansiOk})`)
+          mismatch++
+        }
+      }
+      if (entry.widths) {
+        const fresh = stagedSidecars.get(entry.id)
+        const onDisk = existsSync(path.join(outDir, entry.widths.file))
+          ? readFileSync(path.join(outDir, entry.widths.file), "utf8")
+          : undefined
+        const ok = fresh !== undefined && onDisk === fresh && sha256(fresh) === entry.widths.sha256
+        if (ok) console.log(`[verify] ✓ ${entry.id} widths sidecar stable`)
+        else {
+          console.error(`[verify] ✗ ${entry.id} widths sidecar diverged`)
           mismatch++
         }
       }
@@ -172,15 +235,34 @@ async function main() {
   const manifestBytes = `${JSON.stringify(manifest, null, 2)}\n`
   writeFileSync(path.join(outDir, "manifest.json"), manifestBytes)
   const summary = {
+    theme: manifest.theme,
     scenarios: entries.length,
     variants: entries.reduce((n, e) => n + e.variants.length, 0),
+    widthSidecars: entries.filter((e) => e.widths).length,
     failures: failures.map((f) => `${f.variant}: ${f.error instanceof Error ? f.error.message : String(f.error)}`),
     manifestSha256: sha256(manifestBytes),
   }
   console.log(jsonOut ? JSON.stringify(summary) : `[tui-dump] done: ${JSON.stringify(summary, null, 2)}`)
 }
 
-const staged = new Map<string, CapturedVariant>()
+/** Deterministic measured-width sidecar for a width-edge scenario. */
+function widthsSidecar(id: string, samples: string[], stringWidth: (s: string) => number): string {
+  const sidecar = {
+    id,
+    measuredBy: "string-width@7.2.0 (bundled by @opentui/core; ambiguousIsNarrow=true, emoji=2)",
+    widthMethod: "unicode",
+    samples: samples.map((text) => ({
+      text,
+      utf16: text.length,
+      codepoints: [...text].length,
+      width: stringWidth(text),
+    })),
+  }
+  return `${JSON.stringify(sidecar, null, 2)}\n`
+}
+
+const stagedFrames = new Map<string, CapturedVariant>()
+const stagedSidecars = new Map<string, string>()
 const { serializeAnsi } = await import("./frame")
 
 async function capture(

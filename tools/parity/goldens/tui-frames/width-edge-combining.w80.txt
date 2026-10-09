@@ -1,0 +1,30 @@
+   precomposed: école déjà naïve café                                           
+   NFD: école déjà à côtê (e + U+0301)                                          
+   ambiguous narrow: ±0.5 · ratio · ellipsis… · ○ △ ▽ ※                         
+   circled/roman: ① ② ③ ⅓ Ⅷ Ⅻ Ⅺ                                                 
+   box drawing: ─│┌┐└┘ ├┤┬┴┼ ═ ║ □ ■                                            
+   devanagari: हिन्दी में लिखा matras combine                                          
+   thai: สวัสดีครับ vowel marks above                                              
+   flags: 🇺🇸🇯🇵🇩🇪 regional indicator pairs                                       
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                

@@ -1,0 +1,24 @@
+  All · vs v2                                                              0/1 ?
+                                                                                
+   src/file.txt                                                         +3 -3   
+                                                                                
+   1    const first = true                                                      
+   2 -  const oldFirst = true                                                   
+   2 +  const newFirst = true                                                   
+   3    const afterFirst = true                                                 
+   @@ -20,3 +20,3 @@                                                            
+   20   const second = true                                                     
+   21 - const oldSecond = true                                                  
+   21 + const newSecond = true                                                  
+   22   const afterSecond = true                                                
+   @@ -40,3 +40,3 @@                                                            
+   40   const third = true                                                      
+   41 - const oldThird = true                                                   
+   41 + const newThird = true                                                   
+   42   const afterThird = true                                                 
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                

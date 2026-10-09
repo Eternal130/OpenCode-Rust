@@ -1,0 +1,55 @@
+{
+  "id": "width-edge-emoji",
+  "measuredBy": "string-width@7.2.0 (bundled by @opentui/core; ambiguousIsNarrow=true, emoji=2)",
+  "widthMethod": "unicode",
+  "samples": [
+    {
+      "text": "thumbs: 👍 plain and 👍🏽 medium skin tone",
+      "utf16": 42,
+      "codepoints": 39,
+      "width": 40
+    },
+    {
+      "text": "family ZWJ: 👨‍👩‍👧‍👦 four members",
+      "utf16": 36,
+      "codepoints": 32,
+      "width": 27
+    },
+    {
+      "text": "rainbow flag: 🏳️‍🌈 ZWJ + VS16",
+      "utf16": 31,
+      "codepoints": 29,
+      "width": 27
+    },
+    {
+      "text": "astronaut: 🧑🏻‍🚀 skin tone + ZWJ",
+      "utf16": 34,
+      "codepoints": 31,
+      "width": 29
+    },
+    {
+      "text": "handshake: 🫱🏻‍🫲🏿 two skin tones",
+      "utf16": 35,
+      "codepoints": 31,
+      "width": 28
+    },
+    {
+      "text": "shipped 🎉✅🚀 three files 💯 percent done",
+      "utf16": 41,
+      "codepoints": 38,
+      "width": 42
+    },
+    {
+      "text": "hearts: ❤️‍🔥 beating and 💞 sparkling",
+      "utf16": 38,
+      "codepoints": 36,
+      "width": 35
+    },
+    {
+      "text": "keycap 1️⃣ vs circled ⑩ digits",
+      "utf16": 30,
+      "codepoints": 30,
+      "width": 29
+    }
+  ]
+}
