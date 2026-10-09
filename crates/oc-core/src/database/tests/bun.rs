@@ -44,7 +44,43 @@ const REF_PASSWORD: &str = "core-db-ref-password";
 /// True when the reference can be run: bun exists (well-known install paths
 /// or `PATH`) and the reference checkout is present.
 pub(super) fn has_bun() -> bool {
+    if !ensure_ref_runtime() {
+        return false;
+    }
     bun_path().is_some() && ref_root().is_dir()
+}
+
+/// Rebuild /tmp/opencode/ref if wiped (self-heal; see incident log).
+fn ensure_ref_runtime() -> bool {
+    let marker = std::path::Path::new("/tmp/opencode/ref/packages/cli/src/index.ts");
+    let node_modules = std::path::Path::new("/tmp/opencode/ref/node_modules");
+    if marker.exists() && node_modules.is_dir() {
+        return true;
+    }
+    eprintln!("[ref-selfheal] reference runtime missing — rebuilding");
+    let bun = ["/usr/local/bin/bun", "/root/.bun/bin/bun"]
+        .iter()
+        .find(|p| std::path::Path::new(p).exists());
+    let ok = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("mkdir -p /tmp/opencode && chmod 1777 /tmp/opencode 2>/dev/null; mkdir -p /tmp/opencode/ref.tmp && cd /opt/opencode-ref && tar -cf - --exclude=.git . | (cd /tmp/opencode/ref.tmp && tar -xf -) && mv /tmp/opencode/ref.tmp /tmp/opencode/ref")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !ok {
+        eprintln!("[ref-selfheal] copy failed");
+        return false;
+    }
+    let Some(bun) = bun else {
+        eprintln!("[ref-selfheal] bun unavailable");
+        return false;
+    };
+    let ok = std::process::Command::new(bun)
+        .args(["install", "--frozen-lockfile"])
+        .current_dir("/tmp/opencode/ref")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    eprintln!("[ref-selfheal] {}", if ok { "rebuilt" } else { "bun install failed" });
+    ok
 }
 
 fn ref_root() -> PathBuf {
