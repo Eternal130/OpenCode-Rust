@@ -9,3 +9,11 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+oc-util = { workspace = true }
+ratatui = "0.29"
+taffy = { version = "0.9", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
+crossterm = "0.28"
+unicode-width = "0.2"
+
+[dev-dependencies]
+parity = { path = "../../tools/parity" }

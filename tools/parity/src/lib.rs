@@ -21,6 +21,11 @@
 //!   subscribe from t0, drive a scripted API flow, collect to quiescence,
 //!   and golden the normalized frame-sequence groups (Phase 5 replays the
 //!   same scripts against the port).
+//! - [`tui_frame`] — TUI golden-frame primitives (wave 7.0): load the
+//!   headless-exported reference frames (`goldens/tui-frames`), parse the
+//!   canonical text-grid / ANSI-styled formats, compare frames with
+//!   first-divergent-cell classification, and degrade colors through the
+//!   TERM matrix (truecolor → 256 → 16).
 //!
 //! HTTP is performed by a private minimal localhost HTTP/1.1 client
 //! (`minih`, not public API): the harness only ever talks to `127.0.0.1`,
@@ -33,5 +38,6 @@ pub mod reference;
 pub mod rust_server;
 pub mod scenario;
 pub mod sse;
+pub mod tui_frame;
 
 mod minih;

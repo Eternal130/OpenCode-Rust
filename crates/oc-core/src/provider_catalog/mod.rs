@@ -17,6 +17,7 @@
 pub mod catalog;
 pub mod facade;
 pub mod native;
+pub mod overlay;
 pub mod refresh;
 pub mod source;
 pub mod support;
@@ -28,6 +29,7 @@ pub use facade::{
     ModelConnection, ProtocolFamily, ProviderError,
 };
 pub use native::{aisdk, native, native_package, package_name, AISDK_PREFIX};
+pub use overlay::{providers_from_config, ConfigProviders};
 pub use refresh::{CatalogKv, CatalogService, CatalogSource, RefreshOutcome, DEFAULT_SOURCE};
 pub use source::parse_catalog;
 pub use support::{supports_from_reasoning_options, Support, VariantModel};

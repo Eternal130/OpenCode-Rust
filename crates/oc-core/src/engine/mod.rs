@@ -23,7 +23,8 @@
 //!   injection (in-flight claim + ledger + `session.synthetic`);
 //! - `SessionRunner::with_snapshot` over the git snapshot store;
 //!   `SessionExecution` over the real drain; `RouteLlmClient` (or an
-//!   injected test client) + the catalog-driven model resolver.
+//!   injected test client) + the catalog-driven model resolver — resolved
+//!   PER LOCATION (config overlay first, engine-level bindings second).
 //!
 //! Server-shaped operations (prompt, interrupt, revert, list/messages,
 //! permission ask/reply, forms, event subscribe, compact) live on
@@ -116,7 +117,7 @@ use crate::location_services::{GlobalServices, LocationServiceMap};
 use crate::mcp::McpRegistry;
 use crate::permission::{Permission, ReplyInput};
 use crate::provider_catalog::facade::{FacadeContext, ModelConnection};
-use crate::provider_catalog::Catalog;
+use crate::provider_catalog::{providers_from_config, Catalog};
 use crate::session::execution::{InterruptOptions, SessionExecution};
 use crate::session::inbox::SessionInbox;
 use crate::session::projector::install_projectors;
@@ -137,6 +138,7 @@ use crate::tool::{
     self, opencode_tools, question, skill as skill_tool, webfetch, websearch, ToolServices,
 };
 use crate::tool_output::ToolOutput;
+use oc_ai::route::SharedTransport;
 
 // ===========================================================================
 // Options
@@ -292,6 +294,9 @@ pub struct Engine {
     rng: Arc<dyn RngSource>,
     llm: Arc<dyn LlmClient>,
     resolver: Arc<dyn ModelResolver>,
+    /// The shared transport every per-location provider overlay binds
+    /// onto (the engine resolver and each location overlay share one).
+    facade_transport: SharedTransport,
     projects: Arc<crate::project::SqliteProjectStore>,
     tool_output: Arc<ToolOutput>,
     /// The v2 location service map (graph lifecycle authority: adopt /
@@ -335,12 +340,14 @@ impl Engine {
         let projects = Arc::new(crate::project::SqliteProjectStore::new((*db).clone()));
         let llm: Arc<dyn LlmClient> =
             options.llm.clone().unwrap_or_else(|| Arc::new(RouteLlmClient));
+        // One shared transport: the engine-level resolver and every
+        // per-location provider overlay bind onto it.
+        let facade_transport: SharedTransport =
+            Arc::new(oc_ai::route::transport::reqwest_transport::ReqwestTransport::new());
         let resolver: Arc<dyn ModelResolver> =
             options.model_resolver.clone().unwrap_or_else(|| {
                 Arc::new(resolver::CatalogModelResolver::new(
-                    FacadeContext::new(Arc::new(
-                        oc_ai::route::transport::reqwest_transport::ReqwestTransport::new(),
-                    )),
+                    FacadeContext::new(Arc::clone(&facade_transport)),
                     Arc::clone(&options.catalog),
                     options.connections.clone(),
                     options.custom_providers.clone(),
@@ -381,6 +388,7 @@ impl Engine {
             rng: options.rng.clone(),
             llm,
             resolver,
+            facade_transport,
             projects,
             tool_output,
             locations: Arc::clone(&locations),
@@ -479,6 +487,29 @@ impl Engine {
             home: self.home.clone(),
         };
         let loaded = Loader::new(location.as_path().to_path_buf(), global_dirs).load();
+
+        // Per-location provider overlay (v2 resolves providers per
+        // location — `provider.ts` reads the layer's `Config`): custom
+        // providers + the model default from THIS location's config,
+        // consulted before the engine-level (boot/global) bindings. A
+        // daemon booted in one directory thereby serves every project's
+        // config-seeded providers.
+        let location_providers = providers_from_config(&loaded);
+        let resolver: Arc<dyn ModelResolver> =
+            if crate::provider_catalog::overlay::is_empty(&location_providers) {
+                Arc::clone(&self.resolver)
+            } else {
+                Arc::new(resolver::LocationModelResolver::new(
+                    resolver::CatalogModelResolver::new(
+                        FacadeContext::new(Arc::clone(&self.facade_transport)),
+                        Arc::clone(&self.catalog),
+                        BTreeMap::new(),
+                        location_providers.custom,
+                        location_providers.default_model,
+                    ),
+                    Arc::clone(&self.resolver),
+                ))
+            };
 
         // Agents: v2 builtins + config markdown ingestion (seeded by the
         // agent plugin during the graph build over THIS registry).
@@ -692,7 +723,7 @@ impl Engine {
             location.clone(),
             Arc::clone(&graph.agents),
             Arc::clone(&graph.tools),
-            Arc::clone(&self.resolver),
+            Arc::clone(&resolver),
             deps,
         ));
         let requests = Arc::new(SessionModelRequest::new(
@@ -706,7 +737,7 @@ impl Engine {
             Arc::clone(&self.llm),
             Arc::clone(&requests),
             Arc::clone(&graph.agents),
-            Arc::clone(&self.resolver),
+            Arc::clone(&resolver),
             Arc::clone(&self.rng),
         ));
         let title = Arc::new(SessionTitle::new(
@@ -787,6 +818,7 @@ impl Engine {
             inbox,
             execution,
             runner,
+            resolver,
         });
         let (effective, fresh_won) = self.services.insert(location.clone(), Arc::clone(&services));
         if fresh_won {
@@ -1137,6 +1169,9 @@ pub struct LocationServices {
     pub inbox: SessionInbox,
     pub execution: SessionExecution,
     pub runner: Arc<SessionRunner>,
+    /// This location's model resolver: the config overlay first, then the
+    /// engine-level bindings (per-location provider wiring).
+    pub resolver: Arc<dyn ModelResolver>,
 }
 
 // ===========================================================================

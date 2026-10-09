@@ -312,18 +312,49 @@ impl Tx<'_> {
 
 /// WAL at open (the node driver's native layer), then the tuning pragmas and
 /// boot checkpoint (`database.ts:39-47`).
+///
+/// `busy_timeout` arms FIRST: the WAL journal-mode transition needs the
+/// write lock, and without a busy handler a concurrent first-open of the
+/// same file (a second standalone server in one project) fails instantly
+/// with `database is locked` instead of waiting the 5s budget.
 fn apply_pragmas(conn: &mut Connection, memory: bool) -> Result<()> {
-    let mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
+    conn.execute_batch("PRAGMA busy_timeout = 5000")?;
+    let mode = set_wal_with_retry(conn)?;
     if !memory && mode != "wal" {
         return Err(DbError::Pragma(format!("journal_mode did not stick (got {mode})")));
     }
     conn.execute_batch("PRAGMA synchronous = NORMAL")?;
-    conn.execute_batch("PRAGMA busy_timeout = 5000")?;
     conn.execute_batch("PRAGMA cache_size = -64000")?;
     // One-shot boot checkpoint; returns (busy, log, checkpointed) — ignored.
     let _ = conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
     conn.execute_batch("PRAGMA foreign_keys = ON")?;
     Ok(())
+}
+
+/// `PRAGMA journal_mode = WAL` with a bounded retry. The mode switch can
+/// still surface `SQLITE_BUSY` when a concurrent connection holds the
+/// database mid-transition (the busy handler does not cover every step of
+/// the switch); retrying a few times resolves the overlap — the switch is
+/// idempotent once another opener set it.
+fn set_wal_with_retry(conn: &mut Connection) -> Result<String> {
+    let mut last: Option<rusqlite::Error> = None;
+    for attempt in 0u32..5 {
+        match conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get::<_, String>(0)) {
+            Ok(mode) => return Ok(mode),
+            Err(error) => {
+                let busy = matches!(error, rusqlite::Error::SqliteFailure(ref code, _)
+                        if code.code == rusqlite::ErrorCode::DatabaseBusy
+                            || code.code == rusqlite::ErrorCode::DatabaseLocked);
+                if !busy || attempt == 4 {
+                    return Err(error.into());
+                }
+                last = Some(error);
+                let backoff = 100u64.saturating_mul(u64::from(attempt + 1));
+                std::thread::sleep(std::time::Duration::from_millis(backoff));
+            }
+        }
+    }
+    Err(last.map_or_else(|| DbError::Pragma("wal retry exhausted".into()), Into::into))
 }
 
 /// Creates the database file with mode `0600` if missing and tightens the

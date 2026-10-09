@@ -539,6 +539,16 @@ pub static MIGRATIONS: &[Migration] = &[
 
 /// Applies migrations with the bootstrap classification
 /// (`migration.ts:22-52`).
+///
+/// Cross-process bootstrapping: the classification read happens BEFORE the
+/// write transaction, and the per-file bootstrap lock in
+/// [`crate::database`] is process-local — two PROCESSES opening the same
+/// fresh database (concurrent `opencode run --standalone` in one project,
+/// managed + standalone overlap) both see an empty schema. The
+/// classification is therefore re-checked INSIDE the `BEGIN IMMEDIATE`
+/// transaction (double-checked locking): the loser of the write-lock race
+/// sees the winner's committed tables and falls through to the
+/// incremental path instead of dying on `table already exists`.
 pub fn apply(conn: &mut Connection, opts: &MigrationOptions) -> Result<ApplyReport> {
     let tables = opencode_tables(conn)?;
     if tables.iter().any(|name| name == "session" || name == "session_v2") {
@@ -548,7 +558,13 @@ pub fn apply(conn: &mut Connection, opts: &MigrationOptions) -> Result<ApplyRepo
         return Err(DbError::NotEmptyNoSession);
     }
     let now = now_ms();
-    run_top_tx(conn, Begin::Immediate, |tx| {
+    let bootstrapped = run_top_tx(conn, Begin::Immediate, |tx| {
+        let raced = opencode_tables(tx.conn())?;
+        if !raced.is_empty() {
+            // Another process bootstrapped while we waited for the write
+            // lock — the incremental path sees the complete journal.
+            return Ok(false);
+        }
         tx.execute_batch(BOOTSTRAP_SQL)?;
         tx.execute_batch(MIGRATION_TABLE_SQL)?;
         for id in MIGRATION_IDS {
@@ -557,8 +573,11 @@ pub fn apply(conn: &mut Connection, opts: &MigrationOptions) -> Result<ApplyRepo
                 rusqlite::params![id, now],
             )?;
         }
-        Ok(())
+        Ok(true)
     })?;
+    if !bootstrapped {
+        return apply_only(conn, opts);
+    }
     Ok(ApplyReport { bootstrapped: true, seeded_legacy: false, applied: Vec::new() })
 }
 
@@ -1007,6 +1026,48 @@ fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
 mod tests {
     use super::*;
     use crate::database::bootstrap::MIGRATION_IDS;
+
+    /// Two raw connections racing the bootstrap on one fresh file
+    /// (`migrations::apply` directly — the per-file bootstrap lock in
+    /// `Database::open_location` is process-local and does not see the
+    /// second process; the busy-timeout pragma mirrors the armed one there).
+    /// Before the in-transaction re-check the loser of the write-lock
+    /// race died on `table account_state already exists`.
+    #[test]
+    fn concurrent_applies_bootstrap_exactly_once() {
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        let path = dir.path().join("race.db");
+        let options = MigrationOptions::default();
+
+        let open = || -> rusqlite::Connection {
+            let conn = rusqlite::Connection::open(&path).expect("open");
+            conn.execute_batch("PRAGMA busy_timeout = 5000").expect("busy timeout");
+            conn
+        };
+        let first = std::sync::Arc::new(std::sync::Mutex::new(open()));
+        let second = std::sync::Arc::new(std::sync::Mutex::new(open()));
+        let (a, b) = (std::sync::Arc::clone(&first), std::sync::Arc::clone(&second));
+        let make = |conn: &std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+                    options: MigrationOptions| {
+            let conn = std::sync::Arc::clone(conn);
+            std::thread::spawn(move || apply(&mut conn.lock().unwrap(), &options))
+        };
+        let join_a = make(&a, options.clone());
+        let join_b = make(&b, options);
+        let report_a = join_a.join().expect("thread a").expect("apply a");
+        let report_b = join_b.join().expect("thread b").expect("apply b");
+        assert!(
+            report_a.bootstrapped ^ report_b.bootstrapped,
+            "exactly one connection bootstraps: a={:?} b={:?}",
+            report_a.bootstrapped,
+            report_b.bootstrapped
+        );
+        // Both connections observe the complete journal afterwards.
+        for (name, conn) in [("a", first), ("b", second)] {
+            let ids = journal_ids(&conn.lock().unwrap()).expect("journal");
+            assert_eq!(ids.len(), MIGRATION_IDS.len(), "journal complete for {name}");
+        }
+    }
 
     #[test]
     fn migration_ids_match_bootstrap_journal_constant() {

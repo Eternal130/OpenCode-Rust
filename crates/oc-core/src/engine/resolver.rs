@@ -144,6 +144,79 @@ impl ModelResolver for CatalogModelResolver {
     }
 }
 
+/// A location-aware resolver: the location's config overlay FIRST, then
+/// the engine-level bindings (global config custom providers + the
+/// catalog) as fallback — v2 resolves providers per location
+/// (`provider.ts` reads the layer's `Config`), so a daemon booted in one
+/// directory serves every location's config-seeded providers.
+///
+/// Semantics:
+///
+/// - an explicit model ref consults the overlay (location custom
+///   providers, then the shared catalog); when the overlay cannot bind
+///   it, the base resolver answers (boot-seeded/global custom providers
+///   the location config does not redefine);
+/// - a session with no pinned model uses the location's `model` default
+///   when the location config sets one (authoritative — a broken default
+///   surfaces its error rather than silently falling back), else the
+///   engine-level default.
+pub struct LocationModelResolver {
+    overlay: CatalogModelResolver,
+    base: Arc<dyn ModelResolver>,
+}
+
+impl LocationModelResolver {
+    /// Wraps `base` with the location overlay (`providers_from_config`
+    /// over the location's loaded config).
+    #[must_use]
+    pub fn new(overlay: CatalogModelResolver, base: Arc<dyn ModelResolver>) -> Self {
+        Self { overlay, base }
+    }
+
+    /// The overlay half (tests + diagnostics).
+    #[must_use]
+    pub fn overlay(&self) -> &CatalogModelResolver {
+        &self.overlay
+    }
+}
+
+impl ModelResolver for LocationModelResolver {
+    fn resolve(&self, session: &SessionRow) -> Result<ResolvedModel, ModelError> {
+        // A session-pinned model takes the same path on both layers
+        // (resolve_selected); only the DEFAULT selection differs.
+        if let Some(reference) = session
+            .model
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<oc_schema::model::Ref>(raw).ok())
+        {
+            return self.resolve_selected(session, &reference);
+        }
+        match self.overlay.resolve(session) {
+            Ok(resolved) => Ok(resolved),
+            // The location config sets no default — the engine default
+            // (global config / boot seeding) answers.
+            Err(ModelError::NotSelected(_)) => self.base.resolve(session),
+            // The location default exists but is unresolvable — the
+            // config is authoritative; surface the error.
+            Err(other) => Err(other),
+        }
+    }
+
+    fn resolve_selected(
+        &self,
+        session: &SessionRow,
+        reference: &oc_schema::model::Ref,
+    ) -> Result<ResolvedModel, ModelError> {
+        match self.overlay.resolve_selected(session, reference) {
+            Ok(resolved) => Ok(resolved),
+            // Not a location custom provider nor a resolvable catalog
+            // entry — the base may know it (global/boot custom
+            // providers); its error surfaces when neither does.
+            Err(_) => self.base.resolve_selected(session, reference),
+        }
+    }
+}
+
 /// `SessionRunnerModel.Resolved` assembly: catalog identity + limits.
 fn resolved_from(
     model: oc_ai::LanguageModel,

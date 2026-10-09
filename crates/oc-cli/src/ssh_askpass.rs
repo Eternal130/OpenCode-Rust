@@ -20,7 +20,12 @@ async fn askpass() -> Result<i32, String> {
         .filter(|port| (0..=65535).contains(port))
         .ok_or("invalid askpass port")?;
     let token = std::env::var("OPENCODE_SSH_ASKPASS_TOKEN").ok();
-    let text = std::env::args().skip(2).collect::<Vec<_>>().join(" ");
+    // The compiled v2.0.24 binary is exec'd by OpenSSH as `[bin, prompt]`,
+    // so the prompt text is argv[1] (the shipped TS reads `argv.slice(2)`,
+    // which only carries the prompt under `bun <entry> <prompt>` test
+    // invocations — in the compiled shape it forwards an empty string).
+    // Extra argv words are joined after it, mirroring v2's space-join.
+    let text = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
     let confirm = std::env::var("SSH_ASKPASS_PROMPT").as_deref() == Ok("confirm");
 
     let io = tokio::time::timeout(Duration::from_mins(5), async {

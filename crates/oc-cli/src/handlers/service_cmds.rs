@@ -55,7 +55,7 @@ async fn restart() -> i32 {
 }
 
 async fn status() -> i32 {
-    if let Some(endpoint) = server_connection::discover_managed().await {
+    if let Some(endpoint) = server_connection::discover_managed(None).await {
         println!("{}", endpoint.url);
         0
     } else {
