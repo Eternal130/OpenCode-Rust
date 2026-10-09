@@ -1,0 +1,24 @@
+                                                                                
+  ┃                                                                             
+  ┃  Turn 8 asks about section 8 of the document                                
+  ┃                                                                             
+                                                                                
+     Answer 8: the section describes step 8 of the pipeline in detail.          
+                                                                                
+     Build · fixture/fixture · 2ms                                              
+                                                                                
+  ┃                                                                             
+  ┃  Turn 9 asks about section 9 of the document                                
+  ┃                                                                             
+                                                                                
+     Answer 9: the section describes step 9 of the pipeline in detail.          
+                                                                                
+     Build · fixture/fixture · 2ms                                              
+                                                                                
+  ┃                                                                             
+  ┃                                                                             
+  ┃                                                                             
+  ┃                                                                             
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+  /tmp/opencode/packages/tui:main            shift+tab agents  ctrl+p commands  
+                                                                                

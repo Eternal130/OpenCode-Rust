@@ -1,4 +1,4 @@
-# tui-dump — reference golden-frame exporter (wave 7.0; gate-8 P1 + findings 2/5 in wave 7.1)
+# tui-dump — reference golden-frame exporter (wave 7.0; gate-8 P1 + findings 2/5 in wave 7.1; second export wave 7.2)
 
 Drives the **reference v2.0.24 TUI's opentui renderer headless** through its
 own test fixture harness (`testRender` from `@opentui/solid`, fixtures from
@@ -43,8 +43,9 @@ bun --preload @opentui/solid/preload export.ts --verify \
 
 `goldens/tui-frames/<scenario>.w<width>.{txt,ansi}` + `manifest.json`
 (format `tui-frame-golden/2`, camelCase, byte-stable, SHA-256 pinned).
-21 scenarios × 2 widths (80/160 for the app corpus, 80/40 for the
-width-edge probes) × 2 formats = 84 blobs + 3 width sidecars. Format
+After the 7.2 second export wave: 37 scenarios / 66 variants / 132 blobs +
+3 width sidecars + 3 replay scripts (the 42 pre-existing variants are
+byte-identical to the 7.1 corpus — the wave is purely additive). Format
 details: `frame.ts` here and `tools/parity/src/tui_frame.rs`
 (parser/serializer + comparators); `crates/oc-tui` renders the same format
 from ratatui.
@@ -56,7 +57,57 @@ The manifest also pins, per gate-8:
   `width-edge`, oracle-gate8 approval table);
 - `comparisonDepthDefault` + per-scenario `comparisonDepth` — style
   comparison depth (`truecolor-canonical` for tier-a/c1/width-edge,
-  `degraded-256` for tier-b; see `tools/parity/NORMALIZATION.md` §10).
+  `degraded-256` for tier-b; see `tools/parity/NORMALIZATION.md` §10);
+- per-scenario `scrollOffset` (vscroll family only) — the pinned scroll
+  offset of the frame (gate-9 addition a);
+- `replay[]` — keypress-replay script entries (see below).
+
+## Second export wave (gate-8 finding 2 / gate-9 additions)
+
+- **Composer states** (`scenarios/composer.tsx`): the real session-route
+  `Prompt` inside the app's own provider stack; placeholder-empty,
+  typed-multiline, CJK-input, attachment-chip (`[Image 1]` file extmark)
+  and autocomplete-open (`/re` filtered slash list + selected row) at 80
+  and 40. States are driven through `PromptRef.set()` (the reference's own
+  draft-restore path) so they are deterministic; only the autocomplete
+  state uses typed keys (after `reset()` — the module-level draft stash
+  would otherwise leak the previous mount's draft).
+- **Message groups** (`scenarios/session_app.tsx`): full-app session route
+  with consecutive user/assistant turns, exploration (`Explored: 1 read`)
+  and reasoning (`Thought`) group headers, and the boundary row between
+  turns, at 80 and 40.
+- **Markdown frame (C1)** (`scenarios/markdown_frame.tsx`): the TextPart
+  `<markdown>` mount (headings/bold/inline-code/lists/fence) with a
+  ≥10-char bold run crossing the wrap boundary at BOTH widths — the
+  gate-9 styled-span instrument.
+- **Frozen spinner (C1)** (`scenarios/spinner_frozen.tsx`): the running
+  exploration `InlineToolRow` on a `ManualClock` pinned at t=0 (spinner
+  glyph ⠋, one tick, no animation loop).
+- **Toast (C1)**: one toast surface over live session content via the
+  app's `tui.toast.show` event channel.
+- **Sidebar pair**: the right-hand session pane visible (`sidebar=auto`)
+  vs hidden (`sidebar=hide`) at width 160 (the pane is `auto` only above
+  120 columns).
+- **Virtual-scroll pinned frames**: one transcript (10 turns ≫ a 24-row
+  viewport) exported at four offsets — `vscroll-top` / `vscroll-middle` /
+  `vscroll-bottom` / `vscroll-stick-bottom`; the last stays sticky while a
+  new assistant turn streams in and the viewport follows the append. The
+  manifest records `scrollOffset` per scenario.
+- **40-column session screen**: the complete session route (transcript +
+  composer + horizontal tabs bar) at width 40.
+- **Keypress-replay scripts** (`replay_scripts.ts` →
+  `goldens/tui-frames/replay/*.json`): non-frame acceptance fixtures for
+  the future Rust key-replay harness — `leader-q` exit (binding gated on
+  the empty prompt), `ctrl+p` palette open → filter → select, and
+  permission once/always/deny. Every step was replayed against the booted
+  reference app before being pinned; format
+  `{ steps: [{ keys: [...], expect: { frameIncludes, dialogs, exit, ... } }] }`
+  in kitty token encoding.
+
+Full-app scenarios boot the entire reference app headless exactly like its
+own lifecycle tests (`createTestRenderer` + `run()` against a `Bun.serve`
+fixture) — deterministic data, animations off, fixed `time.*` values for
+all duration labels.
 
 ## Width-edge probes (gate-8 finding 2)
 
@@ -85,7 +136,18 @@ against ground truth directly, not only via frames.
 | group-view-instructions | cli/tui/group-view | session-group (tier-a) |
 | diff-viewer-split | cli/tui/diff-viewer | diff-viewer (tier-b, degraded-256) |
 | width-edge-cjk, width-edge-emoji, width-edge-combining | tui-dump corpus | width-probe (width-edge) |
+| composer-placeholder-empty, -typed-multiline, -cjk-input, -attachment-chip, -autocomplete-open | component/prompt state corpus | composer (tier-a) |
+| markdown-frame | routes/session TextPart mount | markdown (tier-c1) |
+| spinner-frozen | group-view running row, ManualClock | spinner (tier-c1) |
+| message-groups | full-app session fixture | message-group (tier-a) |
+| vscroll-top, -middle, -bottom, -stick-bottom | full-app session fixture | vscroll (tier-a, scrollOffset pinned) |
+| sidebar-expanded, sidebar-collapsed | full-app session fixture | sidebar (tier-a) |
+| session-screen-40 | full-app session fixture | session-screen (tier-a) |
+| toast-over-session | full-app session fixture (tui.toast.show) | toast (tier-c1) |
+| replay/exit-leader-q, palette-ctrl-p, permission-once-always-deny | app-lifecycle / command-palette / input-scope | replay (non-frame) |
 
 Animations are disabled and spinner/time-driven content deliberately
-excluded so frames are byte-stable.
+excluded so frames are byte-stable — the two C1 exceptions being the
+markdown frame (async block fill awaited before capture) and the frozen
+spinner (ManualClock, t=0).
 

@@ -203,6 +203,10 @@ pub struct Manifest {
     #[serde(default)]
     pub superseded_reason: Option<String>,
     pub scenarios: Vec<ManifestScenario>,
+    /// Keypress-replay scripts (gate-8 non-frame acceptance track) pinned
+    /// under `replay/`; absent on corpora predating the second export wave.
+    #[serde(default)]
+    pub replay: Vec<ManifestReplay>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -218,10 +222,29 @@ pub struct ManifestScenario {
     /// Explicit comparison-depth override for this scenario.
     #[serde(default)]
     pub comparison_depth: Option<ComparisonDepth>,
+    /// Virtual-scroll scenarios: the pinned scroll offset this frame records
+    /// (`vscroll-*` family — one scenario per offset of the same fixture).
+    #[serde(default)]
+    pub scroll_offset: Option<String>,
     pub variants: Vec<ManifestVariant>,
     /// Measured-width sidecar (width-edge scenarios).
     #[serde(default)]
     pub widths: Option<ManifestSidecar>,
+}
+
+/// Manifest entry for one keypress-replay script (`replay/<id>.json`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ManifestReplay {
+    pub id: String,
+    pub description: String,
+    pub source: String,
+    /// Key-event token encoding the steps use ("kitty").
+    pub keys: String,
+    pub steps: usize,
+    pub file: String,
+    pub bytes: u64,
+    pub sha256: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -284,8 +307,9 @@ pub struct GoldenCheck {
 }
 
 /// Verify every `.txt` / `.ansi` blob (and, for `width-edge` scenarios, the
-/// `.widths.json` sidecar) referenced by the manifest: present on disk, byte
-/// length and SHA-256 match. Returns one check per blob.
+/// `.widths.json` sidecar; plus every `replay/*.json` script) referenced by
+/// the manifest: present on disk, byte length and SHA-256 match. Returns one
+/// check per blob.
 pub fn verify_goldens(dir: &Path) -> Result<Vec<GoldenCheck>> {
     let manifest = load_manifest(dir)?;
     let mut checks = Vec::new();
@@ -313,6 +337,23 @@ pub fn verify_goldens(dir: &Path) -> Result<Vec<GoldenCheck>> {
             };
             checks.push(check);
         }
+    }
+    for replay in &manifest.replay {
+        let path = dir.join(&replay.file);
+        let mut check = verify_blob(
+            dir,
+            &path,
+            &replay.id,
+            0,
+            "replay",
+            &ManifestBlob { bytes: replay.bytes, sha256: replay.sha256.clone() },
+        );
+        check.detail = if check.detail.is_empty() {
+            replay.file.clone()
+        } else {
+            format!("{}: {}", replay.file, check.detail)
+        };
+        checks.push(check);
     }
     Ok(checks)
 }
@@ -354,6 +395,63 @@ pub fn load_widths_sidecar(dir: &Path, id: &str) -> Result<WidthsSidecar> {
     let bytes = std::fs::read(dir.join(format!("{id}.widths.json")))
         .with_context(|| format!("reading widths sidecar for {id} in {}", dir.display()))?;
     serde_json::from_slice(&bytes).with_context(|| format!("parsing widths sidecar for {id}"))
+}
+
+/// One step of a keypress-replay script: the key tokens to replay plus the
+/// state the reference asserts afterwards.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplayStep {
+    pub keys: Vec<String>,
+    pub expect: ReplayExpect,
+}
+
+/// The asserted post-state of a replay step. Frame checks use the stable
+/// labels the reference tests match on; `exit` means the `app.exit` binding
+/// ran (renderer torn down).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ReplayExpect {
+    #[serde(default)]
+    pub frame_includes: Option<Vec<String>>,
+    #[serde(default)]
+    pub frame_excludes: Option<Vec<String>>,
+    #[serde(default)]
+    pub focus: Option<String>,
+    #[serde(default)]
+    pub route: Option<ReplayRoute>,
+    #[serde(default)]
+    pub dialogs: Option<usize>,
+    #[serde(default)]
+    pub exit: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplayRoute {
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(default, rename = "sessionID")]
+    pub session_id: Option<String>,
+}
+
+/// The parsed content of a `replay/<id>.json` script.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplayScript {
+    pub id: String,
+    pub description: String,
+    pub source: String,
+    /// Key-event token encoding ("kitty").
+    pub keys: String,
+    pub steps: Vec<ReplayStep>,
+}
+
+/// Load and parse one keypress-replay script by id.
+pub fn load_replay_script(dir: &Path, id: &str) -> Result<ReplayScript> {
+    let bytes = std::fs::read(dir.join(format!("replay/{id}.json")))
+        .with_context(|| format!("reading replay script {id} in {}", dir.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("parsing replay script {id}"))
 }
 
 /// Load one golden text grid by `(scenario id, width)`.
@@ -1329,7 +1427,8 @@ mod tests {
     fn golden_corpus_on_disk_verifies_against_manifest() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("goldens/tui-frames");
         let checks = verify_goldens(&dir).expect("verify goldens");
-        // 21 scenarios × 2 widths × 2 blobs + 3 width sidecars.
+        // 37 scenarios × 2 widths × 2 blobs + 3 width sidecars + 3 replay
+        // scripts (second export wave included).
         assert!(
             checks.len() >= 40,
             "expected at least 15 scenarios × 2 widths × 2 blobs, got {}",
@@ -1337,6 +1436,104 @@ mod tests {
         );
         let failures: Vec<&GoldenCheck> = checks.iter().filter(|check| !check.ok).collect();
         assert!(failures.is_empty(), "golden verification failures: {failures:?}");
+    }
+
+    /// Second export wave (gate-8 finding 2 / gate-9 additions): the corpus
+    /// carries the composer states, message groups, markdown/spinner/toast
+    /// C1 frames, sidebar pair, the four pinned virtual-scroll offsets and
+    /// the 40-column session screen — every scenario class annotated, the
+    /// `vscroll-*` family pinning one scroll offset each, and the replay
+    /// scripts parsing with their asserted expectations intact.
+    #[test]
+    fn second_export_wave_classes_and_replay_scripts_are_pinned() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("goldens/tui-frames");
+        let manifest = load_manifest(&dir).expect("manifest");
+        let classes: Vec<(String, String)> =
+            manifest.scenarios.iter().map(|s| (s.component_class.clone(), s.id.clone())).collect();
+        for expected in [
+            "composer",
+            "message-group",
+            "markdown",
+            "spinner",
+            "toast",
+            "sidebar",
+            "vscroll",
+            "session-screen",
+        ] {
+            assert!(
+                classes.iter().any(|(class, _)| class == expected),
+                "scenario class {expected} missing from the corpus"
+            );
+        }
+        // Composer states: all five, both widths.
+        let composer: Vec<_> =
+            manifest.scenarios.iter().filter(|s| s.component_class == "composer").collect();
+        assert_eq!(composer.len(), 5, "five composer states");
+        for scenario in &composer {
+            assert_eq!(scenario.variants.len(), 2, "{} pinned at 80 + 40", scenario.id);
+        }
+        // Virtual scroll: four scenarios, one offset each, distinct offsets.
+        let vscroll: Vec<_> =
+            manifest.scenarios.iter().filter(|s| s.component_class == "vscroll").collect();
+        assert_eq!(vscroll.len(), 4, "four pinned scroll offsets");
+        let mut offsets: Vec<&str> =
+            vscroll.iter().filter_map(|s| s.scroll_offset.as_deref()).collect();
+        offsets.sort_unstable();
+        assert_eq!(offsets, ["bottom", "middle", "stick-to-bottom", "top"]);
+        // C1 wave members (markdown / spinner / toast) stay tier-c1.
+        for id in ["markdown-frame", "spinner-frozen", "toast-over-session"] {
+            let scenario =
+                manifest.scenarios.iter().find(|s| s.id == id).unwrap_or_else(|| panic!("{id}"));
+            assert_eq!(scenario.class, Some(ScenarioClass::TierC1), "{id} is tier-c1");
+        }
+        // Sidebar pair + 40-column session screen present.
+        assert!(manifest.scenarios.iter().any(|s| s.id == "sidebar-expanded"));
+        assert!(manifest.scenarios.iter().any(|s| s.id == "sidebar-collapsed"));
+        let narrow = manifest
+            .scenarios
+            .iter()
+            .find(|s| s.id == "session-screen-40")
+            .expect("session-screen-40");
+        assert_eq!(narrow.variants.len(), 1);
+        assert_eq!(narrow.variants[0].width, 40);
+
+        // Replay scripts: pinned, parsed, and self-consistent.
+        assert_eq!(manifest.replay.len(), 3, "three replay flows");
+        for entry in &manifest.replay {
+            let script = load_replay_script(&dir, &entry.id).expect("replay script parses");
+            assert_eq!(script.id, entry.id);
+            assert_eq!(script.keys, "kitty");
+            assert_eq!(script.steps.len(), entry.steps, "{} step count matches manifest", entry.id);
+            assert!(script.steps.len() >= 3, "{} has steps", entry.id);
+            for (index, step) in script.steps.iter().enumerate() {
+                if let Some(exit) = step.expect.exit {
+                    // Only the terminal step of a flow may assert a positive exit.
+                    assert_eq!(
+                        exit,
+                        index + 1 == script.steps.len(),
+                        "{} step {index} exit flag must only be true on the last step",
+                        entry.id
+                    );
+                }
+                if let Some(route) = &step.expect.route {
+                    assert!(matches!(route.kind.as_str(), "home" | "session"));
+                }
+            }
+            // Every step carries at least one asserted expectation.
+            assert!(script.steps.iter().all(|step| {
+                step.expect.frame_includes.is_some()
+                    || step.expect.frame_excludes.is_some()
+                    || step.expect.exit.is_some()
+                    || step.expect.dialogs.is_some()
+                    || step.expect.focus.is_some()
+                    || step.expect.route.is_some()
+            }));
+        }
+        // The exit flow ends with the leader-q termination step.
+        let exit = load_replay_script(&dir, "exit-leader-q").expect("exit script");
+        let last = exit.steps.last().expect("last step");
+        assert_eq!(last.keys, vec!["ctrl+x", "q"]);
+        assert_eq!(last.expect.exit, Some(true));
     }
 
     /// Gate-8 P1: the corpus manifest pins the v2-dark default theme, every

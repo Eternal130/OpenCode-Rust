@@ -382,3 +382,14 @@ as `theme: { id: "opencode", mode: "dark" }` (gate-8 P1 — pre-P1
 mixed-style corpora must be marked `superseded` and are diffing reference
 only).
 
+Second export wave additions to the same `tui-frame-golden/2` schema (both
+optional, so legacy corpora still parse): `scrollOffset` on a scenario —
+the pinned scroll offset of the `vscroll-*` family (one scenario per
+offset: top / middle / bottom / stick-bottom over one transcript ≫
+viewport; windowing changes what is drawn, so the golden must encode the
+offset) — and a top-level `replay` array of keypress-replay scripts
+(`replay/<id>.json`): non-frame acceptance fixtures for the future Rust
+key-replay harness, `{ steps: [{ keys: [...], expect: {...}] } }` in
+kitty token encoding, whose expectations mirror the reference tests'
+assertions (frame labels, dialog depth, route, exit).
+

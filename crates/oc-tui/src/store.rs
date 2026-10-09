@@ -507,7 +507,10 @@ impl Store {
                 // Reconcile AFTER the channel drained: refresh session
                 // titles in place (tab order preserved), keep unread
                 // marks the offline events re-established, and add the
-                // ones the resync reports.
+                // ones the resync reports. `unread` is already filtered
+                // by the data layer (`time.idle > time.viewed`, known
+                // timestamps only — no false unread on reconnect; see
+                // `crate::data::resync_unread`).
                 self.tabs.update(|state| {
                     for session in &sessions {
                         state.tabs = model::open_session_tab(
@@ -743,6 +746,8 @@ mod tests {
                 sessions: vec![SessionSnapshot {
                     id: "a".to_owned(),
                     title: Some("Fresh title".to_owned()),
+                    time_idle: None,
+                    viewed: None,
                 }],
                 unread: vec!["a".to_owned()],
             },

@@ -11,18 +11,28 @@
 //! * `tool-wrap-rows` — text grid **and** canonical ANSI byte-exact at
 //!   the manifest depth (v2-dark tokens painted through
 //!   [`crate::theme`]).
+//!
+//! 7.2 wave 0 adds the styled-segment instruments: the tool-wrap
+//! migration proof (styled leaves reproduce the plain-leaf frames
+//! byte-for-byte) and markdown-style cross-boundary span frames at
+//! 80/40 with a golden-style ANSI roundtrip.
 
 #![cfg(test)]
 // Frame dimensions come from the manifest (bounded by terminal sizes),
-// so the usize→u16 casts cannot truncate real inputs.
+// so the usize→u16/f32 casts cannot truncate real inputs.
 #![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_precision_loss)]
 
 use parity::tui_frame as pf;
+use ratatui::style::{Modifier, Style};
 
 use crate::components::session_tabs::{paint_bar, paint_rail, TabStatus, TabView, ADD_TAB_WIDTH};
 use crate::components::tool_rows::render_tool_wrap;
+use crate::layout::{BoxSpec, LayoutTree, StyledSpan};
+use crate::render::{paint_placed, serialize_canonical};
 use crate::store::{SessionTab, Unread};
 use crate::theme::ThemeState;
+use taffy::AvailableSpace;
 
 fn goldens() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/parity/goldens/tui-frames")
@@ -220,4 +230,157 @@ fn bar_plus_affordance_alignment() {
     // Tabs occupy [0, 64); the plus glyph sits at 65 inside " + ".
     assert_eq!(row.chars().nth(65), Some('+'), "row: {row:?}");
     assert_eq!(ADD_TAB_WIDTH, 3);
+}
+
+// -- 7.2 wave 0: styled-segment leaf instruments --------------------------------
+
+/// The frozen plain-leaf construction of `tool-wrap-rows` (what
+/// `layout_tool_wrap` looked like before the styled-leaf migration) —
+/// kept here as the reference side of the migration proof.
+fn layout_tool_wrap_plain_leaves(
+    fixture: &[crate::components::tool_rows::ToolRowFixture],
+    theme: &crate::theme::ThemeStyles,
+) -> Vec<crate::layout::Placed> {
+    use crate::components::tool_rows::{row_style, BOX_WIDTH, ICON_WIDTH};
+    let mut tree = LayoutTree::new();
+    let wrappers: Vec<_> = fixture
+        .iter()
+        .map(|row| {
+            let style = row_style(theme, row.failed);
+            let icon = tree.text_sized(
+                &row.icon.to_string(),
+                style,
+                &BoxSpec::default().width(ICON_WIDTH).shrink(0.0),
+            );
+            let label = tree.text_sized(
+                &row.label,
+                style,
+                &BoxSpec::default().grow(1.0).shrink(1.0).min_width(0.0),
+            );
+            let content = tree.box_node(&BoxSpec::row(), &[icon, label]);
+            tree.box_node(&BoxSpec::default().padding_left(3.0), &[content])
+        })
+        .collect();
+    let column = tree.box_node(&BoxSpec::column(), &wrappers);
+    let root = tree.box_node(&BoxSpec::column().width(BOX_WIDTH), &[column]);
+    tree.set_root(root);
+    tree.compute((BOX_WIDTH, AvailableSpace::MaxContent)).placed
+}
+
+/// Migration proof: the styled-leaf path (production since wave 0)
+/// reproduces the plain-leaf frames **byte-for-byte** — text grid and
+/// canonical ANSI — so the new leaf type subsumes the old one at the
+/// gated depths.
+#[test]
+fn tool_wrap_rows_styled_path_is_byte_identical_to_plain_leaves() {
+    let theme = ThemeState::v2_dark();
+    let fixture = crate::components::tool_rows::tool_wrap_fixture();
+    let plain_placed = layout_tool_wrap_plain_leaves(&fixture, &theme.styles());
+    let styled_placed = crate::components::tool_rows::layout_tool_wrap(&fixture, &theme.styles());
+    for (width, height) in [(80u16, 12u16), (160, 12)] {
+        let plain = paint_placed(
+            &plain_placed,
+            (width, height),
+            crate::components::tool_rows::fill_style(&theme.styles()),
+        );
+        let styled = paint_placed(
+            &styled_placed,
+            (width, height),
+            crate::components::tool_rows::fill_style(&theme.styles()),
+        );
+        assert_eq!(plain.text_grid(), styled.text_grid(), "{width}: text grid");
+        assert_eq!(
+            serialize_canonical(&plain),
+            serialize_canonical(&styled),
+            "{width}: canonical ANSI bytes"
+        );
+    }
+}
+
+/// Markdown-style spans crossing wrap points at 80 and 40 columns,
+/// hand-derived: plain prefix, one bold span covering the wrap
+/// boundary, plain tail. The bold attribute must follow the span
+/// across the line break (per-cell styles from segments).
+fn markdown_spans() -> Vec<StyledSpan> {
+    let base = Style::new().fg(ratatui::style::Color::Indexed(252));
+    let bold = base.add_modifier(Modifier::BOLD);
+    vec![
+        StyledSpan {
+            text: "alpha bravo charlie delta echo foxtrot golf hotel india ".into(),
+            style: base,
+        },
+        StyledSpan { text: "juliet kilo lima mike november oscar papa".into(), style: bold },
+        StyledSpan { text: " quebec".into(), style: base },
+    ]
+}
+
+#[test]
+fn markdown_bold_spans_wrap_boundaries_at_80_and_40() {
+    let spans = markdown_spans();
+    for (width, expected) in [
+        (
+            80usize,
+            vec![
+                "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike",
+                "november oscar papa quebec",
+            ],
+        ),
+        (
+            40,
+            vec![
+                "alpha bravo charlie delta echo foxtrot",
+                "golf hotel india juliet kilo lima mike",
+                "november oscar papa quebec",
+            ],
+        ),
+    ] {
+        let mut tree = LayoutTree::new();
+        let leaf = tree.text_styled_flex(spans.clone());
+        let root = tree.box_node(&BoxSpec::column().width(width as f32), &[leaf]);
+        tree.set_root(root);
+        let placed = tree.compute((width as f32, AvailableSpace::MaxContent)).placed.remove(0);
+        assert_eq!(placed.line_texts(), expected, "hand-derived wrap at {width}");
+
+        let frame = paint_placed(std::slice::from_ref(&placed), (width as u16, 6), Style::new());
+        // The bold bits land exactly on the bold span's fragments
+        // (bold starts 56 cols into the text at 80; at 40 the boundary
+        // splits the span on line 2 and the fragment continues line 3).
+        let bold = |row: usize, from: usize, to: usize| {
+            for col in from..to {
+                assert!(
+                    frame.cell(row, col).attrs & 1 != 0,
+                    "{width}: cell ({row},{col}) must be bold — row {:?}",
+                    frame.text_grid()[row]
+                );
+            }
+            for col in 0..from {
+                assert_eq!(
+                    frame.cell(row, col).attrs & 1,
+                    0,
+                    "{width}: cell ({row},{col}) must not be bold"
+                );
+            }
+        };
+        if width == 80 {
+            bold(0, 56, 77); // "juliet kilo lima mike" — mid-span wrap
+            bold(1, 0, 19); // "november oscar papa" — span tail
+        } else {
+            bold(1, 17, 38); // "juliet kilo lima mike" (span opens mid-line)
+            bold(2, 0, 19); // "november oscar papa"
+        }
+        // Golden-style roundtrip: the canonical ANSI re-parses to the
+        // same per-cell styles and re-serializes byte-stably.
+        let serialized = serialize_canonical(&frame);
+        let parsed = pf::parse_ansi(&serialized, Some((6, width))).expect("parses");
+        assert_eq!(pf::render_ansi(&parsed), serialized, "{width}: roundtrip stability");
+        for (row, line) in frame.text_grid().iter().enumerate() {
+            for (col, _) in line.char_indices() {
+                assert_eq!(
+                    parsed.cell(row, col).style.attrs,
+                    frame.cell(row, col).attrs,
+                    "{width}: ({row},{col}) attrs survive the roundtrip"
+                );
+            }
+        }
+    }
 }

@@ -1,0 +1,30 @@
+   Parser rewrite                                                               
+                                                                                
+   The parser now handles bold-spanning-the-wrap-boundary-abcdefghij as one     
+   styled run.                                                                  
+                                                                                
+   Second paragraph opens with filler words and then bold-run-deliberately-     
+   longer-than-the-wrap-boundary-at-eighty before the tail.                     
+                                                                                
+   Ordinary paragraph with inline.code and emphasis mixed into prose.           
+                                                                                
+   - item one with `inline.code`                                                
+   - item two follows the first                                                 
+   - item three closes the list                                                 
+                                                                                
+   1. ordered entry                                                             
+   2. second ordered entry                                                      
+                                                                                
+   const x = parse(input)                                                       
+   return x.map(transform)                                                      
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                

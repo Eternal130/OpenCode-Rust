@@ -1,0 +1,20 @@
+                                                                                
+                                                                                
+┃                                                                               
+┃  Refactor the parser module                                                   
+┃  keep the public API stable                                                   
+┃  add regression tests                                                         
+┃                                                                               
+┃                                                                               
+╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+/tmp/opencode/packages/tui:main                                agents   commands
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                

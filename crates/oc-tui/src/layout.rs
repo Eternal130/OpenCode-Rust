@@ -2,8 +2,8 @@
 //! with the wave-7.0 substrate gotchas encoded as **layer defaults**
 //! (never per-node patches — gate-8 layout instruction):
 //!
-//! 1. **Padding on the content node**: `taffy` 0.9 applies padding to the
-//!    child *content* node's location; the collector aggregates through
+//! 1. **Padding on the content node**: `taffy` 0.9 applies padding to
+//!    the child *content* node's location; the collector aggregates through
 //!    it, so absolute positions come out of one recursive location sum.
 //! 2. **`MinContent` = longest run between wrap opportunities**: text
 //!    leaves are measured through [`crate::wrap`], whose single seam
@@ -17,6 +17,14 @@
 //!    wrap width comes from the resolved layout, so the collector
 //!    re-wraps each leaf at `layout.size.width`.
 //!
+//! Wave 0 (gate-9): leaves are either **plain** (`(text, style)`) or
+//! **styled-segment** (`Vec<(text, style)>` spans, [`TextLeaf::Styled`])
+//! — both flatten through [`crate::wrap::flatten_spans`] into ONE
+//! (cluster, style) stream, so measurement, wrapping and paint treat a
+//! styled leaf exactly like a plain one: span boundaries are not break
+//! opportunities, wrap boundaries may land mid-span, and placed lines
+//! carry per-run styles re-assembled at paint time.
+//!
 //! Layout coordinates are bounded by terminal dimensions (far below
 //! 2^23), so the pedantic float↔int cast lints do not carry real risk.
 
@@ -28,29 +36,91 @@ use ratatui::style::Style as PaintStyle;
 use taffy::prelude::*;
 use taffy::{AvailableSpace, Dimension, LengthPercentage, NodeId, Rect, Size, Style, TaffyTree};
 
-use crate::wrap::{display_width, max_content_width, min_content_width, wrap_label};
+use crate::wrap::{
+    atoms_max_content_width, atoms_min_content_width, flatten, flatten_spans, styled_runs,
+    wrap_atoms, Atom,
+};
 
-/// Node context for measured text leaves.
+/// The styled-span type text leaves are built from (defined in
+/// [`crate::wrap`], re-exported as the layout-facing name).
+pub use crate::wrap::StyledSpan;
+pub use crate::wrap::StyledSpan as TextSpan;
+
+/// Node context for measured text leaves: a plain run, or a
+/// styled-segment leaf whose spans flow through layout/wrap/paint as
+/// ONE text stream.
 #[derive(Debug, Clone)]
-pub struct TextLeaf {
-    pub text: String,
-    pub style: PaintStyle,
-    /// Component-set tag so callers can locate this run's placement
-    /// after layout (e.g. tab titles for overlay separators).
-    pub tag: Option<String>,
+pub enum TextLeaf {
+    /// One text run under one style.
+    Plain { text: String, style: PaintStyle, tag: Option<String> },
+    /// `Vec<(text, style)>` spans — the critical-path leaf type
+    /// (markdown bold/inline-code, per-cell tab colors, diff colors).
+    Styled { spans: Vec<StyledSpan>, tag: Option<String> },
+}
+
+impl TextLeaf {
+    /// The leaf's flattened (cluster, style) stream — the ONE seam
+    /// shared by measurement, wrapping and paint.
+    fn atoms(&self) -> Vec<Atom> {
+        match self {
+            Self::Plain { text, style, .. } => flatten(text, *style),
+            Self::Styled { spans, .. } => flatten_spans(spans),
+        }
+    }
+
+    fn tag(&self) -> Option<&str> {
+        match self {
+            Self::Plain { tag, .. } | Self::Styled { tag, .. } => tag.as_deref(),
+        }
+    }
+}
+
+/// One placed text line after layout: runs of contiguous style,
+/// re-assembled from the flattened stream ([`crate::wrap::styled_runs`]).
+/// Plain leaves yield a single run per line.
+#[derive(Debug, Clone)]
+pub struct PlacedLine {
+    pub runs: Vec<StyledSpan>,
+}
+
+impl PlacedLine {
+    #[must_use]
+    pub fn plain(text: impl Into<String>, style: PaintStyle) -> Self {
+        Self { runs: vec![StyledSpan { text: text.into(), style }] }
+    }
+
+    /// The line's concatenated text (glyph content, styles aside).
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.runs.iter().map(|run| run.text.as_str()).collect()
+    }
+
+    /// The line's display width.
+    #[must_use]
+    pub fn display_width(&self) -> usize {
+        self.runs.iter().map(|run| crate::wrap::display_width(&run.text)).sum()
+    }
 }
 
 /// One placed text run after layout: absolute cell position, the wrap
-/// width actually resolved, the re-wrapped lines, and its style.
+/// width actually resolved, the re-wrapped lines (per-run styles), and
+/// the leaf's component tag.
 #[derive(Debug, Clone)]
 pub struct Placed {
     pub x: usize,
     pub y: usize,
     pub width: usize,
-    pub lines: Vec<String>,
-    pub style: PaintStyle,
+    pub lines: Vec<PlacedLine>,
     /// The leaf's component tag, if it carried one.
     pub tag: Option<String>,
+}
+
+impl Placed {
+    /// The placed lines as plain strings (glyph content).
+    #[must_use]
+    pub fn line_texts(&self) -> Vec<String> {
+        self.lines.iter().map(PlacedLine::text).collect()
+    }
 }
 
 /// A computed layout: paint list plus the content height (for callers
@@ -250,7 +320,7 @@ impl LayoutTree {
         self.taffy
             .new_leaf_with_context(
                 BoxSpec::default().taffy_style(),
-                TextLeaf { text: text.to_owned(), style, tag: Some(tag.into()) },
+                TextLeaf::Plain { text: text.to_owned(), style, tag: Some(tag.into()) },
             )
             .expect("text leaf")
     }
@@ -261,7 +331,25 @@ impl LayoutTree {
         self.taffy
             .new_leaf_with_context(
                 spec.taffy_style(),
-                TextLeaf { text: text.to_owned(), style, tag: None },
+                TextLeaf::Plain { text: text.to_owned(), style, tag: None },
+            )
+            .expect("text leaf")
+    }
+
+    /// A styled-segment text leaf (`Vec<(text, style)>` spans flowing as
+    /// ONE text stream — see [`TextLeaf::Styled`]) under a box spec.
+    pub fn text_styled(&mut self, spans: Vec<StyledSpan>, spec: &BoxSpec) -> NodeId {
+        self.taffy
+            .new_leaf_with_context(spec.taffy_style(), TextLeaf::Styled { spans, tag: None })
+            .expect("text leaf")
+    }
+
+    /// A styled-segment text leaf carrying a placement tag.
+    pub fn text_styled_tagged(&mut self, spans: Vec<StyledSpan>, tag: impl Into<String>) -> NodeId {
+        self.taffy
+            .new_leaf_with_context(
+                BoxSpec::default().taffy_style(),
+                TextLeaf::Styled { spans, tag: Some(tag.into()) },
             )
             .expect("text leaf")
     }
@@ -269,6 +357,11 @@ impl LayoutTree {
     /// A text leaf that fills the available width and wraps (grow 1).
     pub fn text_flex(&mut self, text: &str, style: PaintStyle) -> NodeId {
         self.text_sized(text, style, &BoxSpec::default().grow(1.0).shrink(1.0).min_width(0.0))
+    }
+
+    /// A styled-segment leaf that fills the available width and wraps.
+    pub fn text_styled_flex(&mut self, spans: Vec<StyledSpan>) -> NodeId {
+        self.text_styled(spans, &BoxSpec::default().grow(1.0).shrink(1.0).min_width(0.0))
     }
 
     /// A box with children.
@@ -345,20 +438,24 @@ impl LayoutTree {
     /// Gotcha 1: absolute positions accumulate through every location —
     /// taffy 0.9 factors padding into the child content node's location,
     /// and the recursive sum carries it through. Gotcha 4: leaves
-    /// re-wrap at the resolved width.
+    /// re-wrap at the resolved width; styled lines re-assemble per
+    /// contiguous style ([`styled_runs`]).
     fn collect(&self, node: NodeId, parent_x: f32, parent_y: f32, placed: &mut Vec<Placed>) {
         let layout = *self.taffy.layout(node).expect("node layout");
         let x = parent_x + layout.location.x;
         let y = parent_y + layout.location.y;
         if let Some(leaf) = self.taffy.get_node_context(node) {
             let width = layout.size.width.floor().max(0.0) as usize;
+            let lines = wrap_atoms(&leaf.atoms(), width)
+                .into_iter()
+                .map(|line| PlacedLine { runs: styled_runs(&line) })
+                .collect();
             placed.push(Placed {
                 x: x.round() as usize,
                 y: y.round() as usize,
                 width,
-                lines: wrap_label(&leaf.text, width),
-                style: leaf.style,
-                tag: leaf.tag.clone(),
+                lines,
+                tag: leaf.tag().map(str::to_owned),
             });
         }
         let children = self.taffy.children(node).expect("children");
@@ -368,7 +465,8 @@ impl LayoutTree {
     }
 }
 
-/// Text measurement contract for leaves: definite constraints wrap to the
+/// Text measurement contract for leaves (plain and styled alike — the
+/// flattened stream is style-agnostic): definite constraints wrap to the
 /// wrapped size; `MinContent` reports the longest run between break
 /// opportunities (the CSS automatic minimum — gotcha 2); `MaxContent`
 /// reports the single line.
@@ -382,15 +480,22 @@ fn measure_text_leaf(
         AvailableSpace::Definite(width) => Some(width),
         _ => None,
     });
+    let atoms = leaf.atoms();
     let (width, height) = match definite {
         Some(width) => {
             let width = width.floor().max(0.0) as usize;
-            let lines = wrap_label(&leaf.text, width);
-            let longest = lines.iter().map(|line| display_width(line)).max().unwrap_or(0);
+            let lines = wrap_atoms(&atoms, width);
+            let longest = lines
+                .iter()
+                .map(|line| line.iter().map(|atom| atom.width).sum())
+                .max()
+                .unwrap_or(0);
             (longest, lines.len())
         }
-        None if available.width == AvailableSpace::MinContent => (min_content_width(&leaf.text), 1),
-        None => (max_content_width(&leaf.text), 1),
+        None if available.width == AvailableSpace::MinContent => {
+            (atoms_min_content_width(&atoms), 1)
+        }
+        None => (atoms_max_content_width(&atoms), 1),
     };
     Size { width: width as f32, height: height as f32 }
 }
@@ -398,8 +503,14 @@ fn measure_text_leaf(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wrap::min_content_width;
 
     const STYLE: PaintStyle = PaintStyle::new();
+    const BOLD: PaintStyle = PaintStyle::new().add_modifier(ratatui::style::Modifier::BOLD);
+
+    fn span(text: &str, style: PaintStyle) -> StyledSpan {
+        StyledSpan { text: text.to_owned(), style }
+    }
 
     #[test]
     fn column_children_stretch_by_default() {
@@ -411,7 +522,7 @@ mod tests {
         let computed = tree.compute((20.0, AvailableSpace::MaxContent));
         assert_eq!(computed.placed.len(), 1);
         assert_eq!(computed.placed[0].x, 0);
-        assert_eq!(computed.placed[0].lines, vec!["hi".to_owned()]);
+        assert_eq!(computed.placed[0].line_texts(), vec!["hi".to_owned()]);
         // The inner box stretched to 20 even without an explicit width.
         assert!(computed.placed[0].width >= 2);
     }
@@ -438,7 +549,7 @@ mod tests {
         let root = tree.box_node(&BoxSpec::column().width(72.0), &[wrapper]);
         tree.set_root(root);
         let computed = tree.compute((72.0, AvailableSpace::MaxContent));
-        let label = computed.placed.iter().find(|p| p.lines[0].starts_with("Read")).unwrap();
+        let label = computed.placed.iter().find(|p| p.line_texts()[0].starts_with("Read")).unwrap();
         assert_eq!(label.x, 5, "3 padding + 2 icon");
         assert_eq!(label.width, 67);
         assert_eq!(label.lines.len(), 1, "this label fits at 67");
@@ -457,7 +568,7 @@ mod tests {
         let computed = tree.compute((10.0, AvailableSpace::MaxContent));
         let placed = &computed.placed[0];
         assert_eq!(placed.width, 10);
-        assert_eq!(placed.lines.len(), 4, "wraps within 10 cells: {:?}", placed.lines);
+        assert_eq!(placed.lines.len(), 4, "wraps within 10 cells: {:?}", placed.line_texts());
         assert_eq!(min_content_width("global package index search"), 7);
     }
 
@@ -475,10 +586,39 @@ mod tests {
         let placed = &computed.placed[0];
         assert_eq!(placed.width, 6);
         assert_eq!(
-            placed.lines,
+            placed.line_texts(),
             vec!["データ".to_owned(), "ベース".to_owned(), "の設定".to_owned()]
         );
         assert_eq!(min_content_width(text), 2);
+    }
+
+    /// Gate-9 finding 5: the layout-level **`MinContent` measurement
+    /// arm** — a flex item WITHOUT the `min_width(0.0)` bypass gets
+    /// taffy's automatic minimum, which the leaf measures intrinsically
+    /// (the seam's longest run: one wide CJK grapheme = 2 cells). With
+    /// only 1 column left after the fixed icon, the solver floors the
+    /// label at its intrinsic minimum (2), proving the arm fired — a
+    /// dead arm would resolve 1.
+    #[test]
+    fn auto_min_width_measures_intrinsic_min_content_for_cjk() {
+        let text = "データベースの設定";
+        let mut tree = LayoutTree::new();
+        let icon = tree.text_sized("→", STYLE, &BoxSpec::default().width(2.0).shrink(0.0));
+        // No min_width(0.0) bypass: the automatic minimum applies.
+        let label = tree.text_sized(text, STYLE, &BoxSpec::default().grow(1.0).shrink(1.0));
+        let row = tree.box_node(&BoxSpec::row().width(3.0), &[icon, label]);
+        tree.set_root(row);
+        let computed = tree.compute((3.0, AvailableSpace::MaxContent));
+        let label = &computed.placed[1];
+        assert_eq!(
+            label.width, 2,
+            "automatic minimum = intrinsic MinContent (one wide grapheme), not the 1 column left"
+        );
+        assert_eq!(
+            label.line_texts(),
+            vec!["デ", "ー", "タ", "ベ", "ー", "ス", "の", "設", "定"],
+            "wraps at grapheme granularity at the intrinsic minimum"
+        );
     }
 
     #[test]
@@ -491,5 +631,72 @@ mod tests {
         let computed = tree.compute((40.0, AvailableSpace::MaxContent));
         let ys: Vec<usize> = computed.placed.iter().map(|p| p.y).collect();
         assert_eq!(ys, vec![1, 3], "padding-top 1 then gap 1 between rows");
+    }
+
+    // -- styled-segment leaves ------------------------------------------------
+
+    /// A styled leaf lays out, measures and wraps identically to the
+    /// plain leaf of the same concatenated text — the styled path
+    /// subsumes the plain one.
+    #[test]
+    fn styled_leaf_layouts_like_the_equivalent_plain_leaf() {
+        let text = "設定 configの値 wraps through the seam";
+        let styled = {
+            let mut tree = LayoutTree::new();
+            let leaf = tree.text_styled_flex(vec![span(text, BOLD)]);
+            let root = tree.box_node(&BoxSpec::column().width(10.0), &[leaf]);
+            tree.set_root(root);
+            tree.compute((10.0, AvailableSpace::MaxContent)).placed.remove(0)
+        };
+        let plain = {
+            let mut tree = LayoutTree::new();
+            let leaf = tree.text_flex(text, STYLE);
+            let root = tree.box_node(&BoxSpec::column().width(10.0), &[leaf]);
+            tree.set_root(root);
+            tree.compute((10.0, AvailableSpace::MaxContent)).placed.remove(0)
+        };
+        assert_eq!(styled.width, plain.width);
+        assert_eq!(styled.line_texts(), plain.line_texts());
+        assert_eq!(styled.lines.len(), plain.lines.len());
+    }
+
+    /// A wrap boundary landing mid-span keeps the span's style on BOTH
+    /// fragments, and runs re-assemble per contiguous style at collect
+    /// time (see also the frame-level tests in `golden_tests`).
+    #[test]
+    fn styled_leaf_wraps_mid_span_with_runs_per_contiguous_style() {
+        let mut tree = LayoutTree::new();
+        let leaf = tree.text_styled_flex(vec![
+            span("plain ", STYLE),
+            span("**bold run**", BOLD),
+            span(" tail", STYLE),
+        ]);
+        let root = tree.box_node(&BoxSpec::column().width(12.0), &[leaf]);
+        tree.set_root(root);
+        let computed = tree.compute((12.0, AvailableSpace::MaxContent));
+        let placed = &computed.placed[0];
+        assert_eq!(placed.line_texts(), vec!["plain **bold", "run** tail"]);
+        assert_eq!(placed.lines[0].runs, vec![span("plain ", STYLE), span("**bold", BOLD)]);
+        assert_eq!(placed.lines[1].runs, vec![span("run**", BOLD), span(" tail", STYLE)]);
+        assert_eq!(placed.lines[0].display_width(), 12);
+    }
+
+    /// `MinContent` / `MaxContent` measurement on styled leaves through the
+    /// solver: the styled leaf floors at the same intrinsic minimum as
+    /// the plain leaf of the same text (finding 5's arm, styled side).
+    #[test]
+    fn styled_leaf_measures_min_content_through_the_solver() {
+        let spans = vec![span("設定 ", STYLE), span("config", BOLD), span("の値", STYLE)];
+        let atoms = flatten_spans(&spans);
+        assert_eq!(atoms_min_content_width(&atoms), 8, "the `configの` run");
+        assert_eq!(atoms_max_content_width(&atoms), crate::wrap::display_width("設定 configの値"));
+        // Through the solver: an auto-width box around the styled leaf
+        // resolves the box to the single-line (max-content) width.
+        let mut tree = LayoutTree::new();
+        let leaf = tree.text_styled(spans.clone(), &BoxSpec::default());
+        let box_node = tree.box_node(&BoxSpec::column(), &[leaf]);
+        tree.set_root(box_node);
+        let computed = tree.compute((200.0, AvailableSpace::MaxContent));
+        assert_eq!(computed.placed[0].width, atoms_max_content_width(&atoms));
     }
 }

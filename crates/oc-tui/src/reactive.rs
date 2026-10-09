@@ -12,16 +12,34 @@
 //!   automatically record dependencies. A `Signal::set` marks downstream
 //!   memos dirty (transitively) and enqueues downstream effects — memo
 //!   evaluation stays lazy, and an effect runs **at most once per pump**
-//!   ([`Runtime::run_effects`]): notifications landing while it runs
-//!   (e.g. a memo recomputing underneath it) coalesce into the next pump.
+//!   ([`Runtime::run_effects`]).
 //! * Effects do not run inside `set`; they run when the owner pumps
 //!   [`Runtime::run_effects`], which is the coalescing point: N mutations
 //!   between two pumps produce at most one effect run each.
+//! * **Never-dropped notifications** (gate-9 finding 4): a notification
+//!   landing while its effect has already run this pump sets a *pending
+//!   marker* — the effect re-runs on the NEXT pump instead of losing the
+//!   notification. Within one pump an effect still runs at most once;
+//!   across pumps nothing is dropped.
+//! * Effect bodies live in a thread-local slab keyed **per graph**
+//!   (`(graph id, node id)` — gate-9 finding 3): two runtimes on one
+//!   thread allocate independent graphs with globally-unique ids, so
+//!   their effect slots can never collide or cross-drop.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::{Rc, Weak};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 type NodeId = usize;
+/// EFFECTS key: graph ids come from a global allocator, so two live
+/// runtimes on one thread never share a key even when their node ids
+/// coincide — and a freed graph's memory being reused cannot resurrect
+/// a stale slot.
+type EffectKey = (u64, NodeId);
+
+/// Global graph-id allocator (graph ids are never reused).
+static NEXT_GRAPH_ID: AtomicU64 = AtomicU64::new(1);
 
 struct Node {
     observers: Vec<NodeId>,
@@ -33,6 +51,8 @@ struct Node {
 }
 
 struct Graph {
+    /// Globally unique id (see [`EffectKey`]).
+    id: u64,
     nodes: Vec<Node>,
     free: Vec<NodeId>,
     queue: Vec<NodeId>,
@@ -45,6 +65,9 @@ struct Graph {
     in_pump: Cell<bool>,
     /// Per effect node: the pump it last ran in.
     last_pump: Vec<u64>,
+    /// Per effect node: notified after it ran this pump — re-runs next
+    /// pump (never dropped; gate-9 finding 4).
+    pending: Vec<bool>,
 }
 
 impl Default for Graph {
@@ -52,6 +75,7 @@ impl Default for Graph {
     /// never suppresses the first notifications.
     fn default() -> Self {
         Self {
+            id: NEXT_GRAPH_ID.fetch_add(1, Ordering::Relaxed),
             nodes: Vec::new(),
             free: Vec::new(),
             queue: Vec::new(),
@@ -60,6 +84,7 @@ impl Default for Graph {
             pump: Cell::new(1),
             in_pump: Cell::new(false),
             last_pump: Vec::new(),
+            pending: Vec::new(),
         }
     }
 }
@@ -75,11 +100,15 @@ impl Graph {
         };
         if let Some(id) = self.free.pop() {
             self.nodes[id] = node;
+            // A recycled id carries no scheduling state from its past life.
+            self.queued[id] = false;
+            self.pending[id] = false;
             id
         } else {
             self.nodes.push(node);
             self.queued.push(false);
             self.last_pump.push(0);
+            self.pending.push(false);
             self.nodes.len() - 1
         }
     }
@@ -108,7 +137,9 @@ impl Graph {
     }
 
     /// Mark everything downstream of `id` as needing a re-run. Memos turn
-    /// dirty; effects are enqueued once.
+    /// dirty; effects are enqueued once — and an effect that already ran
+    /// this pump is marked *pending* so the notification survives into
+    /// the next pump (never dropped — gate-9 finding 4).
     fn notify(&mut self, id: NodeId) {
         let observers = self.nodes[id].observers.clone();
         for observer in observers {
@@ -120,12 +151,13 @@ impl Graph {
                 // so effects observing the memo are scheduled.
                 self.nodes[observer].dirty.set(true);
                 self.notify(observer);
-            } else if !self.queued[observer]
-                // An effect runs at most once per pump: notifications that
-                // land while it is running (a memo recomputing underneath
-                // it) coalesce into the next pump.
-                && (!self.in_pump.get() || self.last_pump[observer] != self.pump.get())
-            {
+            } else if self.queued[observer] {
+                // Already scheduled this pump — coalesced.
+            } else if self.in_pump.get() && self.last_pump[observer] == self.pump.get() {
+                // Ran earlier THIS pump: at most once per pump, but the
+                // notification is never dropped — re-run next pump.
+                self.pending[observer] = true;
+            } else {
                 self.queued[observer] = true;
                 self.queue.push(observer);
             }
@@ -133,11 +165,12 @@ impl Graph {
     }
 }
 
-// Effect bodies live in a thread-local slab keyed by node id so the graph
-// stays data-only while effect closures capture arbitrary state.
+// Effect bodies live in a thread-local slab keyed by (graph id, node id)
+// so the graph stays data-only while effect closures capture arbitrary
+// state — and two runtimes on one thread never cross (finding 3).
 type EffectSlot = Option<Rc<dyn Fn()>>;
 thread_local! {
-    static EFFECTS: RefCell<Vec<EffectSlot>> = const { RefCell::new(Vec::new()) };
+    static EFFECTS: RefCell<HashMap<EffectKey, EffectSlot>> = RefCell::new(HashMap::new());
 }
 
 /// Shared graph handle.
@@ -160,16 +193,30 @@ impl Runtime {
         (Rc::downgrade(&self.graph), id)
     }
 
+    fn graph_id(&self) -> u64 {
+        self.graph.borrow().id
+    }
+
     /// Run every enqueued effect (draining the queue) until the graph is
     /// quiet. An effect runs at most once per pump: notifications that
     /// land while it is running (e.g. a memo recomputing underneath it)
-    /// coalesce into the next pump; a hard iteration cap guards
-    /// pathological feedback loops.
+    /// set the pending marker and re-run on the NEXT pump — never
+    /// dropped; a hard iteration cap guards pathological feedback loops.
     pub fn run_effects(&self) {
         {
-            let graph = self.graph.borrow_mut();
+            let mut graph = self.graph.borrow_mut();
             graph.pump.set(graph.pump.get() + 1);
             graph.in_pump.set(true);
+            // Carry pending notifications into this pump (finding 4).
+            for id in 0..graph.pending.len() {
+                if graph.pending[id] {
+                    graph.pending[id] = false;
+                    if !graph.queued[id] && graph.nodes[id].alive && !graph.nodes[id].memo {
+                        graph.queued[id] = true;
+                        graph.queue.push(id);
+                    }
+                }
+            }
         }
         for _ in 0..64 {
             let batch: Vec<NodeId> = {
@@ -186,7 +233,8 @@ impl Runtime {
             let pump = self.graph.borrow().pump.get();
             for id in batch {
                 // Mark before running so notifications landing inside the
-                // run coalesce into the next pump (once-per-pump).
+                // run pending-mark rather than re-enqueue
+                // (once-per-pump, never dropped).
                 self.graph.borrow_mut().last_pump[id] = pump;
                 self.run_effect_node(id);
             }
@@ -195,7 +243,8 @@ impl Runtime {
     }
 
     fn run_effect_node(&self, id: NodeId) {
-        let effect = EFFECTS.with(|effects| effects.borrow().get(id).cloned().flatten());
+        let key = (self.graph_id(), id);
+        let effect = EFFECTS.with(|effects| effects.borrow().get(&key).cloned().flatten());
         let Some(effect) = effect else { return };
         if !self.graph.borrow().nodes[id].alive {
             return;
@@ -230,13 +279,10 @@ impl Runtime {
         self.graph.borrow_mut().notify(source);
     }
 
-    fn store_effect(id: NodeId, f: Rc<dyn Fn()>) {
+    fn store_effect(&self, id: NodeId, f: Rc<dyn Fn()>) {
+        let key = (self.graph_id(), id);
         EFFECTS.with(|effects| {
-            let mut effects = effects.borrow_mut();
-            if effects.len() <= id {
-                effects.resize(id + 1, None);
-            }
-            effects[id] = Some(f);
+            effects.borrow_mut().insert(key, Some(f));
         });
     }
 }
@@ -418,8 +464,8 @@ impl Effect {
     pub fn new(rt: &Runtime, f: impl Fn() + 'static) -> EffectHandle {
         let (graph, id) = rt.register(false);
         let f: Rc<dyn Fn()> = Rc::new(f);
-        Runtime::store_effect(id, Rc::clone(&f));
-        let handle = EffectHandle { graph, id };
+        rt.store_effect(id, Rc::clone(&f));
+        let handle = EffectHandle { graph, graph_id: rt.graph_id(), id };
         rt.run_effect_node(id);
         handle
     }
@@ -429,6 +475,9 @@ impl Effect {
 /// effect (its body stops running).
 pub struct EffectHandle {
     graph: Weak<RefCell<Graph>>,
+    /// The graph's globally-unique id — survives the graph itself so the
+    /// EFFECTS slot is reclaimed even if the graph is gone first.
+    graph_id: u64,
     id: NodeId,
 }
 
@@ -438,10 +487,7 @@ impl Drop for EffectHandle {
             graph.borrow_mut().drop_node(self.id);
         }
         EFFECTS.with(|effects| {
-            let mut effects = effects.borrow_mut();
-            if effects.len() > self.id {
-                effects[self.id] = None;
-            }
+            effects.borrow_mut().remove(&(self.graph_id, self.id));
         });
     }
 }
@@ -519,5 +565,86 @@ mod tests {
         signal.set(9);
         rt.run_effects();
         assert_eq!(runs.get(), 1, "dropped effect never runs again");
+    }
+
+    /// Gate-9 finding 3: two runtimes on ONE thread. The old slab was
+    /// keyed by node id alone, so runtime B's effect (node 0) overwrote
+    /// runtime A's slot and dropping A's handle zeroed B's closure.
+    /// Graph-keyed slots keep the graphs independent.
+    #[test]
+    fn two_runtimes_on_one_thread_do_not_cross_effects() {
+        let rt_a = Runtime::new();
+        let rt_b = Runtime::new();
+        let signal_a = Signal::new(&rt_a, 1i32);
+        let signal_b = Signal::new(&rt_b, 1i32);
+        let runs_a = Rc::new(Cell::new(0));
+        let runs_b = Rc::new(Cell::new(0));
+        let watched_a = signal_a.clone();
+        let inner_a = Rc::clone(&runs_a);
+        let effect_a = Effect::new(&rt_a, move || {
+            let _ = watched_a.get();
+            inner_a.set(inner_a.get() + 1);
+        });
+        let watched_b = signal_b.clone();
+        let inner_b = Rc::clone(&runs_b);
+        let effect_b = Effect::new(&rt_b, move || {
+            let _ = watched_b.get();
+            inner_b.set(inner_b.get() + 1);
+        });
+        assert_eq!((runs_a.get(), runs_b.get()), (1, 1), "both register-time runs");
+        signal_a.set(2);
+        signal_b.set(2);
+        rt_a.run_effects();
+        rt_b.run_effects();
+        assert_eq!((runs_a.get(), runs_b.get()), (2, 2), "both pumps fire their own effect");
+        // Dropping A's handle must not touch B's slot (the old bug: both
+        // lived at node id 0 of one thread-local slab).
+        drop(effect_a);
+        signal_b.set(3);
+        rt_b.run_effects();
+        assert_eq!(runs_b.get(), 3, "B's effect survives A's teardown");
+        assert_eq!(runs_a.get(), 2);
+        drop(effect_b);
+    }
+
+    /// Gate-9 finding 4: a notification landing AFTER its effect ran this
+    /// pump is deferred (pending marker), never dropped. F reads `s`;
+    /// E runs after F in queue order and writes `s` — F must re-run on
+    /// the NEXT pump (the old semantics lost F's re-run entirely).
+    #[test]
+    fn notification_after_running_repeats_on_the_next_pump() {
+        let rt = Runtime::new();
+        let s = Signal::new(&rt, 0i32);
+        let t = Signal::new(&rt, 0i32);
+        let armed = Rc::new(Cell::new(false));
+        let f_runs = Rc::new(Cell::new(0));
+        // F: queued first (reads s only).
+        let watched = s.clone();
+        let f_counter = Rc::clone(&f_runs);
+        let _f = Effect::new(&rt, move || {
+            let _ = watched.get();
+            f_counter.set(f_counter.get() + 1);
+        });
+        // E: queued second (reads t; writes s when armed).
+        let s_write = s.clone();
+        let t_watched = t.clone();
+        let armed_flag = Rc::clone(&armed);
+        let _e = Effect::new(&rt, move || {
+            let _ = t_watched.get();
+            if armed_flag.get() {
+                armed_flag.set(false);
+                s_write.set(99);
+            }
+        });
+        assert_eq!(f_runs.get(), 1, "registration run");
+        armed.set(true);
+        s.set(1); // → F enqueued
+        t.set(1); // → E enqueued after F
+        rt.run_effects();
+        assert_eq!(f_runs.get(), 2, "F ran once this pump (E's write deferred)");
+        rt.run_effects();
+        assert_eq!(f_runs.get(), 3, "the deferred notification re-ran F next pump");
+        rt.run_effects();
+        assert_eq!(f_runs.get(), 3, "nothing pending — quiet");
     }
 }

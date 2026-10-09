@@ -1,0 +1,20 @@
+┃ /redo        Redo                                                            ┃
+┃ /rename      Rename session                                                  ┃
+┃                                                                               
+┃  /re                                                                          
+┃                                                                               
+┃                                                                               
+╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+/tmp/opencode/packages/tui:main                                agents   commands
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                

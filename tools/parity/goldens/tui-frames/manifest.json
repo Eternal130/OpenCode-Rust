@@ -824,6 +824,538 @@
         "sha256": "a9ef01020305d60afeeba1ef7114aeaf9913e11b3d0caa28fd8aa170c5513782",
         "samples": 8
       }
+    },
+    {
+      "id": "composer-placeholder-empty",
+      "source": "packages/tui/src/component/prompt (state corpus; drive via PromptRef.set)",
+      "description": "Empty composer with a single-entry placeholder list (Ask anything… prompt)",
+      "componentClass": "composer",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 20,
+          "rows": 20,
+          "cols": 80,
+          "txt": {
+            "bytes": 1790,
+            "sha256": "c2f429515caf81e170b46b3661f85304ac0242447729914af93741b830760466"
+          },
+          "ansi": {
+            "bytes": 3007,
+            "sha256": "fcae8bf5d0cf2b5cbf8d3d34e88977178b7038c40e5d0ce31f025ecf5768f432"
+          }
+        },
+        {
+          "width": 40,
+          "height": 20,
+          "rows": 20,
+          "cols": 40,
+          "txt": {
+            "bytes": 910,
+            "sha256": "3fb39e63135cd1d544996bf7db3a2cf935e82eae7d458b44a0954a2d5a04ca91"
+          },
+          "ansi": {
+            "bytes": 1952,
+            "sha256": "2a333a4d1dc7adfa4de4fbb18f53b4e0e43fab13b7cc3576d89eab36a15dfd21"
+          }
+        }
+      ]
+    },
+    {
+      "id": "composer-typed-multiline",
+      "source": "packages/tui/src/component/prompt (state corpus; drive via PromptRef.set)",
+      "description": "Composer holding a three-line typed draft (multi-row input, caret at end)",
+      "componentClass": "composer",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 20,
+          "rows": 20,
+          "cols": 80,
+          "txt": {
+            "bytes": 1792,
+            "sha256": "7dc42d1da0637695fb33ef68f8b470d439a54747c1f4452b58151d3516285b4f"
+          },
+          "ansi": {
+            "bytes": 3213,
+            "sha256": "179293d07eb939490eb150febc15e35bf275ec50acb5a410f0b545bd5fb69562"
+          }
+        },
+        {
+          "width": 40,
+          "height": 20,
+          "rows": 20,
+          "cols": 40,
+          "txt": {
+            "bytes": 912,
+            "sha256": "f9b827a55f99733061649d28f5df1a20d5cb2d0ed97aa457af9dec9e3a40d7d6"
+          },
+          "ansi": {
+            "bytes": 2158,
+            "sha256": "5cc569a26d8224c682c2e4f198558b79b1759db1eaef65c5c649f24091c6655d"
+          }
+        }
+      ]
+    },
+    {
+      "id": "composer-cjk-input",
+      "source": "packages/tui/src/component/prompt (state corpus; drive via PromptRef.set)",
+      "description": "Composer holding a mixed Japanese/ASCII draft (double-width glyphs in the input)",
+      "componentClass": "composer",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 20,
+          "rows": 20,
+          "cols": 80,
+          "txt": {
+            "bytes": 1807,
+            "sha256": "1a2b7f82f8e8b5ca04563169890ccf2631ed82301d340bcb40b531b902933ff9"
+          },
+          "ansi": {
+            "bytes": 3024,
+            "sha256": "035c2076305e4b7b0e17e7ec93823474e700f76a5452abbbe24cfe4336228c6b"
+          }
+        },
+        {
+          "width": 40,
+          "height": 20,
+          "rows": 20,
+          "cols": 40,
+          "txt": {
+            "bytes": 929,
+            "sha256": "2fc62a7f6932d69561be4d95e641f962270fdb830411a35c1b63b4c65abd2bec"
+          },
+          "ansi": {
+            "bytes": 2073,
+            "sha256": "114a6b4d823e613579db5f41de026dc9ef392bfc3643408c6c452d649829f146"
+          }
+        }
+      ]
+    },
+    {
+      "id": "composer-attachment-chip",
+      "source": "packages/tui/src/component/prompt (state corpus; drive via PromptRef.set)",
+      "description": "Composer with a pasted-image attachment: [Image 1] chip rendered as a file extmark inside the input",
+      "componentClass": "composer",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 20,
+          "rows": 20,
+          "cols": 80,
+          "txt": {
+            "bytes": 1788,
+            "sha256": "cb921b2c783c145d78bfb0d08a9e1f10d87b4863c5b0dc10202943f292f6159b"
+          },
+          "ansi": {
+            "bytes": 3076,
+            "sha256": "54cdaaf58ebb8b824895acedba723afb2ec90ff2f5467605a76c05d7c0e9ac91"
+          }
+        },
+        {
+          "width": 40,
+          "height": 20,
+          "rows": 20,
+          "cols": 40,
+          "txt": {
+            "bytes": 910,
+            "sha256": "0ce67dabe9df028887abed29ea192a2dd988ec404d49f9fe69ad744eacfca2d3"
+          },
+          "ansi": {
+            "bytes": 2125,
+            "sha256": "c9b3852c19d628265e42c52874e1b4d4de96c059b464e4c5e7d9e2bc294f6a79"
+          }
+        }
+      ]
+    },
+    {
+      "id": "composer-autocomplete-open",
+      "source": "packages/tui/src/component/prompt (state corpus; drive via PromptRef.set)",
+      "description": "Slash-command autocomplete open on '/re': filtered list (/redo, /rename) with the selected row highlighted",
+      "componentClass": "composer",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 20,
+          "rows": 20,
+          "cols": 80,
+          "txt": {
+            "bytes": 1796,
+            "sha256": "ede505a86113fd1576454b1949d8a45e48e4509e5538ff9c67bf29b4ef7d424d"
+          },
+          "ansi": {
+            "bytes": 3322,
+            "sha256": "c092ff9dc28a56ec21db260d2172895af7bad1b8adc8dd872a640ba8ef90d023"
+          }
+        },
+        {
+          "width": 40,
+          "height": 20,
+          "rows": 20,
+          "cols": 40,
+          "txt": {
+            "bytes": 916,
+            "sha256": "2c29f357b1d7f22334400f9625fab2399516f6aad549e6e1870244cbb2de20ee"
+          },
+          "ansi": {
+            "bytes": 2267,
+            "sha256": "45ca857403595c10ce7d25aa18a73a2ff181a64f24e759e6f4df7be7b2bc4a13"
+          }
+        }
+      ]
+    },
+    {
+      "id": "markdown-frame",
+      "source": "packages/tui/src/routes/session/message-parts.tsx (TextPart mount)",
+      "description": "Assistant markdown mix (heading/bold/inline-code/emphasis/lists/fence) with a ≥10-char bold run crossing the wrap boundary at both widths",
+      "componentClass": "markdown",
+      "class": "tier-c1",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 30,
+          "rows": 30,
+          "cols": 80,
+          "txt": {
+            "bytes": 2430,
+            "sha256": "bd4cadd8da0726f759754764ceb0336f7164e1a683b97cebd228804107c7407d"
+          },
+          "ansi": {
+            "bytes": 5005,
+            "sha256": "33dbfc566873eaa9fffd719e631e4ec9312b80c4ec2485d8a35897b693c1913b"
+          }
+        },
+        {
+          "width": 40,
+          "height": 30,
+          "rows": 30,
+          "cols": 40,
+          "txt": {
+            "bytes": 1230,
+            "sha256": "c65d480b6e444968db712567e4eadeb2a9ac9004e310d269f07e82a99ec2d11f"
+          },
+          "ansi": {
+            "bytes": 4017,
+            "sha256": "5473f72bdab0cfdbbe244652d55f3b4f7d161118c6efd9a60e1a80f240c14dce"
+          }
+        }
+      ]
+    },
+    {
+      "id": "spinner-frozen",
+      "source": "packages/tui/src/routes/session/group-view.tsx (running InlineToolRow, ManualClock)",
+      "description": "Tool-running row frozen at t=0: spinner glyph ⠋ beside its pending label, clock never advances",
+      "componentClass": "spinner",
+      "class": "tier-c1",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 6,
+          "rows": 6,
+          "cols": 80,
+          "txt": {
+            "bytes": 488,
+            "sha256": "0f6443d0d15c9949e635c20eb227386dca8d089e5893feec30052692bd2f093d"
+          },
+          "ansi": {
+            "bytes": 862,
+            "sha256": "e01669bb7f897104dce0c0f0d0b7e14e13d9e14b98a2533f74ff5119be4c7f35"
+          }
+        },
+        {
+          "width": 40,
+          "height": 6,
+          "rows": 6,
+          "cols": 40,
+          "txt": {
+            "bytes": 248,
+            "sha256": "7ddccf233ae2d4f8024020eb9e0133d43b8d3fab039d5ed5b3b185e30b2ce664"
+          },
+          "ansi": {
+            "bytes": 622,
+            "sha256": "e9f2201dc41cf0c756e4bbac466ad8977e2312bfe98a0eb1b092278b53795332"
+          }
+        }
+      ]
+    },
+    {
+      "id": "message-groups",
+      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+      "description": "Consecutive user/assistant turns with exploration ('Explored: 1 read') and reasoning ('Thought') group headers plus the boundary row between turns",
+      "componentClass": "message-group",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 30,
+          "rows": 30,
+          "cols": 80,
+          "txt": {
+            "bytes": 2609,
+            "sha256": "55e3a0d0f13e0d9f5d92db94c69076e9f98e00466bde49b05f65debda88880ad"
+          },
+          "ansi": {
+            "bytes": 6026,
+            "sha256": "cf187b0747bc34c926cd7f6811920f11c62cd46aaf34e0f7af3a11d211d6410f"
+          }
+        },
+        {
+          "width": 40,
+          "height": 30,
+          "rows": 30,
+          "cols": 40,
+          "txt": {
+            "bytes": 1333,
+            "sha256": "c2a650e30f190a1b60e1fdaaeac2d7e536139c7434c0534956907b84ff5ba3b8"
+          },
+          "ansi": {
+            "bytes": 4680,
+            "sha256": "abe50e9f1e26fd07563f9291fae82115f610e0dcf40d403427720d4a984bcf0f"
+          }
+        }
+      ]
+    },
+    {
+      "id": "vscroll-top",
+      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+      "description": "Virtual-scroll transcript ≫ viewport pinned at scrollTop=0 (oldest turn at the top, 'Jump to latest' indicator visible)",
+      "componentClass": "vscroll",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "scrollOffset": "top",
+      "variants": [
+        {
+          "width": 80,
+          "height": 24,
+          "rows": 24,
+          "cols": 80,
+          "txt": {
+            "bytes": 2122,
+            "sha256": "bdbb56f36afa34d2f3a846c79a660a9398c9da5f3d825319dbde87f72a104e60"
+          },
+          "ansi": {
+            "bytes": 5027,
+            "sha256": "f4760bbc02aeb316bf46540d3e9e5c9cc83ed0e3dcd6c84f06212ae37682429e"
+          }
+        }
+      ]
+    },
+    {
+      "id": "vscroll-middle",
+      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+      "description": "Same transcript pinned at the middle of the scroll range (half the maximum scrollTop)",
+      "componentClass": "vscroll",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "scrollOffset": "middle",
+      "variants": [
+        {
+          "width": 80,
+          "height": 24,
+          "rows": 24,
+          "cols": 80,
+          "txt": {
+            "bytes": 2122,
+            "sha256": "954395bdd8db539574cba0c3d1fe352e6f2b201e89dcf077cfd8b83c16be1795"
+          },
+          "ansi": {
+            "bytes": 5027,
+            "sha256": "7507e0f04f0e35e4147d0021b584ac844af4da776b26a5535b122661098ad802"
+          }
+        }
+      ]
+    },
+    {
+      "id": "vscroll-bottom",
+      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+      "description": "Same transcript scrolled to the maximum scrollTop after being away (indicator cleared, sticky re-armed)",
+      "componentClass": "vscroll",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "scrollOffset": "bottom",
+      "variants": [
+        {
+          "width": 80,
+          "height": 24,
+          "rows": 24,
+          "cols": 80,
+          "txt": {
+            "bytes": 2120,
+            "sha256": "0a5d8e555694be773b39b2cafb5c4f3a6e0a9744a85b3fd37a7aa4168316f44a"
+          },
+          "ansi": {
+            "bytes": 4955,
+            "sha256": "c48121dc7f9bd2c7748cdd751ae45339d63245d0ae83c8d0be49f7c18752d193"
+          }
+        }
+      ]
+    },
+    {
+      "id": "vscroll-stick-bottom",
+      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+      "description": "Same transcript left sticky-at-bottom while a new assistant turn streams in — the viewport follows the append",
+      "componentClass": "vscroll",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "scrollOffset": "stick-to-bottom",
+      "variants": [
+        {
+          "width": 80,
+          "height": 24,
+          "rows": 24,
+          "cols": 80,
+          "txt": {
+            "bytes": 2116,
+            "sha256": "4795f78f64976d5e783d69e898de79cbad578307119381f57833c2ddf9f6d6bb"
+          },
+          "ansi": {
+            "bytes": 4743,
+            "sha256": "159827c065c167fa4835b6a0ba4205f5f0753c0bde7b5e1ae7d53adbf2c08cb0"
+          }
+        }
+      ]
+    },
+    {
+      "id": "sidebar-expanded",
+      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+      "description": "Session route at width 160 with the right-hand sidebar pane visible (session title + plugin slot area, sidebar=auto)",
+      "componentClass": "sidebar",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 160,
+          "height": 30,
+          "rows": 30,
+          "cols": 160,
+          "txt": {
+            "bytes": 5089,
+            "sha256": "7b35d39e9c556dbb330f53f7f9cd3fb33d38999b589bc8b80fa722de37b7e714"
+          },
+          "ansi": {
+            "bytes": 11170,
+            "sha256": "b085e165589c528731d1c5c91a9feed8a5047c4dee884fe332897295545b5250"
+          }
+        }
+      ]
+    },
+    {
+      "id": "sidebar-collapsed",
+      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+      "description": "Same session route with the sidebar pane hidden (session.sidebar=hide) — full-width transcript",
+      "componentClass": "sidebar",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 160,
+          "height": 30,
+          "rows": 30,
+          "cols": 160,
+          "txt": {
+            "bytes": 5169,
+            "sha256": "291c184877317241c39514c3c3ba6a7485c86b9e49cac346712ba90113c0a7f6"
+          },
+          "ansi": {
+            "bytes": 8516,
+            "sha256": "5b080176b4f2c394f090f314871ab0e3d83edc65279abd3515e3203b91e0ca9d"
+          }
+        }
+      ]
+    },
+    {
+      "id": "session-screen-40",
+      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+      "description": "Complete session route at 40 columns: transcript list, composer input and the horizontal tabs bar",
+      "componentClass": "session-screen",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 40,
+          "height": 30,
+          "rows": 30,
+          "cols": 40,
+          "txt": {
+            "bytes": 1331,
+            "sha256": "fc0501227f5bd999351bbb56070a68ac5a2e0e6522774cebb524416e9573582e"
+          },
+          "ansi": {
+            "bytes": 4716,
+            "sha256": "a1e262e869affd395c25710ea46eb2a34d195bbcdfa1b3b3720987588ce2594c"
+          }
+        }
+      ]
+    },
+    {
+      "id": "toast-over-session",
+      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+      "description": "One toast surface (title + message + dismiss affordance) rendered over live session content via the app's tui.toast.show event",
+      "componentClass": "toast",
+      "class": "tier-c1",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 30,
+          "rows": 30,
+          "cols": 80,
+          "txt": {
+            "bytes": 2629,
+            "sha256": "ea5fd549df8963fd5ee2dbc115ca49254112c2ecbc3583ffe0a090143bbf4d2c"
+          },
+          "ansi": {
+            "bytes": 6843,
+            "sha256": "c942062269deceed57bc936c0db1341c552f891af48f693a58d760bd7c5441e3"
+          }
+        }
+      ]
+    }
+  ],
+  "replay": [
+    {
+      "id": "exit-leader-q",
+      "description": "Leader-q exit sequence: with text in the prompt the app.exit binding is disabled (leader+q merely types q); once the draft is cleared, <leader> (ctrl+x) followed by q dispatches app.exit and tears the renderer down",
+      "source": "test/app-lifecycle.test.tsx (exit ordering) + src/config/keybind.ts (app.exit = 'ctrl+c,ctrl+d,<leader>q', leader default ctrl+x) + src/app.tsx app.exit layer enabled only while the prompt is empty",
+      "keys": "kitty",
+      "steps": 4,
+      "file": "replay/exit-leader-q.json",
+      "bytes": 1421,
+      "sha256": "eeb40d89e813b1156b2905e2c831b6ad7cadf5ff35a85701307f0fc3c15e3715"
+    },
+    {
+      "id": "palette-ctrl-p",
+      "description": "Command palette flow: ctrl+p opens the palette (suggested commands visible), typed text fuzzy-filters the list, Enter runs the selected command — here 'Rename session', which replaces the palette with the rename dialog",
+      "source": "test/cli/tui/command-palette.test.tsx (open → filter → enter select) + src/app.tsx COMMAND_PALETTE_COMMAND via command.palette.show (default ctrl+p)",
+      "keys": "kitty",
+      "steps": 3,
+      "file": "replay/palette-ctrl-p.json",
+      "bytes": 1174,
+      "sha256": "25d02d3909b2fdd1dfa7c06407b34f995d260b8c8d149bc07b3babbb68608aaa"
+    },
+    {
+      "id": "permission-once-always-deny",
+      "description": "Permission prompt replies: the prompt lists Allow once / Always allow (when the request carries save patterns) / Reject with 'once' selected; Enter replies once, left/right move the selection, Escape opens the reject stage whose free-text reason Enter confirms",
+      "source": "test/cli/tui/input-scope.test.tsx (Enter → {decision:'once'}; Escape → reject stage keeping the reason draft) + src/routes/session/permission.tsx SessionQuestion (left/h, right/l, escapeKey=reject; app.exit shadowed while open)",
+      "keys": "kitty",
+      "steps": 6,
+      "file": "replay/permission-once-always-deny.json",
+      "bytes": 1917,
+      "sha256": "f4a6c274d3924454e90b81b15d25a2a4b85c1e3e6d11cf121c71186a878505fd"
     }
   ]
 }

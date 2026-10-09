@@ -14,7 +14,7 @@
 // pedantic usize→f32 cast lints carry no real risk here.
 #![allow(clippy::cast_precision_loss)]
 
-use crate::layout::{BoxSpec, LayoutTree, Placed};
+use crate::layout::{BoxSpec, LayoutTree, Placed, PlacedLine, StyledSpan};
 use crate::render::{paint_placed, Frame};
 use crate::store::{SessionTab, Unread};
 use crate::theme::ThemeStyles;
@@ -303,9 +303,10 @@ pub fn render_bar(
         };
         let title = view.tab.title.clone().unwrap_or_else(|| "Untitled session".into());
         let title_width = width.saturating_sub(1 + number_width).max(1);
-        let title_leaf = tree.text_sized(
-            &take_width(&title, title_width),
-            style,
+        // Styled-segment leaf (single span): the trivially-equivalent
+        // migration proving the styled path subsumes plain leaves.
+        let title_leaf = tree.text_styled(
+            vec![StyledSpan { text: take_width(&title, title_width), style }],
             &BoxSpec::default().width(title_width as f32).shrink(0.0),
         );
         children.push(tree.box_node(
@@ -369,16 +370,19 @@ pub fn render_rail(
             )
         };
         let title = view.tab.title.clone().unwrap_or_else(|| "Untitled session".into());
-        let title_leaf =
-            tree.text_tagged(&take_width(&title, title_width), style, format!("tab-title:{index}"));
+        // Styled-segment leaf carrying the placement tag (single span —
+        // trivially-equivalent styled migration).
+        let title_leaf = tree.text_styled_tagged(
+            vec![StyledSpan { text: take_width(&title, title_width), style }],
+            format!("tab-title:{index}"),
+        );
         let title_box =
             tree.box_node(&BoxSpec::default().width(title_width as f32).shrink(0.0), &[title_leaf]);
         let title_row =
             tree.box_node(&BoxSpec::row().height(1.0).padding_right(1.0), &[indicator, title_box]);
         let detail = view.detail.clone().unwrap_or_default();
-        let detail_leaf = tree.text_sized(
-            &take_width(&detail, title_width),
-            style,
+        let detail_leaf = tree.text_styled(
+            vec![StyledSpan { text: take_width(&detail, title_width), style }],
             &BoxSpec::default().shrink(0.0),
         );
         let detail_row = tree.box_node(
@@ -416,8 +420,10 @@ pub fn render_rail(
                     x: 0,
                     y,
                     width: INDICATOR_WIDTH,
-                    lines: vec![SEPARATOR_GLYPH.to_string().repeat(INDICATOR_WIDTH)],
-                    style,
+                    lines: vec![PlacedLine::plain(
+                        SEPARATOR_GLYPH.to_string().repeat(INDICATOR_WIDTH),
+                        style,
+                    )],
                     tag: Some(format!("separator:{index}")),
                 });
             }

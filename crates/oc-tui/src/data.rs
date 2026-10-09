@@ -68,10 +68,40 @@ impl BusEvent {
 }
 
 /// A session row from a resync fetch.
+///
+/// `time_idle` / `viewed` come from the `session.list` wire shape
+/// (`SessionInfo.time.idle` / `.viewed`, epoch seconds) and drive the
+/// **unread derivation** (see [`resync_unread`]); both are `None` when
+/// the server omits them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionSnapshot {
     pub id: String,
     pub title: Option<String>,
+    /// Last activity timestamp (`time.idle`); absent when unknown.
+    pub time_idle: Option<f64>,
+    /// Last view timestamp (`time.viewed`); absent when unknown.
+    pub viewed: Option<f64>,
+}
+
+/// Sessions a resync marks unread: exactly those whose last activity
+/// is newer than their last view — `time.idle > time.viewed`, the same
+/// comparison the reference derives via `session.view` round-trips.
+///
+/// Both timestamps must be **known**: absent data marks nothing, so a
+/// reconnect can never fabricate unread state (gate-9 finding 6 — the
+/// old code marked every session unread on every reconnect). The
+/// full `session.view` refinement for viewed-absent sessions lands
+/// with the wave-3 `message.list` resync.
+#[must_use]
+pub fn resync_unread(sessions: &[SessionSnapshot]) -> Vec<String> {
+    sessions
+        .iter()
+        .filter(|session| match (session.time_idle, session.viewed) {
+            (Some(idle), Some(viewed)) => idle > viewed,
+            _ => false,
+        })
+        .map(|session| session.id.clone())
+        .collect()
 }
 
 /// The single ordered ingest stream into the store (see module docs).
@@ -121,9 +151,8 @@ impl ConnectionConfig {
     }
 }
 
-/// How sessions are re-fetched during resync (swappable for tests; the
-/// scripted-server test uses a fixture source, production uses
-/// [`HttpResync`]).
+/// How sessions are re-fetched during resync (swappable for tests;
+/// production uses [`HttpResync`]).
 pub trait SessionListSource {
     fn fetch(
         &self,
@@ -159,13 +188,30 @@ impl SessionListSource for HttpResync {
         Ok(response
             .data
             .into_iter()
-            .map(|session| SessionSnapshot { id: session.id, title: session.title })
+            .map(|session| SessionSnapshot {
+                id: session.id,
+                title: session.title,
+                time_idle: session.time.idle,
+                viewed: session.time.viewed,
+            })
             .collect())
     }
 }
 
 /// The SSE connection state machine: subscribe, relay, reconnect with
 /// backoff, resync on reconnect, feed one ordered ingest channel.
+///
+/// Gate-9 finding 6 wiring:
+///
+/// * **Resubscription cursor**: every reconnect re-subscribes with the
+///   tracked last event id as the SSE `Last-Event-ID` header
+///   ([`oc_client::event_ext`] — the server resumes from it or ignores
+///   it; the resync snapshot below remains the consistency net either
+///   way).
+/// * **No false unread on resync**: the snapshot marks unread only
+///   sessions whose `time.idle > time.viewed` with both timestamps
+///   known ([`resync_unread`]) — previously every session was marked,
+///   so every reconnect fabricated unread state.
 pub struct Connection {
     client: Client,
     config: ConnectionConfig,
@@ -226,15 +272,23 @@ impl Connection {
                 }
                 tokio::time::sleep(self.config.backoff(self.attempts - 1)).await;
             }
-            let Ok(mut stream) = self.client.event().subscribe().await else {
+            // Resubscription carries the tracked cursor as the SSE
+            // `Last-Event-ID` header: a cursor-aware server resumes the
+            // event stream from it; any other server ignores the header.
+            let stream = match self.cursor.as_deref() {
+                Some(cursor) => self.client.event().subscribe_from(cursor).await,
+                None => self.client.event().subscribe().await,
+            };
+            let Ok(mut stream) = stream else {
                 continue;
             };
             if self.attempts > 1 {
                 // Resync on reconnect BEFORE relaying further live
                 // events: the fetch result queues behind everything
                 // already sent and ahead of the new stream's events.
+                // Unread marks derive from `idle > viewed`, known-only.
                 if let Ok(sessions) = fetcher.fetch().await {
-                    let unread = sessions.iter().map(|session| session.id.clone()).collect();
+                    let unread = resync_unread(&sessions);
                     if tx.send(Ingest::Resync { sessions, unread }).await.is_err() {
                         return;
                     }
@@ -293,42 +347,84 @@ mod tests {
         assert_eq!(config.backoff(50), Duration::from_millis(8000));
     }
 
-    struct FakeSource(Result<Vec<SessionSnapshot>, String>);
-    impl SessionListSource for FakeSource {
-        async fn fetch(&self) -> Result<Vec<SessionSnapshot>, String> {
-            std::future::ready(self.0.clone()).await
-        }
+    #[test]
+    fn resync_unread_requires_known_idle_newer_than_viewed() {
+        // Gate-9 finding 6: only `idle > viewed` with BOTH timestamps
+        // known marks unread; absent data marks nothing (no false
+        // unread on reconnect).
+        let session = |id: &str, idle: Option<f64>, viewed: Option<f64>| SessionSnapshot {
+            id: id.to_owned(),
+            title: None,
+            time_idle: idle,
+            viewed,
+        };
+        let sessions = vec![
+            session("fresh", Some(100.0), Some(50.0)), // idle > viewed → unread
+            session("caught-up", Some(30.0), Some(30.0)), // idle ≤ viewed → clean
+            session("stale-view", Some(10.0), Some(20.0)),
+            session("no-idle", None, Some(50.0)), // idle unknown → clean
+            session("no-viewed", Some(100.0), None), // viewed unknown → clean
+        ];
+        assert_eq!(resync_unread(&sessions), vec!["fresh".to_owned()]);
+    }
+
+    /// One SSE frame for the scripted server: /api/event payloads are
+    /// JSON-in-string (double-decoded).
+    fn sse_frame(id: &str, type_: &str, data_json: &str) -> String {
+        let event = format!("{{\"id\":\"{id}\",\"type\":\"{type_}\",\"data\":{data_json}}}");
+        let escaped = event.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("data: \"{escaped}\"\n\n")
+    }
+
+    /// `/api/session` body (full `SessionInfo` wire shape): s1 has
+    /// activity newer than its last view (unread), s2 is caught up, s3
+    /// omits idle/viewed entirely (no false unread).
+    fn session_list_body() -> String {
+        concat!(
+            r#"{"cursor":{},"data":["#,
+            r#"{"id":"s1","title":"Fresh","time":{"created":0,"updated":0,"idle":100,"viewed":50},"location":{"directory":"/tmp"},"projectID":"p","cost":0,"tokens":{"cache":{"read":0,"write":0},"input":0,"output":0,"read":0,"write":0,"reasoning":0}},"#,
+            r#"{"id":"s2","title":"Caught up","time":{"created":0,"updated":0,"idle":30,"viewed":30},"location":{"directory":"/tmp"},"projectID":"p","cost":0,"tokens":{"cache":{"read":0,"write":0},"input":0,"output":0,"read":0,"write":0,"reasoning":0}},"#,
+            r#"{"id":"s3","title":"Unknown times","time":{"created":0,"updated":0},"location":{"directory":"/tmp"},"projectID":"p","cost":0,"tokens":{"cache":{"read":0,"write":0},"input":0,"output":0,"read":0,"write":0,"reasoning":0}}"#,
+            r#"]}"#,
+        )
+        .to_owned()
     }
 
     /// Scripted local server (FakeLlm-style): `/api/event` serves SSE
     /// frames then closes the stream; `/api/session` serves a session
-    /// list. Drives the full reconnect → resync state machine through
-    /// oc-client.
+    /// list with `time.idle`/`time.viewed`. Drives the full reconnect →
+    /// resync state machine through oc-client AND the production
+    /// [`HttpResync`] fetcher, asserting (a) the ordered ingest stream,
+    /// (b) the idle>viewed unread derivation over the wire, and (c) the
+    /// reconnect carrying the tracked cursor as `Last-Event-ID`.
     #[tokio::test]
     async fn reconnect_resyncs_and_orders_ingest() {
+        use std::sync::{Arc, Mutex};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        fn sse_frame(id: &str, type_: &str, data_json: &str) -> String {
-            // /api/event payloads are JSON-in-string (double-decoded).
-            let event = format!("{{\"id\":\"{id}\",\"type\":\"{type_}\",\"data\":{data_json}}}");
-            let escaped = event.replace('\\', "\\\\").replace('"', "\\\"");
-            format!("data: \"{escaped}\"\n\n")
-        }
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
+        // Per-connection `Last-Event-ID` headers seen on /api/event.
+        let seen_cursors: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let cursors = Arc::clone(&seen_cursors);
         let server = tokio::spawn(async move {
             let mut connections = 0u32;
             loop {
                 let (mut socket, _) = listener.accept().await.expect("accept");
                 connections += 1;
                 let first = connections <= 1;
+                let cursors = Arc::clone(&cursors);
                 let (mut reader, _) = socket.split();
                 let mut request = vec![0u8; 8192];
                 let _ = reader.read(&mut request).await;
                 let head = String::from_utf8_lossy(&request);
                 let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
                 if path.starts_with("/api/event") {
+                    let cursor = head.lines().find_map(|line| {
+                        let lower = line.to_lowercase();
+                        lower.strip_prefix("last-event-id:").map(|value| value.trim().to_owned())
+                    });
+                    cursors.lock().expect("cursor log").push(cursor);
                     // First connection: connected + one live event, then
                     // EOF. Second connection: one live event, then EOF.
                     let body = if first {
@@ -342,7 +438,7 @@ mod tests {
                     );
                     let _ = socket.write_all(response.as_bytes()).await;
                 } else if path.starts_with("/api/session") {
-                    let body = r#"{"data":[{"id":"s1","title":"Fresh"}]}"#;
+                    let body = session_list_body();
                     let response = format!(
                         "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                         body.len()
@@ -358,7 +454,7 @@ mod tests {
 
         let client = Client::new(&format!("http://{addr}")).expect("client");
         let connection = Connection::with_config(
-            client,
+            client.clone(),
             ConnectionConfig {
                 backoff_base: Duration::from_millis(10),
                 backoff_max: Duration::from_millis(10),
@@ -366,11 +462,8 @@ mod tests {
             },
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-        let fetcher = FakeSource(Ok(vec![SessionSnapshot {
-            id: "s1".to_owned(),
-            title: Some("Fresh".to_owned()),
-        }]));
-        let runner = tokio::spawn(connection.run(tx, fetcher));
+        // Production fetcher: session.list through the wire types.
+        let runner = tokio::spawn(connection.run(tx, HttpResync::new(client)));
 
         let mut observed = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -401,9 +494,19 @@ mod tests {
         let Ingest::Resync { sessions, unread } = &observed[4] else {
             panic!("resync arrives after the reconnect transition: {observed:?}");
         };
+        // The snapshot carries the fetched sessions (titles through the
+        // wire types) and marks ONLY the idle>viewed session unread.
         assert_eq!(sessions[0].title.as_deref(), Some("Fresh"));
-        assert_eq!(unread, &vec!["s1".to_owned()]);
+        assert_eq!(sessions[0].time_idle, Some(100.0));
+        assert_eq!(sessions[0].viewed, Some(50.0));
+        assert_eq!(sessions[2].time_idle, None, "s3 omits idle");
+        assert_eq!(unread, &vec!["s1".to_owned()], "no false unread for s2/s3");
         assert!(matches!(&observed[5], Ingest::Event(event) if event.id == "e3"));
+        // The reconnect carried the tracked cursor (e2) as Last-Event-ID.
+        let cursors = seen_cursors.lock().expect("cursor log").clone();
+        assert_eq!(cursors.len(), 2, "two /api/event connections");
+        assert_eq!(cursors[0], None, "first subscribe has no cursor");
+        assert_eq!(cursors[1].as_deref(), Some("e2"), "resubscribe sent Last-Event-ID: e2");
     }
 
     /// The ingest stream drives the store end-to-end (drain → reduce →
