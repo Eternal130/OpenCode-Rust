@@ -4,18 +4,20 @@
 //! `tools/parity::tui_frame` with the manifest's per-scenario
 //! comparison depth (`compare_ansi_frames_at` / `compare_ansi_bytes_at`).
 //!
-//! 7.1 coverage:
+//! Coverage:
 //! * `session-tabs-horizontal` / `session-tabs-vertical` — text grid
-//!   exact at 80/160 (per-cell glow gradients + per-tab background
-//!   tints are the 7.2 ANSI polish).
+//!   AND canonical ANSI **byte-exact** at 80/160 since 7.2 wave 2:
+//!   the resting unread glow (per-cell pulse backgrounds, per-char
+//!   title tints, separator falloff) ports the deterministic math in
+//!   `components::tab_pulse` (gate-9 finding 1, the Tier-A
+//!   obligation); only time-varying envelopes stay C2.
 //! * `tool-wrap-rows` — text grid **and** canonical ANSI byte-exact at
 //!   the manifest depth (v2-dark tokens painted through
 //!   [`crate::theme`]).
-//!
-//! 7.2 wave 0 adds the styled-segment instruments: the tool-wrap
-//! migration proof (styled leaves reproduce the plain-leaf frames
-//! byte-for-byte) and markdown-style cross-boundary span frames at
-//! 80/40 with a golden-style ANSI roundtrip.
+//! * 7.2 wave 0 adds the styled-segment instruments: the tool-wrap
+//!   migration proof (styled leaves reproduce the plain-leaf frames
+//!   byte-for-byte) and markdown-style cross-boundary span frames at
+//!   80/40 with a golden-style ANSI roundtrip.
 
 #![cfg(test)]
 // Frame dimensions come from the manifest (bounded by terminal sizes),
@@ -81,6 +83,22 @@ fn assert_text_grid_match(id: &str, width: usize, frame: &AnsiFrameRender) {
     );
 }
 
+/// Canonical ANSI bytes at the manifest's comparison depth — since the
+/// 7.2 glow upgrade this is exact for the session-tabs scenarios (the
+/// resting-glow tint math closes the last style divergence).
+fn assert_ansi_match(id: &str, width: usize, frame: &AnsiFrameRender) {
+    let scenario = scenario(id);
+    let depth = manifest().comparison_depth_for(&scenario);
+    let golden_ansi = std::fs::read_to_string(goldens().join(format!("{id}.w{width}.ansi")))
+        .expect("golden ansi");
+    let diff = pf::compare_ansi_bytes_at(&golden_ansi, &frame.ansi, depth).expect("ansi parses");
+    assert!(
+        diff.equal,
+        "{id}@{width} ansi differs at manifest depth {depth}: first divergence {:?}",
+        diff.first_divergent_offset
+    );
+}
+
 /// Adapter so tests can talk about one rendered thing.
 pub struct AnsiFrameRender {
     pub text_grid: Vec<String>,
@@ -100,28 +118,36 @@ impl AnsiFrameRender {
 fn session_tabs_horizontal_matches_golden_at_80() {
     let theme = ThemeState::v2_dark();
     let frame = paint_bar(&golden_tab_views(), Some("second"), true, (80, 10), &theme.styles());
-    assert_text_grid_match("session-tabs-horizontal", 80, &AnsiFrameRender::from_frame(&frame));
+    let render = AnsiFrameRender::from_frame(&frame);
+    assert_text_grid_match("session-tabs-horizontal", 80, &render);
+    assert_ansi_match("session-tabs-horizontal", 80, &render);
 }
 
 #[test]
 fn session_tabs_horizontal_matches_golden_at_160() {
     let theme = ThemeState::v2_dark();
     let frame = paint_bar(&golden_tab_views(), Some("second"), true, (160, 10), &theme.styles());
-    assert_text_grid_match("session-tabs-horizontal", 160, &AnsiFrameRender::from_frame(&frame));
+    let render = AnsiFrameRender::from_frame(&frame);
+    assert_text_grid_match("session-tabs-horizontal", 160, &render);
+    assert_ansi_match("session-tabs-horizontal", 160, &render);
 }
 
 #[test]
 fn session_tabs_vertical_matches_golden_at_80() {
     let theme = ThemeState::v2_dark();
     let frame = paint_rail(&golden_tab_views(), Some("second"), true, (80, 16), &theme.styles());
-    assert_text_grid_match("session-tabs-vertical", 80, &AnsiFrameRender::from_frame(&frame));
+    let render = AnsiFrameRender::from_frame(&frame);
+    assert_text_grid_match("session-tabs-vertical", 80, &render);
+    assert_ansi_match("session-tabs-vertical", 80, &render);
 }
 
 #[test]
 fn session_tabs_vertical_matches_golden_at_160() {
     let theme = ThemeState::v2_dark();
     let frame = paint_rail(&golden_tab_views(), Some("second"), true, (160, 16), &theme.styles());
-    assert_text_grid_match("session-tabs-vertical", 160, &AnsiFrameRender::from_frame(&frame));
+    let render = AnsiFrameRender::from_frame(&frame);
+    assert_text_grid_match("session-tabs-vertical", 160, &render);
+    assert_ansi_match("session-tabs-vertical", 160, &render);
 }
 
 #[test]
@@ -165,11 +191,11 @@ fn tool_wrap_rows_matches_text_grid_and_ansi_at_160() {
 
 /// Fidelity-classified comparison through the full parity pipeline
 /// (`compare_ansi_frames_at` at the manifest depth) for the
-/// session-tabs scenarios — text grids are exact today; style fidelity
-/// (glow gradients) is the tracked 7.2 gap, asserted here as glyph-only
-/// so the instrument is wired and green.
+/// session-tabs scenarios — since the 7.2 glow upgrade the frames are
+/// **fully equal** at the manifest depth (glyphs and styles): this
+/// instrument now pins that nothing regresses to style-only parity.
 #[test]
-fn session_tabs_ansi_glyph_fidelity_at_manifest_depth() {
+fn session_tabs_ansi_full_fidelity_at_manifest_depth() {
     for id in ["session-tabs-horizontal", "session-tabs-vertical"] {
         let scenario = scenario(id);
         let depth = manifest().comparison_depth_for(&scenario);
@@ -199,23 +225,18 @@ fn session_tabs_ansi_glyph_fidelity_at_manifest_depth() {
             )
             .expect("render parses");
             let fidelity = pf::compare_ansi_frames_at(&golden, &render, depth);
-            // Text-grid parity is this wave's gate: glyphs must match
-            // everywhere; the remaining divergences may only be style
-            // (per-tab glow gradients) — the tracked 7.2 ANSI gap.
             assert_eq!(
                 fidelity.glyph_match_pct(),
                 100.0,
                 "{id}@{} glyphs must match exactly",
                 variant.width
             );
-            if let Some((row, col, class)) = fidelity.first_divergence() {
-                assert_eq!(
-                    class,
-                    pf::DivergenceClass::Style,
-                    "{id}@{} first divergence at ({row},{col}) must be style-only",
-                    variant.width
-                );
-            }
+            assert!(
+                fidelity.first_divergence().is_none(),
+                "{id}@{} diverged at {:?} — expected full fidelity after the glow upgrade",
+                variant.width,
+                fidelity.first_divergence()
+            );
         }
     }
 }

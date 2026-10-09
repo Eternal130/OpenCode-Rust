@@ -435,12 +435,13 @@ impl Transcript {
             fills.extend(row.fills.iter().filter_map(|fill| shift_fill(fill, offset)));
         }
         // The jump-to-latest indicator (right-aligned in the slot row
-        // under the viewport; wave-2 golden bytes — muted here, the
-        // `text.action.secondary` token lands with the theme pass).
+        // under the viewport, `inset` from the frame's right edge —
+        // pinned by the vscroll-top/middle goldens at cols 62..77 of
+        // 80).
         if follow.jump_to_latest_visible() {
             let indicator = "Jump to latest ↓";
             let width = usize::from(size.0);
-            let x = width.saturating_sub(self.inset + crate::wrap::display_width(indicator) + 1);
+            let x = width.saturating_sub(self.inset + crate::wrap::display_width(indicator));
             placed.push(Placed {
                 x,
                 y: frame_height.saturating_sub(1),
@@ -544,6 +545,57 @@ pub fn message_groups_fixture() -> Vec<Message> {
             time: PartTime { created: Some(11), completed: Some(14) },
         },
     ]
+}
+
+/// The `vscroll-*` fixture messages (`session_app.tsx`
+/// `VSCROLL_MESSAGES`) — ten short turns, ~8 rows each, so the
+/// transcript (80 rows) overflows a 16-row viewport 5×.
+#[must_use]
+pub fn vscroll_messages_fixture() -> Vec<Message> {
+    use crate::components::message::model::PartTime;
+    let mut messages = Vec::new();
+    for index in 0..10u64 {
+        messages.push(Message::User {
+            id: format!("vs-user-{index}"),
+            text: format!("Turn {index} asks about section {index} of the document"),
+            created: index * 10,
+        });
+        messages.push(Message::Assistant {
+            id: format!("vs-answer-{index}"),
+            agent: "build".into(),
+            model: "fixture/fixture".into(),
+            parts: vec![Part::Text {
+                text: format!(
+                    "Answer {index}: the section describes step {index} of the pipeline in detail."
+                ),
+                time: PartTime::default(),
+            }],
+            finish: Some("stop".into()),
+            time: PartTime { created: Some(index * 10 + 1), completed: Some(index * 10 + 2) },
+        });
+    }
+    messages
+}
+
+/// The appended assistant turn the `vscroll-stick-bottom` golden
+/// streams in while the viewport stays pinned to the bottom
+/// (`evt_vs_*` in `session_app.tsx`): step started at 101, text ended
+/// at 102, step ended (stop) at 103 — so the footer duration reads
+/// 103 − 90 (the turn-9 user message) = 13ms.
+#[must_use]
+pub fn vscroll_appended_turn() -> Message {
+    use crate::components::message::model::PartTime;
+    Message::Assistant {
+        id: "vs-answer-appended".into(),
+        agent: "build".into(),
+        model: "fixture/fixture".into(),
+        parts: vec![Part::Text {
+            text: "Appended while pinned to the bottom.".into(),
+            time: PartTime::default(),
+        }],
+        finish: Some("stop".into()),
+        time: PartTime { created: Some(101), completed: Some(103) },
+    }
 }
 
 #[cfg(test)]
