@@ -91,7 +91,12 @@ pub fn emit(infos: &[OpInfo], sha256: &str) -> String {
     out.push_str("//! Paths are axum-style templates: `:param` captures one segment, `*name`\n");
     out.push_str("//! captures the remainder (axum 0.8 spellings: `{param}` / `{*name}`).\n");
     out.push_str("//! Consumed by the oc-server dispatch; mirrors oc-client namespaces 1:1.\n");
-    out.push_str("#![allow(clippy::struct_excessive_bools)]\n\n");
+    out.push_str("#![allow(clippy::struct_excessive_bools)]\n");
+    // Generated-table lint posture: identifiers like `providerID` trip
+    // doc_markdown, and table accessors are queried, not consumed
+    // (must_use_candidate). The file is machine-emitted — suppress the
+    // pedantic residue here instead of hand-editing.
+    out.push_str("#![allow(clippy::doc_markdown, clippy::must_use_candidate)]\n\n");
     out.push_str("pub const OPENAPI_SHA256: &str = \"");
     out.push_str(sha256);
     out.push_str("\";\n");

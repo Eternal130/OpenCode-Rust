@@ -558,18 +558,22 @@ impl Default for RecordedUsage {
 /// `TokenUsage` → JSON (wire shape).
 #[must_use]
 pub fn tokens_json(tokens: &TokenUsage) -> serde_json::Value {
+    // Through `Num` so whole values serialize as integers (the v2 wire
+    // emits `11`, not `11.0`).
+    let num =
+        |value: f64| serde_json::to_value(oc_schema::common::Num::from(value)).unwrap_or_default();
     serde_json::json!({
-        "input": tokens.input.0,
-        "output": tokens.output.0,
-        "reasoning": tokens.reasoning.0,
-        "cache": { "read": tokens.cache.read.0, "write": tokens.cache.write.0 },
+        "input": num(tokens.input.0),
+        "output": num(tokens.output.0),
+        "reasoning": num(tokens.reasoning.0),
+        "cache": { "read": num(tokens.cache.read.0), "write": num(tokens.cache.write.0) },
     })
 }
 
 /// `Usd` → JSON.
 #[must_use]
 pub fn usd_json(cost: &Usd) -> serde_json::Value {
-    serde_json::json!(cost.0 .0)
+    serde_json::to_value(cost.0).unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------

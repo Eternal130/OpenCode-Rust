@@ -478,6 +478,9 @@ async fn publish_usage_updated(bus: &Bus, session_id: &str) -> Result<()> {
     let Some((cost, input, output, reasoning, cache_read, cache_write)) = row else {
         return Ok(());
     };
+    // `cost` through `Num` so whole dollars serialize as integers (the
+    // v2 wire emits `0`, not `0.0`).
+    let cost = serde_json::to_value(oc_schema::common::Num::from(cost)).unwrap_or_default();
     let data = serde_json::json!({
         "sessionID": session_id,
         "cost": cost,

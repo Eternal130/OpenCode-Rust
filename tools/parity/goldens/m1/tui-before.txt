@@ -1,0 +1,40 @@
+   Parity fake says hello.         New session                   + New session
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                              ▄
+                                                             █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+                                                             █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
+                                                             ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+
+                                           ┃
+                                           ┃  Ask anything… "Fix broken tests"
+                                           ┃
+                                           ┃  Build · fake-model parityfake
+                                           ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                           /tmp/opencode/ref/packages/cli            shift+tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                                                                         local
+
+ ✓ Server  ○ UI  Theme  Tools  Experiments

@@ -172,7 +172,15 @@ Not yet implemented (module seams exist):
 - **tui frame compare** — capture TUI frames from both builds at scripted
   checkpoints; requires an output-normalization layer for cursor addressing
   and timing-dependent spinners (extend `NORMALIZATION.md` §5 before use).
-- **two-sided scenario replay** — the scenario runner captures and goldens
-  one side; Phase 5 wires the same `Step` scripts against the Rust port and
-  feeds both captures into `sse::compare_sequences` (the policy, collection,
-  and golden capture form are all in place).
+- **two-sided scenario replay** — DONE (Phase 5 / M1): `src/rust_server.rs`
+  spawns the `oc-server` binary (built on demand, hermetic env, sandboxed
+  HOME, cwd mirroring the reference spawn), `tests/rust_scenarios.rs`
+  replays the SAME five scripts (`scenario::scripts`) against it and
+  compares to the reference goldens through
+  `sse::filter_capture_types` + `sse::compare_scenario_captures` with an
+  explicit per-scenario skip-list. Current state: 4/4 no-model scenarios
+  EXACT; `prompt_fake_llm` equal modulo `session.instructions.updated`
+  (the port's instruction digest set differs — documented in the test).
+  `tests/m1_tui_smoke.rs` additionally boots the official v2.0.24 TUI
+  against the Rust server inside tmux (opt-in: `OC_M1_TUI=1` +
+  `--run-ignored only`); its pane captures live in `goldens/m1/`.

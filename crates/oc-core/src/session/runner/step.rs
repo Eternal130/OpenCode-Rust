@@ -195,7 +195,6 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
         input.agent.clone(),
         input.model.reference.clone(),
         input.model.provider_metadata_key().to_string(),
-        start_snapshot.clone(),
         0,
     );
     let tools_disabled = matches!(input.prepared.request.tool_choice, Some(ToolChoice::None {}));

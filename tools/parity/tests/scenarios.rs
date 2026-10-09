@@ -5,12 +5,15 @@
 //! quiescence, and compares the normalized canonical grouping against
 //! `goldens/scenarios/<name>.json` (written with `PARITY_UPDATE=1`).
 //!
+//! The scripts themselves live in [`parity::scenario::scripts`] — the
+//! SAME scripts replay against the Rust port in `tests/rust_scenarios.rs`
+//! (M1 parity gate).
+//!
 //! All tests skip (pass, with a note) when bun or the reference checkout
 //! is missing.
 
 use parity::reference::{self, ReferenceServer};
-use parity::scenario::{self, FakeLlm, ScenarioSpec, Step};
-use serde_json::json;
+use parity::scenario::{self, scripts, FakeLlm};
 
 /// The boot → run → shutdown dance every scenario test uses (mirrors
 /// `reference_info.rs`: the scenario result and the shutdown result must
@@ -37,6 +40,18 @@ async fn scenario_test(
     Ok(())
 }
 
+/// Runs the named canonical script against `server` and goldens it.
+async fn replay(
+    server: &ReferenceServer,
+    name: &str,
+    fake: Option<&FakeLlm>,
+) -> anyhow::Result<()> {
+    let script =
+        scripts::build(name, fake).ok_or_else(|| anyhow::anyhow!("unknown scenario {name}"))?;
+    scenario::drive_and_golden(server, &script.spec, &script.steps).await?;
+    Ok(())
+}
+
 /// `session_lifecycle`: create → rename → list → delete a session in the
 /// sandbox project; the capture must contain the session.created /
 /// session.renamed / session.deleted durable frames (per-aggregate seq
@@ -45,32 +60,7 @@ async fn scenario_test(
 async fn scenario_session_lifecycle() -> anyhow::Result<()> {
     scenario_test("session_lifecycle", |server| {
         Box::pin(async move {
-            let spec = ScenarioSpec::new(
-                "session_lifecycle",
-                "POST /api/session (create) -> PATCH rename -> GET list -> DELETE; session lifecycle frames",
-            );
-            let steps = vec![
-                Step::request(
-                    "POST",
-                    "/api/session",
-                    Some(json!({
-                        "title": "parity lifecycle",
-                        "location": { "directory": "{project_dir}" }
-                    })),
-                )
-                .capture("session_id", "/data/id"),
-                Step::request(
-                    "PATCH",
-                    "/api/session/{session_id}",
-                    Some(json!({ "title": "parity renamed" })),
-                ),
-                Step::request_nobody("GET", "/api/session"),
-                Step::request_nobody("DELETE", "/api/session/{session_id}").expect(204),
-                Step::expect_frames("session.created", 1),
-                Step::expect_frames("session.renamed", 1),
-                Step::expect_frames("session.deleted", 1),
-            ];
-            scenario::drive_and_golden(server, &spec, &steps).await?;
+            replay(server, "session_lifecycle", None).await?;
             Ok(())
         })
     })
@@ -86,27 +76,7 @@ async fn scenario_session_lifecycle() -> anyhow::Result<()> {
 async fn scenario_config_touch() -> anyhow::Result<()> {
     scenario_test("config_touch", |server| {
         Box::pin(async move {
-            let spec = ScenarioSpec::new(
-                "config_touch",
-                "boot project location -> create opencode.json -> modify it; config.updated frames",
-            );
-            let steps = vec![
-                Step::request_nobody("GET", "/api/location?location[directory]={project_dir_q}"),
-                Step::write_file(
-                    "{project_dir}/opencode.json",
-                    "{\n  \"username\": \"parity-one\"\n}\n",
-                ),
-                // Let the watcher's 100 ms reload debounce fire (and the
-                // reload's config.updated land) before the second write, so
-                // each modification gets its own reload.
-                Step::sleep_ms(800),
-                Step::write_file(
-                    "{project_dir}/opencode.json",
-                    "{\n  \"username\": \"parity-two\"\n}\n",
-                ),
-                Step::expect_frames("config.updated", 2),
-            ];
-            scenario::drive_and_golden(server, &spec, &steps).await?;
+            replay(server, "config_touch", None).await?;
             Ok(())
         })
     })
@@ -115,68 +85,17 @@ async fn scenario_config_touch() -> anyhow::Result<()> {
 
 /// `permission_saved`: the v2 API has no `POST /api/permission/saved`; a
 /// saved permission is produced by replying `always` to an `ask`-effect
-/// permission request that carries `save` resources (shapes adapted from
-/// `packages/protocol/openapi.json`): create session → ask → reply always
-/// → list saved → delete the saved row.
+/// permission request that carries `save` resources. Reference quirk
+/// (reproduced 5/5): the first ask on a freshly booted location
+/// short-circuits to `deny` (closed `Permission` service) — the warm-up
+/// ask in the script makes the real ask deterministic. See the script
+/// docs in `parity::scenario::scripts` for how the port's warm open
+/// service reaches the same frame-less outcome.
 #[tokio::test]
 async fn scenario_permission_saved() -> anyhow::Result<()> {
     scenario_test("permission_saved", |server| {
         Box::pin(async move {
-            let spec = ScenarioSpec::new(
-                "permission_saved",
-                "ask permission (save) -> reply always -> GET /api/permission/saved -> DELETE row",
-            );
-            let steps = vec![
-                Step::request(
-                    "POST",
-                    "/api/session",
-                    Some(json!({
-                        "title": "parity permission",
-                        "location": { "directory": "{project_dir}" }
-                    })),
-                )
-                .capture("session_id", "/data/id"),
-                // Warm-up ask. Reference quirk (reproduced 5/5): the first
-                // permission ask on a freshly booted location is served by
-                // a closed Permission service and short-circuits to
-                // `deny` — no pending request, no events. A warm-up ask
-                // (rules say `allow` on a warm service, `deny` on the cold
-                // one; either way frame-less) makes the real ask below
-                // deterministic.
-                Step::request(
-                    "POST",
-                    "/api/session/{session_id}/permission",
-                    Some(json!({ "action": "read", "resources": ["/etc/parity-warmup"] })),
-                ),
-                Step::request(
-                    "POST",
-                    "/api/session/{session_id}/permission",
-                    // The default agent permissions allow everything except
-                    // `external_directory` outside the sandbox globs (agent
-                    // schema defaults + location allows), so this asks.
-                    Some(json!({
-                        "action": "external_directory",
-                        "resources": ["/etc/parity-readonly"],
-                        "save": ["/etc/parity-readonly"]
-                    })),
-                )
-                .capture("request_id", "/data/id"),
-                Step::request(
-                    "POST",
-                    "/api/session/{session_id}/permission/{request_id}/reply",
-                    Some(json!({ "decision": "always" })),
-                )
-                .expect(204),
-                Step::request_nobody(
-                    "GET",
-                    "/api/permission/saved?location[directory]={project_dir_q}",
-                )
-                .capture("saved_id", "/data/0/id"),
-                Step::request_nobody("DELETE", "/api/permission/saved/{saved_id}").expect(204),
-                Step::expect_frames("permission.asked", 1),
-                Step::expect_frames("permission.replied", 1),
-            ];
-            scenario::drive_and_golden(server, &spec, &steps).await?;
+            replay(server, "permission_saved", None).await?;
             Ok(())
         })
     })
@@ -190,16 +109,7 @@ async fn scenario_permission_saved() -> anyhow::Result<()> {
 async fn scenario_location_reload() -> anyhow::Result<()> {
     scenario_test("location_reload", |server| {
         Box::pin(async move {
-            let spec = ScenarioSpec::new(
-                "location_reload",
-                "boot project location -> POST /api/location/reload; location.shutdown frames",
-            );
-            let steps = vec![
-                Step::request_nobody("GET", "/api/location?location[directory]={project_dir_q}"),
-                Step::request_nobody("POST", "/api/location/reload").expect(204),
-                Step::expect_frames("location.shutdown", 1),
-            ];
-            scenario::drive_and_golden(server, &spec, &steps).await?;
+            replay(server, "location_reload", None).await?;
             Ok(())
         })
     })
@@ -217,30 +127,7 @@ async fn scenario_prompt_fake_llm() -> anyhow::Result<()> {
     scenario_test("prompt_fake_llm", |server| {
         Box::pin(async move {
             let fake = FakeLlm::start().await?;
-            let spec = ScenarioSpec::new(
-                "prompt_fake_llm",
-                "config-seeded openai-compatible provider -> fake local LLM -> prompt/message flow frames",
-            );
-            let steps = vec![
-                Step::write_file("{project_dir}/opencode.json", fake.provider_config()),
-                Step::request(
-                    "POST",
-                    "/api/session",
-                    Some(json!({
-                        "title": "parity prompt",
-                        "location": { "directory": "{project_dir}" },
-                        "model": { "providerID": "parityfake", "id": "fake-model" }
-                    })),
-                )
-                .capture("session_id", "/data/id"),
-                Step::request(
-                    "POST",
-                    "/api/session/{session_id}/prompt",
-                    Some(json!({ "text": "Say hello." })),
-                ),
-                Step::expect_frames("session.text.delta", 1),
-            ];
-            scenario::drive_and_golden(server, &spec, &steps).await?;
+            replay(server, "prompt_fake_llm", Some(&fake)).await?;
             Ok(())
         })
     })

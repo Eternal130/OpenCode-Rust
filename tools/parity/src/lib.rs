@@ -30,6 +30,7 @@ pub mod golden;
 pub mod httpdiff;
 pub mod normalize;
 pub mod reference;
+pub mod rust_server;
 pub mod scenario;
 pub mod sse;
 

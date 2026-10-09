@@ -78,7 +78,9 @@ async fn runner_e2e_tool_call_turn_full_event_sequence_and_message_tree() {
     assert_eq!(events[16].2["finish"], serde_json::json!("stop"));
     assert_eq!(events[16].2["tokens"]["input"].as_f64(), Some(20.0));
     assert_eq!(events[16].2["tokens"]["output"].as_f64(), Some(8.0));
-    assert_eq!(events[16].2["cost"], serde_json::json!(0.0));
+    // Whole costs serialize as integers on the v2 wire (`0`, not `0.0` —
+    // `Num` semantics; the parity goldens pin the shape).
+    assert_eq!(events[16].2["cost"], serde_json::json!(0));
 
     // The projected message tree: instruction baseline, user, assistant
     // (tool), assistant (text). The initial instruction baseline commits

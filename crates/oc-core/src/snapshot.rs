@@ -275,6 +275,13 @@ impl GitSnapshotStore {
         if !self.enabled() {
             return Err(operation_error("capture", "Snapshots are disabled"));
         }
+        // v2's snapshot service resolves the SOURCE repository first
+        // (`git.repo.discover(project.directory)`); outside a Git
+        // repository capture is undefined — no snapshot fields ride the
+        // step events (parity goldens pin the shapes).
+        if self.source_repo().is_none() {
+            return Err(operation_error("capture", "Project is not a Git repository"));
+        }
         let repo = self.open_repo().map_err(|error| operation_error("capture", error.message()))?;
         let source = self.source_repo();
         let scope_path = if self.scope == "." {

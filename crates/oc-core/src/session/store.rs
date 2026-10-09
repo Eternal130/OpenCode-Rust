@@ -541,43 +541,54 @@ impl SessionStore {
         }
         let subpath = relativize(&project.directory, location.directory.as_str());
 
-        let data = serde_json::json!({
+        // v2's Schema serialization omits undefined fields — absent
+        // agent/parentID/metadata/permissions/model stay OUT of the event
+        // payload instead of serializing as null (parity goldens pin the
+        // wire shape).
+        let mut data = serde_json::json!({
             "sessionID": session_id.as_str(),
             "slug": slug_create(),
             "version": input.version,
             "projectID": project.id,
-            "parentID": input.parent_id.as_ref().map(oc_schema::id::SessionId::as_str),
             "location": serde_json::to_value(&location)?,
             "subpath": subpath,
             "title": input.title,
-            "agent": input.agent,
-            // Children inherit metadata and permissions so host policies
-            // treat the family uniformly.
-            "metadata": match input.metadata {
-                Some(metadata) => serde_json::to_value(&metadata)?,
-                None => parent
-                    .as_ref()
-                    .and_then(|parent| parent.metadata.clone())
-                    .map(|stored| serde_json::from_str::<SessionMetadata>(&stored))
-                    .transpose()?
-                    .map(|metadata| serde_json::to_value(&metadata).unwrap_or_default())
-                    .unwrap_or(serde_json::Value::Null),
-            },
-            "permissions": match input.permissions {
-                Some(permissions) => serde_json::to_value(&permissions)?,
-                None => parent
-                    .as_ref()
-                    .and_then(|parent| parent.permission.clone())
-                    .map(|stored| serde_json::from_str::<Ruleset>(&stored))
-                    .transpose()?
-                    .map(|permissions| serde_json::to_value(&permissions).unwrap_or_default())
-                    .unwrap_or(serde_json::Value::Null),
-            },
-            "model": match input.model {
-                Some(model) => serde_json::to_value(&model)?,
-                None => serde_json::Value::Null,
-            },
         });
+        if let Some(parent_id) = input.parent_id.as_ref() {
+            data["parentID"] = serde_json::Value::String(parent_id.as_str().to_owned());
+        }
+        if let Some(agent) = input.agent {
+            data["agent"] = serde_json::Value::String(agent);
+        }
+        // Children inherit metadata and permissions so host policies
+        // treat the family uniformly.
+        let metadata = match input.metadata {
+            Some(metadata) => Some(serde_json::to_value(&metadata)?),
+            None => parent
+                .as_ref()
+                .and_then(|parent| parent.metadata.clone())
+                .map(|stored| serde_json::from_str::<SessionMetadata>(&stored))
+                .transpose()?
+                .map(|metadata| serde_json::to_value(&metadata).unwrap_or_default()),
+        };
+        if let Some(metadata) = metadata {
+            data["metadata"] = metadata;
+        }
+        let permissions = match input.permissions {
+            Some(permissions) => Some(serde_json::to_value(&permissions)?),
+            None => parent
+                .as_ref()
+                .and_then(|parent| parent.permission.clone())
+                .map(|stored| serde_json::from_str::<Ruleset>(&stored))
+                .transpose()?
+                .map(|permissions| serde_json::to_value(&permissions).unwrap_or_default()),
+        };
+        if let Some(permissions) = permissions {
+            data["permissions"] = permissions;
+        }
+        if let Some(model) = input.model {
+            data["model"] = serde_json::to_value(&model)?;
+        }
 
         let def = crate::bus::registry::by_type_latest("session.created")
             .unwrap_or_else(|| panic!("no session.created definition"));
@@ -619,7 +630,10 @@ fn relativize(from: &str, to: &str) -> String {
         parts.push((*part).to_string());
     }
     if parts.is_empty() {
-        ".".to_string()
+        // Node's `path.relative(x, x)` is the empty string (v2 emits
+        // `subpath: ""` for a session in the project root, pinned by the
+        // parity goldens) — not ".".
+        String::new()
     } else {
         parts.join("/")
     }
