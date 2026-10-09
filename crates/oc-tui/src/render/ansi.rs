@@ -4,7 +4,7 @@
 //! `ESC[0;attrs;fg;bgm` on every style change; `ESC[0m` at the end of a
 //! non-default-styled line.
 
-use super::{Cell, CellColor, Frame};
+use super::{Cell, CellColor, Frame, CONTINUATION};
 
 /// Serialize a frame to the canonical golden byte format.
 #[must_use]
@@ -14,6 +14,11 @@ pub fn serialize_canonical(frame: &Frame) -> String {
         let mut current = (0u16, CellColor::Default, CellColor::Default);
         let mut serialized = String::new();
         for cell in line {
+            if cell.ch == CONTINUATION {
+                // Wide-cluster continuation cells emit nothing (the
+                // exporter walks cells; empty symbols vanish).
+                continue;
+            }
             let style = (cell.attrs, cell.fg, cell.bg);
             if style != current {
                 serialized.push_str(&sgr(cell));

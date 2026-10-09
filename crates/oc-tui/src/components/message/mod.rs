@@ -18,8 +18,8 @@ pub mod model;
 pub mod rows;
 
 pub use list::{
-    render_transcript, resolve_part, FollowState, MeasuredRow, ThinkingMode, Transcript,
-    TranscriptOptions,
+    render_transcript, resolve_part, vscroll_appended_turn, vscroll_messages_fixture, FollowState,
+    MeasuredRow, ThinkingMode, Transcript, TranscriptOptions,
 };
 pub use markdown::{parse_blocks, parse_inline, render_markdown, MarkdownLine, MarkdownStyles};
 pub use model::{

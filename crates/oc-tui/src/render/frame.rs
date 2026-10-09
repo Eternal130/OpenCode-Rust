@@ -36,6 +36,11 @@ pub struct Frame {
     pub height: usize,
 }
 
+/// The wide-cluster continuation marker: a cell holding this char is
+/// the second (or later) cell of a double-width glyph and emits
+/// nothing in either golden format.
+pub const CONTINUATION: char = '\u{0}';
+
 impl Frame {
     #[must_use]
     pub fn cell(&self, row: usize, col: usize) -> Cell {
@@ -43,10 +48,17 @@ impl Frame {
     }
 
     /// The frame as a text grid (glyphs only), one line per row — the
-    /// `.txt` golden format.
+    /// `.txt` golden format. Wide-cluster continuation cells (the
+    /// cells after a double-width glyph) carry `'\0'` and are skipped,
+    /// exactly like the exporter's per-cell walk.
     #[must_use]
     pub fn text_grid(&self) -> Vec<String> {
-        self.cells.iter().map(|line| line.iter().map(|cell| cell.ch).collect()).collect()
+        self.cells
+            .iter()
+            .map(|line| {
+                line.iter().filter(|cell| cell.ch != CONTINUATION).map(|cell| cell.ch).collect()
+            })
+            .collect()
     }
 }
 

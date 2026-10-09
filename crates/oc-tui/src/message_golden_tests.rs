@@ -20,9 +20,6 @@
 #![cfg(test)]
 #![allow(clippy::cast_possible_truncation)]
 
-use parity::tui_frame as pf;
-use ratatui::style::{Color, Style};
-
 use crate::components::message::list::{
     message_groups_fixture, render_transcript, FollowState, TranscriptOptions,
 };
@@ -30,10 +27,11 @@ use crate::components::message::markdown::{
     markdown_frame_fixture, render_markdown, MarkdownStyles,
 };
 use crate::components::message::rows::spinner_frozen_frame;
-use crate::components::tool_rows::{fill_style, DEFAULT_FOREGROUND};
+use crate::components::tool_rows::fill_style;
 use crate::layout::{Placed, PlacedLine};
-use crate::render::{paint_placed, paint_placed_with_fills, serialize_canonical, Fill, Frame};
+use crate::render::{paint_placed, serialize_canonical, Frame};
 use crate::theme::ThemeState;
+use parity::tui_frame as pf;
 
 fn goldens() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/parity/goldens/tui-frames")
@@ -213,110 +211,18 @@ fn transcript_frame(width: u16, transcript_height: u16, theme: &ThemeState) -> F
 }
 
 /// **Wave-2 composer stub** — the bottom chrome rows the golden frame
-/// carries below the transcript (the composer is wave 2's lane; these
-/// bytes pin the seam so the frame compares whole):
-///
-/// * blank spacing row,
-/// * 4 composer rows (`┃` left border in `border.base` over the
-///   `decrease(background.raised)` prompt background),
-/// * the `╹▀▀…` transition row (▀ painted `promptBg` over base),
-/// * the status line (`{directory}:{branch}` muted, the keybind hints
-///   right-aligned — hidden below ~60 cols),
-/// * the container's bottom padding row.
-///
-/// Replace with the real composer component in wave 2.
+/// carries below the transcript. The seam now lives in
+/// [`crate::components::session_screen::composer_bottom_chrome`]
+/// (the wave-2 assembly's placeholder composer slot); these wrappers
+/// keep this file's call sites unchanged. Replace with the real
+/// composer component in wave 2 (the sibling lane swaps the slot
+/// 1:1).
 fn composer_bottom_chrome(width: u16, theme: &ThemeState) -> Frame {
-    // 7 rows: the composer body (4), the ╹▀ transition, the status
-    // line, the container's bottom padding.
-    let styles = theme.styles();
-    let inset: u16 = if width < 44 { 1 } else { 2 };
-    let content_width = width - inset * 2;
-    let prompt_bg = {
-        let raised = theme.resolved.tokens.background.raised.base;
-        let decreased = theme.resolved.tokens.decrease(raised, 1.0);
-        Color::Rgb(decreased.r, decreased.g, decreased.b)
-    };
-    let border = Style::new().fg(styles.border).bg(styles.background);
-    let mut placed = Vec::new();
-    let mut fills = Vec::new();
-    // Rows 0-3: the composer body (empty textarea + metadata padding).
-    for row in 0..=3u16 {
-        placed.push(Placed {
-            x: inset as usize,
-            y: row as usize,
-            width: 1,
-            lines: vec![PlacedLine::plain("┃", border)],
-            tag: None,
-        });
-        fills.push(Fill {
-            x: inset + 1,
-            y: row,
-            width: content_width - 1,
-            height: 1,
-            style: Style::new().fg(DEFAULT_FOREGROUND).bg(prompt_bg),
-        });
-    }
-    // Row 5: the ╹▀ transition (bottom border drawn with upper-half
-    // blocks in the prompt background color).
-    placed.push(Placed {
-        x: inset as usize,
-        y: 4,
-        width: 1,
-        lines: vec![PlacedLine::plain("╹", border)],
-        tag: None,
-    });
-    placed.push(Placed {
-        x: (inset + 1) as usize,
-        y: 4,
-        width: usize::from(content_width - 1),
-        lines: vec![PlacedLine::plain(
-            "▀".repeat(usize::from(content_width - 1)),
-            Style::new().fg(prompt_bg).bg(styles.background),
-        )],
-        tag: None,
-    });
-    // Row 6: the status line — location muted; the hints right-aligned
-    // ("shift+tab agents" + 2 gap + "ctrl+p commands", keys in
-    // `text.base`, labels muted). Hidden at narrow widths.
-    placed.push(Placed {
-        x: inset as usize,
-        y: 5,
-        width: 31,
-        lines: vec![PlacedLine::plain(
-            "/tmp/opencode/packages/tui:main",
-            Style::new()
-                .fg(styles.text_muted.fg.unwrap_or(DEFAULT_FOREGROUND))
-                .bg(styles.background),
-        )],
-        tag: None,
-    });
-    if width >= 60 {
-        let base =
-            Style::new().fg(styles.text.fg.unwrap_or(DEFAULT_FOREGROUND)).bg(styles.background);
-        let muted = Style::new()
-            .fg(styles.text_muted.fg.unwrap_or(DEFAULT_FOREGROUND))
-            .bg(styles.background);
-        let end = inset + content_width; // exclusive
-        let right_width = 10 + 6 + 2 + 7 + 8; // "shift+tab agents" + gap + "ctrl+p commands"
-        let mut x = (end - right_width) as usize;
-        for (text, style) in [
-            ("shift+tab ", base),
-            ("agents", muted),
-            ("  ", base),
-            ("ctrl+p ", base),
-            ("commands", muted),
-        ] {
-            placed.push(Placed {
-                x,
-                y: 5,
-                width: crate::wrap::display_width(text),
-                lines: vec![PlacedLine::plain(text, style)],
-                tag: None,
-            });
-            x += crate::wrap::display_width(text);
-        }
-    }
-    paint_placed_with_fills(&placed, &fills, (width, 7), fill_style(&styles))
+    crate::components::session_screen::composer_bottom_chrome(
+        width,
+        theme,
+        "/tmp/opencode/packages/tui:main",
+    )
 }
 
 /// Stitch the production transcript rows with the composer stub into

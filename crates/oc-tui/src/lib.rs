@@ -27,6 +27,7 @@
 
 pub mod components;
 pub mod data;
+pub mod diff_viewer_golden_tests;
 pub mod golden_tests;
 pub mod keymap;
 pub mod layout;
@@ -34,6 +35,7 @@ pub mod message_golden_tests;
 pub mod reactive;
 pub mod render;
 pub mod replay;
+pub mod screen_golden_tests;
 pub mod spike;
 pub mod store;
 pub mod theme;

@@ -1,0 +1,594 @@
+//! The composer's visible surface — byte-exact against the
+//! `composer-*` goldens (text grid + canonical ANSI at the manifest
+//! depth). Structure derived from `component/prompt/index.tsx`'s mount:
+//!
+//! ```text
+//! ┃  ← left border (`border.base`) over the page background
+//! ┃  Ask anything… "Fix a TODO in the codebase"   ← promptBg fill
+//! ┃                                              (decrease(raised.base))
+//! ╹▀▀▀…  ← bottom-left corner + upper-half blocks in promptBg
+//! /tmp/opencode/packages/tui:main   [ agents  commands]
+//! ```
+//!
+//! * padding: left/right 2 (1 below 44 cols), top 1 — the textarea
+//!   sits at `top + 1`, the metadata pad row (its labels are absent in
+//!   every pinned state) closes the box;
+//! * the textarea's visible rows = `min(maxHeight, wrapped + 1)` with
+//!   `maxHeight = max(6, height/3)`;
+//! * the placeholder truncates to `inner − 2` (the caret column
+//!   reserve) while typed text wraps with word semantics that KEEP the
+//!   break space on the previous line — CJK clusters break anywhere,
+//!   extmark chips (`[Image 1]`, bold `feedback.warning.base`) are
+//!   atomic;
+//! * the bottom border paints `▀` in `promptBg` over the page bg;
+//! * the footer row: the `{directory}:{branch}` label muted at the
+//!   left, the plugin hints (` agents` + 2 gap + ` commands`, keys in
+//!   `text.base`, labels muted) right-aligned from col `width − 1`,
+//!   gated at ≥ 44 cols;
+//! * the autocomplete popup overlays the rows above the box: `┃`
+//!   borders, the selected row filled `action.primary.focused` with
+//!   `text.action.primary.focused` glyphs, the title column padded to
+//!   the registry's longest display + 2, description prefixed by one
+//!   space.
+//!
+//! Caret policy (lane contract): caret/selection internals are C2 —
+//! the caret renders as v2's visible resting glyph, which in a golden
+//! frame is nothing.
+
+use crate::components::composer::autocomplete::{popup_height, AutocompleteOption};
+use crate::components::composer::PromptDraft;
+use crate::render::{Cell, CellColor, Frame};
+use crate::theme::ThemeState;
+use crate::wrap::display_width;
+use oc_theme::Rgba;
+
+/// The autocomplete popup's render inputs.
+#[derive(Debug, Clone, Default)]
+pub struct AutocompleteView<'a> {
+    pub options: &'a [AutocompleteOption],
+    pub selected: usize,
+    /// The padded title-column width (`registry.display_width()`).
+    pub title_width: usize,
+}
+
+/// The footer row's inputs: the location label and the two hint
+/// prefixes ("" in the golden harness — unbound shortcuts render as
+/// nothing, leaving ` agents` / ` commands`).
+#[derive(Debug, Clone, Default)]
+pub struct FooterHints {
+    pub location: String,
+    pub agent_shortcut: String,
+    pub command_shortcut: String,
+}
+
+/// Everything [`render_prompt_frame`] paints.
+#[derive(Debug, Clone)]
+pub struct PromptView<'a> {
+    pub draft: &'a PromptDraft,
+    /// The placeholder list entry (`Ask anything… "{entry}"`).
+    pub placeholder: String,
+    pub autocomplete: Option<AutocompleteView<'a>>,
+    pub footer: FooterHints,
+    /// The mount's y (the golden harness pads 2 rows above the box).
+    pub top: usize,
+}
+
+/// One styled fragment of a laid-out line (`chip` marks a file
+/// mention rendered as an extmark).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Span {
+    text: String,
+    chip: bool,
+}
+
+/// The textarea's wrap model. Units: spaces (kept on the line they fit
+/// on, consumed at a break that lands on them), words (moved whole),
+/// wide CJK clusters (break anywhere), chips (atomic).
+enum UnitKind {
+    Space,
+    Word,
+    BreakAnywhere,
+}
+
+struct Unit {
+    text: String,
+    width: usize,
+    chip: bool,
+    kind: UnitKind,
+}
+
+fn unit_kind(ch: char) -> UnitKind {
+    if ch == ' ' {
+        UnitKind::Space
+    } else if display_width(&ch.to_string()) > 1 {
+        UnitKind::BreakAnywhere
+    } else {
+        UnitKind::Word
+    }
+}
+
+/// Split the draft into wrap units, honoring file-mention chips as
+/// atomic spans (their chars join the unit stream but never split).
+fn draft_units(draft: &PromptDraft) -> Vec<Unit> {
+    let chars: Vec<char> = draft.text.chars().collect();
+    let chip_at =
+        |index: usize| draft.files.iter().any(|file| index >= file.start && index < file.end);
+    let mut units: Vec<Unit> = Vec::new();
+    let mut index = 0usize;
+    while index < chars.len() {
+        let ch = chars[index];
+        if ch == '\n' {
+            units.push(Unit {
+                text: "\n".into(),
+                width: 0,
+                chip: false,
+                kind: UnitKind::BreakAnywhere,
+            });
+            index += 1;
+            continue;
+        }
+        if chip_at(index) {
+            // Chips are atomic: one unit for the whole mention.
+            let mut end = index;
+            let mut text = String::new();
+            while end < chars.len() && chip_at(end) {
+                text.push(chars[end]);
+                end += 1;
+            }
+            units.push(Unit {
+                width: display_width(&text),
+                text,
+                chip: true,
+                kind: UnitKind::Word,
+            });
+            index = end;
+            continue;
+        }
+        match unit_kind(ch) {
+            UnitKind::Space => {
+                units.push(Unit { text: " ".into(), width: 1, chip: false, kind: UnitKind::Space });
+                index += 1;
+            }
+            UnitKind::BreakAnywhere => {
+                units.push(Unit {
+                    text: ch.to_string(),
+                    width: display_width(&ch.to_string()),
+                    chip: false,
+                    kind: UnitKind::BreakAnywhere,
+                });
+                index += 1;
+            }
+            UnitKind::Word => {
+                let mut text = String::new();
+                while index < chars.len()
+                    && !chip_at(index)
+                    && chars[index] != '\n'
+                    && matches!(unit_kind(chars[index]), UnitKind::Word)
+                {
+                    text.push(chars[index]);
+                    index += 1;
+                }
+                units.push(Unit {
+                    width: display_width(&text),
+                    text,
+                    chip: false,
+                    kind: UnitKind::Word,
+                });
+            }
+        }
+    }
+    units
+}
+
+/// Lay the draft out at `inner` columns: source lines wrap
+/// independently; a break keeps the trailing space on the previous
+/// line when it fits there, and consumes it when it does not.
+#[must_use]
+pub fn layout_draft_lines(draft: &PromptDraft, inner: usize) -> Vec<Vec<Span>> {
+    // Split into source lines first (newlines are hard breaks), then
+    // wrap each line's units.
+    let mut source_lines: Vec<Vec<Unit>> = vec![Vec::new()];
+    for unit in draft_units(draft) {
+        if unit.text == "\n" {
+            source_lines.push(Vec::new());
+        } else {
+            source_lines.last_mut().expect("seeded").push(unit);
+        }
+    }
+    let mut lines: Vec<Vec<Span>> = Vec::new();
+    for source in source_lines {
+        let mut pending: Vec<Unit> = Vec::new();
+        let mut width = 0usize;
+        for unit in source {
+            let unit_width = unit.width;
+            match unit.kind {
+                UnitKind::Space => {
+                    if width + unit_width <= inner {
+                        pending.push(unit);
+                        width += unit_width;
+                    } else {
+                        // The space wraps: consumed, line breaks.
+                        lines.push(merge_spans(&pending));
+                        pending.clear();
+                        width = 0;
+                    }
+                }
+                UnitKind::Word | UnitKind::BreakAnywhere => {
+                    if width + unit_width <= inner {
+                        pending.push(unit);
+                        width += unit_width;
+                    } else if unit_width > inner {
+                        // Overwide unit: hard-fill char by char.
+                        lines.push(merge_spans(&pending));
+                        pending.clear();
+                        let mut chunk = String::new();
+                        let mut chunk_width = 0usize;
+                        for ch in unit.text.chars() {
+                            let char_width = display_width(&ch.to_string());
+                            if chunk_width + char_width > inner {
+                                lines.push(vec![Span {
+                                    text: std::mem::take(&mut chunk),
+                                    chip: unit.chip,
+                                }]);
+                                chunk_width = 0;
+                            }
+                            chunk.push(ch);
+                            chunk_width += char_width;
+                        }
+                        pending.push(Unit {
+                            text: chunk,
+                            width: chunk_width,
+                            chip: unit.chip,
+                            kind: UnitKind::Word,
+                        });
+                        width = chunk_width;
+                    } else {
+                        lines.push(merge_spans(&pending));
+                        pending.clear();
+                        pending.push(unit);
+                        width = unit_width;
+                    }
+                }
+            }
+        }
+        lines.push(merge_spans(&pending));
+    }
+    if lines.is_empty() {
+        lines.push(Vec::new());
+    }
+    lines
+}
+
+fn merge_spans(units: &[Unit]) -> Vec<Span> {
+    let mut spans: Vec<Span> = Vec::new();
+    for unit in units {
+        if let Some(last) = spans.last_mut() {
+            if last.chip == unit.chip {
+                last.text.push_str(&unit.text);
+                continue;
+            }
+        }
+        spans.push(Span { text: unit.text.clone(), chip: unit.chip });
+    }
+    spans
+}
+
+#[must_use]
+fn cell_color(color: Rgba) -> CellColor {
+    CellColor::Rgb(color.r, color.g, color.b)
+}
+
+/// The composer mount's intrinsic height: the box (1 pad + textarea
+/// rows + 1 metadata pad) + the ╹▀ transition + the footer row.
+#[must_use]
+pub fn mount_height(draft: &PromptDraft, width: usize, height: usize) -> usize {
+    let pad = if width >= 44 { 2 } else { 1 };
+    let inner = width.saturating_sub(1 + pad * 2).max(1);
+    let lines = layout_draft_lines(draft, inner);
+    let max_height = (height / 3).max(6);
+    let textarea_rows = (lines.len().max(1) + 1).min(max_height);
+    1 + textarea_rows + 1 + 2
+}
+
+/// Render the composer mount (golden harness shape: the box at
+/// [`PromptView::top`], the popup above it, the footer row below).
+#[must_use]
+/// The theme's resolved painter palette (one place per color the
+/// composer surfaces consume).
+struct Palette {
+    base: CellColor,
+    prompt_bg: CellColor,
+    border: CellColor,
+    text_base: CellColor,
+    muted: CellColor,
+    default_fg: CellColor,
+    raised_high: CellColor,
+    popup_selected_bg: CellColor,
+    popup_selected_text: CellColor,
+    chip_color: CellColor,
+}
+
+fn palette(theme: &ThemeState) -> Palette {
+    let tokens = &theme.resolved.tokens;
+    Palette {
+        base: cell_color(tokens.background.base),
+        prompt_bg: cell_color(tokens.decrease(tokens.background.raised.base, 1.0)),
+        border: cell_color(tokens.border.base),
+        text_base: cell_color(tokens.text.base),
+        muted: cell_color(tokens.text.muted),
+        default_fg: cell_color(Rgba { r: 255, g: 255, b: 255, a: 255 }),
+        raised_high: cell_color(tokens.background.raised.high),
+        popup_selected_bg: cell_color(tokens.background.action.primary.focused),
+        popup_selected_text: cell_color(tokens.text.action.primary.focused),
+        chip_color: cell_color(tokens.text.feedback.warning.base),
+    }
+}
+
+#[must_use]
+pub fn render_prompt_frame(
+    view: &PromptView,
+    width: usize,
+    height: usize,
+    theme: &ThemeState,
+) -> Frame {
+    let colors = palette(theme);
+    let mut frame = Frame { cells: vec![vec![Cell::default(); width]; height], width, height };
+    // Page fill: the renderer's default foreground over background.base.
+    for row in &mut frame.cells {
+        for cell in row.iter_mut() {
+            cell.fg = colors.default_fg;
+            cell.bg = colors.base;
+        }
+    }
+
+    let pad = if width >= 44 { 2 } else { 1 };
+    let inner = width.saturating_sub(1 + pad * 2).max(1);
+    let lines = layout_draft_lines(view.draft, inner);
+    let max_height = (height / 3).max(6);
+    let textarea_rows = (lines.len().max(1) + 1).min(max_height);
+    let content_h = 1 + textarea_rows + 1;
+    let top = view.top;
+
+    paint_composer_box(
+        &mut frame,
+        view,
+        &lines,
+        &colors,
+        pad,
+        textarea_rows,
+        content_h,
+        inner,
+        width,
+        height,
+    );
+    paint_footer_row(&mut frame, view, &colors, top + content_h + 1, width, height);
+    if let Some(popup) = &view.autocomplete {
+        paint_autocomplete_popup(&mut frame, popup, &colors, top, width, height);
+    }
+    frame
+}
+
+/// The composer body: left border, prompt-bg fill, the textarea's
+/// placeholder/lines, and the ╹▀ transition row.
+#[allow(clippy::too_many_arguments)]
+fn paint_composer_box(
+    frame: &mut Frame,
+    view: &PromptView,
+    lines: &[Vec<Span>],
+    colors: &Palette,
+    pad: usize,
+    textarea_rows: usize,
+    content_h: usize,
+    inner: usize,
+    width: usize,
+    height: usize,
+) {
+    let top = view.top;
+    for row in top..(top + content_h).min(height) {
+        let line = &mut frame.cells[row];
+        line[0] = Cell { ch: '┃', attrs: 0, fg: colors.border, bg: colors.base };
+        for cell in &mut line[1..] {
+            cell.fg = colors.default_fg;
+            cell.bg = colors.prompt_bg;
+        }
+    }
+    // Textarea row 1: the placeholder (truncated to inner − 2, muted)
+    // or the wrapped lines with their extmark chips.
+    let text_x = 1 + pad;
+    let text_y = top + 1;
+    if view.draft.is_empty() {
+        // The placeholder truncates to inner − 2 (the caret column
+        // reserve) — `composer-placeholder-empty.w40` pins 35 of 37.
+        let placeholder = truncate_width(&view.placeholder, inner.saturating_sub(2));
+        paint_text(frame, text_x, text_y, &placeholder, colors.muted, colors.prompt_bg, 0);
+    } else {
+        for (index, spans) in lines.iter().enumerate().take(textarea_rows) {
+            let mut x = text_x;
+            for span in spans {
+                let (fg, attrs) =
+                    if span.chip { (colors.chip_color, 1u16) } else { (colors.text_base, 0) };
+                paint_text(frame, x, text_y + index, &span.text, fg, colors.prompt_bg, attrs);
+                x += display_width(&span.text);
+            }
+        }
+    }
+    // Bottom transition: ╹ + ▀ row (upper-half blocks in promptBg).
+    if top + content_h < height {
+        let row = &mut frame.cells[top + content_h];
+        row[0] = Cell { ch: '╹', attrs: 0, fg: colors.border, bg: colors.base };
+        for cell in &mut row[1..] {
+            *cell = Cell { ch: '▀', attrs: 0, fg: colors.prompt_bg, bg: colors.base };
+        }
+    }
+    let _ = width;
+}
+
+/// The footer row: the `{directory}:{branch}` label muted at the left,
+/// the plugin hints right-aligned (gated at ≥ 44 cols).
+fn paint_footer_row(
+    frame: &mut Frame,
+    view: &PromptView,
+    colors: &Palette,
+    row_index: usize,
+    width: usize,
+    height: usize,
+) {
+    if row_index >= height {
+        return;
+    }
+    let hints_shown = width >= 44;
+    let agent_hint = format!("{} agents", view.footer.agent_shortcut);
+    let command_hint = format!("{} commands", view.footer.command_shortcut);
+    let block_width = display_width(&agent_hint) + 2 + display_width(&command_hint);
+    let location_width =
+        if hints_shown { width.saturating_sub(block_width + 2).max(1) } else { width };
+    let location = truncate_width(&view.footer.location, location_width);
+    paint_text(frame, 0, row_index, &location, colors.muted, colors.base, 0);
+    if hints_shown {
+        let mut x = width - block_width;
+        for (hint, label) in [(&agent_hint, "agents"), (&command_hint, "commands")] {
+            let key_len = hint.len().saturating_sub(label.len());
+            let (key, _) = hint.split_at(key_len);
+            paint_text(frame, x, row_index, key, colors.text_base, colors.base, 0);
+            x += display_width(key);
+            paint_text(frame, x, row_index, label, colors.muted, colors.base, 0);
+            x += display_width(label) + 2;
+        }
+    }
+}
+
+/// The autocomplete popup above the box: bordered rows, the selected
+/// row filled `action.primary.focused`, title column padded, the
+/// description one space ahead.
+fn paint_autocomplete_popup(
+    frame: &mut Frame,
+    popup: &AutocompleteView,
+    colors: &Palette,
+    top: usize,
+    width: usize,
+    height: usize,
+) {
+    let count = popup.options.len();
+    let popup_h = popup_height(count, top);
+    for (row_index, option) in popup.options.iter().take(popup_h).enumerate() {
+        let y = top - popup_h + row_index;
+        if y >= height {
+            continue;
+        }
+        let selected = row_index == popup.selected;
+        let row = &mut frame.cells[y];
+        row[0] = Cell { ch: '┃', attrs: 0, fg: colors.border, bg: colors.base };
+        let last = width - 1;
+        row[last] = Cell { ch: '┃', attrs: 0, fg: colors.border, bg: colors.base };
+        let row_bg = if selected { colors.popup_selected_bg } else { colors.raised_high };
+        for cell in &mut row[1..last] {
+            cell.fg = colors.default_fg;
+            cell.bg = row_bg;
+        }
+        let title_color = if selected { colors.popup_selected_text } else { colors.text_base };
+        let desc_color = if selected { colors.popup_selected_text } else { colors.muted };
+        let title = format!("{:width$}", option.display, width = popup.title_width);
+        paint_text(frame, 2, y, &title, title_color, row_bg, 0);
+        let mut x = 2 + popup.title_width;
+        if let Some(description) = &option.description {
+            let desc = format!(" {description}");
+            paint_text(frame, x, y, &desc, desc_color, row_bg, 0);
+            x += display_width(&desc);
+        }
+        let _ = x;
+    }
+}
+
+/// Paint `text` starting at (`x`, `y`) with one style; wide clusters
+/// mark their continuation cells with `'\0'` (skipped by the text grid
+/// and the canonical serializer, matching the exporter's cell walk).
+fn paint_text(
+    frame: &mut Frame,
+    x: usize,
+    y: usize,
+    text: &str,
+    fg: CellColor,
+    bg: CellColor,
+    attrs: u16,
+) {
+    let Some(row) = frame.cells.get_mut(y) else { return };
+    let mut x = x;
+    for atom in crate::wrap::flatten(text, ratatui::style::Style::new()) {
+        let width = atom.width.max(1);
+        if x >= row.len() {
+            break;
+        }
+        row[x] = Cell { ch: atom.text.chars().next().unwrap_or(' '), attrs, fg, bg };
+        let span_end = (x + width).min(row.len());
+        for continuation in &mut row[(x + 1)..span_end] {
+            *continuation = Cell { ch: '\u{0}', attrs, fg, bg };
+        }
+        x += width;
+    }
+}
+
+/// Truncate by display width (chars kept while the width budget lasts).
+#[must_use]
+fn truncate_width(text: &str, limit: usize) -> String {
+    let mut budget = limit;
+    let mut out = String::new();
+    for ch in text.chars() {
+        let width = display_width(&ch.to_string());
+        if width > budget {
+            break;
+        }
+        budget -= width;
+        out.push(ch);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::composer::FileMention;
+
+    fn draft(text: &str) -> PromptDraft {
+        PromptDraft { text: text.to_owned(), ..PromptDraft::default() }
+    }
+
+    #[test]
+    fn chip_draft_wraps_keeping_the_break_space() {
+        // The w40 attachment golden: line 1 keeps the trailing space
+        // ("…the current " 35 cells), "design" wraps whole.
+        let start = "Compare [Image 1] with the current design".find("[Image").unwrap();
+        let end = start + "[Image 1]".len();
+        let d = PromptDraft {
+            text: "Compare [Image 1] with the current design".into(),
+            files: vec![FileMention { name: "screenshot.png".into(), start, end }],
+            ..PromptDraft::default()
+        };
+        let lines = layout_draft_lines(&d, 37);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0][0].text, "Compare ");
+        assert_eq!(lines[0][1].text, "[Image 1]");
+        assert!(lines[0][1].chip);
+        assert_eq!(lines[0][2].text, " with the current ");
+        assert_eq!(lines[0].iter().map(|span| display_width(&span.text)).sum::<usize>(), 35);
+        assert_eq!(lines[1][0].text, "design");
+    }
+
+    #[test]
+    fn cjk_breaks_anywhere_and_consumes_the_boundary_space() {
+        // The w40 CJK golden: line 1 fills 37 exactly ("…（English"),
+        // the boundary space wraps and is consumed, まじり） follows.
+        let text = "検証：日本語プロンプトの入力（English まじり）";
+        let lines = layout_draft_lines(&draft(text), 37);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0][0].text, "検証：日本語プロンプトの入力（English");
+        assert_eq!(display_width(&lines[0][0].text), 37);
+        assert_eq!(lines[1][0].text, "まじり）", "boundary space consumed");
+    }
+
+    #[test]
+    fn explicit_newlines_are_hard_breaks() {
+        let lines = layout_draft_lines(&draft("one\ntwo\nthree"), 80);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[1][0].text, "two");
+    }
+}

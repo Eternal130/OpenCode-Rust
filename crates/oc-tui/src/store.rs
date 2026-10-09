@@ -22,6 +22,9 @@ use std::rc::Rc;
 
 use serde_json::Value;
 
+use crate::components::composer::{
+    Composer, PromptDraft, PromptHistory, PromptSink, RecordingPromptSink, SubmittedPrompt,
+};
 use crate::components::dialog_select::SelectState;
 use crate::components::footer::{FooterMachine, PromptRoute};
 use crate::components::message::model::{Message, Part, PartTime};
@@ -309,6 +312,15 @@ pub struct MessageState {
 }
 
 /// The store root.
+/// The composer's store slice: per-session drafts (the draft stash),
+/// the shared prompt history, and the engine prompt sink.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PromptState {
+    /// Drafts keyed by session (the stash `PromptRef.set` restores).
+    pub drafts: std::collections::HashMap<String, PromptDraft>,
+    pub history: PromptHistory,
+}
+
 pub struct Store {
     /// Reactive runtime owning the graph (pump via `run_effects`).
     pub runtime: Runtime,
@@ -323,6 +335,11 @@ pub struct Store {
     toasts: Signal<ToastQueue>,
     /// Session message trees (lane C message flow).
     messages: Signal<MessageState>,
+    /// The composer state (drafts + history) for the session route.
+    prompt: Signal<PromptState>,
+    /// The engine prompt API stub submissions forward to
+    /// (TODO(7.3): the real `session.prompt` oc-client call).
+    prompt_sink: std::rc::Rc<dyn PromptSink>,
     /// The injected clock (ms since boot) — the ONLY time source
     /// animations may read (`ManualClock` semantics: a frozen clock pins
     /// spinner frame 0; render happens on tick, only when it advances).
@@ -344,6 +361,9 @@ impl Store {
         let footer = Signal::new(&runtime, FooterMachine::new());
         let toasts = Signal::new(&runtime, ToastQueue::new());
         let messages = Signal::new(&runtime, MessageState::default());
+        let prompt = Signal::new(&runtime, PromptState::default());
+        let prompt_sink: std::rc::Rc<dyn PromptSink> =
+            std::rc::Rc::new(RecordingPromptSink::default());
         let clock = Signal::new(&runtime, 0u64);
         let redraw_requests = Rc::new(Cell::new(0u64));
         // Any root-state change requests exactly one redraw per pump.
@@ -356,6 +376,7 @@ impl Store {
         let watch_footer = footer.clone();
         let watch_toasts = toasts.clone();
         let watch_messages = messages.clone();
+        let watch_prompt = prompt.clone();
         let watch_clock = clock.clone();
         let redraw_effect = Effect::new(&runtime, move || {
             let _ = (
@@ -367,6 +388,7 @@ impl Store {
                 watch_footer.get(),
                 watch_toasts.get(),
                 watch_messages.get(),
+                watch_prompt.get(),
                 watch_clock.get(),
             );
             bump.set(bump.get() + 1);
@@ -381,6 +403,8 @@ impl Store {
             footer,
             toasts,
             messages,
+            prompt,
+            prompt_sink,
             clock,
             redraw_requests,
             _redraw_effect: redraw_effect,
@@ -479,6 +503,62 @@ impl Store {
         self.toasts.update(|queue| {
             queue.advance(now_ms);
         });
+    }
+
+    // -- prompt (composer, wave 2) ---------------------------------------------
+
+    /// The session's draft (empty when never edited — the composer's
+    /// placeholder state).
+    #[must_use]
+    pub fn prompt_draft(&self, session_id: &str) -> PromptDraft {
+        self.prompt.get().drafts.get(session_id).cloned().unwrap_or_default()
+    }
+
+    /// The composer editing state for a session (draft + history),
+    /// ready for the renderers and the keypress pump.
+    #[must_use]
+    pub fn composer(&self, session_id: &str) -> Composer {
+        let state = self.prompt.get();
+        Composer {
+            draft: state.drafts.get(session_id).cloned().unwrap_or_default(),
+            history: state.history,
+            ..Composer::default()
+        }
+    }
+
+    /// Store a composer edit (draft + history advance together).
+    pub fn set_composer(&self, session_id: &str, composer: &Composer) {
+        self.prompt.update(|state| {
+            if composer.draft.is_empty() {
+                state.drafts.remove(session_id);
+            } else {
+                state.drafts.insert(session_id.to_owned(), composer.draft.clone());
+            }
+            state.history = composer.history.clone();
+        });
+    }
+
+    /// `prompt.submit`: take the session's draft, record it in the
+    /// history ring, and forward to the engine prompt stub.
+    #[must_use = "the submitted prompt feeds the engine call"]
+    pub fn submit_prompt(&self, session_id: &str) -> Option<SubmittedPrompt> {
+        let draft = self.prompt_draft(session_id);
+        if draft.is_empty() {
+            return None;
+        }
+        self.prompt.update(|state| {
+            state.drafts.remove(session_id);
+            state.history = state.history.clone().push(&draft.text);
+        });
+        let prompt = SubmittedPrompt { text: draft.text, files: draft.files, agents: draft.agents };
+        self.prompt_sink.send(session_id, &prompt);
+        Some(prompt)
+    }
+
+    /// Swap the engine prompt sink (tests inject recorders; wave 3
+    /// wires the oc-client call).
+    pub fn set_prompt_sink(&mut self, sink: std::rc::Rc<dyn PromptSink>) {
+        self.prompt_sink = sink;
     }
 
     // -- messages (lane C) -----------------------------------------------------
@@ -973,14 +1053,46 @@ impl Store {
             }
             "session.step.started" => {
                 // A new step reopens the assistant message (retry
-                // footers are wave 3); completion state clears.
+                // footers are wave 3); completion state clears. A
+                // message that does not exist yet is created OPEN with
+                // the step's agent/model and the envelope's `created`
+                // (the reference's session reducer — the
+                // vscroll-stick-bottom golden streams exactly this:
+                // step started → text ended → step ended).
                 let Some((session, assistant)) = session_and_assistant(event) else { return };
+                let agent = event.string("agent").unwrap_or_else(|| "build".to_owned());
+                let model = event
+                    .data
+                    .pointer("/model")
+                    .map(|model| match (model.get("providerID"), model.get("id")) {
+                        (Some(provider), Some(id)) if provider.is_string() && id.is_string() => {
+                            format!(
+                                "{}/{}",
+                                provider.as_str().unwrap_or_default(),
+                                id.as_str().unwrap_or_default()
+                            )
+                        }
+                        _ => String::new(),
+                    })
+                    .unwrap_or_default();
+                let created = event.created;
                 self.update_messages(&session, |messages| {
-                    if let Some(Message::Assistant { finish, time, .. }) =
-                        messages.iter_mut().find(|m| m.id() == assistant.as_str())
-                    {
-                        *finish = None;
-                        time.completed = None;
+                    match messages.iter_mut().find(|m| m.id() == assistant.as_str()) {
+                        Some(Message::Assistant { finish, time, .. }) => {
+                            *finish = None;
+                            time.completed = None;
+                        }
+                        Some(_) => {}
+                        None => {
+                            messages.push(Message::Assistant {
+                                id: assistant.clone(),
+                                agent,
+                                model,
+                                parts: Vec::new(),
+                                finish: None,
+                                time: PartTime { created, completed: None },
+                            });
+                        }
                     }
                 });
             }
@@ -1771,15 +1883,24 @@ mod tests {
 
     /// The stream fixture of the vscroll-stick-bottom golden end-to-end:
     /// step started → text started → text ended → step ended builds the
-    /// appended assistant turn exactly as the fixture messages look.
+    /// appended assistant turn exactly as the fixture messages look
+    /// (agent + model from the step envelope, completion from
+    /// step.ended's envelope).
     #[test]
     fn streamed_turn_matches_the_fixture_shape() {
         let store = Store::new(Runtime::new());
+        let mut started = BusEvent::new(
+            "session.step.started",
+            serde_json::json!({
+                "sessionID": "s",
+                "assistantMessageID": "vs-answer-appended",
+                "agent": "build",
+                "model": { "providerID": "fixture", "id": "fixture" },
+            }),
+        );
+        started.created = Some(101);
+        store.ingest_all([Ingest::Event(started)]);
         let events = [
-            (
-                "session.step.started",
-                serde_json::json!({ "sessionID": "s", "assistantMessageID": "vs-answer-appended", "agent": "build" }),
-            ),
             (
                 "session.text.started",
                 serde_json::json!({ "sessionID": "s", "assistantMessageID": "vs-answer-appended" }),
@@ -1788,16 +1909,18 @@ mod tests {
                 "session.text.ended",
                 serde_json::json!({ "sessionID": "s", "assistantMessageID": "vs-answer-appended", "ordinal": 0, "text": "Appended while pinned to the bottom." }),
             ),
-            (
-                "session.step.ended",
-                serde_json::json!({ "sessionID": "s", "assistantMessageID": "vs-answer-appended", "finish": "stop" }),
-            ),
         ];
         for (kind, data) in events {
             store.ingest_all([Ingest::Event(BusEvent::new(kind, data))]);
         }
+        let mut ended = BusEvent::new(
+            "session.step.ended",
+            serde_json::json!({ "sessionID": "s", "assistantMessageID": "vs-answer-appended", "finish": "stop" }),
+        );
+        ended.created = Some(103);
+        store.ingest_all([Ingest::Event(ended)]);
         let messages = store.messages("s");
-        let Message::Assistant { parts, finish, .. } = &messages[0] else { panic!() };
+        let Message::Assistant { parts, finish, model, time, .. } = &messages[0] else { panic!() };
         assert_eq!(
             parts,
             &[Part::Text {
@@ -1806,5 +1929,8 @@ mod tests {
             }]
         );
         assert_eq!(finish.as_deref(), Some("stop"));
+        assert_eq!(model, "fixture/fixture");
+        assert_eq!(time.created, Some(101));
+        assert_eq!(time.completed, Some(103));
     }
 }
