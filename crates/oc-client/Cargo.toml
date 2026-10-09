@@ -9,3 +9,13 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+oc-schema = { workspace = true }
+oc-util = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+futures = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+bytes = "1"
+base64 = "0.22"

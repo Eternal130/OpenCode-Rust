@@ -81,22 +81,21 @@ async fn runner_e2e_tool_call_turn_full_event_sequence_and_message_tree() {
     assert_eq!(events[16].2["cost"], serde_json::json!(0.0));
 
     // The projected message tree: instruction baseline, user, assistant
-    // (tool), assistant (text).
-    // The initial instruction baseline commits with empty text, so it
-    // projects no visible message; the tree is user + two assistants + the
-    // idle marker.
+    // (tool), assistant (text). The initial instruction baseline commits
+    // with empty text, so it projects no visible message; the tree is
+    // user + two assistants + the idle marker.
     let messages = harness.messages().await;
     let shapes: Vec<(&str, &str)> =
         messages.iter().map(|(id, type_, _)| (id.as_str(), type_.as_str())).collect();
+    // The durable ids are pinned by the script; the trailing idle marker
+    // is engine-allocated, so it is asserted by type/order only — never
+    // by absolute IdGen value (parallel test load shifts the counter).
     assert_eq!(
-        shapes,
-        vec![
-            ("msg_user_1", "user"),
-            ("msg_1", "assistant"),
-            ("msg_2", "assistant"),
-            ("msg_20", "idle"),
-        ]
+        &shapes[..3],
+        [("msg_user_1", "user"), ("msg_1", "assistant"), ("msg_2", "assistant"),]
     );
+    assert_eq!(shapes.len(), 4, "user + two assistants + the idle marker");
+    assert_eq!(shapes[3].1, "idle");
     // The baseline DID reach the model request (system parts).
     let requests = harness.llm.0.requests();
     let system: String = requests
