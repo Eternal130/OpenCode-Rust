@@ -18,7 +18,13 @@ async fn runner_drain_completes_without_pending_input() {
     harness.create_session().await;
     let outcome = harness
         .runner
-        .drain(harness.session_id().as_str(), false, None, Promotable::Input)
+        .drain(
+            harness.session_id().as_str(),
+            false,
+            None,
+            Promotable::Input,
+            tokio::sync::watch::channel(false).1,
+        )
         .await
         .unwrap();
     assert_eq!(outcome, DrainOutcome::Complete);
@@ -49,7 +55,13 @@ async fn runner_drain_entry_gate_completes_when_nothing_is_promotable() {
         .unwrap();
     let outcome = harness
         .runner
-        .drain(harness.session_id().as_str(), false, None, Promotable::Steer)
+        .drain(
+            harness.session_id().as_str(),
+            false,
+            None,
+            Promotable::Steer,
+            tokio::sync::watch::channel(false).1,
+        )
         .await
         .unwrap();
     assert_eq!(outcome, DrainOutcome::Complete, "queued input stays parked at steer boundaries");
@@ -62,7 +74,13 @@ async fn runner_drain_promotes_steers_and_resets_the_step_cursor() {
     harness.admit_prompt("msg_s1", "steer me").await;
     let outcome = harness
         .runner
-        .drain(harness.session_id().as_str(), false, None, Promotable::Input)
+        .drain(
+            harness.session_id().as_str(),
+            false,
+            None,
+            Promotable::Input,
+            tokio::sync::watch::channel(false).1,
+        )
         .await
         .unwrap();
     assert_eq!(outcome, DrainOutcome::Complete);
@@ -128,7 +146,13 @@ async fn runner_drain_settles_stale_compactions_newest_first() {
     // A forced drain skips the entry gate and settles the stale rows.
     let outcome = harness
         .runner
-        .drain(harness.session_id().as_str(), true, None, Promotable::Input)
+        .drain(
+            harness.session_id().as_str(),
+            true,
+            None,
+            Promotable::Input,
+            tokio::sync::watch::channel(false).1,
+        )
         .await
         .unwrap();
     assert_eq!(outcome, DrainOutcome::Complete);
@@ -194,7 +218,13 @@ async fn runner_drain_settles_stale_tool_calls() {
         .unwrap();
     harness
         .runner
-        .drain(harness.session_id().as_str(), true, None, Promotable::Input)
+        .drain(
+            harness.session_id().as_str(),
+            true,
+            None,
+            Promotable::Input,
+            tokio::sync::watch::channel(false).1,
+        )
         .await
         .unwrap();
     let events = harness.durable_events().await;
@@ -254,7 +284,13 @@ async fn runner_drain_moves_return_moved_for_pending_move() {
         .unwrap();
     let outcome = harness
         .runner
-        .drain(harness.session_id().as_str(), false, None, Promotable::Input)
+        .drain(
+            harness.session_id().as_str(),
+            false,
+            None,
+            Promotable::Input,
+            tokio::sync::watch::channel(false).1,
+        )
         .await
         .unwrap();
     assert!(matches!(outcome, DrainOutcome::Moved { .. }), "{outcome:?}");

@@ -1690,10 +1690,13 @@ async fn execution_stack(
 }
 
 fn hanging_drain() -> DrainFn {
-    Arc::new(|_, _, _, _| {
-        Box::pin(async {
-            std::future::pending::<()>().await;
-            unreachable!()
+    // A drain wedged at an await point that OBSERVES the shutdown watch
+    // (the production contract; a never-returning drain would now ride the
+    // coordinator's unwind deadline).
+    Arc::new(|_, _, _, _, mut shutdown| {
+        Box::pin(async move {
+            let _ = shutdown.changed().await;
+            Err(RunError::Interrupted)
         })
     })
 }
@@ -1740,14 +1743,16 @@ async fn session_execution_claim_lifecycle() {
     let interrupted = "ses_claim_interrupted";
     let completed = "ses_claim_completed";
     let completed_key = completed.to_string();
-    let drain: DrainFn = Arc::new(move |session, _, _, _| {
+    let drain: DrainFn = Arc::new(move |session, _, _, _, mut shutdown| {
         let completed_key = completed_key.clone();
         Box::pin(async move {
             if session == completed_key {
                 Ok(DrainOutcome::Complete)
             } else {
-                std::future::pending::<()>().await;
-                unreachable!()
+                // Wedged until the shutdown watch fires, then unwinds as
+                // interrupted.
+                let _ = shutdown.changed().await;
+                Err(RunError::Interrupted)
             }
         })
     });
@@ -1816,7 +1821,7 @@ async fn session_execution_user_interrupt_releases_claim() {
 /// `reports an idle interrupt as a no-op`.
 #[tokio::test]
 async fn session_execution_idle_interrupt_is_noop() {
-    let drain: DrainFn = Arc::new(|_, _, _, _| Box::pin(async { Ok(DrainOutcome::Complete) }));
+    let drain: DrainFn = Arc::new(|_, _, _, _, _| Box::pin(async { Ok(DrainOutcome::Complete) }));
     let (_db, _bus, execution) = execution_stack(drain, None).await;
     assert!(!execution.interrupt("ses_idle_cancel", InterruptOptions::default()).await);
     assert!(!execution.is_active("ses_idle_cancel"));
@@ -1867,7 +1872,7 @@ async fn session_execution_resume_steers_only_after_interrupt() {
     let drain: DrainFn = {
         let calls = Arc::clone(&calls);
         let started = Arc::clone(&started);
-        Arc::new(move |session, force, _, promotable| {
+        Arc::new(move |session, force, _, promotable, mut shutdown| {
             let calls = Arc::clone(&calls);
             let started = Arc::clone(&started);
             Box::pin(async move {
@@ -1875,8 +1880,10 @@ async fn session_execution_resume_steers_only_after_interrupt() {
                 if first {
                     calls.lock().unwrap().push((session, force, promotable));
                     started.fire();
-                    std::future::pending::<()>().await;
-                    unreachable!()
+                    // Wedged until the shutdown watch fires (the §4
+                    // contract), then unwinds as interrupted.
+                    let _ = shutdown.changed().await;
+                    return Err(RunError::Interrupted);
                 }
                 calls.lock().unwrap().push((session, force, promotable));
                 Ok(DrainOutcome::Complete)
@@ -1917,7 +1924,7 @@ async fn session_execution_idle_interrupt_resume_wakes_pending_steers() {
     let calls: Arc<std::sync::Mutex<Vec<(String, bool, Promotable)>>> = Arc::default();
     let drain: DrainFn = {
         let calls = Arc::clone(&calls);
-        Arc::new(move |session, force, _, promotable| {
+        Arc::new(move |session, force, _, promotable, _shutdown| {
             let calls = Arc::clone(&calls);
             Box::pin(async move {
                 calls.lock().unwrap().push((session, force, promotable));
@@ -1945,7 +1952,7 @@ async fn session_execution_interrupt_continue_compaction_rules() {
     let drain: DrainFn = {
         let calls = Arc::clone(&calls);
         let started = Arc::clone(&started);
-        Arc::new(move |session, force, _, promotable| {
+        Arc::new(move |session, force, _, promotable, mut shutdown| {
             let calls = Arc::clone(&calls);
             let started = Arc::clone(&started);
             Box::pin(async move {
@@ -1953,8 +1960,10 @@ async fn session_execution_interrupt_continue_compaction_rules() {
                 if first {
                     calls.lock().unwrap().push((session, force, promotable));
                     started.fire();
-                    std::future::pending::<()>().await;
-                    unreachable!()
+                    // Wedged until the shutdown watch fires (the §4
+                    // contract), then unwinds as interrupted.
+                    let _ = shutdown.changed().await;
+                    return Err(RunError::Interrupted);
                 }
                 calls.lock().unwrap().push((session, force, promotable));
                 Ok(DrainOutcome::Complete)
@@ -1988,7 +1997,7 @@ async fn session_execution_interrupt_continue_compaction_rules() {
     let parked_calls: Arc<std::sync::Mutex<Vec<(String, bool, Promotable)>>> = Arc::default();
     let parked_drain: DrainFn = {
         let calls = Arc::clone(&parked_calls);
-        Arc::new(move |session, force, _, promotable| {
+        Arc::new(move |session, force, _, promotable, _shutdown| {
             let calls = Arc::clone(&calls);
             Box::pin(async move {
                 calls.lock().unwrap().push((session, force, promotable));
@@ -2078,13 +2087,29 @@ type TestSettled = Arc<
 >;
 
 fn coordinator_from(drain: TestDrain) -> SessionRunCoordinator {
-    SessionRunCoordinator::new(CoordinatorOptions {
-        drain: Some(Arc::new(move |key, force, _continuation, scope| {
-            let drain = Arc::clone(&drain);
-            Box::pin(async move { drain(key, force, scope).await.map(|()| DrainOutcome::Complete) })
-        })),
-        started: None,
-        settled: None,
+    coordinator_with(drain, None, None)
+}
+
+/// The test-drain adapter: races the wrapped future against the
+/// execution's shutdown watch (the §4 contract every production drain
+/// honors — a hung drain unwinds as interrupted once signalled).
+fn shutdown_aware(
+    drain: &TestDrain,
+    key: String,
+    force: bool,
+    scope: Promotable,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) -> futures::future::BoxFuture<'static, Result<DrainOutcome, RunError>> {
+    let drain = Arc::clone(drain);
+    Box::pin(async move {
+        if *shutdown.borrow() {
+            return Err(RunError::Interrupted);
+        }
+        tokio::select! {
+            biased;
+            _ = shutdown.changed() => Err(RunError::Interrupted),
+            outcome = drain(key, force, scope) => outcome.map(|()| DrainOutcome::Complete),
+        }
     })
 }
 
@@ -2094,9 +2119,8 @@ fn coordinator_with(
     started: Option<TestDrain>,
 ) -> SessionRunCoordinator {
     SessionRunCoordinator::new(CoordinatorOptions {
-        drain: Some(Arc::new(move |key, force, _continuation, scope| {
-            let drain = Arc::clone(&drain);
-            Box::pin(async move { drain(key, force, scope).await.map(|()| DrainOutcome::Complete) })
+        drain: Some(Arc::new(move |key, force, _continuation, scope, shutdown| {
+            Box::pin(shutdown_aware(&drain, key, force, scope, shutdown))
         })),
         started: started.map(|hook| {
             Arc::new(move |key: String| {

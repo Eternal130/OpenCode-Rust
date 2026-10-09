@@ -7,11 +7,10 @@
 //! feed ONE single-writer loop; tool fibers are `tokio::spawn`ed tasks that
 //! send their settled exit over an mpsc channel (never touching the
 //! publisher record), so settlement marks happen in the loop's
-//! single-threaded order. The finalization region runs after the stream
-//! exits inside this same task; because the drain future's external
-//! cancellation drops it at await boundaries, Wave A's coordinator treats
-//! that drop as the interrupt — the finalization ordering contract holds
-//! for every path the runner itself observes.
+//! single-threaded order. The coordinator's interrupt arrives on the
+//! execution's shutdown `watch` — never as a future drop: the loop (and
+//! the tool-join phase) latch it, ring every tool fiber's bell, and the
+//! finalization region runs to completion before the interrupt re-raises.
 
 #![allow(clippy::too_many_lines)]
 
@@ -23,7 +22,7 @@ use oc_ai::schema::messages::ToolChoice;
 use oc_ai::schema::ProviderFailureClassification;
 use oc_schema::common::{FinishReason, Record, SessionError};
 use oc_schema::id::{AgentId, MessageId, SessionId};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use oc_ai::schema::{AiError, AiErrorReason, ReasonFields};
 
@@ -38,6 +37,11 @@ use crate::session::runner::{
     is_context_overflow_failure, is_interrupted_stream, is_retry_full_transport, is_retryable,
     to_session_error, unknown_finish_error, LlmClient, ResolvedModel, SessionUsage,
 };
+
+/// How long finalization waits for tool fibers to observe the interrupt
+/// bell and exit before classifying them interrupted anyway (a wedged
+/// fiber must not block durable settlement forever).
+const TOOL_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// `TOOLS_INTERRUPTED` (step.ts:61).
 #[must_use]
@@ -153,17 +157,28 @@ pub struct StepDeps {
     /// The snapshot service (Wave C1); `None` disables the snapshot
     /// bracket (captures resolve to `None`, files stays absent).
     pub snapshot: Option<Arc<dyn crate::snapshot::SnapshotService>>,
+    /// The tool-output budget service (tool-output.ts `truncate`); `None`
+    /// publishes raw tool results (tests that pin untruncated output).
+    pub tool_output: Option<Arc<crate::tool_output::ToolOutput>>,
+    /// The execution's shutdown watch (runner-concurrency.md §4): the
+    /// coordinator's interrupt signals it instead of dropping this
+    /// future; the attempt observes it at await points and unwinds
+    /// through the finalization guard region.
+    pub shutdown: watch::Receiver<bool>,
 }
 
 enum LoopItem {
     Outcome(Option<ToolExit>),
     Event(Option<Result<LLMEvent, AiError>>),
+    Shutdown,
 }
 
-/// The per-tool interrupt bell (runner-concurrency.md §2): fire-then-join,
-/// interrupted executions report `TOOLS_INTERRUPTED` through the outcome
-/// channel so classification stays in one place.
-type ToolInterrupt = Arc<tokio::sync::Notify>;
+/// The per-tool interrupt bell (runner-concurrency.md §2): a `watch`
+/// channel — ringing latches, so fibers that reach their await point
+/// after the ring still observe it. Interrupted executions report
+/// `TOOLS_INTERRUPTED` through the outcome channel so classification
+/// stays in one place.
+type ToolInterrupt = Arc<watch::Sender<bool>>;
 
 /// `SessionStep.attempt` (step.ts:72-279).
 pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, AttemptFailure> {
@@ -186,25 +201,44 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
     let tools_disabled = matches!(input.prepared.request.tool_choice, Some(ToolChoice::None {}));
 
     let (outcome_tx, mut outcome_rx) = mpsc::unbounded_channel::<ToolExit>();
-    let cancel: ToolInterrupt = Arc::new(tokio::sync::Notify::new());
+    let cancel: ToolInterrupt = Arc::new(watch::channel(false).0);
     let mut tool_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     let mut parked_overflow: Option<LLMEvent> = None;
     let mut publisher = publisher;
+    // The coordinator's interrupt, latched at whichever await point
+    // observed it (the stream loop or the tool-join phase). Everything
+    // from classification onward is the uninterruptible region.
+    let mut stream_interrupted = false;
 
     // The single-writer loop: mark synchronously before every publish.
     let mut stream =
         deps.llm.stream(input.prepared.request.clone()).await.map_err(AttemptFailure::Stream)?;
     let mut stream_error: Option<AiError> = None;
+    let mut shutdown = deps.shutdown.clone();
     loop {
         let next = tokio::select! {
             biased;
+            _ = shutdown.changed() => LoopItem::Shutdown,
             outcome = outcome_rx.recv() => LoopItem::Outcome(outcome),
             event = stream.next() => LoopItem::Event(event),
         };
+        if matches!(next, LoopItem::Shutdown) {
+            // The coordinator interrupted the execution: latch and leave
+            // the stream loop; the finalization guard region below rings
+            // the tool bells, joins, settles, and re-raises.
+            stream_interrupted = true;
+            break;
+        }
+        if *shutdown.borrow() {
+            // A clone of the watch marks pre-clone changes as seen, so the
+            // current value is checked explicitly at every iteration.
+            stream_interrupted = true;
+            break;
+        }
         match next {
             LoopItem::Outcome(Some(exit)) => {
-                settle_tool_exit(&mut publisher, exit).await?;
+                settle_tool_exit(&mut publisher, deps, exit).await?;
             }
             LoopItem::Outcome(None) => {}
             LoopItem::Event(Some(Ok(event))) => {
@@ -261,28 +295,45 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
                     let cancel = Arc::clone(&cancel);
                     tool_tasks.push(tokio::spawn(async move {
                         let execution = execute(call.clone());
+                        let mut bell = cancel.subscribe();
                         let outcome = tokio::select! {
                             biased;
-                            () = cancel.notified() => ToolExit::Interrupted,
+                            _ = bell.changed() => ToolExit::Interrupted,
                             outcome = execution => match outcome {
                                 Ok(result) => ToolExit::Success {
                                     id: call.id,
                                     name: call.name,
                                     result,
                                 },
-                                Err(ToolRunFailure::Error { message, metadata }) => ToolExit::Error {
-                                    id: call.id,
-                                    error: SessionError {
-                                        error_type: "tool.execution".into(),
+                                Err(failure) => match failure {
+                                    ToolRunFailure::Error { message, metadata } => {
+                                        ToolExit::Error {
+                                            id: call.id,
+                                            error: SessionError {
+                                                error_type: "tool.execution".into(),
+                                                message,
+                                                status: None,
+                                                response: None,
+                                            },
+                                            metadata,
+                                        }
+                                    }
+                                    ToolRunFailure::PermissionRejected { message, metadata } => {
+                                        ToolExit::Error {
+                                            id: call.id,
+                                            error: SessionError {
+                                                error_type: "permission.rejected".into(),
+                                                message,
+                                                status: None,
+                                                response: None,
+                                            },
+                                            metadata,
+                                        }
+                                    }
+                                    ToolRunFailure::Declined { message } => ToolExit::Declined {
+                                        id: call.id,
                                         message,
-                                        status: None,
-                                        response: None,
                                     },
-                                    metadata,
-                                },
-                                Err(ToolRunFailure::Declined { message }) => ToolExit::Declined {
-                                    id: call.id,
-                                    message,
                                 },
                             },
                         };
@@ -296,6 +347,7 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
                 // failure event; read on until the stream closes.
             }
             LoopItem::Event(None) => break,
+            LoopItem::Shutdown => unreachable!("handled above"),
         }
     }
 
@@ -305,14 +357,68 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
         publisher.streamed().await?;
     }
 
-    // 2. Join the tool fibers, then drain their outcomes.
+    // 2. Join the tool fibers, then drain their outcomes. The join phase
+    //    still observes the interrupt (v2 wraps `Fiber.awaitAll` in
+    //    `restore`): an interrupt here rings the bells for live fibers
+    //    and the join continues to completion.
     let mut tool_die: Option<AiError> = None;
+    if stream_interrupted {
+        // Ring every live tool fiber's bell (interruptTools). The watch
+        // latches, so fibers not yet parked at their await point still
+        // observe it.
+        let _ = cancel.send(true);
+    }
     for task in tool_tasks.drain(..) {
-        if let Err(join_error) = task.await {
-            // Die-reasons-only: a panicked tool fiber is a defect.
-            tool_die = Some(AiError::new(AiErrorReason::UnknownProvider {
-                fields: ReasonFields::new(format!("Tool execution died: {join_error}")),
-            }));
+        if !stream_interrupted && *shutdown.borrow() {
+            stream_interrupted = true;
+            let _ = cancel.send(true);
+        }
+        tokio::pin!(task);
+        // `None` = the join timed out and the wedged fiber was aborted —
+        // an interrupted exit, never a die.
+        let joined: Option<Result<(), tokio::task::JoinError>> = if stream_interrupted {
+            // The fibers are unwinding through their own bells; bound the
+            // wait so a wedged fiber cannot stall durable settlement.
+            match tokio::time::timeout(TOOL_JOIN_TIMEOUT, &mut task).await {
+                Ok(joined) => Some(joined),
+                Err(_elapsed) => {
+                    task.abort();
+                    None
+                }
+            }
+        } else {
+            // A normal join may still be interrupted mid-wait: v2 restores
+            // interruptibility around `Fiber.awaitAll`, and a failed join
+            // re-runs interruptTools.
+            tokio::select! {
+                biased;
+                _ = shutdown.changed() => {
+                    stream_interrupted = true;
+                    let _ = cancel.send(true);
+                    match tokio::time::timeout(TOOL_JOIN_TIMEOUT, &mut task).await {
+                        Ok(joined) => Some(joined),
+                        Err(_elapsed) => {
+                            task.abort();
+                            None
+                        }
+                    }
+                }
+                joined = &mut task => Some(joined),
+            }
+        };
+        match joined {
+            None => continue, // wedged under interrupt: classified interrupted
+            Some(Ok(())) => {}
+            Some(Err(join_error)) => {
+                // Die-reasons-only: a panicked tool fiber is a defect. A
+                // fiber aborted while interrupting reads as interrupted.
+                if stream_interrupted && join_error.is_cancelled() {
+                    continue;
+                }
+                tool_die = Some(AiError::new(AiErrorReason::UnknownProvider {
+                    fields: ReasonFields::new(format!("Tool execution died: {join_error}")),
+                }));
+            }
         }
     }
     drop(outcome_tx);
@@ -321,8 +427,12 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
         exits.push(exit);
     }
     for exit in &exits {
-        settle_tool_exit(&mut publisher, exit.clone()).await?;
+        settle_tool_exit(&mut publisher, deps, exit.clone()).await?;
     }
+
+    // -- Uninterruptible region (§4): classification through durable
+    //    settlement runs to completion; the latched interrupt re-raises
+    //    after it.
 
     // 2b. Classify the tool exits (step.ts:288-311).
     let declines: Vec<(String, String)> = exits
@@ -332,7 +442,8 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
             _ => None,
         })
         .collect();
-    let tools_interrupted_flag = exits.iter().any(|exit| matches!(exit, ToolExit::Interrupted));
+    let tools_interrupted_flag =
+        stream_interrupted || exits.iter().any(|exit| matches!(exit, ToolExit::Interrupted));
 
     // 3. Overflow recovery.
     let overflow =
@@ -474,7 +585,12 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
         }
     }
 
-    // 13. Returns.
+    // 13. Returns. The latched interrupt re-raises here — after durable
+    //     settlement — exactly like v2's `failCause(stream.cause)` on an
+    //     interrupted stream.
+    if stream_interrupted {
+        return Err(AttemptFailure::Interrupted);
+    }
     if let Some(error) = stream_failed(stream_error.as_ref(), tool_die.as_ref()) {
         return Err(AttemptFailure::Stream(error));
     }
@@ -497,12 +613,34 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
 /// settle during finalization).
 async fn settle_tool_exit(
     publisher: &mut LlmEventPublisher,
+    deps: &StepDeps,
     exit: ToolExit,
 ) -> Result<(), PublisherError> {
     match exit {
         ToolExit::Success { id, name, result } => {
-            // toolOutput.truncate — TODO(wave-C): the 2000-line / 50KiB
-            // tool-output budget lands with the tool lane.
+            // toolOutput.truncate (step.ts:122) — the 2000-line / 50KiB
+            // budget runs inside the tool fiber, BEFORE the terminal
+            // settle: the spilled original lands in
+            // `<data>/tool-output/` and the in-band content becomes the
+            // fitting prefix plus the exact marker.
+            let result = match deps.tool_output.as_ref() {
+                Some(service) => {
+                    let truncated = service.truncate(crate::tool_output::ToolOutputResult {
+                        content: result.content.clone(),
+                        metadata: result.metadata.clone(),
+                    });
+                    match truncated {
+                        Ok(truncated) => ToolRunResult {
+                            content: truncated.content,
+                            metadata: truncated.metadata,
+                        },
+                        // A spill failure degrades to the raw result — the
+                        // model still gets its output.
+                        Err(_io) => result,
+                    }
+                }
+                None => result,
+            };
             publisher.tool_execution(&id, &name, &result).await
         }
         ToolExit::Error { id, error, metadata } => {
