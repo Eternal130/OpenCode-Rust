@@ -37,6 +37,67 @@ use parity::scenario::{self, scripts, FakeLlm, ScenarioHost};
 use parity::sse;
 use serde_json::Value;
 
+/// Rebuild the /tmp/opencode/ref bun runtime if it was wiped (it has been,
+/// twice, by /tmp cleaners). Best-effort: returns false (and skips tests)
+/// when the pinned worktree or bun is unavailable.
+fn ensure_ref_runtime_or_skip(name: &str) -> bool {
+    let marker = std::path::Path::new("/tmp/opencode/ref/packages/cli/src/index.ts");
+    let node_modules = std::path::Path::new("/tmp/opencode/ref/node_modules");
+    if marker.exists() && node_modules.is_dir() {
+        return true;
+    }
+    eprintln!("[m1:{name}] reference runtime missing — rebuilding from pinned worktree");
+    let bun = which_bun();
+    let out = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "mkdir -p /tmp/opencode && chmod 1777 /tmp/opencode 2>/dev/null; \
+             mkdir -p /tmp/opencode/ref.tmp && cd {src} && tar -cf - --exclude=.git . | (cd /tmp/opencode/ref.tmp && tar -xf -) && \
+             mv /tmp/opencode/ref.tmp /tmp/opencode/ref",
+            src = "/opt/opencode-ref"
+        ))
+        .output();
+    match out {
+        Ok(o) if o.status.success() => {}
+        _ => {
+            eprintln!("[m1:{name}] ref rebuild (copy) failed — skipping");
+            return false;
+        }
+    }
+    let Ok(bun) = bun else {
+        eprintln!("[m1:{name}] bun unavailable — skipping ref install");
+        return false;
+    };
+    let out = std::process::Command::new(&bun)
+        .args(["install", "--frozen-lockfile"])
+        .current_dir("/tmp/opencode/ref")
+        .output();
+    if out.as_ref().is_ok_and(|o| o.status.success()) {
+        eprintln!("[m1:{name}] reference runtime rebuilt");
+        true
+    } else {
+        eprintln!("[m1:{name}] bun install failed — skipping");
+        false
+    }
+}
+
+fn which_bun() -> Result<String, ()> {
+    for candidate in ["/usr/local/bin/bun", "/root/.bun/bin/bun", "/home/eternal130/.bun/bin/bun"] {
+        if std::path::Path::new(candidate).exists() {
+            return Ok(candidate.to_owned());
+        }
+    }
+    std::env::var("PATH")
+        .ok()
+        .and_then(|path| {
+            path.split(':').find_map(|dir| {
+                let p = std::path::Path::new(dir).join("bun");
+                p.exists().then(|| p.to_string_lossy().to_string())
+            })
+        })
+        .ok_or(())
+}
+
 /// The per-scenario documented skip-list (frame types removed from both
 /// the golden and the Rust capture before comparing). Empty everywhere:
 /// the built-in skills port (gate-6 F3) closed the last documented
@@ -48,6 +109,9 @@ fn skips_for(_name: &str) -> &'static [&'static str] {
 /// Boot the Rust server, run the named script, compare against the golden
 /// on the intersection.
 async fn rust_scenario(name: &str) -> anyhow::Result<()> {
+    if !ensure_ref_runtime_or_skip(name) {
+        return Ok(());
+    }
     if rust_server::skip_if_no_cargo() {
         eprintln!("skipping {name}: cargo not found on PATH");
         return Ok(());

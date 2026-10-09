@@ -1,8 +1,8 @@
 //! Gate-6 F1 regression: `/api/fs/read` containment (v2 `FileSystem.resolve`
 //! double fence). The traversal vectors that leaked before the fix:
 //!
-//! - URL-encoded `..%2Fsecret.txt` (one level up),
-//! - nested `..%2F..%2Fsecret.txt` (two levels up),
+//! - URL-encoded `..%2F<secret>` (one level up),
+//! - nested `..%2F..%2F<secret2>` (two levels up),
 //! - a symlink inside the workspace pointing outside,
 //! - an absolute override (`%2Fetc%2Fhostname` replaces the base),
 //!
@@ -76,8 +76,12 @@ async fn fs_read_containment_and_list_shape() {
         .expect("double-decoded file");
     let parent = workspace.parent().expect("parent").to_path_buf();
     let grandparent = parent.parent().expect("grandparent").to_path_buf();
-    std::fs::write(parent.join("secret.txt"), "parent secret").expect("parent secret");
-    std::fs::write(grandparent.join("secret2.txt"), "grandparent secret").expect("grandparent");
+    // PID-unique names: the shared /tmp scratch is written by both root and
+    // non-root test runs; a fixed name would collide across owners.
+    let secret_name = format!("secret-{}.txt", std::process::id());
+    let secret_two = format!("secret2-{}.txt", std::process::id());
+    std::fs::write(parent.join(&secret_name), "parent secret").expect("parent secret");
+    std::fs::write(grandparent.join(&secret_two), "grandparent secret").expect("grandparent");
     let outside = parent.join("outside-target.md");
     std::fs::write(&outside, "outside secret").expect("outside target");
     std::os::unix::fs::symlink(&outside, workspace.join("escape.md")).expect("escape symlink");
@@ -99,13 +103,13 @@ async fn fs_read_containment_and_list_shape() {
     assert_eq!(response.status, 200, "in-workspace symlink resolves inside");
     assert_eq!(response.text(), "contained payload");
 
-    // URL-encoded single traversal: `..%2Fsecret.txt` dies 500.
-    let response = get("/api/fs/read/..%2Fsecret.txt".to_owned()).await;
+    // URL-encoded single traversal: `..%2F<secret>` dies 500.
+    let response = get(format!("/api/fs/read/..%2F{secret_name}")).await;
     assert_eq!(response.status, 500, "one-level traversal must die");
     assert_eq!(response.json()["_tag"], json!("UnknownError"));
 
-    // Nested traversal: `..%2F..%2Fsecret2.txt` dies 500.
-    let response = get("/api/fs/read/..%2F..%2Fsecret2.txt".to_owned()).await;
+    // Nested traversal: `..%2F..%2F<secret2>` dies 500.
+    let response = get(format!("/api/fs/read/..%2F..%2F{secret_two}")).await;
     assert_eq!(response.status, 500, "two-level traversal must die");
     assert_eq!(response.json()["_tag"], json!("UnknownError"));
 

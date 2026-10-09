@@ -48,7 +48,43 @@ const SANDBOX_ROOT: &str = "/tmp/opencode/w4a-sandbox";
 const FORBIDDEN_PORT: u16 = 49374;
 const REF_PASSWORD: &str = "core-w4a-ref-password";
 
+/// Rebuild /tmp/opencode/ref if wiped (self-heal; see incident log).
+fn ensure_ref_runtime() -> bool {
+    let marker = std::path::Path::new("/tmp/opencode/ref/packages/cli/src/index.ts");
+    let node_modules = std::path::Path::new("/tmp/opencode/ref/node_modules");
+    if marker.exists() && node_modules.is_dir() {
+        return true;
+    }
+    eprintln!("[ref-selfheal] reference runtime missing — rebuilding");
+    let bun = ["/usr/local/bin/bun", "/root/.bun/bin/bun"]
+        .iter()
+        .find(|p| std::path::Path::new(p).exists());
+    let ok = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("mkdir -p /tmp/opencode && chmod 1777 /tmp/opencode 2>/dev/null; mkdir -p /tmp/opencode/ref.tmp && cd /opt/opencode-ref && tar -cf - --exclude=.git . | (cd /tmp/opencode/ref.tmp && tar -xf -) && mv /tmp/opencode/ref.tmp /tmp/opencode/ref")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !ok {
+        eprintln!("[ref-selfheal] copy failed");
+        return false;
+    }
+    let Some(bun) = bun else {
+        eprintln!("[ref-selfheal] bun unavailable");
+        return false;
+    };
+    let ok = std::process::Command::new(bun)
+        .args(["install", "--frozen-lockfile"])
+        .current_dir("/tmp/opencode/ref")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    eprintln!("[ref-selfheal] {}", if ok { "rebuilt" } else { "bun install failed" });
+    ok
+}
+
 fn has_bun() -> bool {
+    if !ensure_ref_runtime() {
+        return false;
+    }
     bun_path().is_some() && Path::new(REF_ROOT).is_dir()
 }
 
@@ -162,6 +198,10 @@ async fn spawn_reference() -> Result<(ReferenceServer, std::path::PathBuf), Stri
     let sandbox = PathBuf::from(SANDBOX_ROOT).join(format!("ref-{}-{port}", std::process::id()));
     let (home, tmp) = prepare_sandbox(&sandbox).map_err(|e| e.to_string())?;
     let db_path = home.join(".local/share/opencode").join("w4a-parity.db");
+    // The launcher lives inside the ref runtime tree (bare workspace
+    // imports resolve from there). The ref runtime must be owned by (or
+    // writable for) the test user — ensure_ref_runtime rebuilds it as the
+    // running user, and root can always write.
     let launcher = root.join("packages/cli").join("w4a-parity-serve.ts");
     std::fs::write(&launcher, LAUNCHER).map_err(|e| format!("write launcher: {e}"))?;
 
