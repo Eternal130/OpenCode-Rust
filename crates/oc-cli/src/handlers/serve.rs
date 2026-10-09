@@ -51,15 +51,13 @@ async fn bounded_drain(handle: ServeHandle) {
 #[allow(clippy::too_many_lines)]
 pub async fn run(options: Options) -> i32 {
     let roots = oc_util::global_roots::resolve();
-    // v2's daemon chdirs to `$HOME` (server-process.ts:59) because its
-    // location assembly re-reads per-project config. The Rust port binds
-    // boot-time custom providers from the PROCESS CWD only (registered
-    // oc-core gap: per-location provider wiring), so the chdir is deferred
-    // until that lands — otherwise a managed daemon loses every
-    // config-seeded provider ("No model is available").
-    if matches!(options.mode, Mode::Service)
-        && std::env::var("OPENCODE_SERVICE_CHDIR").as_deref() == Ok("1")
-    {
+    // v2's daemon chdirs to `$HOME` (server-process.ts:59): the daemon is
+    // shared across projects, and per-location provider wiring (oc-core
+    // resolves each location's config-seeded custom providers through its
+    // own overlay) makes the boot cwd's config irrelevant for every other
+    // location. Engine-level defaults still seed from $HOME's (global)
+    // config after the chdir.
+    if matches!(options.mode, Mode::Service) {
         let _ = std::env::set_current_dir(&roots.home);
     }
     let service = matches!(options.mode, Mode::Service);

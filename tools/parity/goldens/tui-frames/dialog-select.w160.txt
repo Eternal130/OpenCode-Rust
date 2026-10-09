@@ -1,0 +1,20 @@
+    Items                                                                                                                                                esc    
+                                                                                                                                                                
+    Search                                                                                                                                                      
+                                                                                                                                                                
+    Alpha First item                                                                                                                                            
+  ● Beta Second item                                                                                                                                            
+    Gamma Third item                                                                                                                                            
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+    delete ctrl+d  new ctrl+a                                                                                                                                   
+                                                                                                                                                                

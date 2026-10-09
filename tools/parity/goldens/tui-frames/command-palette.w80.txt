@@ -1,0 +1,24 @@
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+              Commands                                         esc              
+                                                                                
+              Search                                                            
+                                                                                
+              Session                                                           
+              New session                                 ctrl+x n              
+                                                                                
+              Agent                                                             
+              Switch model                                ctrl+x m              
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                

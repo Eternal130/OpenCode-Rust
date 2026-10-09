@@ -258,7 +258,7 @@ impl Loop {
 
         let decision = if self.auto {
             "once".to_owned()
-        } else if util::stdout_is_tty() && util::stdin_is_tty() {
+        } else if permission_tty_prompt_enabled() && util::stdout_is_tty() && util::stdin_is_tty() {
             if let Some(choice) = permission_prompt(&action, &resources) {
                 choice
             } else {
@@ -374,6 +374,17 @@ fn permission_prompt(action: &str, resources: &[String]) -> Option<String> {
         Some(_) => Some("reject".to_owned()),
         None => None,
     }
+}
+
+/// Kill-switch for the interactive permission prompt: `CI` set (automation
+/// harnesses, expect scripts) or `OPENCODE_NO_TTY_PROMPT=1` force the
+/// non-TTY auto-reject path even on a real TTY, where a dialoguer prompt
+/// would hang forever with nobody to answer it (oracle gate-7 decision).
+fn permission_tty_prompt_enabled() -> bool {
+    if std::env::var_os("CI").is_some() {
+        return false;
+    }
+    !matches!(std::env::var("OPENCODE_NO_TTY_PROMPT"), Ok(value) if value == "1")
 }
 
 fn urlencoding(input: &str) -> String {
@@ -591,6 +602,10 @@ pub async fn run_prompt(input: PromptInput) -> i32 {
     let session_api = client.session();
     let wait = session_api.wait(&session_id);
     tokio::pin!(wait);
+    // A JoinHandle may only be polled to completion ONCE (tokio panics on
+    // a double-poll), so every later drain/await is gated on whether an
+    // earlier poll already finished it.
+    let mut consumer_done = false;
     tokio::select! {
         result = &mut wait => {
             if let Err(error) = result {
@@ -599,7 +614,11 @@ pub async fn run_prompt(input: PromptInput) -> i32 {
                 let _ = error;
             }
         }
-        _ = &mut consumer => {}
+        _ = &mut consumer => {
+            // The consumer's terminal event beat `session.wait` — the
+            // handle is complete; later polls must be skipped.
+            consumer_done = true;
+        }
     }
     // ALWAYS drain the consumer before reconciling. `wait` can resolve the
     // instant execution ends while the consumer task has not been polled
@@ -608,7 +627,11 @@ pub async fn run_prompt(input: PromptInput) -> i32 {
     // single-threaded event loop; a bounded await is our equivalent. The
     // consumer always terminates (execution.succeeded/failed/interrupted),
     // so the timeout only guards pathological stalls.
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), &mut consumer).await;
+    if !consumer_done
+        && tokio::time::timeout(std::time::Duration::from_secs(30), &mut consumer).await.is_ok()
+    {
+        consumer_done = true;
+    }
     loop_ctx.lock().finalizing = true;
 
     let (found, responded) = reconcile(&loop_ctx, &client).await;
@@ -621,7 +644,7 @@ pub async fn run_prompt(input: PromptInput) -> i32 {
             && !state.emitted_error
             && state.pre_promotion_error.is_none()
     };
-    if await_consumer {
+    if await_consumer && !consumer_done {
         let _ = consumer.await;
     }
     ctrl_c.abort();
@@ -971,7 +994,32 @@ async fn consume(ctx: Loop, mut stream: oc_client::SseStream) {
                     .unwrap_or_else(|| current.content.clone());
                 ctx.lock().rendered_tools.insert(key);
                 let output = tool_render::tool_output_text(&current.tool, Some(&content));
-                if !ctx.emit("tool_use", time, &json!({})) {
+                // v2's failed-tool part: machine consumers get the tool
+                // identity, input, error text, and the provider call
+                // envelope (noninteractive.ts `session.tool.failed`).
+                let part = json!({
+                    "partID": current.id,
+                    "sessionID": ctx.session_id,
+                    "messageID": text_field(&data, "assistantMessageID"),
+                    "type": "tool",
+                    "id": text_field(&data, "id"),
+                    "tool": current.tool,
+                    "state": {
+                        "status": "error",
+                        "input": current.input,
+                        "error": error,
+                        "metadata": {
+                            "providerCall": current.provider_call,
+                            "providerResult": {
+                                "executed": field(&data, "executed"),
+                                "state": field(&data, "resultState"),
+                            },
+                            "rawInput": current.raw,
+                        },
+                        "time": { "start": current.timestamp, "end": time },
+                    },
+                });
+                if !ctx.emit("tool_use", time, &json!({ "part": part })) {
                     let render = ToolRenderPart {
                         tool: current.tool,
                         input: current.input,
@@ -1080,7 +1128,10 @@ fn fallback_tool(event_id: &str, time: u64, _data: &Value) -> ToolState {
 }
 
 /// `reconcile`: page through the projected messages looking for ours; render
-/// anything the event stream missed. Returns `(found, responded)`.
+/// anything the event stream missed. Returns `(found, responded)`. When our
+/// message is NOT in the projection, v2 discards the collected messages
+/// (`found: false → messages: []`) — nothing renders and `responded` is
+/// false, so a failed run on a resumed session never replays older turns.
 #[allow(clippy::too_many_lines)]
 async fn reconcile(ctx: &Loop, client: &Client) -> (bool, bool) {
     let mut messages: Vec<Value> = Vec::new();
@@ -1108,6 +1159,9 @@ async fn reconcile(ctx: &Loop, client: &Client) -> (bool, bool) {
             break;
         }
         cursor.clone_from(&page.cursor.next);
+    }
+    if !found {
+        return (false, false);
     }
     messages.reverse();
     let mut responded = false;
@@ -1262,4 +1316,37 @@ async fn reconcile(ctx: &Loop, client: &Client) -> (bool, bool) {
         }
     }
     (found, responded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The kill-switch unit tests mutate the environment; nextest runs each
+    /// test in its own process, so there is no cross-test interference.
+    #[test]
+    fn tty_prompt_enabled_by_default() {
+        std::env::remove_var("CI");
+        std::env::remove_var("OPENCODE_NO_TTY_PROMPT");
+        assert!(permission_tty_prompt_enabled());
+    }
+
+    #[test]
+    fn ci_env_disables_the_tty_prompt() {
+        std::env::remove_var("OPENCODE_NO_TTY_PROMPT");
+        std::env::set_var("CI", "1");
+        assert!(!permission_tty_prompt_enabled());
+        std::env::remove_var("CI");
+    }
+
+    #[test]
+    fn no_tty_prompt_flag_disables_the_tty_prompt() {
+        std::env::remove_var("CI");
+        std::env::set_var("OPENCODE_NO_TTY_PROMPT", "1");
+        assert!(!permission_tty_prompt_enabled());
+        // Any other value keeps the prompt available.
+        std::env::set_var("OPENCODE_NO_TTY_PROMPT", "0");
+        assert!(permission_tty_prompt_enabled());
+        std::env::remove_var("OPENCODE_NO_TTY_PROMPT");
+    }
 }

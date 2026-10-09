@@ -3,18 +3,23 @@
 //! composition the `oc-server` binary runs and the Phase 5 integration
 //! contract for embedders (`boot_and_serve`).
 //!
-//! ## Config seeding
+//! ## Config seeding + ready ordering
 //!
-//! v2 rebuilds provider bindings when the config reloads; the Rust
-//! engine's model resolver takes custom providers at boot
-//! (`EngineOptions::custom_providers`). `boot_and_serve` therefore loads
-//! the config of the boot location (the process working directory, or
-//! `OPENCODE_CONFIG` when set — the loader honors the explicit file) and
-//! maps `providers.<id>` entries carrying a `settings.baseURL` onto
-//! [`oc_core::provider_catalog::facade::CustomProvider`] handles (the
-//! `openai-compatible` path), plus the `model` default selection. Harness
-//! flows that write the provider config after boot seed it through
-//! `OPENCODE_CONFIG` before spawning (see `tools/parity`'s `RustServer`).
+//! The engine resolves models PER LOCATION (`EngineOptions::
+//! custom_providers` seeds only the engine-level defaults — global-config
+//! providers): every location assembles on FIRST USE with its own config
+//! overlay (`oc_core::provider_catalog::overlay`), exactly like v2's lazy
+//! `LocationServiceMap` (`provide: session => locations.get(session.location)`
+//! — app-node-builder.ts; the parity goldens pin the boot cascade as
+//! request-driven, so the boot location must NOT be eagerly assembled).
+//!
+//! Ready ordering (the standalone-boot race, mechanism (a)): the boot
+//! config load + `EngineOptions` seeding run synchronously BEFORE
+//! `Engine::boot`, which precedes the listener bind / readiness flip /
+//! the stdio `{"url"}` ready line — provider binding cannot lose that
+//! race. Per-location assembly is synchronous within the first request
+//! (the per-location assembly lock), so a request can never observe a
+//! half-bound location either.
 
 use std::io;
 use std::net::IpAddr;
@@ -29,6 +34,8 @@ use oc_util::determinism::{SystemClock, UuidV4IdGen};
 use crate::app::AppShell;
 use crate::lifecycle::{self, ServeHandle, ServeOptions};
 use crate::state::{AppState, AuthConfig};
+
+pub use oc_core::provider_catalog::{providers_from_config, ConfigProviders};
 
 /// Everything `boot_and_serve` needs.
 pub struct BootOptions {
@@ -74,74 +81,12 @@ impl Default for BootOptions {
     }
 }
 
-/// The config-derived provider bindings for one loaded document set.
-#[derive(Debug, Default)]
-pub struct ConfigProviders {
-    /// `providers.<id>` with a `settings.baseURL` (openai-compatible).
-    pub custom: Vec<CustomProvider>,
-    /// The `model` default selection.
-    pub default_model: Option<oc_schema::config::ModelSelection>,
-}
-
-/// Maps a loaded config onto boot-time provider bindings.
-#[must_use]
-pub fn providers_from_config(loaded: &oc_core::config::Loaded) -> ConfigProviders {
-    let mut out = ConfigProviders::default();
-    // Later entries win (priority order: nearest config last).
-    for entry in &loaded.entries {
-        let oc_schema::config::Entry::Document(document) = entry else { continue };
-        if let Some(providers) = &document.info.providers {
-            for (id, provider) in providers {
-                let Some(settings) = &provider.settings else { continue };
-                let base_url = settings
-                    .rest
-                    .get("baseURL")
-                    .or_else(|| settings.rest.get("base_url"))
-                    .and_then(|value| value.as_ref().and_then(|value| value.as_str()))
-                    .map(str::to_owned);
-                let Some(base_url) = base_url else { continue };
-                let api_key = settings
-                    .rest
-                    .get("apiKey")
-                    .or_else(|| settings.rest.get("api_key"))
-                    .and_then(|value| value.as_ref().and_then(|value| value.as_str()))
-                    .map(str::to_owned)
-                    .or_else(|| {
-                        provider
-                            .env
-                            .as_ref()
-                            .and_then(|names| names.first())
-                            .and_then(|name| std::env::var(name).ok())
-                    });
-                let models = provider
-                    .models
-                    .as_ref()
-                    .map(|models| models.keys().cloned().collect())
-                    .unwrap_or_default();
-                out.custom.push(CustomProvider {
-                    id: id.clone(),
-                    name: provider.name.clone().unwrap_or_else(|| id.clone()),
-                    base_url,
-                    api_key,
-                    models,
-                });
-            }
-        }
-        if let Some(selection) = &document.info.model {
-            out.default_model = Some(selection.clone());
-        }
-    }
-    // Later documents override earlier ones for the same provider id.
-    let mut deduped: Vec<CustomProvider> = Vec::new();
-    for provider in out.custom {
-        match deduped.iter().position(|existing| existing.id == provider.id) {
-            Some(index) => deduped[index] = provider,
-            None => deduped.push(provider),
-        }
-    }
-    out.custom = deduped;
-    out
-}
+// The config-derived provider bindings (`ConfigProviders` +
+// `providers_from_config`) are re-exported from
+// `oc_core::provider_catalog::overlay`, where the per-location provider
+// overlay shares the mapping: every `providers.<id>` entry carrying a
+// `settings.baseURL` becomes an openai-compatible `CustomProvider`
+// handle, plus the `model` default selection.
 
 /// Boots the engine + app shell + handler table and serves: the single
 /// production entry (`main.rs` calls this).
@@ -151,19 +96,67 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
+    // One-line boot trace for registered-race hunting (oracle gate-7):
+    // which config candidates were evaluated, which files actually loaded,
+    // how many custom providers bound, and the spawn→assembly vs
+    // spawn→ready timestamps. Logging only — no behavior change.
+    let trace_boot = std::env::var("OPENCODE_TRACE_BOOT").ok().as_deref() == Some("1");
+    let boot_start = std::time::Instant::now();
     let loader = Loader::new(
-        config_location,
+        config_location.clone(),
         GlobalDirs {
             config: options.home.join(".config").join("opencode"),
             home: options.home.clone(),
         },
     );
-    let providers = providers_from_config(&loader.load());
+    let snapshot = loader.load();
+    let providers = providers_from_config(&snapshot);
+    if trace_boot {
+        let sources = &snapshot.sources;
+        let candidates = [
+            sources.explicit.as_ref().map(|path| ("explicit", path)),
+            sources.global.as_ref().map(|path| ("global", path)),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|(kind, path)| format!("{kind}:{}", path.display()))
+        .chain(sources.direct.iter().map(|path| format!("direct:{}", path.display())))
+        .chain(sources.project.iter().map(|root| format!("project:{}", root.path.display())))
+        .collect::<Vec<_>>()
+        .join(" | ");
+        let chosen: Vec<&str> = snapshot
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                oc_schema::config::Entry::Document(document) => document.path.as_deref(),
+                oc_schema::config::Entry::Directory(_) => None,
+            })
+            .collect();
+        eprintln!(
+            "[boot-trace] t=0ms location={} candidates=[{candidates}] chosen={chosen:?} providers={} default_model={:?}",
+            config_location.display(),
+            providers.custom.len(),
+            providers.default_model,
+        );
+    }
 
     let mut engine_options = EngineOptions::new(options.data_root.clone(), options.home.clone());
     engine_options.custom_providers = providers.custom;
     engine_options.default_model = providers.default_model;
+    // Config seeding above is synchronous and precedes Engine::boot, the
+    // listener bind, and readiness — provider binding cannot lose the
+    // ready race. Location graphs stay LAZY (v2 `LocationServiceMap` is
+    // demand-built: `provide: session => locations.get(session.location)`;
+    // the parity goldens pin the boot cascade as request-driven, so an
+    // eager boot-location assembly here would diverge m1_scenarios).
+    // Per-location assembly is synchronous within the first request.
     let engine = Engine::boot(engine_options).await;
+    if trace_boot {
+        eprintln!(
+            "[boot-trace] t={}ms engine booted (catalog defaults bound; locations lazy)",
+            boot_start.elapsed().as_millis()
+        );
+    }
 
     let mut app_state = AppState::new(
         engine,
@@ -176,7 +169,17 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     let state = Arc::new(app_state);
     let shell = AppShell::new(Arc::clone(&state));
     let router = shell.router();
-    lifecycle::serve(&options.serve, state, router, None).await
+    let on_listen = trace_boot.then(|| {
+        Arc::new(move |addr: std::net::SocketAddr| {
+            Box::pin(async move {
+                eprintln!(
+                    "[boot-trace] t={}ms listening {addr} (ready)",
+                    boot_start.elapsed().as_millis()
+                );
+            }) as futures::future::BoxFuture<'static, ()>
+        }) as lifecycle::OnListen
+    });
+    lifecycle::serve(&options.serve, state, router, on_listen).await
 }
 
 /// Parses an `IpAddr` for the CLI (`--hostname`).
@@ -220,4 +223,81 @@ pub fn location_default_model(
     location: &oc_core::location::LocationRef,
 ) -> Option<oc_schema::config::ModelSelection> {
     providers_from_config(&location_config(engine, location)).default_model
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::Readiness;
+    use oc_core::location::LocationRef;
+
+    /// Ready ordering + lazy parity (the standalone-boot race, mechanism
+    /// (a)): config seeding is synchronous BEFORE the engine boots and
+    /// the listener binds — readiness can never precede provider
+    /// binding — while location graphs stay demand-built like v2's
+    /// `LocationServiceMap` (the m1 parity goldens pin the boot cascade
+    /// as request-driven; eager assembly diverges them). The first use
+    /// then assembles the boot location WITH its per-location provider
+    /// overlay.
+    #[tokio::test]
+    async fn boot_lazy_assembles_with_overlay_on_first_use() {
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let project = root.path().join("proj");
+        std::fs::create_dir_all(&project).expect("project dir");
+        std::fs::write(
+            project.join("opencode.json"),
+            r#"{
+                "model": { "providerID": "boot-order-probe", "model": "boot-one" },
+                "providers": {
+                    "boot-order-probe": {
+                        "settings": { "baseURL": "https://boot-order.test/v1" },
+                        "models": { "boot-one": {} }
+                    }
+                }
+            }"#,
+        )
+        .expect("project config");
+        let home = root.path().join("home");
+        std::fs::create_dir_all(&home).expect("home");
+
+        let options = BootOptions {
+            serve: ServeOptions { hostname: IpAddr::from([127, 0, 0, 1]), port: Some(0) },
+            password: None,
+            cors_origins: Vec::new(),
+            version: "test".to_owned(),
+            data_root: root.path().join("data"),
+            home,
+            config_location: Some(project.clone()),
+        };
+        let handle = boot_and_serve(&options).await.expect("boot and serve");
+
+        // Ready flipped with the config-seeded providers bound (synchronous
+        // pre-boot), and the boot location is STILL demand-built (lazy v2
+        // parity — no graph live before any request).
+        assert_eq!(crate::readiness::current(&handle.state.readiness_rx), Readiness::Ready);
+        let location = LocationRef::new(project.clone(), None);
+        assert!(
+            handle.state.engine.locations.get(&location).is_none(),
+            "location graphs stay lazy (v2 parity)"
+        );
+
+        // First use assembles the location, and its per-location overlay
+        // resolves the project's config-seeded custom provider.
+        let services = handle.state.engine.location(location.clone()).await.expect("first use");
+        let mut row = oc_core::database::schema::SessionRow::new(
+            "ses_boot_order",
+            "prj_boot_order",
+            "/proj",
+            "boot-order",
+            "2.0.24",
+        )
+        .expect("row");
+        row.model = None;
+        let resolved = services.resolver.resolve(&row).expect("overlay resolves the config model");
+        assert_eq!(resolved.reference.provider_id.0, "boot-order-probe");
+        assert_eq!(resolved.reference.id.0, "boot-one");
+        assert!(handle.state.engine.locations.get(&location).is_some());
+
+        handle.shutdown_and_join().await.expect("shutdown");
+    }
 }
