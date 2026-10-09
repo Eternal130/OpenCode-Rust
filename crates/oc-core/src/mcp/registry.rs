@@ -1,0 +1,1447 @@
+//! MCP registry — port of `mcp/index.ts` + `tool/mcp.ts`
+//! (core-runner-map §5).
+//!
+//! Owns one `ServerEntry` per configured server with the five-status
+//! lifecycle (`pending`/`connected`/`failed`/`needs_auth`/`disabled`), a
+//! startup latch so readers never hang, per-server lifecycle serialization
+//! plus per-URL startup serialization for shared remote endpoints, watch
+//! callbacks publishing `mcp.tools.changed` / `mcp.resources.changed` /
+//! `mcp.status.changed` / `mcp.prompts.changed`, config reconciliation
+//! (initial async connect, then diff-driven replace/remove), session-expiry
+//! recovery with one replay, OAuth integration registration
+//! (`mcp_<sha1(name\0url)[0..16]>`) over the credential-store seam, and the
+//! MCP → tool-registry bridge with a 100ms debounce and initial flush gate.
+//!
+//! The connector is injectable: production routes to
+//! [`super::client::connect`], tests script connections (including
+//! expiries and list-changed pushes) through the same lifecycle.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use oc_schema::id::{IntegrationId, IntegrationMethodId};
+use oc_schema::mcp::{
+    Resource, ResourceCatalog, ResourceContent, ResourceContentPart, ResourceTemplate,
+    ServerConfig, Status,
+};
+use oc_schema::tool::Content as ToolContent;
+use parking_lot::Mutex as SyncMutex;
+use rusqlite::OptionalExtension;
+use tokio::sync::{Mutex as AsyncMutex, Notify};
+
+use crate::bus::{Bus, PublishOptions};
+use crate::database::Database;
+use crate::location::{
+    ToolExecute, ToolRegistration, ToolRegistryState, ToolRunFailure, ToolRunResult,
+};
+
+use super::client::{self, ConnectFailure, ConnectInput};
+
+/// `mcp.prompts.changed` (defined in v2's `Mcp` module, published here).
+pub const PROMPTS_CHANGED: &str = "mcp.prompts.changed";
+/// Default debounce for tool-registry refreshes (tool/mcp.ts:139).
+pub const TOOL_REFRESH_DEBOUNCE: Duration = Duration::from_millis(100);
+
+/// `MCP.NotFoundError`.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("MCP server not found: {server}")]
+pub struct NotFoundError {
+    pub server: String,
+}
+
+/// `MCP.ToolCallError`.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
+pub struct ToolCallError {
+    pub server: String,
+    pub tool: String,
+    pub message: String,
+}
+
+/// Registry errors surfaced to callers.
+#[derive(Debug, thiserror::Error)]
+pub enum McpError {
+    #[error(transparent)]
+    NotFound(#[from] NotFoundError),
+    #[error(transparent)]
+    ToolCall(#[from] ToolCallError),
+}
+
+/// One tool as the registry exposes it (`Mcp.Tool`): the SDK definition
+/// tagged with its server and Code Mode flag.
+#[derive(Debug, Clone)]
+pub struct Tool {
+    pub name: String,
+    pub description: Option<String>,
+    pub input_schema: serde_json::Value,
+    pub output_schema: Option<serde_json::Value>,
+    pub server: String,
+    pub codemode: Option<bool>,
+}
+
+impl Tool {
+    /// `tool.codemode !== false` (tool/mcp.ts:45).
+    #[must_use]
+    pub fn codemode_enabled(&self) -> bool {
+        self.codemode != Some(false)
+    }
+}
+
+/// `Mcp.ToolResult`.
+#[derive(Debug, Clone)]
+pub struct ToolResult {
+    pub is_error: bool,
+    pub structured: Option<serde_json::Value>,
+    pub content: Vec<client::CallToolContent>,
+    pub server: String,
+    pub tool: String,
+}
+
+/// `Mcp.ServerInfo`.
+#[derive(Debug, Clone)]
+pub struct ServerInfo {
+    pub name: String,
+    pub status: Status,
+    pub integration_id: Option<IntegrationId>,
+}
+
+/// `Mcp.Prompt`.
+#[derive(Debug, Clone)]
+pub struct Prompt {
+    pub name: String,
+    pub description: Option<String>,
+    pub server: String,
+}
+
+/// `Mcp.ServerInstructions`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerInstructions {
+    pub server: String,
+    pub instructions: String,
+}
+
+/// Per-server runtime state (`ServerEntry`, index.ts:78-89).
+struct ServerEntry {
+    config: ServerConfig,
+    status: SyncMutex<Status>,
+    /// Opened once start/replace settles so `callTool` readers never hang.
+    startup: Arc<Notify>,
+    startup_open: SyncMutex<bool>,
+    client: AsyncMutex<Option<client::Connection>>,
+    tools: SyncMutex<Option<Vec<Tool>>>,
+    prompts: SyncMutex<Option<Vec<Prompt>>>,
+    integration_id: Option<IntegrationId>,
+}
+
+impl ServerEntry {
+    fn new(config: ServerConfig) -> Self {
+        Self {
+            config,
+            status: SyncMutex::new(Status::Pending),
+            startup: Arc::new(Notify::new()),
+            startup_open: SyncMutex::new(false),
+            client: AsyncMutex::new(None),
+            tools: SyncMutex::new(None),
+            prompts: SyncMutex::new(None),
+            integration_id: None,
+        }
+    }
+
+    fn open_startup(&self) {
+        let mut open = self.startup_open.lock();
+        if !*open {
+            *open = true;
+            self.startup.notify_waiters();
+        }
+    }
+
+    async fn await_startup(&self) {
+        if !*self.startup_open.lock() {
+            self.startup.notified().await;
+        }
+    }
+
+    fn set_status(&self, status: Status) {
+        *self.status.lock() = status;
+    }
+}
+
+/// The connector seam: production routes to `client::connect`; tests
+/// script connections.
+pub type Connector = Arc<
+    dyn Fn(
+            ConnectInput<'_>,
+        )
+            -> futures::future::BoxFuture<'static, Result<client::Connection, ConnectFailure>>
+        + Send
+        + Sync,
+>;
+
+/// Credential-store seam over database `credential` rows: looks up the
+/// active stored OAuth token for an integration. The full OAuth login flow
+/// (authorize + exchange + refresh rotation) is Phase 9 plugin-runtime
+/// scope; here a missing token plus a 401 settles the server as
+/// `needs_auth` and a stored token rides as the bearer.
+pub trait CredentialStore: Send + Sync {
+    /// The active stored bearer token for `integration_id`, when signed in.
+    fn active_token(
+        &self,
+        integration_id: &IntegrationId,
+    ) -> futures::future::BoxFuture<'static, Option<String>>;
+}
+
+/// Database-backed credential lookup (`credential` rows hold JSON
+/// `Credential.Value` with an access-token field).
+#[derive(Clone)]
+pub struct DatabaseCredentials {
+    db: Database,
+}
+
+impl DatabaseCredentials {
+    #[must_use]
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+}
+
+impl CredentialStore for DatabaseCredentials {
+    fn active_token(
+        &self,
+        integration_id: &IntegrationId,
+    ) -> futures::future::BoxFuture<'static, Option<String>> {
+        let db = self.db.clone();
+        let integration_id = integration_id.as_str().to_string();
+        Box::pin(async move {
+            let value: Option<String> = db
+                .transaction(move |tx| {
+                    Ok(tx
+                        .conn()
+                        .query_row(
+                            "SELECT value FROM credential WHERE integration_id = ?1 AND active = 1 \
+                             ORDER BY time_updated DESC LIMIT 1",
+                            rusqlite::params![integration_id],
+                            |row| row.get(0),
+                        )
+                        .optional()?)
+                })
+                .await
+                .ok()
+                .flatten()?;
+            let parsed: serde_json::Value = serde_json::from_str(value.as_deref()?).ok()?;
+            parsed
+                .get("accessToken")
+                .or_else(|| parsed.get("access_token"))
+                .or_else(|| parsed.get("token"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+    }
+}
+
+/// No credentials available (tests, anonymous servers).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoCredentials;
+
+impl CredentialStore for NoCredentials {
+    fn active_token(
+        &self,
+        _integration_id: &IntegrationId,
+    ) -> futures::future::BoxFuture<'static, Option<String>> {
+        Box::pin(async { None })
+    }
+}
+
+/// `Integration.ID.make(suffix)` derivation for remote servers
+/// (index.ts:176-190): key identity on name + URL, not URL alone — two
+/// configs for the same URL under different names are distinct logical
+/// servers that may hold different accounts.
+#[must_use]
+pub fn integration_suffix(name: &str, url: &str) -> String {
+    // git2 exposes SHA-1 through blob hashing: hash(name + "\0" + url),
+    // then keep the first 16 hex chars like v2's digest().slice(0, 16).
+    let mut payload = Vec::with_capacity(name.len() + 1 + url.len());
+    payload.extend_from_slice(name.as_bytes());
+    payload.push(0);
+    payload.extend_from_slice(url.as_bytes());
+    let oid = git2::Oid::hash_object(git2::ObjectType::Blob, &payload)
+        .expect("SHA-1 blob hash is infallible");
+    let hex = oid.to_string();
+    format!("mcp_{}", &hex[..16])
+}
+
+/// `unavailable` (index.ts:65-76) — EXACT formats.
+#[must_use]
+pub fn unavailable(server: &str, status: &Status) -> String {
+    match status {
+        Status::Failed { error } => {
+            format!("MCP server \"{server}\" is not connected: {error}. Reconnect it from /mcps.")
+        }
+        Status::NeedsAuth { error } => {
+            format!("MCP server \"{server}\" needs authentication: {error}. Sign in from /mcps.")
+        }
+        Status::Disabled => format!("MCP server \"{server}\" is disabled."),
+        Status::Pending | Status::Connected => format!("MCP server \"{server}\" is not connected."),
+    }
+}
+
+struct Inner {
+    bus: Bus,
+    entries: SyncMutex<BTreeMap<String, Arc<ServerEntry>>>,
+    /// Serializes lifecycle operations per server.
+    locks: dashmap::DashMap<String, Arc<AsyncMutex<()>>>,
+    /// Shared remote endpoints must not receive concurrent startup bursts.
+    endpoint_loads: dashmap::DashMap<String, Arc<AsyncMutex<()>>>,
+    connector: Connector,
+    credentials: Arc<dyn CredentialStore>,
+    /// Applied config snapshot for diffing (reconcile).
+    applied: SyncMutex<Option<BTreeMap<String, ServerConfig>>>,
+    /// Runtime overrides (`add` ⇒ `Some`, `remove` ⇒ `None`).
+    overrides: SyncMutex<BTreeMap<String, Option<ServerConfig>>>,
+    reconcile_lock: AsyncMutex<()>,
+    /// Config source read by `reconcile` (merged `mcp.servers`).
+    config_source: SyncMutex<Arc<dyn Fn() -> BTreeMap<String, ServerConfig> + Send + Sync>>,
+    /// Location directory for stdio cwd + roots/list.
+    directory: SyncMutex<String>,
+}
+
+/// The registry service (`Mcp.Service`). Clone shares all state.
+#[derive(Clone)]
+pub struct McpRegistry {
+    inner: Arc<Inner>,
+}
+
+impl McpRegistry {
+    /// Assembles the registry with the production connector and a
+    /// database-backed credential seam.
+    #[must_use]
+    pub fn new(bus: Bus, db: Database) -> Self {
+        Self::with_connector(bus, production_connector(), Arc::new(DatabaseCredentials::new(db)))
+    }
+
+    /// Assembles the registry with an injectable connector (tests).
+    #[must_use]
+    pub fn with_connector(
+        bus: Bus,
+        connector: Connector,
+        credentials: Arc<dyn CredentialStore>,
+    ) -> Self {
+        Self::with_parts(bus, connector, credentials, None)
+    }
+
+    /// Full construction with an explicit location directory.
+    #[must_use]
+    pub fn with_parts(
+        bus: Bus,
+        connector: Connector,
+        credentials: Arc<dyn CredentialStore>,
+        directory: Option<String>,
+    ) -> Self {
+        let directory = directory.unwrap_or_else(|| {
+            std::env::current_dir()
+                .map(|dir| dir.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+        Self {
+            inner: Arc::new(Inner {
+                bus,
+                entries: SyncMutex::new(BTreeMap::new()),
+                locks: dashmap::DashMap::new(),
+                endpoint_loads: dashmap::DashMap::new(),
+                connector,
+                credentials,
+                applied: SyncMutex::new(None),
+                overrides: SyncMutex::new(BTreeMap::new()),
+                reconcile_lock: AsyncMutex::new(()),
+                config_source: SyncMutex::new(Arc::new(BTreeMap::new)),
+                directory: SyncMutex::new(directory),
+            }),
+        }
+    }
+
+    /// Installs the config source (`state.get().servers`): the merged
+    /// `mcp.servers` map, runtime overrides applied on top at reconcile.
+    #[must_use]
+    pub fn with_config_source(
+        self,
+        source: Arc<dyn Fn() -> BTreeMap<String, ServerConfig> + Send + Sync>,
+    ) -> Self {
+        *self.inner.config_source.lock() = source;
+        self
+    }
+
+    /// Overrides the location directory (stdio cwd + roots/list answer).
+    #[must_use]
+    pub fn with_directory(self, directory: impl Into<String>) -> Self {
+        *self.inner.directory.lock() = directory.into();
+        self
+    }
+
+    fn server_lock(inner: &Inner, name: &str) -> Arc<AsyncMutex<()>> {
+        let lock = Arc::new(AsyncMutex::new(()));
+        let inserted = inner.locks.entry(name.to_string()).or_insert_with(|| lock);
+        Arc::clone(&*inserted)
+    }
+
+    async fn publish(&self, type_: &str, server: &str) {
+        let def = crate::bus::registry::by_type(type_)
+            .cloned()
+            .unwrap_or_else(|| crate::bus::registry::EventDefinition::ephemeral(type_));
+        let _ = self
+            .inner
+            .bus
+            .publish(&def, serde_json::json!({ "server": server }), PublishOptions::default())
+            .await;
+    }
+
+    fn require_entry(&self, server: &str) -> Result<Arc<ServerEntry>, NotFoundError> {
+        self.inner
+            .entries
+            .lock()
+            .get(server)
+            .cloned()
+            .ok_or_else(|| NotFoundError { server: server.to_string() })
+    }
+
+    // -----------------------------------------------------------------
+    // lifecycle
+    // -----------------------------------------------------------------
+
+    /// `startServer` (index.ts:427-481): announce pending, connect with the
+    /// tool listing inside the startup (a listing failure marks the server
+    /// failed rather than connected-with-no-tools), then install watches
+    /// and publish the settled status.
+    async fn start_server(&self, name: &str, entry: &Arc<ServerEntry>) {
+        entry.set_status(Status::Pending);
+        self.publish("mcp.status.changed", name).await;
+
+        let bearer = match &entry.integration_id {
+            Some(id) => self.inner.credentials.active_token(id).await,
+            None => None,
+        };
+        let directory = self.inner.directory.lock().clone();
+        let connect = {
+            let connector = Arc::clone(&self.inner.connector);
+            let server = name.to_string();
+            let config = entry.config.clone();
+            let directory = directory.clone();
+            async move {
+                connector(ConnectInput {
+                    server: &server,
+                    config: &config,
+                    directory: &directory,
+                    bearer,
+                })
+                .await
+            }
+        };
+        let load = async {
+            let connection = connect.await?;
+            let tools = connection.tools().await.map_err(|error| {
+                ConnectFailure::Connect(client::ConnectError {
+                    server: name.to_string(),
+                    message: error.message,
+                })
+            })?;
+            Ok::<_, ConnectFailure>((connection, tools))
+        };
+        let result = match &entry.config {
+            ServerConfig::Remote(remote) => {
+                let lock = Self::endpoint_lock(&self.inner, &remote.url);
+                let _guard = lock.lock().await;
+                load.await
+            }
+            ServerConfig::Local(_) => load.await,
+        };
+
+        match result {
+            Ok((connection, tools)) => {
+                let tagged = tools
+                    .iter()
+                    .map(|tool| tag_tool(name, &entry.config, tool))
+                    .collect::<Vec<_>>();
+                *entry.tools.lock() = Some(tagged);
+                *entry.prompts.lock() = Some(Vec::new());
+                entry.set_status(Status::Connected);
+                self.watch(name, entry, &connection);
+                *entry.client.lock().await = Some(connection);
+                // The tool registry reads on these events; a late-connecting
+                // server has no other way to appear.
+                self.publish("mcp.tools.changed", name).await;
+                self.publish("mcp.resources.changed", name).await;
+                self.publish("mcp.status.changed", name).await;
+                self.refresh_prompts(name, entry).await;
+            }
+            Err(failure) => {
+                entry.set_status(match failure {
+                    ConnectFailure::NeedsAuth(auth) => Status::NeedsAuth { error: auth.message },
+                    ConnectFailure::Connect(error) => Status::Failed { error: error.message },
+                });
+                self.publish("mcp.status.changed", name).await;
+            }
+        }
+        entry.open_startup();
+    }
+
+    fn endpoint_lock(inner: &Inner, url: &str) -> Arc<AsyncMutex<()>> {
+        let lock = Arc::new(AsyncMutex::new(()));
+        let inserted = inner.endpoint_loads.entry(url.to_string()).or_insert_with(|| lock);
+        Arc::clone(&*inserted)
+    }
+
+    /// `stopServer` (index.ts:483-494): drop the connection and publish the
+    /// catalog changes so the tool registry clears the server's tools.
+    async fn stop_server(&self, name: &str, entry: &Arc<ServerEntry>) {
+        let connection = entry.client.lock().await.take();
+        *entry.tools.lock() = None;
+        *entry.prompts.lock() = None;
+        if let Some(connection) = connection {
+            connection.close().await;
+        }
+        self.publish("mcp.tools.changed", name).await;
+        self.publish("mcp.resources.changed", name).await;
+        self.publish(PROMPTS_CHANGED, name).await;
+    }
+
+    /// `register` (index.ts:176-215): remote servers with OAuth not
+    /// disabled get an integration identity so credentials live in the
+    /// global store rather than committed config.
+    #[allow(clippy::unused_self)] // service-level seam (integration rows land in Phase 5)
+    fn register_integration(&self, name: &str, entry: &mut ServerEntry) {
+        let ServerConfig::Remote(remote) = &entry.config else { return };
+        if remote.oauth == Some(oc_schema::mcp::OAuthValue::Disabled(false)) {
+            return;
+        }
+        let suffix = integration_suffix(name, &remote.url);
+        entry.integration_id = Some(IntegrationId(suffix.clone()));
+        // The integration row itself (label/metadata/method registration)
+        // is written by the integration service in the Phase 5 server lane;
+        // the identity derivation and credential lookups live here.
+        let _ = IntegrationMethodId(suffix);
+    }
+
+    /// `disposeServer`.
+    async fn dispose_server(&self, name: &str, entry: &Arc<ServerEntry>) {
+        self.stop_server(name, entry).await;
+    }
+
+    /// `replaceServer`.
+    async fn replace_server(&self, name: &str, config: ServerConfig) {
+        let previous = self.inner.entries.lock().get(name).cloned();
+        if let Some(previous) = previous {
+            self.dispose_server(name, &previous).await;
+        }
+        let mut entry = Arc::new(ServerEntry::new(config));
+        let entry_slot = Arc::get_mut(&mut entry).expect("freshly created entry");
+        self.register_integration(name, entry_slot);
+        self.inner.entries.lock().insert(name.to_string(), Arc::clone(&entry));
+        if config_disabled(&entry.config) {
+            entry.set_status(Status::Disabled);
+            entry.open_startup();
+            self.publish("mcp.status.changed", name).await;
+            return;
+        }
+        self.start_server(name, &entry).await;
+    }
+
+    /// `removeServer`.
+    async fn remove_server(&self, name: &str) {
+        let Some(entry) = self.inner.entries.lock().get(name).cloned() else { return };
+        self.dispose_server(name, &entry).await;
+        // Credentials are keyed by name + URL and intentionally survive
+        // removal for a later re-add.
+        self.inner.entries.lock().remove(name);
+        self.publish("mcp.status.changed", name).await;
+    }
+
+    // -----------------------------------------------------------------
+    // watches
+    // -----------------------------------------------------------------
+
+    /// `watch` (index.ts:402-425): close ⇒ failed + stop + status; list
+    /// changes refresh the catalogs and publish. Late callbacks from a
+    /// replaced connection are dropped (`entry.client` identity check in
+    /// [`Self::when_live`]).
+    fn watch(&self, name: &str, entry: &Arc<ServerEntry>, connection: &client::Connection) {
+        let changed = client::Changed {
+            tools: Some(Self::list_changed_callback(
+                self.clone(),
+                name,
+                Arc::clone(entry),
+                connection.clone(),
+                WatchKind::Tools,
+            )),
+            prompts: Some(Self::list_changed_callback(
+                self.clone(),
+                name,
+                Arc::clone(entry),
+                connection.clone(),
+                WatchKind::Prompts,
+            )),
+            resources: Some(Box::new({
+                let registry = self.clone();
+                let name = name.to_string();
+                move || {
+                    let registry = registry.clone();
+                    let name = name.clone();
+                    tokio::spawn(async move {
+                        registry.publish("mcp.resources.changed", &name).await;
+                    });
+                }
+            })),
+        };
+        connection.watch(changed);
+        // Close watcher: mark failed, stop, publish — only while this
+        // connection is still the entry's live client.
+        let registry = self.clone();
+        let name = name.to_string();
+        let entry = Arc::clone(entry);
+        let watcher = connection.clone();
+        tokio::spawn(async move {
+            watcher.watch_close().await;
+            let lock = Self::server_lock(&registry.inner, &name);
+            let _guard = lock.lock().await;
+            let live = entry.client.lock().await;
+            if !live.as_ref().is_some_and(|current| current.is_same(&watcher)) {
+                return;
+            }
+            drop(live);
+            entry.set_status(Status::Failed { error: "Connection closed".to_string() });
+            registry.stop_server(&name, &entry).await;
+            registry.publish("mcp.status.changed", &name).await;
+        });
+    }
+
+    fn list_changed_callback(
+        registry: McpRegistry,
+        name: &str,
+        entry: Arc<ServerEntry>,
+        connection: client::Connection,
+        kind: WatchKind,
+    ) -> Box<dyn Fn() + Send + Sync> {
+        let registry = registry;
+        let name = name.to_string();
+        Box::new(move || {
+            let registry = registry.clone();
+            let name = name.clone();
+            let entry = Arc::clone(&entry);
+            let connection = connection.clone();
+            tokio::spawn(async move {
+                let name = name.clone();
+                let entry = Arc::clone(&entry);
+                let connection = connection.clone();
+                registry
+                    .when_live(&name, &entry, &connection, kind, |registry| {
+                        let name = name.clone();
+                        let entry = Arc::clone(&entry);
+                        let connection = connection.clone();
+                        async move {
+                            match kind {
+                                WatchKind::Tools => {
+                                    registry.refresh_tools(&name, &entry, &connection).await;
+                                    registry.publish("mcp.tools.changed", &name).await;
+                                }
+                                WatchKind::Prompts => {
+                                    registry.refresh_prompts(&name, &entry).await;
+                                }
+                            }
+                        }
+                    })
+                    .await;
+            });
+        })
+    }
+
+    /// `whenLive` (index.ts:328-336): run under the server lock only while
+    /// the connection is still the entry's live client, so late SDK
+    /// callbacks cannot commit obsolete state.
+    async fn when_live<F, Fut>(
+        &self,
+        name: &str,
+        entry: &Arc<ServerEntry>,
+        connection: &client::Connection,
+        kind: WatchKind,
+        effect: F,
+    ) where
+        F: FnOnce(McpRegistry) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        let lock = Self::server_lock(&self.inner, name);
+        let _guard = lock.lock().await;
+        {
+            let live = entry.client.lock().await;
+            if !live.as_ref().is_some_and(|current| current.is_same(connection)) {
+                return;
+            }
+        }
+        let _ = kind;
+        effect(self.clone()).await;
+    }
+
+    async fn refresh_tools(
+        &self,
+        name: &str,
+        entry: &Arc<ServerEntry>,
+        connection: &client::Connection,
+    ) {
+        if let Ok(tools) = connection.tools().await {
+            *entry.tools.lock() =
+                Some(tools.iter().map(|tool| tag_tool(name, &entry.config, tool)).collect());
+        }
+    }
+
+    async fn refresh_prompts(&self, name: &str, entry: &Arc<ServerEntry>) {
+        let Some(connection) = entry.client.lock().await.clone() else { return };
+        let prompts = connection.prompts().await.unwrap_or_default();
+        *entry.prompts.lock() = Some(
+            prompts
+                .iter()
+                .map(|prompt| Prompt {
+                    name: prompt.name.clone(),
+                    description: prompt.description.as_ref().map(ToString::to_string),
+                    server: name.to_string(),
+                })
+                .collect(),
+        );
+        self.publish(PROMPTS_CHANGED, name).await;
+    }
+
+    // -----------------------------------------------------------------
+    // reconcile
+    // -----------------------------------------------------------------
+
+    /// `reconcile` (index.ts:537-575). The initial pass seeds every server
+    /// and connects asynchronously (one slow server does not block
+    /// startup); later passes diff against `applied` and replace/remove
+    /// only what changed.
+    pub async fn reconcile(&self) {
+        let _guard = self.inner.reconcile_lock.lock().await;
+        let mut servers = (self.inner.config_source.lock())();
+        for (name, config) in self.inner.overrides.lock().iter() {
+            match config {
+                Some(config) => {
+                    servers.insert(name.clone(), config.clone());
+                }
+                None => {
+                    servers.remove(name);
+                }
+            }
+        }
+        let applied = self.inner.applied.lock().take();
+        match applied {
+            None if self.inner.entries.lock().is_empty() => {
+                for (name, config) in &servers {
+                    let mut entry = Arc::new(ServerEntry::new(config.clone()));
+                    let entry_slot = Arc::get_mut(&mut entry).expect("freshly created entry");
+                    self.register_integration(name, entry_slot);
+                    self.inner.entries.lock().insert(name.clone(), Arc::clone(&entry));
+                }
+                *self.inner.applied.lock() = Some(servers.clone());
+                let seeded: Vec<(String, Arc<ServerEntry>)> = self
+                    .inner
+                    .entries
+                    .lock()
+                    .iter()
+                    .map(|(name, entry)| (name.clone(), Arc::clone(entry)))
+                    .collect();
+                for (name, entry) in seeded {
+                    if config_disabled(&entry.config) {
+                        entry.set_status(Status::Disabled);
+                        entry.open_startup();
+                        self.publish("mcp.status.changed", &name).await;
+                        continue;
+                    }
+                    // Initial connections stay asynchronous so one slow
+                    // server does not block location startup.
+                    let registry = self.clone();
+                    tokio::spawn(async move {
+                        let lock = Self::server_lock(&registry.inner, &name);
+                        let _guard = lock.lock().await;
+                        registry.start_server(&name, &entry).await;
+                    });
+                }
+            }
+            applied => {
+                let applied = applied.unwrap_or_default();
+                let mut names: Vec<&String> = applied.keys().chain(servers.keys()).collect();
+                names.sort();
+                names.dedup();
+                for name in names {
+                    let previous = applied.get(name);
+                    let updated = servers.get(name);
+                    if previous.is_some_and(|previous| Some(previous) == updated) {
+                        continue;
+                    }
+                    let lock = Self::server_lock(&self.inner, name);
+                    let _guard = lock.lock().await;
+                    match updated {
+                        None => self.remove_server(name).await,
+                        Some(config) => self.replace_server(name, config.clone()).await,
+                    }
+                }
+                *self.inner.applied.lock() = Some(servers);
+            }
+        }
+    }
+
+    /// `Mcp.add`: runtime override + reconcile.
+    pub async fn add(&self, server: &str, config: ServerConfig) {
+        self.inner.overrides.lock().insert(server.to_string(), Some(config));
+        self.reconcile().await;
+    }
+
+    /// `Mcp.connect`: stop + start under the server lock.
+    pub async fn connect(&self, server: &str) -> Result<(), McpError> {
+        let entry = self.require_entry(server)?;
+        let lock = Self::server_lock(&self.inner, server);
+        let _guard = lock.lock().await;
+        self.stop_server(server, &entry).await;
+        self.start_server(server, &entry).await;
+        Ok(())
+    }
+
+    /// `Mcp.disconnect`: stop + mark disabled.
+    pub async fn disconnect(&self, server: &str) -> Result<(), McpError> {
+        let entry = self.require_entry(server)?;
+        let lock = Self::server_lock(&self.inner, server);
+        let _guard = lock.lock().await;
+        self.stop_server(server, &entry).await;
+        entry.set_status(Status::Disabled);
+        self.publish("mcp.status.changed", server).await;
+        Ok(())
+    }
+
+    /// `Mcp.remove`: override tombstone + reconcile.
+    pub async fn remove(&self, server: &str) -> Result<(), McpError> {
+        self.require_entry(server)?;
+        self.inner.overrides.lock().insert(server.to_string(), None);
+        self.reconcile().await;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------
+    // reads
+    // -----------------------------------------------------------------
+
+    /// `Mcp.servers` — sorted by name (`BTreeMap` iteration order).
+    #[must_use]
+    pub fn servers(&self) -> Vec<ServerInfo> {
+        self.inner
+            .entries
+            .lock()
+            .iter()
+            .map(|(name, entry)| ServerInfo {
+                name: name.clone(),
+                status: entry.status.lock().clone(),
+                integration_id: entry.integration_id.clone(),
+            })
+            .collect()
+    }
+
+    /// `Mcp.tools` — reads report what is connected now, sorted by
+    /// (server, name).
+    #[must_use]
+    pub fn tools(&self) -> Vec<Tool> {
+        let mut tools: Vec<Tool> = self
+            .inner
+            .entries
+            .lock()
+            .values()
+            .flat_map(|entry| entry.tools.lock().clone().unwrap_or_default())
+            .collect();
+        tools.sort_by(|a, b| a.server.cmp(&b.server).then_with(|| a.name.cmp(&b.name)));
+        tools
+    }
+
+    /// `Mcp.callTool` (index.ts:669-691): await startup, unavailable
+    /// message when not connected, one expiry recovery + replay.
+    pub async fn call_tool(
+        &self,
+        server: &str,
+        name: &str,
+        args: Option<serde_json::Map<String, serde_json::Value>>,
+        session_id: Option<&str>,
+    ) -> Result<ToolResult, McpError> {
+        let entry = self.require_entry(server)?;
+        entry.await_startup().await;
+        let connection = entry.client.lock().await.clone();
+        let Some(connection) = connection else {
+            return Err(ToolCallError {
+                server: server.to_string(),
+                tool: name.to_string(),
+                message: unavailable(server, &entry.status.lock()),
+            }
+            .into());
+        };
+        let result = connection.call_tool(name, args.as_ref(), session_id).await;
+        let result = match result {
+            Err(error) if error.is_session_expired() => self
+                .replay_after_recovery(server, &entry, |connection| async move {
+                    connection.call_tool(name, args.as_ref(), session_id).await
+                })
+                .await
+                .unwrap_or(Err(error)),
+            outcome => outcome,
+        };
+        match result {
+            Ok(result) => Ok(ToolResult {
+                is_error: result.is_error,
+                structured: result.structured,
+                content: result.content,
+                server: server.to_string(),
+                tool: name.to_string(),
+            }),
+            Err(error) => Err(ToolCallError {
+                server: server.to_string(),
+                tool: name.to_string(),
+                message: format!(
+                    "MCP tool \"{name}\" on server \"{server}\" failed: {}",
+                    error.message
+                ),
+            }
+            .into()),
+        }
+    }
+
+    /// `recovering` (index.ts:350-365): stop + start under the server lock,
+    /// then replay the request once against the replacement.
+    async fn replay_after_recovery<F, Fut, T>(
+        &self,
+        server: &str,
+        entry: &Arc<ServerEntry>,
+        replay: F,
+    ) -> Option<Result<T, client::RequestError>>
+    where
+        F: FnOnce(client::Connection) -> Fut,
+        Fut: std::future::Future<Output = Result<T, client::RequestError>>,
+    {
+        {
+            let lock = Self::server_lock(&self.inner, server);
+            let _guard = lock.lock().await;
+            if entry.client.lock().await.is_some() {
+                self.stop_server(server, entry).await;
+                self.start_server(server, entry).await;
+            }
+        }
+        let replacement = entry.client.lock().await.clone()?;
+        Some(replay(replacement).await)
+    }
+
+    /// `Mcp.instructions` — connected servers with initialization
+    /// instructions, sorted by server.
+    pub async fn instructions(&self) -> Vec<ServerInstructions> {
+        let entries: Vec<(String, Arc<ServerEntry>)> = self
+            .inner
+            .entries
+            .lock()
+            .iter()
+            .map(|(server, entry)| (server.clone(), Arc::clone(entry)))
+            .collect();
+        let mut out = Vec::new();
+        for (server, entry) in entries {
+            let connection = entry.client.lock().await;
+            if let Some(instructions) =
+                connection.as_ref().and_then(client::Connection::instructions)
+            {
+                out.push(ServerInstructions { server, instructions });
+            }
+        }
+        out.sort_by(|a, b| a.server.cmp(&b.server));
+        out
+    }
+
+    /// `Mcp.prompts` — sorted by (server, name).
+    #[must_use]
+    pub fn prompts(&self) -> Vec<Prompt> {
+        let mut prompts: Vec<Prompt> = self
+            .inner
+            .entries
+            .lock()
+            .values()
+            .flat_map(|entry| entry.prompts.lock().clone().unwrap_or_default())
+            .collect();
+        prompts.sort_by(|a, b| a.server.cmp(&b.server).then_with(|| a.name.cmp(&b.name)));
+        prompts
+    }
+
+    /// `Mcp.prompt(name, args)` — `Ok(None)` when unavailable.
+    pub async fn prompt(
+        &self,
+        server: &str,
+        name: &str,
+        args: Option<BTreeMap<String, String>>,
+    ) -> Result<Option<serde_json::Value>, McpError> {
+        let entry = self.require_entry(server)?;
+        entry.await_startup().await;
+        let connection = entry.client.lock().await.clone();
+        let Some(connection) = connection else { return Ok(None) };
+        let result = connection.prompt(name, args.clone()).await;
+        let result = match result {
+            Err(error) if error.is_session_expired() => self
+                .replay_after_recovery(server, &entry, |connection| async move {
+                    connection.prompt(name, args.clone()).await
+                })
+                .await
+                .unwrap_or(Err(error)),
+            outcome => outcome,
+        };
+        match result {
+            Ok(result) => Ok(Some(serde_json::to_value(&result).unwrap_or_default())),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// `Mcp.resourceCatalog` — every connected server merged; per-server
+    /// failures collapse to empty catalogs.
+    pub async fn resource_catalog(&self) -> ResourceCatalog {
+        let mut catalogs = Vec::new();
+        let entries: Vec<(String, Arc<ServerEntry>)> = self
+            .inner
+            .entries
+            .lock()
+            .iter()
+            .map(|(name, entry)| (name.clone(), Arc::clone(entry)))
+            .collect();
+        for (name, entry) in entries {
+            if entry.client.lock().await.is_none() {
+                catalogs.push(empty_catalog());
+                continue;
+            }
+            catalogs.push(self.load_catalog(&name, &entry).await.unwrap_or_else(empty_catalog));
+        }
+        merge_catalogs(&catalogs)
+    }
+
+    /// `Mcp.resources({server})`.
+    pub async fn resources(&self, server: &str) -> Result<ResourceCatalog, McpError> {
+        let entry = self.require_entry(server)?;
+        entry.await_startup().await;
+        if entry.client.lock().await.is_none() {
+            return Ok(empty_catalog());
+        }
+        Ok(self.load_catalog(server, &entry).await.unwrap_or_else(empty_catalog))
+    }
+
+    /// `loadCatalog` (index.ts:367-400) with one expiry recovery + replay.
+    async fn load_catalog(&self, name: &str, entry: &Arc<ServerEntry>) -> Option<ResourceCatalog> {
+        let connection = entry.client.lock().await.clone()?;
+        let catalog = catalog_once(&connection, name).await;
+        match catalog {
+            Ok(catalog) => Some(catalog),
+            Err(error) if error.is_session_expired() => self
+                .replay_after_recovery(name, entry, |connection| async move {
+                    catalog_once(&connection, name).await
+                })
+                .await
+                .and_then(Result::ok),
+            Err(_) => None,
+        }
+    }
+
+    /// `Mcp.readResource` — `Ok(None)` when the server is not connected or
+    /// does not expose resources.
+    pub async fn read_resource(
+        &self,
+        server: &str,
+        uri: &str,
+    ) -> Result<Option<ResourceContent>, McpError> {
+        let entry = self.require_entry(server)?;
+        entry.await_startup().await;
+        let connection = entry.client.lock().await.clone();
+        let Some(connection) = connection else { return Ok(None) };
+        let read = connection.read_resource(uri).await;
+        let read = match read {
+            Err(error) if error.is_session_expired() => self
+                .replay_after_recovery(server, &entry, |connection| async move {
+                    connection.read_resource(uri).await
+                })
+                .await
+                .unwrap_or(Err(error)),
+            outcome => outcome,
+        };
+        let Ok(Some(result)) = read else { return Ok(None) };
+        Ok(Some(ResourceContent {
+            server: server.to_string(),
+            uri: uri.to_string(),
+            contents: result
+                .contents
+                .iter()
+                .map(|part| match part {
+                    rmcp::model::ResourceContents::TextResourceContents {
+                        uri,
+                        mime_type,
+                        text,
+                        ..
+                    } => ResourceContentPart::Text {
+                        uri: uri.clone(),
+                        text: text.clone(),
+                        mime_type: mime_type.clone(),
+                    },
+                    rmcp::model::ResourceContents::BlobResourceContents {
+                        uri,
+                        mime_type,
+                        blob,
+                        ..
+                    } => ResourceContentPart::Blob {
+                        uri: uri.clone(),
+                        blob: blob.clone(),
+                        mime_type: mime_type.clone(),
+                    },
+                })
+                .collect(),
+        }))
+    }
+
+    /// Shutdown every connection (location teardown).
+    pub async fn shutdown(&self) {
+        let entries: Vec<(String, Arc<ServerEntry>)> = self
+            .inner
+            .entries
+            .lock()
+            .iter()
+            .map(|(name, entry)| (name.clone(), Arc::clone(entry)))
+            .collect();
+        for (name, entry) in entries {
+            self.dispose_server(&name, &entry).await;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatchKind {
+    Tools,
+    Prompts,
+}
+
+/// One `loadCatalog` attempt.
+async fn catalog_once(
+    connection: &client::Connection,
+    name: &str,
+) -> Result<ResourceCatalog, client::RequestError> {
+    let resources = connection.resources().await?;
+    // Some servers declare resources without implementing template listing.
+    let templates = connection.resource_templates().await.unwrap_or_default();
+    Ok(ResourceCatalog {
+        resources: resources
+            .iter()
+            .map(|resource| Resource {
+                server: name.to_string(),
+                name: resource.name.clone(),
+                uri: resource.uri.clone(),
+                description: resource.description.as_ref().map(ToString::to_string),
+                mime_type: resource.mime_type.as_ref().map(ToString::to_string),
+            })
+            .collect(),
+        templates: templates
+            .iter()
+            .map(|template| ResourceTemplate {
+                server: name.to_string(),
+                name: template.name.clone(),
+                uri_template: template.uri_template.clone(),
+                description: template.description.as_ref().map(ToString::to_string),
+                mime_type: template.mime_type.as_ref().map(ToString::to_string),
+            })
+            .collect(),
+    })
+}
+
+/// An empty catalog (`ResourceCatalog.make({resources: [], templates: []})`).
+#[must_use]
+pub fn empty_catalog() -> ResourceCatalog {
+    ResourceCatalog { resources: Vec::new(), templates: Vec::new() }
+}
+
+/// Merge catalogs sorted by (server, name, uri) (index.ts:756-772).
+#[must_use]
+pub fn merge_catalogs(catalogs: &[ResourceCatalog]) -> ResourceCatalog {
+    let mut resources: Vec<Resource> =
+        catalogs.iter().flat_map(|catalog| catalog.resources.clone()).collect();
+    let mut templates: Vec<ResourceTemplate> =
+        catalogs.iter().flat_map(|catalog| catalog.templates.clone()).collect();
+    resources.sort_by(|a, b| {
+        a.server.cmp(&b.server).then_with(|| a.name.cmp(&b.name)).then_with(|| a.uri.cmp(&b.uri))
+    });
+    templates.sort_by(|a, b| {
+        a.server
+            .cmp(&b.server)
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.uri_template.cmp(&b.uri_template))
+    });
+    ResourceCatalog { resources, templates }
+}
+
+/// `toTool` (index.ts:304-308): tag the SDK tool with its server and the
+/// config's Code Mode flag.
+fn tag_tool(server: &str, config: &ServerConfig, tool: &rmcp::model::Tool) -> Tool {
+    Tool {
+        name: tool.name.to_string(),
+        description: tool.description.as_ref().map(ToString::to_string),
+        input_schema: serde_json::to_value(&*tool.input_schema).unwrap_or_default(),
+        output_schema: tool
+            .output_schema
+            .as_ref()
+            .map(|schema| serde_json::to_value(&**schema).unwrap_or_default()),
+        server: server.to_string(),
+        codemode: match config {
+            ServerConfig::Local(local) => local.codemode,
+            ServerConfig::Remote(remote) => remote.codemode,
+        },
+    }
+}
+
+/// Whether a config disables the server (`disabled ?? false`).
+#[must_use]
+pub fn config_disabled(config: &ServerConfig) -> bool {
+    match config {
+        ServerConfig::Local(local) => local.disabled.unwrap_or(false),
+        ServerConfig::Remote(remote) => remote.disabled.unwrap_or(false),
+    }
+}
+
+fn production_connector() -> Connector {
+    Arc::new(|input: ConnectInput<'_>| {
+        let server = input.server.to_string();
+        let config = input.config.clone();
+        let directory = input.directory.to_string();
+        let bearer = input.bearer.clone();
+        Box::pin(async move {
+            client::connect(ConnectInput {
+                server: &server,
+                config: &config,
+                directory: &directory,
+                bearer,
+            })
+            .await
+        })
+    })
+}
+
+// ---------------------------------------------------------------------------
+// tool-registry bridge (tool/mcp.ts)
+// ---------------------------------------------------------------------------
+
+/// `McpTool.namespace` (tool/mcp.ts:16): non-`[a-zA-Z0-9_-]` → `_`.
+#[must_use]
+pub fn namespace(server: &str) -> String {
+    server
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') { c } else { '_' })
+        .collect()
+}
+
+/// `McpTool.name` (tool/mcp.ts:17): `{serverSanitized}_{toolSanitized}`.
+#[must_use]
+pub fn tool_name(server: &str, tool: &str) -> String {
+    format!("{}_{}", namespace(server), namespace(tool))
+}
+
+/// The executor bound to one MCP tool (tool/mcp.ts:49-117): `mcp.callTool`
+/// with structured-output preference (`structuredContent` → JSON-parsed
+/// text when the server declares no schema → raw text); media → file
+/// parts; tool errors join the text parts or fall back to the generic
+/// message.
+///
+/// The permission assert (action = the full namespaced name, resources and
+/// save both `["*"]`) runs in the C1 tool pipeline's execute wrapper, which
+/// owns the session/message context; this executor carries the engine for
+/// that wiring.
+pub struct McpToolExecutor {
+    registry: McpRegistry,
+    tool: Tool,
+    #[allow(dead_code)] // C1 pipeline: permission.assert(action = namespaced name, ["*"])
+    permission: crate::permission::Permission,
+}
+
+/// Reserved metadata key carrying the computed tool `output`
+/// (`Tool.NormalizedResult.output`) through the Wave-B `ToolRunResult`
+/// seam until the C1 pipeline widens it.
+pub const OUTPUT_METADATA_KEY: &str = "mcp.output";
+
+#[async_trait::async_trait]
+impl ToolExecute for McpToolExecutor {
+    async fn execute(&self, input: &serde_json::Value) -> Result<ToolRunResult, ToolRunFailure> {
+        let args = input.as_object().cloned();
+        let result =
+            self.registry.call_tool(&self.tool.server, &self.tool.name, args, None).await.map_err(
+                |error| ToolRunFailure::Error {
+                    message: match error {
+                        McpError::NotFound(error) => {
+                            format!("MCP server \"{}\" is not available", error.server)
+                        }
+                        McpError::ToolCall(error) => error.message,
+                    },
+                    metadata: None,
+                },
+            )?;
+        if result.is_error {
+            let joined = result
+                .content
+                .iter()
+                .filter_map(|part| match part {
+                    client::CallToolContent::Text { text } => Some(text.as_str()),
+                    client::CallToolContent::Media { .. } => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let trimmed = joined.trim();
+            return Err(ToolRunFailure::Error {
+                message: if trimmed.is_empty() {
+                    "MCP tool returned an error".to_string()
+                } else {
+                    trimmed.to_string()
+                },
+                metadata: None,
+            });
+        }
+        let content: Vec<ToolContent> = result
+            .content
+            .iter()
+            .map(|part| match part {
+                client::CallToolContent::Text { text } => ToolContent::Text { text: text.clone() },
+                client::CallToolContent::Media { data, mime_type } => ToolContent::File {
+                    uri: format!("data:{mime_type};base64,{data}"),
+                    mime: mime_type.clone(),
+                    name: None,
+                },
+            })
+            .collect();
+        let text = content
+            .iter()
+            .filter_map(|part| match part {
+                ToolContent::Text { text } => Some(text.as_str()),
+                ToolContent::File { .. } => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let output = if let Some(structured) = &result.structured {
+            structured.clone()
+        } else if text.is_empty() {
+            serde_json::Value::Null
+        } else if self.tool.output_schema.is_none()
+            && (text.starts_with('{') || text.starts_with('['))
+        {
+            // Agents assume JSON returned as text is already an object, so
+            // parse it when the server declares no schema.
+            serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text.clone()))
+        } else {
+            serde_json::Value::String(text)
+        };
+        let mut metadata = oc_schema::common::Record::default();
+        metadata.insert(OUTPUT_METADATA_KEY.into(), output);
+        Ok(ToolRunResult { content, metadata: Some(metadata) })
+    }
+}
+
+/// The MCP → tool-registry bridge (tool/mcp.ts): one shared registration
+/// refresh, driven by `mcp.tools.changed` with a 100ms debounce; the
+/// initial registration flushes before the first read (`flush`).
+pub struct McpToolBridge {
+    /// Resolves once the initial registration settled.
+    flush: tokio::sync::watch::Receiver<bool>,
+}
+
+impl McpToolBridge {
+    /// Installs the bridge against a tool registry. Wholly-denied tools
+    /// are dropped by `ToolRegistryState::snapshot` at read time, matching
+    /// v2's snapshot filtering.
+    #[must_use]
+    pub fn install(
+        registry: &McpRegistry,
+        tools: &Arc<ToolRegistryState>,
+        permission: &crate::permission::Permission,
+    ) -> McpToolBridge {
+        let (flush_tx, flush_rx) = tokio::sync::watch::channel(false);
+        // Initial registration: register once after initial discovery; only
+        // subsequent updates need the debounced reload.
+        let owned = Arc::new(SyncMutex::new(std::collections::BTreeSet::new()));
+        let initial = {
+            let registry = registry.clone();
+            let tools = Arc::clone(tools);
+            let permission = permission.clone();
+            let owned = Arc::clone(&owned);
+            async move {
+                Self::sync(&registry, &tools, &permission, &owned);
+                let _ = flush_tx.send(true);
+            }
+        };
+        tokio::spawn(initial);
+        // Debounced updates: eager bus subscription, sliding-1 signal, the
+        // refresh settles bursts before reloading the whole catalog.
+        let (signal_tx, mut signal_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let mut subscription = registry.inner.bus.subscribe_type("mcp.tools.changed");
+        {
+            tokio::spawn(async move {
+                use futures::StreamExt;
+                while subscription.next().await.is_some() {
+                    let _ = signal_tx.try_send(());
+                }
+            });
+        }
+        let refresh = {
+            let registry = registry.clone();
+            let tools = Arc::clone(tools);
+            let permission = permission.clone();
+            let owned = Arc::clone(&owned);
+            async move {
+                while signal_rx.recv().await.is_some() {
+                    // Sliding debounce: collapse bursts within 100ms.
+                    let deadline = tokio::time::sleep(TOOL_REFRESH_DEBOUNCE);
+                    tokio::pin!(deadline);
+                    loop {
+                        tokio::select! {
+                            () = &mut deadline => break,
+                            _ = signal_rx.recv() => {},
+                        }
+                    }
+                    Self::sync(&registry, &tools, &permission, &owned);
+                }
+            }
+        };
+        tokio::spawn(refresh);
+        McpToolBridge { flush: flush_rx }
+    }
+
+    fn sync(
+        registry: &McpRegistry,
+        tools: &ToolRegistryState,
+        permission: &crate::permission::Permission,
+        owned: &SyncMutex<std::collections::BTreeSet<String>>,
+    ) {
+        let discovered = registry.tools();
+        let current: std::collections::BTreeSet<String> =
+            discovered.iter().map(|tool| tool_name(&tool.server, &tool.name)).collect();
+        // Remove bridge-owned registrations that left the catalog; other
+        // registrations are never touched.
+        for stale in owned.lock().difference(&current) {
+            tools.remove(stale);
+        }
+        for tool in discovered {
+            let name = tool_name(&tool.server, &tool.name);
+            let executor = McpToolExecutor {
+                registry: registry.clone(),
+                tool: tool.clone(),
+                permission: permission.clone(),
+            };
+            let mut registration = ToolRegistration::new(
+                name.clone(),
+                tool.description.clone().unwrap_or_default(),
+                tool.input_schema.clone(),
+            );
+            registration.namespace = Some(namespace(&tool.server));
+            registration.permission = Some(name.clone());
+            registration.codemode = tool.codemode_enabled();
+            tools.register(registration);
+            tools.register_executor(name.clone(), Arc::new(executor));
+            owned.lock().insert(name);
+        }
+    }
+
+    /// Wait for the initial MCP tool registration to settle.
+    pub async fn flush(&self) {
+        if *self.flush.borrow() {
+            return;
+        }
+        let mut flush = self.flush.clone();
+        flush.changed().await.expect("flush sender lives for the bridge lifetime");
+    }
+}

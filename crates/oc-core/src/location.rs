@@ -376,11 +376,32 @@ pub enum ToolRunFailure {
     Declined { message: String },
 }
 
+/// The invocation identity handed to context-aware tool executors
+/// (`Tool.Context`: session, agent, assistant message, call id).
+#[derive(Debug, Clone)]
+pub struct ToolCallContext {
+    pub session_id: oc_schema::id::SessionId,
+    pub agent: oc_schema::id::AgentId,
+    pub message_id: String,
+    pub call_id: String,
+}
+
 /// The local execute seam (Wave C replaces this with the full tool
 /// pipeline; Wave B's runner + tests register stub executors here).
 #[async_trait::async_trait]
 pub trait ToolExecute: Send + Sync {
     async fn execute(&self, input: &serde_json::Value) -> Result<ToolRunResult, ToolRunFailure>;
+
+    /// Context-aware surface (Wave C1 tool leaves): default delegates to the
+    /// bare call so stub executors keep working unchanged.
+    async fn execute_with_context(
+        &self,
+        input: &serde_json::Value,
+        context: &ToolCallContext,
+    ) -> Result<ToolRunResult, ToolRunFailure> {
+        let _ = context;
+        self.execute(input).await
+    }
 }
 
 /// One boxed tool executor (test/registry storage).

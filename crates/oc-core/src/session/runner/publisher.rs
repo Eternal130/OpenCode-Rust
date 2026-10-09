@@ -915,12 +915,13 @@ impl LlmEventPublisher {
         self.start_assistant().await?;
         let mut data = self.base();
         data["error"] = session_error_json(&failure);
-        // TODO(oc-schema): the `StepFailFinish` unit-struct round-trips as a
-        // string but cannot DEserialize from one, so the projector's typed
-        // decode rejects `finish: "content-filter"`. Until that lands the
-        // content-filter marker stays in the error message only (the TS
-        // wire keeps `finish`); see session_event.rs StepFailFinish.
-        let _ = finish_reason_json;
+        // The content-filter marker rides the `finish` field exactly like the
+        // TS wire (`stepSettlement?.finish === "content-filter"`); the
+        // StepFailFinish round-trip fix (Wave C1) makes the typed decode
+        // accept it again.
+        if self.step_settlement.as_ref().map(|s| s.finish) == Some(FinishReason::ContentFilter) {
+            data["finish"] = serde_json::json!("content-filter");
+        }
         if let Some(settlement) = &self.step_settlement {
             if let Some(raw) = &settlement.raw_finish {
                 data["rawFinish"] = serde_json::json!(raw);
@@ -935,7 +936,8 @@ impl LlmEventPublisher {
         if let Some(tokens) = &details.tokens {
             data["tokens"] = crate::session::runner::tokens_json(tokens);
         }
-        if let Some(snapshot) = &self.snapshot {
+        // `...details` — the END capture rides the failure event too.
+        if let Some(snapshot) = &details.snapshot {
             data["snapshot"] = serde_json::json!(snapshot.as_str());
         }
         if let Some(files) = &details.files {
