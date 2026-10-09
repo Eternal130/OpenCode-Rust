@@ -21,15 +21,51 @@ use crate::layout::Placed;
 use crate::render::{Cell, CellColor, Frame};
 use crate::wrap::flatten;
 
+/// A background fill rectangle: `height` rows of `width` cells stamped
+/// with `style` before any text paints over them (opentui box
+/// `backgroundColor` — fills never carry glyphs). Painted top-down in
+/// list order; text placed afterwards wins per cell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fill {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    pub style: Style,
+}
+
 /// Paint `placed` runs over `size`, first filling the whole area with
 /// `background` (the reference renderer fills the frame with the theme
 /// style).
 #[must_use]
 pub fn paint_placed(placed: &[Placed], size: (u16, u16), background: Style) -> Frame {
+    paint_placed_with_fills(placed, &[], size, background)
+}
+
+/// [`paint_placed`] with explicit background-fill rectangles (box
+/// backgrounds) applied after the whole-frame fill, before text.
+#[must_use]
+pub fn paint_placed_with_fills(
+    placed: &[Placed],
+    fills: &[Fill],
+    size: (u16, u16),
+    background: Style,
+) -> Frame {
     let (width, height) = size;
     let area = Rect { x: 0, y: 0, width, height };
     let mut buffer = Buffer::empty(area);
     buffer.set_style(area, background);
+    for fill in fills {
+        let clip = Rect {
+            x: fill.x.min(width),
+            y: fill.y.min(height),
+            width: fill.width.min(width.saturating_sub(fill.x.min(width))),
+            height: fill.height.min(height.saturating_sub(fill.y.min(height))),
+        };
+        if clip.width > 0 && clip.height > 0 {
+            buffer.set_style(clip, fill.style);
+        }
+    }
     for item in placed {
         paint_run(&mut buffer, item, width, height);
     }

@@ -416,9 +416,14 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "dialog.select.submit" => "dialog.select.submit", "return", "Submit selected dialog item", "dialog";
     "dialog.prompt.submit" => "dialog.prompt.submit", "return", "Submit dialog prompt", "dialog";
     "dialog.project_copy.generate" => "dialog.project_copy.generate", "tab", "Generate project copy name", "dialog";
-    "dialog.move_session.new" => "dialog.move_session.new", "ctrl+m", "New project copy", "dialog";
-    "dialog.move_session.delete" => "dialog.move_session.delete", "ctrl+d", "Delete project copy", "dialog";
-    "dialog.move_session.refresh" => "dialog.move_session.refresh", "ctrl+r", "Refresh project copies", "dialog";
+    // The move_session trio follows the OPERATIVE v2 keybind table
+    // (`config/keybind.ts`) — the v1 defaults differ (ctrl+m); the
+    // dialog-select golden's footer labels ("new ctrl+a") pin the v2
+    // values at runtime.
+    "dialog.move_session.new" => "dialog.move_session.new", "ctrl+a", "New worktree", "dialog";
+    "dialog.move_session.move" => "dialog.move_session.move", "ctrl+m", "Move session to worktree", "dialog";
+    "dialog.move_session.delete" => "dialog.move_session.delete", "ctrl+d", "Delete worktree", "dialog";
+    "dialog.move_session.refresh" => "dialog.move_session.refresh", "ctrl+r", "Refresh worktrees", "dialog";
     "prompt.autocomplete.prev" => "prompt.autocomplete.prev", "up,ctrl+p", "Move to previous autocomplete item", "autocomplete";
     "prompt.autocomplete.next" => "prompt.autocomplete.next", "down,ctrl+n", "Move to next autocomplete item", "autocomplete";
     "prompt.autocomplete.hide" => "prompt.autocomplete.hide", "escape", "Hide autocomplete", "autocomplete";
@@ -599,7 +604,7 @@ impl Keymap {
             candidate.push(stroke.clone());
             match self.match_chord(&candidate) {
                 ChordMatch::Exact(command) => {
-                    return Outcome::Command { command: command.to_owned(), args: None }
+                    return Outcome::Command { command: command.to_owned(), args: None };
                 }
                 ChordMatch::Prefix => {
                     self.pending = Some(Pending {
@@ -913,5 +918,51 @@ mod tests {
             .iter()
             .any(|def| def.command == "model.list" && def.group == Some(CommandGroup::Agent)));
         assert!(palette.iter().all(|def| def.palette));
+    }
+}
+
+#[cfg(test)]
+mod dialog_layer_tests {
+    use super::*;
+
+    fn stroke(spec: &str) -> KeyStroke {
+        KeyStroke::parse(spec).expect("test stroke parses")
+    }
+
+    /// The `dialog.*` navigation table resolves inside the dialog mode
+    /// (the modal layer's mover bindings).
+    #[test]
+    fn dialog_navigation_table_resolves_in_dialog_mode() {
+        let mut keymap = Keymap::new();
+        let clock = ManualClock::default();
+        keymap.push_mode("dialog");
+        let cases: &[(&str, &str)] = &[
+            ("up", "dialog.select.prev"),
+            ("ctrl+p", "dialog.select.prev"),
+            ("down", "dialog.select.next"),
+            ("ctrl+n", "dialog.select.next"),
+            ("pageup", "dialog.select.page_up"),
+            ("pagedown", "dialog.select.page_down"),
+            ("home", "dialog.select.home"),
+            ("end", "dialog.select.end"),
+            ("return", "dialog.select.submit"),
+            ("ctrl+d", "queued_prompt.delete"), // first ctrl+d rule in table order
+        ];
+        for (spec, command) in cases {
+            assert_eq!(
+                keymap.lookup(stroke(spec), &clock),
+                Outcome::Command { command: (*command).to_owned(), args: None },
+                "{spec} → {command}"
+            );
+        }
+    }
+
+    /// The `move_session` defaults follow the operative v2 table (the
+    /// dialog-select golden footer shows "new ctrl+a").
+    #[test]
+    fn move_session_defaults_follow_the_v2_table() {
+        let keymap = Keymap::new();
+        assert_eq!(keymap.bindings_for("dialog.move_session.new"), vec!["ctrl+a".to_owned()]);
+        assert_eq!(keymap.bindings_for("dialog.move_session.delete"), vec!["ctrl+d".to_owned()]);
     }
 }
