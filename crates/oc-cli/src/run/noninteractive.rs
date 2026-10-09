@@ -601,6 +601,14 @@ pub async fn run_prompt(input: PromptInput) -> i32 {
         }
         _ = &mut consumer => {}
     }
+    // ALWAYS drain the consumer before reconciling. `wait` can resolve the
+    // instant execution ends while the consumer task has not been polled
+    // yet — abandoning it there loses the step markers (reconcile only
+    // re-renders text/tools). v2 gets this ordering implicitly from the
+    // single-threaded event loop; a bounded await is our equivalent. The
+    // consumer always terminates (execution.succeeded/failed/interrupted),
+    // so the timeout only guards pathological stalls.
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), &mut consumer).await;
     loop_ctx.lock().finalizing = true;
 
     let (found, responded) = reconcile(&loop_ctx, &client).await;
