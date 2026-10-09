@@ -28,7 +28,7 @@ use oc_ai::schema::{AiError, AiErrorReason, ReasonFields};
 
 use crate::bus::Bus;
 use crate::location::{ToolRunFailure, ToolRunResult};
-use crate::session::runner::model_request::{Prepared, ToolCallData};
+use crate::session::runner::model_request::{ExecuteTool, Prepared, ToolCallData};
 use crate::session::runner::publisher::{
     LlmEventPublisher, PublisherError, SettlementDetails, ToolFailureScope,
 };
@@ -111,7 +111,7 @@ impl From<PublisherError> for AttemptFailure {
 
 /// One locally executed tool call's settled exit.
 #[derive(Debug, Clone)]
-enum ToolExit {
+pub(crate) enum ToolExit {
     Success {
         id: String,
         name: String,
@@ -178,7 +178,7 @@ enum LoopItem {
 /// after the ring still observe it. Interrupted executions report
 /// `TOOLS_INTERRUPTED` through the outcome channel so classification
 /// stays in one place.
-type ToolInterrupt = Arc<watch::Sender<bool>>;
+pub(crate) type ToolInterrupt = Arc<watch::Sender<bool>>;
 
 /// `SessionStep.attempt` (step.ts:72-279).
 pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, AttemptFailure> {
@@ -293,52 +293,7 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
                     };
                     let tx = outcome_tx.clone();
                     let cancel = Arc::clone(&cancel);
-                    tool_tasks.push(tokio::spawn(async move {
-                        let execution = execute(call.clone());
-                        let mut bell = cancel.subscribe();
-                        let outcome = tokio::select! {
-                            biased;
-                            _ = bell.changed() => ToolExit::Interrupted,
-                            outcome = execution => match outcome {
-                                Ok(result) => ToolExit::Success {
-                                    id: call.id,
-                                    name: call.name,
-                                    result,
-                                },
-                                Err(failure) => match failure {
-                                    ToolRunFailure::Error { message, metadata } => {
-                                        ToolExit::Error {
-                                            id: call.id,
-                                            error: SessionError {
-                                                error_type: "tool.execution".into(),
-                                                message,
-                                                status: None,
-                                                response: None,
-                                            },
-                                            metadata,
-                                        }
-                                    }
-                                    ToolRunFailure::PermissionRejected { message, metadata } => {
-                                        ToolExit::Error {
-                                            id: call.id,
-                                            error: SessionError {
-                                                error_type: "permission.rejected".into(),
-                                                message,
-                                                status: None,
-                                                response: None,
-                                            },
-                                            metadata,
-                                        }
-                                    }
-                                    ToolRunFailure::Declined { message } => ToolExit::Declined {
-                                        id: call.id,
-                                        message,
-                                    },
-                                },
-                            },
-                        };
-                        let _ = tx.send(outcome);
-                    }));
+                    tool_tasks.push(tokio::spawn(run_tool_task(execute, call, cancel, tx)));
                 }
             }
             LoopItem::Event(Some(Err(error))) => {
@@ -607,6 +562,73 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
         return Err(AttemptFailure::StepFailed(failure));
     }
     Ok(Outcome::Completed { needs_continuation: !tools_disabled && record.needs_continuation })
+}
+
+/// One spawned tool task (runner-concurrency.md §2): subscribes to the
+/// bell, races the execution against it, and reports the settled exit
+/// over the outcome channel.
+///
+/// The bell's CURRENT value is checked before the select: a ring that
+/// landed between this task's spawn and its first poll is marked seen
+/// by the fresh receiver (`changed()` would never fire), so — the same
+/// by-construction guard as the coordinator loop's shutdown checks —
+/// the latched value cancels the execution before it is ever polled.
+pub(crate) async fn run_tool_task(
+    execute: ExecuteTool,
+    call: ToolCallData,
+    cancel: ToolInterrupt,
+    tx: mpsc::UnboundedSender<ToolExit>,
+) {
+    let execution = execute(call.clone());
+    let mut bell = cancel.subscribe();
+    if *bell.borrow() {
+        // The bell rang in the spawn→first-poll window: report the
+        // interrupt without starting the tool's side effects.
+        let _ = tx.send(ToolExit::Interrupted);
+        return;
+    }
+    let outcome = tokio::select! {
+        biased;
+        _ = bell.changed() => ToolExit::Interrupted,
+        outcome = execution => match outcome {
+            Ok(result) => ToolExit::Success {
+                id: call.id,
+                name: call.name,
+                result,
+            },
+            Err(failure) => match failure {
+                ToolRunFailure::Error { message, metadata } => {
+                    ToolExit::Error {
+                        id: call.id,
+                        error: SessionError {
+                            error_type: "tool.execution".into(),
+                            message,
+                            status: None,
+                            response: None,
+                        },
+                        metadata,
+                    }
+                }
+                ToolRunFailure::PermissionRejected { message, metadata } => {
+                    ToolExit::Error {
+                        id: call.id,
+                        error: SessionError {
+                            error_type: "permission.rejected".into(),
+                            message,
+                            status: None,
+                            response: None,
+                        },
+                        metadata,
+                    }
+                }
+                ToolRunFailure::Declined { message } => ToolExit::Declined {
+                    id: call.id,
+                    message,
+                },
+            },
+        },
+    };
+    let _ = tx.send(outcome);
 }
 
 /// `failTool`/`toolExecution` for one settled exit (declines and interrupts
