@@ -4,17 +4,20 @@
 //!
 //! Module map:
 //!
-//! * [`reactive`] — signal/memo/effect micrograph (no deps) powering the
+//! * [`reactive`] — signal/memo/effect micrograph (no deps; per-graph
+//!   effect slots, never-dropped cross-pump notifications) powering the
 //!   store's coalesced redraw scheduling.
 //! * [`store`] — tabs (session-tabs-model semantics), route, dialogs,
 //!   theme, connection state; single-consumer event ingest.
 //! * [`keymap`] — @opentui/keymap semantics + the full v2 default table.
-//! * [`layout`] — taffy flex tree with opentui box semantics and the
-//!   substrate gotchas encoded as layer defaults.
-//! * [`wrap`] — text wrapping + measurement sharing one break-opportunity
-//!   seam; sidecar-pinned display widths.
-//! * [`render`] — painted frames + the canonical ANSI serialization
-//!   shared with `tools/parity` goldens.
+//! * [`layout`] — taffy flex tree with opentui box semantics, plain and
+//!   styled-segment text leaves, and the substrate gotchas encoded as
+//!   layer defaults.
+//! * [`wrap`] — the flattened (cluster, style) text stream: wrapping +
+//!   measurement over one break-opportunity seam, cluster-safe hard
+//!   breaks, sidecar-pinned display widths.
+//! * [`render`] — painted frames (per-run styles from segments) + the
+//!   canonical ANSI serialization shared with `tools/parity` goldens.
 //! * [`theme`] — `oc-theme` `ResolvedTheme` consumption → style defaults.
 //! * [`data`] — SSE connection: reconnect, resync, ordered ingest.
 //! * [`components`] — session-tabs (golden-matched), route skeletons,

@@ -7,10 +7,15 @@
 //! renderer's default foreground over `background.base`; icons and
 //! labels paint `text.muted` over `background.base` — matching the
 //! re-pinned golden ANSI streams byte-for-byte (P1).
+//!
+//! Wave 0: icons and labels are **styled-segment leaves** (one span
+//! each) — the trivially-equivalent migration onto the styled-segment
+//! path, proven byte-identical by the golden instrument in
+//! `golden_tests`.
 
 use ratatui::style::{Color, Style};
 
-use crate::layout::{BoxSpec, LayoutTree};
+use crate::layout::{BoxSpec, LayoutTree, StyledSpan};
 use crate::render::{paint_placed, Frame};
 use crate::theme::ThemeStyles;
 use taffy::AvailableSpace;
@@ -87,6 +92,11 @@ pub fn row_style(theme: &ThemeStyles, failed: bool) -> Style {
 /// Build the tool-wrap box tree through the production layout layer and
 /// collect the placed runs (the spike's bespoke taffy tree, now one
 /// [`LayoutTree`] consumer among many).
+///
+/// Wave 0: icons and labels are **styled-segment leaves** (one span
+/// each — trivially equivalent to the old plain leaves; the golden
+/// instrument in `golden_tests` proves the outputs byte-identical),
+/// exercising the styled path in production.
 #[must_use]
 pub fn layout_tool_wrap(
     fixture: &[ToolRowFixture],
@@ -97,14 +107,12 @@ pub fn layout_tool_wrap(
         .iter()
         .map(|row| {
             let style = row_style(theme, row.failed);
-            let icon = tree.text_sized(
-                &row.icon.to_string(),
-                style,
+            let icon = tree.text_styled(
+                vec![StyledSpan { text: row.icon.to_string(), style }],
                 &BoxSpec::default().width(ICON_WIDTH).shrink(0.0),
             );
-            let label = tree.text_sized(
-                &row.label,
-                style,
+            let label = tree.text_styled(
+                vec![StyledSpan { text: row.label.clone(), style }],
                 &BoxSpec::default().grow(1.0).shrink(1.0).min_width(0.0),
             );
             let content = tree.box_node(&BoxSpec::row(), &[icon, label]);

@@ -29,6 +29,12 @@ export interface Scenario {
   tier: ScenarioTier
   variants: ScenarioVariant[]
   /**
+   * Virtual-scroll scenarios (gate-9 addition a): the pinned scroll offset
+   * this frame records. Four scenarios share one fixture (`vscroll-*`),
+   * each pinning a different offset of the same transcript.
+   */
+  scrollOffset?: "top" | "middle" | "bottom" | "stick-to-bottom"
+  /**
    * Width-probe strings (width-edge scenarios only). Each string is rendered
    * as a row AND measured with the same `string-width` build @opentui/core
    * bundles, producing a `<id>.widths.json` sidecar.
@@ -61,6 +67,10 @@ export function cleanup(app: TestRendererSetup) {
     /* renderer already torn down */
   }
   app.renderer.destroy()
+  // Full-app fixtures additionally own a fixture server + app Effect task;
+  // dispose them (fire-and-forget — renderer.destroy() already unblocked both).
+  const dispose = (app as { dispose?: () => Promise<void> }).dispose
+  if (dispose) void dispose().catch(() => {})
 }
 
 export const WIDE_VARIANTS = (height: number): ScenarioVariant[] => [

@@ -15,6 +15,7 @@
 //! `oc_server::routes_gen::OPENAPI_SHA256`).
 
 pub mod error;
+pub mod event_ext;
 pub mod sse;
 pub mod transport;
 

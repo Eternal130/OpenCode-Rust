@@ -1,0 +1,24 @@
+                                                                                
+  ┃                                                                             
+  ┃  Turn 4 asks about section 4 of the document                                
+  ┃                                                                             
+                                                                                
+     Answer 4: the section describes step 4 of the pipeline in detail.          
+                                                                                
+     Build · fixture/fixture · 2ms                                              
+                                                                                
+  ┃                                                                             
+  ┃  Turn 5 asks about section 5 of the document                                
+  ┃                                                                             
+                                                                                
+     Answer 5: the section describes step 5 of the pipeline in detail.          
+                                                                                
+     Build · fixture/fixture · 2ms                                              
+                                                              Jump to latest ↓  
+  ┃                                                                             
+  ┃                                                                             
+  ┃                                                                             
+  ┃                                                                             
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+  /tmp/opencode/packages/tui:main            shift+tab agents  ctrl+p commands  
+                                                                                

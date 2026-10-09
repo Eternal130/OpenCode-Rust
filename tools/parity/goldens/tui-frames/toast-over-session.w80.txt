@@ -1,0 +1,30 @@
+                                                                                
+  ┃                                  ┃                                       ┃  
+  ┃  What does the parser do?        ┃  Fixture notice                    x  ┃  
+  ┃                                  ┃                                       ┃  
+                                     ┃  Toast rendered over session content  ┃  
+     → Explored: 1 read              ┃                                       ┃  
+                                                                                
+     It reads the configuration and produces a build plan.                      
+                                                                                
+     Build · fixture/fixture · 2ms                                              
+                                                                                
+  ┃                                                                             
+  ┃  Now summarize the failure modes                                            
+  ┃                                                                             
+                                                                                
+     + Thought: Failure modes · 1ms                                             
+                                                                                
+     Three failure modes dominate: recursion limits, cycle detection and        
+     budget exhaustion.                                                         
+                                                                                
+     Build · fixture/fixture · 4ms                                              
+                                                                                
+                                                                                
+  ┃                                                                             
+  ┃                                                                             
+  ┃                                                                             
+  ┃                                                                             
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+  /tmp/opencode/packages/tui:main            shift+tab agents  ctrl+p commands  
+                                                                                

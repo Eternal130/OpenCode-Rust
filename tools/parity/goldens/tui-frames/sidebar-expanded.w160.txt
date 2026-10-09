@@ -1,0 +1,30 @@
+                                                                                                                                                                
+  ┃                                                                                                                     Sidebar fixture                         
+  ┃  What does the parser do?                                                                                                                                   
+  ┃                                                                                                                                                             
+                                                                                                                                                                
+     → Explored: 1 read                                                                                                                                         
+                                                                                                                                                                
+     It reads the configuration and produces a build plan.                                                                                                      
+                                                                                                                                                                
+     Build · fixture/fixture · 2ms                                                                                                                              
+                                                                                                                                                                
+  ┃                                                                                                                                                             
+  ┃  Now summarize the failure modes                                                                                                                            
+  ┃                                                                                                                                                             
+                                                                                                                                                                
+     + Thought: Failure modes · 1ms                                                                                                                             
+                                                                                                                          ⬖ Getting started                ✕    
+     Three failure modes dominate: recursion limits, cycle detection and budget exhaustion.                                                                     
+                                                                                                                            OpenCode includes free models so    
+     Build · fixture/fixture · 4ms                                                                                          you can start immediately.          
+                                                                                                                                                                
+                                                                                                                            Connect from 75+ providers to       
+                                                                                                                            use other models, including         
+  ┃                                                                                                                         Claude, GPT, Gemini etc             
+  ┃                                                                                                                                                             
+  ┃                                                                                                                         Connect provider        /connect    
+  ┃                                                                                                                                                             
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                            
+  /tmp/opencode/packages/tui:main                                                  shift+tab agents  ctrl+p commands    /tmp/opencode/packages/tui:main         
+                                                                                                                                                                
