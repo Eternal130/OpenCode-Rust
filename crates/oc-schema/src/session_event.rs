@@ -377,10 +377,38 @@ pub struct StepFailed {
     pub files: Option<Vec<RelativePath>>,
 }
 
-/// `StepFailed.finish` — the literal `"content-filter"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename = "content-filter")]
+/// `StepFailed.finish` — the literal `"content-filter"`
+/// (`Schema.Literals(["content-filter"])`). Hand-rolled serde: a unit struct
+/// derives `null`, but the wire carries the string literal in both
+/// directions (Wave C1 round-trip fix registered by the Wave B lane).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, schemars::JsonSchema)]
 pub struct StepFailFinish;
+
+impl Serialize for StepFailFinish {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str("content-filter")
+    }
+}
+
+impl<'de> Deserialize<'de> for StepFailFinish {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl serde::de::Visitor<'_> for Visitor {
+            type Value = StepFailFinish;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(r#"the string "content-filter""#)
+            }
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                if value == "content-filter" {
+                    Ok(StepFailFinish)
+                } else {
+                    Err(E::custom(format!("unknown variant `{value}`, expected `content-filter`")))
+                }
+            }
+        }
+        deserializer.deserialize_str(Visitor)
+    }
+}
 
 /// `session.text.started` (durable v1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -412,7 +440,9 @@ pub struct TextEnded {
     pub assistant_message_id: MessageId,
     pub ordinal: NonNegativeInt,
     pub text: String,
-    #[serde(rename = "providerState", default, skip_serializing_if = "Option::is_none")]
+    /// The wire key is `state` (session-event.ts Text.Ended); only
+    /// `step.ended`/`step.failed` carry `providerState`.
+    #[serde(rename = "state", default, skip_serializing_if = "Option::is_none")]
     pub provider_state: Option<Record>,
 }
 
@@ -424,7 +454,8 @@ pub struct ReasoningStarted {
     #[serde(rename = "assistantMessageID")]
     pub assistant_message_id: MessageId,
     pub ordinal: NonNegativeInt,
-    #[serde(rename = "providerState", default, skip_serializing_if = "Option::is_none")]
+    /// The wire key is `state` (session-event.ts Reasoning.Started).
+    #[serde(rename = "state", default, skip_serializing_if = "Option::is_none")]
     pub provider_state: Option<Record>,
 }
 
@@ -448,7 +479,8 @@ pub struct ReasoningEnded {
     pub assistant_message_id: MessageId,
     pub ordinal: NonNegativeInt,
     pub text: String,
-    #[serde(rename = "providerState", default, skip_serializing_if = "Option::is_none")]
+    /// The wire key is `state` (session-event.ts Reasoning.Ended).
+    #[serde(rename = "state", default, skip_serializing_if = "Option::is_none")]
     pub provider_state: Option<Record>,
 }
 
@@ -495,7 +527,9 @@ pub struct ToolCalled {
     pub id: String,
     pub input: Record,
     pub executed: bool,
-    #[serde(rename = "providerState", default, skip_serializing_if = "Option::is_none")]
+    /// The wire key is `state` (session-event.ts Tool.Called); only
+    /// `step.ended`/`step.failed` carry `providerState`.
+    #[serde(rename = "state", default, skip_serializing_if = "Option::is_none")]
     pub provider_state: Option<Record>,
 }
 
@@ -1017,5 +1051,129 @@ mod tests {
         assert_eq!(json["durable"]["version"], 2);
         assert_eq!(json["data"]["content"][0]["text"], "ok");
         assert_eq!(json["data"]["executed"], true);
+    }
+
+    fn record(value: serde_json::Value) -> Record {
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn wire_round_trip(event: &Event) -> Event {
+        let json = serde_json::to_value(event).unwrap();
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn step_fail_finish_round_trips_as_the_string_literal() {
+        // Wave B registered bug 1: the unit struct derived `null` on serialize
+        // and rejected the string on deserialize.
+        let event = Event::StepFailed(DurableEnvelope {
+            id: EventId::parse("evt_4").unwrap(),
+            created: 6,
+            metadata: None,
+            durable: DurableInfo { aggregate_id: "ses_1".into(), seq: 10, version: 1 },
+            location: None,
+            data: StepFailed {
+                session_id: SessionId::parse("ses_1").unwrap(),
+                assistant_message_id: MessageId::parse("msg_1").unwrap(),
+                error: SessionError {
+                    error_type: "provider.content-filter".into(),
+                    message: "blocked".into(),
+                    status: None,
+                    response: None,
+                },
+                finish: Some(StepFailFinish),
+                raw_finish: None,
+                provider_state: None,
+                cost: None,
+                tokens: None,
+                snapshot: None,
+                files: None,
+            },
+        });
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["data"]["finish"], "content-filter");
+        assert_eq!(wire_round_trip(&event), event);
+        // Without the marker the field stays absent.
+        let Event::StepFailed(envelope) = event else { unreachable!() };
+        let plain = Event::StepFailed(DurableEnvelope {
+            durable: DurableInfo { aggregate_id: "ses_1".into(), seq: 11, version: 1 },
+            data: StepFailed { finish: None, ..envelope.data },
+            ..envelope
+        });
+        let plain_json = serde_json::to_value(&plain).unwrap();
+        assert!(plain_json["data"].get("finish").is_none());
+        assert_eq!(wire_round_trip(&plain), plain);
+    }
+
+    #[test]
+    fn streaming_provider_state_reads_the_wire_state_key() {
+        // Wave B registered bug 2: these four events read `providerState`
+        // where the wire writes `state` (session-event.ts Text/Reasoning/
+        // Tool.Called). `step.ended` keeps `providerState`.
+        let state = record(serde_json::json!({ "sig": "abc" }));
+        let mk = |data: serde_json::Value| {
+            Event::TextEnded(DurableEnvelope {
+                id: EventId::parse("evt_5").unwrap(),
+                created: 7,
+                metadata: None,
+                durable: DurableInfo { aggregate_id: "ses_1".into(), seq: 12, version: 1 },
+                location: None,
+                data: serde_json::from_value(data).unwrap(),
+            })
+        };
+        let event = mk(serde_json::json!({
+            "sessionID": "ses_1",
+            "assistantMessageID": "msg_1",
+            "ordinal": 0,
+            "text": "hi",
+            "state": { "sig": "abc" },
+        }));
+        assert_eq!(wire_round_trip(&event), event);
+        let Event::TextEnded(envelope) = &event else { unreachable!() };
+        assert_eq!(envelope.data.provider_state, Some(state));
+        // The serialized wire uses `state`, never `providerState`.
+        let json = serde_json::to_value(&event).unwrap();
+        assert!(json["data"].get("state").is_some());
+        assert!(json["data"].get("providerState").is_none());
+
+        let called: ToolCalled = serde_json::from_value(serde_json::json!({
+            "sessionID": "ses_1",
+            "assistantMessageID": "msg_1",
+            "id": "call_1",
+            "input": {},
+            "executed": false,
+            "state": { "partial": true },
+        }))
+        .unwrap();
+        assert!(called.provider_state.is_some());
+        let started: ReasoningStarted = serde_json::from_value(serde_json::json!({
+            "sessionID": "ses_1",
+            "assistantMessageID": "msg_1",
+            "ordinal": 0,
+            "state": { "a": 1 },
+        }))
+        .unwrap();
+        assert!(started.provider_state.is_some());
+        let ended: ReasoningEnded = serde_json::from_value(serde_json::json!({
+            "sessionID": "ses_1",
+            "assistantMessageID": "msg_1",
+            "ordinal": 0,
+            "text": "t",
+            "state": { "b": 2 },
+        }))
+        .unwrap();
+        assert!(ended.provider_state.is_some());
+
+        // Step events keep the `providerState` spelling.
+        let step: StepEnded = serde_json::from_value(serde_json::json!({
+            "sessionID": "ses_1",
+            "assistantMessageID": "msg_1",
+            "finish": "stop",
+            "cost": 0,
+            "tokens": { "input": 1, "output": 1, "reasoning": 0, "cache": { "read": 0, "write": 0 } },
+            "providerState": { "kept": true },
+        }))
+        .unwrap();
+        assert!(step.provider_state.is_some());
     }
 }

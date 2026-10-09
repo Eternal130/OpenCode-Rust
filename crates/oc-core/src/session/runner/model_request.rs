@@ -82,6 +82,8 @@ pub struct ToolCallData {
     pub id: String,
     pub name: String,
     pub input: Value,
+    /// The assistant message id (the permission `source.messageID`).
+    pub message_id: String,
 }
 
 /// `Prepared.executeTool` outcome — tool failure or a user decline.
@@ -658,9 +660,15 @@ impl SessionModelRequest {
             .iter()
             .map(|(name, registration)| (name.clone(), registration.name.clone()))
             .collect();
+        // Context captured per request (v2 Tool.Context: session + agent;
+        // the assistant message id joins per call in the step loop).
+        let context_session = session_id_of(session);
+        let context_agent = input.agent.clone();
         let execute_tool = Arc::new(move |call: ToolCallData| {
             let registry = Arc::clone(&registry);
             let hooked_names = hooked_names.clone();
+            let context_session = context_session.clone();
+            let context_agent = context_agent.clone();
             Box::pin(async move {
                 let original = hooked_names.get(&call.name).cloned().unwrap_or(call.name.clone());
                 let Some(executor) = registry.executor(&original) else {
@@ -672,7 +680,13 @@ impl SessionModelRequest {
                         metadata: None,
                     });
                 };
-                executor.execute(&call.input).await
+                let context = crate::location::ToolCallContext {
+                    session_id: context_session,
+                    agent: context_agent,
+                    message_id: call.message_id.clone(),
+                    call_id: call.id.clone(),
+                };
+                executor.execute_with_context(&call.input, &context).await
             }) as futures::future::BoxFuture<'static, ExecuteToolOutcome>
         });
 

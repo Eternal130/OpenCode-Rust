@@ -297,6 +297,26 @@ pub const PERMISSION_ASKED: &str = "permission.asked";
 pub const PERMISSION_REPLIED: &str = "permission.replied";
 /// Type of the project registry event (`project.ts`).
 pub const PROJECT_UPDATED: &str = "project.updated";
+/// Type of the MCP tool-list event (`mcp-event.ts`, wave D).
+pub const MCP_TOOLS_CHANGED: &str = "mcp.tools.changed";
+/// Type of the MCP resource-list event (`mcp-event.ts`, wave D).
+pub const MCP_RESOURCES_CHANGED: &str = "mcp.resources.changed";
+/// Type of the MCP status event (`mcp-event.ts`, wave D).
+pub const MCP_STATUS_CHANGED: &str = "mcp.status.changed";
+/// Type of the MCP prompt-list event (`mcp/index.ts`, wave D).
+pub const MCP_PROMPTS_CHANGED: &str = "mcp.prompts.changed";
+/// Type of the PTY lifecycle event (`schema/pty.ts`, wave D).
+pub const PTY_CREATED: &str = "pty.created";
+/// Type of the PTY lifecycle event (`schema/pty.ts`, wave D).
+pub const PTY_UPDATED: &str = "pty.updated";
+/// Type of the PTY lifecycle event (`schema/pty.ts`, wave D).
+pub const PTY_EXITED: &str = "pty.exited";
+/// Type of the PTY lifecycle event (`schema/pty.ts`, wave D).
+pub const PTY_DELETED: &str = "pty.deleted";
+/// Type of the persistent-PTY lifecycle event (`schema/persistent-pty.ts`, wave D).
+pub const PERSISTENT_PTY_ADDED: &str = "persistent-pty.added";
+/// Type of the persistent-PTY lifecycle event (`schema/persistent-pty.ts`, wave D).
+pub const PERSISTENT_PTY_REMOVED: &str = "persistent-pty.removed";
 
 static NON_SESSION: LazyLock<Vec<EventDefinition>> = LazyLock::new(|| {
     vec![
@@ -305,6 +325,16 @@ static NON_SESSION: LazyLock<Vec<EventDefinition>> = LazyLock::new(|| {
         EventDefinition::ephemeral(PERMISSION_ASKED),
         EventDefinition::ephemeral(PERMISSION_REPLIED),
         EventDefinition::ephemeral(PROJECT_UPDATED),
+        EventDefinition::ephemeral(MCP_TOOLS_CHANGED),
+        EventDefinition::ephemeral(MCP_RESOURCES_CHANGED),
+        EventDefinition::ephemeral(MCP_STATUS_CHANGED),
+        EventDefinition::ephemeral(MCP_PROMPTS_CHANGED),
+        EventDefinition::ephemeral(PTY_CREATED),
+        EventDefinition::ephemeral(PTY_UPDATED),
+        EventDefinition::ephemeral(PTY_EXITED),
+        EventDefinition::ephemeral(PTY_DELETED),
+        EventDefinition::ephemeral(PERSISTENT_PTY_ADDED),
+        EventDefinition::ephemeral(PERSISTENT_PTY_REMOVED),
     ]
 });
 
@@ -347,6 +377,24 @@ pub fn permission_replied() -> &'static EventDefinition {
 #[must_use]
 pub fn project_updated() -> &'static EventDefinition {
     &NON_SESSION[4]
+}
+
+/// The `mcp.tools.changed` definition.
+#[must_use]
+pub fn mcp_tools_changed() -> &'static EventDefinition {
+    &NON_SESSION[5]
+}
+
+/// The `mcp.resources.changed` definition.
+#[must_use]
+pub fn mcp_resources_changed() -> &'static EventDefinition {
+    &NON_SESSION[6]
+}
+
+/// The `mcp.status.changed` definition.
+#[must_use]
+pub fn mcp_status_changed() -> &'static EventDefinition {
+    &NON_SESSION[7]
 }
 
 /// Single lookup across the whole known inventory — session events

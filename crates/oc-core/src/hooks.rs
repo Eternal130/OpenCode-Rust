@@ -1347,7 +1347,10 @@ pub struct InternalPlugin {
     id: String,
     #[allow(clippy::type_complexity)]
     register: Arc<
-        dyn for<'a> Fn(&HookRegistry, &crate::location::LocationPorts<'a>) -> Result<(), String>
+        dyn for<'a> Fn(
+                &Arc<HookRegistry>,
+                &crate::location::LocationPorts<'a>,
+            ) -> Result<(), String>
             + Send
             + Sync,
     >,
@@ -1366,7 +1369,10 @@ impl InternalPlugin {
     /// own blocking bridge for guest effects (see the module docs).
     pub fn new(
         id: impl Into<String>,
-        register: impl for<'a> Fn(&HookRegistry, &crate::location::LocationPorts<'a>) -> Result<(), String>
+        register: impl for<'a> Fn(
+                &Arc<HookRegistry>,
+                &crate::location::LocationPorts<'a>,
+            ) -> Result<(), String>
             + Send
             + Sync
             + 'static,
@@ -1382,7 +1388,7 @@ impl InternalPlugin {
 
     fn register_at(
         &self,
-        hooks: &HookRegistry,
+        hooks: &Arc<HookRegistry>,
         ports: &crate::location::LocationPorts<'_>,
     ) -> Result<(), String> {
         (self.register)(hooks, ports)
@@ -1455,7 +1461,7 @@ impl PluginSupervisor {
     /// registered.
     fn boot_one(
         plugin: &InternalPlugin,
-        hooks: &HookRegistry,
+        hooks: &Arc<HookRegistry>,
         ports: &crate::location::LocationPorts<'_>,
         seen: &mut Vec<String>,
         outcome: &mut PluginBootOutcome,
@@ -1482,7 +1488,7 @@ impl PluginSupervisor {
     #[must_use]
     pub fn boot(
         &self,
-        hooks: &HookRegistry,
+        hooks: &Arc<HookRegistry>,
         ports: &crate::location::LocationPorts<'_>,
     ) -> PluginBootOutcome {
         let mut outcome = PluginBootOutcome::default();

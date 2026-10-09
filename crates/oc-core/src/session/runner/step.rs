@@ -150,6 +150,9 @@ pub struct AttemptInput {
 pub struct StepDeps {
     pub bus: Bus,
     pub llm: Arc<dyn LlmClient>,
+    /// The snapshot service (Wave C1); `None` disables the snapshot
+    /// bracket (captures resolve to `None`, files stays absent).
+    pub snapshot: Option<Arc<dyn crate::snapshot::SnapshotService>>,
 }
 
 enum LoopItem {
@@ -164,8 +167,12 @@ type ToolInterrupt = Arc<tokio::sync::Notify>;
 
 /// `SessionStep.attempt` (step.ts:72-279).
 pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, AttemptFailure> {
-    // startSnapshot — TODO(wave-C): the snapshot service (git tree capture)
-    // is Wave C; Wave B records no snapshot bracket.
+    // startSnapshot (step.ts:73) — the attempt's snapshot bracket; `None`
+    // when snapshots are disabled (capture degrades to None).
+    let start_snapshot = match deps.snapshot.as_ref() {
+        Some(service) => service.capture().await,
+        None => None,
+    };
     let publisher = LlmEventPublisher::new(
         deps.bus.clone(),
         input.session_id.as_str().to_string(),
@@ -173,7 +180,7 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
         input.agent.clone(),
         input.model.reference.clone(),
         input.model.provider_metadata_key().to_string(),
-        None,
+        start_snapshot.clone(),
         0,
     );
     let tools_disabled = matches!(input.prepared.request.tool_choice, Some(ToolChoice::None {}));
@@ -248,6 +255,7 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
                         id: id.clone(),
                         name: name.clone(),
                         input: call_input.clone(),
+                        message_id: input.assistant_message_id.as_str().to_string(),
                     };
                     let tx = outcome_tx.clone();
                     let cancel = Arc::clone(&cancel);
@@ -420,17 +428,35 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
         }
     }
 
-    // 11. Durable settlement. TODO(wave-C): snapshot capture + files diff.
+    // 11. Durable settlement (step.ts:226-251): capture the end snapshot;
+    // files = [] when the trees are equal, the diff otherwise, absent when
+    // either capture failed.
     let record = publisher.record();
     if record.finish.is_some() || record.failure.is_some() {
+        let snapshot = match deps.snapshot.as_ref() {
+            Some(service) => service.capture().await,
+            None => None,
+        };
+        let files: Option<Vec<String>> = match (&start_snapshot, &snapshot) {
+            (Some(from), Some(to)) if from == to => Some(Vec::new()),
+            (Some(from), Some(to)) => match deps.snapshot.as_ref() {
+                Some(service) => service
+                    .files(from, to)
+                    .await
+                    .ok()
+                    .map(|files| files.into_iter().map(|path| path.0).collect()),
+                None => None,
+            },
+            _ => None,
+        };
         let details: SettlementDetails = record
             .finish
             .as_ref()
             .map(|settlement| SettlementDetails {
                 cost: Some(SessionUsage::calculate_cost(&input.model.cost, &settlement.tokens)),
                 tokens: Some(settlement.tokens.clone()),
-                snapshot: None,
-                files: None,
+                snapshot: snapshot.clone(),
+                files: files.clone(),
             })
             .unwrap_or_default();
         if record.failure.is_some() {

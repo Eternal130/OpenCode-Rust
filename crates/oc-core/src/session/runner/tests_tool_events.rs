@@ -440,9 +440,9 @@ async fn runner_publisher_content_filter_finish_fails_with_category() {
     publisher.publish_step_failure(&SettlementDetails::default()).await.unwrap();
     let events = harness.durable_events().await;
     let failed = events.iter().find(|(type_, _, _)| type_ == "session.step.failed").unwrap();
-    // TODO(oc-schema): the `finish: "content-filter"` marker is dropped
-    // until `StepFailFinish` round-trips (see publisher.rs).
-    assert!(failed.2.get("finish").is_none());
+    // The content-filter marker now rides `finish` (Wave C1 oc-schema
+    // round-trip fix; the TS wire keeps `finish: "content-filter"`).
+    assert_eq!(failed.2["finish"], serde_json::json!("content-filter"));
 }
 
 #[tokio::test]

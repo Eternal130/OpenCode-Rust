@@ -62,6 +62,9 @@ pub struct SessionRunner {
     ids: Arc<dyn IdGen>,
     /// Whether the runner's location has closed (reload boundary).
     location_closed: Arc<dyn Fn() -> bool + Send + Sync>,
+    /// The snapshot service for step settlements (`None` disables the
+    /// bracket; Wave C1).
+    snapshot: Option<Arc<dyn crate::snapshot::SnapshotService>>,
     /// `FiberMap`-equivalent for title generation: one live task per
     /// session, `onlyIfMissing`.
     title_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
@@ -99,8 +102,17 @@ impl SessionRunner {
             rng,
             ids,
             location_closed,
+            snapshot: None,
             title_tasks: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Attaches the snapshot service (Wave C1): step settlements capture
+    /// the bracket and publish `files` diffs.
+    #[must_use]
+    pub fn with_snapshot(mut self, snapshot: Arc<dyn crate::snapshot::SnapshotService>) -> Self {
+        self.snapshot = Some(snapshot);
+        self
     }
 
     /// The injectable drain for
@@ -548,7 +560,11 @@ impl SessionRunner {
                 }) as futures::future::BoxFuture<'static, bool>
             });
             let location_closed = Arc::clone(&self.location_closed);
-            let deps = StepDeps { bus: self.bus.clone(), llm: Arc::clone(&self.llm) };
+            let deps = StepDeps {
+                bus: self.bus.clone(),
+                llm: Arc::clone(&self.llm),
+                snapshot: self.snapshot.clone(),
+            };
             let input = AttemptInput {
                 session_id: session_id.clone(),
                 assistant_message_id: assistant_message_id.clone(),

@@ -28,9 +28,9 @@ use oc_schema::location;
 use oc_schema::model;
 use oc_schema::session_event::{
     self as event, AgentSelected, CompactionEnded, CompactionFailed, CompactionStarted,
-    MessageContentUpdated, ModelSelected, Moved, RetryScheduled, ShellEnded, ShellStarted,
-    StepEnded, StepFailed, StepStarted, StepStreamed, Synthetic, ToolCalled, ToolFailed,
-    ToolInputEnded, ToolInputStarted, ToolSuccess,
+    MessageContentUpdated, ModelSelected, Moved, ReasoningEnded, ReasoningStarted, RetryScheduled,
+    ShellEnded, ShellStarted, StepEnded, StepFailed, StepStarted, StepStreamed, Synthetic,
+    TextEnded, ToolCalled, ToolFailed, ToolInputEnded, ToolInputStarted, ToolSuccess,
 };
 use oc_schema::session_message::{
     self as message, AssistantContent, AssistantRetry, AssistantSnapshot, AssistantTime,
@@ -512,18 +512,15 @@ impl SessionMessageUpdater {
             }
 
             "session.text.ended" => {
-                // Parsed manually: the wire field is `state`, which the
-                // typed struct renames (`providerState`).
-                let id = field_str(event, "assistantMessageID")?;
-                let text = field_str(event, "text")?;
-                let state = event.data.get("state").filter(|v| !v.is_null()).cloned();
-                owned(adapter, &id, |draft| {
+                let data: TextEnded = decode_data(event)?;
+                let id = data.assistant_message_id.clone();
+                owned(adapter, id.as_str(), |draft| {
                     if let Some(AssistantContent::Text {
                         text: target, state: target_state, ..
                     }) = latest_text(draft)
                     {
-                        *target = text.clone();
-                        *target_state = state.clone().map(record);
+                        *target = data.text.clone();
+                        *target_state = data.provider_state.clone();
                     }
                 })
             }
@@ -571,6 +568,9 @@ impl SessionMessageUpdater {
                     }) = latest_tool(draft, &data.id)
                     {
                         *executed = Some(data.executed);
+                        // The typed field reads the wire `state` key (Wave C1
+                        // oc-schema fix); this is the projection that
+                        // previously dropped tool.called provider state.
                         *provider_state = data.provider_state.clone();
                         time.ran = Some(created);
                         *state = ToolState::Running {
@@ -659,23 +659,21 @@ impl SessionMessageUpdater {
             }
 
             "session.reasoning.started" => {
-                // Parsed manually: the wire field is `state` (see above).
-                let id = field_str(event, "assistantMessageID")?;
-                let state = event.data.get("state").filter(|v| !v.is_null()).cloned();
-                owned(adapter, &id, |draft| {
+                let data: ReasoningStarted = decode_data(event)?;
+                let id = data.assistant_message_id.clone();
+                owned(adapter, id.as_str(), |draft| {
                     draft.content.push(AssistantContent::Reasoning {
                         text: String::new(),
-                        state: state.clone().map(record),
+                        state: data.provider_state.clone(),
                         time: None,
                     });
                 })
             }
 
             "session.reasoning.ended" => {
-                let id = field_str(event, "assistantMessageID")?;
-                let text = field_str(event, "text")?;
-                let state = event.data.get("state").filter(|v| !v.is_null()).cloned();
-                owned(adapter, &id, |draft| {
+                let data: ReasoningEnded = decode_data(event)?;
+                let id = data.assistant_message_id.clone();
+                owned(adapter, id.as_str(), |draft| {
                     if let Some(AssistantContent::Reasoning {
                         text: target,
                         state: target_state,
@@ -683,14 +681,14 @@ impl SessionMessageUpdater {
                         ..
                     }) = latest_reasoning(draft)
                     {
-                        *target = text.clone();
+                        *target = data.text.clone();
                         let original = time.map_or(created, |time| time.created);
                         *time = Some(message::ReasoningTime {
                             created: original,
                             completed: Some(created),
                         });
-                        if let Some(next) = state.clone() {
-                            *target_state = Some(record(next));
+                        if let Some(next) = data.provider_state.clone() {
+                            *target_state = Some(next);
                         }
                     }
                 })
