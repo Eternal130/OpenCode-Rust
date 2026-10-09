@@ -71,6 +71,178 @@ use oc_schema::skill::{Skill, SkillSource};
 use crate::config::{Json, Loaded};
 use crate::tool::skill::SkillTable;
 
+/// The v2 built-in skills internal plugin (`plugin/skill.ts`, mounted in
+/// `internal.ts` `pre` BEFORE the config skill plugin): two embedded
+/// skills — `opencode` and `report` — with the report body extended by a
+/// runtime diagnostics snapshot captured at registration.
+///
+/// The Rust engine has no skill-editor plugin port (all skills enter
+/// through [`ConfigSkillTable::discover`], which runs before the graph's
+/// plugin supervisor), so the port lands there: built-ins seed the table
+/// first and config skills insert unconditionally after — v2's
+/// `editor.add` overwrite precedence (config wins on id collision).
+pub mod builtin {
+    use super::{ConfigEntry, Loaded, Skill, SkillId, SkillName};
+
+    /// `OpencodeContent` — byte-identical to the reference
+    /// `plugin/skill/opencode.md`.
+    pub const OPENCODE_MD: &str = include_str!("skill/opencode.md");
+    /// `ReportContent` — byte-identical to the reference
+    /// `plugin/skill/report.md`.
+    pub const REPORT_MD: &str = include_str!("skill/report.md");
+
+    pub const OPENCODE_DESCRIPTION: &str = "Use this skill for any question about OpenCode itself, including how OpenCode works, using or configuring it, migrating from V1 to V2, troubleshooting it, developing plugins or integrations, using the OpenCode SDK, clients, server, or API, and contributing to the OpenCode codebase. Also use it for OpenCode agents, commands, skills, tools, permissions, MCP servers, providers, models, themes, keybinds, formatters, the CLI, TUI, desktop app, and web app.";
+    const REPORT_DESCRIPTION: &str = "Use when the user wants to report an opencode issue or bug. Collect standard diagnostics, add user-specific reproduction context, and publish the issue with GitHub CLI.";
+
+    /// `app.version` — the workspace (v2 port) version.
+    pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+    /// `app.channel` — the build-time `OPENCODE_CHANNEL` define, default
+    /// `"local"` (v2 `cli/version.ts`).
+    pub const APP_CHANNEL: &str = match option_env!("OPENCODE_CHANNEL") {
+        Some(channel) => channel,
+        None => "local",
+    };
+
+    /// The two embedded skills, in registration order.
+    #[must_use]
+    pub fn skills(loaded: &Loaded) -> Vec<Skill> {
+        vec![opencode_skill(), report_skill(loaded)]
+    }
+
+    fn opencode_skill() -> Skill {
+        Skill {
+            id: SkillId::parse("opencode"),
+            name: SkillName::parse("OpenCode"),
+            description: Some(OPENCODE_DESCRIPTION.to_owned()),
+            auto_invoke: None,
+            path: oc_schema::common::AbsolutePath::parse("/builtin/opencode.md"),
+            content: OPENCODE_MD.to_owned(),
+        }
+    }
+
+    fn report_skill(loaded: &Loaded) -> Skill {
+        Skill {
+            id: SkillId::parse("report"),
+            name: SkillName::parse("Report"),
+            description: Some(REPORT_DESCRIPTION.to_owned()),
+            auto_invoke: None,
+            path: oc_schema::common::AbsolutePath::parse("/builtin/report.md"),
+            content: report_content_with_diagnostics(loaded),
+        }
+    }
+
+    /// `reportContentWithDiagnostics`: the reference body, then the
+    /// snapshot block with the TS field set verbatim.
+    #[must_use]
+    pub fn report_content_with_diagnostics(loaded: &Loaded) -> String {
+        [
+            REPORT_MD.to_owned(),
+            String::new(),
+            "## Runtime Diagnostics Snapshot".to_owned(),
+            String::new(),
+            "These values were captured when the built-in report skill was registered. Verify them before publishing.".to_owned(),
+            String::new(),
+            format!("- opencode version: {APP_VERSION}"),
+            format!("- install/channel: {APP_CHANNEL}"),
+            format!("- OS: {} {} ({} {})", os_type(), os_release(), platform(), arch()),
+            format!("- Terminal: {}", terminal()),
+            format!("- Shell: {}", shell()),
+            format!("- Active plugins: {}", active_plugins(loaded)),
+        ]
+        .join("\n")
+    }
+
+    /// `os.type()` for the platforms the port targets.
+    fn os_type() -> &'static str {
+        match std::env::consts::OS {
+            "linux" => "Linux",
+            "macos" => "Darwin",
+            "windows" => "Windows_NT",
+            _ => "Unknown",
+        }
+    }
+
+    /// `os.release()` — the kernel release (procfs on Linux).
+    fn os_release() -> String {
+        if std::env::consts::OS == "linux" {
+            if let Ok(release) = std::fs::read_to_string("/proc/sys/kernel/osrelease") {
+                return release.trim().to_owned();
+            }
+        }
+        String::new()
+    }
+
+    /// `os.platform()`.
+    fn platform() -> &'static str {
+        std::env::consts::OS
+    }
+
+    /// `os.arch()` — Node's arch names.
+    fn arch() -> &'static str {
+        match std::env::consts::ARCH {
+            "x86_64" => "x64",
+            "aarch64" => "arm64",
+            "x86" => "ia32",
+            "arm" => "arm",
+            "riscv64" => "riscv64",
+            "loongarch64" => "loong64",
+            other => other,
+        }
+    }
+
+    /// The terminal probe: TERM_PROGRAM / TERM / COLORTERM lines, or the
+    /// reference's unavailability sentence.
+    fn terminal() -> String {
+        let probes = [
+            ("TERM_PROGRAM", std::env::var("TERM_PROGRAM").ok()),
+            ("TERM", std::env::var("TERM").ok()),
+            ("COLORTERM", std::env::var("COLORTERM").ok()),
+        ];
+        let present: Vec<String> = probes
+            .into_iter()
+            .filter_map(|(name, value)| value.map(|value| format!("{name}={value}")))
+            .collect();
+        if present.is_empty() {
+            "Unavailable: terminal environment variables are not set".to_owned()
+        } else {
+            present.join(", ")
+        }
+    }
+
+    /// The shell probe: SHELL (ComSpec on Windows), or the reference's
+    /// unavailability sentence.
+    fn shell() -> String {
+        std::env::var("SHELL")
+            .or_else(|_| std::env::var("ComSpec"))
+            .or_else(|_| std::env::var("COMSPEC"))
+            .unwrap_or_else(|_| "Unavailable: shell environment variable is not set".to_owned())
+    }
+
+    /// `configuredPlugins`: every config document `plugins` entry mapped
+    /// verbatim (string or `.package`), sorted — remove directives and
+    /// duplicates included, exactly like the reference.
+    fn active_plugins(loaded: &Loaded) -> String {
+        let mut names: Vec<String> = Vec::new();
+        for entry in &loaded.entries {
+            let ConfigEntry::Document(document) = entry else { continue };
+            let Some(plugins) = &document.info.plugins else { continue };
+            for plugin in plugins {
+                match plugin {
+                    oc_schema::config::Plugin::Spec(spec) => names.push(spec.clone()),
+                    oc_schema::config::Plugin::Entry { package, .. } => {
+                        names.push(package.clone());
+                    }
+                }
+            }
+        }
+        if names.is_empty() {
+            return "None found in config".to_owned();
+        }
+        names.sort();
+        names.join(", ")
+    }
+}
+
 /// The config-driven skill table: discovered once per location boot from
 /// the loaded config snapshot.
 #[derive(Debug, Default)]
@@ -88,7 +260,10 @@ impl ConfigSkillTable {
     /// Discovers skills from a loaded config snapshot for `location`
     /// (directory entries contribute `<dir>/skill` + `<dir>/skills`;
     /// document `skills` entries contribute paths relative to the
-    /// location; `~` expands against `home`).
+    /// location; `~` expands against `home`). The built-in skills seed
+    /// FIRST (the v2 pre-plugin); config skills insert UNCONDITIONALLY —
+    /// on an id collision the config skill wins (v2 `editor.add`
+    /// overwrite), and later config sources overwrite earlier ones.
     #[must_use]
     pub fn discover(loaded: &Loaded, location: &Path, home: &Path) -> Self {
         let mut sources: Vec<PathBuf> = Vec::new();
@@ -127,9 +302,15 @@ impl ConfigSkillTable {
             }
         }
         let mut by_id: BTreeMap<String, Skill> = BTreeMap::new();
+        // Built-ins first (the v2 SkillPlugin pre-plugin position), then
+        // config skills inserted unconditionally: collisions overwrite —
+        // config wins, the later source over the earlier (v2 `editor.add`).
+        for skill in builtin::skills(loaded) {
+            by_id.insert(skill.id.as_str().to_string(), skill);
+        }
         for directory in sources {
             for skill in scan_directory(&directory) {
-                by_id.entry(skill.id.as_str().to_string()).or_insert(skill);
+                by_id.insert(skill.id.as_str().to_string(), skill);
             }
         }
         Self { skills: by_id.into_values().collect() }

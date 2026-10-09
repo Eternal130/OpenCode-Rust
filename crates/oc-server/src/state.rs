@@ -71,6 +71,12 @@ pub struct AppState {
     pub persistent_pty: PersistentPty,
     /// The location announcer (boot/reload/config-change frames).
     pub announce: crate::announce::Announcer,
+    /// The process-level shutdown latch (gate-6 F2): the serve loop's
+    /// graceful-drain trigger. Infinite stream bodies (SSE event feed,
+    /// session-log follow, PTY WebSocket loops) select on it so they END
+    /// when shutdown begins — otherwise `with_graceful_shutdown` waits on
+    /// them forever.
+    pub shutdown: tokio::sync::watch::Sender<bool>,
 }
 
 impl AppState {
@@ -81,7 +87,8 @@ impl AppState {
         ids: std::sync::Arc<dyn IdGen>,
         clock: std::sync::Arc<dyn Clock>,
     ) -> Self {
-        let (tx, rx) = tokio::sync::watch::channel(Readiness::Starting);
+        let (readiness, readiness_rx) = tokio::sync::watch::channel(Readiness::Starting);
+        let (shutdown, _shutdown_rx) = tokio::sync::watch::channel(false);
         let tmp_dir = oc_util::global_roots::resolve().tmp.clone();
         let bus = engine.bus.as_ref().clone();
         let pty = PtyService::new(bus.clone());
@@ -89,8 +96,8 @@ impl AppState {
         Self {
             engine,
             auth,
-            readiness: tx,
-            readiness_rx: rx,
+            readiness,
+            readiness_rx,
             local_addr: parking_lot::RwLock::new(None),
             version,
             ids,
@@ -103,6 +110,7 @@ impl AppState {
             pty,
             persistent_pty,
             announce: crate::announce::Announcer::new(),
+            shutdown,
         }
     }
 

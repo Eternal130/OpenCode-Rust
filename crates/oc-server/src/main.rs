@@ -86,11 +86,21 @@ async fn main() -> io::Result<()> {
     }
     let _ = address;
 
-    // Graceful stop on SIGTERM / SIGINT.
+    // Graceful stop on SIGTERM / SIGINT. The overall drain is bounded
+    // (gate-6 F2): stream bodies end on the shutdown watch, but anything
+    // still in flight at 5s is abandoned with exit(0) — the reference's
+    // practical prompt-exit behavior.
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {}
         _ = sigterm.recv() => {}
     }
-    handle.shutdown_and_join().await
+    match tokio::time::timeout(std::time::Duration::from_secs(5), handle.shutdown_and_join()).await
+    {
+        Ok(result) => result,
+        Err(_elapsed) => {
+            eprintln!("graceful shutdown deadline exceeded; exiting");
+            std::process::exit(0);
+        }
+    }
 }

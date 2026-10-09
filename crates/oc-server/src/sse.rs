@@ -254,10 +254,13 @@ impl Subscription {
     }
 
     /// Wraps this subscription into the SSE body stream: the frames merged
-    /// with the heartbeat cadence (`Stream.merge` + `haltStrategy: "left"`).
+    /// with the heartbeat cadence (`Stream.merge` + `haltStrategy: "left"`),
+    /// ending when `shutdown` fires (gate-6 F2: stream bodies must END on
+    /// shutdown so the graceful drain is not held open by infinite feeds).
     pub fn into_body_stream(
         self,
         heartbeat: Duration,
+        shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> impl futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> + Send {
         let queue = Arc::clone(&self.queue);
         // The stream owns the lifecycle now; the Subscription's own Drop
@@ -265,7 +268,7 @@ impl Subscription {
         std::mem::forget(self);
         // Dropping the body (client disconnect) closes the queue so the feed
         // reaps the subscriber and the heartbeat loop ends.
-        SubscriptionStream { queue, inner: None, heartbeat }
+        SubscriptionStream { queue, inner: None, heartbeat, shutdown: Some(shutdown) }
     }
 }
 
@@ -274,6 +277,7 @@ struct SubscriptionStream {
     queue: Arc<SubscriberQueue>,
     inner: Option<FeedStream>,
     heartbeat: Duration,
+    shutdown: Option<tokio::sync::watch::Receiver<bool>>,
 }
 
 impl Drop for SubscriptionStream {
@@ -299,6 +303,8 @@ impl futures::Stream for SubscriptionStream {
                 recv: None,
                 heartbeat: interval,
                 done: false,
+                shutdown_wait: None,
+                shutdown: this.shutdown.take(),
             });
         }
         std::pin::Pin::new(this.inner.as_mut().expect("armed")).poll_next(cx)
@@ -358,11 +364,26 @@ type RecvFuture = std::pin::Pin<
 
 /// A subscriber stream merged with the 15s heartbeat (`Stream.merge` with
 /// `haltStrategy: "left"` — the heartbeat dies with the frames stream).
+/// The shutdown watch ends the body when the server begins stopping.
 struct FeedStream {
     queue: Arc<SubscriberQueue>,
     recv: Option<RecvFuture>,
     heartbeat: tokio::time::Interval,
+    shutdown: Option<tokio::sync::watch::Receiver<bool>>,
+    /// The armed `wait_for(|flag| flag)` future — single-shot like `recv`,
+    /// armed on first poll so its waker keeps this stream responsive while
+    /// no frames or ticks are due.
+    shutdown_wait: Option<ShutdownWait>,
     done: bool,
+}
+
+/// The in-flight shutdown watch future.
+type ShutdownWait = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+fn shutdown_wait(mut receiver: tokio::sync::watch::Receiver<bool>) -> ShutdownWait {
+    Box::pin(async move {
+        let _ = receiver.wait_for(|flag| *flag).await;
+    })
 }
 
 impl FeedStream {
@@ -394,6 +415,19 @@ impl futures::Stream for FeedStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         if self.done {
+            return Poll::Ready(None);
+        }
+        // Shutdown ends the body even mid-frame / mid-heartbeat. `wait_for`
+        // resolves immediately for a receiver created latched true.
+        if self.shutdown_wait.is_none() {
+            self.shutdown_wait = self.shutdown.take().map(shutdown_wait);
+        }
+        let shutdown_fired = match self.shutdown_wait.as_mut() {
+            Some(wait) => wait.as_mut().poll(cx).is_ready(),
+            None => true,
+        };
+        if shutdown_fired {
+            self.done = true;
             return Poll::Ready(None);
         }
         match self.poll_recv(cx) {
@@ -428,7 +462,7 @@ pub fn event_response(
     let initial = connected_frame(state);
     let stream =
         futures::stream::once(async move { Ok(bytes::Bytes::from(initial.as_bytes().to_vec())) })
-            .chain(feed.subscribe().into_body_stream(heartbeat));
+            .chain(feed.subscribe().into_body_stream(heartbeat, state.shutdown.subscribe()));
     sse_response(axum::body::Body::from_stream(stream))
 }
 
@@ -507,20 +541,31 @@ pub async fn session_log_response(
     }
 
     let input = bus::LogInput { aggregate_id: session.as_str().to_owned(), after, follow };
-    let stream = state.engine.bus.log(input).filter_map(|item| async move {
-        match item {
-            Ok(log_item) => match log_item_frame(&log_item) {
-                Ok(frame) => Some(Ok(bytes::Bytes::from(frame.into_bytes()))),
+    let mut shutdown = state.shutdown.subscribe();
+    let stream = state
+        .engine
+        .bus
+        .log(input)
+        .take_until(async move {
+            // Gate-6 F2: a following log stream is infinite; end the body
+            // when the server begins stopping so the drain completes.
+            let _ = shutdown.wait_for(|flag| *flag).await;
+        })
+        .filter_map(|item| async move {
+            match item {
+                Ok(log_item) => match log_item_frame(&log_item) {
+                    Ok(frame) => Some(Ok(bytes::Bytes::from(frame.into_bytes()))),
+                    Err(error) => Some(Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        error.to_string(),
+                    ))),
+                },
                 Err(error) => Some(Err(std::io::Error::new(
                     std::io::ErrorKind::BrokenPipe,
                     error.to_string(),
                 ))),
-            },
-            Err(error) => {
-                Some(Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, error.to_string())))
             }
-        }
-    });
+        });
     sse_response(axum::body::Body::from_stream(stream))
 }
 

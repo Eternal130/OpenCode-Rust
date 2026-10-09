@@ -269,17 +269,19 @@ async fn connect(
         .filter(|value| *value >= -1);
 
     upgrade.on_upgrade(move |socket| async move {
-        pty_session(shared, socket, pty_id, cursor).await;
+        pty_session(shared, socket, pty_id, cursor, state.shutdown.subscribe()).await;
     })
 }
 
 /// One attached PTY socket: replay → metaFrame(cursor) → live output;
-/// attach failure closes with 4404 after a 1s drain window (§3).
+/// attach failure closes with 4404 after a 1s drain window (§3). The
+/// shutdown watch ends the loop when the server stops (gate-6 F2).
 async fn pty_session(
     shared: std::sync::Arc<pty_state::PtyShared>,
     mut socket: WebSocket,
     pty_id: String,
     cursor: Option<i64>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     use futures::{SinkExt as _, StreamExt as _};
     let (outbox_tx, mut outbox_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
@@ -327,6 +329,7 @@ async fn pty_session(
     let (mut sender, mut receiver) = socket_split(socket);
     loop {
         tokio::select! {
+            _ = shutdown.changed() => break,
             outbound = outbox_rx.recv() => {
                 match outbound {
                     Some(message) => {
