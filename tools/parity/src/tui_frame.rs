@@ -1,4 +1,5 @@
-//! TUI golden-frame loading and comparison primitives (wave 7.0).
+//! TUI golden-frame loading and comparison primitives (wave 7.0; gate-8 P1
+//! + findings 2/5 in wave 7.1).
 //!
 //! The golden corpus under `goldens/tui-frames/` is exported from the
 //! reference v2.0.24 TUI by `/tmp/opencode/tui-dump/export.ts` (bun), which
@@ -11,6 +12,24 @@
 //!   row, a single full-state SGR (`ESC [ 0 ; attrs ; fg ; bg m`) whenever
 //!   the cell style changes, `\x1b[0m` at end of a non-default-styled line.
 //!
+//! **Corpus theme (gate-8 hard precondition P1)**: every scenario of the
+//! `tui-frame-golden/2` corpus renders under the reference's default theme —
+//! the built-in `opencode` v2 theme resolved in dark mode (manifest
+//! `theme: { id: "opencode", mode: "dark" }`). The pre-P1 corpus, which
+//! mixed three style bases (opentui preload defaults, mini
+//! `RUN_THEME_FALLBACK`, v2-dark `emptyThemeSource`), is kept under
+//! `goldens/tui-frames/legacy-mixed-theme/` with its manifest marked
+//! `superseded: true` — diffing reference only, never an acceptance target.
+//!
+//! **Width-edge scenarios (finding 2)**: `width-edge-*` pin opentui's
+//! actual display-width behavior for CJK text, emoji + ZWJ sequences +
+//! skin-tone modifiers, and combining marks / East-Asian-ambiguous
+//! characters, at 80 and 40 columns. Each also ships a `<id>.widths.json`
+//! sidecar with the probe strings measured by the reference's own width
+//! function (`string-width@7.2.0` bundled by `@opentui/core`; ambiguous
+//! chars narrow, emoji 2 cells) — ground truth for unit-testing the Rust
+//! `display_width` without going through frames.
+//!
 //! This module mirrors the export format exactly (`parse_ansi` /
 //! `render_ansi` are inverse on goldens) and provides the comparison
 //! primitives the Phase 7 acceptance gate will use:
@@ -20,11 +39,17 @@
 //! - [`compare_ansi_frames`] / [`FrameFidelity`] — cell-wise glyph/style
 //!   fidelity with the first divergence classified as dimensions / glyph /
 //!   style;
+//! - [`compare_ansi_frames_at`] / [`compare_ansi_bytes_at`] +
+//!   [`ComparisonDepth`] — the same comparisons at an explicit style depth
+//!   (truecolor-canonical, or both-sides-degraded 256; see the
+//!   [`ComparisonDepth`] docs for the approximation caveat and
+//!   `tools/parity/NORMALIZATION.md` §10);
 //! - [`degrade_frame`] + [`ColorDepth`] — the TERM degradation matrix
 //!   (truecolor → 256 → 16) used to compare renders across terminal
 //!   capabilities;
-//! - [`load_manifest`] / [`verify_goldens`] — manifest loading and SHA-256
-//!   verification of the corpus on disk.
+//! - [`load_manifest`] / [`verify_goldens`] / [`load_text_grid`] /
+//!   [`load_ansi_frame`] / [`load_widths_sidecar`] — the Phase 7 gate's
+//!   ingestion API.
 //!
 //! Format reference (keep in sync): `/tmp/opencode/tui-dump/frame.ts` and
 //! `crates/oc-tui/src/spike` (renderer-substrate spike serializer).
@@ -59,12 +84,124 @@ fn sha256_hex(bytes: &[u8]) -> String {
 // Manifest
 // ---------------------------------------------------------------------------
 
+/// Corpus theme descriptor (gate-8 hard precondition P1): every scenario of
+/// a `tui-frame-golden/2` corpus renders under this theme — the reference's
+/// default built-in `opencode` v2 theme (`src/theme/assets/v2/opencode.json`)
+/// resolved in the given mode.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ManifestTheme {
+    pub id: String,
+    pub label: String,
+    pub mode: String,
+}
+
+/// Style comparison depth a scenario is judged at (oracle-gate8 finding 5).
+///
+/// Goldens are exported headless (TERM-free) in truecolor. Tier-A scenarios
+/// compare the canonical streams byte-for-byte in that form
+/// ([`ComparisonDepth::TruecolorCanonical`]). Tier-B scenarios tolerate exact
+/// hue drift by degrading **both** sides to the xterm-256 palette before the
+/// byte/style comparison ([`ComparisonDepth::Degraded256`]) — this
+/// degradation is **our approximation** of the reference's native
+/// TERM=xterm-256color rendering, not a capture of it: the goldens never
+/// passed through a 256-color terminal, so the nearest-palette mapping (see
+/// [`nearest_ansi256`], documented tie-breaking) stands in for whatever the
+/// reference would emit natively. Good enough to assert "same perceived
+/// color class"; not a byte-parity claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ComparisonDepth {
+    #[serde(rename = "truecolor-canonical")]
+    TruecolorCanonical,
+    #[serde(rename = "degraded-256")]
+    Degraded256,
+}
+
+impl ComparisonDepth {
+    /// The TERM color depth this comparison mode degrades frames to.
+    #[must_use]
+    pub fn color_depth(self) -> ColorDepth {
+        match self {
+            ComparisonDepth::TruecolorCanonical => ColorDepth::TrueColor,
+            ComparisonDepth::Degraded256 => ColorDepth::Ansi256,
+        }
+    }
+}
+
+impl fmt::Display for ComparisonDepth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ComparisonDepth::TruecolorCanonical => write!(f, "truecolor-canonical"),
+            ComparisonDepth::Degraded256 => write!(f, "degraded-256"),
+        }
+    }
+}
+
+/// Acceptance tier of a scenario (oracle-gate8 approval table).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScenarioClass {
+    TierA,
+    TierB,
+    TierC1,
+    WidthEdge,
+}
+
+/// A measured-width sidecar (`<id>.widths.json`) of a `width-edge`
+/// scenario: the exact probe strings plus their display widths as measured
+/// by the reference's own width function (`string-width@7.2.0` bundled by
+/// `@opentui/core`, the renderer's "unicode" width method). The Rust
+/// `display_width` is unit-tested against these numbers directly, without
+/// going through frames.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManifestSidecar {
+    pub file: String,
+    pub bytes: u64,
+    pub sha256: String,
+    pub samples: usize,
+}
+
+/// One measured sample of a widths sidecar.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WidthSample {
+    pub text: String,
+    pub utf16: usize,
+    pub codepoints: usize,
+    pub width: usize,
+}
+
+/// The parsed content of a `<id>.widths.json` sidecar.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WidthsSidecar {
+    pub id: String,
+    pub measured_by: String,
+    pub width_method: String,
+    pub samples: Vec<WidthSample>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Manifest {
     pub format: String,
     pub generator: String,
     pub ansi_format: String,
+    /// Corpus theme; absent on legacy (pre-P1) `tui-frame-golden/1` manifests.
+    #[serde(default)]
+    pub theme: Option<ManifestTheme>,
+    /// Default comparison depth for scenarios without an explicit override.
+    #[serde(default)]
+    pub comparison_depth_default: Option<ComparisonDepth>,
+    /// True on superseded legacy corpora kept for diffing reference only.
+    #[serde(default)]
+    pub superseded: bool,
+    #[serde(default)]
+    pub superseded_by: Option<String>,
+    #[serde(default)]
+    pub superseded_reason: Option<String>,
     pub scenarios: Vec<ManifestScenario>,
 }
 
@@ -75,7 +212,16 @@ pub struct ManifestScenario {
     pub source: String,
     pub description: String,
     pub component_class: String,
+    /// Acceptance tier; absent on legacy manifests.
+    #[serde(default)]
+    pub class: Option<ScenarioClass>,
+    /// Explicit comparison-depth override for this scenario.
+    #[serde(default)]
+    pub comparison_depth: Option<ComparisonDepth>,
     pub variants: Vec<ManifestVariant>,
+    /// Measured-width sidecar (width-edge scenarios).
+    #[serde(default)]
+    pub widths: Option<ManifestSidecar>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -107,6 +253,17 @@ impl Manifest {
             .iter()
             .find(|variant| variant.width == width)
     }
+
+    /// Effective comparison depth for a scenario: the scenario's explicit
+    /// override, else the corpus default, else
+    /// [`ComparisonDepth::TruecolorCanonical`].
+    #[must_use]
+    pub fn comparison_depth_for(&self, scenario: &ManifestScenario) -> ComparisonDepth {
+        scenario
+            .comparison_depth
+            .or(self.comparison_depth_default)
+            .unwrap_or(ComparisonDepth::TruecolorCanonical)
+    }
 }
 
 /// Load `manifest.json` from a golden corpus directory.
@@ -126,8 +283,9 @@ pub struct GoldenCheck {
     pub detail: String,
 }
 
-/// Verify every `.txt` / `.ansi` file referenced by the manifest: present on
-/// disk, byte length and SHA-256 match. Returns one check per blob.
+/// Verify every `.txt` / `.ansi` blob (and, for `width-edge` scenarios, the
+/// `.widths.json` sidecar) referenced by the manifest: present on disk, byte
+/// length and SHA-256 match. Returns one check per blob.
 pub fn verify_goldens(dir: &Path) -> Result<Vec<GoldenCheck>> {
     let manifest = load_manifest(dir)?;
     let mut checks = Vec::new();
@@ -135,38 +293,67 @@ pub fn verify_goldens(dir: &Path) -> Result<Vec<GoldenCheck>> {
         for variant in &scenario.variants {
             for (kind, blob) in [("txt", &variant.txt), ("ansi", &variant.ansi)] {
                 let path = dir.join(format!("{}.w{}.{}", scenario.id, variant.width, kind));
-                let ok;
-                let detail;
-                match std::fs::read(&path) {
-                    Err(error) => {
-                        ok = false;
-                        detail = format!("read error: {error}");
-                    }
-                    Ok(bytes) => {
-                        let actual_sha = sha256_hex(&bytes);
-                        if bytes.len() as u64 != blob.bytes {
-                            ok = false;
-                            detail = format!("length {} != manifest {}", bytes.len(), blob.bytes);
-                        } else if actual_sha != blob.sha256 {
-                            ok = false;
-                            detail = format!("sha256 {actual_sha} != manifest {}", blob.sha256);
-                        } else {
-                            ok = true;
-                            detail = String::new();
-                        }
-                    }
-                }
-                checks.push(GoldenCheck {
-                    scenario: scenario.id.clone(),
-                    width: variant.width,
-                    kind,
-                    ok,
-                    detail,
-                });
+                checks.push(verify_blob(dir, &path, &scenario.id, variant.width, kind, blob));
             }
+        }
+        if let Some(sidecar) = &scenario.widths {
+            let path = dir.join(&sidecar.file);
+            let mut check = verify_blob(
+                dir,
+                &path,
+                &scenario.id,
+                0,
+                "widths",
+                &ManifestBlob { bytes: sidecar.bytes, sha256: sidecar.sha256.clone() },
+            );
+            check.detail = if check.detail.is_empty() {
+                sidecar.file.clone()
+            } else {
+                format!("{}: {}", sidecar.file, check.detail)
+            };
+            checks.push(check);
         }
     }
     Ok(checks)
+}
+
+fn verify_blob(
+    _dir: &Path,
+    path: &Path,
+    scenario: &str,
+    width: usize,
+    kind: &'static str,
+    blob: &ManifestBlob,
+) -> GoldenCheck {
+    let ok;
+    let detail;
+    match std::fs::read(path) {
+        Err(error) => {
+            ok = false;
+            detail = format!("read error: {error}");
+        }
+        Ok(bytes) => {
+            let actual_sha = sha256_hex(&bytes);
+            if bytes.len() as u64 != blob.bytes {
+                ok = false;
+                detail = format!("length {} != manifest {}", bytes.len(), blob.bytes);
+            } else if actual_sha != blob.sha256 {
+                ok = false;
+                detail = format!("sha256 {actual_sha} != manifest {}", blob.sha256);
+            } else {
+                ok = true;
+                detail = String::new();
+            }
+        }
+    }
+    GoldenCheck { scenario: scenario.to_string(), width, kind, ok, detail }
+}
+
+/// Load and parse one scenario's measured-width sidecar (`<id>.widths.json`).
+pub fn load_widths_sidecar(dir: &Path, id: &str) -> Result<WidthsSidecar> {
+    let bytes = std::fs::read(dir.join(format!("{id}.widths.json")))
+        .with_context(|| format!("reading widths sidecar for {id} in {}", dir.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("parsing widths sidecar for {id}"))
 }
 
 /// Load one golden text grid by `(scenario id, width)`.
@@ -216,7 +403,13 @@ impl TextGrid {
 }
 
 /// Parse golden text-grid bytes. With `dims = Some((rows, cols))` the parser
-/// asserts the parsed grid matches the manifest dimensions.
+/// asserts the parsed grid has the manifest's row count. Only rows are
+/// asserted: `cols` is the renderer's **display** width, while the grid is
+/// compared per `char` — wide glyphs occupy multiple columns but one char,
+/// and combining marks add chars without columns, so the per-row char count
+/// of a width-edge frame legitimately differs from `cols` in both
+/// directions (see the `width-edge-*` scenarios and their `.widths.json`
+/// sidecars).
 #[must_use]
 pub fn parse_text_grid(text: &str, dims: Option<(usize, usize)>) -> TextGrid {
     let mut rows: Vec<String> = text.split('\n').map(str::to_string).collect();
@@ -226,12 +419,8 @@ pub fn parse_text_grid(text: &str, dims: Option<(usize, usize)>) -> TextGrid {
     let height = rows.len();
     let width = rows.iter().map(|row| row.chars().count()).max().unwrap_or(0);
     let grid = TextGrid { rows, height, width };
-    if let Some((expected_rows, expected_cols)) = dims {
-        assert_eq!(
-            (grid.height, grid.width),
-            (expected_rows, expected_cols),
-            "text grid dims do not match manifest"
-        );
+    if let Some((expected_rows, _expected_cols)) = dims {
+        assert_eq!(grid.height, expected_rows, "text grid row count does not match manifest");
     }
     grid
 }
@@ -347,8 +536,10 @@ pub struct StyledCell {
     pub style: CellStyle,
 }
 
-/// A parsed golden ANSI stream: one row of styled cells per screen row,
-/// padded to the frame width with default-styled blanks.
+/// A parsed golden ANSI stream: one row of styled cells per screen row.
+/// Rows are **not** padded to a uniform width (wide glyphs and combining
+/// marks make per-row char counts vary); out-of-range cells read as
+/// default-styled blanks through [`AnsiFrame::cell`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnsiFrame {
     pub rows: Vec<Vec<StyledCell>>,
@@ -386,7 +577,13 @@ impl std::error::Error for AnsiParseError {}
 /// Supported: SGR sequences (`ESC [ ... m`, parameter subset used by the
 /// exporter plus the common off-codes), text, and `\n` row breaks. Any other
 /// escape sequence is rejected so silent corruption cannot pass as a match.
-/// Short rows are padded with default-styled blanks to the frame width.
+///
+/// Rows keep their natural length — they are **not** padded to a uniform
+/// width. The exporter emits each line exactly as captured, and with wide
+/// glyphs / combining marks the per-row **char** count of a full
+/// display-width row varies, so padding to the longest row would invent
+/// cells that were never in the stream (and break the byte roundtrip).
+/// Out-of-range cells read as default-styled blanks through [`AnsiFrame::cell`].
 pub fn parse_ansi(text: &str, dims: Option<(usize, usize)>) -> Result<AnsiFrame, AnsiParseError> {
     let mut rows: Vec<Vec<StyledCell>> = Vec::new();
     let mut current: Vec<StyledCell> = Vec::new();
@@ -440,11 +637,6 @@ pub fn parse_ansi(text: &str, dims: Option<(usize, usize)>) -> Result<AnsiFrame,
     }
     let height = rows.len();
     let width = rows.iter().map(Vec::len).max().unwrap_or(0);
-    for row in &mut rows {
-        if row.len() < width {
-            row.resize(width, StyledCell { ch: ' ', style: CellStyle::default() });
-        }
-    }
     Ok(AnsiFrame { rows, height, width })
 }
 
@@ -737,6 +929,58 @@ pub fn compare_ansi_frames(expected: &AnsiFrame, actual: &AnsiFrame) -> FrameFid
         }
     }
     fidelity
+}
+
+// ---------------------------------------------------------------------------
+// Depth-aware comparison (oracle-gate8 finding 5)
+// ---------------------------------------------------------------------------
+
+/// Compare two styled frames at an explicit [`ComparisonDepth`].
+///
+/// `TruecolorCanonical` compares the frames as exported (headless,
+/// TERM-free truecolor). `Degraded256` first degrades **both** sides to the
+/// xterm-256 palette ([`degrade_frame`]) so exact hue drift is tolerated
+/// while color-class drift is not. Important: the degradation is *our*
+/// nearest-palette approximation of what the reference would render under
+/// `TERM=xterm-256color` — the goldens never passed through such a
+/// terminal — so a Degraded256 match asserts perceived-color agreement,
+/// not byte parity with reference 256-color output. Glyphs and attributes
+/// are compared identically at both depths.
+#[must_use]
+pub fn compare_ansi_frames_at(
+    expected: &AnsiFrame,
+    actual: &AnsiFrame,
+    depth: ComparisonDepth,
+) -> FrameFidelity {
+    if depth == ComparisonDepth::TruecolorCanonical {
+        return compare_ansi_frames(expected, actual);
+    }
+    let expected_degraded = degrade_frame(expected, depth.color_depth());
+    let actual_degraded = degrade_frame(actual, depth.color_depth());
+    compare_ansi_frames(&expected_degraded, &actual_degraded)
+}
+
+/// Compare two canonical ANSI byte streams at an explicit
+/// [`ComparisonDepth`]: both sides are parsed, degraded (unless
+/// truecolor-canonical), re-rendered, and then byte-compared — so the
+/// reported first-divergent offset refers to the degraded streams.
+///
+/// The same caveat as [`compare_ansi_frames_at`] applies: the degradation
+/// approximates the reference's native TERM behavior; it does not capture
+/// it.
+pub fn compare_ansi_bytes_at(
+    expected: &str,
+    actual: &str,
+    depth: ComparisonDepth,
+) -> Result<AnsiByteDiff, AnsiParseError> {
+    if depth == ComparisonDepth::TruecolorCanonical {
+        return Ok(compare_ansi_bytes(expected, actual));
+    }
+    let expected_frame = parse_ansi(expected, None)?;
+    let actual_frame = parse_ansi(actual, None)?;
+    let expected_degraded = render_ansi(&degrade_frame(&expected_frame, depth.color_depth()));
+    let actual_degraded = render_ansi(&degrade_frame(&actual_frame, depth.color_depth()));
+    Ok(compare_ansi_bytes(&expected_degraded, &actual_degraded))
 }
 
 /// Compare a golden text grid (glyphs only) against a styled render.
@@ -1085,13 +1329,174 @@ mod tests {
     fn golden_corpus_on_disk_verifies_against_manifest() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("goldens/tui-frames");
         let checks = verify_goldens(&dir).expect("verify goldens");
+        // 21 scenarios × 2 widths × 2 blobs + 3 width sidecars.
         assert!(
-            checks.len() >= 30,
+            checks.len() >= 40,
             "expected at least 15 scenarios × 2 widths × 2 blobs, got {}",
             checks.len()
         );
         let failures: Vec<&GoldenCheck> = checks.iter().filter(|check| !check.ok).collect();
         assert!(failures.is_empty(), "golden verification failures: {failures:?}");
+    }
+
+    /// Gate-8 P1: the corpus manifest pins the v2-dark default theme, every
+    /// scenario carries an acceptance class, tiers map to comparison
+    /// depths, and the width-edge scenarios ship verified sidecars.
+    #[test]
+    fn corpus_manifest_pins_theme_classes_and_depths() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("goldens/tui-frames");
+        let manifest = load_manifest(&dir).expect("manifest");
+        assert!(!manifest.superseded, "active corpus must not be superseded");
+        assert_eq!(manifest.format, "tui-frame-golden/2");
+        let theme = manifest.theme.as_ref().expect("theme pinned");
+        assert_eq!((theme.id.as_str(), theme.mode.as_str()), ("opencode", "dark"));
+        assert_eq!(manifest.comparison_depth_default, Some(ComparisonDepth::TruecolorCanonical));
+
+        let mut width_edge = 0;
+        for scenario in &manifest.scenarios {
+            let class = scenario.class.expect("scenario class pinned");
+            let depth = manifest.comparison_depth_for(scenario);
+            match class {
+                ScenarioClass::TierA => assert_eq!(depth, ComparisonDepth::TruecolorCanonical),
+                ScenarioClass::TierB => assert_eq!(depth, ComparisonDepth::Degraded256),
+                ScenarioClass::TierC1 | ScenarioClass::WidthEdge => {
+                    assert_eq!(depth, ComparisonDepth::TruecolorCanonical);
+                }
+            }
+            if class == ScenarioClass::WidthEdge {
+                width_edge += 1;
+                let sidecar = scenario.widths.as_ref().expect("width-edge has sidecar");
+                assert!(sidecar.samples >= 3, "width-edge needs samples");
+                let sidecar_file = dir.join(&sidecar.file);
+                let bytes = std::fs::read(&sidecar_file).unwrap_or_else(|e| panic!("{e}"));
+                assert_eq!(bytes.len() as u64, sidecar.bytes);
+                assert_eq!(sha256_hex(&bytes), sidecar.sha256);
+            } else {
+                assert!(scenario.widths.is_none(), "only width-edge has sidecars");
+            }
+        }
+        assert!(width_edge >= 3, "need >= 3 width-edge scenarios, got {width_edge}");
+        // Tier-B is exactly the diff viewer until oc-theme token parity lands.
+        let diff = manifest
+            .scenarios
+            .iter()
+            .find(|s| s.id == "diff-viewer-split")
+            .expect("diff viewer scenario");
+        assert_eq!(diff.class, Some(ScenarioClass::TierB));
+    }
+
+    /// The pre-P1 corpus stays loadable and on-disk-verified, marked
+    /// superseded — diffing reference only.
+    #[test]
+    fn legacy_mixed_theme_corpus_is_superseded_but_verified() {
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("goldens/tui-frames/legacy-mixed-theme");
+        let manifest = load_manifest(&dir).expect("legacy manifest parses under the v2 struct");
+        assert!(manifest.superseded, "legacy corpus must be marked superseded");
+        assert!(manifest.superseded_by.is_some());
+        assert_eq!(manifest.format, "tui-frame-golden/1");
+        assert!(manifest.theme.is_none(), "legacy corpus predates the theme pin");
+        let checks = verify_goldens(&dir).expect("verify legacy goldens");
+        assert!(
+            checks.iter().all(|check| check.ok),
+            "legacy blob failures: {:?}",
+            checks.iter().filter(|check| !check.ok).collect::<Vec<_>>()
+        );
+    }
+
+    /// The width-edge sidecars are the ground truth for the Rust
+    /// `display_width`: samples parse, agree with their utf16/codepoint
+    /// bookkeeping, and pure-ASCII samples measure one cell per char.
+    #[test]
+    fn width_edge_sidecars_pin_measured_widths() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("goldens/tui-frames");
+        let manifest = load_manifest(&dir).expect("manifest");
+        let width_edge: Vec<_> = manifest
+            .scenarios
+            .iter()
+            .filter(|s| s.class == Some(ScenarioClass::WidthEdge))
+            .collect();
+        assert!(width_edge.len() >= 3);
+        for scenario in width_edge {
+            let sidecar = load_widths_sidecar(&dir, &scenario.id).expect("sidecar");
+            assert_eq!(sidecar.id, scenario.id);
+            assert_eq!(sidecar.width_method, "unicode");
+            assert!(
+                sidecar.measured_by.contains("string-width@7.2.0"),
+                "measured by the reference's bundled string-width"
+            );
+            assert!(sidecar.samples.len() >= 6, "each probe has a full sample set");
+            for sample in &sidecar.samples {
+                assert_ne!(sample.text, "");
+                assert_eq!(sample.utf16, sample.text.chars().map(char::len_utf16).sum::<usize>());
+                assert_eq!(sample.codepoints, sample.text.chars().count());
+                assert!(sample.codepoints <= sample.utf16);
+                assert!(sample.width >= 1, "non-empty samples occupy at least one cell");
+                if sample.text.is_ascii() {
+                    assert_eq!(sample.width, sample.text.chars().count());
+                }
+            }
+        }
+    }
+
+    /// Depth-aware comparison: exact-color drift fails truecolor-canonical
+    /// but passes after both sides degrade to the 256-color palette, while
+    /// color-class drift still fails. The degradation is our approximation
+    /// of the reference's TERM behavior (documented on `ComparisonDepth`).
+    #[test]
+    fn depth_aware_comparison_tolerates_hue_drift_only() {
+        let golden = AnsiFrame {
+            rows: vec![vec![StyledCell {
+                ch: 'a',
+                style: CellStyle { fg: Color::Rgb(10, 10, 250), ..Default::default() },
+            }]],
+            height: 1,
+            width: 1,
+        };
+        // Same glyph, hue-drifted fg: (10,10,250) vs (12,12,248) both
+        // degrade to xterm-256 index 12.
+        let hue_drift = AnsiFrame {
+            rows: vec![vec![StyledCell {
+                ch: 'a',
+                style: CellStyle { fg: Color::Rgb(12, 12, 248), ..Default::default() },
+            }]],
+            height: 1,
+            width: 1,
+        };
+        // A different color class entirely.
+        let class_drift = AnsiFrame {
+            rows: vec![vec![StyledCell {
+                ch: 'a',
+                style: CellStyle { fg: Color::Rgb(250, 250, 10), ..Default::default() },
+            }]],
+            height: 1,
+            width: 1,
+        };
+        let strict =
+            compare_ansi_frames_at(&golden, &hue_drift, ComparisonDepth::TruecolorCanonical);
+        assert!(!strict.all_match(), "exact hue drift fails truecolor-canonical");
+        let lenient = compare_ansi_frames_at(&golden, &hue_drift, ComparisonDepth::Degraded256);
+        assert!(lenient.all_match(), "hue drift passes after 256 degradation");
+        let still_fails =
+            compare_ansi_frames_at(&golden, &class_drift, ComparisonDepth::Degraded256);
+        assert!(!still_fails.all_match(), "color-class drift fails even degraded");
+
+        // Byte-level variant: degraded streams are byte-equal for hue drift.
+        let golden_text = render_ansi(&golden);
+        let hue_text = render_ansi(&hue_drift);
+        assert!(
+            !compare_ansi_bytes_at(&golden_text, &hue_text, ComparisonDepth::TruecolorCanonical)
+                .expect("parse")
+                .equal
+        );
+        assert!(
+            compare_ansi_bytes_at(&golden_text, &hue_text, ComparisonDepth::Degraded256)
+                .expect("parse")
+                .equal
+        );
+        // Degraded comparison maps to the Ansi256 TERM depth.
+        assert_eq!(ComparisonDepth::Degraded256.color_depth(), ColorDepth::Ansi256);
+        assert_eq!(ComparisonDepth::TruecolorCanonical.color_depth(), ColorDepth::TrueColor);
     }
 
     #[test]
@@ -1108,6 +1513,9 @@ mod tests {
                 .expect("read ansi");
                 assert_eq!(render_ansi(&frame), text, "roundtrip failed for {}", scenario.id);
                 // Styled-frame glyphs must agree with the text grid golden.
+                // (Char-wise agreement: wide/combining graphemes are stored
+                // inline identically in both artifacts, so this holds for
+                // the width-edge corpus too.)
                 let grid = load_text_grid(&dir, &scenario.id, variant.width).expect("load txt");
                 for row in 0..grid.height {
                     for col in 0..grid.width {
@@ -1122,6 +1530,6 @@ mod tests {
                 checked += 1;
             }
         }
-        assert!(checked >= 36, "expected at least 36 variants, checked {checked}");
+        assert!(checked >= 42, "expected at least 42 variants, checked {checked}");
     }
 }

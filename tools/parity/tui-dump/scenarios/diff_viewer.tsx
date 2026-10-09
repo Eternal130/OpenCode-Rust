@@ -188,6 +188,7 @@ export const scenarios: Scenario[] = [
     source: "test/cli/tui/diff-viewer.test.tsx",
     description: "Diff viewer split view rendering three hunks of a modified file (gutter +/- rows)",
     componentClass: "diff-viewer",
+    tier: "tier-b",
     variants: [
       { width: 80, height: 24 },
       { width: 160, height: 24 },

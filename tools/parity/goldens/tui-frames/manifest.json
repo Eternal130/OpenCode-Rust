@@ -1,13 +1,21 @@
 {
-  "format": "tui-frame-golden/1",
+  "format": "tui-frame-golden/2",
   "generator": "tui-dump (bun) @ opencode v2.0.24 reference",
   "ansiFormat": "canonical span SGR: ESC[0;attrs;fg;bgm per style change, see frame.ts / tools/parity/src/tui_frame.rs",
+  "theme": {
+    "id": "opencode",
+    "label": "v2-dark",
+    "mode": "dark"
+  },
+  "comparisonDepthDefault": "truecolor-canonical",
   "scenarios": [
     {
       "id": "tool-wrap-rows",
       "source": "test/cli/tui/inline-tool-wrap-snapshot.test.tsx",
-      "description": "Five consecutive grep/glob/read InlineToolRow summaries at width 72 (wrap behavior)",
+      "description": "Five consecutive grep/glob/read InlineToolRow summaries at width 72 (wrap behavior, v2-dark theme)",
       "componentClass": "tool-row",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -19,8 +27,8 @@
             "sha256": "768ff734b4f6cd59ae62590c60918431b061295616898b84554bad23c151ee14"
           },
           "ansi": {
-            "bytes": 1414,
-            "sha256": "58d12624af4335de58353020c0e1f04c3566c6fc9ff7685c71623cf9ea5c63b4"
+            "bytes": 2290,
+            "sha256": "e66de902a3f164e4978e797a398d16e0233c906f1ba7f304d98b5a10de517e31"
           }
         },
         {
@@ -33,8 +41,8 @@
             "sha256": "1cdb31b4d53e8ba974221433c878e6fadf920430f4862da7d8812391c37e26a7"
           },
           "ansi": {
-            "bytes": 2374,
-            "sha256": "fac259f361081f08a95623778ed777071830dffcd386be2d2d63460bb75d4fa7"
+            "bytes": 3250,
+            "sha256": "4fed2587751e6fb59d9daede9203367824d47bdc9fe104314c858bead6a4e8ee"
           }
         }
       ]
@@ -42,8 +50,10 @@
     {
       "id": "tool-wrap-error-expanded",
       "source": "test/cli/tui/inline-tool-wrap-snapshot.test.tsx",
-      "description": "Same tool rows with errorExpanded (LSP error rendered under the tool text)",
+      "description": "Same tool rows with errorExpanded (LSP error rendered under the tool text, v2-dark theme)",
       "componentClass": "tool-row",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -55,8 +65,8 @@
             "sha256": "2fcc39fa1f247be1ca0dce7b519920c43209b45464eafce0d1d288a005a36ab6"
           },
           "ansi": {
-            "bytes": 1414,
-            "sha256": "2b2abf3c78f7c953b9ee1153e2d8dc3d5695bb46c0bd2b7e1130a99d181a24ac"
+            "bytes": 2360,
+            "sha256": "55726e6e1aedbab244daa190cae98bd7758999345179b6dca0337550ba7343e8"
           }
         },
         {
@@ -69,8 +79,8 @@
             "sha256": "bf8c423e62d8eb1c797f2c354b1d6a964e24bf0ad1ff67b61ffaa1115e693481"
           },
           "ansi": {
-            "bytes": 2374,
-            "sha256": "0df7592ddaabea9977213d90dd3ef3fe25ac1845d99a7322e79f714ce22b4944"
+            "bytes": 3320,
+            "sha256": "06ba03ed4733a04ebb9e4ffe3a79fbb1d6f1edd24ea17ce1c38a463e3e23417c"
           }
         }
       ]
@@ -80,6 +90,8 @@
       "source": "test/component/session-tabs-status.test.tsx",
       "description": "SessionTabs horizontal bar/rail with two tabs; first tab carries an unread-activity indicator",
       "componentClass": "session-tabs",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -116,6 +128,8 @@
       "source": "test/component/session-tabs-status.test.tsx",
       "description": "SessionTabs vertical bar/rail with two tabs; first tab carries an unread-activity indicator",
       "componentClass": "session-tabs",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -152,6 +166,8 @@
       "source": "test/mini/footer.view.test.tsx",
       "description": "RunFooterView default prompt composer (idle phase, fallback dark theme)",
       "componentClass": "mini-footer",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -188,6 +204,8 @@
       "source": "test/mini/footer.view.test.tsx",
       "description": "RunFooterView permission view: 'Permission required' with Allow once / Reject actions",
       "componentClass": "mini-footer-permission",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -224,6 +242,8 @@
       "source": "test/mini/footer.view.test.tsx",
       "description": "RunFooterView multi-field form view (Deployment: Service + Notes)",
       "componentClass": "mini-footer-form",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -260,6 +280,8 @@
       "source": "test/mini/footer.view.test.tsx",
       "description": "RejectField free-text reason input shown with permission actions",
       "componentClass": "mini-footer-permission",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -296,6 +318,8 @@
       "source": "test/mini/footer.view.test.tsx",
       "description": "RunCommandMenuBody grouped commands panel (Session/Agent/Editor sections + MCP command)",
       "componentClass": "mini-footer-panel",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -332,6 +356,8 @@
       "source": "test/mini/footer.view.test.tsx",
       "description": "RunModelSelectBody provider/model picker (opencode: GPT-5, GPT Free, deprecated Old Model)",
       "componentClass": "mini-footer-panel",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -368,6 +394,8 @@
       "source": "test/mini/footer.view.test.tsx",
       "description": "RunAgentSelectBody agent picker (Build/Review/Explore, current=review, hidden agent excluded)",
       "componentClass": "mini-footer-panel",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -404,6 +432,8 @@
       "source": "test/mini/footer.view.test.tsx",
       "description": "RunVariantSelectBody reasoning-effort picker (Default + high/minimal, current=high)",
       "componentClass": "mini-footer-panel",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -440,6 +470,8 @@
       "source": "test/mini/footer.view.test.tsx",
       "description": "RunSettingsBody verbosity/thinking/tools/shell settings panel (mono=false, animations off)",
       "componentClass": "mini-footer-panel",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -476,6 +508,8 @@
       "source": "test/cli/tui/form.test.tsx",
       "description": "Session FormPrompt: external authorization form (acknowledgement required)",
       "componentClass": "prompt-composer",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -512,6 +546,8 @@
       "source": "test/cli/tui/command-palette.test.tsx",
       "description": "CommandPaletteDialog listing two registered commands (New session / Switch model)",
       "componentClass": "dialog",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -548,6 +584,8 @@
       "source": "test/cli/tui/dialog-select.test.tsx",
       "description": "DialogSelect fuzzy picker with three items, Beta selected, two row actions",
       "componentClass": "dialog",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -584,6 +622,8 @@
       "source": "test/cli/tui/group-view.test.tsx",
       "description": "SessionGroupView collapsed instructions group ('Instructions: 2 files' summary row)",
       "componentClass": "session-group",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
       "variants": [
         {
           "width": 80,
@@ -620,6 +660,8 @@
       "source": "test/cli/tui/diff-viewer.test.tsx",
       "description": "Diff viewer split view rendering three hunks of a modified file (gutter +/- rows)",
       "componentClass": "diff-viewer",
+      "class": "tier-b",
+      "comparisonDepth": "degraded-256",
       "variants": [
         {
           "width": 80,
@@ -650,6 +692,138 @@
           }
         }
       ]
+    },
+    {
+      "id": "width-edge-cjk",
+      "source": "tui-dump width-edge corpus (oracle-gate8 finding 2)",
+      "description": "CJK display-width probe: mixed zh + ASCII, full-width punctuation and brackets, wrap-anywhere reflow",
+      "componentClass": "width-probe",
+      "class": "width-edge",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 30,
+          "rows": 30,
+          "cols": 80,
+          "txt": {
+            "bytes": 2591,
+            "sha256": "b10fd056a93d1b25adef305177e31757b81ae6761669281094051de3e30530bb"
+          },
+          "ansi": {
+            "bytes": 4321,
+            "sha256": "313b5f0985badbca6922341c2224366218a5732fb748ed27455787e9d3ebe6e3"
+          }
+        },
+        {
+          "width": 40,
+          "height": 30,
+          "rows": 30,
+          "cols": 40,
+          "txt": {
+            "bytes": 1391,
+            "sha256": "9d5e050bd958b78c9f3bd5310f57ddd891c596fad1e355d5ece0bec555df9ded"
+          },
+          "ansi": {
+            "bytes": 3891,
+            "sha256": "984bd38ca254f7ccc681462cdcfacb6dda59616ece530725ca9085149dcbe02c"
+          }
+        }
+      ],
+      "widths": {
+        "file": "width-edge-cjk.widths.json",
+        "bytes": 1490,
+        "sha256": "5cd896eb63a244e167854279e0f1ba90d4e7ee0df23431fe515a6d8a029a844a",
+        "samples": 8
+      }
+    },
+    {
+      "id": "width-edge-emoji",
+      "source": "tui-dump width-edge corpus (oracle-gate8 finding 2)",
+      "description": "Emoji display-width probe: ZWJ sequences (family/flags/handshake), skin-tone modifiers, keycap VS16",
+      "componentClass": "width-probe",
+      "class": "width-edge",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 30,
+          "rows": 30,
+          "cols": 80,
+          "txt": {
+            "bytes": 2530,
+            "sha256": "891c8074c1ed9645236b1297b75a4ae15a1e59b68f7f41dd176233bed3e11695"
+          },
+          "ansi": {
+            "bytes": 4238,
+            "sha256": "dc2142f85e46a914002a03fb835b9b8f4a2b9c7000b1ebdcc82353152ed925ea"
+          }
+        },
+        {
+          "width": 40,
+          "height": 30,
+          "rows": 30,
+          "cols": 40,
+          "txt": {
+            "bytes": 1330,
+            "sha256": "d696097995dbe3ba01824d7f68c5c99d4868b7bca12dc999d5e0237aa7f8c044"
+          },
+          "ansi": {
+            "bytes": 3248,
+            "sha256": "438e3101db3a205b685ace72846215586b71cdac03bf6df50275e284459e95b8"
+          }
+        }
+      ],
+      "widths": {
+        "file": "width-edge-emoji.widths.json",
+        "bytes": 1269,
+        "sha256": "756aa6a810060374ad7bae267c0c96af6cb182fc36f803f6c8169c55a687d1e1",
+        "samples": 8
+      }
+    },
+    {
+      "id": "width-edge-combining",
+      "source": "tui-dump width-edge corpus (oracle-gate8 finding 2)",
+      "description": "Combining-marks / ambiguous-width probe: NFD vs precomposed, ±·…○△, circled/roman numerals, box drawing, Indic scripts",
+      "componentClass": "width-probe",
+      "class": "width-edge",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 30,
+          "rows": 30,
+          "cols": 80,
+          "txt": {
+            "bytes": 2579,
+            "sha256": "9dd54d734f41e2ff0329ccbdbecd7d10bff554dd2459621f6904980257d7060c"
+          },
+          "ansi": {
+            "bytes": 4289,
+            "sha256": "253e6e03d69906656920df6146fd056271c49a128119b2d2e20180275a50c865"
+          }
+        },
+        {
+          "width": 40,
+          "height": 30,
+          "rows": 30,
+          "cols": 40,
+          "txt": {
+            "bytes": 1379,
+            "sha256": "fb5dacfedffdeec34b3771b09da6b6456c0be2b24aa171edeead2bb5d7c29cd1"
+          },
+          "ansi": {
+            "bytes": 3579,
+            "sha256": "1398075eb5a77b299e90585cef9a9c1b5dd4e51e49a0d6aa1a52642a6e6893eb"
+          }
+        }
+      ],
+      "widths": {
+        "file": "width-edge-combining.widths.json",
+        "bytes": 1351,
+        "sha256": "a9ef01020305d60afeeba1ef7114aeaf9913e11b3d0caa28fd8aa170c5513782",
+        "samples": 8
+      }
     }
   ]
 }

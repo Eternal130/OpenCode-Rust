@@ -247,6 +247,7 @@ export const scenarios: Scenario[] = [
     source: "test/cli/tui/form.test.tsx",
     description: "Session FormPrompt: external authorization form (acknowledgement required)",
     componentClass: "prompt-composer",
+    tier: "tier-a",
     variants: [
       { width: 80, height: 20 },
       { width: 160, height: 20 },
@@ -258,6 +259,7 @@ export const scenarios: Scenario[] = [
     source: "test/cli/tui/command-palette.test.tsx",
     description: "CommandPaletteDialog listing two registered commands (New session / Switch model)",
     componentClass: "dialog",
+    tier: "tier-a",
     variants: [
       { width: 80, height: 24 },
       { width: 160, height: 24 },
@@ -269,6 +271,7 @@ export const scenarios: Scenario[] = [
     source: "test/cli/tui/dialog-select.test.tsx",
     description: "DialogSelect fuzzy picker with three items, Beta selected, two row actions",
     componentClass: "dialog",
+    tier: "tier-a",
     variants: [
       { width: 80, height: 20 },
       { width: 160, height: 20 },
@@ -280,6 +283,7 @@ export const scenarios: Scenario[] = [
     source: "test/cli/tui/group-view.test.tsx",
     description: "SessionGroupView collapsed instructions group ('Instructions: 2 files' summary row)",
     componentClass: "session-group",
+    tier: "tier-a",
     variants: [
       { width: 80, height: 24 },
       { width: 160, height: 24 },

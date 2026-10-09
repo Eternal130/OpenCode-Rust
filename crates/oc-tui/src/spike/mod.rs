@@ -1,49 +1,48 @@
-//! Renderer-substrate spike (wave 7.0).
+//! Renderer-substrate spike (wave 7.0) — **absorbed**. The bespoke
+//! taffy/wrap/paint pipeline now lives in the production modules
+//! ([`crate::layout`], [`crate::wrap`], [`crate::render`],
+//! [`crate::components::tool_rows`]); this module keeps the spike's
+//! public surface as aliases and its golden comparison as the
+//! absorption proof, upgraded to the P1 corpus:
 //!
-//! Minimal **ratatui + taffy** pipeline rendering ONE exported golden
-//! scenario — `tool-wrap-rows`, the simplest text-heavy component (a column
-//! of `InlineToolRow`s; layout + glyph content, single paint style):
-//!
-//! 1. [`layout`] mirrors the opentui box tree of the reference fixture as a
-//!    taffy flex tree with measured text leaves;
-//! 2. [`paint`] paints the computed layout into a ratatui `Buffer`;
-//! 3. [`paint::serialize_canonical`] serializes the buffer through the same
-//!    canonical format the golden exporter uses (text grid + ANSI stream);
-//! 4. tests compare against `tools/parity/goldens/tui-frames` via the
-//!    `parity` crate (dev-dependency) and report fidelity.
-//!
-//! **Findings** (see `.slim/deepwork/rust-port/w7export-lane.md`): for this
-//! component class — pure flex layout + word-wrapped narrow-width text +
-//! flat cell styles — the spike reproduces the golden **byte-for-byte**:
-//! 100% text-grid match and byte-equal ANSI streams at both 80 and 160
-//! columns (see `golden_tests` below). What the substrate does not cover
-//! (and Phase 7 must scope out or defer): opentui's full line-break
-//! algorithm (the golden corpus only exercises break-after-space/-dot),
-//! sub-cell glyph positioning, RGBA alpha blending, half-block/image rows
-//! (kitty/sixel), spinner/time-driven frames, and textarea internals.
+//! * painted under the **v2-dark corpus theme** (frame fill =
+//!   renderer-default foreground over `background.base`; icon+label =
+//!   `text.muted`) — matching the re-pinned `tui-frame-golden/2`
+//!   streams byte-for-byte;
+//! * ANSI comparisons run at the manifest's per-scenario comparison
+//!   depth (`parity::tui_frame::compare_ansi_bytes_at`).
 
-pub mod layout;
-pub mod paint;
-pub mod wrap;
+pub use crate::components::tool_rows::{
+    layout_tool_wrap, tool_wrap_fixture, ToolRowFixture, BOX_WIDTH, ICON_WIDTH,
+};
+pub use crate::render::{
+    serialize_canonical, Cell as SpikeCell, CellColor as SpikeColor, Frame as SpikeFrame,
+};
+pub use crate::wrap::{display_width, wrap_label};
 
-pub use layout::{layout_tool_wrap, tool_wrap_fixture, LaidOutFixture, LaidOutRow, ToolRowFixture};
-pub use paint::{paint, serialize_canonical, to_spike_frame, SpikeFrame};
+use crate::components::tool_rows::{fill_style, render_tool_wrap as render_themed};
+use crate::render::Frame;
+use crate::theme::ThemeState;
 
-use ratatui::buffer::Buffer;
+/// Render the `tool-wrap-rows` fixture at a terminal size (spike API:
+/// v2-dark corpus theme).
+#[must_use]
+pub fn render_tool_wrap(width: u16, height: u16) -> Frame {
+    let theme = ThemeState::v2_dark();
+    render_themed(&theme.styles(), width, height)
+}
 
-/// Render the `tool-wrap-rows` fixture at a terminal size and return the
-/// serialized canonical ANSI stream.
+/// Render the `tool-wrap-rows` fixture and serialize the canonical ANSI
+/// stream (spike API).
 #[must_use]
 pub fn render_tool_wrap_ansi(width: u16, height: u16) -> String {
     serialize_canonical(&render_tool_wrap(width, height))
 }
 
-/// Render the `tool-wrap-rows` fixture at a terminal size.
+/// The spike's frame fill style, now derived from the corpus theme.
 #[must_use]
-pub fn render_tool_wrap(width: u16, height: u16) -> SpikeFrame {
-    let fixture = layout_tool_wrap(&tool_wrap_fixture());
-    let buffer: Buffer = paint(&fixture, width, height);
-    to_spike_frame(&buffer)
+pub fn base_style() -> ratatui::style::Style {
+    fill_style(&ThemeState::v2_dark().styles())
 }
 
 #[cfg(test)]
@@ -58,6 +57,10 @@ mod golden_tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/parity/goldens/tui-frames")
     }
 
+    fn manifest() -> pf::Manifest {
+        pf::load_manifest(&goldens()).expect("golden manifest")
+    }
+
     fn measure(width: usize, height: u16) -> (pf::TextGridDiff, pf::AnsiByteDiff) {
         let dir = goldens();
         let golden = pf::load_text_grid(&dir, "tool-wrap-rows", width).expect("golden text grid");
@@ -69,7 +72,17 @@ mod golden_tests {
         let golden_ansi =
             std::fs::read_to_string(dir.join(format!("tool-wrap-rows.w{width}.ansi")))
                 .expect("golden ansi");
-        let ansi_diff = pf::compare_ansi_bytes(&golden_ansi, &serialize_canonical(&frame));
+        // P1: the corpus is re-pinned under v2-dark; compare at the
+        // manifest's per-scenario depth.
+        let scenario = manifest()
+            .scenarios
+            .into_iter()
+            .find(|scenario| scenario.id == "tool-wrap-rows")
+            .expect("tool-wrap-rows scenario");
+        let depth = manifest().comparison_depth_for(&scenario);
+        let ansi_diff =
+            pf::compare_ansi_bytes_at(&golden_ansi, &serialize_canonical(&frame), depth)
+                .expect("ansi parses");
         (text_diff, ansi_diff)
     }
 
@@ -84,7 +97,7 @@ mod golden_tests {
             ansi_diff.first_divergent_offset
         );
         assert_eq!(text_diff.first_divergence, None, "text grid must match exactly");
-        assert!(ansi_diff.equal, "ansi stream must be byte-equal");
+        assert!(ansi_diff.equal, "ansi stream must be byte-equal at the manifest depth");
     }
 
     #[test]
@@ -98,7 +111,7 @@ mod golden_tests {
             ansi_diff.first_divergent_offset
         );
         assert_eq!(text_diff.first_divergence, None, "text grid must match exactly");
-        assert!(ansi_diff.equal, "ansi stream must be byte-equal");
+        assert!(ansi_diff.equal, "ansi stream must be byte-equal at the manifest depth");
     }
 
     /// The spike's serializer must produce bytes the parity parser
@@ -115,5 +128,25 @@ mod golden_tests {
                 assert_eq!(parsed.cell(row, col).ch, ch);
             }
         }
+    }
+
+    /// The v2-dark corpus theme is what the goldens pin: the fill pairs
+    /// the renderer-default foreground with the theme background, and
+    /// the rows paint `text.muted`.
+    #[test]
+    fn corpus_theme_mapping_matches_the_golden_fill() {
+        let theme = ThemeState::v2_dark();
+        let styles = theme.styles();
+        assert_eq!(
+            styles.background,
+            ratatui::style::Color::Rgb(
+                theme.resolved.tokens.background.base.r,
+                theme.resolved.tokens.background.base.g,
+                theme.resolved.tokens.background.base.b
+            )
+        );
+        let fill = base_style();
+        assert_eq!(fill.fg, Some(crate::components::tool_rows::DEFAULT_FOREGROUND));
+        assert_eq!(fill.bg, Some(styles.background));
     }
 }

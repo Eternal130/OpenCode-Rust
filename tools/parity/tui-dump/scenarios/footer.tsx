@@ -150,6 +150,7 @@ export const scenarios: Scenario[] = [
     source: "test/mini/footer.view.test.tsx",
     description: "RunFooterView default prompt composer (idle phase, fallback dark theme)",
     componentClass: "mini-footer",
+    tier: "tier-a",
     variants: [
       { width: 80, height: 12 },
       { width: 160, height: 12 },
@@ -161,6 +162,7 @@ export const scenarios: Scenario[] = [
     source: "test/mini/footer.view.test.tsx",
     description: "RunFooterView permission view: 'Permission required' with Allow once / Reject actions",
     componentClass: "mini-footer-permission",
+    tier: "tier-a",
     variants: [
       { width: 80, height: 16 },
       { width: 160, height: 16 },
@@ -182,6 +184,7 @@ export const scenarios: Scenario[] = [
     source: "test/mini/footer.view.test.tsx",
     description: "RunFooterView multi-field form view (Deployment: Service + Notes)",
     componentClass: "mini-footer-form",
+    tier: "tier-a",
     variants: [
       { width: 80, height: 16 },
       { width: 160, height: 16 },
@@ -211,6 +214,7 @@ export const scenarios: Scenario[] = [
     source: "test/mini/footer.view.test.tsx",
     description: "RejectField free-text reason input shown with permission actions",
     componentClass: "mini-footer-permission",
+    tier: "tier-a",
     variants: [
       { width: 80, height: 18 },
       { width: 160, height: 18 },
@@ -248,6 +252,7 @@ export const scenarios: Scenario[] = [
     source: "test/mini/footer.view.test.tsx",
     description: "RunCommandMenuBody grouped commands panel (Session/Agent/Editor sections + MCP command)",
     componentClass: "mini-footer-panel",
+    tier: "tier-a",
     variants: [
       { width: 80, height: RUN_COMMAND_PANEL_ROWS + 1 },
       { width: 160, height: RUN_COMMAND_PANEL_ROWS + 1 },
@@ -297,6 +302,7 @@ export const scenarios: Scenario[] = [
     source: "test/mini/footer.view.test.tsx",
     description: "RunModelSelectBody provider/model picker (opencode: GPT-5, GPT Free, deprecated Old Model)",
     componentClass: "mini-footer-panel",
+    tier: "tier-a",
     variants: [
       { width: 80, height: RUN_COMMAND_PANEL_ROWS + 1 },
       { width: 160, height: RUN_COMMAND_PANEL_ROWS + 1 },
@@ -328,6 +334,7 @@ export const scenarios: Scenario[] = [
     source: "test/mini/footer.view.test.tsx",
     description: "RunAgentSelectBody agent picker (Build/Review/Explore, current=review, hidden agent excluded)",
     componentClass: "mini-footer-panel",
+    tier: "tier-a",
     variants: [
       { width: 80, height: RUN_COMMAND_PANEL_ROWS },
       { width: 160, height: RUN_COMMAND_PANEL_ROWS },
@@ -364,6 +371,7 @@ export const scenarios: Scenario[] = [
     source: "test/mini/footer.view.test.tsx",
     description: "RunVariantSelectBody reasoning-effort picker (Default + high/minimal, current=high)",
     componentClass: "mini-footer-panel",
+    tier: "tier-a",
     variants: [
       { width: 80, height: RUN_COMMAND_PANEL_ROWS },
       { width: 160, height: RUN_COMMAND_PANEL_ROWS },
@@ -395,6 +403,7 @@ export const scenarios: Scenario[] = [
     source: "test/mini/footer.view.test.tsx",
     description: "RunSettingsBody verbosity/thinking/tools/shell settings panel (mono=false, animations off)",
     componentClass: "mini-footer-panel",
+    tier: "tier-a",
     variants: [
       { width: 80, height: RUN_COMMAND_PANEL_ROWS },
       { width: 160, height: RUN_COMMAND_PANEL_ROWS },
