@@ -11,7 +11,7 @@ use axum::http::{HeaderMap, Uri};
 use axum::response::Response;
 use serde_json::{json, Value};
 
-use super::common::{parse_query_field, percent_decode, ApiError, SharedState};
+use super::common::{parse_query_field, ApiError, SharedState};
 use super::session::{query_field, services};
 
 pub fn routes() -> axum::Router<SharedState> {
@@ -149,15 +149,17 @@ async fn read(
 ) -> Result<Response, ApiError> {
     let location = resolve_location_for_fs(&uri, &headers)?;
     let _services = services(&state, &location).await?;
-    let relative = percent_decode(&path);
-    let real = resolve_contained(&location, &relative).await?;
+    // axum's `Path` already percent-decodes the wildcard; decoding again
+    // would mangle names that legitimately contain `%` (`a%25b` → `a%b`).
+    let relative = path.as_str();
+    let real = resolve_contained(&location, relative).await?;
     let metadata =
-        tokio::fs::metadata(&real).await.map_err(|_| ApiError::file_not_found(&relative))?;
+        tokio::fs::metadata(&real).await.map_err(|_| ApiError::file_not_found(relative))?;
     if !metadata.is_file() {
         // `Path is not a file` dies in v2 (500).
         return Err(ApiError::unknown_ref());
     }
-    let bytes = tokio::fs::read(&real).await.map_err(|_| ApiError::file_not_found(&relative))?;
+    let bytes = tokio::fs::read(&real).await.map_err(|_| ApiError::file_not_found(relative))?;
     let mime = detect_mime(&bytes).map_or_else(
         || {
             if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) || utf8_valid(&bytes) {

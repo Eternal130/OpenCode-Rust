@@ -8,6 +8,7 @@ pub mod global_roots;
 pub mod hash;
 pub mod npm_config;
 pub mod pathx;
+pub mod procutil;
 pub mod retry;
 pub mod wildcard;
 

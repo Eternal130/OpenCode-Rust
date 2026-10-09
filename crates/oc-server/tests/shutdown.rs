@@ -8,6 +8,7 @@
 //!    SIGTERM: the process must exit 0 in under 5s (the bin's bounded
 //!    overall drain backstops anything still in flight).
 
+#![allow(unsafe_code)] // contained kill(2) on own child handle
 mod support;
 
 use std::sync::Arc;
@@ -127,14 +128,15 @@ async fn serve_bin_sigterm_with_open_sse_exits_promptly() {
     assert_eq!(response.status, 200);
     body.read_until("server.connected", Duration::from_secs(5)).await.expect("initial frame");
 
-    // SIGTERM — the production shutdown trigger.
+    // SIGTERM — the production shutdown trigger. Signalled via the CHILD
+    // HANDLE's pid (we own the Child; not yet waited/reaped, so the PID is
+    // guaranteed to still name our process — incident 2026-10 rule: never
+    // shell out to /bin/kill with a detached PID).
     let pid = child.id().expect("pid");
     let started = Instant::now();
-    let signalled = std::process::Command::new("kill")
-        .args(["-s", "TERM", &pid.to_string()])
-        .status()
-        .expect("kill -TERM");
-    assert!(signalled.success(), "failed to deliver SIGTERM");
+    // SAFETY: kill(2) on our own live, unreaped child's pid.
+    let signalled = unsafe { libc::kill(i32::try_from(pid).expect("pid fits i32"), libc::SIGTERM) };
+    assert_eq!(signalled, 0, "failed to deliver SIGTERM");
 
     let status = tokio::time::timeout(Duration::from_secs(15), child.wait())
         .await
