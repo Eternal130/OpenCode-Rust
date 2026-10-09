@@ -1,0 +1,937 @@
+//! The five footer picker panels (`mini/footer.command.tsx`):
+//! command menu, model select, agent select, variant select and
+//! settings — each an entry list rendered through the shared
+//! [`super::panel`] shell.
+
+#![allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools, clippy::too_many_lines)]
+
+use super::canvas::Canvas;
+use super::panel::{
+    footer_panel_layout, render_panel_shell, FooterMenuItem, FooterMenuState, FooterTone,
+    PANEL_LIST_ROWS, RUN_COMMAND_PANEL_ROWS,
+};
+use super::theme::FooterTheme;
+use crate::render::Frame;
+
+/// `RunProvider` (the picker subset).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RunProvider {
+    pub id: String,
+    pub name: String,
+    /// modelID → (display name, cost.input, deprecated).
+    pub models: Vec<RunModel>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunModel {
+    pub id: String,
+    pub name: String,
+    pub cost_input: f64,
+    pub deprecated: bool,
+}
+
+/// `RunAgent` (the picker subset).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RunAgent {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// `all` | `primary` | `subagent`.
+    pub mode: String,
+    pub hidden: bool,
+}
+
+/// `MiniSettings` + the verbosity presets (`mini/runtime.boot.ts`,
+/// `mini/verbosity.ts`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MiniSettings {
+    pub thinking: &'static str,
+    pub tools: &'static str,
+    pub shell_output: &'static str,
+    pub turn_summary: &'static str,
+    pub footer: &'static str,
+    pub splash: &'static str,
+    pub work_spinner: &'static str,
+    pub mono: bool,
+}
+
+/// `MiniWorkSpinner.literals`.
+pub const WORK_SPINNERS: &[&str] = &[
+    "block-soft-slide",
+    "block-soft-sweep",
+    "block-low-comet",
+    "block-low-duet",
+    "block-shuttle",
+    "block-bridge",
+    "block-squeeze",
+    "small-toggle",
+    "square-toggle",
+    "grow-shrink",
+    "quadrant-orbit",
+    "crosshatch",
+    "density-wave",
+    "seed",
+];
+
+/// `resolveMiniSettings()` defaults.
+#[must_use]
+pub fn resolve_mini_settings() -> MiniSettings {
+    MiniSettings {
+        thinking: "show",
+        tools: "hide",
+        shell_output: "hide",
+        turn_summary: "show",
+        footer: "show",
+        splash: "show",
+        work_spinner: "block-soft-slide",
+        mono: false,
+    }
+}
+
+/// `verbosityLabel` / `matchMiniVerbosity`.
+#[must_use]
+pub fn verbosity_label(level: &str) -> &'static str {
+    match level {
+        "quiet" => "Quiet",
+        "default" => "Default",
+        "everything" => "Everything",
+        _ => "Custom",
+    }
+}
+
+fn verbosity_knob_preset(level: &str) -> MiniSettings {
+    let hide_show = |thinking, tools, shell, turn, footer| MiniSettings {
+        thinking,
+        tools,
+        shell_output: shell,
+        turn_summary: turn,
+        footer,
+        ..resolve_mini_settings()
+    };
+    match level {
+        "quiet" => hide_show("hide", "hide", "hide", "hide", "hide"),
+        "everything" => hide_show("show", "show", "show", "show", "show"),
+        _ => hide_show("show", "hide", "hide", "show", "show"),
+    }
+}
+
+/// `matchMiniVerbosity` — which preset the knobs equal.
+#[must_use]
+pub fn match_mini_verbosity(settings: &MiniSettings) -> &'static str {
+    for level in ["quiet", "default", "everything"] {
+        let preset = verbosity_knob_preset(level);
+        if (
+            settings.thinking,
+            settings.tools,
+            settings.shell_output,
+            settings.turn_summary,
+            settings.footer,
+        ) == (
+            preset.thinking,
+            preset.tools,
+            preset.shell_output,
+            preset.turn_summary,
+            preset.footer,
+        ) {
+            return level;
+        }
+    }
+    "custom"
+}
+
+/// `verbosityChange` — cycle one step if the level changes.
+#[must_use]
+pub fn verbosity_change(
+    settings: &MiniSettings,
+    direction: i8,
+) -> Option<(&'static str, &'static str)> {
+    let levels = ["quiet", "default", "everything"];
+    let knobs = [
+        settings.thinking,
+        settings.tools,
+        settings.shell_output,
+        settings.turn_summary,
+        settings.footer,
+    ];
+    let distance = |level: &str| {
+        let preset = verbosity_knob_preset(level);
+        let preset_knobs = [
+            preset.thinking,
+            preset.tools,
+            preset.shell_output,
+            preset.turn_summary,
+            preset.footer,
+        ];
+        knobs
+            .iter()
+            .zip(preset_knobs.iter())
+            .filter(|(current, preset)| **current != **preset)
+            .count()
+    };
+    let current = match_mini_verbosity(settings);
+    let index = if current == "custom" {
+        levels
+            .iter()
+            .enumerate()
+            .min_by_key(|(index, level)| (distance(level), *index))
+            .map_or(0, |(index, _)| index)
+    } else {
+        levels.iter().position(|level| *level == current).unwrap_or(0)
+    };
+    let next = (isize::try_from(index).unwrap_or(0)).saturating_add(isize::from(direction));
+    let value = if next < 0 {
+        levels[0]
+    } else if usize::try_from(next).is_ok_and(|value| value >= levels.len()) {
+        levels[levels.len() - 1]
+    } else {
+        levels[usize::try_from(next).unwrap_or(0)]
+    };
+    (match_mini_verbosity(settings) != value).then_some(("verbosity", value))
+}
+
+/// `applyMiniSettingChange`.
+#[must_use]
+pub fn apply_mini_setting_change(settings: &MiniSettings, key: &str, value: &str) -> MiniSettings {
+    if key == "verbosity" {
+        let preset = verbosity_knob_preset(value);
+        return MiniSettings { ..preset };
+    }
+    let mut next = settings.clone();
+    match key {
+        "thinking" => next.thinking = leak_str(value),
+        "tools" => next.tools = leak_str(value),
+        "shell_output" => next.shell_output = leak_str(value),
+        "turn_summary" => next.turn_summary = leak_str(value),
+        "footer" => next.footer = leak_str(value),
+        "splash" => next.splash = leak_str(value),
+        "work_spinner" => next.work_spinner = leak_str(value),
+        _ => {}
+    }
+    next
+}
+
+// Settings values are the fixed show/hide literals; map any dynamic
+// string onto one of them (unknown values keep the current literal).
+fn leak_str(value: &str) -> &'static str {
+    match value {
+        "hide" => "hide",
+        _ => "show",
+    }
+}
+
+/// `MiniSettingChange` — a settings mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MiniSettingChange {
+    pub key: &'static str,
+    pub value: String,
+}
+
+// -- entry lists ---------------------------------------------------------------
+
+// The panel renders keep the reference's argument surface.
+
+/// The command-menu entries (`RunCommandMenuBody.entries`): static
+/// session/agent/system commands; subagent and queued rows appear only
+/// with data, the variant row only with variants.
+#[must_use]
+pub fn command_menu_entries(
+    subagents: usize,
+    active_subagents: usize,
+    queued: usize,
+    variants: &[String],
+    variant_cycle: &str,
+) -> Vec<FooterMenuItem> {
+    let mut entries = vec![
+        FooterMenuItem {
+            display: "Open editor".into(),
+            category: "Session".into(),
+            footer: Some("/editor".into()),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Show status".into(),
+            category: "Session".into(),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Compact session".into(),
+            category: "Session".into(),
+            footer: Some("/compact".into()),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "New session".into(),
+            category: "Session".into(),
+            footer: Some("/new".into()),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Switch agent".into(),
+            category: "Agent".into(),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Switch model".into(),
+            category: "Agent".into(),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Variant cycle".into(),
+            category: "Agent".into(),
+            footer: Some(variant_cycle.to_owned()),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Switch model variant".into(),
+            category: "Agent".into(),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Clear screen".into(),
+            category: "System".into(),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Settings".into(),
+            category: "System".into(),
+            footer: Some("/settings".into()),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Exit".into(),
+            category: "System".into(),
+            footer: Some("/exit".into()),
+            ..FooterMenuItem::default()
+        },
+    ];
+    // View subagents slots in after "Show status" when present.
+    if subagents > 0 {
+        let footer = if active_subagents > 0 {
+            format!("{active_subagents} active")
+        } else {
+            format!("{subagents} recent")
+        };
+        entries.insert(
+            2,
+            FooterMenuItem {
+                display: "View subagents".into(),
+                category: "Session".into(),
+                footer: Some(footer),
+                ..FooterMenuItem::default()
+            },
+        );
+    }
+    if queued > 0 {
+        let position = entries.iter().position(|item| item.display == "Switch model").unwrap_or(5);
+        entries.insert(
+            position + 1,
+            FooterMenuItem {
+                display: "View pending prompts".into(),
+                category: "Agent".into(),
+                footer: Some(format!("{queued} pending")),
+                ..FooterMenuItem::default()
+            },
+        );
+    }
+    if variants.is_empty() {
+        entries.retain(|item| item.display != "Switch model variant");
+    }
+    entries
+}
+
+/// The model-select entries (`RunModelSelectBody.entries`): deprecated
+/// models filtered, opencode provider first, footer = current / Free
+/// (zero-cost opencode) / modelID.
+#[must_use]
+pub fn model_entries(
+    providers: &[RunProvider],
+    current: Option<(&str, &str)>,
+) -> Vec<FooterMenuItem> {
+    let mut entries: Vec<FooterMenuItem> = providers
+        .iter()
+        .flat_map(|provider| {
+            provider.models.iter().filter(|model| !model.deprecated).map(|model| {
+                let title =
+                    if model.name.is_empty() { model.id.clone() } else { model.name.clone() };
+                let is_current = current == Some((provider.id.as_str(), model.id.as_str()));
+                let footer = if is_current {
+                    Some("current".to_owned())
+                } else if model.cost_input == 0.0 && provider.id == "opencode" {
+                    Some("Free".to_owned())
+                } else if title != model.id {
+                    Some(model.id.clone())
+                } else {
+                    None
+                };
+                FooterMenuItem {
+                    display: title,
+                    category: provider.name.clone(),
+                    footer,
+                    footer_tone: is_current.then_some(FooterTone::Selection),
+                    current: is_current,
+                    ..FooterMenuItem::default()
+                }
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| {
+        let provider = a.category.is_empty().cmp(&b.category.is_empty());
+        provider.then_with(|| a.category.cmp(&b.category)).then_with(|| a.display.cmp(&b.display))
+    });
+    entries
+}
+
+/// The agent-select entries (`RunAgentSelectBody.entries`): non-hidden
+/// non-subagent agents, display = id, description in the muted column,
+/// footer "current".
+#[must_use]
+pub fn agent_entries(agents: &[RunAgent], current: Option<&str>) -> Vec<FooterMenuItem> {
+    agents
+        .iter()
+        .filter(|agent| agent.mode != "subagent" && !agent.hidden)
+        .map(|agent| FooterMenuItem {
+            display: agent.id.clone(),
+            description: agent.description.clone(),
+            footer: (current == Some(agent.id.as_str())).then(|| "current".to_owned()),
+            footer_tone: Some(FooterTone::Selection),
+            current: current == Some(agent.id.as_str()),
+            ..FooterMenuItem::default()
+        })
+        .collect()
+}
+
+/// The variant-select entries: "Default" (no variant) + the variants.
+#[must_use]
+pub fn variant_entries(variants: &[String], current: Option<&str>) -> Vec<FooterMenuItem> {
+    let mut entries = vec![FooterMenuItem {
+        display: "Default".into(),
+        footer: current.is_none().then(|| "current".to_owned()),
+        footer_tone: Some(FooterTone::Selection),
+        current: current.is_none(),
+        ..FooterMenuItem::default()
+    }];
+    entries.extend(variants.iter().map(|variant| FooterMenuItem {
+        display: variant.clone(),
+        footer: (current == Some(variant.as_str())).then(|| "current".to_owned()),
+        footer_tone: Some(FooterTone::Selection),
+        current: current == Some(variant.as_str()),
+        ..FooterMenuItem::default()
+    }));
+    entries
+}
+
+/// The settings entries (`RunSettingsBody.entries`).
+#[must_use]
+pub fn settings_entries(settings: &MiniSettings) -> Vec<FooterMenuItem> {
+    let spinner = settings.work_spinner.trim_start_matches("block-").replace('-', " ");
+    vec![
+        FooterMenuItem {
+            display: "Verbosity".into(),
+            category: "Transcript".into(),
+            footer: Some(verbosity_label(match_mini_verbosity(settings)).into()),
+            footer_tone: Some(FooterTone::Selection),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Thinking".into(),
+            category: "Transcript".into(),
+            footer: Some(settings.thinking.into()),
+            footer_tone: Some(FooterTone::Selection),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Tools".into(),
+            category: "Transcript".into(),
+            footer: Some(settings.tools.into()),
+            footer_tone: Some(FooterTone::Selection),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Shell".into(),
+            category: "Transcript".into(),
+            footer: Some(settings.shell_output.into()),
+            footer_tone: Some(FooterTone::Selection),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Turn summary".into(),
+            category: "Transcript".into(),
+            footer: Some(settings.turn_summary.into()),
+            footer_tone: Some(FooterTone::Selection),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Footer details".into(),
+            category: "Terminal".into(),
+            footer: Some(settings.footer.into()),
+            footer_tone: Some(FooterTone::Selection),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Splash".into(),
+            category: "Terminal".into(),
+            footer: Some(settings.splash.into()),
+            footer_tone: Some(FooterTone::Selection),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Monochrome UI".into(),
+            category: "Terminal".into(),
+            footer: Some(if settings.mono { "on" } else { "off" }.into()),
+            footer_tone: Some(FooterTone::Selection),
+            ..FooterMenuItem::default()
+        },
+        FooterMenuItem {
+            display: "Work spinner".into(),
+            category: "Terminal".into(),
+            footer: Some(spinner),
+            footer_tone: Some(FooterTone::Selection),
+            icon: Some('▪'),
+            ..FooterMenuItem::default()
+        },
+    ]
+}
+
+/// Reveal the current entry in a picker (`isCurrent` effect).
+#[must_use]
+pub fn reveal_current(entries: &[FooterMenuItem]) -> FooterMenuState {
+    let mut menu = FooterMenuState::new();
+    if let Some(index) = entries.iter().position(|item| item.current) {
+        menu.reveal(index, entries.len(), PANEL_LIST_ROWS);
+    }
+    menu
+}
+
+// -- panel renders ---------------------------------------------------------------
+
+fn panel_frame(
+    width: usize,
+    height: usize,
+    term_height: usize,
+    title: &str,
+    count_visible: bool,
+    hint: Option<&str>,
+    entries: &[FooterMenuItem],
+    menu: &FooterMenuState,
+    grouped: bool,
+    background: bool,
+    header_color: bool,
+    empty: &str,
+    theme: &FooterTheme,
+    with_rail: bool,
+) -> Frame {
+    let mut canvas = Canvas::new(width, height);
+    let layout = footer_panel_layout(term_height, PANEL_LIST_ROWS);
+    render_panel_shell(
+        &mut canvas,
+        0,
+        title,
+        count_visible,
+        entries.iter().filter(|item| fuzzy_matches(item, "")).count(),
+        entries.len(),
+        "",
+        "Search",
+        hint,
+        entries,
+        menu,
+        layout,
+        grouped,
+        background,
+        header_color.then_some(theme.muted),
+        empty,
+        theme,
+        width,
+        height,
+    );
+    if with_rail && !layout.compact && background {
+        let rail_y = if layout.compact { 2 + layout.limit } else { 5 + layout.limit };
+        if rail_y < height {
+            let rail = super::panel::render_bottom_rail(width, theme);
+            canvas.spans(rail_y, 0, &rail);
+        }
+    }
+    canvas.into_frame()
+}
+
+/// `footer-command-menu`: static command groups. Terminal height
+/// `RUN_COMMAND_PANEL_ROWS + 1` in the corpus.
+#[must_use]
+pub fn render_command_menu(width: usize, height: usize, theme: &FooterTheme) -> Frame {
+    let entries =
+        command_menu_entries(0, 0, 0, &["high".to_owned(), "minimal".to_owned()], "ctrl+t");
+    let menu = FooterMenuState::new();
+    panel_frame(
+        width,
+        height,
+        RUN_COMMAND_PANEL_ROWS + 1,
+        "Commands",
+        false,
+        None,
+        &entries,
+        &menu,
+        true,
+        true,
+        true,
+        "No results found",
+        theme,
+        true,
+    )
+}
+
+/// `footer-model-select`: provider-grouped model list, transparent
+/// background, the current model revealed + focused.
+#[must_use]
+pub fn render_model_select(
+    providers: &[RunProvider],
+    current: Option<(&str, &str)>,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Frame {
+    let entries = model_entries(providers, current);
+    let menu = reveal_current(&entries);
+    panel_frame(
+        width,
+        height,
+        RUN_COMMAND_PANEL_ROWS + 1,
+        "Select model",
+        true,
+        None,
+        &entries,
+        &menu,
+        true,
+        false,
+        true,
+        if providers.is_empty() { "Models loading" } else { "No results found" },
+        theme,
+        true,
+    )
+}
+
+/// `footer-agent-select`: flat agent list (height `RUN_COMMAND_PANEL_ROWS`
+/// ⇒ compact in the corpus).
+#[must_use]
+pub fn render_agent_select(
+    agents: &[RunAgent],
+    current: Option<&str>,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Frame {
+    let entries = agent_entries(agents, current);
+    let menu = reveal_current(&entries);
+    panel_frame(
+        width,
+        height,
+        RUN_COMMAND_PANEL_ROWS,
+        "Select agent",
+        true,
+        None,
+        &entries,
+        &menu,
+        false,
+        true,
+        false,
+        "No agents found",
+        theme,
+        false,
+    )
+}
+
+/// `footer-variant-select`.
+#[must_use]
+pub fn render_variant_select(
+    variants: &[String],
+    current: Option<&str>,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Frame {
+    let entries = variant_entries(variants, current);
+    let menu = reveal_current(&entries);
+    panel_frame(
+        width,
+        height,
+        RUN_COMMAND_PANEL_ROWS,
+        "Select variant",
+        true,
+        None,
+        &entries,
+        &menu,
+        false,
+        true,
+        false,
+        "No results found",
+        theme,
+        false,
+    )
+}
+
+/// `footer-settings`.
+#[must_use]
+pub fn render_settings(
+    settings: &MiniSettings,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Frame {
+    let entries = settings_entries(settings);
+    let menu = FooterMenuState::new();
+    panel_frame(
+        width,
+        height,
+        RUN_COMMAND_PANEL_ROWS,
+        "Settings",
+        false,
+        Some("left/right change"),
+        &entries,
+        &menu,
+        true,
+        true,
+        true,
+        "No settings found",
+        theme,
+        false,
+    )
+}
+
+/// Fuzzysort-shaped filter (`match`): a subsequence over display /
+/// category / description / keywords; empty query passes everything.
+/// (The reference uses `fuzzysort.go` scoring; ordering for equal
+/// candidates is input order there too — corpus queries are empty.)
+#[must_use]
+pub fn fuzzy_matches(item: &FooterMenuItem, query: &str) -> bool {
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+    let hay = format!(
+        "{}{}{}{}",
+        item.display,
+        item.category,
+        item.description.as_deref().unwrap_or(""),
+        item.footer.as_deref().unwrap_or(""),
+    )
+    .to_lowercase();
+    let mut cursor = 0;
+    for ch in query.to_lowercase().chars() {
+        cursor = match hay[cursor..].find(ch) {
+            Some(position) => cursor + position + 1,
+            None => return false,
+        };
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider() -> RunProvider {
+        RunProvider {
+            id: "opencode".into(),
+            name: "opencode".into(),
+            models: vec![
+                RunModel {
+                    id: "gpt-5".into(),
+                    name: "GPT-5".into(),
+                    cost_input: 1.0,
+                    deprecated: false,
+                },
+                RunModel {
+                    id: "gpt-free".into(),
+                    name: "GPT Free".into(),
+                    cost_input: 0.0,
+                    deprecated: false,
+                },
+                RunModel {
+                    id: "old".into(),
+                    name: "Old Model".into(),
+                    cost_input: 1.0,
+                    deprecated: true,
+                },
+            ],
+        }
+    }
+
+    fn agents() -> Vec<RunAgent> {
+        vec![
+            RunAgent {
+                id: "build".into(),
+                name: "Build".into(),
+                description: Some("Build software".into()),
+                mode: "all".into(),
+                hidden: false,
+            },
+            RunAgent {
+                id: "review".into(),
+                name: "Review".into(),
+                description: Some("Review changes".into()),
+                mode: "primary".into(),
+                hidden: false,
+            },
+            RunAgent {
+                id: "explore".into(),
+                name: "Explore".into(),
+                description: None,
+                mode: "subagent".into(),
+                hidden: false,
+            },
+            RunAgent {
+                id: "secret".into(),
+                name: "Secret".into(),
+                description: None,
+                mode: "all".into(),
+                hidden: true,
+            },
+        ]
+    }
+
+    #[test]
+    fn model_entries_sort_filter_and_footers() {
+        let entries = model_entries(&[provider()], Some(("opencode", "gpt-5")));
+        let displays: Vec<&str> = entries.iter().map(|item| item.display.as_str()).collect();
+        assert_eq!(
+            displays,
+            vec!["GPT Free", "GPT-5"],
+            "deprecated filtered, GPT Free sorts first"
+        );
+        assert_eq!(entries[0].footer.as_deref(), Some("Free"));
+        assert_eq!(entries[1].footer.as_deref(), Some("current"));
+        assert!(entries[1].current);
+    }
+
+    #[test]
+    fn agent_entries_filter_hidden_and_subagent() {
+        let entries = agent_entries(&agents(), Some("review"));
+        let displays: Vec<&str> = entries.iter().map(|item| item.display.as_str()).collect();
+        assert_eq!(displays, vec!["build", "review"]);
+        assert_eq!(entries[1].footer.as_deref(), Some("current"));
+        assert_eq!(entries[0].description.as_deref(), Some("Build software"));
+    }
+
+    #[test]
+    fn variant_entries_lead_with_default() {
+        let entries = variant_entries(&["high".to_owned(), "minimal".to_owned()], Some("high"));
+        assert_eq!(entries[0].display, "Default");
+        assert!(entries[1].current);
+        assert_eq!(entries[2].footer, None);
+    }
+
+    #[test]
+    fn settings_defaults_match_the_golden_fixture() {
+        let settings = resolve_mini_settings();
+        assert_eq!(settings.thinking, "show");
+        assert_eq!(settings.tools, "hide");
+        assert_eq!(settings.shell_output, "hide");
+        assert_eq!(settings.turn_summary, "show");
+        assert_eq!(settings.work_spinner, "block-soft-slide");
+        assert!(!settings.mono);
+        let entries = settings_entries(&settings);
+        assert_eq!(entries.len(), 9);
+        assert_eq!(entries[0].footer.as_deref(), Some("Default"), "verbosity label");
+        let spinner = entries.last().unwrap();
+        assert_eq!(spinner.footer.as_deref(), Some("soft slide"), "block- prefix stripped");
+        assert_eq!(spinner.icon, Some('▪'));
+    }
+
+    #[test]
+    fn verbosity_cycles_through_presets() {
+        let mut settings = resolve_mini_settings();
+        assert_eq!(match_mini_verbosity(&settings), "default");
+        let (key, value) = verbosity_change(&settings, 1).expect("changes to everything");
+        assert_eq!((key, value), ("verbosity", "everything"));
+        settings = apply_mini_setting_change(&settings, key, value);
+        assert_eq!(match_mini_verbosity(&settings), "everything");
+        let down = verbosity_change(&settings, -1).expect("back to default");
+        assert_eq!(down.1, "default");
+    }
+
+    #[test]
+    fn command_menu_entries_shape() {
+        let entries = command_menu_entries(0, 0, 0, &["high".to_owned()], "ctrl+t");
+        let displays: Vec<&str> = entries.iter().map(|item| item.display.as_str()).collect();
+        assert!(displays.contains(&"Open editor"));
+        assert!(displays.contains(&"Variant cycle"));
+        assert!(displays.contains(&"Switch model variant"));
+        assert_eq!(entries[0].category, "Session");
+        let cycle = entries.iter().find(|item| item.display == "Variant cycle").unwrap();
+        assert_eq!(cycle.footer.as_deref(), Some("ctrl+t"));
+        let empty = command_menu_entries(0, 0, 0, &[], "");
+        assert!(!empty.iter().any(|item| item.display == "Switch model variant"));
+        let with_subagents = command_menu_entries(2, 1, 0, &[], "");
+        assert!(with_subagents
+            .iter()
+            .any(|item| item.display == "View subagents"
+                && item.footer.as_deref() == Some("1 active")));
+    }
+
+    #[test]
+    fn golden_frame_shapes_at_80() {
+        let theme = FooterTheme::fallback_dark();
+        let settings = render_settings(&resolve_mini_settings(), 80, 16, &theme);
+        let grid = settings.text_grid();
+        assert!(grid[0].contains("Settings"));
+        assert!(grid[0].contains("left/right change · esc"));
+        assert!(grid[1].contains("Search"));
+        assert!(grid[2].contains("Verbosity"));
+        assert!(grid[2].contains("Default"));
+        assert!(grid[10].contains("Work spinner"));
+        assert!(grid[10].contains("soft slide"));
+
+        let command = render_command_menu(80, 17, &theme);
+        let grid = command.text_grid();
+        assert!(grid[1].contains("Commands"));
+        assert_eq!(grid[5].trim(), "Session");
+        assert!(grid[6].contains("Open editor"));
+        assert!(grid[6].contains("/editor"));
+        assert_eq!(grid[11].trim(), "Agent");
+        assert!(grid[14].contains("Variant cycle"));
+        assert!(grid[14].contains("ctrl+t"));
+        assert!(grid[15].starts_with('▀'), "half-block rail");
+
+        let models =
+            render_model_select(&[provider()], Some(("opencode", "gpt-5")), 80, 17, &theme);
+        let grid = models.text_grid();
+        assert!(grid[1].contains("Select model 2"));
+        assert_eq!(grid[5].trim(), "opencode");
+        assert!(grid[6].contains("GPT Free"));
+        assert!(grid[6].contains("Free"));
+        assert!(grid[7].contains("GPT-5"));
+        assert!(grid[7].contains("current"));
+
+        let agent_frame = render_agent_select(&agents(), Some("review"), 80, 16, &theme);
+        let grid = agent_frame.text_grid();
+        assert!(grid[0].contains("Select agent 2"));
+        assert!(grid[2].contains("build"));
+        assert!(grid[2].contains("Build software"));
+        assert!(grid[3].contains("review"));
+        assert!(grid[3].contains("current"));
+
+        let variants = render_variant_select(
+            &["high".to_owned(), "minimal".to_owned()],
+            Some("high"),
+            80,
+            16,
+            &theme,
+        );
+        let grid = variants.text_grid();
+        assert!(grid[0].contains("Select variant 3"));
+        assert!(grid[2].contains("Default"));
+        assert!(grid[3].contains("high"));
+        assert!(grid[3].contains("current"));
+        assert!(grid[4].contains("minimal"));
+    }
+
+    #[test]
+    fn fuzzy_filter_passes_subsequences() {
+        let item = FooterMenuItem {
+            display: "Switch model".into(),
+            category: "Agent".into(),
+            ..FooterMenuItem::default()
+        };
+        assert!(fuzzy_matches(&item, ""));
+        assert!(fuzzy_matches(&item, "swimo"));
+        assert!(!fuzzy_matches(&item, "zzz"));
+    }
+}

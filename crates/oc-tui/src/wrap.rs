@@ -25,12 +25,14 @@
 //! # Break opportunities (the single seam)
 //!
 //! Break opportunities (observed against the golden corpus): after a
-//! space (the breaking space is consumed), after `.` (UAX-14-style:
-//! `data.*dir` wraps as `data.` / `*dir`), and after every CJK
-//! ideograph (breaks-anywhere ⇒ for CJK text the "longest word" is a
-//! single grapheme). `|` and `/` are NOT opportunities. Greedy fill:
-//! pack atoms until one overflows, break at the last legal opportunity
-//! on the line, hard-break when none exists.
+//! space (a breaking space that **fits** stays at the end of the line —
+//! the markdown goldens pin its styled trailing cell), after `.` and
+//! `-` (UAX-14-style: `data.*dir` wraps as `data.` / `*dir`;
+//! `bold-run-` wraps at hyphens), and after every CJK ideograph
+//! (breaks-anywhere ⇒ for CJK text the "longest word" is a single
+//! grapheme). `|` and `/` are NOT opportunities. Greedy fill: pack
+//! atoms until one overflows, break at the last legal opportunity on
+//! the line, hard-break when none exists.
 //!
 //! [`atoms_min_content_width`] reports the longest run between
 //! opportunities — for CJK text that is the widest single grapheme (2
@@ -214,9 +216,14 @@ pub fn flatten_spans(spans: &[StyledSpan]) -> Vec<Atom> {
 /// Characters after which a line break is legal. THE single seam shared
 /// by wrapping ([`wrap_atoms`]) and measurement
 /// ([`atoms_min_content_width`]).
+///
+/// `-` joined the set with the markdown goldens (7.2 lane C): the
+/// reference wraps `bold-run-deliberately-longer-…` after the last
+/// hyphen that fits at BOTH pinned widths (markdown-frame@80/40), so
+/// hyphens are break opportunities exactly like dots.
 #[must_use]
 pub fn is_break_after(ch: char) -> bool {
-    ch == ' ' || ch == '.' || is_cjk(ch)
+    ch == ' ' || ch == '.' || ch == '-' || is_cjk(ch)
 }
 
 /// The break decision for one atom: the seam above evaluated on the
@@ -314,7 +321,15 @@ pub fn wrap_atoms(atoms: &[Atom], width: usize) -> Vec<Vec<Atom>> {
                 _ => index,
             };
             let mut line_end = break_at;
-            if line_end > line_start && is_space_atom(&atoms[line_end - 1]) {
+            // A breaking space that FITS stays at the end of the line
+            // (the markdown goldens pin the styled trailing space:
+            // `…as one ` carries the paragraph style one cell past
+            // "one"). Only a space that would overflow the width is
+            // dropped — it never fit.
+            if line_end > line_start
+                && is_space_atom(&atoms[line_end - 1])
+                && atoms[line_start..line_end].iter().map(|atom| atom.width).sum::<usize>() > width
+            {
                 line_end -= 1;
             }
             lines.push(atoms[line_start..line_end].to_vec());
@@ -417,8 +432,12 @@ mod tests {
     }
 
     #[test]
-    fn wraps_on_spaces_and_drops_breaking_space() {
-        assert_eq!(wrap_label("aaa bb ccc", 5), vec!["aaa", "bb", "ccc"]);
+    fn wraps_on_spaces_and_keeps_a_fitting_breaking_space() {
+        assert_eq!(wrap_label("aaa bb ccc", 5), vec!["aaa ", "bb ", "ccc"]);
+        assert_eq!(wrap_label("aa bb cc", 5), vec!["aa bb", "cc"]);
+        // The breaking space stays styled at the line end when it fits
+        // (the markdown goldens pin it in the canonical ANSI).
+        assert_eq!(wrap_label("one styled", 5), vec!["one ", "style", "d"]);
     }
 
     #[test]
@@ -440,6 +459,19 @@ mod tests {
             wrap_label("Global\\.Path\\.data|data", 10),
             vec!["Global\\.", "Path\\.", "data|data"]
         );
+    }
+
+    /// Hyphens are break opportunities (markdown goldens pin the exact
+    /// `bold-run-deliberately-` boundary at both 80 and 40 columns).
+    #[test]
+    fn breaks_at_hyphens_like_the_markdown_golden() {
+        assert_eq!(
+            wrap_label("bold-run-deliberately-longer-than", 22),
+            vec!["bold-run-deliberately-", "longer-than"]
+        );
+        // The last hyphen that FITS wins, greedy.
+        assert_eq!(wrap_label("a-b-c-d", 5), vec!["a-b-", "c-d"]);
+        assert_eq!(min_content_width("bold-run-deliberately"), "deliberately".len());
     }
 
     #[test]

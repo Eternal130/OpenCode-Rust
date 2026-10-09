@@ -41,12 +41,15 @@ pub struct BusEvent {
     pub id: String,
     pub type_: String,
     pub data: Value,
+    /// Envelope `created` (epoch ms) — the only timestamp SSE reducers
+    /// may use (reasoning/tool completion times; `None` when absent).
+    pub created: Option<u64>,
 }
 
 impl BusEvent {
     #[must_use]
     pub fn new(type_: &str, data: Value) -> Self {
-        Self { id: String::new(), type_: type_.to_owned(), data }
+        Self { id: String::new(), type_: type_.to_owned(), data, created: None }
     }
 
     /// Decode the double-decoded SSE JSON payload.
@@ -57,6 +60,7 @@ impl BusEvent {
             id: object.get("id").and_then(Value::as_str).unwrap_or_default().to_owned(),
             type_: object.get("type").and_then(Value::as_str)?.to_owned(),
             data: object.get("data").cloned().unwrap_or(Value::Null),
+            created: object.get("created").and_then(Value::as_u64),
         })
     }
 
@@ -64,6 +68,13 @@ impl BusEvent {
     #[must_use]
     pub fn string(&self, field: &str) -> Option<String> {
         self.data.get(field).and_then(Value::as_str).map(str::to_owned)
+    }
+
+    /// The part ordinal of a text/reasoning delta/ended event (0 when
+    /// the server omits it).
+    #[must_use]
+    pub fn ordinal(&self) -> u64 {
+        self.data.get("ordinal").and_then(Value::as_u64).unwrap_or(0)
     }
 }
 

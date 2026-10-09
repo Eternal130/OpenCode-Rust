@@ -84,6 +84,31 @@ pub struct ThemeStyles {
     /// Base text painted over the base background — the whole-frame fill
     /// style (`opentui` fills the frame with the theme style).
     pub base: Style,
+    /// 7.2 lane C (message flow): the markdown token palette
+    /// (`theme.markdown.*`) and the extra roles the transcript paints.
+    pub markdown: MarkdownStyles,
+    /// `text.feedback.warning.base` (the reasoning-group header tint
+    /// derives from it at 0.6 alpha).
+    pub warning: Color,
+    /// Agent identity colors (`local.agent.color`: categorical hues at
+    /// step 200, deduped, index-modulo).
+    pub agent_colors: [Color; 5],
+}
+
+/// The markdown token palette (`theme.markdown.*`) — 7.2 lane C's
+/// markdown text renderer paints every block from these.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MarkdownStyles {
+    pub text: Color,
+    pub heading: Color,
+    pub strong: Color,
+    pub emphasis: Color,
+    pub code: Color,
+    pub code_block: Color,
+    pub link: Color,
+    pub link_text: Color,
+    pub block_quote: Color,
+    pub horizontal_rule: Color,
 }
 
 impl ThemeStyles {
@@ -92,6 +117,11 @@ impl ThemeStyles {
         let tokens = &theme.tokens;
         let fg = rgba(tokens.text.base);
         let bg = rgba(tokens.background.base);
+        let md = &tokens.markdown;
+        let mut agent_colors = [bg; 5];
+        for (slot, scale) in tokens.categorical.iter().take(5).enumerate() {
+            agent_colors[slot] = rgba(scale.s200);
+        }
         Self {
             text: Style::new().fg(fg).bg(bg),
             text_muted: Style::new().fg(rgba(tokens.text.muted)).bg(bg),
@@ -103,7 +133,28 @@ impl ThemeStyles {
             error: rgba(tokens.text.feedback.error.base),
             border: rgba(tokens.border.base),
             base: Style::new().fg(fg).bg(bg),
+            markdown: MarkdownStyles {
+                text: rgba(md.text),
+                heading: rgba(md.heading),
+                strong: rgba(md.strong),
+                emphasis: rgba(md.emphasis),
+                code: rgba(md.code),
+                code_block: rgba(md.code_block),
+                link: rgba(md.link),
+                link_text: rgba(md.link_text),
+                block_quote: rgba(md.block_quote),
+                horizontal_rule: rgba(md.horizontal_rule),
+            },
+            warning: rgba(tokens.text.feedback.warning.base),
+            agent_colors,
         }
+    }
+
+    /// The agent identity color (`local.agent.color`: the categorical
+    /// palette indexed by the agent's position, modulo).
+    #[must_use]
+    pub fn agent_color(&self, index: usize) -> Color {
+        self.agent_colors[index % self.agent_colors.len()]
     }
 }
 
