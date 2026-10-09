@@ -369,11 +369,49 @@ pub struct ToolRunResult {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolRunFailure {
     /// `Tool.Error` — settles through `session.tool.failed` with the mapped
-    /// error.
+    /// error. The durable error type is the default `tool.execution`
+    /// (`toSessionError` on a `Tool.Error` with no nested cause).
     Error { message: String, metadata: Option<oc_schema::common::Record> },
+    /// `Tool.Error` wrapping a `Permission.BlockedError`/`CorrectedError` —
+    /// `toSessionError` unwraps the nested cause, so the durable type is
+    /// `permission.rejected` while the model-visible message is the
+    /// engine's (the same string [`Error`] would carry).
+    PermissionRejected { message: String, metadata: Option<oc_schema::common::Record> },
     /// `Permission.DeclinedError` / `QuestionTool.CancelledError` — declines
     /// end the step as an interrupt.
     Declined { message: String },
+}
+
+impl ToolRunFailure {
+    /// The model-visible message (identical for both error kinds).
+    #[must_use]
+    pub fn message(&self) -> &str {
+        match self {
+            ToolRunFailure::Error { message, .. }
+            | ToolRunFailure::PermissionRejected { message, .. }
+            | ToolRunFailure::Declined { message } => message,
+        }
+    }
+
+    /// The metadata carried into the durable `session.tool.failed` event.
+    #[must_use]
+    pub fn metadata(&self) -> Option<&oc_schema::common::Record> {
+        match self {
+            ToolRunFailure::Error { metadata, .. }
+            | ToolRunFailure::PermissionRejected { metadata, .. } => metadata.as_ref(),
+            ToolRunFailure::Declined { .. } => None,
+        }
+    }
+
+    /// The durable error type (`toSessionError(Tool.Error)` unwrapping).
+    #[must_use]
+    pub fn error_type(&self) -> &'static str {
+        match self {
+            ToolRunFailure::Error { .. } => "tool.execution",
+            ToolRunFailure::PermissionRejected { .. } => "permission.rejected",
+            ToolRunFailure::Declined { .. } => "aborted",
+        }
+    }
 }
 
 /// The invocation identity handed to context-aware tool executors
@@ -710,9 +748,9 @@ pub struct LocationGraph {
     /// This location's plugin hook registry (v2 `PluginHooks`).
     pub hooks: Arc<HookRegistry>,
     /// Agent table + selection semantics (v2 `Agent`).
-    pub agents: AgentRegistry,
+    pub agents: Arc<AgentRegistry>,
     /// Tool table + permission-filtered snapshots (v2 `Tool`).
-    pub tools: ToolRegistryState,
+    pub tools: Arc<ToolRegistryState>,
     /// Shell environment node (placeholder).
     pub shell: ShellEnv,
     /// File-access boundary for this location's directory.
@@ -750,11 +788,19 @@ pub struct LocationPorts<'a> {
     pub db: &'a Arc<Database>,
     pub bus: &'a Arc<Bus>,
     pub catalog: &'a Catalog,
-    pub agents: &'a AgentRegistry,
-    pub tools: &'a ToolRegistryState,
+    pub agents: &'a Arc<AgentRegistry>,
+    pub tools: &'a Arc<ToolRegistryState>,
     pub shell: &'a ShellEnv,
     pub files: &'a FileAccessState,
     pub instructions: &'a InstructionSlots,
+}
+
+/// Optional pre-built per-location state (the composition root shares its
+/// registries with the graph so runners and tools observe one table).
+pub struct LocationStateSeed {
+    pub hooks: Arc<HookRegistry>,
+    pub agents: Arc<AgentRegistry>,
+    pub tools: Arc<ToolRegistryState>,
 }
 
 impl LocationGraph {
@@ -772,6 +818,27 @@ impl LocationGraph {
         globals: &crate::location_services::GlobalServices,
         generation: u64,
     ) -> Result<Arc<Self>, BootError> {
+        Self::build_with_state(
+            location,
+            globals,
+            generation,
+            LocationStateSeed {
+                hooks: Arc::new(HookRegistry::new()),
+                agents: Arc::new(AgentRegistry::new()),
+                tools: Arc::new(ToolRegistryState::new()),
+            },
+        )
+        .await
+    }
+
+    /// [`LocationGraph::build`] over pre-built state (the composition
+    /// root's shared registries).
+    pub async fn build_with_state(
+        location: LocationRef,
+        globals: &crate::location_services::GlobalServices,
+        generation: u64,
+        seed: LocationStateSeed,
+    ) -> Result<Arc<Self>, BootError> {
         if !location.directory.is_dir() {
             return Err(BootError::MissingDirectory(location.directory.clone()));
         }
@@ -779,9 +846,9 @@ impl LocationGraph {
         // files before the graph is published to the map.
         globals.db.migration_ids().await?;
 
-        let hooks = Arc::new(HookRegistry::new());
-        let agents = AgentRegistry::new();
-        let tools = ToolRegistryState::new();
+        let hooks = seed.hooks;
+        let agents = seed.agents;
+        let tools = seed.tools;
         let shell = ShellEnv::new(location.directory.clone());
         let files = FileAccessState::new(
             location.directory.clone(),

@@ -507,22 +507,109 @@ fn codemode_source(tools: Arc<ToolRegistryState>) -> InstructionSource {
     }
 }
 
-/// `core/mcp-guidance` — TODO(wave-D): MCP server guidance text lands with
-/// the MCP lane; the source stays present so the key shape matches v2.
-fn mcp_guidance_source() -> InstructionSource {
+/// `core/mcp-guidance` (mcp/instructions.ts): connected servers render as
+/// `<mcp_instructions>` entries — codemode servers add the `execute`
+/// namespace line — and an empty visible set is an observed absence (the
+/// key stays out of the instruction delta).
+pub(crate) fn mcp_guidance_source(
+    mcp: Arc<dyn Fn() -> Vec<McpServerSummary> + Send + Sync>,
+) -> InstructionSource {
+    fn entries(servers: &[McpServerSummary]) -> Vec<String> {
+        servers
+            .iter()
+            .flat_map(|server| {
+                let mut result = vec![format!("  <server name=\"{}\">", server.server)];
+                if server.codemode {
+                    result.push(format!(
+                        "    Use tools from this server through `execute` under `tools[{}]`.",
+                        serde_json::to_string(&crate::mcp::registry::namespace(&server.server))
+                            .unwrap_or_else(|_| format!("\"{}\"", server.server)),
+                    ));
+                }
+                result.extend(server.instructions.split('\n').map(|line| format!("    {line}")));
+                result.push("  </server>".to_string());
+                result
+            })
+            .collect()
+    }
+    fn render(servers: &[McpServerSummary]) -> String {
+        let mut lines = vec!["<mcp_instructions>".to_string()];
+        lines.extend(entries(servers));
+        lines.push("</mcp_instructions>".to_string());
+        lines.join("\n")
+    }
+    fn update(previous: &[McpServerSummary], current: &[McpServerSummary]) -> String {
+        let key = |server: &McpServerSummary| server.server.clone();
+        let changed = |before: &McpServerSummary, after: &McpServerSummary| {
+            before.instructions != after.instructions || before.codemode != after.codemode
+        };
+        let previous_keys: std::collections::HashSet<String> = previous.iter().map(&key).collect();
+        let added: Vec<McpServerSummary> = current
+            .iter()
+            .filter(|server| !previous_keys.contains(&server.server))
+            .cloned()
+            .collect();
+        let current_keys: std::collections::HashSet<String> = current.iter().map(&key).collect();
+        let removed: Vec<McpServerSummary> = previous
+            .iter()
+            .filter(|server| !current_keys.contains(&server.server))
+            .cloned()
+            .collect();
+        let same_changed = current.iter().any(|after| {
+            previous
+                .iter()
+                .find(|before| before.server == after.server)
+                .is_some_and(|before| changed(before, after))
+        });
+        if same_changed || (added.is_empty() && removed.is_empty()) {
+            return [
+                "The available MCP server instructions have changed. This list supersedes the previous one."
+                    .to_string(),
+                render(current),
+            ]
+            .join("\n");
+        }
+        let mut parts = Vec::new();
+        if !added.is_empty() {
+            parts.push(
+                "New MCP server instructions are available in addition to those previously listed:"
+                    .to_string(),
+            );
+            parts.extend(entries(&added));
+        }
+        if !removed.is_empty() {
+            parts.push(format!(
+                "Instructions for the following MCP servers are no longer available: {}.",
+                removed.iter().map(|server| server.server.as_str()).collect::<Vec<_>>().join(", ")
+            ));
+        }
+        parts.join("\n")
+    }
     InstructionSource {
         key: "core/mcp-guidance".into(),
-        // TODO(wave-D): read the connected-server summary; an empty server
-        // set is an observed absence, like v2's empty skill list.
-        read: Box::new(|| ReadOutcome::Removed),
-        initial: Box::new(|_| {
-            Some(
-                "No MCP servers are currently connected. MCP tools may appear after you connect a server from /mcps."
-                    .to_string(),
-            )
+        read: Box::new(move || {
+            let servers = (mcp)();
+            if servers.is_empty() {
+                ReadOutcome::Removed
+            } else {
+                ReadOutcome::Value(serde_json::to_value(&servers).unwrap_or_default())
+            }
         }),
-        changed: Box::new(|_, _| Some("The connected MCP servers changed.".to_string())),
-        removed: None,
+        initial: Box::new(|value| {
+            let servers: Vec<McpServerSummary> =
+                serde_json::from_value(value.clone()).unwrap_or_default();
+            Some(render(&servers))
+        }),
+        changed: Box::new(|previous, current| {
+            let previous: Vec<McpServerSummary> =
+                serde_json::from_value(previous.clone()).unwrap_or_default();
+            let current: Vec<McpServerSummary> =
+                serde_json::from_value(current.clone()).unwrap_or_default();
+            Some(update(&previous, &current))
+        }),
+        removed: Some(Box::new(|_| {
+            Some("MCP server instructions are no longer available.".to_string())
+        })),
     }
 }
 
@@ -544,9 +631,27 @@ fn reference_guidance_source() -> InstructionSource {
     }
 }
 
-/// `core/skill-guidance` (skill/instructions.ts) — Wave B has no skill
-/// registry yet, so the available list is empty; TODO(wave-D).
-fn skill_guidance_source() -> InstructionSource {
+/// `core/skill-guidance` (skill/instructions.ts): the available list
+/// (`description` present, autoinvoke enabled), sorted by id; an empty
+/// list is an observed absence.
+fn skill_guidance_source(
+    skills: Arc<dyn Fn() -> Vec<oc_schema::skill::Skill> + Send + Sync>,
+) -> InstructionSource {
+    let summaries = |skills: &[oc_schema::skill::Skill]| -> Vec<serde_json::Value> {
+        let mut visible: Vec<serde_json::Value> = skills
+            .iter()
+            .filter(|skill| skill.description.is_some() && skill.auto_invoke != Some(false))
+            .map(|skill| {
+                serde_json::json!({
+                    "id": skill.id.as_str(),
+                    "name": skill.name.0.clone(),
+                    "description": skill.description.clone().unwrap_or_default(),
+                })
+            })
+            .collect();
+        visible.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        visible
+    };
     let render = |skills: &[serde_json::Value]| -> String {
         let mut lines = vec![
             "Skills provide specialized instructions and workflows for specific tasks.".to_string(),
@@ -576,7 +681,14 @@ fn skill_guidance_source() -> InstructionSource {
     };
     InstructionSource {
         key: "core/skill-guidance".into(),
-        read: Box::new(|| ReadOutcome::Removed),
+        read: Box::new(move || {
+            let visible = summaries(&(skills)());
+            if visible.is_empty() {
+                ReadOutcome::Removed
+            } else {
+                ReadOutcome::Value(serde_json::Value::Array(visible))
+            }
+        }),
         initial: Box::new(move |value| {
             let skills = value.as_array().cloned().unwrap_or_default();
             Some(render(&skills))
@@ -1123,8 +1235,19 @@ impl SelectError {
     }
 }
 
+/// One connected MCP server's instruction summary (`McpInstructions`
+/// Summary shape; `codemode: false` servers skip the `execute` line).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct McpServerSummary {
+    pub server: String,
+    pub instructions: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub codemode: bool,
+}
+
 /// Aux dependency handles the graph supplies (Wave B builtins + discovery
-/// seam; MCP/skills/reference bodies land with their lanes).
+/// seam; the composition root binds the catalog, MCP summaries, and the
+/// skill table).
 #[derive(Clone)]
 pub struct ContextDeps {
     pub clock: Arc<dyn oc_util::determinism::Clock>,
@@ -1133,6 +1256,34 @@ pub struct ContextDeps {
     pub discovery: Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>,
     /// The environment block renderer (overridable for tests).
     pub environment: Arc<dyn Fn() -> String + Send + Sync>,
+    /// The provider catalog (`model.small` for the title fallback; an
+    /// empty catalog keeps Wave B's "reuse the primary" behavior).
+    pub catalog: Arc<crate::provider_catalog::Catalog>,
+    /// Connected MCP server summaries; empty = observed absence (the
+    /// guidance key stays out of the instruction delta).
+    pub mcp: Arc<dyn Fn() -> Vec<McpServerSummary> + Send + Sync>,
+    /// Available skills (`description` present, autoinvoke enabled); empty
+    /// = observed absence.
+    pub skills: Arc<dyn Fn() -> Vec<oc_schema::skill::Skill> + Send + Sync>,
+}
+
+impl ContextDeps {
+    /// The Wave B shape: empty catalog, no MCP servers, no skills.
+    #[must_use]
+    pub fn minimal(
+        clock: Arc<dyn oc_util::determinism::Clock>,
+        discovery: Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>,
+        environment: Arc<dyn Fn() -> String + Send + Sync>,
+    ) -> Self {
+        Self {
+            clock,
+            discovery,
+            environment,
+            catalog: Arc::new(crate::provider_catalog::Catalog::empty()),
+            mcp: Arc::new(Vec::new),
+            skills: Arc::new(Vec::new),
+        }
+    }
 }
 
 impl std::fmt::Debug for ContextDeps {
@@ -1150,6 +1301,30 @@ pub struct SessionContext {
     tools: Arc<ToolRegistryState>,
     resolver: Arc<dyn ModelResolver>,
     deps: ContextDeps,
+}
+
+/// `Model.small(providerID)` (model.ts:266-274): the provider's active
+/// text-in/text-out models, first match in the family preference order.
+#[must_use]
+pub fn small_model<'a>(
+    catalog: &'a crate::provider_catalog::Catalog,
+    provider_id: &str,
+) -> Option<&'a oc_schema::model::Info> {
+    let models: Vec<&oc_schema::model::Info> = catalog
+        .provider(provider_id)?
+        .models
+        .iter()
+        .filter(|model| {
+            model.provider_id.as_str() == provider_id
+                && model.status == oc_schema::model::Status::Active
+                && model.capabilities.input.iter().any(|item| item.starts_with("text"))
+                && model.capabilities.output.iter().any(|item| item.starts_with("text"))
+        })
+        .collect();
+    ["gpt-luna", "gemini-flash-lite", "gemini-flash", "claude-haiku"]
+        .iter()
+        .find_map(|family| models.iter().find(|model| model.family.as_deref() == Some(*family)))
+        .copied()
 }
 
 impl SessionContext {
@@ -1179,9 +1354,43 @@ impl SessionContext {
     ) -> Option<(AgentInfo, Option<ResolvedModel>, ResolvedModel)> {
         let agent = self.agents.get(&AgentId::parse("title"))?;
         let primary = self.resolve_model(session).ok();
-        // `model.small(providerID)` — TODO(wave-C): catalog-driven small
-        // model lookup; Wave B reuses the primary.
-        let selected = primary.clone()?;
+        // The title model: the agent's own model, else the provider's
+        // small family member (model.ts `small`); neither exists ⇒ the
+        // primary carries the title request.
+        let info = match &agent.model {
+            Some(reference) => self.deps.catalog.model(&reference.provider_id.0, &reference.id.0),
+            None => {
+                let primary = primary.as_ref()?;
+                small_model(&self.deps.catalog, &primary.reference.provider_id.0)
+            }
+        };
+        let preferred = info.and_then(|info| {
+            // agent.model.variant ?? first minimal-reasoning variant the
+            // model carries (context.ts MINIMAL_REASONING_VARIANTS).
+            let variant =
+                agent.model.as_ref().and_then(|reference| reference.variant.clone()).or_else(
+                    || {
+                        ["none", "minimal", "low"].iter().find_map(|id| {
+                            info.variants
+                                .iter()
+                                .any(|variant| variant.id.as_str() == *id)
+                                .then(|| oc_schema::id::ModelVariantId::parse(*id))
+                        })
+                    },
+                );
+            let mut reference = oc_schema::model::Ref {
+                provider_id: info.provider_id.clone(),
+                id: info.id.clone(),
+                variant,
+            };
+            if reference.variant.is_none() {
+                // A catalog resolution picks the default variant when none
+                // is pinned (the resolver's default selection).
+                reference.variant = Some(oc_schema::id::ModelVariantId::parse("default"));
+            }
+            self.resolver.resolve_selected(session, &reference).ok()
+        });
+        let selected = preferred.or_else(|| primary.clone())?;
         Some((agent, primary, selected))
     }
 
@@ -1200,9 +1409,9 @@ impl SessionContext {
     async fn instruction_list(&self, session_id: &str) -> InstructionList {
         let mut list: InstructionList = vec![
             codemode_source(Arc::clone(&self.tools)),
-            mcp_guidance_source(),
+            mcp_guidance_source(Arc::clone(&self.deps.mcp)),
             reference_guidance_source(),
-            skill_guidance_source(),
+            skill_guidance_source(Arc::clone(&self.deps.skills)),
             discovery_source(Arc::clone(&self.deps.discovery)),
             date_source(Arc::clone(&self.deps.clock)),
             environment_source(Arc::clone(&self.deps.environment)),

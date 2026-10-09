@@ -393,14 +393,23 @@ impl SubagentTool {
         }
 
         // Foreground: block on the child job; interrupt ⇒ child interrupt
-        // + cancel (subagent.ts:234-239).
+        // + cancel (subagent.ts:234-239). The runner's per-attempt bell
+        // drops this future mid-block; the guard fires the same child
+        // interrupt + job cancel on that drop, and the direct bell (when
+        // wired) resolves first.
         let result = {
             let block = deps.subagents.block(&child.id, context.session_id.as_str());
             let interrupt = deps.interrupt.clone();
-            match interrupt {
+            let mut guard = SubagentCancelGuard {
+                subagents: deps.subagents.clone(),
+                child: child.id.clone(),
+                armed: true,
+            };
+            let result = match interrupt {
                 Some(bell) => tokio::select! {
                     biased;
                     () = bell.notified() => {
+                        guard.disarm();
                         deps.subagents.interrupt(&child.id).await;
                         return Err(ToolRunFailure::Declined {
                             message: format!("Subagent cancelled (sessionID: {})", child.id),
@@ -409,7 +418,9 @@ impl SubagentTool {
                     outcome = block => outcome,
                 },
                 None => block.await,
-            }
+            };
+            guard.disarm();
+            result
         };
 
         match result {
@@ -451,6 +462,35 @@ impl SubagentTool {
                 metadata: None,
             }),
         }
+    }
+}
+
+/// The `Effect.onInterrupt` translation for the foreground block: future
+/// drop (the runner's tool-fiber cancel) fires the child-session interrupt
+/// + job cancel v2 performs on fiber interrupt. Fire-and-forget (Drop
+/// cannot await); both operations are idempotent.
+struct SubagentCancelGuard {
+    subagents: Arc<crate::session::subagent_job::SubagentJob>,
+    child: String,
+    armed: bool,
+}
+
+impl SubagentCancelGuard {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SubagentCancelGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let subagents = Arc::clone(&self.subagents);
+        let child = self.child.clone();
+        tokio::spawn(async move {
+            subagents.interrupt(&child).await;
+        });
     }
 }
 

@@ -3,6 +3,7 @@
 pub mod bus;
 pub mod config;
 pub mod database;
+pub mod engine;
 pub mod env;
 pub mod file_access;
 pub mod file_mutation;

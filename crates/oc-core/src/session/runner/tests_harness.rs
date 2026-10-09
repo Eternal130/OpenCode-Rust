@@ -229,10 +229,10 @@ pub(crate) async fn harness_with(llm: oc_ai::testing::TestLlm) -> Harness {
 
     let directory = path.to_string_lossy().into_owned();
     let environment_dir = directory.clone();
-    let deps = ContextDeps {
-        clock: clock.clone(),
-        discovery: Arc::new(|| Vec::new()),
-        environment: Arc::new(move || {
+    let deps = ContextDeps::minimal(
+        clock.clone(),
+        Arc::new(|| Vec::new()),
+        Arc::new(move || {
             crate::session::runner::context::environment_block(
                 &environment_dir,
                 &environment_dir,
@@ -240,7 +240,7 @@ pub(crate) async fn harness_with(llm: oc_ai::testing::TestLlm) -> Harness {
                 "/tmp/opencode",
             )
         }),
-    };
+    );
     let context = Arc::new(SessionContext::new(
         db.clone(),
         bus.clone(),

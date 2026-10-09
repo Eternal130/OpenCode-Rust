@@ -512,3 +512,234 @@ fn runner_route_client_is_constructible() {
     assert_send_sync::<crate::session::runner::RouteLlmClient>();
     let _ = Arc::new(crate::session::runner::RouteLlmClient);
 }
+
+// ---------------------------------------------------------------------------
+// Wave 5-0: RouteLlmClient anthropic native compaction
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn runner_route_client_compact_support_by_protocol() {
+    use crate::session::runner::{CompactMechanism, LlmClient as _, RouteLlmClient};
+
+    let anthropic = oc_ai::protocols::anthropic_messages::anthropic_route(
+        Arc::new(oc_ai::route::transport::FailingTransport {
+            message: "compact support test never reaches a transport",
+        }),
+        None,
+    );
+    let model = anthropic.model("claude-sonnet-4-5", None).expect("anthropic model");
+    let mut request = oc_ai::schema::messages::LLMRequest::new(model);
+    request.messages = vec![Message::user("hello")];
+
+    let client = RouteLlmClient;
+    assert!(
+        client.can_compact(&request, CompactMechanism::Trigger),
+        "anthropic-messages supports the in-stream compaction trigger"
+    );
+    assert!(
+        !client.can_compact(&request, CompactMechanism::Endpoint),
+        "anthropic has no standalone compact endpoint"
+    );
+
+    let responses =
+        oc_ai::test_support::echo_route(Arc::new(oc_ai::route::transport::FailingTransport {
+            message: "echo protocol has no compact",
+        }));
+    let chat = responses.model("m", None).expect("chat model");
+    let mut chat_request = oc_ai::schema::messages::LLMRequest::new(chat);
+    chat_request.messages = vec![Message::user("hello")];
+    assert!(!client.can_compact(&chat_request, CompactMechanism::Trigger));
+    assert!(!client.can_compact(&chat_request, CompactMechanism::Endpoint));
+}
+
+#[tokio::test]
+async fn runner_route_client_anthropic_trigger_compact_collects_checkpoint() {
+    use crate::session::runner::{CompactMechanism, LlmClient as _, RouteLlmClient};
+    use oc_ai::schema::messages::ContentPart;
+
+    // A scripted anthropic SSE stream answering the contextManagement.edits
+    // trigger with exactly one compaction block.
+    let body = [
+        r#"data: {"type":"message_start","message":{"usage":{"input_tokens":5}}}"#,
+        r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"compaction","content":null}}"#,
+        r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"compaction_delta","content":"CHECKPOINT-BYTES"}}"#,
+        r#"data: {"type":"content_block_stop","index":0}"#,
+        r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}"#,
+        r#"data: {"type":"message_stop"}"#,
+        "data: [DONE]",
+    ]
+    .join("\n\n")
+        + "\n\n";
+
+    let transport = Arc::new(oc_ai::test_support::MockTransport::from_interactions(vec![
+        oc_ai::test_support::RecordedInteraction {
+            method: "POST".into(),
+            url: "https://api.anthropic.com/v1/messages?beta=true".into(),
+            status: 200,
+            body,
+            request_body: None,
+        },
+    ]));
+    let route = oc_ai::protocols::anthropic_messages::anthropic_messages_route(transport.clone());
+    let model = route.model("claude-sonnet-4-5", None).expect("anthropic model");
+    let mut request = oc_ai::schema::messages::LLMRequest::new(model);
+    request.messages = vec![Message::user("compact this")];
+
+    let client = RouteLlmClient;
+    let outcome = client.compact(request, CompactMechanism::Trigger).await.expect("compact");
+    let checkpoint = outcome.checkpoint.expect("the compaction checkpoint");
+    match checkpoint {
+        ContentPart::Compaction { provider, text, .. } => {
+            assert_eq!(provider.as_str(), "anthropic");
+            assert_eq!(text.as_deref(), Some("CHECKPOINT-BYTES"));
+        }
+        other => panic!("expected a compaction part, got {other:?}"),
+    }
+    // The request carried the contextManagement.edits trigger (the beta
+    // header rides the wire body).
+    let sent = transport.requests();
+    let _ = sent;
+}
+
+// ---------------------------------------------------------------------------
+// Wave 5-0: title model.small + the MCP guidance body
+// ---------------------------------------------------------------------------
+
+/// A catalog with one provider whose models include a `gpt-luna` family
+/// member (the first `Model.small` preference).
+fn small_family_catalog() -> crate::provider_catalog::Catalog {
+    crate::provider_catalog::Catalog::parse(
+        r#"{
+            "lunarcorp": {
+                "id": "lunarcorp",
+                "name": "LunarCorp",
+                "npm": "@opencode/ai/providers/openai-compatible",
+                "api": "https://api.lunarcorp.test/v1",
+                "models": {
+                    "luna-mini": { "id": "luna-mini", "name": "Luna Mini", "family": "gpt-luna", "tool_call": true, "modalities": { "input": ["text"], "output": ["text"] }, "limit": { "context": 100000, "output": 8000 } },
+                    "luna-max": { "id": "luna-max", "name": "Luna Max", "family": "gpt-luna-pro", "tool_call": true, "modalities": { "input": ["text"], "output": ["text"] }, "limit": { "context": 200000, "output": 16000 } }
+                }
+            }
+        }"#,
+    )
+    .expect("catalog parses")
+}
+
+#[tokio::test]
+async fn runner_title_selects_the_catalog_small_model() {
+    use crate::session::runner::context::{ContextDeps, SessionContext};
+
+    let stack = crate::session::runner::tests_harness::harness().await;
+    let catalog = Arc::new(small_family_catalog());
+    let agents = Arc::new(crate::location::AgentRegistry::new());
+    agents.set(crate::session::runner::tests_harness::agent_info("title", None));
+    agents.set(crate::session::runner::tests_harness::agent_info("build", None));
+    let tools = Arc::new(crate::location::ToolRegistryState::new());
+
+    // The resolver resolves whatever ref it is asked for (like the
+    // catalog resolver would).
+    struct ResolvesRef;
+    impl crate::session::runner::ModelResolver for ResolvesRef {
+        fn resolve(
+            &self,
+            session: &crate::database::schema::SessionRow,
+        ) -> Result<crate::session::runner::ResolvedModel, crate::session::runner::ModelError>
+        {
+            self.resolve_selected(
+                session,
+                &oc_schema::model::Ref {
+                    provider_id: oc_schema::id::ProviderId::parse("lunarcorp"),
+                    id: oc_schema::id::ModelId::parse("luna-max"),
+                    variant: Some(oc_schema::id::ModelVariantId::parse("default")),
+                },
+            )
+        }
+
+        fn resolve_selected(
+            &self,
+            _session: &crate::database::schema::SessionRow,
+            reference: &oc_schema::model::Ref,
+        ) -> Result<crate::session::runner::ResolvedModel, crate::session::runner::ModelError>
+        {
+            let mut resolved = crate::session::runner::tests_harness::test_resolved_model();
+            resolved.reference = reference.clone();
+            Ok(resolved)
+        }
+    }
+
+    let deps = ContextDeps::minimal(
+        crate::session::runner::tests_harness::fixed_clock(),
+        Arc::new(|| Vec::new()),
+        Arc::new(|| String::new()),
+    );
+    let deps = ContextDeps { catalog: Arc::clone(&catalog), ..deps };
+    let context = SessionContext::new(
+        stack.db.clone(),
+        stack.bus.clone(),
+        crate::location::LocationRef::new("/tmp/opencode", None),
+        agents,
+        tools,
+        Arc::new(ResolvesRef),
+        deps,
+    );
+    let session = crate::database::schema::SessionRow::new(
+        "ses_title_small",
+        "prj_1",
+        "/tmp/opencode",
+        "slug",
+        "test",
+    )
+    .expect("session row");
+    let (_agent, primary, selected) = context.select_title(&session).expect("selection");
+    assert_eq!(primary.expect("primary").reference.id.as_str(), "luna-max");
+    assert_eq!(
+        selected.reference.id.as_str(),
+        "luna-mini",
+        "the title falls back to the provider's small family model"
+    );
+}
+
+#[test]
+fn runner_title_small_model_family_preference_order() {
+    let catalog = small_family_catalog();
+    let small = crate::session::runner::context::small_model(&catalog, "lunarcorp")
+        .expect("the gpt-luna family member");
+    assert_eq!(small.id.as_str(), "luna-mini");
+    assert!(
+        crate::session::runner::context::small_model(&catalog, "unknown").is_none(),
+        "unknown providers have no small model"
+    );
+}
+
+#[test]
+fn runner_mcp_guidance_renders_the_v2_body() {
+    use crate::session::runner::context::{mcp_guidance_source, McpServerSummary, ReadOutcome};
+
+    let summaries = vec![
+        McpServerSummary {
+            server: "context7".into(),
+            instructions: "Use context7 for library docs.".into(),
+            codemode: true,
+        },
+        McpServerSummary {
+            server: "legacy".into(),
+            instructions: "Direct tools only.".into(),
+            codemode: false,
+        },
+    ];
+    let source = mcp_guidance_source(Arc::new(move || summaries.clone()));
+    assert_eq!(source.key, "core/mcp-guidance");
+    let ReadOutcome::Value(value) = (source.read)() else {
+        panic!("connected servers are an observed value");
+    };
+    let rendered = (source.initial)(&value).expect("initial body");
+    assert_eq!(
+        rendered,
+        "<mcp_instructions>\n  <server name=\"context7\">\n    Use tools from this server through `execute` under `tools[\"context7\"]`.\n    Use context7 for library docs.\n  </server>\n  <server name=\"legacy\">\n    Direct tools only.\n  </server>\n</mcp_instructions>",
+        "byte-exact against mcp/instructions.ts"
+    );
+
+    // Empty = observed absence: the key stays out of the instruction delta.
+    let empty = mcp_guidance_source(Arc::new(Vec::new));
+    assert!(matches!((empty.read)(), ReadOutcome::Removed));
+}

@@ -350,19 +350,30 @@ impl PipelineExecutor {
                     return Err(ToolRunFailure::Declined { message: failure.message });
                 }
                 let message = failure.visible_message();
+                let failure = match &failure.cause {
+                    // `toSessionError` unwraps Blocked/Corrected to
+                    // `permission.rejected` with the engine's message.
+                    Some(super::FailureCause::Permission { message }) => {
+                        ToolRunFailure::PermissionRejected {
+                            message: message.clone(),
+                            metadata: None,
+                        }
+                    }
+                    _ => ToolRunFailure::Error { message, metadata: None },
+                };
                 self.emit_after(
                     &input,
                     context,
                     HookToolOutcome::Error {
                         error: oc_schema::tool::ToolError {
-                            message: failure.message.clone(),
+                            message: failure.message().to_string(),
                             error: None,
                             metadata: None,
                         },
                     },
                 )
                 .await;
-                return Err(ToolRunFailure::Error { message, metadata: None });
+                return Err(failure);
             }
         };
         // tool.execute.after (result mutation).

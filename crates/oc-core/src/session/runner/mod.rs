@@ -79,7 +79,7 @@ mod tests_compaction;
 #[cfg(test)]
 mod tests_e2e;
 #[cfg(test)]
-mod tests_harness;
+pub(crate) mod tests_harness;
 #[cfg(test)]
 mod tests_message;
 #[cfg(test)]
@@ -150,8 +150,8 @@ pub trait LlmClient: Send + Sync {
 
 /// The production client over oc-ai routes: streams through the request's
 /// own route; native compaction through the OpenAI-Responses compact
-/// endpoints (anthropic's in-stream compaction arrives with its Wave C
-/// route lane — TODO(wave-C)).
+/// endpoints and the Anthropic in-stream `context_management.edits`
+/// trigger (the `compact-2026-01-12` beta the messages protocol carries).
 pub struct RouteLlmClient;
 
 #[async_trait::async_trait]
@@ -162,8 +162,16 @@ impl LlmClient for RouteLlmClient {
         Ok(Box::pin(stream))
     }
 
-    fn can_compact(&self, request: &LLMRequest, _mechanism: CompactMechanism) -> bool {
-        request.model.route.protocol.id() == "openai-responses"
+    fn can_compact(&self, request: &LLMRequest, mechanism: CompactMechanism) -> bool {
+        match request.model.route.protocol.id() {
+            "openai-responses" => true,
+            // Anthropic native compaction is trigger-only: the
+            // `context_management.edits` request rides a normal stream and
+            // the provider answers with one `compaction` content block
+            // (anthropic_messages.rs parser + beta header wiring).
+            "anthropic-messages" => matches!(mechanism, CompactMechanism::Trigger),
+            _ => false,
+        }
     }
 
     async fn compact(
@@ -183,6 +191,9 @@ impl LlmClient for RouteLlmClient {
                 })
             }
             CompactMechanism::Trigger => {
+                if route.protocol.id() == "anthropic-messages" {
+                    return anthropic_trigger_compact(route, request).await;
+                }
                 let response =
                     oc_ai::protocols::openai_responses::trigger_compaction(&route, &request)
                         .await?;
@@ -199,6 +210,84 @@ impl LlmClient for RouteLlmClient {
             }
         }
     }
+}
+
+/// The encode failure for the anthropic compaction options.
+fn compaction_options_error(
+    provider: &oc_ai::schema::ProviderId,
+    error: serde_json::Error,
+) -> AiError {
+    AiError::new(AiErrorReason::ProviderConfiguration {
+        provider: provider.clone(),
+        message: format!("compaction options encode failed: {error}"),
+    })
+}
+
+/// The Anthropic trigger mechanism: replay the window through a normal
+/// stream carrying `contextManagement.edits: [{type:
+/// "compact_20260112"}]`, collect the single `compaction` content block
+/// as the checkpoint, and bill the stream's usage.
+async fn anthropic_trigger_compact(
+    route: Arc<oc_ai::route::client::Route>,
+    request: LLMRequest,
+) -> Result<CompactOutcome, AiError> {
+    // The edit trigger requires an input-token threshold (>= 50k); the
+    // compaction request targets the smallest window the model accepts.
+    const ANTHROPIC_COMPACT_TRIGGER_TOKENS: f64 = 50_000.0;
+    let mut request = request;
+    let options = request.provider_options.clone().unwrap_or_default();
+    let mut options = serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
+        serde_json::to_value(&options).unwrap_or(serde_json::Value::Null),
+    )
+    .unwrap_or_default();
+    options.insert(
+        "contextManagement".into(),
+        serde_json::json!({
+            "edits": [
+                { "type": "compact_20260112", "trigger": { "type": "input_tokens", "value": ANTHROPIC_COMPACT_TRIGGER_TOKENS } }
+            ]
+        }),
+    );
+    request.provider_options = serde_json::from_value(serde_json::Value::Object(options))
+        .map_err(|error| compaction_options_error(&request.model.provider, error))?;
+
+    let stream = route.stream(request).await?;
+    tokio::pin!(stream);
+    use futures::StreamExt;
+    let mut checkpoint: Option<oc_ai::schema::messages::ContentPart> = None;
+    let mut usage = None;
+    let mut failed: Option<AiError> = None;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(LLMEvent::Compaction { provider, id, encrypted, text }) => {
+                checkpoint = Some(oc_ai::schema::messages::ContentPart::Compaction {
+                    provider,
+                    id,
+                    encrypted,
+                    text,
+                });
+            }
+            Ok(LLMEvent::Finish { usage: finish_usage, .. }) => {
+                usage = finish_usage.or(usage);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                failed = Some(error);
+                break;
+            }
+        }
+    }
+    if let Some(error) = failed {
+        return Err(error);
+    }
+    let checkpoint = checkpoint.ok_or_else(|| {
+        AiError::new(AiErrorReason::InvalidProviderOutput {
+            fields: ReasonFields::new("Compaction response must contain exactly one checkpoint"),
+            classification: None,
+            route: None,
+        })
+    })?;
+    Ok(CompactOutcome { replacement: Vec::new(), checkpoint: Some(checkpoint), usage })
 }
 
 // ---------------------------------------------------------------------------

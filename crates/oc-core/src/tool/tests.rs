@@ -157,10 +157,7 @@ async fn call(
 }
 
 fn error_message(failure: &ToolRunFailure) -> String {
-    match failure {
-        ToolRunFailure::Error { message, .. } => message.clone(),
-        ToolRunFailure::Declined { message } => message.clone(),
-    }
+    failure.message().to_string()
 }
 
 fn text_of(outcome: &crate::location::ToolRunResult) -> String {

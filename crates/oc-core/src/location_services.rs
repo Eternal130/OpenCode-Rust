@@ -269,6 +269,23 @@ impl LocationServiceMap {
         }
     }
 
+    /// Adopts an already-built graph (the engine's composition root builds
+    /// each location's graph over per-location globals — its plugin
+    /// supervisor carries the location's tool plugins — and hands the
+    /// finished graph to this map, which stays the lifecycle authority:
+    /// invalidate/shutdown/TTL all run through here). No-op when a graph
+    /// is already live for the location (the incumbent wins, matching
+    /// `get_or_build`'s race rule).
+    pub fn adopt(&self, graph: Arc<LocationGraph>) -> Arc<LocationGraph> {
+        match self.map.entry(graph.location.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(existing) => Arc::clone(existing.get()),
+            dashmap::mapref::entry::Entry::Vacant(slot) => {
+                slot.insert(Arc::clone(&graph));
+                graph
+            }
+        }
+    }
+
     /// Invalidate a location: remove the entry, then run the shutdown
     /// sequence (permission close → forms close → rpc close → publish
     /// `location.shutdown`). Returns the old graph — its `Arc` survives in

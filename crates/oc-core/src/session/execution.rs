@@ -48,6 +48,12 @@ use crate::bus::{Bus, PublishOptions};
 use crate::session::inbox::{Promotable, SessionInbox};
 use crate::session::store::SessionStore;
 
+/// How long the coordinator waits for an interrupted drain to unwind
+/// through its guard regions and settle on its own (runner-concurrency.md
+/// §4: the interrupt is a shutdown signal, not a future drop — but a
+/// wedged drain must not hang the coordinator forever).
+const UNWIND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// A drain continuation (`{step}`, runner-map §1.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Continuation {
@@ -104,6 +110,10 @@ type SharedExit = Option<Exit>;
 struct Execution {
     /// Stop bell (one permit ⇒ the drain loop breaks as interrupted).
     stop: Arc<Notify>,
+    /// The interrupt signal the drain observes at await points (§4): the
+    /// coordinator sends `true` instead of dropping the drain future, so
+    /// finalization/settlement guard regions run to completion.
+    shutdown_tx: Arc<watch::Sender<bool>>,
     /// Waiter fan-out: `Some(exit)` once settled.
     done_tx: watch::Sender<SharedExit>,
     scope: Promotable,
@@ -115,10 +125,15 @@ struct Execution {
     interruption_reason: Option<InterruptReason>,
 }
 
-/// The injectable drain (`options.drain`). Wave B plugs the real LLM
-/// runner; Wave A tests inject fakes.
-pub type DrainFn =
-    Arc<dyn Fn(String, bool, Option<Continuation>, Promotable) -> DrainFuture + Send + Sync>;
+/// The injectable drain (`options.drain`). The runner plugs the real LLM
+/// pipeline; tests inject fakes. The final argument is the execution's
+/// shutdown watch receiver — the interrupt signal the drain observes at
+/// its await points (§4) instead of being dropped.
+pub type DrainFn = Arc<
+    dyn Fn(String, bool, Option<Continuation>, Promotable, watch::Receiver<bool>) -> DrainFuture
+        + Send
+        + Sync,
+>;
 /// Boxed drain future.
 pub type DrainFuture = Pin<Box<dyn Future<Output = Result<DrainOutcome, RunError>> + Send>>;
 /// `options.started`.
@@ -172,7 +187,7 @@ impl SessionRunCoordinator {
             inner: Arc::new(CoordinatorInner {
                 executions: Mutex::new(HashMap::new()),
                 drain: options.drain.unwrap_or_else(|| {
-                    Arc::new(|_, _, _, _| Box::pin(async { Ok(DrainOutcome::Complete) }))
+                    Arc::new(|_, _, _, _, _| Box::pin(async { Ok(DrainOutcome::Complete) }))
                 }),
                 started: options.started,
                 settled: options.settled,
@@ -273,6 +288,11 @@ impl SessionRunCoordinator {
             // admissions and restart normally at settle.
             execution.pending_wake = None;
             execution.interruption_reason = reason;
+            // Signal the drain's shutdown watch FIRST (§4): the drain
+            // observes it at its await points and unwinds through its
+            // guard regions. The stop bell stays for wakeups parked
+            // outside the drain's observation surface.
+            let _ = execution.shutdown_tx.send(true);
             // Fire and forget: nobody benefits from waiting out cleanup here.
             execution.stop.notify_one();
             (true, Some(execution.done_tx.subscribe()))
@@ -307,6 +327,7 @@ impl SessionRunCoordinator {
             execution.stopping = true;
             execution.pending_wake = None;
             execution.interruption_reason = None;
+            let _ = execution.shutdown_tx.send(true);
             execution.stop.notify_one();
         }
     }
@@ -320,8 +341,10 @@ fn start_locked(
     scope: Promotable,
 ) -> Arc<Mutex<Execution>> {
     let (done_tx, _) = watch::channel(None);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let execution = Arc::new(Mutex::new(Execution {
         stop: Arc::new(Notify::new()),
+        shutdown_tx: Arc::new(shutdown_tx),
         done_tx,
         scope,
         pending_wake: None,
@@ -331,7 +354,7 @@ fn start_locked(
     }));
     executions.insert(key.to_string(), Arc::clone(&execution));
     let task_key = key.to_string();
-    tokio::spawn(run_execution(inner, task_key, Arc::clone(&execution), force, scope));
+    tokio::spawn(run_execution(inner, task_key, Arc::clone(&execution), force, scope, shutdown_rx));
     execution
 }
 
@@ -355,12 +378,14 @@ async fn await_receiver(receiver: &watch::Receiver<SharedExit>) -> Exit {
 
 /// One execution: started hook → drain loop (doorbell trampoline) →
 /// uninterruptible settlement → successor start → waiter release.
+#[allow(clippy::too_many_arguments)]
 async fn run_execution(
     inner: Arc<CoordinatorInner>,
     key: String,
     execution: Arc<Mutex<Execution>>,
     force: bool,
     initial_scope: Promotable,
+    shutdown: watch::Receiver<bool>,
 ) {
     // The leading yield lets wake()/run() observe the execution before the
     // first drain settles (run-coordinator.ts:94-96).
@@ -379,11 +404,31 @@ async fn run_execution(
 
     while exit.is_ok() {
         let stop = execution.lock().stop.clone();
-        let drain = (inner.drain)(key.clone(), force, None, scope);
-        let drained = tokio::select! {
-            biased;
-            () = stop.notified() => Err(RunError::Interrupted),
-            outcome = drain => outcome.map(|_| ()),
+        let drain = (inner.drain)(key.clone(), force, None, scope, shutdown.clone());
+        tokio::pin!(drain);
+        // §4: the interrupt SIGNALS the drain's shutdown watch — it never
+        // drops the drain future. Once the stop bell rings the drain gets
+        // UNWIND_TIMEOUT to observe the watch, unwind through its guard
+        // regions, and settle on its own; a drain that never returns is
+        // abandoned (the only way out of a wedge) and classified
+        // interrupted.
+        let mut stopping = false;
+        let drained = loop {
+            if stopping {
+                break match tokio::time::timeout(UNWIND_TIMEOUT, &mut drain).await {
+                    Ok(outcome) => outcome.map(|_| ()),
+                    Err(_elapsed) => Err(RunError::Interrupted),
+                };
+            }
+            tokio::select! {
+                biased;
+                () = stop.notified() => {
+                    stopping = true;
+                    // The watch was already signalled by `interrupt`; keep
+                    // polling the drain without the stop arm.
+                }
+                outcome = &mut drain => break outcome.map(|_| ()),
+            }
         };
         if let Err(err) = drained {
             exit = Err(err);
@@ -604,7 +649,7 @@ impl SessionExecution {
 /// :87-110): Moved re-drains without force carrying the continuation;
 /// Reloaded re-drains with its own force flag.
 fn wrap_drain(store: SessionStore, drain: DrainFn) -> DrainFn {
-    Arc::new(move |session_id, force, continuation, promotable| {
+    Arc::new(move |session_id, force, continuation, promotable, shutdown| {
         let store = store.clone();
         let drain = Arc::clone(&drain);
         Box::pin(async move {
@@ -615,17 +660,31 @@ fn wrap_drain(store: SessionStore, drain: DrainFn) -> DrainFn {
             if session.is_none() {
                 return Err(RunError::Defect(format!("Session not found: {session_id}")));
             }
-            let mut outcome = drain(session_id.clone(), force, continuation, promotable).await?;
+            let mut outcome =
+                drain(session_id.clone(), force, continuation, promotable, shutdown.clone())
+                    .await?;
             loop {
                 match outcome {
                     DrainOutcome::Complete => return Ok(DrainOutcome::Complete),
                     DrainOutcome::Moved { continuation } => {
-                        outcome =
-                            drain(session_id.clone(), false, continuation, promotable).await?;
+                        outcome = drain(
+                            session_id.clone(),
+                            false,
+                            continuation,
+                            promotable,
+                            shutdown.clone(),
+                        )
+                        .await?;
                     }
                     DrainOutcome::Reloaded { force, continuation } => {
-                        outcome =
-                            drain(session_id.clone(), force, continuation, promotable).await?;
+                        outcome = drain(
+                            session_id.clone(),
+                            force,
+                            continuation,
+                            promotable,
+                            shutdown.clone(),
+                        )
+                        .await?;
                     }
                 }
             }
