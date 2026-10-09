@@ -376,7 +376,13 @@ pub fn custom_language_model(
         &custom.base_url,
     )
     .with(RoutePatch {
-        auth: Some(bearer_auth(custom.api_key.clone().map(Secret::Value), &[])),
+        auth: Some(match custom.api_key.clone() {
+            Some(key) => bearer_auth(Some(Secret::Value(key)), &[]),
+            // No configured key: anonymous — v2's openai-compatible
+            // providers send unauthenticated requests when no credential
+            // is configured (local/loopback providers rely on it).
+            None => auth::Definition::none(),
+        }),
         ..Default::default()
     });
     route.model(model_id, None).map_err(|error| ProviderError::Configuration {

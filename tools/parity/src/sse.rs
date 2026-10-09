@@ -503,6 +503,39 @@ pub fn scenario_capture(frames: &[Frame], env: &NormEnv) -> Vec<Value> {
     groups
 }
 
+/// Remove every frame whose payload `type` is in `types` from a capture
+/// (the [`scenario_capture`] form), dropping groups left empty — the
+/// Rust-port replay compares against the reference goldens **on the
+/// intersection**, with the port's legitimately-missing frame types on an
+/// explicit skip-list (documented per scenario in
+/// `tests/rust_scenarios.rs`).
+#[must_use]
+pub fn filter_capture_types(groups: &[Value], types: &[&str]) -> Vec<Value> {
+    groups
+        .iter()
+        .filter_map(|group| {
+            let entries = group.as_array()?;
+            let kept: Vec<Value> = entries
+                .iter()
+                .filter(|entry| {
+                    let frame_type = entry
+                        .get("data")
+                        .and_then(|data| data.get("type"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    !types.contains(&frame_type)
+                })
+                .cloned()
+                .collect();
+            if kept.is_empty() {
+                None
+            } else {
+                Some(Value::Array(kept))
+            }
+        })
+        .collect()
+}
+
 /// First divergence between a golden capture and a fresh capture, both in
 /// the [`scenario_capture`] form (sorted group orderings). Multiset
 /// semantics: groups are paired greedily by equality (order in the sorted

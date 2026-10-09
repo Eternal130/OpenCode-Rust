@@ -6,6 +6,7 @@
 //! captures the remainder (axum 0.8 spellings: `{param}` / `{*name}`).
 //! Consumed by the oc-server dispatch; mirrors oc-client namespaces 1:1.
 #![allow(clippy::struct_excessive_bools)]
+#![allow(clippy::doc_markdown, clippy::must_use_candidate)]
 
 pub const OPENAPI_SHA256: &str = "0612418392961ef22f0337ce0e1e520270917665fc85f29c4af1c94d1e1873ee";
 pub const OPERATION_COUNT: usize = 141;

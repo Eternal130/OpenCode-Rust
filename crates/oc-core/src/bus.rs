@@ -539,6 +539,10 @@ struct Committed {
 #[derive(Clone)]
 pub struct Bus {
     inner: Arc<Inner>,
+    /// The location envelope this handle stamps on publishes that carry
+    /// none (v2's location-scoped bus layer — `Bus.layer(ref)`). `None`
+    /// on the global bus handle; location services hold scoped clones.
+    default_location: Option<location::Ref>,
 }
 
 impl Bus {
@@ -560,7 +564,18 @@ impl Bus {
                 projectors: RwLock::new(HashMap::new()),
                 sessions: RwLock::new(HashMap::new()),
             }),
+            default_location: None,
         }
+    }
+
+    /// A handle that stamps `location` on every publish carrying none
+    /// (v2's location-scoped bus — `Bus.layer(ref)`): location services
+    /// publish session-scoped frames through a scoped clone so the SSE
+    /// grouping keys them by location. Explicit `location`/`global`
+    /// options still win.
+    #[must_use]
+    pub fn scoped(&self, location: location::Ref) -> Self {
+        Self { inner: Arc::clone(&self.inner), default_location: Some(location) }
     }
 
     /// The underlying database (diagnostics/tests).
@@ -616,7 +631,11 @@ impl Bus {
             metadata: options.metadata,
             type_: definition.type_.clone(),
             durable: None,
-            location: if options.global { None } else { options.location },
+            location: if options.global {
+                None
+            } else {
+                options.location.clone().or_else(|| self.default_location.clone())
+            },
             data,
         };
 
@@ -679,7 +698,11 @@ impl Bus {
                 id: input.id.unwrap_or_else(|| self.inner.next_id()),
                 created,
                 metadata: input.metadata,
-                location: if input.global { None } else { input.location },
+                location: if input.global {
+                    None
+                } else {
+                    input.location.clone().or_else(|| self.default_location.clone())
+                },
                 data: input.data,
                 commit: input.commit,
             });

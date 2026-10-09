@@ -78,15 +78,17 @@ intentional and part of the spec.
 | `time`, `timestamp`, `created`, `createdAt`, `updatedAt`, `updated`, `modified`, `startedAt`, `endedAt`, `expiresAt`, `lastUsedAt`, `date`, `started`, `completed`, `streamed`, `ran`, `idle`, `viewed`, `archived`, `at`, `from`, `to`, `next`, `expires`, `published`, `active` | `<TS>` | `<ISO>` (only if the value matches the ISO regex §5.5) |
 | `version` | — | `<VERSION>` (only if the value matches the version regex §5.6) |
 | `slug` | — | `<SLUG>` (only if the value matches the slug regex §5.7: `^[a-z]+-[a-z]+$`) |
-| `projectID`, `id`, `previous` | — | `<PRJ_ID:n>` (only if the value matches the bare sha1 regex §5.7: `^[0-9a-f]{40}$`) |
+| `projectID`, `id`, `previous` | — | `<PRJ_ID:n>` (only if the value matches the bare project-id regex §5.7: `^[0-9a-f]{40}$` or `^[0-9a-f]{64}$`) |
 
 #### Key-gated hash and slug rewrites (reference v2.0.24)
 
 - **Project ids** are not prefixed ids: the reference computes them as
-  `Hash.fast("directory:<dir>")` — a bare sha1 hex digest of the project
-  directory. Sandbox project directories differ per run, so the id does
-  too. Only the exact keys `projectID`, `id`, and `previous` with a
-  40-lowercase-hex value are rewritten (to numbered `<PRJ_ID:n>` tokens
+  `Hash.fast("directory:<dir>")` — a bare sha1 hex digest (40 chars) of
+  the project directory; the Rust port's oc-core `hash_fast` uses sha256
+  (64 chars) for the same identity input. Sandbox project directories
+  differ per run, so the id does too. Only the exact keys `projectID`,
+  `id`, and `previous` with a 40-or-64-lowercase-hex value are rewritten
+  (to numbered `<PRJ_ID:n>` tokens
   through the same first-seen numbering as §5.4, namespace `prj`); the
   fixed project id `"global"` and every other value stay literal, and
   prefixed ids (`evt_…` under `id`) keep flowing through §5.4.
@@ -199,7 +201,7 @@ Three value shapes are rewritten when the *whole string* matches:
 | Shape | Regex | Where | Token |
 | --- | --- | --- | --- |
 | sha256 digest | `^[0-9a-f]{64}$` | any string (content pass) | `<SHA256>` |
-| project id (sha1) | `^[0-9a-f]{40}$` | keys `projectID`/`id`/`previous` (§4) | `<PRJ_ID:n>` |
+| project id (sha1/sha256) | `^[0-9a-f]{40}$` \| `^[0-9a-f]{64}$` | keys `projectID`/`id`/`previous` (§4) | `<PRJ_ID:n>` |
 | generated slug | `^[a-z]+-[a-z]+$` | key `slug` (§4) | `<SLUG>` |
 
 - **sha256**: content-addressed hashes whose *inputs* embed run-specific
@@ -214,7 +216,10 @@ Three value shapes are rewritten when the *whole string* matches:
   stay literal (the pass is whole-string anchored).
 - **sha1 project ids** are keyed, not global, because bare 40-hex strings
   could legitimately appear as content (git SHAs); only the three id keys
-  are rewritten, and only with the exact digest shape.
+  are rewritten, and only with the exact digest shape. The same key gating
+  covers the Rust port's 64-hex sha256 project ids (Phase 5: the key —
+  not the digest length — identifies a project id; unkeyed 64-hex values
+  still collapse to `<SHA256>`).
 
 ## 6. The canonical algorithm (pseudocode)
 

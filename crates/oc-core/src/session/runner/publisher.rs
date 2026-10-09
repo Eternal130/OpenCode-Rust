@@ -84,13 +84,19 @@ struct ToolRecord {
 /// One streaming fragment family (text / reasoning / tool input).
 #[derive(Default)]
 struct Fragments {
-    /// id → (ordinal, values, state).
-    chunks: BTreeMap<String, (u64, Vec<String>, Option<Record>)>,
+    /// id → (ordinal, values, state, pending batch, batch opened at).
+    chunks:
+        BTreeMap<String, (u64, Vec<String>, Option<Record>, String, Option<std::time::Instant>)>,
     next_ordinal: u64,
     /// `true` for text/reasoning (one open fragment at a time).
     single: bool,
     kind: &'static str,
 }
+
+/// v2's `deltaBatchInterval` (publish-llm-event.ts:79): stream deltas
+/// accumulate into a pending batch and publish coalesced — chunks
+/// arriving within the interval merge into one delta frame.
+const DELTA_BATCH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 impl Fragments {
     fn start(&mut self, id: &str, state: Option<Record>) -> PublishResult<u64> {
@@ -102,7 +108,7 @@ impl Fragments {
         }
         let ordinal = self.next_ordinal;
         self.next_ordinal += 1;
-        self.chunks.insert(id.to_string(), (ordinal, Vec::new(), state));
+        self.chunks.insert(id.to_string(), (ordinal, Vec::new(), state, String::new(), None));
         Ok(ordinal)
     }
 
@@ -111,10 +117,56 @@ impl Fragments {
             return defect(format!("{} delta before start: {}", self.kind, id));
         };
         entry.1.push(value.to_string());
+        entry.3.push_str(value);
+        entry.4.get_or_insert_with(std::time::Instant::now);
         if state.is_some() {
             entry.2 = state;
         }
         Ok(entry.0)
+    }
+
+    /// Takes the pending batch for `id` when one is due (v2's batching
+    /// timer: the batch publishes after the interval, on fragment
+    /// boundaries, or on flush — coalescing rapid chunks).
+    fn take_pending(&mut self, id: &str, force: bool) -> Option<(u64, String)> {
+        let entry = self.chunks.get_mut(id)?;
+        if entry.3.is_empty() {
+            return None;
+        }
+        let due =
+            force || entry.4.map(|opened| opened.elapsed() >= DELTA_BATCH_INTERVAL).unwrap_or(true);
+        if !due {
+            return None;
+        }
+        let batch = std::mem::take(&mut entry.3);
+        entry.4 = None;
+        Some((entry.0, batch))
+    }
+
+    /// Every pending batch (publishPending — called on fragment starts
+    /// and before non-delta events).
+    fn pending_batches(&mut self) -> Vec<(String, u64, String)> {
+        let ids = self.ids();
+        let mut out = Vec::new();
+        for id in ids {
+            if let Some((ordinal, batch)) = self.take_pending(&id, true) {
+                out.push((id, ordinal, batch));
+            }
+        }
+        out
+    }
+
+    /// Due batches only (the interval elapsed — checked as stream events
+    /// arrive, standing in for v2's forked timer).
+    fn due_batches(&mut self) -> Vec<(String, u64, String)> {
+        let ids = self.ids();
+        let mut out = Vec::new();
+        for id in ids {
+            if let Some((ordinal, batch)) = self.take_pending(&id, false) {
+                out.push((id, ordinal, batch));
+            }
+        }
+        out
     }
 
     fn end(
@@ -122,14 +174,17 @@ impl Fragments {
         id: &str,
         state: Option<Record>,
         value: Option<&str>,
-    ) -> PublishResult<(u64, String, Option<Record>)> {
-        let Some((ordinal, values, existing)) = self.chunks.remove(id) else {
+    ) -> PublishResult<(u64, String, Option<Record>, Option<String>)> {
+        let Some((ordinal, values, existing, pending, _)) = self.chunks.remove(id) else {
             return defect(format!("{} end before start: {}", self.kind, id));
         };
         let joined = values.join("");
         let text = value.map(str::to_string).unwrap_or(joined);
         let state = state.or(existing);
-        Ok((ordinal, text, state))
+        // An unpublished pending batch flushes with the end (v2's `end`
+        // interrupts the timer and publishes before `ended`).
+        let trailing = (!pending.is_empty()).then_some(pending);
+        Ok((ordinal, text, state, trailing))
     }
 
     fn has(&self, id: &str) -> bool {
@@ -141,7 +196,7 @@ impl Fragments {
     }
 
     fn values_joined(&self, id: &str) -> String {
-        self.chunks.get(id).map(|(_, values, _)| values.join("")).unwrap_or_default()
+        self.chunks.get(id).map(|(_, values, ..)| values.join("")).unwrap_or_default()
     }
 }
 
@@ -180,7 +235,6 @@ pub struct LlmEventPublisher {
     agent: AgentId,
     model: model::Ref,
     provider_metadata_key: String,
-    snapshot: Option<SnapshotId>,
     started: u64,
     // -- single-writer record ------------------------------------------------
     step_started: bool,
@@ -203,7 +257,6 @@ impl LlmEventPublisher {
         agent: AgentId,
         model: model::Ref,
         provider_metadata_key: impl Into<String>,
-        snapshot: Option<SnapshotId>,
         started: u64,
     ) -> Self {
         Self {
@@ -213,7 +266,6 @@ impl LlmEventPublisher {
             agent,
             model,
             provider_metadata_key: provider_metadata_key.into(),
-            snapshot,
             started,
             step_started: false,
             provider_failed: false,
@@ -269,9 +321,6 @@ impl LlmEventPublisher {
         let mut data = self.base();
         data["agent"] = serde_json::json!(self.agent.as_str());
         data["model"] = serde_json::to_value(&self.model).unwrap_or_default();
-        if let Some(snapshot) = &self.snapshot {
-            data["snapshot"] = serde_json::json!(snapshot.as_str());
-        }
         data["started"] = serde_json::json!(self.started);
         self.publish_type("session.step.started", data, PublishOptions::default()).await?;
         Ok(self.assistant_message_id.clone())
@@ -296,6 +345,31 @@ impl LlmEventPublisher {
     // -----------------------------------------------------------------------
     // Text / reasoning fragments
     // -----------------------------------------------------------------------
+
+    /// Publishes every pending text/reasoning delta batch (v2's
+    /// `publishPendingDeltas` — fragment starts and flush boundaries).
+    async fn publish_pending_delta_batches(&mut self) -> PublishResult<()> {
+        for (_id, ordinal, batch) in self.text.pending_batches() {
+            self.publish_text_delta(ordinal, &batch).await?;
+        }
+        for (_id, ordinal, batch) in self.reasoning.pending_batches() {
+            self.publish_reasoning_delta(ordinal, &batch).await?;
+        }
+        Ok(())
+    }
+
+    /// Publishes delta batches whose batching interval elapsed (v2's
+    /// forked timer, approximated on event arrival — publish ORDER is
+    /// preserved: every batch precedes the next published frame).
+    async fn flush_due_delta_batches(&mut self) -> PublishResult<()> {
+        for (_id, ordinal, batch) in self.text.due_batches() {
+            self.publish_text_delta(ordinal, &batch).await?;
+        }
+        for (_id, ordinal, batch) in self.reasoning.due_batches() {
+            self.publish_reasoning_delta(ordinal, &batch).await?;
+        }
+        Ok(())
+    }
 
     async fn publish_text_started(&mut self, ordinal: u64) -> PublishResult<()> {
         self.require_assistant("text started")?;
@@ -410,7 +484,7 @@ impl LlmEventPublisher {
         if !self.tool_input.has(id) {
             return defect(format!("Duplicate tool input end: {id}"));
         }
-        let (ordinal, text, _state) = self.tool_input.end(id, None, value)?;
+        let (ordinal, text, _state, _trailing) = self.tool_input.end(id, None, value)?;
         let mut data = self.base();
         data["id"] = serde_json::json!(id);
         data["text"] = serde_json::json!(text);
@@ -483,8 +557,12 @@ impl LlmEventPublisher {
     // -----------------------------------------------------------------------
 
     /// `publish` (publish-llm-event.ts:401-558). Marks the record
-    /// synchronously before every await.
+    /// synchronously before every await. Stream deltas coalesce per v2's
+    /// `deltaBatchInterval` batching: appends accumulate, the batch
+    /// publishes when due (the next event after the interval), on
+    /// fragment starts, or with the fragment end.
     pub async fn publish(&mut self, event: &LLMEvent) -> PublishResult<()> {
+        self.flush_due_delta_batches().await?;
         match event {
             LLMEvent::StepStart { .. } => {
                 self.start_assistant().await?;
@@ -494,16 +572,20 @@ impl LlmEventPublisher {
                 let state = self.provider_state(provider_metadata.as_ref());
                 let ordinal = self.text.start(id, state)?;
                 self.start_assistant().await?;
+                self.publish_pending_delta_batches().await?;
                 self.publish_text_started(ordinal).await?;
             }
             LLMEvent::TextDelta { id, text, provider_metadata, .. } => {
                 let state = self.provider_state(provider_metadata.as_ref());
-                let ordinal = self.text.append(id, text, state)?;
-                self.publish_text_delta(ordinal, text).await?;
+                self.text.append(id, text, state)?;
             }
             LLMEvent::TextEnd { id, text, provider_metadata, .. } => {
                 let state = self.provider_state(provider_metadata.as_ref());
-                let (ordinal, joined, state) = self.text.end(id, state, text.as_deref())?;
+                let (ordinal, joined, state, trailing) =
+                    self.text.end(id, state, text.as_deref())?;
+                if let Some(batch) = trailing {
+                    self.publish_text_delta(ordinal, &batch).await?;
+                }
                 self.publish_text_ended(ordinal, &joined, state).await?;
             }
             LLMEvent::ReasoningStart { id, provider_metadata, .. } => {
@@ -511,16 +593,20 @@ impl LlmEventPublisher {
                 let state = self.provider_state(provider_metadata.as_ref());
                 let ordinal = self.reasoning.start(id, state.clone())?;
                 self.start_assistant().await?;
+                self.publish_pending_delta_batches().await?;
                 self.publish_reasoning_started(ordinal, state).await?;
             }
             LLMEvent::ReasoningDelta { id, text, provider_metadata, .. } => {
                 let state = self.provider_state(provider_metadata.as_ref());
-                let ordinal = self.reasoning.append(id, text, state)?;
-                self.publish_reasoning_delta(ordinal, text).await?;
+                self.reasoning.append(id, text, state)?;
             }
             LLMEvent::ReasoningEnd { id, text, provider_metadata, .. } => {
                 let state = self.provider_state(provider_metadata.as_ref());
-                let (ordinal, joined, state) = self.reasoning.end(id, state, text.as_deref())?;
+                let (ordinal, joined, state, trailing) =
+                    self.reasoning.end(id, state, text.as_deref())?;
+                if let Some(batch) = trailing {
+                    self.publish_reasoning_delta(ordinal, &batch).await?;
+                }
                 self.publish_reasoning_ended(ordinal, &joined, state).await?;
             }
             LLMEvent::ToolInputStart { id, name, provider_executed, .. } => {
@@ -817,11 +903,17 @@ impl LlmEventPublisher {
     /// `flush` — end every open fragment.
     pub async fn flush(&mut self) -> PublishResult<()> {
         for id in self.text.ids() {
-            let (ordinal, text, state) = self.text.end(&id, None, None)?;
+            let (ordinal, text, state, trailing) = self.text.end(&id, None, None)?;
+            if let Some(batch) = trailing {
+                self.publish_text_delta(ordinal, &batch).await?;
+            }
             self.publish_text_ended(ordinal, &text, state).await?;
         }
         for id in self.reasoning.ids() {
-            let (ordinal, text, state) = self.reasoning.end(&id, None, None)?;
+            let (ordinal, text, state, trailing) = self.reasoning.end(&id, None, None)?;
+            if let Some(batch) = trailing {
+                self.publish_reasoning_delta(ordinal, &batch).await?;
+            }
             self.publish_reasoning_ended(ordinal, &text, state).await?;
         }
         for id in self.tool_input.ids() {
@@ -931,7 +1023,7 @@ impl LlmEventPublisher {
             }
         }
         if let Some(cost) = &details.cost {
-            data["cost"] = serde_json::json!(cost.0 .0);
+            data["cost"] = crate::session::runner::usd_json(cost);
         }
         if let Some(tokens) = &details.tokens {
             data["tokens"] = crate::session::runner::tokens_json(tokens);
@@ -973,7 +1065,7 @@ impl LlmEventPublisher {
             data["providerState"] = state;
         }
         if let Some(cost) = &details.cost {
-            data["cost"] = serde_json::json!(cost.0 .0);
+            data["cost"] = crate::session::runner::usd_json(cost);
         }
         if let Some(tokens) = &details.tokens {
             data["tokens"] = crate::session::runner::tokens_json(tokens);

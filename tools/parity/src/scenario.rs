@@ -67,7 +67,7 @@
 //! flow then runs through the real session pipeline deterministically.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -75,8 +75,41 @@ use serde_json::{json, Value};
 
 use crate::golden;
 use crate::minih;
-use crate::reference::ReferenceServer;
+use crate::normalize::NormEnv;
 use crate::sse::{self, Frame, SseStream};
+
+/// A server a [`ScenarioSpec`] can run against: the reference v2.0.24
+/// server ([`crate::reference::ReferenceServer`]) or the Rust port
+/// ([`crate::rust_server::RustServer`]) — the same scripts drive both.
+pub trait ScenarioHost {
+    /// Base URL, e.g. `http://127.0.0.1:54321`.
+    fn url(&self) -> &str;
+
+    /// The Basic-auth password for API requests (username is `opencode`).
+    fn password(&self) -> &str;
+
+    /// Sandbox directory backing this server (HOME, TMPDIR, logs, and the
+    /// scenario project directory).
+    fn sandbox(&self) -> &Path;
+
+    /// A [`NormEnv`] preloaded with this server's sandbox roots (override
+    /// to add roots).
+    fn norm_env(&self) -> NormEnv {
+        NormEnv::new().with_root(self.sandbox().to_string_lossy().to_string())
+    }
+}
+
+impl ScenarioHost for crate::reference::ReferenceServer {
+    fn url(&self) -> &str {
+        self.url()
+    }
+    fn password(&self) -> &str {
+        self.password()
+    }
+    fn sandbox(&self) -> &Path {
+        self.sandbox()
+    }
+}
 
 /// One scripted scenario: collection budget + identity. The steps are kept
 /// separate (callers pass a `&[Step]`) so the spec stays data.
@@ -221,9 +254,10 @@ pub fn encode_query_value(value: &str) -> String {
 
 /// Run `steps` against a freshly-subscribed SSE stream on `server`, collect
 /// per the spec, and return the capture. `server` must be a live
-/// [`ReferenceServer`] (see [`drive_and_golden`] for the full test shape).
+/// [`ScenarioHost`] (see [`drive_and_golden`] for the full test shape).
+#[allow(clippy::too_many_lines)]
 pub async fn drive(
-    server: &ReferenceServer,
+    server: &impl ScenarioHost,
     spec: &ScenarioSpec,
     steps: &[Step],
 ) -> Result<Outcome> {
@@ -317,8 +351,28 @@ pub async fn drive(
         if let Step::ExpectFrames { frame_type, min } = step {
             let have = count_frames_of_type(&frames, frame_type);
             if have < *min {
+                let mut census = std::collections::BTreeMap::new();
+                for frame in &frames {
+                    if let Some(found) =
+                        serde_json::from_str::<Value>(&frame.data).ok().and_then(|value| {
+                            value.get("type").and_then(Value::as_str).map(str::to_string)
+                        })
+                    {
+                        *census.entry(found).or_insert(0usize) += 1;
+                    }
+                }
+                let mut failures = Vec::new();
+                for frame in &frames {
+                    if let Ok(value) = serde_json::from_str::<Value>(&frame.data) {
+                        if value.get("type").and_then(Value::as_str)
+                            == Some("session.execution.failed")
+                        {
+                            failures.push(value.to_string());
+                        }
+                    }
+                }
                 return Err(anyhow!(
-                    "scenario {}: expected at least {min} frame(s) of type {frame_type}, captured {have} ({} total data frames)",
+                    "scenario {}: expected at least {min} frame(s) of type {frame_type}, captured {have} ({} total data frames; census: {census:?}; execution failures: {failures:?})",
                     spec.name,
                     frames.len()
                 ));
@@ -333,7 +387,7 @@ pub async fn drive(
 /// Run a scenario end-to-end (drive + golden assert). Returns the outcome
 /// for extra caller-side assertions.
 pub async fn drive_and_golden(
-    server: &ReferenceServer,
+    server: &impl ScenarioHost,
     spec: &ScenarioSpec,
     steps: &[Step],
 ) -> Result<Outcome> {
@@ -387,7 +441,7 @@ pub fn assert_golden(spec: &ScenarioSpec, groups: &[Value]) -> Result<()> {
 /// The sandbox project directory scenarios operate on (inside the server's
 /// sandbox, so every emitted path normalizes under `<SANDBOX>`).
 #[must_use]
-pub fn project_dir(server: &ReferenceServer) -> PathBuf {
+pub fn project_dir(server: &impl ScenarioHost) -> PathBuf {
     server.sandbox().join("project")
 }
 
@@ -559,6 +613,174 @@ fn content_length(head: &[u8]) -> usize {
             }
         })
         .unwrap_or(0)
+}
+
+// ---------------------------------------------------------------------------
+// The canonical scenario scripts
+// ---------------------------------------------------------------------------
+
+/// The canonical scenario scripts (the five goldens under
+/// `goldens/scenarios/`). Shared by the reference replay
+/// (`tests/scenarios.rs`) and the Rust-port replay
+/// (`tests/rust_scenarios.rs`) so both sides run byte-identical steps.
+pub mod scripts {
+    use super::{FakeLlm, ScenarioSpec, Step};
+    use serde_json::json;
+
+    /// One named scenario: its spec and steps.
+    pub struct Script {
+        pub spec: ScenarioSpec,
+        pub steps: Vec<Step>,
+    }
+
+    /// The canonical script for `name`, plus the [`FakeLlm`] it needs
+    /// (`prompt_fake_llm`).
+    #[allow(clippy::needless_pass_by_value, clippy::too_many_lines, clippy::must_use_candidate)]
+    pub fn build(name: &str, fake: Option<&FakeLlm>) -> Option<Script> {
+        let script = match name {
+            "session_lifecycle" => Script {
+                spec: ScenarioSpec::new(
+                    "session_lifecycle",
+                    "POST /api/session (create) -> PATCH rename -> GET list -> DELETE; session lifecycle frames",
+                ),
+                steps: vec![
+                    Step::request(
+                        "POST",
+                        "/api/session",
+                        Some(json!({
+                            "title": "parity lifecycle",
+                            "location": { "directory": "{project_dir}" }
+                        })),
+                    )
+                    .capture("session_id", "/data/id"),
+                    Step::request(
+                        "PATCH",
+                        "/api/session/{session_id}",
+                        Some(json!({ "title": "parity renamed" })),
+                    ),
+                    Step::request_nobody("GET", "/api/session"),
+                    Step::request_nobody("DELETE", "/api/session/{session_id}").expect(204),
+                    Step::expect_frames("session.created", 1),
+                    Step::expect_frames("session.renamed", 1),
+                    Step::expect_frames("session.deleted", 1),
+                ],
+            },
+            "config_touch" => Script {
+                spec: ScenarioSpec::new(
+                    "config_touch",
+                    "boot project location -> create opencode.json -> modify it; config.updated frames",
+                ),
+                steps: vec![
+                    Step::request_nobody("GET", "/api/location?location[directory]={project_dir_q}"),
+                    Step::write_file(
+                        "{project_dir}/opencode.json",
+                        "{\n  \"username\": \"parity-one\"\n}\n",
+                    ),
+                    // Let the watcher's 100 ms reload debounce fire (and the
+                    // reload's config.updated land) before the second write,
+                    // so each modification gets its own reload.
+                    Step::sleep_ms(800),
+                    Step::write_file(
+                        "{project_dir}/opencode.json",
+                        "{\n  \"username\": \"parity-two\"\n}\n",
+                    ),
+                    Step::expect_frames("config.updated", 2),
+                ],
+            },
+            "permission_saved" => Script {
+                spec: ScenarioSpec::new(
+                    "permission_saved",
+                    "ask permission (save) -> reply always -> GET /api/permission/saved -> DELETE row",
+                ),
+                steps: vec![
+                    Step::request(
+                        "POST",
+                        "/api/session",
+                        Some(json!({
+                            "title": "parity permission",
+                            "location": { "directory": "{project_dir}" }
+                        })),
+                    )
+                    .capture("session_id", "/data/id"),
+                    // Warm-up ask (see the reference quirk note in
+                    // tests/scenarios.rs): frame-less either way on the
+                    // reference (cold Permission service short-circuits to
+                    // deny) and on the port (warm service rules allow the
+                    // read) — it makes the real ask below deterministic.
+                    Step::request(
+                        "POST",
+                        "/api/session/{session_id}/permission",
+                        Some(json!({ "action": "read", "resources": ["/etc/parity-warmup"] })),
+                    ),
+                    Step::request(
+                        "POST",
+                        "/api/session/{session_id}/permission",
+                        Some(json!({
+                            "action": "external_directory",
+                            "resources": ["/etc/parity-readonly"],
+                            "save": ["/etc/parity-readonly"]
+                        })),
+                    )
+                    .capture("request_id", "/data/id"),
+                    Step::request(
+                        "POST",
+                        "/api/session/{session_id}/permission/{request_id}/reply",
+                        Some(json!({ "decision": "always" })),
+                    )
+                    .expect(204),
+                    Step::request_nobody(
+                        "GET",
+                        "/api/permission/saved?location[directory]={project_dir_q}",
+                    )
+                    .capture("saved_id", "/data/0/id"),
+                    Step::request_nobody("DELETE", "/api/permission/saved/{saved_id}").expect(204),
+                    Step::expect_frames("permission.asked", 1),
+                    Step::expect_frames("permission.replied", 1),
+                ],
+            },
+            "location_reload" => Script {
+                spec: ScenarioSpec::new(
+                    "location_reload",
+                    "boot project location -> POST /api/location/reload; location.shutdown frames",
+                ),
+                steps: vec![
+                    Step::request_nobody("GET", "/api/location?location[directory]={project_dir_q}"),
+                    Step::request_nobody("POST", "/api/location/reload").expect(204),
+                    Step::expect_frames("location.shutdown", 1),
+                ],
+            },
+            "prompt_fake_llm" => {
+                let fake = fake?;
+                Script {
+                    spec: ScenarioSpec::new(
+                        "prompt_fake_llm",
+                        "config-seeded openai-compatible provider -> fake local LLM -> prompt/message flow frames",
+                    ),
+                    steps: vec![
+                        Step::write_file("{project_dir}/opencode.json", fake.provider_config()),
+                        Step::request(
+                            "POST",
+                            "/api/session",
+                            Some(json!({
+                                "title": "parity prompt",
+                                "location": { "directory": "{project_dir}" },
+                                "model": { "providerID": "parityfake", "id": "fake-model" }
+                            })),
+                        )
+                        .capture("session_id", "/data/id"),
+                        Step::request(
+                            "POST",
+                            "/api/session/{session_id}/prompt",
+                            Some(json!({ "text": "Say hello." })),
+                        ),
+                        Step::expect_frames("session.text.delta", 1),
+                    ],
+                }
+            }
+            _ => return None,
+        };
+        Some(script)
+    }
 }
 
 #[cfg(test)]
