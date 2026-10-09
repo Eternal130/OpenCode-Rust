@@ -157,7 +157,6 @@ async fn version_banner_is_pinned() {
 }
 
 #[tokio::test]
-#[ignore = "wave-6a in-flight: standalone child does not discover the seeded custom-provider config (engine falls back to 302ai) — resume in wave 6a"]
 async fn run_standalone_default_format_renders_v2_output() {
     let fake = FakeLlm::start("Rust fake says hi").await;
     let sandbox = sandbox("default");
@@ -190,7 +189,6 @@ async fn run_standalone_default_format_renders_v2_output() {
 }
 
 #[tokio::test]
-#[ignore = "wave-6a in-flight: standalone child does not discover the seeded custom-provider config (engine falls back to 302ai) — resume in wave 6a"]
 async fn run_standalone_json_format_emits_event_lines() {
     let fake = FakeLlm::start("JSON fake says hello").await;
     let sandbox = sandbox("json");
