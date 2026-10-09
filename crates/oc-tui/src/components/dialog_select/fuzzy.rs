@@ -487,6 +487,19 @@ pub fn go_keys<T: Clone>(
     score_fn: impl Fn(&[f64]) -> f64,
     threshold: Option<f64>,
 ) -> Vec<Ranked<T>> {
+    go_keys_with(search, targets, keys, move |_, scores| score_fn(scores), threshold)
+}
+
+/// [`go_keys`] with the target handed to the score function — for
+/// scoreFns that read the entry itself (the prompt autocomplete's
+/// prefix-doubling rule, e.g. `display.startsWith("/" + query)`).
+pub fn go_keys_with<T: Clone>(
+    search: &str,
+    targets: &[T],
+    keys: &[fn(&T) -> Option<String>],
+    score_fn: impl Fn(&T, &[f64]) -> f64,
+    threshold: Option<f64>,
+) -> Vec<Ranked<T>> {
     let trimmed = search.trim();
     if trimmed.is_empty() {
         return Vec::new();
@@ -574,7 +587,7 @@ pub fn go_keys<T: Clone>(
 
         // scoreFn over normalized per-key scores (0 for missing keys).
         let normalized: Vec<f64> = key_scores.iter().map(|score| normalize_score(*score)).collect();
-        let combined = score_fn(&normalized);
+        let combined = score_fn(target, &normalized);
         if combined == 0.0 || combined.is_nan() {
             continue;
         }

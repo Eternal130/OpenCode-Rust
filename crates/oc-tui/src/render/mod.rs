@@ -7,5 +7,5 @@ pub mod frame;
 pub mod paint;
 
 pub use ansi::serialize_canonical;
-pub use frame::{Cell, CellColor, Frame};
+pub use frame::{Cell, CellColor, Frame, CONTINUATION};
 pub use paint::{paint_placed, paint_placed_with_fills, to_frame, Fill};

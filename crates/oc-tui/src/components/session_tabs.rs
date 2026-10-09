@@ -5,21 +5,26 @@
 //!
 //! Golden scope (`session-tabs-{horizontal,vertical}` @80/160): two
 //! tabs, first carries an unread-activity indicator, second is active,
-//! detail line "project", the add affordance present. The full component
-//! surface — marquee scrolling, context menus, drag reordering, motion
-//! (width springs), and per-cell glow/gradient backgrounds — lands with
-//! later waves; text-grid parity is what this wave pins.
+//! detail line "project", the add affordance present. Since 7.2 wave 2
+//! the frames are **text + canonical ANSI byte-exact**: the resting
+//! unread glow (per-cell pulse backgrounds, per-character title tints,
+//! the separator's outer falloff) ports the deterministic math in
+//! [`crate::components::tab_pulse`] — sustain state only; the
+//! time-varying envelopes (ignition/release/sweep/flash, marquee,
+//! motion springs) stay C2.
 
-// Tab widths/gaps are terminal dimensions (far below 2^23), so the
-// pedantic usize→f32 cast lints carry no real risk here.
-#![allow(clippy::cast_precision_loss)]
+// Tab widths/gaps are terminal dimensions (far below 2^16/2^23), so
+// the pedantic usize→u16/f32 cast lints carry no real risk here, and
+// the golden renderers read as one geometry pass per surface.
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
+use crate::components::tab_pulse::{glow_text_color, resting_glow_bg, tint, Rgb, GLOW_TAIL};
 use crate::layout::{BoxSpec, LayoutTree, Placed, PlacedLine, StyledSpan};
-use crate::render::{paint_placed, Frame};
+use crate::render::{paint_placed_with_fills, Fill, Frame};
 use crate::store::{SessionTab, Unread};
 use crate::theme::ThemeStyles;
 use crate::wrap::take_width;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use taffy::AvailableSpace;
 
 /// `SESSION_TAB_WIDTH` / `SESSION_TAB_MAX_WIDTH` / `SESSION_TAB_MIN_WIDTH`.
@@ -248,16 +253,73 @@ pub struct TabView {
     pub detail: Option<String>,
 }
 
+/// A renderer's output: placed text runs plus the background fills
+/// they sit on (pulse gradients arrive as fills; the frame base fill
+/// is applied by the painter).
+#[derive(Debug, Default)]
+pub struct TabRender {
+    pub placed: Vec<Placed>,
+    pub fills: Vec<Fill>,
+}
+
+/// Merge consecutive 1-row cells with equal style into rect fills.
+fn fill_runs(y: u16, cells: &[Style], x0: u16) -> Vec<Fill> {
+    let mut fills = Vec::new();
+    let mut start = 0usize;
+    for index in 1..=cells.len() {
+        if index == cells.len() || cells[index] != cells[start] {
+            fills.push(Fill {
+                x: x0 + start as u16,
+                y,
+                width: (index - start) as u16,
+                height: 1,
+                style: cells[start],
+            });
+            start = index;
+        }
+    }
+    fills
+}
+
+fn rgb(color: Color) -> Rgb {
+    match color {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => (0, 0, 0),
+    }
+}
+
+fn color(rgb: Rgb) -> Color {
+    Color::Rgb(rgb.0, rgb.1, rgb.2)
+}
+
+/// `tabFeedbackColor ?? unreadColor` — the hue a glow renders in.
+fn glow_hue(status: TabStatus, theme: &ThemeStyles) -> Rgb {
+    if status.attention.is_none() && status.unread == Some(Unread::Error) {
+        rgb(theme.error)
+    } else {
+        rgb(theme.accent)
+    }
+}
+
+/// The glow color each surface derives from its pulse background:
+/// the bar tints with `glowLevel()` (1) as the alpha; the rail's title
+/// pulse uses 0.45, detail 0.25, separator outer 0.1.
+fn glow_over(background: Rgb, hue: Rgb, alpha: f64) -> Rgb {
+    tint(background, hue, alpha)
+}
+
 /// The horizontal tab strip (height 1). Renders `[overflow-left] tabs…
 /// [overflow-right] " + "` like `HorizontalSessionTabs` with animations
-/// off; returns the placed runs plus the strip width consumed.
+/// off; the unread tab paints its full-width resting pulse (per-cell
+/// backgrounds) and per-character tinted title.
 #[must_use]
 pub fn render_bar(
     tabs: &[TabView],
     active: Option<&str>,
     show_plus: bool,
     available: usize,
-) -> Vec<Placed> {
+    theme: &ThemeStyles,
+) -> TabRender {
     let owned: Vec<SessionTab> = tabs.iter().map(|view| view.tab.clone()).collect();
     let layout = adaptive_session_tab_layout(
         &owned,
@@ -266,170 +328,522 @@ pub fn render_bar(
         0,
     );
     let number_width = tabs.len().to_string().len().max(2);
-    let style = Style::new();
+    // `background()`: tint(base, decrease(raised.base), selection) —
+    // `decrease` of the gray raised surface resolves to raised.high
+    // (30,30,30) in v2-dark; `ThemeStyles::background_prompt` carries
+    // exactly that decrease for the composer, reuse it.
+    let selected_bg = theme.background_prompt;
     let mut tree = LayoutTree::new();
     let mut children = Vec::new();
+    let mut fills = Vec::new();
     if layout.before > 0 {
         children.push(tree.text_sized(
             &format!("‹{}", layout.before),
-            style,
+            Style::new().fg(theme.text_muted.fg.unwrap_or_default()).bg(theme.background),
             &BoxSpec::default().width(session_tab_overflow_width(layout.before) as f32).shrink(0.0),
         ));
     }
     // The visible window of the adaptive layout parallels `tabs` in
     // order (`layout.tabs` is its clone) — iterate the source views.
     let window: &[TabView] = &tabs[layout.start..layout.start + layout.tabs.len()];
+    let mut tab_x = if layout.before > 0 { session_tab_overflow_width(layout.before) } else { 0 };
     for (index, view) in window.iter().enumerate() {
         let width = layout.widths[index];
-        let glyph = view.status.indicator_label();
-        // The indicator glyph renders right-aligned in a (numberWidth+1)
-        // box with one trailing pad; an empty label leaves the reserved
-        // slot blank (numbers mode paints ordinals — 7.2).
-        let indicator = if glyph.is_empty() {
-            tree.box_node(
-                &BoxSpec::default().width((number_width + 1) as f32).shrink(0.0).padding_right(1.0),
-                &[],
-            )
-        } else {
-            let leaf = tree.text_sized(glyph, style, &BoxSpec::default().shrink(0.0));
-            tree.box_node(
-                &BoxSpec::default()
-                    .width((number_width + 1) as f32)
-                    .shrink(0.0)
-                    .padding_right(1.0)
-                    .justify_end(),
-                &[leaf],
-            )
-        };
-        let title = view.tab.title.clone().unwrap_or_else(|| "Untitled session".into());
-        let title_width = width.saturating_sub(1 + number_width).max(1);
-        // Styled-segment leaf (single span): the trivially-equivalent
-        // migration proving the styled path subsumes plain leaves.
-        let title_leaf = tree.text_styled(
-            vec![StyledSpan { text: take_width(&title, title_width), style }],
-            &BoxSpec::default().width(title_width as f32).shrink(0.0),
-        );
-        children.push(tree.box_node(
-            &BoxSpec::default().width(width as f32).shrink(0.0),
-            &[indicator, title_leaf],
+        bar_tab_fills(&mut fills, view, active, theme, tab_x, width, selected_bg);
+        children.push(bar_tab_node(
+            &mut tree,
+            view,
+            active,
+            theme,
+            width,
+            number_width,
+            selected_bg,
         ));
+        tab_x += width;
     }
+    let mut plus_x = tab_x;
     if layout.after > 0 {
         children.push(tree.text_sized(
             &format!(" {}›", layout.after),
-            style,
+            Style::new().fg(theme.text_muted.fg.unwrap_or_default()).bg(theme.background),
             &BoxSpec::default().width(session_tab_overflow_width(layout.after) as f32).shrink(0.0),
         ));
-    }
-    if show_plus {
-        children.push(tree.text_sized(
-            " + ",
-            style,
-            &BoxSpec::default().width(ADD_TAB_WIDTH as f32).shrink(0.0),
-        ));
+        plus_x += session_tab_overflow_width(layout.after);
     }
     let strip = tree.box_node(&BoxSpec::row().height(1.0), &children);
     tree.set_root(strip);
-    tree.compute((available as f32, AvailableSpace::Definite(1.0))).placed
+    let mut placed = tree.compute((available as f32, AvailableSpace::Definite(1.0))).placed;
+    if show_plus {
+        placed.push(add_affordance(plus_x, theme));
+    }
+    TabRender { placed, fills }
+}
+
+/// One bar tab's background fills: the resting pulse per cell while
+/// glowing, else the flat tab background.
+#[allow(clippy::too_many_arguments)]
+fn bar_tab_fills(
+    fills: &mut Vec<Fill>,
+    view: &TabView,
+    active: Option<&str>,
+    theme: &ThemeStyles,
+    tab_x: usize,
+    width: usize,
+    selected_bg: Color,
+) {
+    let selected = Some(view.tab.session_id.as_str()) == active;
+    let tab_bg = if selected { selected_bg } else { theme.background };
+    if !view.status.glows(selected) {
+        fills.push(Fill {
+            x: tab_x as u16,
+            y: 0,
+            width: width as u16,
+            height: 1,
+            style: Style::new().bg(tab_bg),
+        });
+        return;
+    }
+    let glow = glow_over(rgb(tab_bg), glow_hue(view.status, theme), 1.0);
+    let cells: Vec<Style> = (0..width)
+        .map(|cell| {
+            Style::new().fg(Color::Reset).bg(color(resting_glow_bg(
+                rgb(tab_bg),
+                glow,
+                cell,
+                width,
+                GLOW_TAIL,
+                1.0,
+            )))
+        })
+        .collect();
+    fills.extend(fill_runs(0, &cells, tab_x as u16));
+}
+
+/// One bar tab's layout node: the indicator glyph and the title runs
+/// (per-character glow tints while glowing — `characterColor`).
+#[allow(clippy::too_many_arguments)]
+fn bar_tab_node(
+    tree: &mut LayoutTree,
+    view: &TabView,
+    active: Option<&str>,
+    theme: &ThemeStyles,
+    width: usize,
+    number_width: usize,
+    selected_bg: Color,
+) -> taffy::NodeId {
+    let selected = Some(view.tab.session_id.as_str()) == active;
+    let tab_bg = if selected { selected_bg } else { theme.background };
+    let glows = view.status.glows(selected);
+    let hue = glow_hue(view.status, theme);
+    let glow = glow_over(rgb(tab_bg), hue, 1.0);
+    let glyph = view.status.indicator_label();
+    // The indicator glyph renders right-aligned in a (numberWidth+1)
+    // box with one trailing pad; an empty label leaves the reserved
+    // slot blank (numbers mode paints ordinals — 7.2).
+    let indicator = if glyph.is_empty() {
+        tree.box_node(
+            &BoxSpec::default().width((number_width + 1) as f32).shrink(0.0).padding_right(1.0),
+            &[],
+        )
+    } else {
+        // The glyph right-aligns at column numberWidth − 1.
+        let bg_at_glyph = if glows {
+            color(resting_glow_bg(
+                rgb(tab_bg),
+                glow,
+                number_width.saturating_sub(1),
+                width,
+                GLOW_TAIL,
+                1.0,
+            ))
+        } else {
+            tab_bg
+        };
+        let fg = if view.status.unread.is_some() || view.status.attention.is_some() {
+            Color::Rgb(hue.0, hue.1, hue.2)
+        } else {
+            theme.text.fg.unwrap_or(Color::Rgb(255, 255, 255))
+        };
+        let leaf = tree.text_sized(
+            glyph,
+            Style::new().fg(fg).bg(bg_at_glyph),
+            &BoxSpec::default().shrink(0.0),
+        );
+        tree.box_node(
+            &BoxSpec::default()
+                .width((number_width + 1) as f32)
+                .shrink(0.0)
+                .padding_right(1.0)
+                .justify_end(),
+            &[leaf],
+        )
+    };
+    let title = view.tab.title.clone().unwrap_or_else(|| "Untitled session".into());
+    let title_width = width.saturating_sub(1 + number_width).max(1);
+    let title_text = take_width(&title, title_width);
+    let foreground = if selected {
+        theme.text.fg.unwrap_or(Color::Rgb(255, 255, 255))
+    } else {
+        theme.text_muted.fg.unwrap_or(Color::Rgb(128, 128, 128))
+    };
+    let bold =
+        if selected { ratatui::style::Modifier::BOLD } else { ratatui::style::Modifier::empty() };
+    let spans: Vec<StyledSpan> = if glows {
+        title_text
+            .chars()
+            .enumerate()
+            .map(|(cell, ch)| {
+                let column = 1 + number_width + cell;
+                StyledSpan {
+                    text: ch.to_string(),
+                    style: Style::new()
+                        .fg(color(glow_text_color(rgb(foreground), glow, column, width, 1.0)))
+                        .bg(color(resting_glow_bg(
+                            rgb(tab_bg),
+                            glow,
+                            column,
+                            width,
+                            GLOW_TAIL,
+                            1.0,
+                        )))
+                        .add_modifier(bold),
+                }
+            })
+            .collect()
+    } else {
+        vec![StyledSpan {
+            text: title_text,
+            style: Style::new().fg(foreground).bg(tab_bg).add_modifier(bold),
+        }]
+    };
+    let title_leaf =
+        tree.text_styled(spans, &BoxSpec::default().width(title_width as f32).shrink(0.0));
+    tree.box_node(&BoxSpec::default().width(width as f32).shrink(0.0), &[indicator, title_leaf])
+}
+
+/// The `" + "` affordance, placed directly (the wrap seam eats the
+/// trailing pad space of a tree leaf at some widths — 160 — and the
+/// golden bytes pin it verbatim).
+fn add_affordance(x: usize, theme: &ThemeStyles) -> Placed {
+    Placed {
+        x,
+        y: 0,
+        width: ADD_TAB_WIDTH,
+        lines: vec![PlacedLine {
+            runs: vec![StyledSpan {
+                text: " + ".to_owned(),
+                style: Style::new()
+                    .fg(theme.text_muted.fg.unwrap_or_default())
+                    .bg(theme.background),
+            }],
+        }],
+        tag: Some("session-tabs.add".to_owned()),
+    }
 }
 
 /// The vertical rail: padding-top 1, one 2-row tab block per session
 /// (title row + detail row, gap 1), the `+ New session` slot, and the
 /// unread-glow separator rows (▄ × `INDICATOR_WIDTH`) above a tab whose
-/// predecessor glows (`TabPulse` static rendering with animations off).
+/// predecessor glows — each surface with its own resting pulse
+/// (title 0.45/tail 8, detail 0.25/tail 8, separator outer 0.1/tail 5).
 #[must_use]
 pub fn render_rail(
     tabs: &[TabView],
     active: Option<&str>,
     show_add: bool,
     width: usize,
-) -> Vec<Placed> {
+    theme: &ThemeStyles,
+) -> TabRender {
     let compact = width < SESSION_TABS_COMPACT_BREAKPOINT;
-    let style = Style::new();
     let number_width = tabs.len().to_string().len().max(2);
     let prefix_width = number_width + 1;
     let title_width = (width.saturating_sub(prefix_width + 1)).max(1);
+    let rail_bg = theme.background_raised;
+    let muted = theme.text_muted.fg.unwrap_or(Color::Rgb(128, 128, 128));
     let mut tree = LayoutTree::new();
     let mut blocks = Vec::new();
     for (index, view) in tabs.iter().enumerate() {
-        let glyph = view.status.indicator_label();
-        let indicator = if glyph.is_empty() {
-            tree.box_node(
-                &BoxSpec::default().width((number_width + 1) as f32).shrink(0.0).padding_right(1.0),
-                &[],
-            )
-        } else {
-            let leaf = tree.text_sized(glyph, style, &BoxSpec::default().shrink(0.0));
-            tree.box_node(
-                &BoxSpec::default()
-                    .width((number_width + 1) as f32)
-                    .shrink(0.0)
-                    .padding_right(1.0)
-                    .justify_end(),
-                &[leaf],
-            )
-        };
-        let title = view.tab.title.clone().unwrap_or_else(|| "Untitled session".into());
-        // Styled-segment leaf carrying the placement tag (single span —
-        // trivially-equivalent styled migration).
-        let title_leaf = tree.text_styled_tagged(
-            vec![StyledSpan { text: take_width(&title, title_width), style }],
-            format!("tab-title:{index}"),
-        );
-        let title_box =
-            tree.box_node(&BoxSpec::default().width(title_width as f32).shrink(0.0), &[title_leaf]);
-        let title_row =
-            tree.box_node(&BoxSpec::row().height(1.0).padding_right(1.0), &[indicator, title_box]);
-        let detail = view.detail.clone().unwrap_or_default();
-        let detail_leaf = tree.text_styled(
-            vec![StyledSpan { text: take_width(&detail, title_width), style }],
-            &BoxSpec::default().shrink(0.0),
-        );
-        let detail_row = tree.box_node(
-            &BoxSpec::row().height(1.0).padding_left(prefix_width as f32).padding_right(2.0),
-            &[detail_leaf],
-        );
-        blocks.push(tree.box_node(
-            &BoxSpec::column().height(if compact { 1.0 } else { 2.0 }),
-            &[title_row, detail_row],
+        blocks.push(rail_tab_block(
+            &mut tree,
+            view,
+            index,
+            active,
+            theme,
+            width,
+            number_width,
+            prefix_width,
+            title_width,
+            compact,
         ));
     }
     if show_add {
-        let plus = tree.text_sized("+", style, &BoxSpec::default().width(2.0).shrink(0.0));
-        let label = tree.text_sized(NEW_SESSION_TAB_TITLE, style, &BoxSpec::default().shrink(0.0));
-        blocks.push(tree.box_node(
-            &BoxSpec::row().height(1.0).padding_left(if compact { 0.0 } else { 1.0 }),
-            &[plus, label],
-        ));
+        blocks.push(rail_add_row(&mut tree, theme, rail_bg, muted, compact));
     }
     let rail =
         tree.box_node(&BoxSpec::column().width(width as f32).padding_top(1.0).gap(1.0), &blocks);
     tree.set_root(rail);
     let mut placed = tree.compute((width as f32, AvailableSpace::MaxContent)).placed;
-    // Separator rows: above tab i when tab i-1 glows (the golden's ▄ row
-    // between First and Second).
-    for index in 1..tabs.len() {
-        let previous = &tabs[index - 1];
-        let previous_selected = Some(previous.tab.session_id.as_str()) == active;
-        if previous.status.glows(previous_selected) {
-            if let Some(title) =
-                placed.iter().find(|p| p.tag.as_deref() == Some(&format!("tab-title:{index}")))
-            {
-                let y = title.y.saturating_sub(1);
-                placed.push(Placed {
-                    x: 0,
-                    y,
-                    width: INDICATOR_WIDTH,
-                    lines: vec![PlacedLine::plain(
-                        SEPARATOR_GLYPH.to_string().repeat(INDICATOR_WIDTH),
-                        style,
-                    )],
-                    tag: Some(format!("separator:{index}")),
-                });
-            }
+    let fills = rail_pulse_fills(tabs, active, theme, &placed);
+    rail_separators(tabs, active, theme, &mut placed);
+    TabRender { placed, fills }
+}
+
+/// One rail tab's 2-row block: the indicator + tinted title row, the
+/// detail row over its pulse. One function per surface row keeps the
+/// reference's own row-at-a-time shape readable.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn rail_tab_block(
+    tree: &mut LayoutTree,
+    view: &TabView,
+    index: usize,
+    active: Option<&str>,
+    theme: &ThemeStyles,
+    width: usize,
+    number_width: usize,
+    prefix_width: usize,
+    title_width: usize,
+    compact: bool,
+) -> taffy::NodeId {
+    let selected = Some(view.tab.session_id.as_str()) == active;
+    let glows = view.status.glows(selected);
+    let hue = glow_hue(view.status, theme);
+    let rail_bg = theme.background_raised;
+    let text_base = theme.text.fg.unwrap_or(Color::Rgb(255, 255, 255));
+    let muted = theme.text_muted.fg.unwrap_or(Color::Rgb(128, 128, 128));
+    // The pulse backgrounds sit on `pulseBackground` — tint(bg,
+    // tabBackground, tabBackground.a); the selected rail tab's
+    // action surface is transparent (a=0), so every golden state
+    // resolves to the rail background.
+    let pulse_bg = rgb(rail_bg);
+    let title_glow = glow_over(pulse_bg, hue, 0.45);
+    let detail_glow = glow_over(pulse_bg, hue, 0.25);
+    let bold =
+        if selected { ratatui::style::Modifier::BOLD } else { ratatui::style::Modifier::empty() };
+    let glyph = view.status.indicator_label();
+    let indicator = if glyph.is_empty() {
+        tree.box_node(
+            &BoxSpec::default().width((number_width + 1) as f32).shrink(0.0).padding_right(1.0),
+            &[],
+        )
+    } else {
+        let fg = if view.status.unread.is_some() || view.status.attention.is_some() {
+            Color::Rgb(hue.0, hue.1, hue.2)
+        } else {
+            muted
+        };
+        // The glyph right-aligns at column numberWidth − 1.
+        let bg = if glows {
+            color(resting_glow_bg(
+                pulse_bg,
+                title_glow,
+                number_width.saturating_sub(1),
+                INDICATOR_WIDTH,
+                GLOW_TAIL,
+                1.0,
+            ))
+        } else {
+            rail_bg
+        };
+        let leaf =
+            tree.text_sized(glyph, Style::new().fg(fg).bg(bg), &BoxSpec::default().shrink(0.0));
+        tree.box_node(
+            &BoxSpec::default()
+                .width((number_width + 1) as f32)
+                .shrink(0.0)
+                .padding_right(1.0)
+                .justify_end(),
+            &[leaf],
+        )
+    };
+    // `titleColor`: per-character glow tints while glowing (level 1 —
+    // the eased `titleGlow` rests at 1 with animations off), flat
+    // otherwise.
+    let title = view.tab.title.clone().unwrap_or_else(|| "Untitled session".into());
+    let title_text = take_width(&title, title_width);
+    let foreground = if selected { text_base } else { muted };
+    let spans: Vec<StyledSpan> = if glows && !compact {
+        title_text
+            .chars()
+            .enumerate()
+            .map(|(cell, ch)| {
+                let column = 1 + number_width + cell;
+                StyledSpan {
+                    text: ch.to_string(),
+                    style: Style::new()
+                        .fg(color(glow_text_color(rgb(foreground), title_glow, column, width, 1.0)))
+                        .bg(color(resting_glow_bg(
+                            pulse_bg,
+                            title_glow,
+                            column,
+                            INDICATOR_WIDTH,
+                            GLOW_TAIL,
+                            1.0,
+                        )))
+                        .add_modifier(bold),
+                }
+            })
+            .collect()
+    } else {
+        vec![StyledSpan {
+            text: title_text,
+            style: Style::new().fg(foreground).bg(rail_bg).add_modifier(bold),
+        }]
+    };
+    // Styled-segment leaf carrying the placement tag.
+    let title_leaf = tree.text_styled_tagged(spans, format!("tab-title:{index}"));
+    let title_box =
+        tree.box_node(&BoxSpec::default().width(title_width as f32).shrink(0.0), &[title_leaf]);
+    let title_row =
+        tree.box_node(&BoxSpec::row().height(1.0).padding_right(1.0), &[indicator, title_box]);
+    // `detailColor` = tint(muted, pulseBackground, 0.35); the
+    // per-character glow applies only while detail-fading (marquee) —
+    // flat here, over the detail pulse cells.
+    let detail = view.detail.clone().unwrap_or_default();
+    let detail_fg = color(tint(rgb(muted), pulse_bg, 0.35));
+    let detail_text = take_width(&detail, title_width);
+    let detail_spans: Vec<StyledSpan> = if glows && !compact {
+        detail_text
+            .chars()
+            .enumerate()
+            .map(|(cell, ch)| StyledSpan {
+                text: ch.to_string(),
+                style: Style::new().fg(detail_fg).bg(color(resting_glow_bg(
+                    pulse_bg,
+                    detail_glow,
+                    prefix_width + cell,
+                    INDICATOR_WIDTH,
+                    10.0,
+                    1.0,
+                ))),
+            })
+            .collect()
+    } else {
+        vec![StyledSpan { text: detail_text, style: Style::new().fg(detail_fg).bg(rail_bg) }]
+    };
+    let detail_leaf = tree.text_styled(detail_spans, &BoxSpec::default().shrink(0.0));
+    let detail_row = tree.box_node(
+        &BoxSpec::row().height(1.0).padding_left(prefix_width as f32).padding_right(2.0),
+        &[detail_leaf],
+    );
+    tree.box_node(
+        &BoxSpec::column().height(if compact { 1.0 } else { 2.0 }),
+        &[title_row, detail_row],
+    )
+}
+
+/// The `+ New session` slot: `idleNumber` = `tint(formfield.base,
+/// background, 0.55)` for the `+`; the label stays muted.
+fn rail_add_row(
+    tree: &mut LayoutTree,
+    theme: &ThemeStyles,
+    rail_bg: Color,
+    muted: Color,
+    compact: bool,
+) -> taffy::NodeId {
+    let idle = tint(rgb(theme.formfield_base), rgb(rail_bg), 0.55);
+    let plus = tree.text_sized(
+        "+",
+        Style::new().fg(color(idle)).bg(rail_bg),
+        &BoxSpec::default().width(2.0).shrink(0.0),
+    );
+    let label = tree.text_sized(
+        NEW_SESSION_TAB_TITLE,
+        Style::new().fg(muted).bg(rail_bg),
+        &BoxSpec::default().shrink(0.0),
+    );
+    tree.box_node(
+        &BoxSpec::row().height(1.0).padding_left(if compact { 0.0 } else { 1.0 }),
+        &[plus, label],
+    )
+}
+
+/// The rail's pulse fills: per glowing tab, the title row's strip
+/// (glow α 0.45, tail clamped to 8) and the detail row's (α 0.25,
+/// glowTail prop 10 → still 8).
+fn rail_pulse_fills(
+    tabs: &[TabView],
+    active: Option<&str>,
+    theme: &ThemeStyles,
+    placed: &[Placed],
+) -> Vec<Fill> {
+    let rail_bg = theme.background_raised;
+    let mut fills = Vec::new();
+    for (index, view) in tabs.iter().enumerate() {
+        let selected = Some(view.tab.session_id.as_str()) == active;
+        if !view.status.glows(selected) {
+            continue;
+        }
+        let Some(title) =
+            placed.iter().find(|p| p.tag.as_deref() == Some(&format!("tab-title:{index}")))
+        else {
+            continue;
+        };
+        let pulse_bg = rgb(rail_bg);
+        let hue = glow_hue(view.status, theme);
+        for (y, alpha, tail) in [(title.y, 0.45, GLOW_TAIL), (title.y + 1, 0.25, 10.0)] {
+            let glow = glow_over(pulse_bg, hue, alpha);
+            let cells: Vec<Style> = (0..INDICATOR_WIDTH)
+                .map(|cell| {
+                    Style::new().fg(Color::Reset).bg(color(resting_glow_bg(
+                        pulse_bg,
+                        glow,
+                        cell,
+                        INDICATOR_WIDTH,
+                        tail,
+                        1.0,
+                    )))
+                })
+                .collect();
+            fills.extend(fill_runs(y as u16, &cells, 0));
         }
     }
-    placed
+    fills
+}
+
+/// The unread-glow separator rows: `▄` × `INDICATOR_WIDTH` above the tab
+/// following a glowing tab (outer α 0.1, tail 5; the inner voice is
+/// idle for a non-glowing successor, so the glyph fg is the plain
+/// background).
+fn rail_separators(
+    tabs: &[TabView],
+    active: Option<&str>,
+    theme: &ThemeStyles,
+    placed: &mut Vec<Placed>,
+) {
+    for (index, view) in tabs.iter().enumerate() {
+        let selected = Some(view.tab.session_id.as_str()) == active;
+        if !view.status.glows(selected) || index + 1 >= tabs.len() {
+            continue;
+        }
+        let Some(next) =
+            placed.iter().find(|p| p.tag.as_deref() == Some(&format!("tab-title:{}", index + 1)))
+        else {
+            continue;
+        };
+        let y = next.y.saturating_sub(1);
+        let pulse_bg = rgb(theme.background_raised);
+        let outer_glow = glow_over(pulse_bg, glow_hue(view.status, theme), 0.1);
+        let runs: Vec<StyledSpan> = (0..INDICATOR_WIDTH)
+            .map(|cell| StyledSpan {
+                text: SEPARATOR_GLYPH.to_string(),
+                style: Style::new().fg(theme.background_raised).bg(color(resting_glow_bg(
+                    pulse_bg,
+                    outer_glow,
+                    cell,
+                    INDICATOR_WIDTH,
+                    5.0,
+                    1.0,
+                ))),
+            })
+            .collect();
+        placed.push(Placed {
+            x: 0,
+            y,
+            width: INDICATOR_WIDTH,
+            lines: vec![PlacedLine { runs }],
+            tag: Some(format!("separator:{}", index + 1)),
+        });
+    }
 }
 
 /// Paint the horizontal strip frame (golden scenario shape).
@@ -441,8 +855,13 @@ pub fn paint_bar(
     size: (u16, u16),
     theme: &ThemeStyles,
 ) -> Frame {
-    let placed = render_bar(tabs, active, show_plus, usize::from(size.0));
-    paint_placed(&placed, size, Style::new().bg(theme.background))
+    let render = render_bar(tabs, active, show_plus, usize::from(size.0), theme);
+    paint_placed_with_fills(
+        &render.placed,
+        &render.fills,
+        size,
+        Style::new().fg(crate::components::tool_rows::DEFAULT_FOREGROUND).bg(theme.background),
+    )
 }
 
 /// Paint the vertical rail frame (golden scenario shape).
@@ -455,8 +874,21 @@ pub fn paint_rail(
     theme: &ThemeStyles,
 ) -> Frame {
     let width = SESSION_SIDEBAR_WIDTH.min(usize::from(size.0));
-    let placed = render_rail(tabs, active, show_add, width);
-    paint_placed(&placed, size, Style::new().bg(theme.background_raised))
+    let render = render_rail(tabs, active, show_add, width, theme);
+    let mut fills = vec![Fill {
+        x: 0,
+        y: 0,
+        width: width as u16,
+        height: size.1,
+        style: Style::new().bg(theme.background_raised),
+    }];
+    fills.extend(render.fills);
+    paint_placed_with_fills(
+        &render.placed,
+        &fills,
+        size,
+        Style::new().fg(crate::components::tool_rows::DEFAULT_FOREGROUND).bg(theme.background),
+    )
 }
 
 #[cfg(test)]

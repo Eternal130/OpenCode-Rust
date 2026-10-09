@@ -90,9 +90,55 @@ pub struct ThemeStyles {
     /// `text.feedback.warning.base` (the reasoning-group header tint
     /// derives from it at 0.6 alpha).
     pub warning: Color,
+    /// `text.action.secondary.base` (the diff-viewer source switch
+    /// label; 7.2 wave 2 diff lane).
+    pub action_secondary: Color,
+    /// The `theme.diff.*` palette (7.2 wave 2 diff viewer).
+    pub diff: DiffStyles,
+    /// `text.formfield.base` (the rail add-slot's `idleNumber` tint
+    /// derives from it at 0.55).
+    pub formfield_base: Color,
+    /// `background.action.primary.focused` — the autocomplete
+    /// selected-row background (7.2 wave 2 composer).
+    pub action_focused_bg: Color,
+    /// `text.action.primary.focused` — the selected row's text.
+    pub action_focused_fg: Color,
+    /// `theme.decrease(background.raised.base)` — the composer's prompt
+    /// background (`promptBg`, also the selected tab pill's lift in the
+    /// horizontal bar).
+    pub background_prompt: Color,
     /// Agent identity colors (`local.agent.color`: categorical hues at
     /// step 200, deduped, index-modulo).
     pub agent_colors: [Color; 5],
+}
+
+/// The `theme.diff.*` token palette — the diff viewer's gutter, sign
+/// and row-background colors (`feature-plugins/system/diff-viewer.tsx`
+/// consumes exactly these).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DiffStyles {
+    /// `diff.text.added` — the `+N` count glyphs.
+    pub text_added: Color,
+    /// `diff.text.removed` — the `-N` count glyphs.
+    pub text_removed: Color,
+    /// `diff.text.hunkHeader` — the `@@ -a,b +c,d @@` rows.
+    pub hunk_header: Color,
+    /// `diff.background.added` — added-row text background.
+    pub background_added: Color,
+    /// `diff.background.removed` — removed-row text background.
+    pub background_removed: Color,
+    /// `diff.background.context` — the patch card + context rows.
+    pub background_context: Color,
+    /// `diff.highlight.added` — the ` +` sign.
+    pub highlight_added: Color,
+    /// `diff.highlight.removed` — the ` -` sign.
+    pub highlight_removed: Color,
+    /// `diff.lineNumber.text` — gutter numbers.
+    pub line_number: Color,
+    /// `diff.lineNumber.background.added` — added-row gutter.
+    pub line_number_added: Color,
+    /// `diff.lineNumber.background.removed` — removed-row gutter.
+    pub line_number_removed: Color,
 }
 
 /// The markdown token palette (`theme.markdown.*`) — 7.2 lane C's
@@ -146,6 +192,27 @@ impl ThemeStyles {
                 horizontal_rule: rgba(md.horizontal_rule),
             },
             warning: rgba(tokens.text.feedback.warning.base),
+            formfield_base: rgba(tokens.text.formfield.base),
+            action_focused_bg: rgba(tokens.background.action.primary.focused),
+            action_focused_fg: rgba(tokens.text.action.primary.focused),
+            background_prompt: {
+                let decreased = tokens.decrease(tokens.background.raised.base, 1.0);
+                rgba(decreased)
+            },
+            action_secondary: rgba(tokens.text.action.secondary.base),
+            diff: DiffStyles {
+                text_added: rgba(tokens.diff.text.added),
+                text_removed: rgba(tokens.diff.text.removed),
+                hunk_header: rgba(tokens.diff.text.hunk_header),
+                background_added: rgba(tokens.diff.background.added),
+                background_removed: rgba(tokens.diff.background.removed),
+                background_context: rgba(tokens.diff.background.context),
+                highlight_added: rgba(tokens.diff.highlight.added),
+                highlight_removed: rgba(tokens.diff.highlight.removed),
+                line_number: rgba(tokens.diff.line_number.text),
+                line_number_added: rgba(tokens.diff.line_number.background.added),
+                line_number_removed: rgba(tokens.diff.line_number.background.removed),
+            },
             agent_colors,
         }
     }
