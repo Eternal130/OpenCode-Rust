@@ -361,6 +361,17 @@ impl ToolExecuteWithContext for ShellExecute {
                 run,
             });
 
+            // `Effect.onInterrupt` (shell.ts:234,259): dropping this future
+            // mid-run — the runner's tool-fiber bell — removes the process
+            // and cancels the job. Disarmed on every completing return.
+            let mut cancel_guard = ShellCancelGuard {
+                shell: deps.shell.clone(),
+                jobs: deps.jobs.clone(),
+                shell_id: info.id.clone(),
+                job_id: job.id.clone(),
+                armed: true,
+            };
+
             let notify_when_done =
                 |job_id: String, shell_info: oc_schema::shell::Info, command: String| {
                     let jobs = deps.jobs.clone();
@@ -412,10 +423,12 @@ impl ToolExecuteWithContext for ShellExecute {
                 deps.jobs.background(&job.id).await;
                 notify_when_done(job.id.clone(), info.clone(), info.command.clone());
                 let output = background_result(info.id.as_str(), &info.file);
+                cancel_guard.disarm();
                 return Ok(tool_result(&output));
             }
 
             let result = deps.jobs.block(&job.id, context.session_id.as_str()).await;
+            cancel_guard.disarm();
             match result {
                 Some(BlockResult::Backgrounded { .. }) => {
                     deps.shell.timeout(&info.id, 0).await.ok();
@@ -464,6 +477,40 @@ fn decode_messages(payload: &str) -> String {
     serde_json::from_str::<ShellToolOutput>(payload)
         .map(|output| result_messages(&output).join("\n\n"))
         .unwrap_or_else(|_| payload.to_string())
+}
+
+/// The `Effect.onInterrupt` translation: future-drop (the runner's
+/// tool-fiber cancel) fires the same cleanup v2 runs on fiber interrupt —
+/// remove the process, cancel the job. Fire-and-forget (Drop cannot
+/// await); both operations are idempotent.
+struct ShellCancelGuard {
+    shell: crate::shell::Shell,
+    jobs: crate::jobs::Jobs,
+    shell_id: oc_schema::id::ShellId,
+    job_id: String,
+    armed: bool,
+}
+
+impl ShellCancelGuard {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ShellCancelGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let shell = self.shell.clone();
+        let jobs = self.jobs.clone();
+        let shell_id = self.shell_id.clone();
+        let job_id = self.job_id.clone();
+        tokio::spawn(async move {
+            let _ = shell.remove(&shell_id).await;
+            jobs.cancel(&job_id).await;
+        });
+    }
 }
 
 fn tool_result(output: &ShellToolOutput) -> ToolOutcome {

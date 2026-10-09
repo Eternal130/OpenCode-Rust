@@ -65,6 +65,8 @@ pub struct SessionRunner {
     /// The snapshot service for step settlements (`None` disables the
     /// bracket; Wave C1).
     snapshot: Option<Arc<dyn crate::snapshot::SnapshotService>>,
+    /// The tool-output budget service (`None` publishes raw tool results).
+    tool_output: Option<Arc<crate::tool_output::ToolOutput>>,
     /// `FiberMap`-equivalent for title generation: one live task per
     /// session, `onlyIfMissing`.
     title_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
@@ -103,6 +105,7 @@ impl SessionRunner {
             ids,
             location_closed,
             snapshot: None,
+            tool_output: None,
             title_tasks: Mutex::new(HashMap::new()),
         }
     }
@@ -115,16 +118,25 @@ impl SessionRunner {
         self
     }
 
+    /// Attaches the shared tool-output budget service: settled tool
+    /// results pass through `toolOutput.truncate` (step.ts:122) before
+    /// the terminal publish.
+    #[must_use]
+    pub fn with_tool_output(mut self, service: Arc<crate::tool_output::ToolOutput>) -> Self {
+        self.tool_output = Some(service);
+        self
+    }
+
     /// The injectable drain for
     /// [`crate::session::execution::SessionExecution::new`].
     #[must_use]
     pub fn drain_fn(self: &Arc<Self>) -> crate::session::execution::DrainFn {
         let runner = Arc::clone(self);
-        Arc::new(move |session_id, force, continuation, promotable| {
+        Arc::new(move |session_id, force, continuation, promotable, shutdown| {
             let runner = Arc::clone(&runner);
             Box::pin(async move {
                 runner
-                    .drain(&session_id, force, continuation, promotable)
+                    .drain(&session_id, force, continuation, promotable, shutdown)
                     .await
                     .map_err(run_error_of)
             })
@@ -138,6 +150,7 @@ impl SessionRunner {
         force: bool,
         continuation: Option<Continuation>,
         promotable: Promotable,
+        shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<DrainOutcome, RunFailure> {
         let mut force = force;
         let mut continuing = continuation.is_some();
@@ -173,7 +186,7 @@ impl SessionRunner {
                 .await?;
             match next {
                 Boundary::Ready(context, ready_step) => {
-                    let needs_continuation = self.run_step(context, ready_step).await?;
+                    let needs_continuation = self.run_step(context, ready_step, &shutdown).await?;
                     step = ready_step + 1;
                     force = false;
                     entering = false;
@@ -451,7 +464,12 @@ impl SessionRunner {
     /// `runStep` (llm.ts:206-297): owns logical Step policy; each attempt
     /// owns its streaming, tools, and durable settlement. Returns the
     /// step's `needsContinuation` (the drain's next `continuing`).
-    async fn run_step(&self, first: Box<Loaded>, step: u32) -> Result<bool, RunFailure> {
+    async fn run_step(
+        &self,
+        first: Box<Loaded>,
+        step: u32,
+        shutdown: &tokio::sync::watch::Receiver<bool>,
+    ) -> Result<bool, RunFailure> {
         let session_id = SessionId::parse(first.session.id.clone())
             .unwrap_or_else(|error| SessionId(error.value));
         let mut assistant_message_id = self.new_message_id();
@@ -564,6 +582,8 @@ impl SessionRunner {
                 bus: self.bus.clone(),
                 llm: Arc::clone(&self.llm),
                 snapshot: self.snapshot.clone(),
+                tool_output: self.tool_output.clone(),
+                shutdown: shutdown.clone(),
             };
             let input = AttemptInput {
                 session_id: session_id.clone(),
