@@ -87,8 +87,12 @@ struct ReferenceServer {
 impl ReferenceServer {
     async fn stop(mut self) {
         if let Some(pgid) = self.child.id() {
-            let _ =
-                std::process::Command::new("kill").args(["-TERM", &format!("-{pgid}")]).status();
+            // Incident 2026-10 rule: filtered group signal (see oc-util procutil).
+            oc_util::procutil::signal_group_filtered(
+                pgid,
+                libc::SIGTERM,
+                &["bun", "opencode", "oc-server", "node"],
+            );
         }
         if tokio::time::timeout(Duration::from_secs(5), self.child.wait())
             .await
@@ -709,6 +713,18 @@ async fn session_projector_replay_parities_reference() {
                     "{table} {} time_updated drifted: {rust_ms} vs {reference_ms}",
                     rust["id"]
                 );
+            }
+            // Claim bookkeeping (`time_suspended`, `resume_attempts`) is
+            // written DIRECTLY by SessionStore.claim/release (never through
+            // durable events — a shutdown-interrupted execution KEEPS its
+            // claim), so a pure event replay cannot reproduce it. Excluded
+            // from replay parity; the live claim/release semantics are
+            // covered by the store unit tests.
+            if table == "session_v2" {
+                let _ = rust_columns.remove("time_suspended");
+                let _ = rust_columns.remove("resume_attempts");
+                let _ = reference_columns.remove("time_suspended");
+                let _ = reference_columns.remove("resume_attempts");
             }
             assert_eq!(
                 serde_json::Value::Object(rust_columns),

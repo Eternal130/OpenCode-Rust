@@ -68,6 +68,12 @@ async fn fs_read_containment_and_list_shape() {
     std::fs::write(workspace.join("inside.txt"), "contained payload").expect("write");
     std::fs::create_dir_all(workspace.join("notes")).expect("notes dir");
     std::fs::write(workspace.join("notes").join("x.txt"), "nested payload").expect("write");
+    std::fs::write(workspace.join("report 100%.txt"), "percent payload").expect("percent file");
+    std::fs::write(workspace.join("a%2Fb.txt"), "literal-escape payload")
+        .expect("escape-name file");
+    std::fs::create_dir_all(workspace.join("a")).expect("a dir");
+    std::fs::write(workspace.join("a").join("b.txt"), "wrong payload")
+        .expect("double-decoded file");
     let parent = workspace.parent().expect("parent").to_path_buf();
     let grandparent = parent.parent().expect("grandparent").to_path_buf();
     std::fs::write(parent.join("secret.txt"), "parent secret").expect("parent secret");
@@ -123,6 +129,21 @@ async fn fs_read_containment_and_list_shape() {
     // `..` alone resolves to the filesystem root — outside the location.
     let response = get("/api/fs/read/..".to_owned()).await;
     assert_eq!(response.status, 500);
+
+    // Names containing a literal `%` survive exactly one percent-decode
+    // (axum's `Path`): a bare `%` passes through …
+    let response = get("/api/fs/read/report%20100%25.txt".to_owned()).await;
+    assert_eq!(response.status, 200, "literal percent in name must read");
+    assert_eq!(response.text(), "percent payload");
+    // … and `%2F` in a FILE NAME must not be decoded into a separator by a
+    // second decode pass (the old double-decode read `a/b.txt` instead).
+    let response = get("/api/fs/read/a%252Fb.txt".to_owned()).await;
+    assert_eq!(response.status, 200, "encoded slash in name must read the literal file");
+    assert_eq!(
+        response.text(),
+        "literal-escape payload",
+        "double-decoding would resolve a%2Fb.txt to a/b.txt"
+    );
 
     // fs.list: v2 wire shape — entries RELATIVE to the location directory,
     // directories with a trailing separator.

@@ -96,13 +96,19 @@ impl RustServer {
 /// `process_group(0)`).
 #[allow(unsafe_code)]
 fn signal_group(pid: u32, signal: i32) -> Result<()> {
-    let group = i32::try_from(pid).context("pid out of range")?;
-    // SAFETY: libc::kill with a validated integer pgid and signal number.
-    let result = unsafe { libc::kill(-group, signal) };
-    if result == 0 {
+    // Incident 2026-10 rule: filtered group signal — members must look like
+    // our tooling (bun/opencode/node family) via /proc cmdline allowlist;
+    // never a blind `kill(-pgid)` on a possibly recycled id. The leader's
+    // live-or-zombie /proc entry pins the group during the scan.
+    let delivered = oc_util::procutil::signal_group_filtered(
+        pid,
+        signal,
+        &["bun", "opencode", "oc-server", "node", "cargo"],
+    );
+    if delivered > 0 {
         Ok(())
     } else {
-        Err(anyhow!("kill(-{group}, {signal}) failed"))
+        Err(anyhow!("signal_group_filtered({pid}) matched no processes"))
     }
 }
 
@@ -176,6 +182,13 @@ pub struct RustSpawn<'a> {
 
 /// Spawn the Rust server and wait until `GET /api/info` answers 200.
 pub async fn spawn_rust(options: RustSpawn<'_>) -> Result<RustServer> {
+    // Ref-dir self-healing (shared with the reference spawner): the Rust
+    // server mirrors the reference cwd when the checkout exists, so keep it
+    // alive too. A failed rebuild is logged and skipped — the Rust server
+    // itself never needs the checkout.
+    if let Err(error) = crate::reference::ensure_reference_checkout() {
+        eprintln!("[parity] reference checkout rebuild skipped: {error}");
+    }
     let binary = server_binary()?;
     let port = free_port()?;
     let sandbox = std::env::var("PARITY_SANDBOX_ROOT")

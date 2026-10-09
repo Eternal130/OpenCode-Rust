@@ -114,7 +114,9 @@ pub fn registration_same(left: &Registration, right: &Registration) -> bool {
         && left.pid == right.pid
 }
 
-/// Atomic registration write: `<file>.<id>.tmp` mode 0600 → rename.
+/// Atomic registration write: `<file>.<id>.tmp` mode 0600 → rename, plus
+/// the generation sidecar (`<file>.boot` with `boot_id` + process start
+/// time) that later stops use to refuse signalling recycled PIDs.
 pub fn write_registration(file: &Path, info: &Registration) -> io::Result<()> {
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent)?;
@@ -122,7 +124,9 @@ pub fn write_registration(file: &Path, info: &Registration) -> io::Result<()> {
     let temp = file
         .with_extension(format!("{}.tmp", info.id.clone().unwrap_or_else(|| "anon".to_owned())));
     write_private(&temp, serde_json::to_string(info).expect("registration serializes").as_bytes())?;
-    std::fs::rename(&temp, file)
+    std::fs::rename(&temp, file)?;
+    crate::safekill::write_expectation(file, info.pid);
+    Ok(())
 }
 
 /// `0o600` file write.
@@ -665,9 +669,15 @@ impl Contender {
         String::from_utf8_lossy(&guard).trim().to_owned()
     }
 
+    /// `release()` (service-contender.ts:49): DETACH — stop tracking, never
+    /// signal. A contender that won the race *is* the daemon: killing it on
+    /// scope exit was murdering every freshly ensured background service the
+    /// moment the first client's `ensure()` returned. The loser exits on its
+    /// own (EADDRINUSE contender stand-down / registration self-heal).
     fn release(mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let _ = self.child.stdin.take();
+        let _ = self.child.stdout.take();
+        drop(self.child);
     }
 }
 
@@ -1004,58 +1014,70 @@ pub async fn stop(options: StopOptions) {
     }
 }
 
-/// `terminate()`: re-read (abort when changed), signal, escalate, remove.
+/// `terminate()`: re-read (abort when changed), SAFE-signal, escalate, remove.
+///
+/// Signals go through [`crate::safekill::safe_signal`] with the
+/// registration's generation expectation (boot sidecar) — a stale record
+/// (machine rebooted / PID recycled / foreign non-opencode target) is
+/// DELETED and logged, never signalled (production incident 2026-10).
 async fn terminate(info: &Registration, file: Option<&Path>, timing: EnsureTiming) {
     let current = read_registration(file);
     if !current.is_some_and(|current| registration_same(&current, info)) {
         return;
     }
-    signal(info.pid, "TERM");
-    if !wait_until_stopped(info.pid, timing).await {
-        signal(info.pid, "KILL");
-        if !wait_until_stopped(info.pid, timing).await {
-            eprintln!("Server process {} is still running", info.pid);
+    let registration_path = file.map_or_else(registration_fallback, ToOwned::to_owned);
+    let expect = crate::safekill::read_expectation(&registration_path)
+        .unwrap_or(crate::safekill::Expectation::Foreign);
+    match crate::safekill::safe_signal(info.pid, crate::safekill::Signal::Term, &expect) {
+        crate::safekill::SignalOutcome::Delivered => {}
+        outcome => {
+            eprintln!(
+                "Refusing to signal pid {} recorded by an old service registration ({:?}); removing the stale record",
+                info.pid, outcome
+            );
+            let _ = tokio::fs::remove_file(&registration_path).await;
+            let _ = tokio::fs::remove_file(crate::safekill::boot_sidecar(&registration_path)).await;
             return;
+        }
+    }
+    if !wait_until_stopped(info.pid, Some(&expect), timing).await {
+        if let crate::safekill::SignalOutcome::Delivered =
+            crate::safekill::safe_signal(info.pid, crate::safekill::Signal::Kill, &expect)
+        {
+            if !wait_until_stopped(info.pid, Some(&expect), timing).await {
+                eprintln!("Server process {} is still running", info.pid);
+                return;
+            }
+        } else {
+            eprintln!(
+                "Refusing to escalate to SIGKILL for pid {} (record went stale mid-stop)",
+                info.pid
+            );
         }
     }
     let latest = read_registration(file);
     if !latest.is_some_and(|latest| registration_same(&latest, info)) {
         return;
     }
-    let file = file.map_or_else(registration_fallback, ToOwned::to_owned);
-    let _ = tokio::fs::remove_file(file).await;
+    let _ = tokio::fs::remove_file(&registration_path).await;
+    let _ = tokio::fs::remove_file(crate::safekill::boot_sidecar(&registration_path)).await;
 }
 
-/// Sends a signal via the `kill` utility (no libc dependency in this crate).
-fn signal(pid: u32, name: &str) {
-    let _ = Command::new("kill").arg(format!("-{name}")).arg(pid.to_string()).status();
+/// Whether `pid` is alive — NO signalling (pure `/proc` read; zombies count
+/// as dead; with a generation expectation a recycled start time also reads
+/// dead). Replaces the old `kill(pid, 0)` probe.
+fn process_alive(pid: u32, expect: Option<&crate::safekill::Expectation>) -> bool {
+    crate::safekill::process_alive(pid, expect)
 }
 
-/// Whether `pid` is alive (`kill(pid, 0)`). Zombies count as dead — Rust
-/// does not auto-reap children the way Node's runtime does, so a dropped
-/// `Child` that exited would otherwise look immortal.
-fn process_alive(pid: u32) -> bool {
-    if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        // ... ) Z  ...
-        if let Some(rest) = stat.rsplit(')').next() {
-            if rest.trim_start().starts_with('Z') {
-                return false;
-            }
-        }
-    }
-    Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-async fn wait_until_stopped(pid: u32, timing: EnsureTiming) -> bool {
+async fn wait_until_stopped(
+    pid: u32,
+    expect: Option<&crate::safekill::Expectation>,
+    timing: EnsureTiming,
+) -> bool {
     let mut attempts = 0;
     loop {
-        if !process_alive(pid) {
+        if !process_alive(pid, expect) {
             return true;
         }
         if attempts >= timing.stop_poll_attempts {
@@ -1272,6 +1294,22 @@ pub fn decode_inherited_handoff(raw: Option<&str>) -> Option<serde_json::Value> 
 // ===========================================================================
 // serve() (process.ts listen/start)
 // ===========================================================================
+
+/// `waitForStdinClose()` (server-process.ts:199): the stdio ownership lease.
+/// Resolves when stdin reaches EOF or is closed — the OS closes the pipe even
+/// when the parent is killed before finalizers run, which is the whole point
+/// of the lease. A blocking read runs on the dedicated runtime thread.
+pub async fn wait_stdin_eof() {
+    use tokio::io::AsyncReadExt;
+    let mut stdin = tokio::io::stdin();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match stdin.read(&mut chunk).await {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+    }
+}
 
 /// Options for [`serve`].
 pub struct ServeOptions {
@@ -1744,8 +1782,129 @@ mod tests {
         })
         .await;
 
-        assert!(!process_alive(pid), "process terminated");
+        assert!(!process_alive(pid, None), "process terminated");
         assert!(!file.exists(), "registration removed");
+    }
+
+    /// Incident regression (2026-10): a registration from a PREVIOUS boot
+    /// must never be signalled — the PID may now belong to a system
+    /// service. The record is removed instead.
+    #[tokio::test]
+    async fn server_lifecycle_stop_refuses_stale_boot_record() {
+        let mut sleeper = Command::new("sleep").arg("300").spawn().expect("sleep");
+        let pid = sleeper.id();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("service.json");
+        let info = Registration {
+            id: Some("srv_oldboot".to_owned()),
+            version: Some("2.0.24".to_owned()),
+            url: "http://127.0.0.1:1".to_owned(),
+            pid,
+            password: None,
+        };
+        write_registration(&file, &info).expect("write");
+        // Corrupt the generation sidecar: wrong boot id (as if the machine
+        // had rebooted since the record was written).
+        let record = crate::safekill::BootRecord {
+            boot_id: "ffffffff-ffff-ffff-ffff-ffffffffffff".to_owned(),
+            start_time: crate::safekill::proc_start_time(pid).unwrap_or(0),
+        };
+        std::fs::write(
+            crate::safekill::boot_sidecar(&file),
+            serde_json::to_string(&record).unwrap(),
+        )
+        .expect("sidecar");
+
+        stop(StopOptions {
+            file: Some(file.clone()),
+            pty: PtyStop::Clear,
+            timing: EnsureTiming::default(),
+        })
+        .await;
+
+        assert!(
+            process_alive(pid, None),
+            "stale-boot record must NOT be signalled — target could be an innocent process"
+        );
+        assert!(!file.exists(), "stale record removed");
+        let _ = sleeper.kill();
+        let _ = sleeper.wait();
+    }
+
+    /// Incident regression: same-boot record whose PID was recycled (start
+    /// time no longer matches) must not be signalled.
+    #[tokio::test]
+    async fn server_lifecycle_stop_refuses_recycled_pid_record() {
+        let mut sleeper = Command::new("sleep").arg("300").spawn().expect("sleep");
+        let pid = sleeper.id();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("service.json");
+        let info = Registration {
+            id: Some("srv_recycled".to_owned()),
+            version: Some("2.0.24".to_owned()),
+            url: "http://127.0.0.1:1".to_owned(),
+            pid,
+            password: None,
+        };
+        write_registration(&file, &info).expect("write");
+        let record = crate::safekill::BootRecord {
+            boot_id: crate::safekill::boot_id().unwrap_or_default(),
+            start_time: crate::safekill::proc_start_time(pid).unwrap_or(0).wrapping_add(7),
+        };
+        std::fs::write(
+            crate::safekill::boot_sidecar(&file),
+            serde_json::to_string(&record).unwrap(),
+        )
+        .expect("sidecar");
+
+        stop(StopOptions {
+            file: Some(file.clone()),
+            pty: PtyStop::Clear,
+            timing: EnsureTiming::default(),
+        })
+        .await;
+
+        assert!(process_alive(pid, None), "recycled-pid record must NOT be signalled");
+        assert!(!file.exists(), "stale record removed");
+        let _ = sleeper.kill();
+        let _ = sleeper.wait();
+    }
+
+    /// Incident regression: a foreign record (no sidecar — e.g. written by
+    /// the TypeScript server) pointing at a live NON-opencode process must
+    /// not be signalled (cmdline identity check).
+    #[tokio::test]
+    async fn server_lifecycle_stop_refuses_foreign_non_opencode_target() {
+        let mut sleeper = Command::new("sleep").arg("300").spawn().expect("sleep");
+        let pid = sleeper.id();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("service.json");
+        let info = Registration {
+            id: Some("srv_foreign".to_owned()),
+            version: Some("2.0.24".to_owned()),
+            url: "http://127.0.0.1:1".to_owned(),
+            pid,
+            password: None,
+        };
+        write_registration(&file, &info).expect("write");
+        // Strip the sidecar: the record is now indistinguishable from one
+        // written by a foreign (non-Rust) writer.
+        std::fs::remove_file(crate::safekill::boot_sidecar(&file)).expect("strip sidecar");
+
+        stop(StopOptions {
+            file: Some(file.clone()),
+            pty: PtyStop::Clear,
+            timing: EnsureTiming::default(),
+        })
+        .await;
+
+        assert!(
+            process_alive(pid, None),
+            "foreign record pointing at a non-opencode process must NOT be signalled"
+        );
+        assert!(!file.exists(), "refused record removed");
+        let _ = sleeper.kill();
+        let _ = sleeper.wait();
     }
 
     #[tokio::test]
@@ -1893,7 +2052,7 @@ mod tests {
         // recruit (false) reports its startup failure.
         assert!(error.is_err(), "ensure must not succeed: {error:?}");
 
-        assert!(!process_alive(sleeper_pid), "mismatched owner stopped");
+        assert!(!process_alive(sleeper_pid, None), "mismatched owner stopped");
         assert!(!file.exists(), "registration evicted");
         incumbent.abort();
     }
@@ -2024,5 +2183,93 @@ mod tests {
 
         state.handle.begin_shutdown();
         let _ = state.handle.shutdown_and_join().await;
+    }
+
+    #[tokio::test]
+    async fn server_lifecycle_ensure_detaches_winning_contender() {
+        // Regression (wave 6a): `ensure()` used to SIGKILL its spawned
+        // contender on scope exit — murdering the freshly-ensured daemon the
+        // moment the first client returned (v2 `release()` only detaches).
+        // Winner: a script that writes its own registration, then serves
+        // /api/info on a free port until killed. Requires python3.
+        if !Command::new("python3")
+            .arg("-c")
+            .arg("print('')")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+        {
+            eprintln!("python3 unavailable; skipping contender-detach regression");
+            return;
+        }
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        let file = tmp.path().join("service.json");
+        let script = format!(
+            r#"
+import http.server, json, os
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps({{"version": "test-version", "pid": os.getpid(), "urls": [], "paths": {{}}}}).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *_):
+        pass
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+port = server.server_address[1]
+open(r"{file}", "w").write(json.dumps({{
+    "id": "srv_winner", "version": "test-version",
+    "url": "http://127.0.0.1:%d" % port, "pid": os.getpid(), "password": "secret",
+}}))
+# Well-behaved contender: also write the generation sidecar our stop()
+# path requires (boot id + this process's start time) so it can be
+# terminated safely.
+boot_id = open("/proc/sys/kernel/random/boot_id").read().strip()
+start_time = int(open("/proc/self/stat").read().rsplit(")", 1)[1].split()[19])
+open(r"{file}.boot", "w").write(json.dumps({{"boot_id": boot_id, "start_time": start_time}}))
+import threading
+threading.Thread(target=server.serve_forever, daemon=False).start()
+while True:
+    import time; time.sleep(3600)
+"#,
+            file = file.display(),
+        );
+        let command = vec!["python3".to_owned(), "-c".to_owned(), script];
+        let endpoint = ensure(&EnsureOptions {
+            file: Some(file.clone()),
+            version: Some("test-version".to_owned()),
+            command: Some(command),
+            timing: EnsureTiming {
+                poll_interval: Duration::from_millis(20),
+                promise_timeout: Duration::from_secs(30),
+                ..EnsureTiming::default()
+            },
+            ..EnsureOptions::default()
+        })
+        .await
+        .expect("ensure succeeds against the spawned winner");
+        let registration = read_registration(Some(&file)).expect("winner registered");
+        assert_eq!(endpoint.url, registration.url);
+
+        // The whole point: after ensure() returns, the winner keeps running.
+        let winner_pid = registration.pid;
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(process_alive(winner_pid, None), "ensure() must not kill the daemon it started");
+
+        // Cleanup: stop() terminates the winner and removes the file.
+        stop(StopOptions {
+            file: Some(file.clone()),
+            pty: PtyStop::Clear,
+            timing: EnsureTiming {
+                stop_poll_interval: Duration::from_millis(10),
+                ..EnsureTiming::default()
+            },
+        })
+        .await;
+        assert!(!process_alive(winner_pid, None), "stop() terminates the daemon");
+        assert!(!file.exists(), "stop() removes the registration");
     }
 }
