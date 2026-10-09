@@ -29,7 +29,7 @@ use ratatui::style::{Modifier, Style};
 use crate::components::session_tabs::{paint_bar, paint_rail, TabStatus, TabView, ADD_TAB_WIDTH};
 use crate::components::tool_rows::render_tool_wrap;
 use crate::layout::{BoxSpec, LayoutTree, StyledSpan};
-use crate::render::{paint_placed, serialize_canonical};
+use crate::render::{paint_placed, serialize_canonical, Frame};
 use crate::store::{SessionTab, Unread};
 use crate::theme::ThemeState;
 use taffy::AvailableSpace;
@@ -317,19 +317,22 @@ fn markdown_spans() -> Vec<StyledSpan> {
 #[test]
 fn markdown_bold_spans_wrap_boundaries_at_80_and_40() {
     let spans = markdown_spans();
+    // Expectations updated for the retention seam (7.2 lane C): a
+    // breaking space that FITS stays at the line end — the markdown
+    // goldens pin its styled trailing cell in the canonical ANSI.
     for (width, expected) in [
         (
             80usize,
             vec![
-                "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike",
+                "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike ",
                 "november oscar papa quebec",
             ],
         ),
         (
             40,
             vec![
-                "alpha bravo charlie delta echo foxtrot",
-                "golf hotel india juliet kilo lima mike",
+                "alpha bravo charlie delta echo foxtrot ",
+                "golf hotel india juliet kilo lima mike ",
                 "november oscar papa quebec",
             ],
         ),
@@ -383,4 +386,158 @@ fn markdown_bold_spans_wrap_boundaries_at_80_and_40() {
             }
         }
     }
+}
+
+// -- 7.2 wave 1 Lane A: dialog goldens ---------------------------------------
+
+use crate::components::command_palette::{palette_options, PaletteCommand};
+use crate::components::dialog::render_overlay_with;
+use crate::components::dialog_select::{
+    frame_from_view, render_select, DialogStyles, SelectAction, SelectOption, SelectProps,
+    SelectState,
+};
+use crate::store::{DialogEntry, DialogKind, DialogSize};
+
+/// The `dialog-select` scenario fixture (`tui-dump/scenarios/
+/// session_ui.tsx`): three described items, Beta current, the delete
+/// and new row actions.
+fn dialog_select_fixture() -> (SelectProps, SelectState) {
+    let options = vec![
+        SelectOption::titled("Alpha", "a").described("First item"),
+        SelectOption::titled("Beta", "b").described("Second item"),
+        SelectOption::titled("Gamma", "c").described("Third item"),
+    ];
+    let actions = vec![
+        SelectAction::new("dialog.move_session.delete", "delete", "ctrl+d"),
+        SelectAction::new("dialog.move_session.new", "new", "ctrl+a"),
+    ];
+    let props =
+        SelectProps::new("Items", options).with_current(Some("b".to_owned())).with_actions(actions);
+    let mut state = SelectState::default();
+    state.focus_current(&props);
+    (props, state)
+}
+
+#[test]
+fn dialog_select_matches_text_grid_and_ansi_at_80() {
+    let theme = ThemeState::v2_dark();
+    let styles = DialogStyles::from_theme(&theme);
+    let base = theme.resolved.tokens.background.base;
+    let surface = ratatui::style::Color::Rgb(base.r, base.g, base.b);
+    let (props, state) = dialog_select_fixture();
+    let view = render_select(&props, &state, &styles, surface, 80, 20, Some(20));
+    let frame = frame_from_view(&view, (80, 20), surface, styles.default_fg);
+    let render = AnsiFrameRender::from_frame(&frame);
+    assert_text_grid_match("dialog-select", 80, &render);
+    let depth = manifest().comparison_depth_for(&scenario("dialog-select"));
+    let golden_ansi =
+        std::fs::read_to_string(goldens().join("dialog-select.w80.ansi")).expect("ansi");
+    let diff = pf::compare_ansi_bytes_at(&golden_ansi, &render.ansi, depth).expect("parses");
+    assert!(
+        diff.equal,
+        "dialog-select@80 ansi differs at depth {depth}: first divergence {:?}",
+        diff.first_divergent_offset
+    );
+}
+
+#[test]
+fn dialog_select_matches_text_grid_and_ansi_at_160() {
+    let theme = ThemeState::v2_dark();
+    let styles = DialogStyles::from_theme(&theme);
+    let base = theme.resolved.tokens.background.base;
+    let surface = ratatui::style::Color::Rgb(base.r, base.g, base.b);
+    let (props, state) = dialog_select_fixture();
+    let view = render_select(&props, &state, &styles, surface, 160, 20, Some(20));
+    let frame = frame_from_view(&view, (160, 20), surface, styles.default_fg);
+    let render = AnsiFrameRender::from_frame(&frame);
+    assert_text_grid_match("dialog-select", 160, &render);
+    let depth = manifest().comparison_depth_for(&scenario("dialog-select"));
+    let golden_ansi =
+        std::fs::read_to_string(goldens().join("dialog-select.w160.ansi")).expect("ansi");
+    let diff = pf::compare_ansi_bytes_at(&golden_ansi, &render.ansi, depth).expect("parses");
+    assert!(
+        diff.equal,
+        "dialog-select@160 ansi differs at depth {depth}: first divergence {:?}",
+        diff.first_divergent_offset
+    );
+}
+
+/// The `command-palette` fixture: two custom palette commands (New
+/// session / Switch model), no suggested section — the Dialog wrapper
+/// composites over an empty app (base background + backdrop).
+fn command_palette_frame(width: u16, height: u16) -> Frame {
+    let theme = ThemeState::v2_dark();
+    let registry = [
+        PaletteCommand {
+            command: "session.new",
+            title: "New session",
+            group: "Session",
+            bindings: &["ctrl+x n"],
+        },
+        PaletteCommand {
+            command: "model.list",
+            title: "Switch model",
+            group: "Agent",
+            bindings: &["ctrl+x m"],
+        },
+    ];
+    let props = SelectProps::new("Commands", palette_options(&registry)).flat(true).threshold(0.7);
+    let entry = DialogEntry {
+        kind: DialogKind::CommandPalette,
+        size: DialogSize::Medium,
+        select: SelectState::default(),
+        value: String::new(),
+    };
+    // Empty app base: renderer default fg over the theme base bg.
+    let base_bg = theme.resolved.tokens.background.base;
+    let mut base = crate::render::Frame {
+        cells: vec![
+            vec![
+                crate::render::Cell {
+                    ch: ' ',
+                    attrs: 0,
+                    fg: crate::render::CellColor::Rgb(255, 255, 255),
+                    bg: crate::render::CellColor::Rgb(base_bg.r, base_bg.g, base_bg.b),
+                };
+                usize::from(width)
+            ];
+            usize::from(height)
+        ],
+        width: usize::from(width),
+        height: usize::from(height),
+    };
+    render_overlay_with(&mut base, &entry, &props, &theme, (width, height));
+    base
+}
+
+#[test]
+fn command_palette_matches_text_grid_and_ansi_at_80() {
+    let frame = command_palette_frame(80, 24);
+    let render = AnsiFrameRender::from_frame(&frame);
+    assert_text_grid_match("command-palette", 80, &render);
+    let depth = manifest().comparison_depth_for(&scenario("command-palette"));
+    let golden_ansi =
+        std::fs::read_to_string(goldens().join("command-palette.w80.ansi")).expect("ansi");
+    let diff = pf::compare_ansi_bytes_at(&golden_ansi, &render.ansi, depth).expect("parses");
+    assert!(
+        diff.equal,
+        "command-palette@80 ansi differs at depth {depth}: first divergence {:?}",
+        diff.first_divergent_offset
+    );
+}
+
+#[test]
+fn command_palette_matches_text_grid_and_ansi_at_160() {
+    let frame = command_palette_frame(160, 24);
+    let render = AnsiFrameRender::from_frame(&frame);
+    assert_text_grid_match("command-palette", 160, &render);
+    let depth = manifest().comparison_depth_for(&scenario("command-palette"));
+    let golden_ansi =
+        std::fs::read_to_string(goldens().join("command-palette.w160.ansi")).expect("ansi");
+    let diff = pf::compare_ansi_bytes_at(&golden_ansi, &render.ansi, depth).expect("parses");
+    assert!(
+        diff.equal,
+        "command-palette@160 ansi differs at depth {depth}: first divergence {:?}",
+        diff.first_divergent_offset
+    );
 }
