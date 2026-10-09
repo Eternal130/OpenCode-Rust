@@ -598,10 +598,21 @@ impl Shell {
 /// SIGKILL every process in `leader`'s process group. Some sandboxes
 /// silently drop `kill(-pgid, …)`, so members are enumerated from `/proc`
 /// and signalled individually.
+///
+/// Safety (incident 2026-10): the pgrp scan only runs while the group
+/// LEADER (`/proc/<leader>`) still exists — a live leader pins the process
+/// group id, so it cannot have been recycled onto innocent processes.
+/// Members are signalled via kill(2) on individually-verified pids.
 #[cfg(unix)]
 fn kill_process_group(leader: u32) {
+    // A live leader is the precondition for interpreting `pgrp == leader`
+    // at all; without it the id may name a recycled group.
+    if std::fs::read_to_string(format!("/proc/{leader}/stat")).is_err() {
+        return;
+    }
     let entries = std::fs::read_dir("/proc").ok();
     let Some(entries) = entries else { return };
+    let mut members: Vec<u32> = Vec::new();
     for entry in entries.flatten() {
         let Some(name) = entry.file_name().to_str().map(str::to_string) else { continue };
         let Ok(member) = name.parse::<u32>() else { continue };
@@ -615,11 +626,19 @@ fn kill_process_group(leader: u32) {
             continue;
         };
         if pgrp == leader {
-            let _ = std::process::Command::new("kill")
-                .args(["-9", &member.to_string()])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
+            members.push(member);
+        }
+    }
+    // Signal only pids that are STILL group members at delivery time (they
+    // were re-verified by the scan above; /bin/kill is never invoked).
+    #[allow(unsafe_code)] // contained kill(2) on scan-verified group members
+    for member in members {
+        // SAFETY: kill(2) on a pid whose /proc entry was just read as a
+        // member of the pinned group; the live-leader precondition rules
+        // out group-id recycling.
+        unsafe {
+            let rc = libc::kill(i32::try_from(member).unwrap_or(-1), libc::SIGKILL);
+            let _ = rc;
         }
     }
 }

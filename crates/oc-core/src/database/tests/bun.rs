@@ -94,9 +94,14 @@ impl ReferenceServer {
 
     async fn stop(mut self) {
         if let Some(pgid) = self.child.id() {
-            // Signal the whole process group (`bun run` re-execs a child).
-            let _ =
-                std::process::Command::new("kill").args(["-TERM", &format!("-{pgid}")]).status();
+            // Incident 2026-10 rule: filtered group signal only — members
+            // must look like our tooling (bun/opencode family), never a
+            // blind `kill -TERM -PGID` on a possibly recycled id.
+            oc_util::procutil::signal_group_filtered(
+                pgid,
+                libc::SIGTERM,
+                &["bun", "opencode", "oc-server", "node"],
+            );
         }
         if tokio::time::timeout(Duration::from_secs(5), self.child.wait())
             .await

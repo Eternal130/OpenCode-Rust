@@ -116,13 +116,19 @@ impl ReferenceServer {
 /// `process_group(0)`, so its pgid equals its pid).
 #[allow(unsafe_code)]
 fn signal_group(pid: u32, signal: i32) -> Result<()> {
-    let group = i32::try_from(pid).context("pid out of range")?;
-    // SAFETY: libc::kill with a validated integer pgid and signal number.
-    let result = unsafe { libc::kill(-group, signal) };
-    if result == 0 {
+    // Incident 2026-10 rule: filtered group signal — members must look like
+    // our tooling (bun/opencode/node family) via /proc cmdline allowlist;
+    // never a blind `kill(-pgid)` on a possibly recycled id. The leader's
+    // live-or-zombie /proc entry pins the group during the scan.
+    let delivered = oc_util::procutil::signal_group_filtered(
+        pid,
+        signal,
+        &["bun", "opencode", "oc-server", "node", "cargo"],
+    );
+    if delivered > 0 {
         Ok(())
     } else {
-        Err(anyhow!("kill(-{group}, {signal}) failed"))
+        Err(anyhow!("signal_group_filtered({pid}) matched no processes"))
     }
 }
 
@@ -161,10 +167,85 @@ fn bun_path() -> Option<PathBuf> {
 }
 
 /// Test helper: returns `true` when the reference cannot be run and tests
-/// should skip. Skips when bun is missing or the reference checkout is absent.
+/// should skip: bun missing, or the checkout missing with no rebuild source.
 #[must_use]
 pub fn skip_if_no_bun() -> bool {
-    bun_path().is_none() || !ref_root().is_dir()
+    if bun_path().is_none() {
+        return true;
+    }
+    if reference_checkout_present() {
+        return false;
+    }
+    let source = std::env::var("PARITY_REF_SOURCE").unwrap_or_else(|_| REF_SOURCE.to_owned());
+    !PathBuf::from(source).join("packages/cli").is_dir()
+}
+
+/// Whether the reference checkout (the part the spawner needs) exists.
+fn reference_checkout_present() -> bool {
+    ref_root().join("packages/cli").is_dir()
+}
+
+/// The canonical source checkout the working copy is rebuilt from.
+const REF_SOURCE: &str = "/opt/opencode-ref";
+
+/// Ref-dir self-healing: before spawning, rebuild `/tmp/opencode/ref` from
+/// `/opt/opencode-ref` when `packages/cli` is missing (tmpfs cleanup, fresh
+/// sandbox). The copy excludes `.git`; dependencies come from
+/// `bun install --frozen-lockfile`. Every step is logged so a failing
+/// rebuild is diagnosable from test output.
+pub fn ensure_reference_checkout() -> Result<()> {
+    if reference_checkout_present() {
+        return Ok(());
+    }
+    let root = ref_root();
+    let bun = bun_path().ok_or_else(|| {
+        anyhow!(
+            "bun not found (set PARITY_BUN); cannot rebuild the reference checkout at {}",
+            root.display()
+        )
+    })?;
+    let source =
+        PathBuf::from(std::env::var("PARITY_REF_SOURCE").unwrap_or_else(|_| REF_SOURCE.to_owned()));
+    if !source.join("packages/cli").is_dir() {
+        return Err(anyhow!(
+            "reference source checkout missing {} (set PARITY_REF_SOURCE); cannot rebuild {}",
+            source.display(),
+            root.display()
+        ));
+    }
+    eprintln!(
+        "[parity] reference checkout missing; rebuilding {} from {} (excluding .git)",
+        root.display(),
+        source.display()
+    );
+    if let Some(parent) = root.parent() {
+        std::fs::create_dir_all(parent).context("create reference parent dir")?;
+    }
+    std::fs::create_dir_all(&root).context("create reference dir")?;
+    let copy = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "tar -C {} --exclude=./.git -cf - . | tar -C {} -xf -",
+            source.display(),
+            root.display()
+        ))
+        .status()
+        .context("run tar copy")?;
+    if !copy.success() {
+        return Err(anyhow!("tar copy from {} failed", source.display()));
+    }
+    eprintln!("[parity] reference copy complete; running bun install --frozen-lockfile");
+    let install = std::process::Command::new(&bun)
+        .arg("install")
+        .arg("--frozen-lockfile")
+        .current_dir(&root)
+        .status()
+        .with_context(|| format!("run bun install in {}", root.display()))?;
+    if !install.success() {
+        return Err(anyhow!("bun install failed in {}", root.display()));
+    }
+    eprintln!("[parity] reference checkout rebuilt");
+    Ok(())
 }
 
 /// Pick a free loopback port (never the managed-service default 49374).
@@ -280,6 +361,7 @@ pub async fn spawn() -> Result<ReferenceServer> {
 /// what simulation mode does and does not provide).
 pub async fn spawn_with_env(extra_env: &[(&str, &str)]) -> Result<ReferenceServer> {
     let bun = bun_path().ok_or_else(|| anyhow!("bun not found (set PARITY_BUN)"))?;
+    ensure_reference_checkout()?;
     let root = ref_root();
     let port = free_port()?;
     let sandbox = sandbox_root().join(format!("ref-{}-{}", std::process::id(), port));
@@ -365,4 +447,30 @@ pub async fn spawn_with_env(extra_env: &[(&str, &str)]) -> Result<ReferenceServe
     };
 
     Ok(ReferenceServer { child, url, password, sandbox })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn checkout_present_fast_path_never_rebuilds() {
+        // An existing checkout (even a stand-in tree) short-circuits the
+        // rebuild, so a present checkout never needs bun.
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        std::fs::create_dir_all(dir.path().join("packages/cli")).expect("checkout stand-in");
+        std::env::set_var("PARITY_REF_ROOT", dir.path());
+        assert!(super::reference_checkout_present());
+        super::ensure_reference_checkout().expect("fast path succeeds without bun");
+        std::env::remove_var("PARITY_REF_ROOT");
+    }
+
+    #[test]
+    fn missing_checkout_reports_source_absence() {
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        std::env::set_var("PARITY_REF_ROOT", dir.path());
+        std::env::set_var("PARITY_REF_SOURCE", dir.path().join("nope").display().to_string());
+        let error = super::ensure_reference_checkout().expect_err("source missing");
+        assert!(error.to_string().contains("cannot rebuild"), "{error}");
+        std::env::remove_var("PARITY_REF_ROOT");
+        std::env::remove_var("PARITY_REF_SOURCE");
+    }
 }

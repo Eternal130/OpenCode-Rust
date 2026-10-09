@@ -17,6 +17,7 @@ pub mod boot;
 pub mod handlers;
 #[path = "routes.gen.rs"]
 pub mod routes_gen;
+pub mod safekill;
 pub mod state;
 
 pub mod app;
