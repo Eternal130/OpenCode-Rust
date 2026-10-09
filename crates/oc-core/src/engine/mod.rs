@@ -208,8 +208,25 @@ impl ServiceRegistry {
         self.0.get(location).map(|entry| Arc::clone(entry.value()))
     }
 
-    fn insert(&self, location: LocationRef, services: Arc<LocationServices>) {
-        self.0.insert(location, services);
+    /// Incumbent-wins insert, aligned with `LocationServiceMap::adopt`:
+    /// an already-registered bundle stays the engine's answer for the
+    /// location — a later assembler never displaces it. Returns the
+    /// effective bundle and whether the fresh one won the slot.
+    fn insert(
+        &self,
+        location: LocationRef,
+        services: Arc<LocationServices>,
+    ) -> (Arc<LocationServices>, bool) {
+        match self.0.entry(location) {
+            dashmap::mapref::entry::Entry::Occupied(existing) => {
+                (Arc::clone(existing.get()), false)
+            }
+            dashmap::mapref::entry::Entry::Vacant(slot) => {
+                let effective = Arc::clone(&services);
+                slot.insert(services);
+                (effective, true)
+            }
+        }
     }
 
     fn remove(&self, location: &LocationRef) {
@@ -282,6 +299,16 @@ pub struct Engine {
     pub locations: Arc<LocationServiceMap>,
     services: ServiceRegistry,
     inputs: Arc<DashMap<LocationRef, Arc<PluginInputs>>>,
+    /// Per-location shutdown signals for the background tasks an
+    /// assemble spawns (the MCP summary-cache refresh loop and the MCP
+    /// reconcile); `invalidate` rings them so a superseded bundle's
+    /// loops stop instead of leaking for the process lifetime.
+    location_shutdown: Arc<DashMap<LocationRef, tokio::sync::watch::Sender<bool>>>,
+    /// Per-location assembly locks: concurrent cold `location()` misses
+    /// for the same location produce ONE bundle — both callers receive
+    /// it. Entries stay for the engine's lifetime: removing one under
+    /// waiters would fork the lock and re-open the double-assembly race.
+    assembly_locks: Arc<DashMap<LocationRef, Arc<tokio::sync::Mutex<()>>>>,
     generation: Arc<AtomicU64>,
     sweeper: Option<tokio::task::JoinHandle<()>>,
 }
@@ -359,6 +386,8 @@ impl Engine {
             locations: Arc::clone(&locations),
             services,
             inputs: Arc::new(DashMap::new()),
+            location_shutdown: Arc::new(DashMap::new()),
+            assembly_locks: Arc::new(DashMap::new()),
             generation: Arc::new(AtomicU64::new(1)),
             sweeper: options.activity_sweeper.then(|| {
                 crate::location_services::spawn_activity_sweeper(
@@ -379,6 +408,19 @@ impl Engine {
         if let Some(existing) = self.services.get(&location) {
             return Ok(existing);
         }
+        // Cold path — one assembler per location: the per-location lock
+        // serializes concurrent misses, and the lock holder re-checks
+        // the registry so every waiter receives the SAME bundle.
+        let lock = Arc::clone(
+            self.assembly_locks
+                .entry(location.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .value(),
+        );
+        let _guard = lock.lock().await;
+        if let Some(existing) = self.services.get(&location) {
+            return Ok(existing);
+        }
         let services = self.assemble(&location).await?;
         Ok(services)
     }
@@ -389,6 +431,12 @@ impl Engine {
     pub async fn invalidate(&self, location: &LocationRef) {
         self.services.remove(location);
         self.inputs.remove(location);
+        // Stop the bundle's background tasks (the MCP summary-cache
+        // refresh loop and the in-flight reconcile) — without this every
+        // invalidate leaks one poll loop holding the superseded registry.
+        if let Some((_, shutdown)) = self.location_shutdown.remove(location) {
+            let _ = shutdown.send(true);
+        }
         self.locations.invalidate(location).await;
     }
 
@@ -485,6 +533,13 @@ impl Engine {
         let skills =
             Arc::new(skills::ConfigSkillTable::discover(&loaded, location.as_path(), &self.home));
 
+        // The bundle's background-task shutdown: `invalidate` rings it
+        // (and the sender's drop fires it on an assemble error path), so
+        // the cache-refresh loop and the reconcile below stop with the
+        // bundle instead of leaking past it.
+        let (bundle_shutdown, mut cache_shutdown) = tokio::sync::watch::channel(false);
+        let mut reconcile_shutdown = cache_shutdown.clone();
+
         // The MCP summary cache feeding the context guidance source.
         let mcp_cache: Arc<parking_lot::Mutex<Vec<McpServerSummary>>> =
             Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -503,7 +558,10 @@ impl Engine {
                     })
                     .collect::<Vec<_>>();
                 *cache_for_refresh.lock() = summaries;
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
+                    _ = cache_shutdown.changed() => break,
+                }
             }
         });
 
@@ -695,9 +753,14 @@ impl Engine {
         );
 
         // MCP server reconcile (async connections) + tool bridge attach.
+        // The reconcile observes the same bundle shutdown: an invalidate
+        // stops the connection attempts together with the bundle.
         let mcp_for_reconcile = mcp.clone();
         tokio::spawn(async move {
-            mcp_for_reconcile.reconcile().await;
+            tokio::select! {
+                _ = mcp_for_reconcile.reconcile() => {}
+                _ = reconcile_shutdown.changed() => {}
+            }
         });
         let _bridge = crate::mcp::McpToolBridge::install(&mcp, &graph.tools, &permission);
 
@@ -718,8 +781,17 @@ impl Engine {
             execution,
             runner,
         });
-        self.services.insert(location.clone(), Arc::clone(&services));
-        Ok(services)
+        let (effective, fresh_won) = self.services.insert(location.clone(), Arc::clone(&services));
+        if fresh_won {
+            self.location_shutdown.insert(location.clone(), bundle_shutdown);
+        } else {
+            // An incumbent bundle is already registered (a lifecycle race
+            // even the assembly lock cannot exclude): stop the fresh
+            // bundle's background tasks so it does not leak — the same
+            // signal `invalidate` sends.
+            let _ = bundle_shutdown.send(true);
+        }
+        Ok(effective)
     }
 
     async fn build_graph(

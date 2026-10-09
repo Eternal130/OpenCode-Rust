@@ -86,8 +86,14 @@ pub struct ToolCallData {
     pub message_id: String,
 }
 
-/// `Prepared.executeTool` outcome — tool failure or a user decline.
+/// The outcome of one prepared tool execution (`Prepared.executeTool` —
+/// tool failure or a user decline).
 pub type ExecuteToolOutcome = Result<ToolRunResult, ToolRunFailure>;
+
+/// The prepared request's tool executor closure ([`Prepared::execute_tool`]).
+pub type ExecuteTool = Arc<
+    dyn Fn(ToolCallData) -> futures::future::BoxFuture<'static, ExecuteToolOutcome> + Send + Sync,
+>;
 
 /// The request-preparation input (model-request.ts `Input`).
 pub struct RequestInput {
@@ -401,11 +407,7 @@ pub struct Prepared {
     pub retry: crate::session::runner::retry::PreparedRetryHook,
     /// Runs a tool call against the tools this request advertised
     /// (`Prepared.executeTool`), recovering declines to typed failures.
-    pub execute_tool: Arc<
-        dyn Fn(ToolCallData) -> futures::future::BoxFuture<'static, ExecuteToolOutcome>
-            + Send
-            + Sync,
-    >,
+    pub execute_tool: ExecuteTool,
 }
 
 /// The request preparation service (`SessionModelRequest`).

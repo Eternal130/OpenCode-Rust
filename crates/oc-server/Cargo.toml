@@ -9,3 +9,28 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+oc-core = { workspace = true }
+oc-schema = { workspace = true }
+oc-util = { workspace = true }
+oc-client = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = "0.1"
+futures = "0.3"
+bytes = "1"
+axum = { version = "0.7", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "compression-gzip", "compression-br", "set-header"] }
+hmac = "0.12"
+sha2 = "0.10"
+rand = "0.8"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+parking_lot = "0.12"
+dashmap = "6"
+subtle = "2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -654,3 +654,49 @@ fn engine_skills_table_discovers_config_skill_paths() {
         crate::tool::skill::SkillTable::get(&table, "quick").expect("the bare <skill>.md id");
     assert_eq!(quick.name.0, "Quick");
 }
+
+// ===========================================================================
+// Gate-5 re-review fixes: cold-assembly dedup + bundle background-task
+// shutdown
+// ===========================================================================
+
+#[tokio::test]
+async fn engine_concurrent_cold_location_calls_share_one_bundle() {
+    // Two concurrent get-misses must produce ONE assembly: both callers
+    // receive the same Arc (gate-5 re-review, cold-assembly race).
+    let llm = TestLlm::new();
+    llm.always(parity_text_response("ok", 1.0, 1.0));
+    let (engine, _dir, location) = engine_with(llm).await;
+    let (first, second) =
+        tokio::join!(engine.location(location.clone()), engine.location(location.clone()));
+    let first = first.expect("first assembly");
+    let second = second.expect("second assembly");
+    assert!(Arc::ptr_eq(&first, &second), "concurrent cold location() calls must share one bundle");
+    // A later call still resolves the incumbent.
+    let third = engine.location(location.clone()).await.expect("incumbent");
+    assert!(Arc::ptr_eq(&first, &third));
+}
+
+#[tokio::test]
+async fn engine_invalidate_stops_the_bundle_background_tasks() {
+    // The per-location shutdown token (the MCP cache-refresh loop + the
+    // reconcile observe it) is registered with the bundle and removed —
+    // rung — by invalidate, so a superseded bundle's loops stop instead
+    // of leaking (gate-5 re-review, MCP cache loop leak).
+    let llm = TestLlm::new();
+    llm.always(parity_text_response("ok", 1.0, 1.0));
+    let (engine, _dir, location) = engine_with(llm).await;
+    engine.location(location.clone()).await.expect("assembly");
+    assert!(
+        engine.location_shutdown.get(&location).is_some(),
+        "the bundle registers its background-task shutdown token"
+    );
+    engine.invalidate(&location).await;
+    assert!(
+        engine.location_shutdown.get(&location).is_none(),
+        "invalidate rings and removes the token"
+    );
+    // The location re-assembles cleanly afterwards.
+    engine.location(location.clone()).await.expect("re-assembly");
+    assert!(engine.location_shutdown.get(&location).is_some());
+}

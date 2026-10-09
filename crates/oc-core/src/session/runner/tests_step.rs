@@ -237,3 +237,44 @@ async fn runner_step_unknown_finish_fails_with_incomplete_stream() {
     assert!(events.iter().any(|(type_, _, data)| type_ == "session.step.failed"
         && data["error"]["type"] == serde_json::json!("provider.invalid-output")));
 }
+
+#[tokio::test]
+async fn runner_step_tool_task_observes_a_ring_before_its_first_poll() {
+    // The clone race (gate-5 re-review, tool-bell finding): a bell rung
+    // between the tool task's spawn and its first poll is marked seen by
+    // the fresh receiver, so `bell.changed()` would never fire. The task
+    // must observe the latched value instead — cancelling the execution
+    // before it is ever polled (no side effects, TOOLS_INTERRUPTED exit).
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::step::{run_tool_task, ToolExit, ToolInterrupt};
+
+    let polled = Arc::new(AtomicBool::new(false));
+    let polled_by_executor = Arc::clone(&polled);
+    let execute: crate::session::runner::model_request::ExecuteTool = Arc::new(move |_call| {
+        let polled = Arc::clone(&polled_by_executor);
+        Box::pin(async move {
+            polled.store(true, Ordering::SeqCst);
+            Ok(crate::location::ToolRunResult { content: vec![], metadata: None })
+        })
+    });
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (bell, _bell_alive) = tokio::sync::watch::channel(false);
+    let cancel: ToolInterrupt = Arc::new(bell);
+    let call = crate::session::runner::model_request::ToolCallData {
+        id: "call_race".into(),
+        name: "echo".into(),
+        input: serde_json::json!({}),
+        message_id: "msg_race".into(),
+    };
+    // Spawn the task, then ring WITHOUT yielding in between: on the
+    // current-thread runtime the spawned task cannot have been polled,
+    // so the ring strictly precedes the task's subscribe — the exact
+    // spawn→first-poll window the race lives in.
+    let task = tokio::spawn(run_tool_task(execute, call, Arc::clone(&cancel), tx));
+    let _ = cancel.send(true);
+    task.await.expect("tool task exits");
+    let exit = rx.recv().await.expect("one settled exit");
+    assert!(matches!(exit, ToolExit::Interrupted), "a pre-poll ring cancels: {exit:?}");
+    assert!(!polled.load(Ordering::SeqCst), "the interrupted execution must never be polled");
+}
