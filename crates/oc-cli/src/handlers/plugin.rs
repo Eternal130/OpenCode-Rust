@@ -19,10 +19,10 @@ fn location_query() -> oc_client::types::QueryLocation {
 pub async fn run(command: &PluginCommands) -> i32 {
     match command {
         PluginCommands::List { builtin } => list(*builtin).await,
-        PluginCommands::Add { package } => add(package),
+        PluginCommands::Add { package, force } => add(package, *force),
         PluginCommands::Check { target } => check(target.as_deref()).await,
         PluginCommands::Update { target } => update(target.as_deref()).await,
-        PluginCommands::Remove { package } => remove(package),
+        PluginCommands::Remove { package, force } => remove(package, *force),
     }
 }
 
@@ -98,8 +98,8 @@ fn read_global_config() -> Result<Value, String> {
     crate::handlers::mcp::read_config_json_pub(&global_config_path())
 }
 
-fn write_global_config(config: &Value) -> Result<(), String> {
-    crate::handlers::mcp::write_config_json_pub(&global_config_path(), config)
+fn write_global_config(config: &Value, force: bool) -> Result<(), String> {
+    crate::handlers::mcp::write_config_json_pub(&global_config_path(), config, force)
 }
 
 fn matches_entry(entry: &Value, spec: &str) -> bool {
@@ -110,7 +110,7 @@ fn configured(plugins: Option<&Vec<Value>>, spec: &str) -> bool {
     plugins.is_some_and(|plugins| plugins.iter().any(|entry| matches_entry(entry, spec)))
 }
 
-fn add(package: &str) -> i32 {
+fn add(package: &str, force: bool) -> i32 {
     // REGISTERED divergence: no npm install — only the config entry.
     if package.starts_with('-')
         || package == "*"
@@ -136,15 +136,15 @@ fn add(package: &str) -> i32 {
     let root = config.as_object_mut().expect("config object");
     let entry = root.entry("plugins".to_owned()).or_insert_with(|| json!([]));
     entry.as_array_mut().expect("plugins array").push(json!(package));
-    if let Err(message) = write_global_config(&config) {
+    if let Err(message) = write_global_config(&config, force) {
         eprintln!("Error: {message}");
         return 1;
     }
-    println!("Plugin \"{package}\" installed and added to {}", config_path.display());
+    println!("Plugin \"{package}\" added to {} (installation pending)", config_path.display());
     0
 }
 
-fn remove(package: &str) -> i32 {
+fn remove(package: &str, force: bool) -> i32 {
     let config_path = global_config_path();
     let mut config = match read_global_config() {
         Ok(config) => config,
@@ -166,7 +166,7 @@ fn remove(package: &str) -> i32 {
     {
         entries.retain(|entry| !matches_entry(entry, package));
     }
-    if let Err(message) = write_global_config(&config) {
+    if let Err(message) = write_global_config(&config, force) {
         eprintln!("Error: {message}");
         return 1;
     }

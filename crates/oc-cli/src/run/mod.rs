@@ -257,13 +257,14 @@ async fn resolve_session_target(
 
     let model = parse_run_model(input.model.as_deref())
         .map(|(provider_id, id, variant)| ModelRef { provider_id, id, variant });
-    // v2's `prepare` falls back to the location's configured default
-    // (`client.model.default`) when no explicit model was passed — this
-    // also covers managed daemons whose boot config lives at $HOME (the
-    // daemon chdirs there) while the session's location carries the real
-    // project default.
+    // v2's `prepare` only falls back to a default for NEW sessions
+    // (`session.create` carries the model); a resumed session keeps
+    // `session.model` and a plain run never switches it. Falling back here
+    // unconditionally would reset every `run -c`/`run -s` session to the
+    // location default (gate-7 F3).
     let model = match model {
         Some(model) => Some(model),
+        None if resume => None,
         None => client
             .model()
             .default(&oc_client::types::ModelDefaultQuery {
@@ -361,7 +362,10 @@ async fn run_inner(input: RunInput) -> Result<i32, String> {
     }
 
     let client = input.server.endpoint.client();
-    let environment = input.server.standalone.is_none().then(util::env_session);
+    // `Env.session()` rides along only on the managed service connection
+    // (v2 gates on `input.server.service`): an explicit `--server` target
+    // never receives this client's local environment (gate-7 F7).
+    let environment = input.server.managed.then(util::env_session);
     let target =
         resolve_session_target(&client, &input, &local.display().to_string(), environment).await?;
 

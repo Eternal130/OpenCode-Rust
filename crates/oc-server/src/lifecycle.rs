@@ -1421,7 +1421,9 @@ pub struct ServeHandle {
     /// Shutdown latch (also observable by the registration watcher).
     pub shutdown: watch::Sender<bool>,
     task: tokio::task::JoinHandle<io::Result<()>>,
-    state: Arc<AppState>,
+    /// The shared app state (readiness/engine observability; crate tests
+    /// assert boot ordering through it).
+    pub(crate) state: Arc<AppState>,
 }
 
 impl ServeHandle {

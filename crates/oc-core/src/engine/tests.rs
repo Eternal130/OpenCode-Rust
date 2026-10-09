@@ -824,3 +824,290 @@ async fn engine_invalidate_stops_the_bundle_background_tasks() {
     engine.location(location.clone()).await.expect("re-assembly");
     assert!(engine.location_shutdown.get(&location).is_some());
 }
+
+// ===========================================================================
+// Per-location provider wiring (v2 resolves providers per location —
+// `provider.ts` reads the layer's Config): each location's config-seeded
+// custom providers + model default overlay the engine-level bindings.
+// ===========================================================================
+
+use crate::database::schema::SessionRow;
+use crate::provider_catalog::facade::CustomProvider;
+use oc_schema::config::ModelSelection;
+use oc_schema::id::{ModelId, ProviderId};
+use oc_schema::model::Ref as ModelRef;
+
+/// A project dir with `opencode.json` + a git marker under `root`.
+fn overlay_project(root: &std::path::Path, name: &str, config: Option<&str>) -> LocationRef {
+    let dir = root.join(name);
+    std::fs::create_dir_all(dir.join(".git")).expect("project dir");
+    if let Some(config) = config {
+        std::fs::write(dir.join("opencode.json"), config).expect("project config");
+    }
+    LocationRef::new(dir, None)
+}
+
+/// A session row with an optional pinned model ref.
+fn overlay_row(model: Option<ModelRef>) -> SessionRow {
+    let mut row =
+        SessionRow::new("ses_probe", "prj_probe", "/proj", "probe", "2.0.24").expect("row");
+    row.model = model.map(|reference| serde_json::to_string(&reference).expect("model json"));
+    row
+}
+
+fn model_ref(provider: &str, model: &str) -> ModelRef {
+    ModelRef { provider_id: ProviderId::parse(provider), id: ModelId::parse(model), variant: None }
+}
+
+fn selection(provider: &str, model: &str) -> ModelSelection {
+    ModelSelection {
+        provider_id: ProviderId::parse(provider),
+        model: ModelId::parse(model),
+        variant: None,
+    }
+}
+
+fn custom(provider: &str, model: &str) -> CustomProvider {
+    CustomProvider {
+        id: provider.to_owned(),
+        name: provider.to_owned(),
+        base_url: format!("https://{provider}.test/v1"),
+        api_key: Some("probe-key".into()),
+        models: vec![model.to_owned()],
+    }
+}
+
+/// Boots a resolver-default engine (no injection) over a sandbox root —
+/// the daemon shape: engine-level bindings come only from the options
+/// (boot/global config), everything else resolves per location.
+async fn overlay_engine(
+    root: &std::path::Path,
+    custom_providers: Vec<CustomProvider>,
+    default_model: Option<ModelSelection>,
+) -> Engine {
+    Engine::boot(EngineOptions {
+        custom_providers,
+        default_model,
+        activity_sweeper: false,
+        clock: fixed_clock(),
+        ..EngineOptions::new(root.join("data"), root.join("home"))
+    })
+    .await
+}
+
+#[tokio::test]
+async fn per_location_overlay_two_projects_resolve_their_own() {
+    let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+    let alpha = overlay_project(
+        root.path(),
+        "alpha",
+        Some(
+            r#"{
+                "model": { "providerID": "alpha-probe", "model": "alpha-one" },
+                "providers": {
+                    "alpha-probe": {
+                        "settings": { "baseURL": "https://alpha.test/v1", "apiKey": "k" },
+                        "models": { "alpha-one": { "name": "Alpha One" } }
+                    }
+                }
+            }"#,
+        ),
+    );
+    let beta = overlay_project(
+        root.path(),
+        "beta",
+        Some(
+            r#"{
+                "model": { "providerID": "beta-probe", "model": "beta-one" },
+                "providers": {
+                    "beta-probe": {
+                        "settings": { "baseURL": "https://beta.test/v1", "apiKey": "k" },
+                        "models": { "beta-one": { "name": "Beta One" } }
+                    }
+                }
+            }"#,
+        ),
+    );
+    let engine = overlay_engine(root.path(), Vec::new(), None).await;
+
+    let alpha_services = engine.location(alpha.clone()).await.expect("alpha assembles");
+    let beta_services = engine.location(beta.clone()).await.expect("beta assembles");
+
+    // Each project's own default (config `model`) resolves through its own
+    // overlay — a session with no pinned model.
+    let resolved = alpha_services.resolver.resolve(&overlay_row(None)).expect("alpha default");
+    assert_eq!(resolved.reference.provider_id.0, "alpha-probe");
+    assert_eq!(resolved.reference.id.0, "alpha-one");
+    let resolved = beta_services.resolver.resolve(&overlay_row(None)).expect("beta default");
+    assert_eq!(resolved.reference.provider_id.0, "beta-probe");
+    assert_eq!(resolved.reference.id.0, "beta-one");
+
+    // Explicit refs resolve on their own project and NOT on the sibling's
+    // (the overlay is per-location, the engine-level bindings are empty).
+    assert!(alpha_services
+        .resolver
+        .resolve_selected(&overlay_row(None), &model_ref("alpha-probe", "alpha-one"))
+        .is_ok());
+    assert!(
+        alpha_services
+            .resolver
+            .resolve_selected(&overlay_row(None), &model_ref("beta-probe", "beta-one"))
+            .is_err(),
+        "beta's provider is not visible at alpha"
+    );
+    assert!(beta_services
+        .resolver
+        .resolve_selected(&overlay_row(None), &model_ref("beta-probe", "beta-one"))
+        .is_ok());
+
+    // A pinned model takes the same per-location path.
+    let mut pinned = overlay_row(Some(model_ref("beta-probe", "beta-one")));
+    pinned.directory = beta.directory.to_string_lossy().into_owned();
+    let resolved = beta_services.resolver.resolve(&pinned).expect("pinned beta model");
+    assert_eq!(resolved.reference.provider_id.0, "beta-probe");
+}
+
+#[tokio::test]
+async fn per_location_overlay_falls_through_to_engine_bindings() {
+    let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+    // Engine-level (boot/global config) bindings: a gateway provider and
+    // the engine default selection.
+    let engine = overlay_engine(
+        root.path(),
+        vec![custom("gateway-probe", "gw-one")],
+        Some(selection("gateway-probe", "gw-one")),
+    )
+    .await;
+
+    // A config-less location: no overlay, the engine default answers.
+    let plain = overlay_project(root.path(), "plain", None);
+    let plain_services = engine.location(plain).await.expect("plain assembles");
+    let resolved = plain_services.resolver.resolve(&overlay_row(None)).expect("engine default");
+    assert_eq!(resolved.reference.provider_id.0, "gateway-probe");
+
+    // A location with providers but NO `model` default: the engine default
+    // still answers (overlay NotSelected falls through), and the engine's
+    // global provider stays explicitly resolvable at the location.
+    let delta = overlay_project(
+        root.path(),
+        "delta",
+        Some(
+            r#"{
+                "providers": {
+                    "delta-probe": {
+                        "settings": { "baseURL": "https://delta.test/v1" },
+                        "models": { "delta-one": {} }
+                    }
+                }
+            }"#,
+        ),
+    );
+    let delta_services = engine.location(delta).await.expect("delta assembles");
+    let resolved =
+        delta_services.resolver.resolve(&overlay_row(None)).expect("engine default at delta");
+    assert_eq!(resolved.reference.provider_id.0, "gateway-probe");
+    let resolved = delta_services
+        .resolver
+        .resolve_selected(&overlay_row(None), &model_ref("gateway-probe", "gw-one"))
+        .expect("engine-level provider visible at every location");
+    assert_eq!(resolved.reference.provider_id.0, "gateway-probe");
+
+    // A location WITH a `model` default: the location default wins over
+    // the engine default.
+    let epsilon = overlay_project(
+        root.path(),
+        "epsilon",
+        Some(
+            r#"{
+                "model": { "providerID": "delta-probe", "model": "delta-one" },
+                "providers": {
+                    "delta-probe": {
+                        "settings": { "baseURL": "https://delta.test/v1" },
+                        "models": { "delta-one": {} }
+                    }
+                }
+            }"#,
+        ),
+    );
+    let epsilon_services = engine.location(epsilon).await.expect("epsilon assembles");
+    let resolved = epsilon_services
+        .resolver
+        .resolve(&overlay_row(None))
+        .expect("location default beats engine default");
+    assert_eq!(resolved.reference.provider_id.0, "delta-probe");
+    assert_eq!(resolved.reference.id.0, "delta-one");
+}
+
+/// The daemon cross-project M2 scenario: an engine booted with project A's
+/// config bindings (the pre-overlay boot shape / a `--service` daemon
+/// seeded at its boot cwd) serves project B — B's own custom provider and
+/// default resolve at B.
+#[tokio::test]
+async fn per_location_overlay_daemon_booted_at_a_serves_b() {
+    let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+    let project_a = overlay_project(
+        root.path(),
+        "project-a",
+        Some(
+            r#"{
+                "model": { "providerID": "boot-probe", "model": "boot-one" },
+                "providers": {
+                    "boot-probe": {
+                        "settings": { "baseURL": "https://boot.test/v1" },
+                        "models": { "boot-one": {} }
+                    }
+                }
+            }"#,
+        ),
+    );
+    let project_b = overlay_project(
+        root.path(),
+        "project-b",
+        Some(
+            r#"{
+                "model": { "providerID": "remote-probe", "model": "remote-one" },
+                "providers": {
+                    "remote-probe": {
+                        "settings": { "baseURL": "https://remote.test/v1", "apiKey": "k" },
+                        "models": { "remote-one": { "name": "Remote One" } }
+                    }
+                }
+            }"#,
+        ),
+    );
+    // Boot seeding from project A's config (what `boot_and_serve` did
+    // before per-location wiring — and still does for engine defaults).
+    let loaded = crate::config::Loader::new(
+        project_a.directory.clone(),
+        crate::config::GlobalDirs {
+            config: root.path().join("home/.config/opencode"),
+            home: root.path().join("home"),
+        },
+    )
+    .load();
+    let providers = crate::provider_catalog::providers_from_config(&loaded);
+    let engine = overlay_engine(root.path(), providers.custom, providers.default_model).await;
+
+    let services_b = engine.location(project_b).await.expect("project B assembles");
+    // B's custom provider resolves at B through B's OWN config.
+    let resolved = services_b
+        .resolver
+        .resolve_selected(&overlay_row(None), &model_ref("remote-probe", "remote-one"))
+        .expect("B's custom provider resolves at B");
+    assert_eq!(resolved.reference.provider_id.0, "remote-probe");
+    assert_eq!(
+        resolved.model.route.endpoint.base_url.as_deref(),
+        Some("https://remote.test/v1"),
+        "B's provider binds B's baseURL"
+    );
+    // B's default beats the boot location's default.
+    let resolved =
+        services_b.resolver.resolve(&overlay_row(None)).expect("B's default model resolves at B");
+    assert_eq!(resolved.reference.provider_id.0, "remote-probe");
+    assert_eq!(resolved.reference.id.0, "remote-one");
+    // The boot-time (engine-level) provider stays reachable at B.
+    assert!(services_b
+        .resolver
+        .resolve_selected(&overlay_row(None), &model_ref("boot-probe", "boot-one"))
+        .is_ok());
+}

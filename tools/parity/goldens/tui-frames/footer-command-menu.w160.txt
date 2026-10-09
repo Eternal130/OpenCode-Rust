@@ -1,0 +1,17 @@
+                                                                                                                                                                
+  Commands                                                                                                                                                 esc  
+                                                                                                                                                                
+  Search                                                                                                                                                        
+                                                                                                                                                                
+  Session                                                                                                                                                       
+  Open editor                                                                                                                                          /editor  
+  Show status                                                                                                                                                   
+  Compact session                                                                                                                                     /compact  
+  New session                                                                                                                                             /new  
+                                                                                                                                                                
+  Agent                                                                                                                                                         
+  Switch agent                                                                                                                                                  
+  Switch model                                                                                                                                                  
+  Variant cycle                                                                                                                                         ctrl+t  
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                                                                                                

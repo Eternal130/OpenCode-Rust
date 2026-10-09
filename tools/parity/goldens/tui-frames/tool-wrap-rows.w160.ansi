@@ -1,0 +1,12 @@
+[0;38;2;255;255;255;48;2;0;0;0m   ✱ Grep "OPENCODE.*DB|database|sqlite|drizzle|dev.*db|data.                                                                                                   [0m
+[0;38;2;255;255;255;48;2;0;0;0m     *dir|xdg|APPDATA" in packages/opencode/src (151 matches)                                                                                                   [0m
+[0;38;2;255;255;255;48;2;0;0;0m   ✱ Glob "**/*db*" in packages/opencode (6 matches)                                                                                                            [0m
+[0;38;2;255;255;255;48;2;0;0;0m   → Read packages/opencode/src/storage/db.ts [offset=1, limit=130]                                                                                             [0m
+[0;38;2;255;255;255;48;2;0;0;0m   → Read packages/opencode/src/index.ts [offset=1, limit=100]                                                                                                  [0m
+[0;38;2;255;255;255;48;2;0;0;0m   ✱ Grep "export const OPENCODE_DB|OPENCODE_DB|OPENCODE_DEV|Global\.                                                                                           [0m
+[0;38;2;255;255;255;48;2;0;0;0m     Path\.data|data =" in packages/opencode/src (115 matches)                                                                                                  [0m
+[0;38;2;255;255;255;48;2;0;0;0m                                                                                                                                                                [0m
+[0;38;2;255;255;255;48;2;0;0;0m                                                                                                                                                                [0m
+[0;38;2;255;255;255;48;2;0;0;0m                                                                                                                                                                [0m
+[0;38;2;255;255;255;48;2;0;0;0m                                                                                                                                                                [0m
+[0;38;2;255;255;255;48;2;0;0;0m                                                                                                                                                                [0m

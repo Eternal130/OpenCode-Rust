@@ -164,6 +164,38 @@ pub struct ToolInline {
     pub body: Option<String>,
 }
 
+/// `normalizeInput` (mini/tool.ts): legacy provider shapes alias the path
+/// under `filePath` and the subagent under `subagent_type`; the path tools
+/// (`read`/`write`/`edit`/`lsp`) and `subagent` read through the alias so
+/// old providers do not render "Read " / "Unknown Agent".
+fn normalize_input(
+    name: &str,
+    input: &serde_json::Map<String, Value>,
+) -> serde_json::Map<String, Value> {
+    let mut normalized = input.clone();
+    // v2: `typeof input.path === "string" ? input.path : text(input.filePath)`
+    // — a string `path` (even empty) wins over the alias; the override only
+    // lands when truthy.
+    let aliased = |key: &str, alias: &str| {
+        match input.get(key) {
+            Some(Value::String(value)) => Some(value.clone()),
+            _ => input.get(alias).and_then(Value::as_str).map(str::to_owned),
+        }
+        .filter(|value| !value.is_empty())
+    };
+    if matches!(name, "read" | "write" | "edit" | "lsp") {
+        if let Some(path) = aliased("path", "filePath") {
+            normalized.insert("path".to_owned(), Value::String(path));
+        }
+    }
+    if name == "subagent" {
+        if let Some(agent) = aliased("agent", "subagent_type") {
+            normalized.insert("agent".to_owned(), Value::String(agent));
+        }
+    }
+    normalized
+}
+
 /// `toolInlineInfo(part, directory)` — the per-tool icon/title rules.
 #[must_use]
 #[allow(clippy::too_many_lines)]
@@ -176,6 +208,13 @@ pub fn tool_inline_info(
     directory: &str,
 ) -> ToolInline {
     let name = canonical_tool_name(tool);
+    let normalized;
+    let input = if matches!(name.as_str(), "read" | "write" | "edit" | "lsp" | "subagent") {
+        normalized = normalize_input(&name, input);
+        &normalized
+    } else {
+        input
+    };
     let path_of = |value: &Value| format_path(Some(&text(value)), directory);
     match name.as_str() {
         "shell" => ToolInline {
@@ -511,5 +550,33 @@ mod tests {
         let info = tool_inline_info("glob", &input, &metadata, "completed", "", "/w");
         assert_eq!(info.title, "Glob \"*.rs\"");
         assert_eq!(info.description.as_deref(), Some("in src · 3 matches"));
+    }
+
+    #[test]
+    fn normalize_input_aliases_legacy_shapes() {
+        // filePath → path for the path tools (v2 normalizeInput).
+        let input = json!({"filePath": "/w/src/main.rs"}).as_object().unwrap().clone();
+        let info = tool_inline_info("read", &input, &serde_json::Map::new(), "completed", "", "/w");
+        assert_eq!(info.title, "Read src/main.rs", "read renders through the filePath alias");
+
+        let input = json!({"filePath": "/w/a.txt"}).as_object().unwrap().clone();
+        let info =
+            tool_inline_info("write", &input, &serde_json::Map::new(), "completed", "", "/w");
+        assert_eq!(info.title, "Write a.txt");
+
+        // subagent_type → agent.
+        let input = json!({"subagent_type": "general", "description": "explore the tree"})
+            .as_object()
+            .unwrap()
+            .clone();
+        let info = tool_inline_info("task", &input, &serde_json::Map::new(), "completed", "", "/w");
+        assert_eq!(info.description.as_deref(), Some("General Agent"));
+        assert_eq!(info.title, "explore the tree");
+
+        // An explicit path/agent wins over the alias.
+        let input =
+            json!({"path": "/w/first.rs", "filePath": "/w/second.rs"}).as_object().unwrap().clone();
+        let info = tool_inline_info("read", &input, &serde_json::Map::new(), "completed", "", "/w");
+        assert_eq!(info.title, "Read first.rs");
     }
 }

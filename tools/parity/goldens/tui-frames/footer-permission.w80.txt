@@ -1,0 +1,16 @@
+                                                                                
+                                                                                
+  △ Permission required                                                         
+                                                                                
+   → Read src/index.ts                                                      █   
+                                                                            █   
+  Path: src/index.ts                                                        █   
+                                                                            █   
+                                                                            █   
+                                                                            █   
+                                                                            █   
+                                                                            █   
+                                                                                
+                                                                                
+   Allow once   Reject                    ⇆ select  enter confirm  esc reject   
+                                                                                

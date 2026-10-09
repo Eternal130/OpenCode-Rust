@@ -34,20 +34,25 @@ fn model_json(
     value
 }
 
-/// A config-defined custom provider's model entry (the catalog
-/// `Model.Info` shape — clients read `variants`/`capabilities`/`limit`
-/// off list entries).
+/// A config-defined custom provider's model entry (the FULL catalog
+/// `Model.Info` shape — clients like `run`'s model.default fallback parse
+/// the payload into `ModelInfo`, whose `limit.context`/`limit.output`,
+/// `modelID`, `status`, and `time.released` are REQUIRED; v2 defaults
+/// unspecified config-model limits to 0).
 fn custom_model_json(
     provider: &oc_core::provider_catalog::facade::CustomProvider,
     model: &str,
 ) -> Value {
     json!({
         "id": model,
-        "name": model,
+        "modelID": model,
         "providerID": provider.id,
+        "name": model,
         "enabled": true,
+        "status": "active",
+        "time": { "released": 0 },
         "capabilities": { "input": ["text"], "output": ["text"], "tools": true },
-        "limit": {},
+        "limit": { "context": 0, "output": 0 },
         "cost": [],
         "variants": [],
     })
@@ -90,12 +95,45 @@ async fn model_default(
         let provider = crate::boot::location_custom_providers(&state.engine, &location)
             .into_iter()
             .find(|provider| provider.id == selection.provider_id.as_str());
-        let default = match provider {
-            Some(provider) => custom_model_json(&provider, selection.model.as_str()),
-            None => json!({
-                "id": selection.model.as_str(),
-                "providerID": selection.provider_id.as_str(),
-            }),
+        // A custom (config) provider renders its own entry; a catalog
+        // provider's default resolves through the catalog so the payload
+        // keeps the full (client-parseable) Model.Info shape.
+        let default = if let Some(provider) = provider {
+            custom_model_json(&provider, selection.model.as_str())
+        } else {
+            let catalog = &state.engine.catalog;
+            let catalog_snapshot = catalog
+                .providers()
+                .iter()
+                .find(|snapshot| snapshot.info.id.0 == selection.provider_id.as_str());
+            catalog_snapshot
+                .and_then(|snapshot| {
+                    snapshot
+                        .models
+                        .iter()
+                        .find(|model| model.id.0 == selection.model.as_str())
+                        .map(|model| model_json(snapshot, model))
+                })
+                .or_else(|| {
+                    catalog_snapshot.and_then(|snapshot| {
+                        snapshot.models.first().map(|model| model_json(snapshot, model))
+                    })
+                })
+                .unwrap_or_else(|| {
+                    json!({
+                        "id": selection.model.as_str(),
+                        "modelID": selection.model.as_str(),
+                        "providerID": selection.provider_id.as_str(),
+                        "name": selection.model.as_str(),
+                        "enabled": true,
+                        "status": "active",
+                        "time": { "released": 0 },
+                        "capabilities": { "input": ["text"], "output": ["text"], "tools": true },
+                        "limit": { "context": 0, "output": 0 },
+                        "cost": [],
+                        "variants": [],
+                    })
+                })
         };
         return Ok(json_location_data(&location.as_path().to_string_lossy(), default));
     }

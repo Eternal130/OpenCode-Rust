@@ -354,6 +354,9 @@ pub enum McpCommands {
         /// Write to the global config instead of the project config
         #[arg(long)]
         global: bool,
+        /// Rewrite the config even when it contains JSONC comments (comments are stripped)
+        #[arg(long)]
+        force: bool,
     },
     /// Authenticate with an OAuth-capable remote MCP server
     Auth {
@@ -379,6 +382,9 @@ pub enum PluginCommands {
     Add {
         /// npm registry or Git package specifier
         package: String,
+        /// Rewrite the config even when it contains JSONC comments (comments are stripped)
+        #[arg(long)]
+        force: bool,
     },
     /// Check package plugins for updates
     Check {
@@ -394,6 +400,9 @@ pub enum PluginCommands {
     Remove {
         /// configured package specifier
         package: String,
+        /// Rewrite the config even when it contains JSONC comments (comments are stripped)
+        #[arg(long)]
+        force: bool,
     },
 }
 

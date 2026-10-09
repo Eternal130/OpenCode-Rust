@@ -1,0 +1,20 @@
+┃                                                                                                                                                               
+┃  Authorization required                                                                                                                                       
+┃                                                                                                                                                               
+┃  Authorize access  Submit                                                                                                                                     
+┃                                                                                                                                                               
+┃  Authorize access                                                                                                                                             
+┃                                                                                                                                                               
+┃  https://example.com/authorize                                                                                                                                
+┃                                                                                                                                                               
+┃  Open or copy the URL, complete the external action, then confirm.                                                                                            
+┃                                                                                                                                                               
+┃  ⇆ tab  enter open link  c copy  esc dismiss                                                                                                                  
+┃                                                                                                                                                               
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                

@@ -1,0 +1,655 @@
+{
+  "format": "tui-frame-golden/1",
+  "generator": "tui-dump (bun) @ opencode v2.0.24 reference",
+  "ansiFormat": "canonical span SGR: ESC[0;attrs;fg;bgm per style change, see frame.ts / tools/parity/src/tui_frame.rs",
+  "scenarios": [
+    {
+      "id": "tool-wrap-rows",
+      "source": "test/cli/tui/inline-tool-wrap-snapshot.test.tsx",
+      "description": "Five consecutive grep/glob/read InlineToolRow summaries at width 72 (wrap behavior)",
+      "componentClass": "tool-row",
+      "variants": [
+        {
+          "width": 80,
+          "height": 12,
+          "rows": 12,
+          "cols": 80,
+          "txt": {
+            "bytes": 982,
+            "sha256": "768ff734b4f6cd59ae62590c60918431b061295616898b84554bad23c151ee14"
+          },
+          "ansi": {
+            "bytes": 1414,
+            "sha256": "58d12624af4335de58353020c0e1f04c3566c6fc9ff7685c71623cf9ea5c63b4"
+          }
+        },
+        {
+          "width": 160,
+          "height": 12,
+          "rows": 12,
+          "cols": 160,
+          "txt": {
+            "bytes": 1942,
+            "sha256": "1cdb31b4d53e8ba974221433c878e6fadf920430f4862da7d8812391c37e26a7"
+          },
+          "ansi": {
+            "bytes": 2374,
+            "sha256": "fac259f361081f08a95623778ed777071830dffcd386be2d2d63460bb75d4fa7"
+          }
+        }
+      ]
+    },
+    {
+      "id": "tool-wrap-error-expanded",
+      "source": "test/cli/tui/inline-tool-wrap-snapshot.test.tsx",
+      "description": "Same tool rows with errorExpanded (LSP error rendered under the tool text)",
+      "componentClass": "tool-row",
+      "variants": [
+        {
+          "width": 80,
+          "height": 12,
+          "rows": 12,
+          "cols": 80,
+          "txt": {
+            "bytes": 982,
+            "sha256": "2fcc39fa1f247be1ca0dce7b519920c43209b45464eafce0d1d288a005a36ab6"
+          },
+          "ansi": {
+            "bytes": 1414,
+            "sha256": "2b2abf3c78f7c953b9ee1153e2d8dc3d5695bb46c0bd2b7e1130a99d181a24ac"
+          }
+        },
+        {
+          "width": 160,
+          "height": 12,
+          "rows": 12,
+          "cols": 160,
+          "txt": {
+            "bytes": 1942,
+            "sha256": "bf8c423e62d8eb1c797f2c354b1d6a964e24bf0ad1ff67b61ffaa1115e693481"
+          },
+          "ansi": {
+            "bytes": 2374,
+            "sha256": "0df7592ddaabea9977213d90dd3ef3fe25ac1845d99a7322e79f714ce22b4944"
+          }
+        }
+      ]
+    },
+    {
+      "id": "session-tabs-horizontal",
+      "source": "test/component/session-tabs-status.test.tsx",
+      "description": "SessionTabs horizontal bar/rail with two tabs; first tab carries an unread-activity indicator",
+      "componentClass": "session-tabs",
+      "variants": [
+        {
+          "width": 80,
+          "height": 10,
+          "rows": 10,
+          "cols": 80,
+          "txt": {
+            "bytes": 812,
+            "sha256": "a3c4b9f4c8b8ccfcbf3719907630ab568c3bf97031aeab354eea08a45a3b256b"
+          },
+          "ansi": {
+            "bytes": 1701,
+            "sha256": "b33a7557736a4b0c74f1c870db6ee16e094f33bdd0765490736e202fe6c28dde"
+          }
+        },
+        {
+          "width": 160,
+          "height": 10,
+          "rows": 10,
+          "cols": 160,
+          "txt": {
+            "bytes": 1612,
+            "sha256": "ee0c2a186b2cb4ae458f4513e28292e210e2c87ff48daa55c4632cdae44d8590"
+          },
+          "ansi": {
+            "bytes": 2501,
+            "sha256": "a8aced64e73913e2195c0ed220958d59a251c0f704d47c6198ce9f3dcd051f64"
+          }
+        }
+      ]
+    },
+    {
+      "id": "session-tabs-vertical",
+      "source": "test/component/session-tabs-status.test.tsx",
+      "description": "SessionTabs vertical bar/rail with two tabs; first tab carries an unread-activity indicator",
+      "componentClass": "session-tabs",
+      "variants": [
+        {
+          "width": 80,
+          "height": 16,
+          "rows": 16,
+          "cols": 80,
+          "txt": {
+            "bytes": 1318,
+            "sha256": "04774fde7e7560683e1352f30b5a5d7ad023db16cc2857fbb0fa5f9ea3fb9bce"
+          },
+          "ansi": {
+            "bytes": 3395,
+            "sha256": "38a1b8a3cf57624804aebabbdb5f799b1a8fade392c54553989bcdb33d8b0647"
+          }
+        },
+        {
+          "width": 160,
+          "height": 16,
+          "rows": 16,
+          "cols": 160,
+          "txt": {
+            "bytes": 2598,
+            "sha256": "f5cf03ea5858797364c90a62be64e1d131210a349b26e25155e4f6f40bda3800"
+          },
+          "ansi": {
+            "bytes": 4675,
+            "sha256": "14b9738d8769797f6f5f340faa952146752c1bca2a77792e567b88e318833cdd"
+          }
+        }
+      ]
+    },
+    {
+      "id": "footer-prompt-idle",
+      "source": "test/mini/footer.view.test.tsx",
+      "description": "RunFooterView default prompt composer (idle phase, fallback dark theme)",
+      "componentClass": "mini-footer",
+      "variants": [
+        {
+          "width": 80,
+          "height": 12,
+          "rows": 12,
+          "cols": 80,
+          "txt": {
+            "bytes": 976,
+            "sha256": "792ba03f4cc1b13350f344f2714af94a854c09fe38590896e3f46ce112eb4d12"
+          },
+          "ansi": {
+            "bytes": 1686,
+            "sha256": "da04335e9be07fcfed53dc1dbde75e9e87129f2800850f94f4c3a2b26185900d"
+          }
+        },
+        {
+          "width": 160,
+          "height": 12,
+          "rows": 12,
+          "cols": 160,
+          "txt": {
+            "bytes": 1936,
+            "sha256": "afd25dc561b07342882957f22b8b6ccea4d45aa68c38f07b5b5377e79135b068"
+          },
+          "ansi": {
+            "bytes": 2646,
+            "sha256": "78fcc28dcf4a852e73a55717f95e9990af3d4234bf9ecb0fe7ff4e4f32364e13"
+          }
+        }
+      ]
+    },
+    {
+      "id": "footer-permission",
+      "source": "test/mini/footer.view.test.tsx",
+      "description": "RunFooterView permission view: 'Permission required' with Allow once / Reject actions",
+      "componentClass": "mini-footer-permission",
+      "variants": [
+        {
+          "width": 80,
+          "height": 16,
+          "rows": 16,
+          "cols": 80,
+          "txt": {
+            "bytes": 1318,
+            "sha256": "ede7ac0a120ee4d37d21bfb785c8566efae068a68e471ae28294ed1b629b316c"
+          },
+          "ansi": {
+            "bytes": 3216,
+            "sha256": "1d5ff7a8760df44581eb061ca1e61c3bd03226f0f586060750d4db682a77331f"
+          }
+        },
+        {
+          "width": 160,
+          "height": 16,
+          "rows": 16,
+          "cols": 160,
+          "txt": {
+            "bytes": 2598,
+            "sha256": "dbad47248ed9b6eba3f4ea7cb8d17c58c686c59214259b0f506e6a94ad6ab273"
+          },
+          "ansi": {
+            "bytes": 4496,
+            "sha256": "c834245b51e5f156262bf4ad79500d252f8702f444b9ee7c60ddcad4b4715a3d"
+          }
+        }
+      ]
+    },
+    {
+      "id": "footer-form",
+      "source": "test/mini/footer.view.test.tsx",
+      "description": "RunFooterView multi-field form view (Deployment: Service + Notes)",
+      "componentClass": "mini-footer-form",
+      "variants": [
+        {
+          "width": 80,
+          "height": 16,
+          "rows": 16,
+          "cols": 80,
+          "txt": {
+            "bytes": 1298,
+            "sha256": "13177f213242871e0b8254b8dfdee5623431431a991ca9ce1325820640c20013"
+          },
+          "ansi": {
+            "bytes": 2374,
+            "sha256": "a667b9b43bb3c4e13bf099540bf4191f3e9f860baf1672e64cbda64f22eb19da"
+          }
+        },
+        {
+          "width": 160,
+          "height": 16,
+          "rows": 16,
+          "cols": 160,
+          "txt": {
+            "bytes": 2578,
+            "sha256": "f20f79be86c8090f2c42dd08e5d9f21dc502d137de7a1514fd77424f20f8d6e3"
+          },
+          "ansi": {
+            "bytes": 3654,
+            "sha256": "8f1196e087811ba8dd02d31db6ccbd75b1829b3d6b6f9bea16d6402bad487129"
+          }
+        }
+      ]
+    },
+    {
+      "id": "permission-reject-field",
+      "source": "test/mini/footer.view.test.tsx",
+      "description": "RejectField free-text reason input shown with permission actions",
+      "componentClass": "mini-footer-permission",
+      "variants": [
+        {
+          "width": 80,
+          "height": 18,
+          "rows": 18,
+          "cols": 80,
+          "txt": {
+            "bytes": 1458,
+            "sha256": "c7fbc14988a79c386ec5c9c8576c9407c6618aa005d3ee2e1676f7b2ccf3e7e9"
+          },
+          "ansi": {
+            "bytes": 2144,
+            "sha256": "a79e909731422c397faf0625d922a01f94f33a4fbfda65ce88bd7733f356d76b"
+          }
+        },
+        {
+          "width": 160,
+          "height": 18,
+          "rows": 18,
+          "cols": 160,
+          "txt": {
+            "bytes": 2898,
+            "sha256": "2c469b0fa45c8741d41c4a06e9c6292dd90a0523ebf222707e40fd728fb90c1a"
+          },
+          "ansi": {
+            "bytes": 3584,
+            "sha256": "dfb10a7846745a4675f7e53cc94cfdbf8cf8eca42f3e497722fe82b321e1ff73"
+          }
+        }
+      ]
+    },
+    {
+      "id": "footer-command-menu",
+      "source": "test/mini/footer.view.test.tsx",
+      "description": "RunCommandMenuBody grouped commands panel (Session/Agent/Editor sections + MCP command)",
+      "componentClass": "mini-footer-panel",
+      "variants": [
+        {
+          "width": 80,
+          "height": 17,
+          "rows": 17,
+          "cols": 80,
+          "txt": {
+            "bytes": 1537,
+            "sha256": "2960af8fb3a711f41531206cd19bd5da3e0fd6c1da72132dd44620b5324f4004"
+          },
+          "ansi": {
+            "bytes": 3365,
+            "sha256": "df7884df89ec90015e632eb9456749622b4669f3dca18baa0b798edc28ea0b6a"
+          }
+        },
+        {
+          "width": 160,
+          "height": 17,
+          "rows": 17,
+          "cols": 160,
+          "txt": {
+            "bytes": 3057,
+            "sha256": "cb36e187d3d8facebf76ab7d9f71b9d2d158a9e4ec6b03bdc6008e11f63b5526"
+          },
+          "ansi": {
+            "bytes": 4885,
+            "sha256": "8b4b7dc65cde61b0928a2dd561fbdc41847099d6ed189b52fe8affb570576166"
+          }
+        }
+      ]
+    },
+    {
+      "id": "footer-model-select",
+      "source": "test/mini/footer.view.test.tsx",
+      "description": "RunModelSelectBody provider/model picker (opencode: GPT-5, GPT Free, deprecated Old Model)",
+      "componentClass": "mini-footer-panel",
+      "variants": [
+        {
+          "width": 80,
+          "height": 17,
+          "rows": 17,
+          "cols": 80,
+          "txt": {
+            "bytes": 1377,
+            "sha256": "bb293d53d37652b2f662e4927bf5d84737a1d4c9ebd5fbdd29930429ef5cca05"
+          },
+          "ansi": {
+            "bytes": 2565,
+            "sha256": "fc9318d7a11db8b8616d6b1395d36dcb95c8cae6ac29e50268a88f0185500383"
+          }
+        },
+        {
+          "width": 160,
+          "height": 17,
+          "rows": 17,
+          "cols": 160,
+          "txt": {
+            "bytes": 2737,
+            "sha256": "8ba924741cc93b01fab195d4c3b2418da44f6080178380fd78aa7977823d539b"
+          },
+          "ansi": {
+            "bytes": 3925,
+            "sha256": "abf6c64807b507dd4f7f101b04fc94551626e48e9c91bbb3071a29e3ee89999b"
+          }
+        }
+      ]
+    },
+    {
+      "id": "footer-agent-select",
+      "source": "test/mini/footer.view.test.tsx",
+      "description": "RunAgentSelectBody agent picker (Build/Review/Explore, current=review, hidden agent excluded)",
+      "componentClass": "mini-footer-panel",
+      "variants": [
+        {
+          "width": 80,
+          "height": 16,
+          "rows": 16,
+          "cols": 80,
+          "txt": {
+            "bytes": 1296,
+            "sha256": "1b74a1e47a483d0580d9cd12bd09037a7f80cceaee9343c9550ebf3bebb21b4a"
+          },
+          "ansi": {
+            "bytes": 2483,
+            "sha256": "c5c78b36cdad9017692a1d56598b1da85336e1cf8e03fb2750ed154655289287"
+          }
+        },
+        {
+          "width": 160,
+          "height": 16,
+          "rows": 16,
+          "cols": 160,
+          "txt": {
+            "bytes": 2576,
+            "sha256": "fcd0d4dfdd64d09163f9dac48090951b7c31e6ef38f334a553b5821446616595"
+          },
+          "ansi": {
+            "bytes": 3763,
+            "sha256": "64f763f439bf054da8ec3e9ce2cc8f5fedf3d6a71ee111b43141ccd348783b73"
+          }
+        }
+      ]
+    },
+    {
+      "id": "footer-variant-select",
+      "source": "test/mini/footer.view.test.tsx",
+      "description": "RunVariantSelectBody reasoning-effort picker (Default + high/minimal, current=high)",
+      "componentClass": "mini-footer-panel",
+      "variants": [
+        {
+          "width": 80,
+          "height": 16,
+          "rows": 16,
+          "cols": 80,
+          "txt": {
+            "bytes": 1296,
+            "sha256": "ad9d9ae52713ba98798cb5b31a38381514510d7fc40713df5680892f739e2ce3"
+          },
+          "ansi": {
+            "bytes": 2483,
+            "sha256": "fc9efe587683f2b230a2ca576ec5afc7a781673ca7969c4f0607d1643345ed6a"
+          }
+        },
+        {
+          "width": 160,
+          "height": 16,
+          "rows": 16,
+          "cols": 160,
+          "txt": {
+            "bytes": 2576,
+            "sha256": "300269599d553df5db9e1ac3cd0e099215e94d533f2fd767e33eb45b46cddadb"
+          },
+          "ansi": {
+            "bytes": 3763,
+            "sha256": "7ca6ac770239ff9ff59db6b0af0766cd4ec2813820a74bad80df395c81060d05"
+          }
+        }
+      ]
+    },
+    {
+      "id": "footer-settings",
+      "source": "test/mini/footer.view.test.tsx",
+      "description": "RunSettingsBody verbosity/thinking/tools/shell settings panel (mono=false, animations off)",
+      "componentClass": "mini-footer-panel",
+      "variants": [
+        {
+          "width": 80,
+          "height": 16,
+          "rows": 16,
+          "cols": 80,
+          "txt": {
+            "bytes": 1299,
+            "sha256": "3a84471f685cbcbe2eb1ee4e13ed48206105ba721a6528f653b71df1f856c11c"
+          },
+          "ansi": {
+            "bytes": 3501,
+            "sha256": "9881199195992027ae924227d6ce86c8bce00e2597faac979452a894a2c17153"
+          }
+        },
+        {
+          "width": 160,
+          "height": 16,
+          "rows": 16,
+          "cols": 160,
+          "txt": {
+            "bytes": 2579,
+            "sha256": "4810cab9b8b9ed6f588b8fbb096105353e510833bac8f6bb90d073ec030dc314"
+          },
+          "ansi": {
+            "bytes": 4781,
+            "sha256": "28b6db5679e17db6eb65ef8a525ad0e5fa940c4fecbb9b2549c52f341cd13bc2"
+          }
+        }
+      ]
+    },
+    {
+      "id": "form-authorization",
+      "source": "test/cli/tui/form.test.tsx",
+      "description": "Session FormPrompt: external authorization form (acknowledgement required)",
+      "componentClass": "prompt-composer",
+      "variants": [
+        {
+          "width": 80,
+          "height": 20,
+          "rows": 20,
+          "cols": 80,
+          "txt": {
+            "bytes": 1648,
+            "sha256": "a8200698d4b672767aec7dffbe8e0e88aed75828f96fa361f8f4e1e1c0f18374"
+          },
+          "ansi": {
+            "bytes": 3725,
+            "sha256": "e7be717715fa0c3e20f16140a34f0c34a9caee927cab661455576b9a6e4f9669"
+          }
+        },
+        {
+          "width": 160,
+          "height": 20,
+          "rows": 20,
+          "cols": 160,
+          "txt": {
+            "bytes": 3248,
+            "sha256": "cf1867cd0ec7e7ca254e866605952375eb736bb449d462aa3d321323a2d8383d"
+          },
+          "ansi": {
+            "bytes": 5325,
+            "sha256": "743120df312e3feeb0c52102a80a770ef272dcf92170997ad26278f1e66c1949"
+          }
+        }
+      ]
+    },
+    {
+      "id": "command-palette",
+      "source": "test/cli/tui/command-palette.test.tsx",
+      "description": "CommandPaletteDialog listing two registered commands (New session / Switch model)",
+      "componentClass": "dialog",
+      "variants": [
+        {
+          "width": 80,
+          "height": 24,
+          "rows": 24,
+          "cols": 80,
+          "txt": {
+            "bytes": 1944,
+            "sha256": "44d3d16c06f81eb1e24d5bab4543e449a40e8f4e605045d034c204b4334adba3"
+          },
+          "ansi": {
+            "bytes": 4329,
+            "sha256": "ce25dcde05e797ac645a204c8b21917916707ca56df60e2eafbef1dbd1329afb"
+          }
+        },
+        {
+          "width": 160,
+          "height": 24,
+          "rows": 24,
+          "cols": 160,
+          "txt": {
+            "bytes": 3864,
+            "sha256": "08d7ac3651c05041e647d5254710cd9395d7c1ea3a45d7433171a8c7c32a6ba6"
+          },
+          "ansi": {
+            "bytes": 6249,
+            "sha256": "2ee113e67ef8f6f4c3d0f37e0075bc0f50fac1f67e156d74b374be925e2cdfc1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "dialog-select",
+      "source": "test/cli/tui/dialog-select.test.tsx",
+      "description": "DialogSelect fuzzy picker with three items, Beta selected, two row actions",
+      "componentClass": "dialog",
+      "variants": [
+        {
+          "width": 80,
+          "height": 20,
+          "rows": 20,
+          "cols": 80,
+          "txt": {
+            "bytes": 1622,
+            "sha256": "66f9f14a544fc45c11a6e98f833e940d5cb82c1cb8ccd34fffafbe63f66d2eaa"
+          },
+          "ansi": {
+            "bytes": 3290,
+            "sha256": "efb4a56ea6dafb0ec4a3ca0759752e15b6114dfe78ea7221ab660ab487f96b87"
+          }
+        },
+        {
+          "width": 160,
+          "height": 20,
+          "rows": 20,
+          "cols": 160,
+          "txt": {
+            "bytes": 3222,
+            "sha256": "d98f3ccd525ba4f3f7e4efd1806f64147e25776ba87616866848feb5a1a89cdf"
+          },
+          "ansi": {
+            "bytes": 4890,
+            "sha256": "fbbfef6526b6d8196f5ab0dd02a84f55af851a4d2426f6d9ee826a0b21e6b413"
+          }
+        }
+      ]
+    },
+    {
+      "id": "group-view-instructions",
+      "source": "test/cli/tui/group-view.test.tsx",
+      "description": "SessionGroupView collapsed instructions group ('Instructions: 2 files' summary row)",
+      "componentClass": "session-group",
+      "variants": [
+        {
+          "width": 80,
+          "height": 24,
+          "rows": 24,
+          "cols": 80,
+          "txt": {
+            "bytes": 1946,
+            "sha256": "41a4121d37a3239267ae40456487e9ce6112f58d2b8d61a7bc850972db3f0932"
+          },
+          "ansi": {
+            "bytes": 3022,
+            "sha256": "00b8b18fdf573d762d163f17b1014c1427e0724ba0e443f4755276caa05b2c68"
+          }
+        },
+        {
+          "width": 160,
+          "height": 24,
+          "rows": 24,
+          "cols": 160,
+          "txt": {
+            "bytes": 3866,
+            "sha256": "a419737070b9a8f59180f75cb0f891dc664ed36b9bbe976605d8388cb3c41615"
+          },
+          "ansi": {
+            "bytes": 4942,
+            "sha256": "c074e4a60c0a5157250af81704017b5efa8742680489fe5bf52278c5707f1f6a"
+          }
+        }
+      ]
+    },
+    {
+      "id": "diff-viewer-split",
+      "source": "test/cli/tui/diff-viewer.test.tsx",
+      "description": "Diff viewer split view rendering three hunks of a modified file (gutter +/- rows)",
+      "componentClass": "diff-viewer",
+      "variants": [
+        {
+          "width": 80,
+          "height": 24,
+          "rows": 24,
+          "cols": 80,
+          "txt": {
+            "bytes": 1945,
+            "sha256": "44d40a2f644ae6b3c3e70857ed222076850c237beaf9acce54b83dc6a9f6ad94"
+          },
+          "ansi": {
+            "bytes": 6485,
+            "sha256": "dc5b5a1bf8f58bd96b7f676aeb0b69a968af621067f3c5fbf235cb7400f8fb46"
+          }
+        },
+        {
+          "width": 160,
+          "height": 24,
+          "rows": 24,
+          "cols": 160,
+          "txt": {
+            "bytes": 3871,
+            "sha256": "2417c02a1c76f6634132de11f1e8e50f24a3dc3aa81ae4fb5231c0c90d2f88be"
+          },
+          "ansi": {
+            "bytes": 10362,
+            "sha256": "8e30ed6685e8130fef0c32d1fc5d360f31c3a571300354f2c872ca56a78bf7d4"
+          }
+        }
+      ]
+    }
+  ]
+}
