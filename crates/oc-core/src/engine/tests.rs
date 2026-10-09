@@ -656,6 +656,130 @@ fn engine_skills_table_discovers_config_skill_paths() {
 }
 
 // ===========================================================================
+// Built-in skills plugin (gate-6 F3) — plugin/skill.ts port
+// ===========================================================================
+
+#[test]
+fn engine_builtin_skills_seed_the_table() {
+    let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+    let loaded = crate::config::Loader::new(
+        dir.path().to_path_buf(),
+        crate::config::GlobalDirs { config: dir.path().join("cfg"), home: dir.path().join("home") },
+    )
+    .load();
+    let table = crate::engine::skills::ConfigSkillTable::discover(
+        &loaded,
+        dir.path(),
+        &dir.path().join("home"),
+    );
+
+    let opencode =
+        crate::tool::skill::SkillTable::get(&table, "opencode").expect("built-in opencode");
+    assert_eq!(opencode.name.0, "OpenCode");
+    assert!(opencode
+        .description
+        .as_deref()
+        .unwrap_or_default()
+        .starts_with("Use this skill for any question about OpenCode itself"));
+    assert_eq!(opencode.path.as_str(), "/builtin/opencode.md");
+    assert_eq!(opencode.content, crate::engine::skills::builtin::OPENCODE_MD);
+    assert_eq!(opencode.auto_invoke, None);
+
+    let report = crate::tool::skill::SkillTable::get(&table, "report").expect("built-in report");
+    assert_eq!(report.name.0, "Report");
+    assert!(report.description.as_deref().unwrap_or_default().contains("opencode issue"));
+    assert_eq!(report.path.as_str(), "/builtin/report.md");
+    // The diagnostics snapshot mirrors the TS field set.
+    let content = &report.content;
+    assert!(content.starts_with(crate::engine::skills::builtin::REPORT_MD));
+    assert!(content.contains("## Runtime Diagnostics Snapshot"));
+    assert!(content
+        .contains(&format!("- opencode version: {}", crate::engine::skills::builtin::APP_VERSION)));
+    assert_eq!(crate::engine::skills::builtin::APP_VERSION, "2.0.24");
+    assert!(content
+        .contains(&format!("- install/channel: {}", crate::engine::skills::builtin::APP_CHANNEL)));
+    assert!(content.contains("- OS: "));
+    assert!(content.contains("- Terminal: "));
+    assert!(content.contains("- Shell: "));
+    assert!(content.contains("- Active plugins: None found in config"));
+}
+
+#[test]
+fn engine_builtin_report_lists_configured_plugins_verbatim_and_sorted() {
+    let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+    let document = oc_schema::config::Document {
+        info: serde_json::from_value(serde_json::json!({
+            "plugins": [
+                "package-plugin",
+                "-disabled",
+                "local.ts",
+                { "package": "package-plugin", "options": { "enabled": true } }
+            ]
+        }))
+        .expect("info"),
+        path: None,
+    };
+    let loaded = crate::config::Loaded {
+        sources: crate::config::discovery::Sources::default(),
+        entries: vec![oc_schema::config::Entry::Document(Box::new(document))],
+        diagnostics: Vec::new(),
+    };
+    let table = crate::engine::skills::ConfigSkillTable::discover(
+        &loaded,
+        dir.path(),
+        &dir.path().join("home"),
+    );
+    let report = crate::tool::skill::SkillTable::get(&table, "report").expect("report");
+    // Reference expectation (skill.test.ts): entries verbatim, duplicates
+    // and remove directives included, lexicographically sorted.
+    assert!(
+        report
+            .content
+            .contains("- Active plugins: -disabled, local.ts, package-plugin, package-plugin"),
+        "report content:\n{}",
+        report.content
+    );
+}
+
+#[test]
+fn engine_builtin_skills_lose_id_collisions_to_config() {
+    let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+    let skills = dir.path().join("skills");
+    std::fs::create_dir_all(skills.join("opencode")).expect("skill dir");
+    std::fs::write(
+        skills.join("opencode").join("SKILL.md"),
+        "---\nname: Custom\ndescription: A config-defined opencode skill\n---\n# Custom",
+    )
+    .expect("skill file");
+    let loaded = crate::config::Loader::new(
+        dir.path().to_path_buf(),
+        crate::config::GlobalDirs { config: dir.path().join("cfg"), home: dir.path().join("home") },
+    )
+    .load();
+    let mut with_document = loaded.clone();
+    with_document.entries.push(oc_schema::config::Entry::Document(Box::new(
+        oc_schema::config::Document {
+            info: serde_json::from_value(serde_json::json!({ "skills": ["./skills"] }))
+                .expect("info"),
+            path: None,
+        },
+    )));
+    let table = crate::engine::skills::ConfigSkillTable::discover(
+        &with_document,
+        dir.path(),
+        &dir.path().join("home"),
+    );
+    // Config wins on collision (v2 editor.add overwrite precedence).
+    let collision =
+        crate::tool::skill::SkillTable::get(&table, "opencode").expect("the config opencode");
+    assert_eq!(collision.name.0, "Custom");
+    assert!(collision.content.contains("# Custom"));
+    // The built-in report is untouched.
+    let report = crate::tool::skill::SkillTable::get(&table, "report").expect("report");
+    assert!(report.content.contains("## Runtime Diagnostics Snapshot"));
+}
+
+// ===========================================================================
 // Gate-5 re-review fixes: cold-assembly dedup + bundle background-task
 // shutdown
 // ===========================================================================

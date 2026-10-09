@@ -190,12 +190,12 @@ async fn runner_e2e_plain_text_turn() {
 ///   `reference.updated`, `plugin.updated`) — config-seeded catalog frames
 ///   from the parity harness's config lane (Wave C/D scope);
 /// - `server.connected` (group 3) — the parity harness's server channel;
-/// - `core/skill-guidance` inside `session.instructions.updated` — the Rust
-///   side has no skill registry yet, so the source reads as an observed
-///   absence (v2's empty-skill semantics) and the key stays out of the
-///   initial delta;
 /// - envelope `metadata` (the initial-instruction marker) and `rawFinish`
 ///   on `session.step.ended` — the Rust comparison normalizes both away.
+///
+/// `core/skill-guidance` is NO LONGER skipped: the built-in skills port
+/// (gate-6 F3) seeds the table, the source reads a non-empty list, and the
+/// initial delta carries the key like v2.
 #[tokio::test]
 async fn runner_e2e_parity_prompt_fake_llm_golden_lite() {
     let golden = load_prompt_fake_llm_golden();
@@ -270,16 +270,8 @@ async fn runner_e2e_parity_prompt_fake_llm_golden_lite() {
             actual.0, expected.0,
             "frame {index} type mismatch:\n  emitted: {emitted:#?}\n  expected: {expected:#?}"
         );
-        let mut a = normalize(actual.1.clone(), Some(&dir));
-        let mut b = normalize(expected.1.clone(), None);
-        if actual.0 == "session.instructions.updated" {
-            // core/skill-guidance is a documented Rust-side stub skip.
-            for object in [&mut a, &mut b] {
-                if let Some(delta) = object.get_mut("delta").and_then(Value::as_object_mut) {
-                    delta.remove("core/skill-guidance");
-                }
-            }
-        }
+        let a = normalize(actual.1.clone(), Some(&dir));
+        let b = normalize(expected.1.clone(), None);
         assert_eq!(
             a, b,
             "frame {index} ({}) data mismatch:\n  emitted:  {a:#?}\n  expected: {b:#?}",

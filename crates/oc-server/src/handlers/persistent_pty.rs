@@ -303,6 +303,7 @@ async fn connect(
             input_protocol,
             attachment_id,
             takeover,
+            state.shutdown.subscribe(),
         )
         .await;
     })
@@ -318,6 +319,7 @@ async fn attach_session(
     input_protocol: bool,
     attachment_id: String,
     takeover: bool,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     use futures::{SinkExt as _, StreamExt as _};
     let (outbox_tx, mut outbox_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
@@ -403,6 +405,7 @@ async fn attach_session(
     let (mut sender, mut receiver) = socket_split(socket);
     loop {
         tokio::select! {
+            _ = shutdown.changed() => break,
             outbound = outbox_rx.recv() => {
                 match outbound {
                     Some(message) => {

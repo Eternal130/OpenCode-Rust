@@ -649,7 +649,16 @@ fn skill_guidance_source(
                 })
             })
             .collect();
-        visible.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        // v2 sorts with `id.localeCompare` (ICU tertiary: case-insensitive
+        // primary, lowercase before uppercase on ties). Approximation: ASCII
+        // case-fold then lowercase-first tie-break — identical to ICU for
+        // the ASCII corpus of skill ids; non-ASCII falls back to code
+        // points (documented divergence).
+        visible.sort_by(|a, b| {
+            let (x, y) =
+                (a["id"].as_str().unwrap_or_default(), b["id"].as_str().unwrap_or_default());
+            x.to_lowercase().cmp(&y.to_lowercase()).then_with(|| y.cmp(x))
+        });
         visible
     };
     let render = |skills: &[serde_json::Value]| -> String {
@@ -1268,20 +1277,28 @@ pub struct ContextDeps {
 }
 
 impl ContextDeps {
-    /// The Wave B shape: empty catalog, no MCP servers, no skills.
+    /// The Wave B shape: empty catalog, no MCP servers, no config — but
+    /// the two BUILT-IN skills (the internal skills plugin registers them
+    /// unconditionally in v2, so every session context sees them).
     #[must_use]
     pub fn minimal(
         clock: Arc<dyn oc_util::determinism::Clock>,
         discovery: Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>,
         environment: Arc<dyn Fn() -> String + Send + Sync>,
     ) -> Self {
+        let empty = crate::config::Loaded {
+            sources: crate::config::discovery::Sources::default(),
+            entries: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let builtins = crate::engine::skills::builtin::skills(&empty);
         Self {
             clock,
             discovery,
             environment,
             catalog: Arc::new(crate::provider_catalog::Catalog::empty()),
             mcp: Arc::new(Vec::new),
-            skills: Arc::new(Vec::new),
+            skills: Arc::new(move || builtins.clone()),
         }
     }
 }

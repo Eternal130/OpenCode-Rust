@@ -805,7 +805,11 @@ mod tests {
             }
         );
 
-        notify.notify_waiters();
+        // notify_one (not notify_waiters): a permit survives being called
+        // before the run future's first poll, so the single waiter cannot
+        // miss the wakeup under scheduler jitter (the sibling latch tests
+        // use the same pattern).
+        notify.notify_one();
         let result = jobs.wait("job_bg", None).await;
         assert_eq!(result.info.unwrap().status, Status::Completed);
         // Record persists until the notification is admitted.

@@ -38,12 +38,11 @@ use parity::sse;
 use serde_json::Value;
 
 /// The per-scenario documented skip-list (frame types removed from both
-/// the golden and the Rust capture before comparing).
-fn skips_for(name: &str) -> &'static [&'static str] {
-    match name {
-        "prompt_fake_llm" => &["session.instructions.updated"],
-        _ => &[],
-    }
+/// the golden and the Rust capture before comparing). Empty everywhere:
+/// the built-in skills port (gate-6 F3) closed the last documented
+/// divergence — `prompt_fake_llm` compares fully exact, zero skips.
+fn skips_for(_name: &str) -> &'static [&'static str] {
+    &[]
 }
 
 /// Boot the Rust server, run the named script, compare against the golden
