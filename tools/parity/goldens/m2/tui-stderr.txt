@@ -1,0 +1,228 @@
+[tui] ingest: Resync { sessions: [], unread: [], messages: [] }
+[tui] ingest: Connected
+[tui] ingest: Event(BusEvent { id: "evt_f44996fa82ce4d1abbbdf6542b451fea", type_: "server.connected", data: Object {}, created: None })
+[tui] ingest: Event(BusEvent { id: "evt_3e47f8facb11429a87967c2893970375", type_: "project.updated", data: Object {"canonical": String("/tmp/opencode/ref/packages/cli"), "id": String("98b1b6cf10e8f9f1ef18d4eefbd9b2a048c6f0d3fb68298f9ad8774c5cd1eb77"), "sandboxes": Array [], "time": Object {"active": Number(0), "created": Number(1791603636068), "updated": Number(1791603636068)}}, created: Some(1791603636721) })
+[tui] ingest: Event(BusEvent { id: "evt_b5cf52e54e734c6eb02db8c895fbeeab", type_: "integration.updated", data: Object {}, created: Some(1791603636721) })
+[tui] ingest: Event(BusEvent { id: "evt_73a7dc2bbb534e72a45f0dce42a17d3f", type_: "provider.updated", data: Object {}, created: Some(1791603636736) })
+[tui] ingest: Event(BusEvent { id: "evt_0a7bf5d216ca443f8d5fb1a50684501c", type_: "model.updated", data: Object {}, created: Some(1791603636736) })
+[tui] ingest: Event(BusEvent { id: "evt_ab54750740f2473197ebfe0c556679ce", type_: "agent.updated", data: Object {}, created: Some(1791603636737) })
+[tui] ingest: Event(BusEvent { id: "evt_14b34eeb16fe47cda72d3279caa9a43d", type_: "command.updated", data: Object {}, created: Some(1791603636737) })
+[tui] ingest: Event(BusEvent { id: "evt_4a9bddbf39894c4cabac8051ed890407", type_: "skill.updated", data: Object {}, created: Some(1791603636737) })
+[tui] ingest: Event(BusEvent { id: "evt_f2e1deb16857494fb4d8b05726176ffd", type_: "websearch.updated", data: Object {}, created: Some(1791603636737) })
+[tui] ingest: Event(BusEvent { id: "evt_b8af5018dbd3457c8b2cf0b24898eab5", type_: "reference.updated", data: Object {}, created: Some(1791603636737) })
+[tui] ingest: Event(BusEvent { id: "evt_4ec6588740744272a4bcd6e33e8d852c", type_: "plugin.updated", data: Object {}, created: Some(1791603636737) })
+[tui] key: escape
+[tui] key: W
+[tui] key: h
+[tui] key: a
+[tui] key: t
+[tui] key:  
+[tui] key: f
+[tui] key: i
+[tui] key: l
+[tui] key: e
+[tui] key: s
+[tui] key:  
+[tui] key: a
+[tui] key: r
+[tui] key: e
+[tui] key:  
+[tui] key: h
+[tui] key: e
+[tui] key: r
+[tui] key: e
+[tui] key: ?
+[tui] key: return
+[tui] ingest: Event(BusEvent { id: "evt_9930493088a24efc95926dd56113db95", type_: "session.created", data: Object {"location": Object {"directory": String("/tmp/opencode/m2-sandbox-1486159/project")}, "projectID": String("26442d5bc5d84c0e97c4a19c2d10a1bd6a1a8fed6cf835a9e6b5f7d248d45926"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "slug": String("vivid-bay"), "subpath": String(""), "title": Null, "version": String("2.0.24")}, created: Some(1791603640083) })
+[tui] ingest: Event(BusEvent { id: "evt_41a34bb1f73c42479561aa9ea5a7de8b", type_: "project.updated", data: Object {"canonical": String("/tmp/opencode/m2-sandbox-1486159/project"), "id": String("26442d5bc5d84c0e97c4a19c2d10a1bd6a1a8fed6cf835a9e6b5f7d248d45926"), "sandboxes": Array [], "time": Object {"active": Number(0), "created": Number(1791603640050), "updated": Number(1791603640050)}}, created: Some(1791603640084) })
+[tui] ingest: Event(BusEvent { id: "evt_91871f0fa7de45d288a7af9ec566ac20", type_: "integration.updated", data: Object {}, created: Some(1791603640084) })
+[tui] ingest: Event(BusEvent { id: "evt_7f3a26b3d82a4e5e983d856f7c9b3be2", type_: "provider.updated", data: Object {}, created: Some(1791603640085) })
+[tui] ingest: Event(BusEvent { id: "evt_8206f520678f49398d1c6514afa15123", type_: "model.updated", data: Object {}, created: Some(1791603640085) })
+[tui] ingest: Event(BusEvent { id: "evt_7f5757c8fe0b48f78287bf35b748b2f7", type_: "agent.updated", data: Object {}, created: Some(1791603640085) })
+[tui] ingest: Event(BusEvent { id: "evt_56439af727b04041bb1b0248d99c67a8", type_: "command.updated", data: Object {}, created: Some(1791603640085) })
+[tui] ingest: Event(BusEvent { id: "evt_99940ea9d20647b6b8a6ad208f77e2aa", type_: "skill.updated", data: Object {}, created: Some(1791603640085) })
+[tui] ingest: Event(BusEvent { id: "evt_767e140967e345a2b11fa71b72f52165", type_: "websearch.updated", data: Object {}, created: Some(1791603640085) })
+[tui] ingest: Event(BusEvent { id: "evt_7d1160dd74ae4c9d92d9fecdee5996c9", type_: "reference.updated", data: Object {}, created: Some(1791603640085) })
+[tui] ingest: Event(BusEvent { id: "evt_af92780954dd4d36adee53aaecddfb95", type_: "plugin.updated", data: Object {}, created: Some(1791603640085) })
+[tui] ingest: Event(BusEvent { id: "evt_f234c86f953c4553b78afec3ecdbf7f8", type_: "session.inbox.enqueued", data: Object {"inboxID": String("msg_09099895950e4f9f9ca3e57b550efe69"), "item": Object {"delivery": String("steer"), "payload": Object {"text": String("What files are here?")}, "type": String("user")}, "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603640090) })
+[tui] ingest: Event(BusEvent { id: "evt_1988502e7c1a4ac19235baa2f79e8a4a", type_: "session.execution.started", data: Object {"sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603640091) })
+[tui] ingest: Event(BusEvent { id: "evt_f6dcbad70ea242558b29daf724c379bb", type_: "session.instructions.updated", data: Object {"delta": Object {"core/codemode": String("4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a"), "core/date": String("76b254eceedf66bff1aae8c8fe1a491cb2508b42ad120cbebaf750659e0a5a66"), "core/environment": String("2850b0fef1310b7639cee90d1a4ac2a952c6b889639bcf0b655e39942ae5fa6c"), "core/skill-guidance": String("8394362d28c82fa4d13c7a9f5568c05680f6687e07db8f426a0e3c92f3027dc9")}, "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603640092) })
+[tui] ingest: Event(BusEvent { id: "evt_74fce523bde143f0a6371e672207a1e5", type_: "session.inbox.delivered", data: Object {"inboxID": String("msg_09099895950e4f9f9ca3e57b550efe69"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603640093) })
+[tui] ingest: Event(BusEvent { id: "evt_ea1d7eedf1c643d3a376e45fa38b4e55", type_: "session.usage.recorded", data: Object {"cost": Number(0.0), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "source": String("title"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(11), "output": Number(7), "reasoning": Number(0)}}, created: Some(1791603640111) })
+[tui] ingest: Event(BusEvent { id: "evt_025b15031f444722b3807533845808d9", type_: "session.step.started", data: Object {"agent": String("build"), "assistantMessageID": String("msg_bb868272a21743d7972c5737337cbca4"), "model": Object {"id": String("fake-model"), "providerID": String("parityfake"), "variant": String("default")}, "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "started": Number(0)}, created: Some(1791603640111) })
+[tui] ingest: Event(BusEvent { id: "evt_da5048b2434f41b7a47f50757c8cc076", type_: "session.usage.updated", data: Object {"cost": Number(0), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(11), "output": Number(7), "reasoning": Number(0)}}, created: Some(1791603640112) })
+[tui] ingest: Event(BusEvent { id: "evt_18d3c02207a543838c5ef7e2f2b4fa21", type_: "session.tool.input.started", data: Object {"assistantMessageID": String("msg_bb868272a21743d7972c5737337cbca4"), "id": String("call_m2_read_in"), "name": String("read"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603640112) })
+[tui] ingest: Event(BusEvent { id: "evt_47fff752137b40ea9b03b0c1bdb0984c", type_: "session.tool.input.ended", data: Object {"assistantMessageID": String("msg_bb868272a21743d7972c5737337cbca4"), "id": String("call_m2_read_in"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "text": String("{\"path\":\"/tmp/opencode/m2-sandbox-1486159/project/notes.md\"}")}, created: Some(1791603640113) })
+[tui] ingest: Event(BusEvent { id: "evt_ccbb443fd1224e0eb46929a7967b8309", type_: "session.tool.called", data: Object {"assistantMessageID": String("msg_bb868272a21743d7972c5737337cbca4"), "executed": Bool(false), "id": String("call_m2_read_in"), "input": Object {"path": String("/tmp/opencode/m2-sandbox-1486159/project/notes.md")}, "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603640114) })
+[tui] ingest: Event(BusEvent { id: "evt_1b35904b54ec4d0ca83aa378b9f7830c", type_: "session.step.streamed", data: Object {"assistantMessageID": String("msg_bb868272a21743d7972c5737337cbca4"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603640114) })
+[tui] ingest: Event(BusEvent { id: "evt_520b76df608f4089b5e0b9d38bcbe5c4", type_: "session.tool.success", data: Object {"assistantMessageID": String("msg_bb868272a21743d7972c5737337cbca4"), "content": Array [Object {"text": String("Read file /tmp/opencode/m2-sandbox-1486159/project/notes.md, lines 1-1\n1: m2 daily-work notes file"), "type": String("text")}], "executed": Bool(false), "id": String("call_m2_read_in"), "metadata": Object {"truncated": Bool(false)}, "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603640115) })
+[tui] ingest: Event(BusEvent { id: "evt_2677a5e6a94d42afa8b1aeebb2626342", type_: "session.step.ended", data: Object {"assistantMessageID": String("msg_bb868272a21743d7972c5737337cbca4"), "cost": Number(0), "finish": String("tool-calls"), "rawFinish": String("tool_calls"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(9), "output": Number(3), "reasoning": Number(0)}}, created: Some(1791603640115) })
+[tui] ingest: Event(BusEvent { id: "evt_a4df00b699be4fcebc51f939f04df6e5", type_: "session.usage.updated", data: Object {"cost": Number(0), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(20), "output": Number(10), "reasoning": Number(0)}}, created: Some(1791603640116) })
+[tui] ingest: Event(BusEvent { id: "evt_358f5a4838c744eca1912c2f3366c70b", type_: "session.step.started", data: Object {"agent": String("build"), "assistantMessageID": String("msg_7c5139811f7941038b3c7d01a98dfa7b"), "model": Object {"id": String("fake-model"), "providerID": String("parityfake"), "variant": String("default")}, "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "started": Number(0)}, created: Some(1791603640122) })
+[tui] ingest: Event(BusEvent { id: "evt_c8f09b22726e4fd784faa8b914a13395", type_: "session.text.started", data: Object {"assistantMessageID": String("msg_7c5139811f7941038b3c7d01a98dfa7b"), "ordinal": Number(0), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603640123) })
+[tui] ingest: Event(BusEvent { id: "evt_3adcbf6d7e484c5884beb5831dacff9d", type_: "session.text.delta", data: Object {"assistantMessageID": String("msg_7c5139811f7941038b3c7d01a98dfa7b"), "delta": String("The notes file is present."), "ordinal": Number(0), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603640123) })
+[tui] ingest: Event(BusEvent { id: "evt_7b1588c5ea8a47f6b623d72144966e3e", type_: "session.text.ended", data: Object {"assistantMessageID": String("msg_7c5139811f7941038b3c7d01a98dfa7b"), "ordinal": Number(0), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "text": String("The notes file is present.")}, created: Some(1791603640123) })
+[tui] ingest: Event(BusEvent { id: "evt_55821133f0ae4e1e94f5d4a496bbce93", type_: "session.step.streamed", data: Object {"assistantMessageID": String("msg_7c5139811f7941038b3c7d01a98dfa7b"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603640124) })
+[tui] ingest: Event(BusEvent { id: "evt_4654ca114dbb4d948840846cbfccc6d6", type_: "session.step.ended", data: Object {"assistantMessageID": String("msg_7c5139811f7941038b3c7d01a98dfa7b"), "cost": Number(0), "finish": String("stop"), "rawFinish": String("stop"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(11), "output": Number(7), "reasoning": Number(0)}}, created: Some(1791603640124) })
+[tui] ingest: Event(BusEvent { id: "evt_8eb0d2f45086401b9410a41081a5c66f", type_: "session.usage.updated", data: Object {"cost": Number(0), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(31), "output": Number(17), "reasoning": Number(0)}}, created: Some(1791603640125) })
+[tui] ingest: Event(BusEvent { id: "evt_8a52b38237b34b64a64d08d6903c4603", type_: "session.execution.succeeded", data: Object {"sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603640125) })
+[tui] key: N
+[tui] key: o
+[tui] key: w
+[tui] key:  
+[tui] key: r
+[tui] key: e
+[tui] key: a
+[tui] key: d
+[tui] key:  
+[tui] key: t
+[tui] key: h
+[tui] key: e
+[tui] key:  
+[tui] key: o
+[tui] key: u
+[tui] key: t
+[tui] key: s
+[tui] key: i
+[tui] key: d
+[tui] key: e
+[tui] key:  
+[tui] key: f
+[tui] key: i
+[tui] key: l
+[tui] key: e
+[tui] key:  
+[tui] key: p
+[tui] key: l
+[tui] key: e
+[tui] key: a
+[tui] key: s
+[tui] key: e
+[tui] key: .
+[tui] key: return
+[tui] ingest: Event(BusEvent { id: "evt_7f816b0520cc4b8f8c3e1903b685d59b", type_: "session.inbox.enqueued", data: Object {"inboxID": String("msg_6d82c83052fd4015a75d049b4dbc2c22"), "item": Object {"delivery": String("steer"), "payload": Object {"text": String("Now read the outside file please.")}, "type": String("user")}, "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603644064) })
+[tui] ingest: Event(BusEvent { id: "evt_83d33c5094e541ecbd2cbd5f4ac4d9d0", type_: "session.execution.started", data: Object {"sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603644065) })
+[tui] ingest: Event(BusEvent { id: "evt_292f3fee660a47ba908fb2f073bb007d", type_: "session.inbox.delivered", data: Object {"inboxID": String("msg_6d82c83052fd4015a75d049b4dbc2c22"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603644067) })
+[tui] ingest: Event(BusEvent { id: "evt_02d45b774b0f4d16b7bb228c79892aff", type_: "session.usage.recorded", data: Object {"cost": Number(0.0), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "source": String("title"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(11), "output": Number(7), "reasoning": Number(0)}}, created: Some(1791603644085) })
+[tui] ingest: Event(BusEvent { id: "evt_a107d299955a439b8336624cc2c0acc8", type_: "session.step.started", data: Object {"agent": String("build"), "assistantMessageID": String("msg_5b6e4812762244c18c917bda9ccce9e4"), "model": Object {"id": String("fake-model"), "providerID": String("parityfake"), "variant": String("default")}, "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "started": Number(0)}, created: Some(1791603644086) })
+[tui] ingest: Event(BusEvent { id: "evt_81f802ac7af1446ea07af6887ce3e72a", type_: "session.usage.updated", data: Object {"cost": Number(0), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(42), "output": Number(24), "reasoning": Number(0)}}, created: Some(1791603644086) })
+[tui] ingest: Event(BusEvent { id: "evt_10c386b5842e42cb9c0d80b93e2e0431", type_: "session.tool.input.started", data: Object {"assistantMessageID": String("msg_5b6e4812762244c18c917bda9ccce9e4"), "id": String("call_m2_read_out"), "name": String("read"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603644086) })
+[tui] ingest: Event(BusEvent { id: "evt_57ab91d6ba0545b1b986d7520b6a51ff", type_: "session.tool.input.ended", data: Object {"assistantMessageID": String("msg_5b6e4812762244c18c917bda9ccce9e4"), "id": String("call_m2_read_out"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "text": String("{\"path\":\"/tmp/opencode/m2-sandbox-1486159/outside/secret.txt\"}")}, created: Some(1791603644087) })
+[tui] ingest: Event(BusEvent { id: "evt_3c6353e2e1ae4c18b879dbe1384d307b", type_: "session.tool.called", data: Object {"assistantMessageID": String("msg_5b6e4812762244c18c917bda9ccce9e4"), "executed": Bool(false), "id": String("call_m2_read_out"), "input": Object {"path": String("/tmp/opencode/m2-sandbox-1486159/outside/secret.txt")}, "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603644087) })
+[tui] ingest: Event(BusEvent { id: "evt_28cacfacfca64fc19f589b9c1212db12", type_: "session.step.streamed", data: Object {"assistantMessageID": String("msg_5b6e4812762244c18c917bda9ccce9e4"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603644088) })
+[tui] ingest: Event(BusEvent { id: "evt_05a1ae9390e046708d60a0335dada98e", type_: "permission.asked", data: Object {"action": String("external_directory"), "id": String("per_509f926b7f5447568eed188954993a01"), "resources": Array [String("/tmp/opencode/m2-sandbox-1486159/outside/*")], "save": Array [String("/tmp/opencode/m2-sandbox-1486159/outside/*")], "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "source": Object {"id": String("call_m2_read_out"), "messageID": String("msg_5b6e4812762244c18c917bda9ccce9e4"), "type": String("tool")}}, created: Some(1791603644088) })
+[tui] key: return
+[tui] permission reply per_509f926b7f5447568eed188954993a01 on ses_edc19f8ecffe0Mf4KPxJxOGvsu: once
+[tui] ingest: Event(BusEvent { id: "evt_f83ce651b41b46c8ad63b7a69d3b1dcf", type_: "permission.replied", data: Object {"reply": String("once"), "requestID": String("per_509f926b7f5447568eed188954993a01"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603647084) })
+[tui] ingest: Event(BusEvent { id: "evt_fb0a081c73ac4003a94bec9bbee318e8", type_: "session.tool.success", data: Object {"assistantMessageID": String("msg_5b6e4812762244c18c917bda9ccce9e4"), "content": Array [Object {"text": String("Read file /tmp/opencode/m2-sandbox-1486159/outside/secret.txt, lines 1-1\n1: m2-secret"), "type": String("text")}], "executed": Bool(false), "id": String("call_m2_read_out"), "metadata": Object {"truncated": Bool(false)}, "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603647085) })
+[tui] ingest: Event(BusEvent { id: "evt_eec7df70324a4ffcb09e58a1bcf56472", type_: "session.step.ended", data: Object {"assistantMessageID": String("msg_5b6e4812762244c18c917bda9ccce9e4"), "cost": Number(0), "finish": String("tool-calls"), "rawFinish": String("tool_calls"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(9), "output": Number(3), "reasoning": Number(0)}}, created: Some(1791603647086) })
+[tui] ingest: Event(BusEvent { id: "evt_3b0e0f33c8d4485795c3f0b4616ca533", type_: "session.usage.updated", data: Object {"cost": Number(0), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(51), "output": Number(27), "reasoning": Number(0)}}, created: Some(1791603647086) })
+[tui] ingest: Event(BusEvent { id: "evt_e1ff4764547d4c57be8a36acd2eae5b1", type_: "session.step.started", data: Object {"agent": String("build"), "assistantMessageID": String("msg_1899bcbee74747a38d719f6dea882c88"), "model": Object {"id": String("fake-model"), "providerID": String("parityfake"), "variant": String("default")}, "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "started": Number(0)}, created: Some(1791603647092) })
+[tui] ingest: Event(BusEvent { id: "evt_6ed310f682f0486bacc12230a9dcae29", type_: "session.text.started", data: Object {"assistantMessageID": String("msg_1899bcbee74747a38d719f6dea882c88"), "ordinal": Number(0), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603647093) })
+[tui] ingest: Event(BusEvent { id: "evt_dfdfcf2c39a64f64ae008fc706a28992", type_: "session.text.delta", data: Object {"assistantMessageID": String("msg_1899bcbee74747a38d719f6dea882c88"), "delta": String("The outside file says m2-secret."), "ordinal": Number(0), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603647093) })
+[tui] ingest: Event(BusEvent { id: "evt_ea969d5fdb7947a987e88a51d2ada1cf", type_: "session.text.ended", data: Object {"assistantMessageID": String("msg_1899bcbee74747a38d719f6dea882c88"), "ordinal": Number(0), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "text": String("The outside file says m2-secret.")}, created: Some(1791603647094) })
+[tui] ingest: Event(BusEvent { id: "evt_e7243e92b2674245a1cb965c0d80ba2e", type_: "session.step.streamed", data: Object {"assistantMessageID": String("msg_1899bcbee74747a38d719f6dea882c88"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603647094) })
+[tui] ingest: Event(BusEvent { id: "evt_ff9f2bc75008475c9197c4ae8c254404", type_: "session.step.ended", data: Object {"assistantMessageID": String("msg_1899bcbee74747a38d719f6dea882c88"), "cost": Number(0), "finish": String("stop"), "rawFinish": String("stop"), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(11), "output": Number(7), "reasoning": Number(0)}}, created: Some(1791603647094) })
+[tui] ingest: Event(BusEvent { id: "evt_6ca10c755f3141ea8ea88f749e3c2f13", type_: "session.usage.updated", data: Object {"cost": Number(0), "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(62), "output": Number(34), "reasoning": Number(0)}}, created: Some(1791603647095) })
+[tui] ingest: Event(BusEvent { id: "evt_a4ae07d280d54d5db5295b85e2fc6b31", type_: "session.execution.succeeded", data: Object {"sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603647095) })
+[tui] key: ctrl+x
+[tui] key: n
+[tui] key: S
+[tui] key: a
+[tui] key: y
+[tui] key:  
+[tui] key: s
+[tui] key: o
+[tui] key: m
+[tui] key: e
+[tui] key: t
+[tui] key: h
+[tui] key: i
+[tui] key: n
+[tui] key: g
+[tui] key:  
+[tui] key: f
+[tui] key: o
+[tui] key: r
+[tui] key:  
+[tui] key: s
+[tui] key: e
+[tui] key: s
+[tui] key: s
+[tui] key: i
+[tui] key: o
+[tui] key: n
+[tui] key:  
+[tui] key: t
+[tui] key: w
+[tui] key: o
+[tui] key: .
+[tui] key: return
+[tui] ingest: Event(BusEvent { id: "evt_22efb2ab7fa54236aedfa6662171311c", type_: "session.created", data: Object {"location": Object {"directory": String("/tmp/opencode/m2-sandbox-1486159/project")}, "projectID": String("26442d5bc5d84c0e97c4a19c2d10a1bd6a1a8fed6cf835a9e6b5f7d248d45926"), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB"), "slug": String("rapid-granite"), "subpath": String(""), "title": Null, "version": String("2.0.24")}, created: Some(1791603653185) })
+[tui] ingest: Event(BusEvent { id: "evt_ba62718900eb4bb9bfdb1262a0ca90c8", type_: "session.inbox.enqueued", data: Object {"inboxID": String("msg_cd185d4dad0f434584a6de27eee4d638"), "item": Object {"delivery": String("steer"), "payload": Object {"text": String("Say something for session two.")}, "type": String("user")}, "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB")}, created: Some(1791603653187) })
+[tui] ingest: Event(BusEvent { id: "evt_41a6bc97969145358ccc62921e4f65b0", type_: "session.execution.started", data: Object {"sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB")}, created: Some(1791603653188) })
+[tui] ingest: Event(BusEvent { id: "evt_f6e648608f4c4a24816509ecefe5fe41", type_: "session.instructions.updated", data: Object {"delta": Object {"core/codemode": String("4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a"), "core/date": String("76b254eceedf66bff1aae8c8fe1a491cb2508b42ad120cbebaf750659e0a5a66"), "core/environment": String("2850b0fef1310b7639cee90d1a4ac2a952c6b889639bcf0b655e39942ae5fa6c"), "core/skill-guidance": String("8394362d28c82fa4d13c7a9f5568c05680f6687e07db8f426a0e3c92f3027dc9")}, "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB")}, created: Some(1791603653189) })
+[tui] ingest: Event(BusEvent { id: "evt_d8ff868118914ce39652904dcc4c8c7f", type_: "session.inbox.delivered", data: Object {"inboxID": String("msg_cd185d4dad0f434584a6de27eee4d638"), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB")}, created: Some(1791603653190) })
+[tui] ingest: Event(BusEvent { id: "evt_d684460d97b240df96cf8f1d0c1a7030", type_: "session.usage.recorded", data: Object {"cost": Number(0.0), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB"), "source": String("title"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(11), "output": Number(7), "reasoning": Number(0)}}, created: Some(1791603653207) })
+[tui] ingest: Event(BusEvent { id: "evt_ae4835ae4dbd4eb4bf7fd1567dd7d012", type_: "session.step.started", data: Object {"agent": String("build"), "assistantMessageID": String("msg_b37348a58fd749f584d96792efe3de76"), "model": Object {"id": String("fake-model"), "providerID": String("parityfake"), "variant": String("default")}, "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB"), "started": Number(0)}, created: Some(1791603653208) })
+[tui] ingest: Event(BusEvent { id: "evt_0adf28be2ee74b3aaa7ece6f548b1a06", type_: "session.usage.updated", data: Object {"cost": Number(0), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(11), "output": Number(7), "reasoning": Number(0)}}, created: Some(1791603653208) })
+[tui] ingest: Event(BusEvent { id: "evt_2e9f496349254065a007bf309fd9a0a5", type_: "session.text.started", data: Object {"assistantMessageID": String("msg_b37348a58fd749f584d96792efe3de76"), "ordinal": Number(0), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB")}, created: Some(1791603653209) })
+[tui] ingest: Event(BusEvent { id: "evt_bd48097a4da34a5ab34465bdb60446f9", type_: "session.text.delta", data: Object {"assistantMessageID": String("msg_b37348a58fd749f584d96792efe3de76"), "delta": String("Second session reply."), "ordinal": Number(0), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB")}, created: Some(1791603653209) })
+[tui] ingest: Event(BusEvent { id: "evt_065ed8350f454094a6efe0d90ab80239", type_: "session.text.ended", data: Object {"assistantMessageID": String("msg_b37348a58fd749f584d96792efe3de76"), "ordinal": Number(0), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB"), "text": String("Second session reply.")}, created: Some(1791603653209) })
+[tui] ingest: Event(BusEvent { id: "evt_b86c326e324243ed8f159a5c5215c2f9", type_: "session.step.streamed", data: Object {"assistantMessageID": String("msg_b37348a58fd749f584d96792efe3de76"), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB")}, created: Some(1791603653210) })
+[tui] ingest: Event(BusEvent { id: "evt_429a9991aa664556999b6e58b714c4db", type_: "session.step.ended", data: Object {"assistantMessageID": String("msg_b37348a58fd749f584d96792efe3de76"), "cost": Number(0), "finish": String("stop"), "rawFinish": String("stop"), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(11), "output": Number(7), "reasoning": Number(0)}}, created: Some(1791603653210) })
+[tui] ingest: Event(BusEvent { id: "evt_1ad82ea6d9534f05ab06baf49fb46c78", type_: "session.usage.updated", data: Object {"cost": Number(0), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(22), "output": Number(14), "reasoning": Number(0)}}, created: Some(1791603653211) })
+[tui] ingest: Event(BusEvent { id: "evt_50505effdd874ea6a394e07f771c063f", type_: "session.execution.succeeded", data: Object {"sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB")}, created: Some(1791603653211) })
+[tui] key: alt+down
+[tui] key: ctrl+x
+[tui] key: 2
+[tui] key: ctrl+x
+[tui] key: 1
+[tui] ingest: Event(BusEvent { id: "evt_1c59ef1c47de455ea3334b9d910839b5", type_: "session.inbox.enqueued", data: Object {"inboxID": String("msg_77951485228544c29dc6e63aa84a4e8c"), "item": Object {"delivery": String("steer"), "payload": Object {"text": String("More news.")}, "type": String("user")}, "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB")}, created: Some(1791603659380) })
+[tui] ingest: Event(BusEvent { id: "evt_0ac3ac1a1a2e44c7b097928fb0b5a562", type_: "session.execution.started", data: Object {"sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB")}, created: Some(1791603659380) })
+[tui] ingest: Event(BusEvent { id: "evt_7c206cf7c65f40d5a9ec566425094f65", type_: "session.inbox.delivered", data: Object {"inboxID": String("msg_77951485228544c29dc6e63aa84a4e8c"), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB")}, created: Some(1791603659382) })
+[tui] ingest: Event(BusEvent { id: "evt_a51f9bee0d0a4dbc8c4406189710b773", type_: "session.usage.recorded", data: Object {"cost": Number(0.0), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB"), "source": String("title"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(11), "output": Number(7), "reasoning": Number(0)}}, created: Some(1791603659400) })
+[tui] ingest: Event(BusEvent { id: "evt_e30233342c6c40b08ac7c8e97474d364", type_: "session.step.started", data: Object {"agent": String("build"), "assistantMessageID": String("msg_c26a3acf464e4980a3f5c80a57f1cbb9"), "model": Object {"id": String("fake-model"), "providerID": String("parityfake"), "variant": String("default")}, "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB"), "started": Number(0)}, created: Some(1791603659400) })
+[tui] ingest: Event(BusEvent { id: "evt_681d7179b3e642ef8bb531d67a965f68", type_: "session.usage.updated", data: Object {"cost": Number(0), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(33), "output": Number(21), "reasoning": Number(0)}}, created: Some(1791603659401) })
+[tui] ingest: Event(BusEvent { id: "evt_b4839b4ad6874c1598ca7a5e25d32e78", type_: "session.text.started", data: Object {"assistantMessageID": String("msg_c26a3acf464e4980a3f5c80a57f1cbb9"), "ordinal": Number(0), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB")}, created: Some(1791603659401) })
+[tui] ingest: Event(BusEvent { id: "evt_22bd11a58087449dbbbe6b928f9b1dea", type_: "session.text.delta", data: Object {"assistantMessageID": String("msg_c26a3acf464e4980a3f5c80a57f1cbb9"), "delta": String("Unread ping."), "ordinal": Number(0), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB")}, created: Some(1791603659402) })
+[tui] ingest: Event(BusEvent { id: "evt_cab1dc26519949599561c55cd49013d0", type_: "session.text.ended", data: Object {"assistantMessageID": String("msg_c26a3acf464e4980a3f5c80a57f1cbb9"), "ordinal": Number(0), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB"), "text": String("Unread ping.")}, created: Some(1791603659402) })
+[tui] ingest: Event(BusEvent { id: "evt_0f626568a08f4599a9d0cfbed804ee9b", type_: "session.step.streamed", data: Object {"assistantMessageID": String("msg_c26a3acf464e4980a3f5c80a57f1cbb9"), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB")}, created: Some(1791603659403) })
+[tui] ingest: Event(BusEvent { id: "evt_17b963643cdb48c59f375338d55a105b", type_: "session.step.ended", data: Object {"assistantMessageID": String("msg_c26a3acf464e4980a3f5c80a57f1cbb9"), "cost": Number(0), "finish": String("stop"), "rawFinish": String("stop"), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(11), "output": Number(7), "reasoning": Number(0)}}, created: Some(1791603659403) })
+[tui] ingest: Event(BusEvent { id: "evt_44d47d85249f4bab928d2f093e7d3826", type_: "session.usage.updated", data: Object {"cost": Number(0), "sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB"), "tokens": Object {"cache": Object {"read": Number(0), "write": Number(0)}, "input": Number(44), "output": Number(28), "reasoning": Number(0)}}, created: Some(1791603659403) })
+[tui] ingest: Event(BusEvent { id: "evt_84798198cc3f4a5ea67477bb196904c9", type_: "session.execution.succeeded", data: Object {"sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB")}, created: Some(1791603659404) })
+[tui] key: ctrl+x
+[tui] key: m
+[tui] key: f
+[tui] key: a
+[tui] key: k
+[tui] key: e
+[tui] key: -
+[tui] key: m
+[tui] key: o
+[tui] key: d
+[tui] key: e
+[tui] key: l
+[tui] key: -
+[tui] key: a
+[tui] key: return
+[tui] ingest: Event(BusEvent { id: "evt_afc45001a0184865a72808936114fd33", type_: "session.model.selected", data: Object {"model": Object {"id": String("fake-model-a"), "providerID": String("parityfake")}, "sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu")}, created: Some(1791603664340) })
+[tui] key: ctrl+x
+[tui] key: m
+[tui] key: escape
+[tui] key: ctrl+x
+[tui] key: y
+[tui] key: ctrl+x
+[tui] key: t
+[tui] key: d
+[tui] key: r
+[tui] key: a
+[tui] key: c
+[tui] key: u
+[tui] key: l
+[tui] key: a
+[tui] key: return
+[tui] ingest: Event(BusEvent { id: "evt_e0514ff806664862bc626de9736b1098", type_: "session.renamed", data: Object {"sessionID": String("ses_edc19f8ecffe0Mf4KPxJxOGvsu"), "title": String("Alpha notes")}, created: Some(1791603672811) })
+[tui] ingest: Event(BusEvent { id: "evt_6e639c3561b54a4892c1e839a27281bc", type_: "session.renamed", data: Object {"sessionID": String("ses_edc19c5bfffexoglOIlP6hcyqB"), "title": String("Beta second")}, created: Some(1791603672812) })
+[tui] key: ctrl+x
+[tui] key: q

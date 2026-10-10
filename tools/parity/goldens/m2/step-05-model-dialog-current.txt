@@ -1,0 +1,40 @@
+   Untitled session              • Untitled session              +
+  Untitled session
+
+  ┃
+  ┃  What files are here?
+  ┃
+
+     → Explored: 1 read
+
+     The notes file is present.
+
+     Build · parityfake/fake-model · 34ms             Switch model                                     esc
+
+  ┃                                                   Search
+  ┃  Now read the outside file please.
+  ┃                                                   Zhipu AI Coding Plan
+                                                      GLM-4.6V
+     → Explored: 1 read                               GLM-5.3                                         Free
+                                                      GLM-5.3-Flash                                   Free
+     The outside file says m2-secret.                 GLM-5.3 Highspeed                               Free
+
+     Build · parityfake/fake-model · 3.0s             parityfake
+                                                      fake-model
+                                                    ● fake-model-a
+
+
+
+
+
+
+
+
+
+
+┃
+┃
+┃
+┃
+╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                                                 fake-model-a  shift+tab agents  ctrl+p commands

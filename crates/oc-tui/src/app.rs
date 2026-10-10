@@ -449,6 +449,19 @@ impl App {
                 }
             }
         }
+        // The toast layer (`ui/toast.tsx`): the queue's current toast
+        // composites over whatever rendered underneath — rails keep the
+        // underlying cell background (overlay_toast_over_frame).
+        if let Some(toast) = self.store.toasts().current().cloned() {
+            let pending = self.store.toasts().pending();
+            crate::components::toast::overlay_toast_over_frame(
+                &mut frame,
+                &toast,
+                pending,
+                &footer_theme,
+                &theme.resolved.tokens,
+            );
+        }
         frame
     }
 
@@ -834,6 +847,40 @@ impl crate::store::SelectionSink for HttpSelectionSink {
     }
 }
 
+/// Map the pump's [`PermissionReply`] onto the generated client body
+/// (the `permission.reply` POST — D1's transport).
+#[must_use]
+pub fn permission_reply_body(
+    reply: &PermissionReply,
+) -> oc_client::types::SessionPermissionReplyBody {
+    let decision = match reply.decision.as_str() {
+        "always" => oc_client::types::PermissionReply::Always,
+        "reject" => oc_client::types::PermissionReply::Reject,
+        _ => oc_client::types::PermissionReply::Once,
+    };
+    oc_client::types::SessionPermissionReplyBody {
+        decision,
+        message: (!reply.message.is_empty()).then(|| reply.message.clone()),
+    }
+}
+
+/// POST one recorded permission reply through the generated client
+/// (`session.permission.reply`); failures log (the local ask already
+/// resolved — the server parks the tool until the reply or timeout).
+pub fn post_permission_reply(client: oc_client::Client, reply: PermissionReply) {
+    tokio::spawn(async move {
+        let body = permission_reply_body(&reply);
+        if let Err(error) =
+            client.session().permission_reply(&reply.session_id, &reply.request_id, &body).await
+        {
+            crate::keymap::log_skip(&format!(
+                "permission reply {}/{}: {error}",
+                reply.session_id, reply.request_id
+            ));
+        }
+    });
+}
+
 /// The production engine prompt sink: submitting from an open session
 /// POSTs `session.prompt`; a home submission first creates the session
 /// (`POST /api/session`) and reports it back through the event channel.
@@ -1006,6 +1053,14 @@ pub async fn run_with_size(
             .collect();
         app.store.restore_tabs(tabs);
     }
+    // The restored tabs must be visible to the connection's FIRST-
+    // connect resync (D4: boot hydration fetches `message.list` per
+    // open tab right after subscribe) — sync the registry here, in
+    // the same non-yielding boot section, so the spawned task cannot
+    // observe it empty.
+    if let Ok(mut ids) = open_sessions.lock() {
+        *ids = app.store.open_session_ids();
+    }
     let mut persisted_tabs = app.store.tabs().tabs.clone();
 
     // Config reload: mtime check per tick (the reference watches the dir).
@@ -1049,6 +1104,18 @@ pub async fn run_with_size(
                 eprintln!("[tui] ingest: {message:?}");
             }
             app.store.ingest_all([message]);
+        }
+        // Permission replies (D1): every once/always/reject the pump
+        // recorded POSTs to the server — without this the parked tool
+        // waits forever while the footer already looks resolved.
+        for reply in std::mem::take(&mut app.permission_replies) {
+            if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                eprintln!(
+                    "[tui] permission reply {} on {}: {}",
+                    reply.request_id, reply.session_id, reply.decision
+                );
+            }
+            post_permission_reply(client.clone(), reply);
         }
         // Attention: the bell request set by permission asks / unread
         // transitions — write `\x07` once (raw mode passes it through
@@ -1442,7 +1509,7 @@ mod tests {
 
     /// `<leader>y` runs the copy flow through the pump: the clipboard
     /// sink receives the last assistant text and the success toast
-    /// surfaces.
+    /// surfaces **in the frame** (the live toast layer — V1).
     #[test]
     fn leader_y_copies_the_last_assistant_message() {
         use crate::components::message::model::{Message, Part, PartTime};
@@ -1474,6 +1541,48 @@ mod tests {
             app.store.toasts().current().map(|toast| toast.message.as_str()),
             Some("Message copied to clipboard!")
         );
+        // V1: the toast is composited over the live frame, not just
+        // tracked in the store.
+        let frame = app.frame_text();
+        assert!(frame.contains("Message copied to clipboard!"), "toast visible: {frame}");
+    }
+
+    /// D1: the once/always/reject decisions map onto the
+    /// `session.permission.reply` wire body, and the pump's Enter
+    /// leaves exactly one recorded reply for the drain loop to POST.
+    #[test]
+    fn permission_replies_map_onto_the_wire_body() {
+        let reply = |decision: &str, message: &str| PermissionReply {
+            session_id: "ses_1".into(),
+            request_id: "per_1".into(),
+            decision: decision.into(),
+            message: message.into(),
+        };
+        let body = permission_reply_body(&reply("once", ""));
+        assert_eq!(body.decision, oc_client::types::PermissionReply::Once);
+        assert_eq!(body.message, None, "empty message omitted");
+        assert_eq!(
+            permission_reply_body(&reply("always", "")).decision,
+            oc_client::types::PermissionReply::Always
+        );
+        let reject = permission_reply_body(&reply("reject", "do less"));
+        assert_eq!(reject.decision, oc_client::types::PermissionReply::Reject);
+        assert_eq!(reject.message.as_deref(), Some("do less"));
+
+        // The pump records the reply (the run loop drains + POSTs it).
+        let request = PermissionRequest {
+            id: "per_1".into(),
+            session_id: "ses_1".into(),
+            action: "read".into(),
+            ..PermissionRequest::default()
+        };
+        let mut app = App::new((100, 30));
+        app.store.open_tab("ses_1", None);
+        ask_permission(&app.store, &request);
+        app.press("enter");
+        assert_eq!(app.permission_replies.len(), 1, "one recorded reply");
+        assert_eq!(app.permission_replies[0].decision, "once");
+        assert!(!app.permission_live(), "the ask resolved locally");
     }
 
     /// `<leader>e` sets the editor request the run loop drains (the

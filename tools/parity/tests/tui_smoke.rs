@@ -71,6 +71,11 @@ async fn tui_smoke_rust_port_against_fake_llm() -> anyhow::Result<()> {
 
     let artifacts = PathBuf::from("/tmp/opencode/tui-smoke");
     let home = PathBuf::from("/tmp/opencode/tui-smoke-home");
+    // A FRESH home per run: tabs.json persists the last run's session
+    // tab, and the boot restore (w8B + the D4 first-connect hydration)
+    // would land on the restored SESSION route instead of the home
+    // screen this smoke asserts.
+    let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(&artifacts)?;
     std::fs::create_dir_all(&home)?;
 
