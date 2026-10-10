@@ -335,10 +335,10 @@ fn body_from(request: &LLMRequest) -> Result<Value, AiError> {
             // room for the answer.
             entry.insert(
                 "token_budget".into(),
-                json!(fit_thinking_budget(
+                shared::number(fit_thinking_budget(
                     budget,
                     request.generation.as_ref().and_then(|g| g.max_tokens),
-                    1.0
+                    1.0,
                 )),
             );
         }
@@ -346,28 +346,28 @@ fn body_from(request: &LLMRequest) -> Result<Value, AiError> {
     }
     let generation = request.generation.clone().unwrap_or_default();
     if let Some(max_tokens) = generation.max_tokens {
-        body.insert("max_tokens".into(), json!(max_tokens));
+        body.insert("max_tokens".into(), shared::number(max_tokens));
     }
     if let Some(temperature) = generation.temperature {
-        body.insert("temperature".into(), json!(temperature));
+        body.insert("temperature".into(), shared::number(temperature));
     }
     if let Some(top_p) = generation.top_p {
-        body.insert("p".into(), json!(top_p));
+        body.insert("p".into(), shared::number(top_p));
     }
     if let Some(top_k) = generation.top_k {
-        body.insert("k".into(), json!(top_k));
+        body.insert("k".into(), shared::number(top_k));
     }
     if let Some(seed) = generation.seed {
-        body.insert("seed".into(), json!(seed));
+        body.insert("seed".into(), shared::number(seed));
     }
     if let Some(stop) = &generation.stop {
         body.insert("stop_sequences".into(), json!(stop));
     }
     if let Some(frequency_penalty) = generation.frequency_penalty {
-        body.insert("frequency_penalty".into(), json!(frequency_penalty));
+        body.insert("frequency_penalty".into(), shared::number(frequency_penalty));
     }
     if let Some(presence_penalty) = generation.presence_penalty {
-        body.insert("presence_penalty".into(), json!(presence_penalty));
+        body.insert("presence_penalty".into(), shared::number(presence_penalty));
     }
     Ok(Value::Object(body))
 }

@@ -156,6 +156,22 @@ pub fn fit_thinking_budget(budget: f64, max_tokens: Option<f64>, minimum: f64) -
     }
 }
 
+/// Serialize a JS-style number into a JSON value: finite integral floats
+/// become JSON integers so wire bytes match the TS encoder (`32000` stays
+/// `32000`, never `32000.0` — Go/strict-uint providers reject the float
+/// form); genuinely fractional values stay floats. Values at or beyond
+/// 2^53 lose no precision in JS and keep float form here.
+#[must_use]
+pub fn number(value: f64) -> Value {
+    if value.is_finite() && value.fract() == 0.0 && value.abs() < 9_007_199_254_740_992.0 {
+        Value::from(value as i64)
+    } else {
+        // (cross-lane unblock: qualified path — the bare `json!` was
+        // missing its import and broke every downstream crate's build)
+        serde_json::json!(value)
+    }
+}
+
 /// Typed invalid-stream-event error (port of `eventError`).
 pub fn event_error(route: impl Into<String>, message: impl Into<String>) -> AiError {
     AiError::new(AiErrorReason::InvalidProviderOutput {

@@ -156,10 +156,10 @@ fn cohere_lowers_native_history_thinking_tools_and_sampling() {
                 }
             ],
             "tool_choice": "REQUIRED",
-            "thinking": { "type": "enabled", "token_budget": 128.0 },
-            "max_tokens": 2048.0,
+            "thinking": { "type": "enabled", "token_budget": 128 },
+            "max_tokens": 2048,
             "p": 0.9,
-            "k": 10.0
+            "k": 10
         })
     );
 }
@@ -200,7 +200,7 @@ fn cohere_fits_thinking_budgets_under_the_output_limit() {
         Some(json!({ "thinking": { "tokenBudget": 31_999 } }).as_object().unwrap().clone());
     request.generation = Some(GenerationOptions { max_tokens: Some(4096.0), ..Default::default() });
     let body = compile_body(&route, &request);
-    assert_eq!(body["thinking"], json!({ "type": "enabled", "token_budget": 2048.0 }));
+    assert_eq!(body["thinking"], json!({ "type": "enabled", "token_budget": 2048 }));
 }
 
 #[test]

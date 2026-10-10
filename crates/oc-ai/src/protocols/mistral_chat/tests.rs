@@ -190,8 +190,8 @@ fn mistral_lowers_native_messages_media_tool_choice_options_and_replay_ids() {
         json!({ "type": "function", "function": { "name": "lookup" } })
     );
     assert_eq!(body["stream"], json!(true));
-    assert_eq!(body["max_tokens"], json!(64.0));
-    assert_eq!(body["random_seed"], json!(7.0));
+    assert_eq!(body["max_tokens"], json!(64));
+    assert_eq!(body["random_seed"], json!(7));
     assert_eq!(body["temperature"], json!(0.2));
     assert_eq!(body["top_p"], json!(0.8));
     assert_eq!(body["frequency_penalty"], json!(0.1));
@@ -199,8 +199,8 @@ fn mistral_lowers_native_messages_media_tool_choice_options_and_replay_ids() {
     assert_eq!(body["stop"], json!(["done"]));
     assert_eq!(body["prompt_cache_key"], json!("session-1"));
     assert_eq!(body["safe_prompt"], json!(true));
-    assert_eq!(body["document_image_limit"], json!(3.0));
-    assert_eq!(body["document_page_limit"], json!(8.0));
+    assert_eq!(body["document_image_limit"], json!(3));
+    assert_eq!(body["document_page_limit"], json!(8));
     assert_eq!(body["parallel_tool_calls"], json!(false));
     assert_eq!(body["reasoning_effort"], json!("high"));
     assert_eq!(body["tools"][0]["function"]["name"], json!("lookup"));
