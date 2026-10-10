@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use oc_core::config::{GlobalDirs, Loader};
 use oc_core::engine::{Engine, EngineOptions};
+use oc_core::location::LocationRef;
 use oc_core::provider_catalog::facade::CustomProvider;
 use oc_util::determinism::{SystemClock, UuidV4IdGen};
 
@@ -143,6 +144,32 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     let mut engine_options = EngineOptions::new(options.data_root.clone(), options.home.clone());
     engine_options.custom_providers = providers.custom;
     engine_options.default_model = providers.default_model;
+
+    // The production plugin host (wave-12): boot from the resolved
+    // config's `plugins[]` BEFORE `Engine::boot` — the engine options
+    // carry its seams (the Code Mode runtime attaches even plugin-less
+    // when the host is up: v2's `execute` synthesis is core, not
+    // plugin-gated; MCP tools are codemode-default-true), and the
+    // registration pass must settle before the first location
+    // assembles (the boot module's ready-race rule). The blocking
+    // wait runs on the blocking pool.
+    let boot_loaded = snapshot.clone();
+    let boot_home = options.home.clone();
+    let boot_directory = config_location.clone();
+    let boot_version = options.version.clone();
+    let plugin_ops = crate::plugins::config_plugin_ops(&snapshot);
+    let plugin_boot: Arc<crate::plugins::PluginBoot> = tokio::task::spawn_blocking(move || {
+        crate::plugins::boot(&plugin_ops, &boot_loaded, &boot_home, &boot_directory, &boot_version)
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        eprintln!("opencode plugin: boot task panicked: {join_error}");
+        Arc::new(crate::plugins::PluginBoot::disabled())
+    });
+    let seams = plugin_boot.engine_seams();
+    engine_options.code_mode_runtime = seams.code_mode_runtime;
+    engine_options.plugin_source = seams.plugin_source;
+
     // Config seeding above is synchronous and precedes Engine::boot, the
     // listener bind, and readiness — provider binding cannot lose the
     // ready race. Location graphs stay LAZY (v2 `LocationServiceMap` is
@@ -166,6 +193,13 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
         Arc::new(SystemClock),
     );
     app_state.cors_origins.extend(options.cors_origins.iter().cloned());
+    // The plugin session port fills with the engine handle now that it
+    // exists (ctx.session.* → the boot location's session machinery).
+    plugin_boot.session_slot.fill(Arc::new(crate::plugins::EngineSessionPort {
+        engine: Arc::clone(&app_state.engine),
+        location: LocationRef::new(config_location.clone(), None),
+    }));
+    app_state.plugins = Some(plugin_boot);
     let state = Arc::new(app_state);
     let shell = AppShell::new(Arc::clone(&state));
     let router = shell.router();

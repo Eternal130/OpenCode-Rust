@@ -15,6 +15,7 @@
 pub mod announce;
 pub mod boot;
 pub mod handlers;
+pub mod plugins;
 #[path = "routes.gen.rs"]
 pub mod routes_gen;
 pub mod safekill;

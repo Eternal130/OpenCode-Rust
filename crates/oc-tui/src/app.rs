@@ -77,6 +77,13 @@ pub struct App {
     /// The applied keybind override set (re-merged when the store's
     /// config-reload signal changes).
     applied_keybinds: Vec<crate::keymap::KeybindOverride>,
+    /// The plugin-owned keymap entries (the host's registration
+    /// snapshot's keybind chords) — re-applied after every keybind
+    /// re-merge (a fresh `Keymap` drops owned entries).
+    plugin_owned: Vec<crate::keymap::OwnedCommandDef>,
+    /// The plugin-registered theme documents — re-applied after every
+    /// config reload's registry rebuild.
+    plugin_themes: Vec<(String, String)>,
 }
 
 impl App {
@@ -99,7 +106,39 @@ impl App {
             size,
             exit_requested: false,
             applied_keybinds: Vec::new(),
+            plugin_owned: Vec::new(),
+            plugin_themes: Vec::new(),
         }
+    }
+
+    /// Install the plugin-owned keymap entries (the registration
+    /// snapshot's keybind chords — `App::remerge_keybinds` re-applies
+    /// them after every override re-merge, since a fresh `Keymap`
+    /// drops owned entries).
+    pub fn set_plugin_commands(&mut self, owned: Vec<crate::keymap::OwnedCommandDef>) {
+        self.plugin_owned = owned;
+        for definition in &self.plugin_owned {
+            self.keymap.register_owned(definition.clone());
+        }
+    }
+
+    /// Install the plugin-registered theme documents: applied into the
+    /// live theme registry immediately AND re-applied by
+    /// [`App::apply_config`] on every config reload (which rebuilds the
+    /// registry from disk discovery).
+    pub fn set_plugin_themes(&mut self, themes: Vec<(String, String)>) {
+        self.plugin_themes = themes;
+        self.apply_plugin_themes();
+    }
+
+    /// Rebuild the live registry's plugin-theme segment.
+    fn apply_plugin_themes(&self) {
+        if self.plugin_themes.is_empty() {
+            return;
+        }
+        let mut registry = self.store.registry();
+        crate::theme::register_custom_themes(&mut registry, &self.plugin_themes);
+        self.store.set_registry(registry);
     }
 
     /// Apply the theme registry + user keybinds from a loaded config
@@ -115,6 +154,8 @@ impl App {
             &crate::theme::discover_custom_themes(&Self::config_directories()),
         );
         self.store.set_registry(registry);
+        // Plugin themes ride every registry rebuild (config reload).
+        self.apply_plugin_themes();
         // Theme name + mode.
         let mode = match config.theme.mode.as_deref() {
             Some("light") => Mode::Light,
@@ -154,6 +195,11 @@ impl App {
         self.keymap = Keymap::new();
         self.keymap.apply_overrides(&overrides);
         self.applied_keybinds = overrides;
+        // The plugin-owned chords re-register onto the fresh table
+        // (a config reload must not drop plugin keybinds).
+        for definition in &self.plugin_owned {
+            self.keymap.register_owned(definition.clone());
+        }
         // Restore the mode stack the fresh keymap dropped.
         self.dialog_mode = false;
         self.input_mode = false;
@@ -1022,7 +1068,7 @@ pub async fn run_with_size(
         std::env::current_dir().map(|path| path.display().to_string()).unwrap_or_default();
     app.store.set_prompt_sink(std::rc::Rc::new(HttpPromptSink::new(
         client.clone(),
-        directory,
+        directory.clone(),
         sink_tx,
     )));
 
@@ -1097,7 +1143,64 @@ pub async fn run_with_size(
     let _ = crossterm::terminal::enable_raw_mode();
     app.apply_config(&config, system_mode);
 
+    // The production plugin boot (wave-12): the host loads the config's
+    // `plugins[]` entries and every wave-3 seam attaches — the event
+    // tap (post-ingest broadcast), the palette sink
+    // (`execute_command_in_session` with the ACTIVE session), the
+    // dialog source (materialize-at-open), the registration projection
+    // (palette rows / group rules / home actions + the owned keymap
+    // chords). `None` = no plugins configured (or no bun — the
+    // graceful-disable logged once); the loop then skips the per-pump
+    // drain.
+    let config_root = oc_util::global_roots::resolve().config;
+    let boot_cwd = std::path::PathBuf::from(&directory);
+    let plugins_configured = {
+        let files = crate::plugin_boot::discover_config_files(&config_root, &boot_cwd);
+        crate::plugin_boot::collect_plugin_ops(&files)
+            .iter()
+            .any(|op| matches!(op, oc_plugin_host::PluginOp::Add { .. }))
+    };
+    let plugin_runtime = if plugins_configured {
+        let agents = crate::plugin_boot::fetch_agent_seed(&client).await;
+        let boot_client = client.clone();
+        let boot_version = env!("CARGO_PKG_VERSION").to_owned();
+        let boot_cwd = boot_cwd.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::plugin_boot::TuiPluginRuntime::boot(
+                &boot_client,
+                agents,
+                &config_root,
+                &boot_cwd,
+                &boot_version,
+            )
+        })
+        .await
+        .ok()
+        .flatten()
+        .map(crate::plugin_boot::TuiPluginRuntime::new)
+    } else {
+        None
+    };
+    if let Some(runtime) = &plugin_runtime {
+        let projection = runtime.attach(&app.store);
+        app.set_plugin_commands(projection.owned);
+        app.set_plugin_themes(projection.themes);
+    }
+
     let result: Result<(), String> = loop {
+        // The plugin pump (wave-12): refresh the palette sink's active
+        // session (marker commands submit into it), then drain the
+        // plugin UI-request queue into the store (toasts, sidebar
+        // sections, footer hints, dialog opens — the between-frames
+        // poll the wave-3 contract set).
+        if let Some(runtime) = &plugin_runtime {
+            let active = match app.store.route() {
+                crate::store::Route::Session { session_id } => Some(session_id),
+                crate::store::Route::Home => None,
+            };
+            runtime.set_current_session(active);
+            runtime.drain_ui_requests(&app.store);
+        }
         // Drain ingest.
         while let Ok(message) = rx.try_recv() {
             if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
@@ -1303,6 +1406,9 @@ pub async fn run_with_size(
     // Teardown.
     connection_task.abort();
     lists_task.abort();
+    if let Some(runtime) = &plugin_runtime {
+        runtime.shutdown();
+    }
     let _ = disable_raw_mode();
     let _ = crossterm::execute!(
         std::io::stdout(),

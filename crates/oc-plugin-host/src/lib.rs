@@ -87,6 +87,7 @@ pub mod context;
 pub mod host_js;
 pub mod protocol;
 pub mod registrations;
+pub mod resolve;
 pub mod supervisor;
 pub mod tap;
 pub mod ui;
@@ -100,6 +101,7 @@ pub use registrations::{
     PluginMcp, PluginSkill, PluginState, PluginStatus, PluginTheme, PluginTool,
     RegistrationSnapshot,
 };
+pub use resolve::{parse_ops, resolve, PluginOp, PluginSourceKind, Resolution, ResolvedPlugin};
 pub use supervisor::{HostError, SupervisorConfig};
 pub use tap::{BroadcastTap, TapEvent};
 pub use ui::{PluginDialogOption, PluginDialogSpec, UiRequest};
@@ -529,9 +531,23 @@ impl PluginHost {
         catalog: &[CodeModeToolSpec],
         timeout: Duration,
     ) -> Result<CodeModeRun, String> {
+        self.codemode_evaluate_token(code, catalog, 0, timeout)
+    }
+
+    /// [`PluginHost::codemode_evaluate`] with an evaluation token: the
+    /// guest echoes `token` on every nested `codemode.tool` request, so
+    /// the tool port can route the call onto THIS evaluation's executor
+    /// closure (the production engine adapter's per-request context).
+    pub fn codemode_evaluate_token(
+        &self,
+        code: &str,
+        catalog: &[CodeModeToolSpec],
+        token: u64,
+        timeout: Duration,
+    ) -> Result<CodeModeRun, String> {
         let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
         let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
-        runtime.block_on(self.codemode_evaluate_async(code, catalog, timeout))
+        runtime.block_on(self.codemode_evaluate_token_async(code, catalog, token, timeout))
     }
 
     /// [`PluginHost::codemode_evaluate`] without parking a worker.
@@ -541,10 +557,22 @@ impl PluginHost {
         catalog: &[CodeModeToolSpec],
         timeout: Duration,
     ) -> Result<CodeModeRun, String> {
+        self.codemode_evaluate_token_async(code, catalog, 0, timeout).await
+    }
+
+    /// [`PluginHost::codemode_evaluate_token`] without parking a worker.
+    pub async fn codemode_evaluate_token_async(
+        &self,
+        code: &str,
+        catalog: &[CodeModeToolSpec],
+        token: u64,
+        timeout: Duration,
+    ) -> Result<CodeModeRun, String> {
         let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
         let params = json!({
             "code": code,
             "tools": catalog,
+            "token": token,
         });
         let result = facade
             .shared

@@ -180,6 +180,10 @@ pub struct EngineOptions {
     /// 120 s; v2 leaves program timeout unset by default — the port
     /// keeps the wave-1 "every bridge call bounded" rule).
     pub code_mode_timeout: std::time::Duration,
+    /// The plugin registration source (the wave-12 production seam):
+    /// each location's assembly applies its agents + tool
+    /// registrations natively. `None` = no plugin host attached.
+    pub plugin_source: Option<Arc<dyn crate::plugin_apply::LocationPluginSource>>,
 }
 
 impl EngineOptions {
@@ -201,6 +205,7 @@ impl EngineOptions {
             activity_sweeper: true,
             code_mode_runtime: None,
             code_mode_timeout: std::time::Duration::from_secs(120),
+            plugin_source: None,
         }
     }
 }
@@ -331,6 +336,9 @@ pub struct Engine {
     /// registration in `assemble`); `None` keeps the flat tool surface.
     code_mode_runtime: Option<Arc<dyn crate::tool::codemode::CodeModeRuntime>>,
     code_mode_timeout: std::time::Duration,
+    /// The plugin registration source (the wave-12 seam): applied at
+    /// every location's assembly.
+    plugin_source: Option<Arc<dyn crate::plugin_apply::LocationPluginSource>>,
 }
 
 impl Engine {
@@ -433,6 +441,7 @@ impl Engine {
             }),
             code_mode_runtime: options.code_mode_runtime.clone(),
             code_mode_timeout: options.code_mode_timeout,
+            plugin_source: options.plugin_source.clone(),
         };
         engine
     }
@@ -690,6 +699,18 @@ impl Engine {
         });
         self.inputs.insert(location.clone(), Arc::clone(&inputs));
         let graph = self.build_graph(location.clone(), &inputs).await?;
+
+        // The wave-12 plugin seam: the embedder's plugin host's
+        // registration snapshot applies into THIS location's registries
+        // (agents via plugin_apply, tool rows + executors natively) —
+        // BEFORE the Code Mode surface so the snapshot shaping sees the
+        // plugin tools (code-mode-eligible ones hide behind `execute`
+        // exactly like MCP tools).
+        if let Some(source) = &self.plugin_source {
+            let applied =
+                crate::plugin_apply::apply_location_plugins(source.as_ref(), &agents, &tools);
+            let _ = applied; // diagnostics only (boot-trace reads the registry)
+        }
 
         // The Code Mode surface (wave 4): with a runtime attached, the
         // synthesized `execute` tool registers behind the standard
@@ -1619,6 +1640,26 @@ fn seed_builtin_agents(agents: &Arc<crate::location::AgentRegistry>) {
     title.system = Some(PROMPT_TITLE.to_string());
     title.permissions.push(rule("*", "*", oc_schema::permission::Effect::Deny));
     agents.set(title);
+}
+
+/// The native agent table as v2 `Agent.Info` JSON (builtins + config
+/// markdown) — the plugin host's `HostState::agents` seed (the
+/// flagship's `agent.transform` snapshots this table before deriving
+/// its own). The wave-12 server boot calls this before starting the
+/// host so `load.seed` carries the real native agents.
+#[must_use]
+pub fn native_agent_seed(
+    documents: &[oc_schema::config::Document],
+    home: &std::path::Path,
+) -> Vec<serde_json::Value> {
+    let registry = Arc::new(crate::location::AgentRegistry::new());
+    seed_builtin_agents(&registry);
+    let mut editor = RegistryAgentEditor::new(Arc::clone(&registry));
+    crate::config::agent_md::transform(documents, home, &mut editor);
+    if let Some(default) = editor.default.clone() {
+        registry.set_default(Some(oc_schema::id::AgentId::parse(default)));
+    }
+    registry.list().into_iter().filter_map(|info| serde_json::to_value(&info).ok()).collect()
 }
 
 fn agent_info(

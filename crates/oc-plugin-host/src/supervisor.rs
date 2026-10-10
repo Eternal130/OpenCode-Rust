@@ -393,9 +393,10 @@ impl Shared {
         let bridge = Bridge { shared: Arc::clone(self) };
         let name = params.get("name").and_then(Value::as_str).unwrap_or_default().to_owned();
         let input = params.get("input").cloned().unwrap_or(Value::Null);
+        let token = params.get("token").and_then(Value::as_u64).unwrap_or(0);
         let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
         handle.spawn(async move {
-            let reply = match port.call(&bridge, &name, &input).await {
+            let reply = match port.call_in(&bridge, &name, &input, token).await {
                 Ok(value) => protocol::response(id, json!({ "value": value })),
                 Err(message) => protocol::error_response(id, &message),
             };

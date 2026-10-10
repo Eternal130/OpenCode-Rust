@@ -4,6 +4,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use dashmap::DashMap;
 use oc_core::engine::Engine;
@@ -43,7 +44,7 @@ pub struct AuthConfig {
 }
 
 pub struct AppState {
-    pub engine: Engine,
+    pub engine: Arc<Engine>,
     pub auth: AuthConfig,
     pub readiness: tokio::sync::watch::Sender<Readiness>,
     pub readiness_rx: tokio::sync::watch::Receiver<Readiness>,
@@ -77,6 +78,10 @@ pub struct AppState {
     /// when shutdown begins — otherwise `with_graceful_shutdown` waits on
     /// them forever.
     pub shutdown: tokio::sync::watch::Sender<bool>,
+    /// The booted plugin subsystem (wave-12): `None` when the embedder
+    /// boots without it (tests); `/api/plugin` and the engine seams hang
+    /// off it.
+    pub plugins: Option<Arc<crate::plugins::PluginBoot>>,
 }
 
 impl AppState {
@@ -90,6 +95,7 @@ impl AppState {
         let (readiness, readiness_rx) = tokio::sync::watch::channel(Readiness::Starting);
         let (shutdown, _shutdown_rx) = tokio::sync::watch::channel(false);
         let tmp_dir = oc_util::global_roots::resolve().tmp.clone();
+        let engine = Arc::new(engine);
         let bus = engine.bus.as_ref().clone();
         let pty = PtyService::new(bus.clone());
         let persistent_pty = PersistentPty::new(bus);
@@ -111,6 +117,7 @@ impl AppState {
             persistent_pty,
             announce: crate::announce::Announcer::new(),
             shutdown,
+            plugins: None,
         }
     }
 

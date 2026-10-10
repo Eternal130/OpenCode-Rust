@@ -16,7 +16,7 @@
   ┃  Now read the outside file please.
   ┃
 
-     ⠴ Read /tmp/opencode/p10-tui-2291494/outside/secret.txt
+     ⠼ Read /tmp/opencode/p10-tui-2614781/outside/secret.txt
 
 
 
@@ -27,11 +27,11 @@
 
   ┃                                                                                                                         OpenCode includes free models so
   ┃  △ Permission required                                                                                                  you can start immediately.
-  ┃    ← Access external directory /tmp/opencode/p10-tui-2291494/outside
+  ┃    ← Access external directory /tmp/opencode/p10-tui-2614781/outside
   ┃                                                                                                                         Connect from 75+ providers to
   ┃  Patterns                                                                                                               use other models, including
   ┃                                                                                                                         Claude, GPT, Gemini etc
-  ┃  - /tmp/opencode/p10-tui-2291494/outside/*
+  ┃  - /tmp/opencode/p10-tui-2614781/outside/*
   ┃                                                                                                                         Connect provider        /connect
   ┃
   ┃   Allow once   Always allow   Reject                               ctrl+f fullscreen  ⇆ select  enter confirm

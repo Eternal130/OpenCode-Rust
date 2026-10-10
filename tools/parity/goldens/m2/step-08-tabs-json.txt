@@ -1,1 +1,1 @@
-{"cwd":{},"global":{"tabs":[{"sessionID":"ses_edb29185effeVdWzHmQFMmmQTz","title":"Alpha notes"},{"sessionID":"ses_edb28e563ffenddlOGbZnzuLQe","title":"Beta second"}],"unread":{}}}
+{"cwd":{},"global":{"tabs":[{"sessionID":"ses_edabf395affeq2yfWGyzTfwHAS","title":"Alpha notes"},{"sessionID":"ses_edabf0628ffe5aZeYGt5d5LIZj","title":"Beta second"}],"unread":{}}}

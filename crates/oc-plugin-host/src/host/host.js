@@ -990,7 +990,7 @@ function displayInput(input) {
  * becomes a function with the children attached — the observable
  * semantics of v2's callable-namespace merge.
  */
-function buildToolsTree(entries, calls) {
+function buildToolsTree(entries, calls, token) {
   const root = {};
   const makeCallable = (entry) => {
     const fn = async (input) => {
@@ -998,7 +998,14 @@ function buildToolsTree(entries, calls) {
       const record = { tool: entry.path, status: "running", ...(shown ? { input: shown } : {}) };
       calls.push(record);
       try {
-        const result = await hostRequest("codemode.tool", { name: entry.path, input: input ?? {} });
+        const result = await hostRequest("codemode.tool", {
+          name: entry.path,
+          input: input ?? {},
+          // The host-assigned evaluation token routes the nested call
+          // onto THIS evaluation's executor closure (per-request
+          // session context + location registry).
+          token,
+        });
         const value = result && typeof result === "object" && "value" in result ? result.value : result;
         record.status = "completed";
         return value ?? null;
@@ -1119,13 +1126,14 @@ function makeSearch(entries) {
   };
 }
 
-async function handleCodemodeEvaluate({ code, tools }) {
+async function handleCodemodeEvaluate({ code, tools, token }) {
   if (typeof code !== "string" || code.length === 0) {
     return { ok: false, error: "Code Mode execution requires a `code` string" };
   }
   const calls = [];
   const catalog = Array.isArray(tools) ? tools : [];
-  const toolsTree = buildToolsTree(catalog, calls);
+  const evaluationToken = typeof token === "number" && Number.isFinite(token) ? token : 0;
+  const toolsTree = buildToolsTree(catalog, calls, evaluationToken);
   const search = makeSearch(catalog);
   let value;
   try {

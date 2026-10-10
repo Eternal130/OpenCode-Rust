@@ -221,9 +221,15 @@ async fn plugin_list(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
-    // Host plugins arrive with the plugin lane (TODO(phase-9)); the
-    // documented shape is the empty list.
-    Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(Vec::new())))
+    // The booted plugin subsystem's inventory (wave-12): every resolved
+    // plugin with its live status (active / failed / crash-disabled)
+    // plus the resolution failures, in v2's `Plugin.Info` shape. The
+    // subsystem is process-global (documented divergence from v2's
+    // per-location activation); a plugin-less boot lists empty.
+    let plugins = state.plugins.as_ref().map_or_else(Vec::new, |boot| boot.list_info());
+    let data: Vec<Value> =
+        plugins.iter().map(|info| serde_json::to_value(info).unwrap_or(Value::Null)).collect();
+    Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
 }
 
 async fn plugin_check(

@@ -37,4 +37,4 @@
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
   /tmp/opencode/ref/packages/cli                                                                 18  ctrl+p commands    /tmp/opencode/ref/packages/cli
 
- ✓ Server  ⦿ UI  Theme  Tools  Experiments
+ ✓ Server  ● UI  Theme  Tools  Experiments

@@ -13,6 +13,7 @@ oc-core = { workspace = true }
 oc-schema = { workspace = true }
 oc-util = { workspace = true }
 oc-client = { workspace = true }
+oc-plugin-host = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -35,3 +36,4 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+oc-tui = { workspace = true }

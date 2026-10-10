@@ -123,6 +123,19 @@ pub enum UiRequest {
     DialogOpen { plugin_id: String, spec: PluginDialogSpec },
 }
 
+impl UiRequest {
+    /// The originating plugin (every request carries provenance).
+    #[must_use]
+    pub fn plugin_id(&self) -> &str {
+        match self {
+            UiRequest::Toast { plugin_id, .. }
+            | UiRequest::SidebarSection { plugin_id, .. }
+            | UiRequest::FooterHint { plugin_id, .. }
+            | UiRequest::DialogOpen { plugin_id, .. } => plugin_id,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -38,6 +38,7 @@ pub mod home_golden_tests;
 pub mod keymap;
 pub mod layout;
 pub mod message_golden_tests;
+pub mod plugin_boot;
 pub mod plugin_ui;
 pub mod reactive;
 pub mod render;

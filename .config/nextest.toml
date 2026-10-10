@@ -1,5 +1,7 @@
 [profile.default]
 slow-timeout = "60s"
+# 降载纪律：newapi 同机，限制测试并行度
+test-threads = 4
 
 [profile.default.env]
 # Test processes must never bootstrap the managed pinned bun download
