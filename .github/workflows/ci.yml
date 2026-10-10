@@ -26,7 +26,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: clippy
-        run: cargo clippy --workspace --all-targets -D warnings --locked
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
     name: nextest
@@ -47,4 +47,4 @@ jobs:
           tool: cargo-nextest
 
       - name: Run test suite
-        run: cargo nextest run --workspace --locked
+        run: cargo nextest run --workspace --locked --no-fail-fast
