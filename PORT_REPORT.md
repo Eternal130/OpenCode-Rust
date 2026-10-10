@@ -27,7 +27,7 @@
 **实现选择类**
 - **独立身份（Lane B）**：二进制更名 `opencode-rust`（`--version` 横幅 `opencode-rust v2.0.24`；`/api/info` 版本仍为 2.0.24 不变）；XDG 目录隔离为 `opencode-rust` 后缀（config/data/cache/state 四项，env 覆盖机制不变）；v2 存量数据**单向一次性拷贝迁移**（`oc_core::v2_migration`：数据库走 sqlite backup API、auth.json、扁平配置文件、npm/bin 插件缓存；log/repos 不拷；源目录永不改动——v2 的 v1→v2 迁移是原地升级，我们是拷贝，原因正是目录隔离；marker 文件闩死单向门，锁文件串行并发入口，硬失败仅告警不阻断启动）
 - 插件宿主为 **bun 子进程**（v2 进程内）：hook 可变对象为 copy-in/copy-out（v2 引用可变）——病态插件可观测差异，良性行为等价；换来崩溃隔离
-- Last-Event-ID 重订阅是我们新增（v2 服务器不支持）+ 事件 id 4096 环去重；G11-F1 首连快照/流窗口竞态已在抽头与 store 双侧加固，理论窗口仍登记在案
+- Last-Event-ID 重订阅是我们新增（v2 服务器不支持）+ 事件 id 4096 环去重；G11-F1 首连快照/流窗口竞态**已用时序证明关闭**（D-07，`oc-tui/tests/g11f1_proof.rs` 确定性仿真：delta 为 ephemeral ⇒ fetch 永不含在途增量文本，重叠在构造上不存在；完成守卫 + 双 4096 环兜底；"重放先于快照"序不可达）
 - 键位/主题配置解析 throw→skip（v2 会崩）；`input_paste` 的 preventDefault 对象语义未移植
 - dev 模式 `bun run` 参照服务器的外来注册表停止采用**精确 basename** 身份校验（宁拒杀不误杀——生产事故后的安全决策）
 - flock/watch 部分语义未移植（单进程场景无影响）；模型排序 release-date 精细序简化；/help 列表有 clamp
