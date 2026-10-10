@@ -1,7 +1,7 @@
 # opencode v2.0.24 → Rust 移植报告（PORT_REPORT）
 
 > 生成：2026-10-11 ｜ 移植基线：opencode **v2.0.24**（commit e7a34f09bf，钉版只读 worktree /opt/opencode-ref）
-> 交付仓库：/opt/opencode-rust（单二进制 `opencode`，自报版本精确为 2.0.24）
+> 交付仓库：/opt/opencode-rust（单二进制 `opencode-rust`，自报版本精确为 2.0.24）
 > 终态：**全 10 阶段完成；M1/M2 里程碑达成；旗舰插件实测通过；全仓 2181/2181 测试、clippy -D warnings 0、fmt 0**
 
 ## 1. 目标与结果总览
@@ -25,6 +25,7 @@
 ## 3. 与 v2.0.24 的已文档分歧（诚实清单）
 
 **实现选择类**
+- **独立身份（Lane B）**：二进制更名 `opencode-rust`（`--version` 横幅 `opencode-rust v2.0.24`；`/api/info` 版本仍为 2.0.24 不变）；XDG 目录隔离为 `opencode-rust` 后缀（config/data/cache/state 四项，env 覆盖机制不变）；v2 存量数据**单向一次性拷贝迁移**（`oc_core::v2_migration`：数据库走 sqlite backup API、auth.json、扁平配置文件、npm/bin 插件缓存；log/repos 不拷；源目录永不改动——v2 的 v1→v2 迁移是原地升级，我们是拷贝，原因正是目录隔离；marker 文件闩死单向门，锁文件串行并发入口，硬失败仅告警不阻断启动）
 - 插件宿主为 **bun 子进程**（v2 进程内）：hook 可变对象为 copy-in/copy-out（v2 引用可变）——病态插件可观测差异，良性行为等价；换来崩溃隔离
 - Last-Event-ID 重订阅是我们新增（v2 服务器不支持）+ 事件 id 4096 环去重；G11-F1 首连快照/流窗口竞态已在抽头与 store 双侧加固，理论窗口仍登记在案
 - 键位/主题配置解析 throw→skip（v2 会崩）；`input_paste` 的 preventDefault 对象语义未移植
@@ -51,8 +52,8 @@
 
 ## 4. 打包与分发
 
-- release 二进制（thin-LTO+strip）自报 `opencode v2.0.24`（`--version-rust` 暴露构建戳）；发布冒烟脚本全绿（含 release 二进制的 FakeLlm run e2e 11/11）
-- **bun 分发决策**（保守方案）：托管钉版下载 bun 1.3.10（sha256 f57bc018… 钉入源码，取自真实下载）至 ~/.cache/opencode/bin/，发现顺序 缓存→系统→PATH；缺失且需要插件时自动引导下载，全程可禁用（OPENCODE_DISABLE_BUN_DOWNLOAD），失败优雅降级为核心功能不受影响
+- release 二进制（thin-LTO+strip）产物为 **`opencode-rust`**，自报 `opencode-rust v2.0.24`（`--version-rust` 暴露构建戳）；数据目录隔离 `opencode-rust` 后缀 + v2 存量单向拷贝迁移（见 §3）；发布冒烟脚本全绿（含 release 二进制的 FakeLlm run e2e 11/11）
+- **bun 分发决策**（保守方案）：托管钉版下载 bun 1.3.10（sha256 f57bc018… 钉入源码，取自真实下载）至 ~/.cache/opencode-rust/bin/，发现顺序 缓存→系统→PATH；缺失且需要插件时自动引导下载，全程可禁用（OPENCODE_DISABLE_BUN_DOWNLOAD），失败优雅降级为核心功能不受影响
 - install/install.sh（v2 形态安装器，校验和验证）；`opencode upgrade/uninstall` 真实现；**自动更新默认关闭**（版本伪装 2.0.24 下的自我覆盖=自毁，门 2 即裁定）
 
 ## 5. 安全加固（事故后）
@@ -68,4 +69,4 @@
 
 ## 7. 结论
 
-以 v2.0.24 为唯一规范源，完成了 CLI+Server+TUI+插件体系的 Rust 全量重写，一致性主张全部锚定参照实例（非自述）：服务端契约逐字节、TUI 视觉逐帧逐字节、引擎行为逐事件、旗舰插件端到端（库级）。残留为已具名的延后项、理论窗口与集成边界（§3），逐项可查 `.slim/deepwork/rust-port/` 的 48 份过程档案。用户可按 §4 安装替换 v2.0.24 使用（数据目录兼容，含 stable 等频道文件名方案；旧版本数据首启前建议备份）。
+以 v2.0.24 为唯一规范源，完成了 CLI+Server+TUI+插件体系的 Rust 全量重写，一致性主张全部锚定参照实例（非自述）：服务端契约逐字节、TUI 视觉逐帧逐字节、引擎行为逐事件、旗舰插件端到端（库级）。残留为已具名的延后项、理论窗口与集成边界（§3），逐项可查 `.slim/deepwork/rust-port/` 的 48 份过程档案。用户可按 §4 安装 `opencode-rust` 替换 v2.0.24 使用（首启自动单向拷贝 v2 存量数据至隔离目录，源目录原样保留；含 stable 等频道文件名方案；旧版本数据首启前建议备份）。

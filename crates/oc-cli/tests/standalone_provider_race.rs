@@ -126,7 +126,7 @@ async fn serve(listener: tokio::net::TcpListener) -> std::io::Result<()> {
 }
 
 fn opencode_binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_opencode"))
+    PathBuf::from(env!("CARGO_BIN_EXE_opencode-rust"))
 }
 
 struct Sandbox {

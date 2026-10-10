@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "opencode"
+name = "opencode-rust"
 path = "src/main.rs"
 
 [lints]
