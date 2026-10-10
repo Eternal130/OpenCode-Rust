@@ -7,17 +7,51 @@ how the optional runtime dependencies are handled.
 
 | Artifact | Path | Notes |
 |---|---|---|
-| Release binary | `cargo build --release -p oc-cli` → `target/release/opencode` (~46 MiB, thin-LTO + symbol-strip via the workspace `[profile.release]`) | The single command: CLI + server + TUI. Reports `opencode v2.0.24` (`--version`) and `opencode v2.0.24 (rust port build <git-short>, <profile> profile)` (`--version-rust`, hidden; stamped by `crates/oc-cli/build.rs`). |
-| Installer | `install/install.sh` | Mirrors v2's installer UX shape (versioned download → `~/.opencode/bin/opencode`, chmod 755, shell-config PATH hint, ASCII banner). See below for the parameterization. |
+| Release binary | `cargo build --release -p oc-cli` → `target/release/opencode-rust` (~46 MiB, thin-LTO + symbol-strip via the workspace `[profile.release]`) | The single command: CLI + server + TUI. Reports `opencode-rust v2.0.24` (`--version`) and `opencode-rust v2.0.24 (rust port build <git-short>, <profile> profile)` (`--version-rust`, hidden; stamped by `crates/oc-cli/build.rs`). The `/api/info` version stays `2.0.24` (protocol parity). |
+| Installer | `install/install.sh` | Mirrors v2's installer UX shape (versioned download → `~/.opencode/bin/opencode-rust`, chmod 755, shell-config PATH hint, ASCII banner). See below for the parameterization. |
 | Release smoke | `tools/release-smoke.sh` | Gate for any release candidate; see below. |
-| Release tarball | NOT in-repo — produce at packaging time: `tar -czf opencode-<version>-<target>.tar.gz package/opencode` (a `package/opencode` or `opencode` member; both the installer and `opencode upgrade` accept either, plus zip and raw-binary artifacts) | Publish alongside `<tarball>.sha256` sidecars (`sha256sum` format) — the installer auto-uses them. |
+| Release tarball | NOT in-repo — produce at packaging time: `tar -czf opencode-<version>-<target>.tar.gz package/opencode-rust` (a `package/opencode-rust` or `opencode-rust` member; both the installer and `opencode-rust upgrade` accept either, plus zip and raw-binary artifacts) | Publish alongside `<tarball>.sha256` sidecars (`sha256sum` format) — the installer auto-uses them. |
+
+## Identity: binary name, isolated data dirs, one-way v2 migration
+
+The Rust port ships under its OWN identity so it can be installed next to
+an upstream v2 binary without a shadow war (REGISTERED divergence —
+PORT_REPORT §3):
+
+* **Binary name**: `opencode-rust` (`[[bin]]` in `crates/oc-cli`,
+  clap `--version` banner `opencode-rust v2.0.24`, `--version-rust`
+  stamp prefix likewise). The wire-visible version stays `2.0.24`
+  (`/api/info`, service negotiation — protocol parity is unaffected).
+* **Isolated XDG dirs** (`oc_util::global_roots::APP_NAME`):
+  `~/.config/opencode-rust`, `~/.local/share/opencode-rust`,
+  `~/.cache/opencode-rust`, `~/.local/state/opencode-rust`. Env
+  overrides (`OPENCODE_CONFIG_DIR`, `XDG_*`, `OPENCODE_TEST_HOME`,
+  `OPENCODE_DB`) keep working unchanged. The plugin npm cache and the
+  managed pinned bun follow (`<cache>/opencode-rust/npm`,
+  `<cache>/opencode-rust/bin/bun`).
+* **One-way first-launch migration**
+  (`oc_core::v2_migration::ensure_migrated`, called from the CLI entry
+  and `boot_and_serve`): if upstream v2 directories exist
+  (`~/.config/opencode`, `~/.local/share/opencode`, `~/.cache/opencode`
+  — resolved under the same env rules), they are COPIED into the
+  isolated dirs once — databases (`opencode.db` + channel-suffixed
+  variants, via the sqlite backup API with a byte-copy fallback),
+  `auth.json`, flat config files, and the `npm/`+`bin/` cache subtrees.
+  `log/` and `repos/` are not copied. Sources are NEVER moved, deleted,
+  or modified (v2's own v1→v2 migration was in-place; ours is a copy
+  precisely BECAUSE the directories are isolated). A marker file
+  `<data>/v2-migration.json` latches the one-way door; a lock file
+  under `<state>/locks` serializes concurrent entry points. Any hard
+  failure warns on stderr and continues boot.
 
 ## Version stamping
 
 * The workspace pins `version = "2.0.24"`; the binary reports
   **exactly** `2.0.24` (`env!("CARGO_PKG_VERSION")`) because service
   version negotiation is exact-string and the Rust build must be a
-  drop-in peer of v2.0.24 (MIGRATION §2.4).
+  drop-in peer of v2.0.24 (MIGRATION §2.4). The `--version` banner is
+  `opencode-rust v2.0.24` — the binary-name divergence is registered
+  (see "Identity" above); the version STRING itself is unchanged.
 * `crates/oc-cli/build.rs` additionally stamps the git short hash +
   compilation profile for the hidden `--version-rust` flag.
 * Never report a TS-stream version (`2.0.25+`) — see the upgrade
@@ -39,15 +73,15 @@ Differences from v2's `install` script, both deliberate:
 
 Also supported, matching v2's flags: `--version <v>`, `--binary <path>`
 (local binary OR tarball OR zip), `--no-modify-path`, `-h/--help`.
-Install destination `~/.opencode/bin/opencode`, mode 755, PATH hint
+Install destination `~/.opencode/bin/opencode-rust`, mode 755, PATH hint
 written to the detected shell rc (zsh/bash/fish/ash/sh lists identical
 to v2), `$GITHUB_PATH` appended in Actions.
 
-## `opencode upgrade` / `opencode uninstall` (real, Phase 10)
+## `opencode-rust upgrade` / `opencode-rust uninstall` (real, Phase 10)
 
 * **Auto-update stays default-OFF** (oracle gate 1 / incident-era
   decision): the Rust port ships no background update loop. Only the
-  explicit `opencode upgrade` ever replaces the binary; the default
+  explicit `opencode-rust upgrade` ever replaces the binary; the default
   invocation (no target) reports "already installed" and says so.
 * Methods (`--method`):
   * `local-file` *(Rust-port extension, real)* — target is a path to a
@@ -59,7 +93,7 @@ to v2), `$GITHUB_PATH` appended in Actions.
     extracts, replaces. Without the env it is a clean typed error — it
     will NOT fall back to opencode.ai (TS-stream protection).
   * `curl` — auto-detected when the running binary IS
-    `~/.opencode/bin/opencode`; behaves as `github` (same env).
+    `~/.opencode/bin/opencode-rust`; behaves as `github` (same env).
   * `brew` — detected under a Cellar prefix; errors with the
     `brew upgrade opencode` guidance.
   * `npm`/`pnpm`/`bun`/`yarn`/`vp` — typed error: those streams carry
@@ -77,11 +111,11 @@ Decision (MIGRATION §2.3): **managed pinned download + checksum +
 graceful degradation** — never embedded, single binary stays light.
 
 * Resolution order (`oc_util::bunman::resolve`, shared by the plugin
-  host): `OC_PLUGIN_BUN` override → `~/.cache/opencode/bin/bun` (the
+  host): `OC_PLUGIN_BUN` override → `~/.cache/opencode-rust/bin/bun` (the
   managed install) → `/usr/local/bin/bun` → `PATH` → `~/.bun/bin/bun`.
 * When plugins are requested and NO bun exists
   (`PluginHost::start_detached_with` with entries, or
-  `opencode plugin add`), `oc_util::bunman::ensure()` downloads the
+  `opencode-rust plugin add`), `oc_util::bunman::ensure()` downloads the
   pinned **bun 1.3.10**:
   `https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-linux-x64.zip`
   * sha256 pinned in source (`oc-util/src/bunman.rs::BUN_SHA256`) =
@@ -89,7 +123,7 @@ graceful degradation** — never embedded, single binary stays light.
     captured 2026-10-10 from the real artifact (39,328,732 bytes) via
     `curl -fsSL <url> -o zip && sha256sum zip`. Any other bytes are
     rejected (`EnsureError::Checksum`) before extraction.
-  * Installed to `~/.cache/opencode/bin/bun`, mode 755, staged +
+  * Installed to `~/.cache/opencode-rust/bin/bun`, mode 755, staged +
     atomically renamed, under a flock so concurrent bootstraps
     serialize.
 * Failure of ANY step (offline, missing curl/wget/unzip, checksum,
@@ -112,7 +146,7 @@ graceful degradation** — never embedded, single binary stays light.
 Run before shipping any candidate (argument: path to the release
 binary; builds one if missing):
 
-1. `--version` must print exactly `opencode v2.0.24`.
+1. `--version` must print exactly `opencode-rust v2.0.24`.
 2. `--version-rust` must carry the build stamp.
 3. `serve` boots in a sandboxed home on a RANDOM port (`--port 0`),
    `/api/info` answers `2.0.24` over Basic auth, clean SIGTERM exit.
@@ -121,7 +155,7 @@ binary; builds one if missing):
    `run`/stdio-lease flows, incl. the upgrade/uninstall tests) runs
    against the RELEASE binary via `OPENCODE_SMOKE_BIN`.
 
-Current status: ALL GREEN against `target/release/opencode`
+Current status: ALL GREEN against `target/release/opencode-rust`
 (build `4c74e5f`, release profile).
 
 ## Gates
@@ -146,8 +180,8 @@ The repo ships two workflows:
   `rust-toolchain.toml` (1.99.0 = the version every gate ran on).
 - **`.github/workflows/release.yml`** — tag-triggered (`v*`): builds
   `cargo build --release -p oc-cli --locked` on `ubuntu-latest`, packages
-  `opencode-<version>-linux-x64.tar.gz` (a `package/opencode` member — the
-  layout the installer and `opencode upgrade` accept) plus the
+  `opencode-<version>-linux-x64.tar.gz` (a `package/opencode-rust` member — the
+  layout the installer and `opencode-rust upgrade` accept) plus the
   `sha256sum`-format sidecar, smoke-tests the packaged binary
   (`--version` from inside the tarball), then publishes the GitHub
   Release. Tags containing `beta` publish as **prerelease**.
@@ -156,10 +190,10 @@ The repo ships two workflows:
 
 Tags: `v2.0.24.beta.1`, `v2.0.24.beta.2`, … until acceptance; the final
 release is plain `v2.0.24`. The tag version (leading `v` stripped) names
-the assets. **The binary itself keeps reporting `2.0.24`** — the
-upstream-parity pin is a registered decision (client/server handshake,
-plugin host `app_version`, golden `--version`); beta numbering lives in
-git/Release metadata only.
+the assets. **The binary itself keeps reporting version `2.0.24`** (as
+`opencode-rust v2.0.24`) — the upstream-parity pin is a registered
+decision (client/server handshake, plugin host `app_version`, golden
+`--version`); beta numbering lives in git/Release metadata only.
 
 ### Consumer URL shape
 

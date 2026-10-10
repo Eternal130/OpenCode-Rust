@@ -31,8 +31,8 @@ jobs:
           TARGET="linux-x64"
           ARTIFACT="opencode-${VERSION}-${TARGET}"
           mkdir -p package
-          cp target/release/opencode package/opencode
-          tar -czf "${ARTIFACT}.tar.gz" package/opencode
+          cp target/release/opencode-rust package/opencode-rust
+          tar -czf "${ARTIFACT}.tar.gz" package/opencode-rust
           sha256sum "${ARTIFACT}.tar.gz" > "${ARTIFACT}.tar.gz.sha256"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
           echo "ARTIFACT=${ARTIFACT}" >> "$GITHUB_ENV"
@@ -40,7 +40,7 @@ jobs:
       - name: Smoke the packaged binary
         run: |
           tar -xzf "${ARTIFACT}.tar.gz"
-          ./package/opencode --version
+          ./package/opencode-rust --version
 
       - name: Compose release notes
         run: |
@@ -57,7 +57,7 @@ jobs:
 
           | File | Target |
           |---|---|
-          | \`${ARTIFACT}.tar.gz\` | linux x86_64 (tarball, \`package/opencode\` member) |
+          | \`${ARTIFACT}.tar.gz\` | linux x86_64 (tarball, \`package/opencode-rust\` member) |
           | \`${ARTIFACT}.tar.gz.sha256\` | sha256 sidecar (\`sha256sum\` format) |
 
           ### Install
@@ -68,13 +68,13 @@ jobs:
             --url https://github.com/${REPO}/releases/download/${TAG}/${ARTIFACT}.tar.gz
           \`\`\`
 
-          Or download the tarball directly and extract \`package/opencode\`.
+          Or download the tarball directly and extract \`package/opencode-rust\`.
 
           ### Verify
 
           \`\`\`sh
-          opencode --version        # 2.0.24 (parity pin)
-          opencode --version-rust   # rust port build <git-short>, release profile
+          opencode-rust --version        # opencode-rust v2.0.24 (parity pin)
+          opencode-rust --version-rust   # rust port build <git-short>, release profile
           \`\`\`
           EOF
 

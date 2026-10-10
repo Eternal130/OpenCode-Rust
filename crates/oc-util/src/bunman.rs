@@ -5,7 +5,7 @@
 //! the host).
 //!
 //! * Resolution order (cache > system > `PATH`, per the Phase 9/10
-//!   decision): `OC_PLUGIN_BUN` override → `~/.cache/opencode/bin/bun`
+//!   decision): `OC_PLUGIN_BUN` override → `~/.cache/opencode-rust/bin/bun`
 //!   → `/usr/local/bin/bun` → `PATH` bun → `~/.bun/bin/bun`.
 //! * [`ensure`] downloads the PINNED bun 1.3.10 zip when (and only
 //!   when) the caller actually wants plugins, verifies its sha256
@@ -55,7 +55,7 @@ const ENSURE_LOCK_TIMEOUT: Duration = Duration::from_secs(180);
 pub enum BunSource {
     /// `OC_PLUGIN_BUN` override.
     EnvOverride,
-    /// `~/.cache/opencode/bin/bun` (managed pinned download).
+    /// `~/.cache/opencode-rust/bin/bun` (managed pinned download).
     Cache,
     /// `/usr/local/bin/bun`.
     System,
@@ -441,7 +441,7 @@ mod tests {
         let home = tempfile::tempdir().expect("home");
         env.set("HOME", home.path().to_str().expect("path"));
         env.set("PATH", "/usr/local/bin:/usr/bin");
-        let cache_bun = fake_bun(&home.path().join(".cache/opencode/bin"));
+        let cache_bun = fake_bun(&home.path().join(".cache/opencode-rust/bin"));
         let (found, source) = locate().expect("cache bun located");
         assert_eq!(found, cache_bun);
         assert_eq!(source, BunSource::Cache);

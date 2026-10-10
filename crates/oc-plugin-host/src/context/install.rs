@@ -1,9 +1,10 @@
 //! The pinned, frozen plugin install path (`opencode plugin add`).
 //!
-//! Installs npm package plugins into the v2-compatible cache layout
-//! `<cache>/opencode/npm/<pkg>@<version>/<timestamp>/node_modules/<pkg>`
-//! (the live `oh-my-opencode-slim` install's shape), version pinned,
-//! lockfile-frozen when one exists:
+//! Installs npm package plugins into the app-isolated cache layout
+//! `<cache>/opencode-rust/npm/<pkg>@<version>/<timestamp>/node_modules/<pkg>`
+//! (the v2-compatible shape under OUR `opencode-rust` XDG suffix — the
+//! one-way v2 migration copies an upstream `opencode` cache across on
+//! first launch), version pinned, lockfile-frozen when one exists:
 //!
 //! * `bun install --frozen-lockfile` when `bun.lock` is present,
 //! * `npm ci` when `package-lock.json` is present,
@@ -23,7 +24,7 @@ use serde_json::Value;
 /// Install tuning.
 #[derive(Debug, Clone)]
 pub struct InstallOptions {
-    /// Cache root (default [`default_root`]: the opencode npm cache).
+    /// Cache root (default [`default_root`]: the opencode-rust npm cache).
     pub root: Option<PathBuf>,
     /// Pass `--offline` to the installer (hermetic re-installs).
     pub offline: bool,
@@ -62,15 +63,16 @@ pub struct Installed {
     pub reused: bool,
 }
 
-/// The default cache root: `$XDG_CACHE_HOME|$HOME/.cache` + `opencode/npm`
-/// (mirrors the v2 `Global` data layout the live install uses).
+/// The default cache root: `$XDG_CACHE_HOME|$HOME/.cache` +
+/// `opencode-rust/npm` (the v2 `Global` data layout under the port's
+/// isolated XDG suffix — see `oc_util::global_roots::APP_NAME`).
 #[must_use]
 pub fn default_root() -> PathBuf {
     let base = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
         .unwrap_or_else(|| PathBuf::from("/tmp"));
-    base.join("opencode").join("npm")
+    base.join(oc_util::global_roots::APP_NAME).join("npm")
 }
 
 /// Split `pkg` / `pkg@version`; a missing version is pinned via

@@ -177,7 +177,7 @@ fn opencode_binary() -> PathBuf {
     if let Some(path) = std::env::var_os("OPENCODE_SMOKE_BIN") {
         return PathBuf::from(path);
     }
-    PathBuf::from(env!("CARGO_BIN_EXE_opencode"))
+    PathBuf::from(env!("CARGO_BIN_EXE_opencode-rust"))
 }
 
 struct Sandbox {
@@ -230,7 +230,7 @@ async fn version_banner_is_pinned() {
         .await
         .expect("run --version");
     assert!(output.status.success());
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "opencode v2.0.24");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "opencode-rust v2.0.24");
 }
 
 #[tokio::test]
@@ -561,15 +561,16 @@ async fn uninstall_dry_run_lists_and_force_removes() {
     let home = sandbox.root.join("home");
     // Sentinel state: data/db, cache/bin/x, config/opencode.json, and a
     // (stale) service registration in state/.
-    std::fs::create_dir_all(home.join(".local/share/opencode")).expect("data dir");
-    std::fs::write(home.join(".local/share/opencode/db"), "db").expect("data sentinel");
-    std::fs::create_dir_all(home.join(".cache/opencode/bin")).expect("cache dir");
-    std::fs::write(home.join(".cache/opencode/bin/x"), "x").expect("cache sentinel");
-    std::fs::create_dir_all(home.join(".config/opencode")).expect("config dir");
-    std::fs::write(home.join(".config/opencode/opencode.json"), "{}").expect("config sentinel");
-    std::fs::create_dir_all(home.join(".local/state/opencode")).expect("state dir");
+    std::fs::create_dir_all(home.join(".local/share/opencode-rust")).expect("data dir");
+    std::fs::write(home.join(".local/share/opencode-rust/db"), "db").expect("data sentinel");
+    std::fs::create_dir_all(home.join(".cache/opencode-rust/bin")).expect("cache dir");
+    std::fs::write(home.join(".cache/opencode-rust/bin/x"), "x").expect("cache sentinel");
+    std::fs::create_dir_all(home.join(".config/opencode-rust")).expect("config dir");
+    std::fs::write(home.join(".config/opencode-rust/opencode.json"), "{}")
+        .expect("config sentinel");
+    std::fs::create_dir_all(home.join(".local/state/opencode-rust")).expect("state dir");
     std::fs::write(
-        home.join(".local/state/opencode/service.json"),
+        home.join(".local/state/opencode-rust/service.json"),
         r#"{"id":"x","version":"2.0.24","url":"http://127.0.0.1:1","pid":99999999,"password":"x"}"#,
     )
     .expect("registration sentinel");
@@ -588,7 +589,7 @@ async fn uninstall_dry_run_lists_and_force_removes() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Dry run - no changes made"), "{stdout}");
     assert!(stdout.contains("Stop background service"), "{stdout}");
-    assert!(home.join(".local/share/opencode/db").exists(), "dry run removes nothing");
+    assert!(home.join(".local/share/opencode-rust/db").exists(), "dry run removes nothing");
 
     // Force (non-TTY): removes data/cache/state + the binary, keeps
     // config via --keep-config. The stale registration is deleted by the
@@ -602,10 +603,10 @@ async fn uninstall_dry_run_lists_and_force_removes() {
     .expect("uninstall finishes")
     .expect("uninstall spawns");
     assert!(output.status.success(), "exit: {}", String::from_utf8_lossy(&output.stderr));
-    assert!(!home.join(".local/share/opencode").exists(), "data removed");
-    assert!(!home.join(".cache/opencode").exists(), "cache removed");
-    assert!(!home.join(".local/state/opencode").exists(), "state removed");
-    assert!(home.join(".config/opencode/opencode.json").exists(), "config kept");
+    assert!(!home.join(".local/share/opencode-rust").exists(), "data removed");
+    assert!(!home.join(".cache/opencode-rust").exists(), "cache removed");
+    assert!(!home.join(".local/state/opencode-rust").exists(), "state removed");
+    assert!(home.join(".config/opencode-rust/opencode.json").exists(), "config kept");
     assert!(!installed.exists(), "binary self-unlinked");
 }
 

@@ -521,7 +521,7 @@ impl Engine {
         // the boot-time provider seeding and the location config must see
         // the same document.
         let global_dirs = GlobalDirs {
-            config: self.home.join(".config").join("opencode"),
+            config: self.home.join(".config").join(oc_util::global_roots::APP_NAME),
             home: self.home.clone(),
         };
         let loaded = Loader::new(location.as_path().to_path_buf(), global_dirs).load();
@@ -743,7 +743,7 @@ impl Engine {
                         project_root: Some(discovery_project.as_path()),
                         global_file: &discovery_home
                             .join(".config")
-                            .join("opencode")
+                            .join(oc_util::global_roots::APP_NAME)
                             .join("AGENTS.md"),
                     };
                     match crate::config::instruction::discover(

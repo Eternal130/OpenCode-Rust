@@ -226,7 +226,7 @@ impl PluginHost {
             Self { facade: None, bun: Some(path) }
         } else {
             eprintln!(
-                "opencode plugin-host: bun not found (looked in ~/.cache/opencode/bin, /usr/local/bin/bun, PATH, ~/.bun/bin/bun); plugin subsystem disabled"
+                "opencode plugin-host: bun not found (looked in ~/.cache/opencode-rust/bin, /usr/local/bin/bun, PATH, ~/.bun/bin/bun); plugin subsystem disabled"
             );
             Self { facade: None, bun: None }
         }
