@@ -7,15 +7,15 @@
 //! * The file STATICALLY imports `@opentui/core`, `@opentui/solid`
 //!   and `solid-js`: the first two are HOST-provided in v2 (the
 //!   desktop opencode install injects them; they are absent from the
-//!   package's own node_modules), so a load attempt in this host
+//!   package's own `node_modules`), so a load attempt in this host
 //!   fails at module resolution — CONTAINED (the entry fails, the
 //!   host keeps running).
-//! * Its v2 `setup(ctx)` drives a SolidJS sidebar runtime
-//!   (`createSidebarRuntime`) that renders JSX into the host's
+//! * Its v2 `setup(ctx)` drives a `SolidJS` sidebar runtime
+//!   (`createSidebarRuntime`) that renders `JSX` into the host's
 //!   `CliRenderer` (`ctx.renderer.requestRender`), navigates via
 //!   `ctx.ui.router`, reads `ctx.data.session.list` through the SDK
-//!   client, and claims slots via `ctx.ui.slot({append:
-//!   "sidebar.content"|"app", render})` — a desktop/opentui surface,
+//!   client, and claims slots via `ctx.ui.slot({append`:
+//!   `"sidebar.content"|"app", render}` — a desktop/opentui surface,
 //!   not mappable to the Rust text-grid slots without a Solid host.
 //!   The Rust bridge instead offers the native `ctx.ui.*` slot seams
 //!   (toast/sidebar/footer/dialog), which is what this wave proves.
@@ -104,7 +104,7 @@ fn flagship_tui_export_resolves_and_is_opentui_bound() {
     // …and @opentui is HOST-provided in v2 (absent from the package's
     // own dependencies — only solid-js is an (optional) package dep).
     let node_modules =
-        package.parent().map(|parent| parent.to_path_buf()).unwrap_or_else(|| package.clone());
+        package.parent().map_or_else(|| package.clone(), std::path::Path::to_path_buf);
     assert!(
         !node_modules.join("@opentui").exists(),
         "@opentui is host-provided in the v2 desktop install"

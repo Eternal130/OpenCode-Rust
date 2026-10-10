@@ -1,7 +1,7 @@
 //! The `opencode.mcp.codemode.defaults` transform (v2
 //! `packages/core/src/plugin/mcp-codemode-defaults.ts`) — defaults that
-//! make known MCP servers work well with OpenCode Code Mode, so a
-//! server's own Code Mode never ends up nested inside OpenCode's. A
+//! make known MCP servers work well with `OpenCode` Code Mode, so a
+//! server's own Code Mode never ends up nested inside `OpenCode`'s. A
 //! server with `codemode` set in config is left exactly as configured.
 //!
 //! v2 ships this as an internal Effect plugin over `ctx.mcp.transform`;
@@ -11,7 +11,7 @@
 
 use serde_json::Value;
 
-/// Servers that ARE Code Mode themselves — OpenCode's turns off for
+/// Servers that ARE Code Mode themselves — `OpenCode`'s turns off for
 /// them (`codemode: false`): executor.sh remote endpoints.
 fn is_executor_url(endpoint: &str) -> bool {
     // /^https:\/\/executor\.sh\/[^/]+\/mcp$/ over
@@ -25,9 +25,9 @@ fn is_executor_url(endpoint: &str) -> bool {
     !segment.is_empty() && !segment.contains('/')
 }
 
-/// PostHog wraps all of its tools in one server-side Code Mode tool
-/// unless the client asks for "tools" mode, so OpenCode Code Mode stays
-/// on and PostHog's is turned off via the header (which wins over
+/// `PostHog` wraps all of its tools in one server-side Code Mode tool
+/// unless the client asks for "tools" mode, so `OpenCode` Code Mode stays
+/// on and `PostHog`'s is turned off via the header (which wins over
 /// `?mode=` and leaves the URL — the credential key — unchanged).
 fn is_posthog_host(hostname: &str) -> bool {
     // /^mcp(?:-eu|\.us|\.eu)?\.posthog\.com$/
@@ -90,8 +90,9 @@ pub fn apply_to_server(config: &mut Value) -> bool {
             false
         }
         Some("remote") => {
-            let Some(url) = object.get("url").and_then(Value::as_str) else { return false };
-            let Some((origin, pathname, host)) = url_endpoint(url) else { return false };
+            let url = object.get("url").and_then(Value::as_str).map(str::to_string);
+            let Some(url) = url else { return false };
+            let Some((origin, pathname, host)) = url_endpoint(&url) else { return false };
             let endpoint = format!("{origin}{}", pathname.trim_end_matches('/'));
             let mut changed = false;
             if is_executor_url(&endpoint) {
@@ -100,19 +101,22 @@ pub fn apply_to_server(config: &mut Value) -> bool {
             }
             // PostHog: the header unless `?mode=` or any casing of the
             // header is already present.
-            let has_mode_param = url_endpoint_query(url)
-                .is_some_and(|query| query.split('&').any(|pair| pair.split('=').next() == Some("mode")));
-            let has_header = object
-                .get("headers")
-                .and_then(Value::as_object)
-                .is_some_and(|headers| {
+            let has_mode_param = url_endpoint_query(&url).is_some_and(|query| {
+                query.split('&').any(|pair| pair.split('=').next() == Some("mode"))
+            });
+            let has_header =
+                object.get("headers").and_then(Value::as_object).is_some_and(|headers| {
                     headers.keys().any(|key| key.eq_ignore_ascii_case("x-posthog-mcp-mode"))
                 });
             if is_posthog_host(&host) && !has_mode_param && !has_header {
                 let mut headers = object
                     .get("headers")
                     .and_then(Value::as_object)
-                    .map(|map| map.iter().map(|(key, value)| (key.clone(), value.clone())).collect::<serde_json::Map<_, _>>())
+                    .map(|map| {
+                        map.iter()
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect::<serde_json::Map<_, _>>()
+                    })
                     .unwrap_or_default();
                 headers.insert("x-posthog-mcp-mode".into(), Value::String("tools".into()));
                 object.insert("headers".into(), Value::Object(headers));
@@ -127,9 +131,14 @@ pub fn apply_to_server(config: &mut Value) -> bool {
 /// Apply the defaults to a whole seeded server table. Returns the
 /// number of touched configs.
 pub fn apply_to_servers(servers: &mut serde_json::Map<String, Value>) -> usize {
-    servers.values_mut().filter(|config| apply_to_server(config)).count()
+    let mut touched = 0;
+    for config in servers.values_mut() {
+        if apply_to_server(config) {
+            touched += 1;
+        }
+    }
+    touched
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,6 +151,7 @@ mod tests {
     /// The v2 case table (mcp-codemode-defaults.test.ts) verbatim:
     /// name → (config, expected codemode, expected headers).
     #[test]
+    #[allow(clippy::too_many_lines)] // the reference's verbatim case table
     fn v2_case_table() {
         struct Case {
             name: &'static str,
@@ -152,7 +162,9 @@ mod tests {
         let cases = vec![
             Case {
                 name: "executor remote",
-                config: server(json!({ "type": "remote", "url": "https://executor.sh/example/mcp?source=opencode" })),
+                config: server(
+                    json!({ "type": "remote", "url": "https://executor.sh/example/mcp?source=opencode" }),
+                ),
                 codemode: Some(false),
                 headers: None,
             },
@@ -164,31 +176,41 @@ mod tests {
             },
             Case {
                 name: "cloudflare code mode",
-                config: server(json!({ "type": "remote", "url": "https://mcp.cloudflare.com/mcp/" })),
+                config: server(
+                    json!({ "type": "remote", "url": "https://mcp.cloudflare.com/mcp/" }),
+                ),
                 codemode: None,
                 headers: None,
             },
             Case {
                 name: "cloudflare raw tools",
-                config: server(json!({ "type": "remote", "url": "https://mcp.cloudflare.com/mcp?codemode=false" })),
+                config: server(
+                    json!({ "type": "remote", "url": "https://mcp.cloudflare.com/mcp?codemode=false" }),
+                ),
                 codemode: None,
                 headers: None,
             },
             Case {
                 name: "cloudflare docs",
-                config: server(json!({ "type": "remote", "url": "https://docs.mcp.cloudflare.com/mcp" })),
+                config: server(
+                    json!({ "type": "remote", "url": "https://docs.mcp.cloudflare.com/mcp" }),
+                ),
                 codemode: None,
                 headers: None,
             },
             Case {
                 name: "explicit true",
-                config: server(json!({ "type": "remote", "url": "https://mcp.cloudflare.com/mcp", "codemode": true })),
+                config: server(
+                    json!({ "type": "remote", "url": "https://mcp.cloudflare.com/mcp", "codemode": true }),
+                ),
                 codemode: Some(true),
                 headers: None,
             },
             Case {
                 name: "explicit false",
-                config: server(json!({ "type": "remote", "url": "https://executor.sh/example/mcp", "codemode": false })),
+                config: server(
+                    json!({ "type": "remote", "url": "https://executor.sh/example/mcp", "codemode": false }),
+                ),
                 codemode: Some(false),
                 headers: None,
             },
@@ -212,31 +234,43 @@ mod tests {
             },
             Case {
                 name: "posthog eu with auth",
-                config: server(json!({ "type": "remote", "url": "https://mcp-eu.posthog.com/mcp", "headers": { "Authorization": "Bearer phx_test" } })),
+                config: server(
+                    json!({ "type": "remote", "url": "https://mcp-eu.posthog.com/mcp", "headers": { "Authorization": "Bearer phx_test" } }),
+                ),
                 codemode: None,
-                headers: Some(json!({ "Authorization": "Bearer phx_test", "x-posthog-mcp-mode": "tools" })),
+                headers: Some(
+                    json!({ "Authorization": "Bearer phx_test", "x-posthog-mcp-mode": "tools" }),
+                ),
             },
             Case {
                 name: "posthog explicit code mode",
-                config: server(json!({ "type": "remote", "url": "https://mcp.us.posthog.com/mcp", "codemode": true })),
+                config: server(
+                    json!({ "type": "remote", "url": "https://mcp.us.posthog.com/mcp", "codemode": true }),
+                ),
                 codemode: Some(true),
                 headers: None,
             },
             Case {
                 name: "posthog mode in url",
-                config: server(json!({ "type": "remote", "url": "https://mcp.posthog.com/mcp?mode=cli" })),
+                config: server(
+                    json!({ "type": "remote", "url": "https://mcp.posthog.com/mcp?mode=cli" }),
+                ),
                 codemode: None,
                 headers: None,
             },
             Case {
                 name: "posthog mode header",
-                config: server(json!({ "type": "remote", "url": "https://mcp.posthog.com/mcp", "headers": { "X-PostHog-MCP-Mode": "cli" } })),
+                config: server(
+                    json!({ "type": "remote", "url": "https://mcp.posthog.com/mcp", "headers": { "X-PostHog-MCP-Mode": "cli" } }),
+                ),
                 codemode: None,
                 headers: Some(json!({ "X-PostHog-MCP-Mode": "cli" })),
             },
             Case {
                 name: "posthog without code mode",
-                config: server(json!({ "type": "remote", "url": "https://mcp.posthog.com/mcp", "codemode": false })),
+                config: server(
+                    json!({ "type": "remote", "url": "https://mcp.posthog.com/mcp", "codemode": false }),
+                ),
                 codemode: Some(false),
                 headers: None,
             },
@@ -255,7 +289,7 @@ mod tests {
             } else {
                 None
             };
-            assert_eq!(headers, case.headers.map_or(Value::Null, |value| value), "{}: headers", case.name);
+            assert_eq!(headers, case.headers, "{}: headers", case.name);
         }
     }
 
@@ -264,7 +298,8 @@ mod tests {
         // "posthog without code mode": explicit false → untouched apart
         // from the configured value (the header would turn PostHog's
         // OWN codemode off, pointless when ours is off).
-        let mut config = json!({ "type": "remote", "url": "https://mcp.posthog.com/mcp", "codemode": false });
+        let mut config =
+            json!({ "type": "remote", "url": "https://mcp.posthog.com/mcp", "codemode": false });
         assert!(!apply_to_server(&mut config));
         assert!(config.get("headers").is_none());
     }

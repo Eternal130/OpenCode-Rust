@@ -62,6 +62,7 @@ pub struct BroadcastTap {
 }
 
 /// Bounded FIFO of delivered envelope ids.
+#[derive(Debug)]
 struct SeenRing {
     order: VecDeque<String>,
     set: std::collections::HashSet<String>,
@@ -69,13 +70,20 @@ struct SeenRing {
 
 impl SeenRing {
     fn new() -> Self {
-        Self { order: VecDeque::with_capacity(DEDUP_CAPACITY), set: std::collections::HashSet::new() }
+        Self {
+            order: VecDeque::with_capacity(DEDUP_CAPACITY),
+            set: std::collections::HashSet::new(),
+        }
     }
 
-    /// `true` when the id is new (and is now remembered).
-    fn admit(&mut self, id: &str) -> bool {
+    fn contains(&self, id: &str) -> bool {
+        self.set.contains(id)
+    }
+
+    /// Record a delivered id, evicting the oldest past capacity.
+    fn remember(&mut self, id: &str) {
         if self.set.contains(id) {
-            return false;
+            return;
         }
         if self.order.len() == DEDUP_CAPACITY {
             if let Some(evicted) = self.order.pop_front() {
@@ -84,7 +92,6 @@ impl SeenRing {
         }
         self.order.push_back(id.to_owned());
         self.set.insert(id.to_owned());
-        true
     }
 }
 
@@ -131,20 +138,35 @@ impl BroadcastTap {
     #[allow(clippy::must_use_candidate)]
     pub fn publish(&self, event: TapEvent) -> bool {
         let Some(tx) = &self.tx else { return false };
-        if !event.id.is_empty() {
-            let mut seen = self.seen.lock().unwrap_or_else(|poison| poison.into_inner());
-            if !seen.admit(&event.id) {
-                self.deduped.fetch_add(1, Ordering::Relaxed);
-                return false;
-            }
+        if event.id.is_empty() {
+            return if let Ok(()) = tx.try_send(event) {
+                true
+            } else {
+                self.warn_full();
+                false
+            };
+        }
+        // Check-then-admit under one lock, with the send INSIDE the
+        // critical section (try_send is non-blocking): a queue-full
+        // drop does not burn the id, so a retry can still deliver.
+        let id = event.id.clone();
+        let mut seen = self.seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if seen.contains(&id) {
+            self.deduped.fetch_add(1, Ordering::Relaxed);
+            return false;
         }
         if let Ok(()) = tx.try_send(event) {
+            seen.remember(&id);
             true
         } else {
-            if !self.warned.swap(true, Ordering::Relaxed) {
-                eprintln!("opencode plugin-host: tap queue full or closed; events will be dropped");
-            }
+            self.warn_full();
             false
+        }
+    }
+
+    fn warn_full(&self) {
+        if !self.warned.swap(true, Ordering::Relaxed) {
+            eprintln!("opencode plugin-host: tap queue full or closed; events will be dropped");
         }
     }
 }
@@ -154,25 +176,30 @@ mod tests {
     use super::*;
 
     fn tap() -> (BroadcastTap, tokio::sync::mpsc::Receiver<TapEvent>) {
-        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let (tx, rx) = tokio::sync::mpsc::channel(DEDUP_CAPACITY + 64);
         (BroadcastTap::live(tx), rx)
     }
 
     #[test]
     fn duplicate_envelope_ids_deliver_once() {
         let (tap, mut rx) = tap();
-        let event = TapEvent { id: "evt_1".into(), typ: "session.text.delta".into(), data: Value::Null, created: None };
+        let event = TapEvent {
+            id: "evt_1".into(),
+            typ: "session.text.delta".into(),
+            data: Value::Null,
+            created: None,
+        };
         assert!(tap.publish(event.clone()));
         assert!(!tap.publish(event.clone()), "the G11-F1 double-append is dropped");
         assert_eq!(tap.deduped_count(), 1);
-        assert!(tokio::runtime::Runtime::new().unwrap().block_on(async {
-            rx.recv().await.is_some()
-        }));
+        assert!(tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async { rx.recv().await.is_some() }));
     }
 
     #[test]
     fn idless_fixture_events_pass_through() {
-        let (tap, mut rx) = tap();
+        let (tap, _rx) = tap();
         assert!(tap.publish(TapEvent::new("tui.test", Value::Null)));
         assert!(tap.publish(TapEvent::new("tui.test", Value::Null)));
         assert_eq!(tap.deduped_count(), 0);
@@ -182,10 +209,20 @@ mod tests {
     fn the_ring_evicts_without_false_positives_forever() {
         let (tap, _rx) = tap();
         for n in 0..(DEDUP_CAPACITY as u64 + 16) {
-            tap.publish(TapEvent { id: format!("evt_{n}"), typ: "t".into(), data: Value::Null, created: None });
+            tap.publish(TapEvent {
+                id: format!("evt_{n}"),
+                typ: "t".into(),
+                data: Value::Null,
+                created: None,
+            });
         }
         // evt_0 evicted; re-publishing it is a fresh delivery.
-        assert!(tap.publish(TapEvent { id: "evt_0".into(), typ: "t".into(), data: Value::Null, created: None }));
+        assert!(tap.publish(TapEvent {
+            id: "evt_0".into(),
+            typ: "t".into(),
+            data: Value::Null,
+            created: None
+        }));
     }
 
     #[test]

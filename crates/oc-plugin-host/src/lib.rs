@@ -183,6 +183,16 @@ pub struct CodeModeRun {
     pub tool_calls: Vec<CodeModeCallRecord>,
 }
 
+/// The guest's own error message passes through VERBATIM (a plugin's
+/// thrown error is the model-visible text); transport failures keep
+/// their display forms.
+fn guest_error_text(error: HostError) -> String {
+    match error {
+        HostError::Guest(why) => why,
+        other => other.to_string(),
+    }
+}
+
 /// The plugin host facade. Constructed via [`PluginHost::detect`]
 /// (bun-resolving; a missing bun yields a DISABLED host whose every
 /// operation is a no-op) and [`PluginHost::start_detached`].
@@ -254,23 +264,7 @@ impl PluginHost {
             );
             return self;
         }
-        let supervisor_config = SupervisorConfig {
-            bun,
-            host_js: sandbox.join("host.js"),
-            cwd: sandbox.clone(),
-            entries: entries.to_vec(),
-            registration_timeout: config.registration_timeout,
-            dispatch_timeout: config.dispatch_timeout,
-            restart_backoff_base: config.restart_backoff_base,
-            restart_backoff_max: config.restart_backoff_max,
-            max_plugin_crashes: config.max_plugin_crashes,
-            max_restarts: config.max_restarts,
-            env: std::mem::take(&mut config.env),
-            host_state: config.host_state,
-            session_port: config.session_port.or_else(|| Some(Arc::new(NoSessionEngine))),
-            tool_port: config.tool_port.or_else(|| Some(Arc::new(NoToolEngine))),
-            entry_options: config.entry_options,
-        };
+        let supervisor_config = supervisor_config(&mut config, bun, &sandbox, entries);
         let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
         let (parts_tx, parts_rx) = std::sync::mpsc::channel::<FacadeParts>();
         let thread = std::thread::Builder::new()
@@ -463,9 +457,13 @@ impl PluginHost {
         let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
         let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
         runtime
-            .block_on(facade.shared.request("tool.execute", json!({ "name": name, "input": input }), timeout))
+            .block_on(facade.shared.request(
+                "tool.execute",
+                json!({ "name": name, "input": input }),
+                timeout,
+            ))
             .map(|result| result.get("result").cloned().unwrap_or(Value::Null))
-            .map_err(|error| error.to_string())
+            .map_err(guest_error_text)
     }
 
     /// [`PluginHost::execute_tool`] without parking a runtime worker —
@@ -483,7 +481,7 @@ impl PluginHost {
             .request("tool.execute", json!({ "name": name, "input": input }), timeout)
             .await
             .map(|result| result.get("result").cloned().unwrap_or(Value::Null))
-            .map_err(|error| error.to_string())
+            .map_err(guest_error_text)
     }
 
     /// Run one Code Mode program in the guest runtime over `catalog`
@@ -497,8 +495,7 @@ impl PluginHost {
     ) -> Result<CodeModeRun, String> {
         let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
         let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
-        runtime
-            .block_on(self.codemode_evaluate_async(code, catalog, timeout))
+        runtime.block_on(self.codemode_evaluate_async(code, catalog, timeout))
     }
 
     /// [`PluginHost::codemode_evaluate`] without parking a worker.
@@ -598,6 +595,15 @@ impl PluginHost {
         self.facade.as_ref()?.start_error.lock().ok()?.clone()
     }
 
+    /// The CURRENT guest process id (diagnostics; the adversarial
+    /// fuzz's kill target). `None` on the disabled/dead host.
+    #[must_use]
+    pub fn guest_pid(&self) -> Option<i32> {
+        let facade = self.facade.as_ref()?;
+        let pid = facade.shared.child_pid.load(AtomicOrdering::Relaxed);
+        i32::try_from(pid).ok().filter(|pid| *pid > 0)
+    }
+
     /// Shut the guest down and join the host thread.
     pub fn shutdown(&self) {
         let Some(facade) = &self.facade else { return };
@@ -608,6 +614,34 @@ impl PluginHost {
         if let Some(thread) = thread {
             let _ = thread.join();
         }
+    }
+}
+
+/// The supervisor config assembled from the caller-facing one (the
+/// `start_detached_with` body stayed under clippy's line budget once
+/// the port seams landed).
+fn supervisor_config(
+    config: &mut PluginHostConfig,
+    bun: PathBuf,
+    sandbox: &std::path::Path,
+    entries: &[PathBuf],
+) -> SupervisorConfig {
+    SupervisorConfig {
+        bun,
+        host_js: sandbox.join("host.js"),
+        cwd: sandbox.to_owned(),
+        entries: entries.to_vec(),
+        registration_timeout: config.registration_timeout,
+        dispatch_timeout: config.dispatch_timeout,
+        restart_backoff_base: config.restart_backoff_base,
+        restart_backoff_max: config.restart_backoff_max,
+        max_plugin_crashes: config.max_plugin_crashes,
+        max_restarts: config.max_restarts,
+        env: std::mem::take(&mut config.env),
+        host_state: std::mem::take(&mut config.host_state),
+        session_port: config.session_port.take().or_else(|| Some(Arc::new(NoSessionEngine))),
+        tool_port: config.tool_port.take().or_else(|| Some(Arc::new(NoToolEngine))),
+        entry_options: std::mem::take(&mut config.entry_options),
     }
 }
 

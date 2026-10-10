@@ -45,9 +45,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::location::{
-    ToolCallContext, ToolRegistryState, ToolRegistration, ToolRunResult,
-};
+use crate::location::{ToolCallContext, ToolRegistration, ToolRegistryState, ToolRunResult};
 use oc_schema::permission::Ruleset;
 use oc_schema::tool::Content;
 
@@ -78,7 +76,8 @@ pub fn execute_input_schema() -> Value {
 /// permission action is the bare name `execute`).
 #[must_use]
 pub fn execute_registration() -> ToolRegistration {
-    let mut registration = ToolRegistration::new(EXECUTE_NAME, EXECUTE_DESCRIPTION, execute_input_schema());
+    let mut registration =
+        ToolRegistration::new(EXECUTE_NAME, EXECUTE_DESCRIPTION, execute_input_schema());
     registration.codemode = false;
     registration
 }
@@ -99,10 +98,8 @@ pub fn shape_request_tools(
     if !code_mode_registered || crate::location::wholly_denied(EXECUTE_NAME, rules) {
         return snapshot;
     }
-    let mut tools: Vec<ToolRegistration> = snapshot
-        .into_iter()
-        .filter(|tool| !tool.codemode && tool.name != EXECUTE_NAME)
-        .collect();
+    let mut tools: Vec<ToolRegistration> =
+        snapshot.into_iter().filter(|tool| !tool.codemode && tool.name != EXECUTE_NAME).collect();
     tools.push(execute_registration());
     tools
 }
@@ -168,7 +165,9 @@ pub fn tool_expression(path: &str) -> String {
             out.push_str(segment);
         } else {
             out.push('[');
-            out.push_str(&serde_json::to_string(segment).unwrap_or_else(|_| format!("{segment:?}")));
+            out.push_str(
+                &serde_json::to_string(segment).unwrap_or_else(|_| format!("{segment:?}")),
+            );
             out.push(']');
         }
     }
@@ -326,19 +325,27 @@ fn render_schema(schema: &Value, depth: usize, pretty: bool) -> String {
     if let Some(enum_values) = object.get("enum").and_then(Value::as_array) {
         return enum_values.iter().map(render_literal).collect::<Vec<_>>().join(" | ");
     }
-    if let Some(alternatives) = object.get("anyOf").or_else(|| object.get("oneOf")).and_then(Value::as_array) {
+    if let Some(alternatives) =
+        object.get("anyOf").or_else(|| object.get("oneOf")).and_then(Value::as_array)
+    {
         // Effect's number sentinel renders plain `number`.
         let number_sentinel = |item: &Value| {
             item.get("type").and_then(Value::as_str) == Some("string")
                 && item.get("enum").and_then(Value::as_array).is_some_and(|values| {
                     values.len() == 1
-                        && matches!(values[0].as_str(), Some("NaN") | Some("Infinity") | Some("-Infinity"))
+                        && matches!(
+                            values[0].as_str(),
+                            Some("NaN") | Some("Infinity") | Some("-Infinity")
+                        )
                 })
         };
         let all_numbers = alternatives.iter().all(|item| {
             item.get("type").and_then(Value::as_str) == Some("number") || number_sentinel(item)
         });
-        if all_numbers && alternatives.iter().any(|item| item.get("type").and_then(Value::as_str) == Some("number"))
+        if all_numbers
+            && alternatives
+                .iter()
+                .any(|item| item.get("type").and_then(Value::as_str) == Some("number"))
         {
             return "number".to_string();
         }
@@ -352,7 +359,8 @@ fn render_schema(schema: &Value, depth: usize, pretty: bool) -> String {
     if let Some(members) = object.get("allOf").and_then(Value::as_array) {
         let rendered: Vec<String> =
             members.iter().map(|item| render_schema(item, depth + 1, pretty)).collect();
-        let concrete: Vec<String> = rendered.into_iter().filter(|member| member != "unknown").collect();
+        let concrete: Vec<String> =
+            rendered.into_iter().filter(|member| member != "unknown").collect();
         if concrete.is_empty() {
             return "unknown".to_string();
         }
@@ -412,7 +420,12 @@ fn render_schema(schema: &Value, depth: usize, pretty: bool) -> String {
 /// alphabetically (no `preserve_order`), so general schemas render
 /// sorted; the `search` builtin's own schemas pass v2's declaration
 /// order to keep the pinned signature byte-exact.
-fn render_object(fields: &[(String, &Value)], required: &[&str], depth: usize, pretty: bool) -> String {
+fn render_object(
+    fields: &[(String, &Value)],
+    required: &[&str],
+    depth: usize,
+    pretty: bool,
+) -> String {
     let field = |(name, value): &(String, &Value)| {
         let optional = if required.contains(&name.as_str()) { "" } else { "?" };
         format!("{}{}: {}", render_key(name), optional, render_schema(value, depth + 1, pretty))
@@ -428,7 +441,9 @@ fn render_object(fields: &[(String, &Value)], required: &[&str], depth: usize, p
     let pad = "  ".repeat(depth + 1);
     let lines: Vec<String> = fields
         .iter()
-        .map(|(name, value)| format!("{}{}{},", jsdoc(value, &pad), pad, field(&(name.clone(), *value))))
+        .map(|(name, value)| {
+            format!("{}{}{},", jsdoc(value, &pad), pad, field(&(name.clone(), *value)))
+        })
         .collect();
     format!("{{\n{}\n{}}}", lines.join("\n"), "  ".repeat(depth))
 }
@@ -469,14 +484,13 @@ pub fn search_signature() -> String {
     // required — Schema.Struct).
     let lines = [
         format!("  items: Array<{item_object}>,"),
-        format!("  /** @integer @minimum 0 */\n  remaining: {},", render_schema(&offset_schema, 1, true)),
+        format!(
+            "  /** @integer @minimum 0 */\n  remaining: {},",
+            render_schema(&offset_schema, 1, true)
+        ),
         format!("  next: {next_member} | null,"),
     ];
-    format!(
-        "search({}): {{\n{}\n}}",
-        render_object(&input_fields, &[], 0, true),
-        lines.join("\n")
-    )
+    format!("search({}): {{\n{}\n}}", render_object(&input_fields, &[], 0, true), lines.join("\n"))
 }
 
 // ---------------------------------------------------------------------------
@@ -517,13 +531,7 @@ fn cost(text: &str) -> usize {
 
 /// The listing suffix: `  - {signature} // {first description line}`.
 fn listing_line(entry: &CatalogEntry) -> String {
-    let first_line = entry
-        .description
-        .split('\n')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let first_line = entry.description.split('\n').next().unwrap_or_default().trim().to_string();
     let description = if first_line.len() > DESCRIPTION_LIMIT {
         format!("{}...", &first_line[..DESCRIPTION_LIMIT - 3])
     } else {
@@ -675,7 +683,11 @@ pub fn render_instructions(summary: &CatalogSummary) -> String {
 /// `namespaceLine` (catalog.ts:165-174).
 #[must_use]
 pub fn namespace_line(namespace: &NamespaceSummary) -> String {
-    let count = if namespace.count == 1 { "1 tool".to_string() } else { format!("{} tools", namespace.count) };
+    let count = if namespace.count == 1 {
+        "1 tool".to_string()
+    } else {
+        format!("{} tools", namespace.count)
+    };
     let shown = namespace.entries.len();
     let label = if shown == namespace.count {
         count
@@ -716,7 +728,10 @@ fn summary_from_value(value: &Value) -> Option<CatalogSummary> {
         .map(|namespace| {
             Some(NamespaceSummary {
                 name: namespace.get("name")?.as_str()?.to_string(),
-                description: namespace.get("description").and_then(Value::as_str).map(str::to_string),
+                description: namespace
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
                 count: namespace.get("count")?.as_u64()? as usize,
                 entries: namespace
                     .get("entries")?
@@ -825,8 +840,9 @@ pub struct RunOutcome {
 
 /// Resolves one nested `tools.<path>(input)` call to its JSON result
 /// (`Err` rejects inside the program — the tool failed).
-pub type ToolCallFn =
-    Arc<dyn Fn(&str, Value) -> futures::future::BoxFuture<'static, Result<Value, String>> + Send + Sync>;
+pub type ToolCallFn = Arc<
+    dyn Fn(&str, Value) -> futures::future::BoxFuture<'static, Result<Value, String>> + Send + Sync,
+>;
 
 /// The Code Mode interpreter seam. v2: the in-process confined
 /// interpreter; the Rust port: the plugin host's guest runtime
@@ -847,7 +863,9 @@ pub fn format_result(outcome: &RunOutcome) -> String {
         None => match &outcome.value {
             None => "undefined".to_string(),
             Some(Value::String(text)) => text.clone(),
-            Some(other) => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
+            Some(other) => {
+                serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string())
+            }
         },
     }
 }
@@ -889,11 +907,18 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
         _services: &'a super::ToolServices,
         input: &'a Value,
         context: &'a ToolCallContext,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<super::ToolOutcome, super::ToolFailure>> + Send + 'a>>
-    {
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<super::ToolOutcome, super::ToolFailure>>
+                + Send
+                + 'a,
+        >,
+    > {
         Box::pin(async move {
             let Some(code) = input.get("code").and_then(Value::as_str) else {
-                return Err(super::ToolFailure::message("Code Mode execution requires a `code` string"));
+                return Err(super::ToolFailure::message(
+                    "Code Mode execution requires a `code` string",
+                ));
             };
             let registry = Arc::clone(&self.registry);
             let call_context = context.clone();
@@ -903,9 +928,7 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
                 let name = name.to_string();
                 Box::pin(async move {
                     let Some(executor) = registry.executor(&name) else {
-                        return Err(format!(
-                            "Unknown Code Mode tool: {name}"
-                        ));
+                        return Err(format!("Unknown Code Mode tool: {name}"));
                     };
                     executor
                         .execute_with_context(&input, &context)
@@ -916,7 +939,8 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
             });
             let entries = code_mode_entries(&self.registry);
             let outcome =
-                tokio::time::timeout(self.timeout, self.runtime.evaluate(code, &entries, call)).await;
+                tokio::time::timeout(self.timeout, self.runtime.evaluate(code, &entries, call))
+                    .await;
             let outcome = match outcome {
                 Ok(outcome) => outcome,
                 Err(_elapsed) => {
@@ -937,7 +961,8 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
                         .map(|record| {
                             let mut object = serde_json::Map::new();
                             object.insert("tool".to_string(), Value::String(record.tool.clone()));
-                            object.insert("status".to_string(), Value::String(record.status.clone()));
+                            object
+                                .insert("status".to_string(), Value::String(record.status.clone()));
                             if let Some(input) = &record.input {
                                 object.insert("input".to_string(), input.clone());
                             }
@@ -989,7 +1014,11 @@ mod tests {
     use super::*;
 
     fn entry(path: &str, description: &str, input: Value) -> CatalogEntry {
-        CatalogEntry { path: path.to_string(), description: description.to_string(), signature: signature(path, description, &input) }
+        CatalogEntry {
+            path: path.to_string(),
+            description: description.to_string(),
+            signature: signature(path, description, &input),
+        }
     }
 
     #[test]
@@ -1073,8 +1102,13 @@ mod tests {
             "Echo text\nSecond line here",
             json!({ "type": "object", "properties": { "text": { "type": "string", "description": "The text" } }, "required": ["text"] }),
         );
-        let lookup = entry("2d_get_scene", "Get the scene", json!({ "type": "object", "properties": {} }));
-        let sales = entry("registry.search.sales", "Read sales", json!({ "type": "object", "properties": {} }));
+        let lookup =
+            entry("2d_get_scene", "Get the scene", json!({ "type": "object", "properties": {} }));
+        let sales = entry(
+            "registry.search.sales",
+            "Read sales",
+            json!({ "type": "object", "properties": {} }),
+        );
         let summary = catalog_summary(&[echo.clone(), lookup.clone(), sales.clone()]);
         assert_eq!((summary.total, summary.shown), (3, 3));
         let text = render_instructions(&summary);
@@ -1099,7 +1133,12 @@ mod tests {
             })
             .collect();
         let summary = catalog_summary(&many);
-        assert!(summary.shown < summary.total, "budget engages: {} of {}", summary.shown, summary.total);
+        assert!(
+            summary.shown < summary.total,
+            "budget engages: {} of {}",
+            summary.shown,
+            summary.total
+        );
         let text = render_instructions(&summary);
         assert!(text.contains("The catalog is partial"), "{text}");
         assert!(text.contains(&format!("- {}", search_signature())));
@@ -1107,13 +1146,22 @@ mod tests {
 
     #[test]
     fn format_result_matches_v2() {
-        assert_eq!(format_result(&RunOutcome { value: Some(Value::String("hi".into())), ..Default::default() }), "hi");
+        assert_eq!(
+            format_result(&RunOutcome {
+                value: Some(Value::String("hi".into())),
+                ..Default::default()
+            }),
+            "hi"
+        );
         assert_eq!(
             format_result(&RunOutcome { value: Some(json!({"a":1})), ..Default::default() }),
             "{\n  \"a\": 1\n}"
         );
         assert_eq!(format_result(&RunOutcome::default()), "undefined");
-        assert_eq!(format_result(&RunOutcome { value: Some(Value::Null), ..Default::default() }), "null");
+        assert_eq!(
+            format_result(&RunOutcome { value: Some(Value::Null), ..Default::default() }),
+            "null"
+        );
         assert_eq!(
             format_result(&RunOutcome { error: Some("boom".into()), ..Default::default() }),
             "boom"
@@ -1122,10 +1170,14 @@ mod tests {
 
     #[test]
     fn summary_value_round_trips() {
-        let summary = catalog_summary(&[entry("a.b", "B", json!({ "type": "object", "properties": {} }))]);
+        let summary =
+            catalog_summary(&[entry("a.b", "B", json!({ "type": "object", "properties": {} }))]);
         let value = summary_value(&summary);
         assert_eq!(summary_from_value(&value), Some(summary));
-        assert_eq!(instructions_from_value(&value), render_instructions(&summary_from_value(&value).unwrap()));
+        assert_eq!(
+            instructions_from_value(&value),
+            render_instructions(&summary_from_value(&value).unwrap())
+        );
     }
 }
 
@@ -1135,12 +1187,12 @@ mod tests {
 /// text, and the hard timeout — everything but the JS interpreter.
 #[cfg(test)]
 mod executor_tests {
-    use super::*;
     use super::super::tests::{call, harness_for_codemode};
+    use super::*;
     use crate::location::ToolRunResult;
     use crate::tool::codemode::{
-        register_code_mode, shape_request_tools, CatalogEntry, CodeModeRuntime, CallRecord,
-        EXECUTE_NAME, RunOutcome, ToolCallFn,
+        register_code_mode, shape_request_tools, CallRecord, CatalogEntry, CodeModeRuntime,
+        RunOutcome, ToolCallFn, EXECUTE_NAME,
     };
     use async_trait::async_trait;
 
@@ -1153,7 +1205,12 @@ mod executor_tests {
 
     #[async_trait]
     impl CodeModeRuntime for ScriptRuntime {
-        async fn evaluate(&self, code: &str, catalog: &[CatalogEntry], call: ToolCallFn) -> RunOutcome {
+        async fn evaluate(
+            &self,
+            code: &str,
+            catalog: &[CatalogEntry],
+            call: ToolCallFn,
+        ) -> RunOutcome {
             let mut outcome = RunOutcome::default();
             for token in code.split_whitespace() {
                 let Some(target) = catalog.iter().find(|entry| entry.path == token) else {
@@ -1232,8 +1289,13 @@ mod executor_tests {
         let harness = harness_for_codemode().await;
         let state = Arc::new(ToolRegistryState::new());
         let hooks = Arc::new(crate::hooks::HookRegistry::new());
-        crate::tool::registry::register(&state, &hooks, &harness.services, codemoded("greet", "hello wave4", false))
-            .expect("register greet");
+        crate::tool::registry::register(
+            &state,
+            &hooks,
+            &harness.services,
+            codemoded("greet", "hello wave4", false),
+        )
+        .expect("register greet");
         register_code_mode(
             &state,
             &hooks,
@@ -1245,11 +1307,15 @@ mod executor_tests {
         let entries = crate::tool::codemode::code_mode_entries(&state);
         assert_eq!(entries.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(), ["greet"]);
         let shaped = shape_request_tools(state.snapshot(None), None, true);
-        assert_eq!(shaped.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(), [EXECUTE_NAME]);
+        assert_eq!(
+            shaped.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
+            [EXECUTE_NAME]
+        );
 
-        let result: ToolRunResult = call(&state, EXECUTE_NAME, serde_json::json!({ "code": "greet" }))
-            .await
-            .expect("execute completes");
+        let result: ToolRunResult =
+            call(&state, EXECUTE_NAME, serde_json::json!({ "code": "greet" }))
+                .await
+                .expect("execute completes");
         assert_eq!(
             result.content,
             vec![oc_schema::tool::Content::Text { text: "hello wave4".to_string() }]
@@ -1261,7 +1327,7 @@ mod executor_tests {
                 { "tool": "greet", "status": "completed", "input": { "name": "wave4" } }
             ]))
         );
-        assert!(metadata.get("error").is_none());
+        assert!(!metadata.contains_key("error"));
     }
 
     #[tokio::test]
@@ -1269,8 +1335,13 @@ mod executor_tests {
         let harness = harness_for_codemode().await;
         let state = Arc::new(ToolRegistryState::new());
         let hooks = Arc::new(crate::hooks::HookRegistry::new());
-        crate::tool::registry::register(&state, &hooks, &harness.services, codemoded("boom", "", true))
-            .expect("register boom");
+        crate::tool::registry::register(
+            &state,
+            &hooks,
+            &harness.services,
+            codemoded("boom", "", true),
+        )
+        .expect("register boom");
         register_code_mode(
             &state,
             &hooks,
@@ -1290,7 +1361,12 @@ mod executor_tests {
         struct HangingRuntime;
         #[async_trait]
         impl CodeModeRuntime for HangingRuntime {
-            async fn evaluate(&self, _code: &str, _catalog: &[CatalogEntry], _call: ToolCallFn) -> RunOutcome {
+            async fn evaluate(
+                &self,
+                _code: &str,
+                _catalog: &[CatalogEntry],
+                _call: ToolCallFn,
+            ) -> RunOutcome {
                 futures::future::pending().await
             }
         }

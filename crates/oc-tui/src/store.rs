@@ -634,83 +634,100 @@ pub struct Store {
     _redraw_effect: crate::reactive::EffectHandle,
 }
 
+/// The store's root signals (one struct so [`Store::build`] stays
+/// under clippy's argument budget as the plugin seams landed).
+#[derive(Clone)]
+struct StoreSignals {
+    tabs: Signal<TabsState>,
+    route: Signal<Route>,
+    dialogs: Signal<Vec<DialogEntry>>,
+    theme: Signal<ThemeState>,
+    registry: Signal<ThemeRegistry>,
+    keybinds: Signal<Vec<KeybindOverride>>,
+    connection: Signal<ConnectionState>,
+    footer: Signal<FooterMachine>,
+    toasts: Signal<ToastQueue>,
+    messages: Signal<MessageState>,
+    prompt: Signal<PromptState>,
+    server_lists: Signal<ServerLists>,
+    selection: Signal<SelectionState>,
+    plugin_commands: Signal<Vec<PluginCommandEntry>>,
+    plugin_dialogs: Signal<HashMap<String, PluginDialogContent>>,
+    plugin_sections: Signal<Vec<crate::components::sidebar::SidebarSection>>,
+    plugin_hints: Signal<Vec<(String, String)>>,
+    plugin_home_actions: Signal<Vec<crate::components::home::PluginQuickAction>>,
+    plugin_group_rules: Signal<crate::components::message::model::GroupRules>,
+}
+
 impl Store {
-    #[must_use]
-    pub fn new(runtime: Runtime) -> Self {
-        let tabs = Signal::new(&runtime, TabsState::default());
-        let route = Signal::new(&runtime, Route::Home);
-        let dialogs = Signal::new(&runtime, Vec::<DialogEntry>::new());
-        let theme = Signal::new(&runtime, ThemeState::v2_dark());
-        let registry = Signal::new(&runtime, ThemeRegistry::builtins());
-        let keybinds = Signal::new(&runtime, Vec::<KeybindOverride>::new());
-        let connection = Signal::new(&runtime, ConnectionState::Connecting);
-        let footer = Signal::new(&runtime, FooterMachine::new());
-        let toasts = Signal::new(&runtime, ToastQueue::new());
-        let messages = Signal::new(&runtime, MessageState::default());
-        let prompt = Signal::new(&runtime, PromptState::default());
-        let server_lists = Signal::new(&runtime, ServerLists::default());
-        let selection = Signal::new(&runtime, SelectionState::default());
-        let plugin_commands = Signal::new(&runtime, Vec::<PluginCommandEntry>::new());
-        let plugin_dialogs =
-            Signal::new(&runtime, std::collections::HashMap::<String, PluginDialogContent>::new());
-        let plugin_sections =
-            Signal::new(&runtime, Vec::<crate::components::sidebar::SidebarSection>::new());
-        let plugin_hints = Signal::new(&runtime, Vec::<(String, String)>::new());
-        let plugin_home_actions =
-            Signal::new(&runtime, Vec::<crate::components::home::PluginQuickAction>::new());
-        let plugin_group_rules =
-            Signal::new(&runtime, crate::components::message::model::GroupRules::empty());
-        let prompt_sink: std::rc::Rc<dyn PromptSink> =
-            std::rc::Rc::new(RecordingPromptSink::default());
-        let clock = Signal::new(&runtime, 0u64);
+    /// The coalesced-redraw effect: every root signal read once, one
+    /// request per pump (`(clock, counter, effect)`).
+    #[allow(clippy::type_complexity)]
+    fn mount_redraw_effect(
+        runtime: &Runtime,
+        signals: &StoreSignals,
+    ) -> (Signal<u64>, Rc<Cell<u64>>, crate::reactive::EffectHandle) {
+        let clock = Signal::new(runtime, 0u64);
         let redraw_requests = Rc::new(Cell::new(0u64));
         // Any root-state change requests exactly one redraw per pump.
         let bump = Rc::clone(&redraw_requests);
-        let watch_tabs = tabs.clone();
-        let watch_route = route.clone();
-        let watch_dialogs = dialogs.clone();
-        let watch_theme = theme.clone();
-        let watch_registry = registry.clone();
-        let watch_keybinds = keybinds.clone();
-        let watch_connection = connection.clone();
-        let watch_footer = footer.clone();
-        let watch_toasts = toasts.clone();
-        let watch_messages = messages.clone();
-        let watch_prompt = prompt.clone();
-        let watch_server_lists = server_lists.clone();
-        let watch_selection = selection.clone();
-        let watch_plugin_commands = plugin_commands.clone();
-        let watch_plugin_dialogs = plugin_dialogs.clone();
-        let watch_plugin_sections = plugin_sections.clone();
-        let watch_plugin_hints = plugin_hints.clone();
-        let watch_plugin_home_actions = plugin_home_actions.clone();
-        let watch_plugin_group_rules = plugin_group_rules.clone();
+        let watchers = signals.clone();
         let watch_clock = clock.clone();
-        let redraw_effect = Effect::new(&runtime, move || {
+        let redraw_effect = Effect::new(runtime, move || {
             let _ = (
-                watch_tabs.get(),
-                watch_route.get(),
-                watch_dialogs.get(),
-                watch_theme.get(),
-                watch_registry.get(),
-                watch_keybinds.get(),
-                watch_connection.get(),
-                watch_footer.get(),
-                watch_toasts.get(),
-                watch_messages.get(),
-                watch_prompt.get(),
-                watch_server_lists.get(),
-                watch_selection.get(),
-                watch_plugin_commands.get(),
-                watch_plugin_dialogs.get(),
-                watch_plugin_sections.get(),
-                watch_plugin_hints.get(),
-                watch_plugin_home_actions.get(),
-                watch_plugin_group_rules.get(),
+                watchers.tabs.get(),
+                watchers.route.get(),
+                watchers.dialogs.get(),
+                watchers.theme.get(),
+                watchers.registry.get(),
+                watchers.keybinds.get(),
+                watchers.connection.get(),
+                watchers.footer.get(),
+                watchers.toasts.get(),
+                watchers.messages.get(),
+                watchers.prompt.get(),
+                watchers.server_lists.get(),
+                watchers.selection.get(),
+                watchers.plugin_commands.get(),
+                watchers.plugin_dialogs.get(),
+                watchers.plugin_sections.get(),
+                watchers.plugin_hints.get(),
+                watchers.plugin_home_actions.get(),
+                watchers.plugin_group_rules.get(),
                 watch_clock.get(),
             );
             bump.set(bump.get() + 1);
         });
+        (clock, redraw_requests, redraw_effect)
+    }
+
+    /// The store's constructor body (the signal graph + the redraw
+    /// effect over every root signal).
+    fn build(runtime: Runtime, signals: StoreSignals) -> Self {
+        let prompt_sink: std::rc::Rc<dyn PromptSink> =
+            std::rc::Rc::new(RecordingPromptSink::default());
+        let (clock, redraw_requests, redraw_effect) = Self::mount_redraw_effect(&runtime, &signals);
+        let StoreSignals {
+            tabs,
+            route,
+            dialogs,
+            theme,
+            registry,
+            keybinds,
+            connection,
+            footer,
+            toasts,
+            messages,
+            prompt,
+            server_lists,
+            selection,
+            plugin_commands,
+            plugin_dialogs,
+            plugin_sections,
+            plugin_hints,
+            plugin_home_actions,
+            plugin_group_rules,
+        } = signals;
         Self {
             runtime,
             tabs,
@@ -745,6 +762,57 @@ impl Store {
             redraw_requests,
             _redraw_effect: redraw_effect,
         }
+    }
+
+    #[must_use]
+    pub fn new(runtime: Runtime) -> Self {
+        let tabs = Signal::new(&runtime, TabsState::default());
+        let route = Signal::new(&runtime, Route::Home);
+        let dialogs = Signal::new(&runtime, Vec::<DialogEntry>::new());
+        let theme = Signal::new(&runtime, ThemeState::v2_dark());
+        let registry = Signal::new(&runtime, ThemeRegistry::builtins());
+        let keybinds = Signal::new(&runtime, Vec::<KeybindOverride>::new());
+        let connection = Signal::new(&runtime, ConnectionState::Connecting);
+        let footer = Signal::new(&runtime, FooterMachine::new());
+        let toasts = Signal::new(&runtime, ToastQueue::new());
+        let messages = Signal::new(&runtime, MessageState::default());
+        let prompt = Signal::new(&runtime, PromptState::default());
+        let server_lists = Signal::new(&runtime, ServerLists::default());
+        let selection = Signal::new(&runtime, SelectionState::default());
+        let plugin_commands = Signal::new(&runtime, Vec::<PluginCommandEntry>::new());
+        let plugin_dialogs =
+            Signal::new(&runtime, std::collections::HashMap::<String, PluginDialogContent>::new());
+        let plugin_sections =
+            Signal::new(&runtime, Vec::<crate::components::sidebar::SidebarSection>::new());
+        let plugin_hints = Signal::new(&runtime, Vec::<(String, String)>::new());
+        let plugin_home_actions =
+            Signal::new(&runtime, Vec::<crate::components::home::PluginQuickAction>::new());
+        let plugin_group_rules =
+            Signal::new(&runtime, crate::components::message::model::GroupRules::empty());
+        Self::build(
+            runtime,
+            StoreSignals {
+                tabs,
+                route,
+                dialogs,
+                theme,
+                registry,
+                keybinds,
+                connection,
+                footer,
+                toasts,
+                messages,
+                prompt,
+                server_lists,
+                selection,
+                plugin_commands,
+                plugin_dialogs,
+                plugin_sections,
+                plugin_hints,
+                plugin_home_actions,
+                plugin_group_rules,
+            },
+        )
     }
 
     // -- accessors --------------------------------------------------------
@@ -1466,7 +1534,7 @@ impl Store {
 
     /// Upsert one plugin's sidebar section (latest wins; an empty
     /// title + empty rows removes the section).
-    pub fn set_plugin_sidebar_section(&self, section: crate::components::sidebar::SidebarSection) {
+    pub fn set_plugin_sidebar_section(&self, section: &crate::components::sidebar::SidebarSection) {
         let remove = section.title.is_empty() && section.rows.is_empty();
         self.plugin_sections.update(|sections| {
             sections.retain(|existing| existing.plugin_id != section.plugin_id);

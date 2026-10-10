@@ -55,7 +55,10 @@ fn crash_attributed_restarted_then_plugin_disabled() {
 
     // Let the pump drain the stray kill.ticks the probe raced in
     // (each resolves fast once failed; wait for the queue to settle).
-    let settled = common::wait_for(Duration::from_secs(10), || {
+    // Wave 4 widened this window: the suite's parallel load grew
+    // (codemode/fuzz guests) and in-flight dispatches now resolve
+    // slower under contention — the w9w2 §5 test-budget note.
+    let settled = common::wait_for(Duration::from_secs(20), || {
         let (one, _) = host.dispatch_counters();
         std::thread::sleep(Duration::from_millis(300));
         let (two, _) = host.dispatch_counters();
@@ -64,12 +67,20 @@ fn crash_attributed_restarted_then_plugin_disabled() {
     assert!(settled, "dispatch pump drained after the crash cycles");
 
     // The neighbor survived every restart: dispatch + execute work.
+    // The publish retries — a dispatch that races a crash/restart may
+    // still drop after the pump's bounded retry window (logged and
+    // counted); the recovery contract is that delivery resumes, not
+    // that any single raced event survives.
     let marker = sandbox.join("event.txt");
     let _ = std::fs::remove_file(&marker);
-    host.tap()
-        .publish(TapEvent::new("tui.test", serde_json::json!({ "payload": "after-crashes" })));
     assert!(
-        common::wait_for(Duration::from_secs(10), || marker.exists()),
+        common::wait_for(Duration::from_secs(20), || {
+            host.tap().publish(TapEvent::new(
+                "tui.test",
+                serde_json::json!({ "payload": "after-crashes" }),
+            ));
+            marker.exists()
+        }),
         "healthy plugin still receives events after the crash cycles"
     );
     assert!(

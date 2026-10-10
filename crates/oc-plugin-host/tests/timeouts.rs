@@ -44,9 +44,13 @@ fn hung_plugin_times_out_and_stream_continues() {
         common::wait_for(Duration::from_secs(10), || host.dispatch_counters().1 >= 1),
         "the hung dispatch was dropped (counted)"
     );
-    let (dispatched, dropped) = host.dispatch_counters();
-    assert!(dropped >= 1);
-    assert!(dispatched >= 1);
+    assert!(host.dispatch_counters().1 >= 1);
+    // The marker lands before the dispatch REPLY increments the
+    // counter — poll rather than assert (wave-4 load exposed the race).
+    assert!(
+        common::wait_for(Duration::from_secs(10), || host.dispatch_counters().0 >= 1),
+        "the fast dispatch completed (counted)"
+    );
 
     // And the host still executes commands afterwards.
     assert!(host.execute_command("nope", None, Duration::from_millis(500)).is_err());

@@ -612,9 +612,18 @@ function makeCtx(pluginId, options) {
       // 1.3.10 wedges on that shape (verified: then() returning
       // `inner.then(() => v)` never settles the awaiting frame).
       subscribe(first, second) {
-        if (typeof first === "function" || Array.isArray(first)) {
+        // (handler) | (types, handler) | (types[]) — the handler forms
+        // register a callback subscription (wave 1) and return a plain
+        // Promise<Registration>. `types` may be a single string or an
+        // array (v2 overloads). The NO-ARG form is the v2 EventApi
+        // shape: returns an AsyncIterable SYNCHRONOUSLY.
+        if (typeof first === "function" || Array.isArray(first) || typeof first === "string") {
           return (async () => {
-            const types = Array.isArray(first) ? first : null;
+            const types = Array.isArray(first)
+              ? first
+              : typeof first === "string"
+                ? [first]
+                : null;
             const handler = typeof first === "function" ? first : second;
             const entry = { types, handler: handler ?? null, queue: null };
             subscriptions.push(entry);
@@ -925,8 +934,211 @@ async function handleCommandExecute({ pluginId, name, args, sessionID }) {
     prompt: { text: typeof args === "string" ? args : args?.text ?? null },
     args,
   };
-  const result = await execute(invocation, makeCtx(pluginId));
+  const result = await execute(invocation, makeCtx(pluginId, {}));
   return { ok: true, result: result ?? null };
+}
+
+// ---------------------------------------------------------------------------
+// Tool execution dispatch (wave 4): the wave-2 metadata-only surface
+// becomes callable — `ctx.tool.transform`'s `execute` runs on demand.
+// ---------------------------------------------------------------------------
+
+async function handleToolExecute({ name, input }) {
+  const def = domainStores.tools.get(String(name ?? ""));
+  if (!def || typeof def.execute !== "function") {
+    throw new Error(`tool ${name}: no such plugin tool`);
+  }
+  // v2 ToolContext: an abort signal + progress reporter. The abort
+  // seam is the process lifetime (a killed guest aborts everything);
+  // progress notifications are a later surface.
+  const controller = new AbortController();
+  const context = {
+    signal: controller.signal,
+    progress: () => {},
+    sessionID: undefined,
+    agent: undefined,
+    messageID: undefined,
+    id: undefined,
+  };
+  const result = await def.execute(input ?? {}, context);
+  // v2 Tool.Result: {output?, content?, metadata?} — string content is
+  // the common shape; the host side joins parts.
+  return { ok: true, result: result ?? null };
+}
+
+// ---------------------------------------------------------------------------
+// Code Mode (wave 4): one `execute` program over a tool catalog. The
+// guest is the runtime (v2 uses its in-process confined interpreter —
+// the Rust port's boundary is this sandboxed subprocess plus the
+// host-side HARD timeout; imports/timers are reachable inside the
+// sandbox, a documented divergence).
+// ---------------------------------------------------------------------------
+
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+
+/** v2 `displayInput` (codemode/tool.ts:303-308). */
+function displayInput(input) {
+  if (input === null || input === undefined) return undefined;
+  if (typeof input !== "object" || Array.isArray(input)) return { input };
+  if (Object.keys(input).length === 0) return undefined;
+  return input;
+}
+
+/**
+ * Build the `tools` tree from catalog entries. A path that is BOTH a
+ * callable tool and a namespace (e.g. `pricing` + `pricing.sales`)
+ * becomes a function with the children attached — the observable
+ * semantics of v2's callable-namespace merge.
+ */
+function buildToolsTree(entries, calls) {
+  const root = {};
+  const makeCallable = (entry) => {
+    const fn = async (input) => {
+      const shown = displayInput(input);
+      const record = { tool: entry.path, status: "running", ...(shown ? { input: shown } : {}) };
+      calls.push(record);
+      try {
+        const result = await hostRequest("codemode.tool", { name: entry.path, input: input ?? {} });
+        const value = result && typeof result === "object" && "value" in result ? result.value : result;
+        record.status = "completed";
+        return value ?? null;
+      } catch (error) {
+        record.status = "error";
+        throw error;
+      }
+    };
+    // Discovery marker for the (test-facing) catalog equality checks.
+    Object.defineProperty(fn, "__codemode_tool", { value: entry.path });
+    return fn;
+  };
+  for (const entry of entries ?? []) {
+    const segments = String(entry?.path ?? "").split(".").filter((segment) => segment !== "");
+    if (segments.length === 0) continue;
+    let node = root;
+    for (let at = 0; at < segments.length - 1; at += 1) {
+      const segment = segments[at];
+      let child = node[segment];
+      if (child === undefined) {
+        child = {};
+        node[segment] = child;
+      }
+      node = child;
+    }
+    const leaf = segments[segments.length - 1];
+    const existing = node[leaf];
+    const callable = makeCallable(entry);
+    if (existing === undefined) {
+      node[leaf] = callable;
+    } else if (typeof existing === "function") {
+      // Tool + deeper namespace: attach children onto the callable.
+      node[leaf] = Object.assign(callable, existing);
+    } else {
+      // Namespace recorded first, tool now: turn the object into a
+      // function carrying the same children.
+      node[leaf] = Object.assign(callable, existing);
+    }
+  }
+  return root;
+}
+
+/** v2 `search` over the catalog (tool-runtime.ts tokenize/rank). */
+function makeSearch(entries) {
+  const tokenize = (query) =>
+    query
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((term) => term.length > 0 && term !== "*");
+  const termForms = (term) => {
+    const forms = [term];
+    if (term.endsWith("es") && term.length > 3) forms.push(term.slice(0, -2));
+    if (term.endsWith("s") && term.length > 2) forms.push(term.slice(0, -1));
+    return forms;
+  };
+  const identifierSegment = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+  const toolExpression = (path) =>
+    "tools" +
+    path
+      .split(".")
+      .map((segment) => (identifierSegment.test(segment) ? `.${segment}` : `[${JSON.stringify(segment)}]`))
+      .join("");
+  const ranked = (scoped, query) => {
+    const terms = tokenize(query).map(termForms);
+    return entries
+      .map((entry) => {
+        const path = entry.path.toLowerCase();
+        const description = String(entry.description ?? "").toLowerCase();
+        // v2's searchText (path + description + signature, lowercased).
+        const searchText = `${path} ${description} ${String(entry.signature ?? "").toLowerCase()}`;
+        const pathWords = tokenize(entry.path);
+        const score = terms.reduce(
+          (total, forms) =>
+            total +
+            (forms.some((form) => path === form || path.endsWith(`.${form}`)) ? 20 : 0) +
+            (forms.some((form) => pathWords.includes(form)) ? 12 : 0) +
+            (forms.some((form) => path.includes(form)) ? 8 : 0) +
+            (forms.some((form) => description.includes(form)) ? 4 : 0) +
+            (forms.some((form) => searchText.includes(form)) ? 2 : 0),
+          0,
+        );
+        return { entry, score };
+      })
+      .filter(({ score }) => terms.length === 0 || score > 0)
+      .sort((left, right) => right.score - left.score || (left.entry.path < right.entry.path ? -1 : left.entry.path > right.entry.path ? 1 : 0))
+      .map(({ entry }) => entry);
+  };
+  // NB: `identifierSegment` is declared once above (a duplicate
+  // declaration from a concurrent lane's merge crashed the guest —
+  // removed; identical regex, first binding is the live one).
+  return ({ query, namespace, limit, offset } = {}) => {
+    let ns = namespace;
+    if (ns !== undefined && !entries.some((entry) => entry.path.startsWith("tools."))) {
+      if (ns === "tools") ns = undefined;
+      else if (ns.startsWith("tools.")) ns = ns.slice("tools.".length);
+    }
+    const scoped =
+      ns === undefined
+        ? entries
+        : entries.filter((entry) => entry.path === ns || entry.path.startsWith(`${ns}.`));
+    const trimmed = String(query ?? "").trim();
+    const pathQuery = trimmed.startsWith("tools.") ? trimmed.slice("tools.".length) : trimmed;
+    const exact =
+      pathQuery === ""
+        ? undefined
+        : scoped.find((entry) => entry.path === pathQuery || toolExpression(entry.path) === trimmed);
+    const ordered = exact !== undefined ? [exact] : ranked(scoped, String(query ?? ""));
+    const start = Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
+    const size = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 25;
+    const items = ordered.slice(start, start + size).map((entry) => ({
+      path: toolExpression(entry.path),
+      description: String(entry.description ?? ""),
+      signature: String(entry.signature ?? ""),
+    }));
+    const remaining = Math.max(0, ordered.length - start - items.length);
+    return { items, remaining, next: remaining > 0 ? { offset: start + items.length } : null };
+  };
+}
+
+async function handleCodemodeEvaluate({ code, tools }) {
+  if (typeof code !== "string" || code.length === 0) {
+    return { ok: false, error: "Code Mode execution requires a `code` string" };
+  }
+  const calls = [];
+  const catalog = Array.isArray(tools) ? tools : [];
+  const toolsTree = buildToolsTree(catalog, calls);
+  const search = makeSearch(catalog);
+  let value;
+  try {
+    const program = new AsyncFunction("tools", "search", `"use strict";\n${code}`);
+    value = await program(toolsTree, search);
+  } catch (error) {
+    return { ok: false, error: errText(error), calls };
+  }
+  // `undefined` (no explicit return) is OMITTED so the host formats
+  // "undefined"; explicit null stays null.
+  const result = { ok: true, calls };
+  if (value !== undefined) result.value = value;
+  return result;
 }
 
 async function handleHookDispatch({ pluginId, domain, name, event }) {
@@ -1008,6 +1220,8 @@ const METHODS = {
   dispatch: handleDispatch,
   "command.execute": handleCommandExecute,
   "hook.dispatch": handleHookDispatch,
+  "tool.execute": handleToolExecute,
+  "codemode.evaluate": handleCodemodeEvaluate,
   "dialog.materialize": handleDialogMaterialize,
   scan: async ({ entry }) => ({ digests: await scanDigests(entry) }),
 };
