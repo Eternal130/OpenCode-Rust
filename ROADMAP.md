@@ -48,7 +48,7 @@
 | R-05 | worktree UI | TUI/worktree | P2 | **done（beta.6）** |
 | R-06 | 声音 / OS 通知 | TUI C2 类 | P2 | **done（beta.6）**：v2 触发矩阵+OSC 9/99/777+5 资产 vendor；播放镜像为系统播放器（登记分歧：v2 为进程内 miniaudio） |
 | R-07 | 图像支持（粘贴/显示 kitty/sixel） | TUI/app | P2 | **done（beta.6）**：路径粘贴→附件 chip→data-URI→引擎（anthropic/openai 图像块已有 golden）；显示 kitty APC 分块/sixel 透传/占位回退，`session.image_preview` 默认关 |
-| R-08 | 半块字形、子像素 RGBA 渲染 | TUI C2 类 | P3 | beta.7+ |
+| R-08 | 半块字形、子像素 RGBA 渲染 | TUI C2 类 | P3 | **done（beta.7）**：blocks 图像回退（v2 `resolveImageRenderProtocol`→"blocks"：PNG 解码→2×2 象限量化→Unicode 块字形+真彩，逆向 @opentui/core 0.5.14 二进制探针固化算法与已测分歧）；mini 退出 splash 半块 `_`/`^`/`~` 渲染（splash.ts cells/draw）；「子像素」结论：v2/opentui 无该术语机制，可观测面=blocks 子单元格 RGBA，`drawSuperSampleBuffer` 系列原生未用（wire 不可观测，仅文档化） |
 | R-09 | PTY 守护跨重启交接 | core pty | P3 | beta.7+ |
 | R-10 | rmcp 0.5 elicitation | 协议库升级 | blocked（上游） | 跟踪 |
 | R-11 | 平台矩阵扩展（aarch64/musl/macOS/Windows） | 非功能差距，单独决策 | P3（待用户定时间） | — |
