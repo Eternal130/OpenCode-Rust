@@ -3,6 +3,7 @@
 //! bun-dependent acceptance tests live in [`super::bun`].
 
 mod bun;
+mod null_tolerance;
 
 use std::path::Path;
 use std::time::{Duration, Instant};

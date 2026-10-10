@@ -121,7 +121,10 @@ async fn create(
             let now = oc_core::database::migrations::now_ms();
             if activate {
                 tx.execute(
-                    "UPDATE credential SET active = NULL WHERE integration_id = ?1",
+                    // v2's deactivate-others writes `active: false` (0),
+                    // never NULL (credential.ts:124-126) — see the
+                    // activate handler for the ordering rationale.
+                    "UPDATE credential SET active = 0 WHERE integration_id = ?1",
                     (integration_id.clone(),),
                 )?;
             }
@@ -189,7 +192,12 @@ async fn activate(
                 return Ok(false);
             };
             tx.execute(
-                "UPDATE credential SET active = NULL WHERE integration_id = ?1",
+                // v2 deactivates siblings with `set({ active: false })`
+                // (credential.ts:124-126) — a real 0, never NULL (NULL is
+                // only ever a legacy pre-column value; the census's 3/3
+                // NULLs are migrated rows). Writing NULL here would skew
+                // the `desc(active)` selection order v2 relies on.
+                "UPDATE credential SET active = 0 WHERE integration_id = ?1",
                 (integration,),
             )?;
             tx.execute(
