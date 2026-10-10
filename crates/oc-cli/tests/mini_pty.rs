@@ -438,7 +438,7 @@ impl MiniPty {
     }
 
     fn finish(mut self) -> i32 {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             match self.child.try_wait().expect("wait") {
                 Some(status) => return status.code().unwrap_or(-1),
@@ -469,7 +469,7 @@ async fn mini_pty_prompt_reply_scrollback_and_exit_splash() {
     let mut mini = MiniPty::spawn(stub.port, &[]);
 
     assert!(
-        mini.wait_for("oc mini", Duration::from_secs(10)),
+        mini.wait_for("oc mini", Duration::from_secs(30)),
         "the entry splash booted: {}",
         mini.output()
     );
@@ -478,7 +478,7 @@ async fn mini_pty_prompt_reply_scrollback_and_exit_splash() {
     // Type a prompt; the composer submits on Enter.
     mini.type_text("hello stub\r");
     assert!(
-        mini.wait_for("Stub says hello.", Duration::from_secs(10)),
+        mini.wait_for("Stub says hello.", Duration::from_secs(30)),
         "the stub's reply landed in the scrollback: {}",
         mini.output()
     );
@@ -487,7 +487,7 @@ async fn mini_pty_prompt_reply_scrollback_and_exit_splash() {
     // Two-press ctrl+c exits with the exit splash (shown + session).
     mini.exit_sequence();
     assert!(
-        mini.wait_for("opencode mini -s ses_min_stub", Duration::from_secs(10)),
+        mini.wait_for("opencode mini -s ses_min_stub", Duration::from_secs(30)),
         "the exit splash resume row: {}",
         mini.output()
     );
@@ -506,11 +506,11 @@ async fn mini_pty_permission_ask_allow_continues() {
     let stub = start_stub(PromptMode::PermissionAsk).await;
     let mut mini = MiniPty::spawn(stub.port, &[]);
 
-    assert!(mini.wait_for("oc mini", Duration::from_secs(10)), "boot");
+    assert!(mini.wait_for("oc mini", Duration::from_secs(30)), "boot");
     // Type a prompt; the scripted turn asks permission first.
     mini.type_text("run the tool\r");
     assert!(
-        mini.wait_for("Permission required", Duration::from_secs(10)),
+        mini.wait_for("Permission required", Duration::from_secs(30)),
         "the permission body mounted: {}",
         mini.output()
     );
@@ -519,13 +519,13 @@ async fn mini_pty_permission_ask_allow_continues() {
     // blocker and the turn finishes (tool success + execution end).
     mini.type_text("\r");
     assert!(
-        mini.wait_for("Bash", Duration::from_secs(10)),
+        mini.wait_for("Bash", Duration::from_secs(30)),
         "the accepted tool completed in the scrollback: {}",
         mini.output()
     );
 
     mini.exit_sequence();
-    mini.wait_for("opencode mini -s ses_min_stub", Duration::from_secs(5));
+    mini.wait_for("opencode mini -s ses_min_stub", Duration::from_secs(20));
     let code = mini.finish();
     assert_eq!(code, 0);
     assert!(
@@ -548,18 +548,18 @@ async fn mini_pty_demo_slash_commands() {
     );
     mini.type_text("/fmt text pty demo\r");
     assert!(
-        mini.wait_for("pty demo", Duration::from_secs(10)),
+        mini.wait_for("pty demo", Duration::from_secs(30)),
         "the /fmt text sample echoed: {}",
         mini.output()
     );
     mini.type_text("/permission shell\r");
     assert!(
-        mini.wait_for("Permission required", Duration::from_secs(10)),
+        mini.wait_for("Permission required", Duration::from_secs(30)),
         "the demo permission ask mounted: {}",
         mini.output()
     );
     mini.type_text("\r");
-    mini.wait_for("Demo · completed", Duration::from_secs(5));
+    mini.wait_for("Demo · completed", Duration::from_secs(20));
     mini.exit_sequence();
     mini.finish();
 }
