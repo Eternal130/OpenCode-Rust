@@ -146,11 +146,15 @@ async fn run_and_compare(
         scripts::build(name, fake).ok_or_else(|| anyhow::anyhow!("unknown scenario {name}"))?;
     let outcome = scenario::drive(server, &script.spec, &script.steps).await?;
 
-    // Evidence artifact: the raw Rust-side capture.
+    // Evidence artifact: the raw Rust-side capture. The path is unique per
+    // test PROCESS (nextest runs each test in its own process; the m1 twin
+    // in scenarios.rs writes the same name concurrently — registered race,
+    // fixed by PID-namespacing the artifact).
     let artifact_dir = std::path::PathBuf::from(
         std::env::var("PARITY_SANDBOX_ROOT").unwrap_or_else(|_| SANDBOX_ROOT.to_owned()),
     )
-    .join("../m1-artifacts/scenarios");
+    .join(format!("../m1-artifacts/pid-{}", std::process::id()))
+    .join("scenarios");
     std::fs::create_dir_all(&artifact_dir).ok();
     let artifact = artifact_dir.join(format!("{name}.json"));
     std::fs::write(
