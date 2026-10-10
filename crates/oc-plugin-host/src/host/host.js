@@ -350,10 +350,19 @@ async function registerHook(pluginId, domain, name, handlers) {
 }
 
 // ---------------------------------------------------------------------------
+// Dialog providers (wave 3's slot bridge): plugin-registered builders
+// materialized SYNCHRONOUSLY at open time by the host's
+// `dialog.materialize` request (hard-timeout-bounded on the Rust side).
+// ---------------------------------------------------------------------------
+
+/** @type {Map<string, Map<string, (input: unknown) => object>>} pluginId -> id -> build */
+const dialogProviders = new Map();
+
+// ---------------------------------------------------------------------------
 // The Context
 // ---------------------------------------------------------------------------
 
-function makeCtx(pluginId) {
+function makeCtx(pluginId, options) {
   const commands = plugins.get(pluginId).commands;
   const subscriptions = plugins.get(pluginId).subscriptions;
 
@@ -382,6 +391,10 @@ function makeCtx(pluginId) {
     directory: domainBase.directory,
     location: { directory: domainBase.directory, project: { id: domainBase.project.id } },
     hostFlavor: "v2",
+    // Config-sourced plugin options (v2 `{ ...host, options }` — the
+    // `plugins: [{package, options}]` config entries; plain objects
+    // for option-less plugins).
+    options: options && typeof options === "object" && !Array.isArray(options) ? options : {},
 
     // -- agent (REQUIRED by the flagship: setup bails without
     //    agent.transform) ------------------------------------------------
@@ -537,6 +550,16 @@ function makeCtx(pluginId) {
       switchModel: sessionMethod("switchModel"),
     },
 
+    // -- generate (wave 4: the flagship probes ctx.generate.text and
+    //    degrades without it; the engine seam answers through the
+    //    session port) -------------------------------------------------------
+    generate: {
+      text: async (args) => {
+        const result = await hostRequest("generate.text", { pluginId, args: args ?? {} });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+    },
+
     // -- permission --------------------------------------------------------
     permission: {
       async reply(args) {
@@ -662,6 +685,94 @@ function makeCtx(pluginId) {
     // outstanding.
     ping: async () => hostRequest("ping", { pluginId }),
     log: (...args) => notify("log", { pluginId, level: "info", message: args.join(" ") }),
+
+    // -- ui (wave 3's TUI slot bridge) --------------------------------------
+    // Runtime requests land on the host's UI-request queue (the TUI
+    // drains it between frames); registrations (dialog providers,
+    // group rules, home actions) land in the native snapshot. The
+    // dialog content structure is built HERE, synchronously —
+    // rendering afterwards is native; no per-frame IPC.
+    ui: {
+      toast: {
+        show(options) {
+          const opts = options ?? {};
+          return hostRequest("ui.toast.show", {
+            pluginId,
+            title: typeof opts.title === "string" ? opts.title : null,
+            message: String(opts.message ?? ""),
+            variant: typeof opts.variant === "string" ? opts.variant : "info",
+            duration: Number.isFinite(opts.duration) ? opts.duration : null,
+          }).catch((error) => {
+            notify("log", { pluginId, level: "error", message: `toast.show failed: ${errText(error)}` });
+          });
+        },
+      },
+      sidebar: {
+        async setSection(section) {
+          const spec = section ?? {};
+          await hostRequest("ui.sidebar.section", {
+            pluginId,
+            title: String(spec.title ?? ""),
+            rows: Array.isArray(spec.rows) ? spec.rows.map(String) : [],
+          });
+        },
+        async removeSection() {
+          await hostRequest("ui.sidebar.section", { pluginId, title: "", rows: [] }).catch(() => {});
+        },
+      },
+      footer: {
+        async setHint(hint) {
+          const text = typeof hint === "string" ? hint : String(hint?.text ?? "");
+          await hostRequest("ui.footer.hint", { pluginId, text });
+        },
+      },
+      dialog: {
+        /** Register an open-time content builder (registration-time
+         *  native coverage; the host qualifies the id per plugin). */
+        async register(spec) {
+          const id = String(spec?.id ?? "");
+          if (!id) throw new Error("ui.dialog.register requires an id");
+          if (typeof spec?.build !== "function") throw new Error("ui.dialog.register requires a build function");
+          if (!dialogProviders.has(pluginId)) dialogProviders.set(pluginId, new Map());
+          dialogProviders.get(pluginId).set(id, spec.build);
+          const reply = await hostRequest("ui.dialog.register", { pluginId, id });
+          return {
+            id: typeof reply?.id === "string" ? reply.id : id,
+            async dispose() {
+              dialogProviders.get(pluginId)?.delete(id);
+            },
+          };
+        },
+        /** Open a dialog NOW with fully-built content (fire-and-forget:
+         *  the TUI opens natively from the queued structure). */
+        async open(spec) {
+          await hostRequest("ui.dialog.open", { pluginId, spec: spec ?? {} });
+        },
+      },
+      grouping: {
+        /** {tool} exact match or {toolPrefix} prefix match → header. */
+        async addRule(rule) {
+          const spec = rule ?? {};
+          await hostRequest("ui.group.rule", {
+            pluginId,
+            tool: typeof spec.tool === "string" && spec.tool ? spec.tool : null,
+            toolPrefix: typeof spec.toolPrefix === "string" && spec.toolPrefix ? spec.toolPrefix : null,
+            header: String(spec.header ?? ""),
+          });
+        },
+      },
+      home: {
+        /** {label, command} — a quick action on the home footer row. */
+        async addQuickAction(action) {
+          const spec = action ?? {};
+          await hostRequest("ui.home.quickaction", {
+            pluginId,
+            label: String(spec.label ?? ""),
+            command: String(spec.command ?? ""),
+          });
+        },
+      },
+    },
   };
 }
 
@@ -669,8 +780,10 @@ function makeCtx(pluginId) {
 // Supervisor-facing methods
 // ---------------------------------------------------------------------------
 
-async function handleLoad({ entry, generation, seed }) {
+async function handleLoad({ entry, generation, seed, options }) {
   const abs = require("node:path").resolve(entry);
+  // Config-sourced plugin options (the `load` params; `{}` default).
+  const loadOptions = options && typeof options === "object" && !Array.isArray(options) ? options : {};
   // v2 source.bun parity: evict CJS cache under the plugin dir, then
   // re-import with a generation cache-bust. The FIRST load (generation
   // 1) imports without the `?t=` query — plugins legitimately derive
@@ -711,7 +824,7 @@ async function handleLoad({ entry, generation, seed }) {
   const id = shape.id;
   const record = { id, entry: abs, dispose: null, subscriptions: [], commands: new Map() };
   plugins.set(id, record);
-  const ctx = makeCtx(id);
+  const ctx = makeCtx(id, loadOptions);
   const maybeDispose = await shape.setup(ctx);
   if (typeof maybeDispose === "function" || (maybeDispose && typeof maybeDispose.dispose === "function")) {
     record.dispose = typeof maybeDispose === "function" ? maybeDispose : maybeDispose.dispose;
@@ -728,7 +841,41 @@ async function handleUnload({ pluginId }) {
     notify("log", { level: "warn", message: `${pluginId}: dispose threw ${errText(error)}` });
   }
   plugins.delete(pluginId);
+  dialogProviders.delete(pluginId);
   return { ok: true };
+}
+
+// The open-time dialog materialization (wave 3): the host asks, the
+// plugin's registered builder runs SYNCHRONOUSLY here, and the
+// structure crosses once — the Rust side bounds the whole call with a
+// hard timeout and renders natively afterwards.
+async function handleDialogMaterialize({ pluginId, id }) {
+  let build = dialogProviders.get(pluginId)?.get(id);
+  if (typeof build !== "function") {
+    // The host may send the `plugin:id`-qualified form.
+    for (const [owner, map] of dialogProviders) {
+      for (const [key, fn] of map) {
+        if (`${owner}:${key}` === id) build = fn;
+      }
+    }
+  }
+  if (typeof build !== "function") {
+    throw new Error(`${pluginId}:${id}: no dialog provider`);
+  }
+  const spec = await build({ pluginId });
+  return {
+    title: String(spec?.title ?? ""),
+    rows: Array.isArray(spec?.rows) ? spec.rows.map(String) : [],
+    options: Array.isArray(spec?.options)
+      ? spec.options
+          .filter((option) => typeof option?.title === "string" && typeof option?.value === "string")
+          .map((option) => ({
+            title: option.title,
+            value: option.value,
+            description: String(option.description ?? ""),
+          }))
+      : [],
+  };
 }
 
 async function handleDispatch({ event }) {
@@ -861,6 +1008,7 @@ const METHODS = {
   dispatch: handleDispatch,
   "command.execute": handleCommandExecute,
   "hook.dispatch": handleHookDispatch,
+  "dialog.materialize": handleDialogMaterialize,
   scan: async ({ entry }) => ({ digests: await scanDigests(entry) }),
 };
 

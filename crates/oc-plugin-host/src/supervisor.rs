@@ -23,7 +23,7 @@
 //!    from the pending map; a late reply is discarded by id. A hung
 //!    plugin costs its own dispatch, never the host.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -34,10 +34,14 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::context::{Bridge, HostState, SessionPort, SESSION_METHODS};
+use crate::context::{
+    Bridge, HostState, SessionPort, ToolPort, CODEMODE_METHODS, GENERATE_METHODS,
+    SESSION_METHODS,
+};
 use crate::protocol::{self, Incoming};
 use crate::registrations::{PluginState, PluginStatus, Registrations};
 use crate::tap::TapEvent;
+use crate::ui::UiRequest;
 
 /// Everything the supervisor needs at spawn time.
 #[derive(Clone)]
@@ -71,6 +75,13 @@ pub struct SupervisorConfig {
     pub host_state: HostState,
     /// `ctx.session.*` routing target (default: declining port).
     pub session_port: Option<Arc<dyn SessionPort>>,
+    /// `tools.<name>(input)` routing from Code Mode programs (default:
+    /// declining port; the integrator binds the oc-core registry).
+    pub tool_port: Option<Arc<dyn ToolPort>>,
+    /// Config-sourced plugin options (`opencode.jsonc` plugin entries),
+    /// keyed by entry path — surfaced as `ctx.options` (v2's
+    /// `{ ...host, options: operation.options }`).
+    pub entry_options: BTreeMap<String, Value>,
 }
 
 impl Default for SupervisorConfig {
@@ -89,6 +100,8 @@ impl Default for SupervisorConfig {
             env: Vec::new(),
             host_state: HostState::default(),
             session_port: None,
+            tool_port: None,
+            entry_options: BTreeMap::new(),
         }
     }
 }
@@ -148,6 +161,10 @@ pub struct Shared {
     /// Diagnostics counters (the dropped-dispatch observability).
     pub dispatched_events: AtomicU64,
     pub dropped_events: AtomicU64,
+    /// Plugin → TUI UI requests (the wave-3 slot bridge): pushed on
+    /// the IO reader (deadlock rule 1 — inline answer, enqueued
+    /// reply), drained between frames by the embedder.
+    pub ui_requests: Mutex<VecDeque<UiRequest>>,
     /// The runtime every supervisor task lives on — the async
     /// guest-request path (`session.*`) spawns onto it (deadlock rule
     /// 1: the reader never blocks on a port that calls back in).
@@ -175,6 +192,7 @@ impl Shared {
             ready: Arc::new((Mutex::new(false), Condvar::new())),
             dispatched_events: AtomicU64::new(0),
             dropped_events: AtomicU64::new(0),
+            ui_requests: Mutex::new(VecDeque::new()),
             runtime_handle: None,
         }
     }
@@ -279,7 +297,28 @@ impl Shared {
                 // prompt flow is the permission lane's seam (wave 4).
                 Some(protocol::response(id, Value::Null))
             }
+            // -- wave 4: Code Mode nested tool calls (`tools.<path>`
+            //    inside an `execute` program) — same async-off-the-reader
+            //    routing as session.*, deadlock rule 1.
+            "codemode.tool" => {
+                self.answer_tool_async(id, method, params);
+                None
+            }
+            // -- wave 4: `ctx.generate.text` rides the session port (the
+            //    engine owns one-off generation, GenerateApi).
+            "generate.text" => {
+                self.answer_session_async(id, method, params);
+                None
+            }
             "event.subscribe" | "ping" => Some(protocol::response(id, Value::Null)),
+            // -- wave 3: the TUI slot bridge (registration entries +
+            //    the runtime UI-request queue; answered inline).
+            "ui.toast.show" | "ui.sidebar.section" | "ui.footer.hint" | "ui.dialog.open" => {
+                Some(answer_ui_runtime(self, id, method, params))
+            }
+            "ui.dialog.register" | "ui.group.rule" | "ui.home.quickaction" => {
+                Some(answer_ui_registration(self, id, method, params))
+            }
             "log" => {
                 log_guest(params);
                 Some(protocol::response(id, Value::Null))
@@ -324,6 +363,36 @@ impl Shared {
         let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
         handle.spawn(async move {
             let reply = match port.call(&bridge, &method, &args).await {
+                Ok(value) => protocol::response(id, json!({ "value": value })),
+                Err(message) => protocol::error_response(id, &message),
+            };
+            let _ = outbound.send(reply);
+        });
+    }
+
+    /// The async `codemode.tool` path — identical shape to
+    /// [`Shared::answer_session_async`] over the tool port.
+    fn answer_tool_async(self: &Arc<Self>, id: u64, method: &str, params: &Value) {
+        let _ = method; // CODEMODE_METHODS routing reached here already
+        let Some(handle) = self.runtime_handle.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(id, "plugin host runtime unavailable"));
+            return;
+        };
+        let Some(port) = self.config.tool_port.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(
+                id,
+                "codemode.tool: no tool engine attached to the plugin host",
+            ));
+            return;
+        };
+        let bridge = Bridge { shared: Arc::clone(self) };
+        let name = params.get("name").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let input = params.get("input").cloned().unwrap_or(Value::Null);
+        let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+        handle.spawn(async move {
+            let reply = match port.call(&bridge, &name, &input).await {
                 Ok(value) => protocol::response(id, json!({ "value": value })),
                 Err(message) => protocol::error_response(id, &message),
             };
@@ -560,6 +629,123 @@ fn answer_storage(shared: &Shared, id: u64, method: &str, params: &Value) -> Str
     }
 }
 
+/// The runtime `ui.*` arms (wave 3's slot bridge): parse, push onto
+/// the UI-request queue, reply inline. The TUI drains the queue
+/// between frames — a slow plugin never stalls the reader (rule 1:
+/// this is bounded parsing + a queue push).
+fn answer_ui_runtime(shared: &Shared, id: u64, method: &str, params: &Value) -> String {
+    let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
+    let request = match method {
+        "ui.toast.show" => {
+            let Some(message) = params.get("message").and_then(Value::as_str) else {
+                return protocol::error_response(id, "ui.toast.show requires a message");
+            };
+            UiRequest::Toast {
+                title: params.get("title").and_then(Value::as_str).map(str::to_owned),
+                message: message.to_owned(),
+                variant: params.get("variant").and_then(Value::as_str).unwrap_or("info").to_owned(),
+                duration_ms: params
+                    .get("duration")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(crate::ui::DEFAULT_TOAST_DURATION_MS),
+                plugin_id,
+            }
+        }
+        "ui.sidebar.section" => {
+            let title = params.get("title").and_then(Value::as_str).unwrap_or_default().to_owned();
+            let rows: Vec<String> = params
+                .get("rows")
+                .and_then(Value::as_array)
+                .map(|rows| rows.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                .unwrap_or_default();
+            // An empty title + empty rows is `removeSection` (the TUI
+            // drops the plugin's section).
+            UiRequest::SidebarSection { plugin_id, title, rows }
+        }
+        "ui.footer.hint" => {
+            let Some(text) = params.get("text").and_then(Value::as_str) else {
+                return protocol::error_response(id, "ui.footer.hint requires text");
+            };
+            UiRequest::FooterHint { plugin_id, text: text.to_owned() }
+        }
+        "ui.dialog.open" => {
+            let Some(spec) = params.get("spec") else {
+                return protocol::error_response(id, "ui.dialog.open requires a spec");
+            };
+            UiRequest::DialogOpen { plugin_id, spec: crate::ui::PluginDialogSpec::from_json(spec) }
+        }
+        other => return protocol::error_response(id, &format!("unknown ui method {other:?}")),
+    };
+    shared.ui_requests.lock().expect("ui request queue poisoned").push_back(request);
+    protocol::response(id, Value::Null)
+}
+
+/// The registration-time `ui.*` arms: dialog-provider coverage, group
+/// rules, home quick actions — all native entries in
+/// [`Registrations`] (the snapshot is the TUI's only synchronous
+/// surface; nothing here crosses IPC again).
+fn answer_ui_registration(shared: &Shared, id: u64, method: &str, params: &Value) -> String {
+    let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
+    let mut registrations = shared.registrations.write().expect("registrations poisoned");
+    match method {
+        "ui.dialog.register" => {
+            let raw = params.get("id").and_then(Value::as_str).unwrap_or_default();
+            if raw.is_empty() {
+                return protocol::error_response(id, "ui.dialog.register requires an id");
+            }
+            // Qualified per host so two plugins may reuse a local id.
+            let qualified = format!("{plugin_id}:{raw}");
+            registrations.dialogs.insert(
+                qualified.clone(),
+                crate::registrations::PluginDialog { plugin_id, id: qualified.clone() },
+            );
+            protocol::response(id, json!({ "id": qualified }))
+        }
+        "ui.group.rule" => {
+            let header = params.get("header").and_then(Value::as_str).unwrap_or_default();
+            if header.is_empty() {
+                return protocol::error_response(id, "ui.group.rule requires a header");
+            }
+            let rule = crate::registrations::PluginGroupRule {
+                plugin_id,
+                tool: params
+                    .get("tool")
+                    .and_then(Value::as_str)
+                    .filter(|tool| !tool.is_empty())
+                    .map(str::to_owned),
+                tool_prefix: params
+                    .get("toolPrefix")
+                    .and_then(Value::as_str)
+                    .filter(|prefix| !prefix.is_empty())
+                    .map(str::to_owned),
+                header: header.to_owned(),
+            };
+            if rule.tool.is_none() && rule.tool_prefix.is_none() {
+                return protocol::error_response(id, "ui.group.rule requires tool or toolPrefix");
+            }
+            registrations.group_rules.push(rule);
+            protocol::response(id, Value::Null)
+        }
+        "ui.home.quickaction" => {
+            let label = params.get("label").and_then(Value::as_str).unwrap_or_default();
+            let command = params.get("command").and_then(Value::as_str).unwrap_or_default();
+            if label.is_empty() || command.is_empty() {
+                return protocol::error_response(
+                    id,
+                    "ui.home.quickaction requires label and command",
+                );
+            }
+            registrations.home_actions.push(crate::registrations::PluginHomeAction {
+                plugin_id,
+                label: label.to_owned(),
+                command: command.to_owned(),
+            });
+            protocol::response(id, Value::Null)
+        }
+        other => protocol::error_response(id, &format!("unknown ui registration {other:?}")),
+    }
+}
+
 /// A running supervisor handle (cloneable, kept alive by the facade).
 pub struct Supervisor {
     pub shared: Arc<Shared>,
@@ -588,6 +774,7 @@ impl Supervisor {
             ready: Arc::new((Mutex::new(false), Condvar::new())),
             dispatched_events: AtomicU64::new(0),
             dropped_events: AtomicU64::new(0),
+            ui_requests: Mutex::new(VecDeque::new()),
             runtime_handle: Some(tokio::runtime::Handle::current()),
         });
         // Prime plugin statuses before any IO so crash attribution
@@ -659,6 +846,7 @@ async fn load_entry(shared: &Arc<Shared>, entry: &std::path::Path) {
         }
     }
     let generation = shared.generation.load(Ordering::Relaxed);
+    let options = shared.config.entry_options.get(&key).cloned().unwrap_or(Value::Null);
     let outcome = shared
         .request(
             "load",
@@ -666,6 +854,7 @@ async fn load_entry(shared: &Arc<Shared>, entry: &std::path::Path) {
                 "entry": key,
                 "generation": generation,
                 "seed": shared.config.host_state.to_seed_json(),
+                "options": options,
             }),
             shared.config.registration_timeout,
         )
@@ -763,6 +952,7 @@ impl Shared {
                     .await;
             }
             let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+            let reload_options = self.config.entry_options.get(&key).cloned().unwrap_or(Value::Null);
             let outcome = self
                 .request(
                     "load",
@@ -770,6 +960,7 @@ impl Shared {
                         "entry": key,
                         "generation": generation,
                         "seed": self.config.host_state.to_seed_json(),
+                        "options": reload_options,
                     }),
                     self.config.registration_timeout,
                 )
@@ -804,6 +995,32 @@ impl Shared {
             .commands
             .get(name)
             .map(|command| command.plugin_id.clone())
+    }
+
+    /// Look up the owning plugin of a dialog provider id (raw or
+    /// `plugin:id`-qualified).
+    pub fn plugin_for_dialog(&self, dialog_id: &str) -> Option<String> {
+        let registrations = self.registrations.read().expect("registrations poisoned");
+        if let Some(dialog) = registrations.dialogs.get(dialog_id) {
+            return Some(dialog.plugin_id.clone());
+        }
+        // Raw id: exactly one provider may own it locally.
+        let mut found: Option<String> = None;
+        for dialog in registrations.dialogs.values() {
+            if dialog.id.ends_with(&format!(":{dialog_id}")) {
+                if found.is_some() {
+                    return None; // ambiguous — caller must qualify
+                }
+                found = Some(dialog.plugin_id.clone());
+            }
+        }
+        found
+    }
+
+    /// Drain the pending plugin → TUI UI requests (between frames).
+    pub fn drain_ui_requests(&self) -> Vec<UiRequest> {
+        let mut queue = self.ui_requests.lock().expect("ui request queue poisoned");
+        queue.drain(..).collect()
     }
 }
 

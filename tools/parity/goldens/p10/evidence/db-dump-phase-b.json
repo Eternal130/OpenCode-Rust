@@ -1,0 +1,216 @@
+{
+  "migrations": [
+    {
+      "id": "20260127222353_familiar_lady_ursula",
+      "time_completed": 1791612450858
+    },
+    {
+      "id": "20260211171708_add_project_commands",
+      "time_completed": 1791612450858
+    },
+    {
+      "id": "20260213144116_wakeful_the_professor",
+      "time_completed": 1791612450859
+    },
+    {
+      "id": "20260225215848_workspace",
+      "time_completed": 1791612450859
+    },
+    {
+      "id": "20260227213759_add_session_workspace_id",
+      "time_completed": 1791612450859
+    },
+    {
+      "id": "20260228203230_blue_harpoon",
+      "time_completed": 1791612450859
+    },
+    {
+      "id": "20260303231226_add_workspace_fields",
+      "time_completed": 1791612450859
+    },
+    {
+      "id": "20260309230000_move_org_to_state",
+      "time_completed": 1791612450859
+    },
+    {
+      "id": "20260312043431_session_message_cursor",
+      "time_completed": 1791612450859
+    },
+    {
+      "id": "20260323234822_events",
+      "time_completed": 1791612450859
+    },
+    {
+      "id": "20260410174513_workspace-name",
+      "time_completed": 1791612450859
+    },
+    {
+      "id": "20260413175956_chief_energizer",
+      "time_completed": 1791612450859
+    },
+    {
+      "id": "20260423070820_add_icon_url_override",
+      "time_completed": 1791612450859
+    },
+    {
+      "id": "20260427172553_slow_nightmare",
+      "time_completed": 1791612450859
+    },
+    {
+      "id": "20260428004200_add_session_path",
+      "time_completed": 1791612450859
+    },
+    {
+      "id": "20260501142318_next_venus",
+      "time_completed": 1791612450859
+    },
+    {
+      "id": "20260504145000_add_sync_owner",
+      "time_completed": 1791612450859
+    },
+    {
+      "id": "20260507164347_add_workspace_time",
+      "time_completed": 1791612450860
+    },
+    {
+      "id": "20260510033149_session_usage",
+      "time_completed": 1791612450860
+    },
+    {
+      "id": "20260511000411_data_migration_state",
+      "time_completed": 1791612450860
+    },
+    {
+      "id": "20260511173437_session-metadata",
+      "time_completed": 1791612450860
+    },
+    {
+      "id": "20260601010001_normalize_storage_paths",
+      "time_completed": 1791612450860
+    },
+    {
+      "id": "20260601202201_amazing_prowler",
+      "time_completed": 1791612450860
+    },
+    {
+      "id": "20260602002951_lowly_union_jack",
+      "time_completed": 1791612450860
+    },
+    {
+      "id": "20260602182828_add_project_directories",
+      "time_completed": 1791612450860
+    },
+    {
+      "id": "20260603001617_session_message_projection_indexes",
+      "time_completed": 1791612450860
+    },
+    {
+      "id": "20260603040000_session_message_projection_order",
+      "time_completed": 1791612450860
+    },
+    {
+      "id": "20260603141458_session_input_inbox",
+      "time_completed": 1791612450861
+    },
+    {
+      "id": "20260603160727_jittery_ezekiel_stane",
+      "time_completed": 1791612450861
+    },
+    {
+      "id": "20260604172448_event_sourced_session_input",
+      "time_completed": 1791612450861
+    },
+    {
+      "id": "20260605003541_add_session_context_snapshot",
+      "time_completed": 1791612450861
+    },
+    {
+      "id": "20260605042240_add_context_epoch_agent",
+      "time_completed": 1791612450861
+    },
+    {
+      "id": "20260611035744_credential",
+      "time_completed": 1791612450861
+    },
+    {
+      "id": "20260611192811_lush_chimera",
+      "time_completed": 1791612450861
+    },
+    {
+      "id": "20260612174303_project_dir_strategy",
+      "time_completed": 1791612450861
+    },
+    {
+      "id": "20260622142730_simplify_session_context_epoch",
+      "time_completed": 1791612450861
+    },
+    {
+      "id": "20260622170816_reset_v2_session_state",
+      "time_completed": 1791612450861
+    },
+    {
+      "id": "20260622202450_simplify_session_input",
+      "time_completed": 1791612450861
+    },
+    {
+      "id": "20260804233008_loose_psylocke",
+      "time_completed": 1791612450861
+    },
+    {
+      "id": "20260805200742_import_legacy_credentials",
+      "time_completed": 1791612450862
+    },
+    {
+      "id": "20260808023530_workspace_domain",
+      "time_completed": 1791612450862
+    },
+    {
+      "id": "20260811161259_execution_claim_attempts",
+      "time_completed": 1791612450862
+    },
+    {
+      "id": "20260812181746_session_inbox",
+      "time_completed": 1791612450862
+    },
+    {
+      "id": "20260812213948_worktree",
+      "time_completed": 1791612450862
+    },
+    {
+      "id": "20260819222447_session_viewed_state",
+      "time_completed": 1791612450862
+    },
+    {
+      "id": "20260823191254_nullable_workspace_binding",
+      "time_completed": 1791612450862
+    },
+    {
+      "id": "20260910120000_clear_v1_session_permission",
+      "time_completed": 1791612450862
+    },
+    {
+      "id": "20260923013825_project_time_active",
+      "time_completed": 1791612450862
+    }
+  ],
+  "sessions": [
+    {
+      "agent": null,
+      "id": "ses_edb93877fffe3DS25KTZKvIlrM",
+      "model": null,
+      "parent_id": null
+    },
+    {
+      "agent": null,
+      "id": "ses_edb938765ffeZ43hULcid1qpX5",
+      "model": "{\"id\":\"fake-model\",\"providerID\":\"parityfake\"}",
+      "parent_id": null
+    },
+    {
+      "agent": null,
+      "id": "ses_edb9385bdffefEqVVDPnxn4XYw",
+      "model": null,
+      "parent_id": "ses_edb93877fffe3DS25KTZKvIlrM"
+    }
+  ]
+}

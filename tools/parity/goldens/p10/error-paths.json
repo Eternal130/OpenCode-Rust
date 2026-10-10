@@ -1,0 +1,179 @@
+[
+  {
+    "divergence": null,
+    "finding": null,
+    "name": "unknown_session_404",
+    "port": {
+      "body": {
+        "_tag": "SessionNotFoundError",
+        "message": "Session not found: <SES_ID:1>",
+        "sessionID": "<SES_ID:1>"
+      },
+      "content_type": "application/json",
+      "status": 404
+    },
+    "reference": {
+      "body": {
+        "_tag": "SessionNotFoundError",
+        "message": "Session not found: <SES_ID:1>",
+        "sessionID": "<SES_ID:1>"
+      },
+      "content_type": "application/json",
+      "status": 404
+    },
+    "request": {
+      "auth": true,
+      "body": null,
+      "method": "GET",
+      "path": "/api/session/ses_UNKNOWNSESSIONID0000"
+    }
+  },
+  {
+    "divergence": null,
+    "finding": null,
+    "name": "invalid_cursor_400",
+    "port": {
+      "body": {
+        "_tag": "InvalidCursorError",
+        "message": "Invalid cursor"
+      },
+      "content_type": "application/json",
+      "status": 400
+    },
+    "reference": {
+      "body": {
+        "_tag": "InvalidCursorError",
+        "message": "Invalid cursor"
+      },
+      "content_type": "application/json",
+      "status": 400
+    },
+    "request": {
+      "auth": true,
+      "body": null,
+      "method": "GET",
+      "path": "/api/session?cursor=@@invalid-cursor@@"
+    }
+  },
+  {
+    "divergence": null,
+    "finding": null,
+    "name": "unauthorized_401",
+    "port": {
+      "body": {
+        "_tag": "UnauthorizedError",
+        "message": "Authentication required"
+      },
+      "content_type": "application/json",
+      "status": 401
+    },
+    "reference": {
+      "body": {
+        "_tag": "UnauthorizedError",
+        "message": "Authentication required"
+      },
+      "content_type": "application/json",
+      "status": 401
+    },
+    "request": {
+      "auth": false,
+      "body": null,
+      "method": "GET",
+      "path": "/api/info"
+    }
+  },
+  {
+    "divergence": null,
+    "finding": null,
+    "name": "unknown_route_404",
+    "port": {
+      "body": "<empty>",
+      "content_type": "",
+      "status": 404
+    },
+    "reference": {
+      "body": "<empty>",
+      "content_type": "",
+      "status": 404
+    },
+    "request": {
+      "auth": true,
+      "body": null,
+      "method": "GET",
+      "path": "/api/nonexistent-route"
+    }
+  },
+  {
+    "divergence": "status: reference=400 port=200",
+    "finding": "P10-E1: port accepts wrongly-typed payload fields (200) where v2 400s with InvalidRequestError kind=Payload — schema-error middleware parity gap",
+    "name": "payload_schema_reject_400",
+    "port": {
+      "body": "<success-body-elided>",
+      "content_type": "application/json",
+      "status": 200
+    },
+    "reference": {
+      "body": {
+        "_tag": "InvalidRequestError",
+        "kind": "Payload",
+        "message": "Expected string | null\n  at [\"title\"]"
+      },
+      "content_type": "application/json",
+      "status": 400
+    },
+    "request": {
+      "auth": true,
+      "body": {
+        "title": 12345
+      },
+      "method": "POST",
+      "path": "/api/session"
+    }
+  },
+  {
+    "divergence": "status: reference=400 port=200",
+    "finding": "P10-E2: port ignores invalid query values (200) where v2 400s with InvalidRequestError kind=Query",
+    "name": "query_schema_reject_400",
+    "port": {
+      "body": "<success-body-elided>",
+      "content_type": "application/json",
+      "status": 200
+    },
+    "reference": {
+      "body": {
+        "_tag": "InvalidRequestError",
+        "kind": "Query",
+        "message": "Expected an integer\n  at [\"limit\"]"
+      },
+      "content_type": "application/json",
+      "status": 400
+    },
+    "request": {
+      "auth": true,
+      "body": null,
+      "method": "GET",
+      "path": "/api/session?limit=notanumber"
+    }
+  },
+  {
+    "divergence": "status: reference=404 port=405",
+    "finding": "P10-E3: port answers method mismatch with 405 (axum default), v2 with 404 + empty body",
+    "name": "method_mismatch_delete_info",
+    "port": {
+      "body": "<empty>",
+      "content_type": "",
+      "status": 405
+    },
+    "reference": {
+      "body": "<empty>",
+      "content_type": "",
+      "status": 404
+    },
+    "request": {
+      "auth": true,
+      "body": null,
+      "method": "DELETE",
+      "path": "/api/info"
+    }
+  }
+]

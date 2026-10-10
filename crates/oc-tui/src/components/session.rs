@@ -126,6 +126,7 @@ pub fn render_session(
             command_shortcut: "ctrl+p".into(),
             status_agent,
             status_model,
+            plugin_hints: store.plugin_footer_hints(),
         },
         top: 0,
     };
@@ -138,7 +139,10 @@ pub fn render_session(
 
     let transcript = render_transcript(
         &store.messages(session_id),
-        &TranscriptOptions::default(),
+        &TranscriptOptions {
+            group_rules: store.plugin_group_rules(),
+            ..TranscriptOptions::default()
+        },
         styles,
         width,
     );

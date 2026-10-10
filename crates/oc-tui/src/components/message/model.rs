@@ -159,13 +159,57 @@ impl Message {
     }
 }
 
-/// Group kind (`GroupKind`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Group kind (`GroupKind`). The four native kinds are the reference's
+/// closed set; [`GroupKind::Plugin`] is wave 3's open rules table —
+/// plugin-provided rules (match tool name/prefix → custom header)
+/// extend grouping without touching the closed enum's semantics.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupKind {
     Activity,
     Reasoning,
     Exploration,
     Instructions,
+    /// A plugin-defined group: the rule's header label.
+    Plugin(String),
+}
+
+/// The plugin-provided grouping rules (the open rules table): checked
+/// AFTER the native kinds (reasoning/exploration stay reference
+/// behavior; a rule may claim any other tool).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GroupRules {
+    pub rules: Vec<GroupRule>,
+}
+
+/// One rule: exact `tool` or `tool_prefix` match → `header` group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupRule {
+    pub tool: Option<String>,
+    pub tool_prefix: Option<String>,
+    pub header: String,
+}
+
+impl GroupRules {
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self { rules: Vec::new() }
+    }
+
+    /// The matching plugin group for a tool name, if any rule claims
+    /// it (first match wins; native kinds are checked before this).
+    /// Matching is on the RAW tool name — the shape plugins register
+    /// and see in `tool.transform` (canonicalization is a display
+    /// concern).
+    #[must_use]
+    pub fn group_for(&self, tool: &str) -> Option<GroupKind> {
+        self.rules
+            .iter()
+            .find(|rule| {
+                rule.tool.as_deref() == Some(tool)
+                    || rule.tool_prefix.as_deref().is_some_and(|prefix| tool.starts_with(prefix))
+            })
+            .map(|rule| GroupKind::Plugin(rule.header.clone()))
+    }
 }
 
 /// The exploration tools that group under one "Explored" header
@@ -243,14 +287,16 @@ enum PartKind {
 
 /// `partPath`: reasoning groups; exploration tools group; text parts
 /// and non-exploration tools stand alone (verbosity medium — "low"'s
-/// activity wrapping is out of scope).
-fn part_path(part: &PartKind) -> Vec<GroupKind> {
+/// activity wrapping is out of scope). Plugin rules are checked AFTER
+/// the native kinds (wave 3's open rules table).
+fn part_path(part: &PartKind, rules: &GroupRules) -> Vec<GroupKind> {
     match part {
         PartKind::Reasoning => vec![GroupKind::Reasoning],
         PartKind::Tool(name) if EXPLORATION_TOOLS.contains(&name.as_str()) => {
             vec![GroupKind::Exploration]
         }
-        PartKind::Text | PartKind::Tool(_) => Vec::new(),
+        PartKind::Tool(name) => rules.group_for(name).map(|kind| vec![kind]).unwrap_or_default(),
+        PartKind::Text => Vec::new(),
     }
 }
 
@@ -273,6 +319,17 @@ fn message_path(message: &Message) -> Vec<GroupKind> {
 pub fn reduce_rows<S: std::hash::BuildHasher>(
     messages: &[Message],
     inputs: &std::collections::HashSet<String, S>,
+) -> Vec<Row> {
+    reduce_rows_with_rules(messages, inputs, &GroupRules::empty())
+}
+
+/// [`reduce_rows`] with the plugin-provided grouping rules (wave 3's
+/// open rules table — see [`GroupRules`]).
+#[must_use]
+pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
+    messages: &[Message],
+    inputs: &std::collections::HashSet<String, S>,
+    rules: &GroupRules,
 ) -> Vec<Row> {
     let mut pending: std::collections::HashSet<String> = inputs
         .iter()
@@ -321,7 +378,7 @@ pub fn reduce_rows<S: std::hash::BuildHasher>(
                     projections.push(Projection {
                         entry: Entry::Part { message_id: id.clone(), part_id },
                         part: Some(kind.clone()),
-                        path: part_path(&kind),
+                        path: part_path(&kind, rules),
                         closes_previous: None,
                         reasoning_completed: part.time().completed.is_some(),
                     });
@@ -368,7 +425,7 @@ fn project_entries(projections: Vec<Projection>) -> Vec<Row> {
         size: usize,
     }
     fn append(nodes: &mut Vec<Building>, projection: Projection, path: &[GroupKind], depth: usize) {
-        let Some(kind) = path.get(depth).copied() else {
+        let Some(kind) = path.get(depth).cloned() else {
             nodes.push(Building {
                 kind: None,
                 children: Vec::new(),
@@ -378,7 +435,7 @@ fn project_entries(projections: Vec<Projection>) -> Vec<Row> {
             return;
         };
         if let Some(last) = nodes.last_mut() {
-            if last.kind == Some(kind) {
+            if last.kind.as_ref() == Some(&kind) {
                 last.size += 1;
                 append(&mut last.children, projection, path, depth + 1);
                 return;
@@ -683,10 +740,11 @@ mod tests {
             Row::Group { kind, size, completed, .. } => format!(
                 "group:{}({}, {})",
                 match kind {
-                    GroupKind::Exploration => "exploration",
-                    GroupKind::Reasoning => "reasoning",
-                    GroupKind::Activity => "activity",
-                    GroupKind::Instructions => "instructions",
+                    GroupKind::Exploration => "exploration".to_owned(),
+                    GroupKind::Reasoning => "reasoning".to_owned(),
+                    GroupKind::Activity => "activity".to_owned(),
+                    GroupKind::Instructions => "instructions".to_owned(),
+                    GroupKind::Plugin(header) => format!("plugin:{header}"),
                 },
                 if *completed { "completed" } else { "open" },
                 size
@@ -722,7 +780,7 @@ mod tests {
         let Row::Group { kind, size, completed, .. } = &rows[1] else {
             panic!("expected exploration group, got {:?}", rows[1]);
         };
-        assert_eq!((*kind, *size, *completed), (GroupKind::Exploration, 2, false));
+        assert_eq!((kind.clone(), *size, *completed), (GroupKind::Exploration, 2, false));
         // "Explored: 1 search, 1 read" while open says "Exploring".
         assert_eq!(exploration_label(&["grep", "read"], false), "Exploring: 1 search, 1 read");
         assert_eq!(

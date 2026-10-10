@@ -55,8 +55,21 @@ pub fn handle_dialog_key(
 ) -> DialogKeyOutcome {
     let Some(entry) = store.top_dialog() else { return DialogKeyOutcome::Unhandled };
     let props = select_props_for(&entry.kind, store);
-    let is_select = !matches!(entry.kind, DialogKind::SessionRename { .. });
+    let is_select = match &entry.kind {
+        DialogKind::SessionRename { .. } => false,
+        // A rows-only plugin dialog is static (like help): printables
+        // pass through; only the close bindings act.
+        DialogKind::Plugin { id } => {
+            store.plugin_dialog_content(id).is_none_or(|content| content.is_select())
+        }
+        DialogKind::CommandPalette
+        | DialogKind::ThemeList
+        | DialogKind::Help
+        | DialogKind::ServerList { .. } => true,
+    };
     let is_help = matches!(entry.kind, DialogKind::Help);
+    let is_static =
+        is_help || !is_select && !matches!(entry.kind, DialogKind::SessionRename { .. });
 
     // -- modal layer (dialog.tsx) -------------------------------------------
     if stroke.key == "escape" && !stroke.ctrl && !stroke.alt {
@@ -87,7 +100,7 @@ pub fn handle_dialog_key(
     }
 
     // -- the focused input renderable ---------------------------------------
-    if !is_help && !stroke.ctrl && !stroke.alt && stroke.key.chars().count() == 1 {
+    if !is_static && !stroke.ctrl && !stroke.alt && stroke.key.chars().count() == 1 {
         if let Some(ch) = stroke.key.chars().next() {
             let text = if stroke.shift { ch.to_ascii_uppercase() } else { ch };
             store.update_dialog(|top| {
@@ -102,7 +115,7 @@ pub fn handle_dialog_key(
             return DialogKeyOutcome::Consumed;
         }
     }
-    if !is_help && stroke.key == "backspace" && !stroke.ctrl && !stroke.alt && !stroke.shift {
+    if !is_static && stroke.key == "backspace" && !stroke.ctrl && !stroke.alt && !stroke.shift {
         store.update_dialog(|top| {
             if matches!(top.kind, DialogKind::SessionRename { .. }) {
                 top.value.pop();
@@ -157,15 +170,22 @@ pub fn render_overlay(
         return;
     }
     let props = select_props_for(&entry.kind, store);
-    render_overlay_with(base, &entry, &props, theme, terminal);
+    let plugin = match &entry.kind {
+        DialogKind::Plugin { id } => store.plugin_dialog_content(id),
+        _ => None,
+    };
+    render_overlay_with(base, &entry, &props, plugin.as_ref(), theme, terminal);
 }
 
 /// The overlay compositor with explicit content props (the golden
-/// fixtures mount custom command registries).
+/// fixtures mount custom command registries). `plugin` carries a
+/// plugin dialog's materialized content (rows-only dialogs render it
+/// statically; select dialogs' options already live in `props`).
 pub fn render_overlay_with(
     base: &mut Frame,
     entry: &DialogEntry,
     props: &crate::components::dialog_select::SelectProps,
+    plugin: Option<&crate::store::PluginDialogContent>,
     theme: &crate::theme::ThemeState,
     terminal: (u16, u16),
 ) {
@@ -191,6 +211,14 @@ pub fn render_overlay_with(
             render_rename_prompt(entry, &styles, dialog_bg, box_width)
         }
         DialogKind::Help => render_help_content(&styles, dialog_bg, box_width),
+        DialogKind::Plugin { .. } if plugin.is_some_and(|content| !content.is_select()) => {
+            render_plugin_rows(
+                plugin.unwrap_or(&crate::store::PluginDialogContent::default()),
+                &styles,
+                dialog_bg,
+                box_width,
+            )
+        }
         _ => render_select(
             props,
             &entry.select,
@@ -237,6 +265,37 @@ fn blend_backdrop(bg: crate::render::CellColor) -> crate::render::CellColor {
         }
         other => other,
     }
+}
+
+/// A plugin dialog's static content (the delegation payload's
+/// rows-only shape): the bold title row with the `esc` hint, a blank
+/// row, then every row verbatim (muted) — the same chrome geometry as
+/// the select's title block.
+fn render_plugin_rows(
+    content: &crate::store::PluginDialogContent,
+    styles: &DialogStyles,
+    surface: Color,
+    width: usize,
+) -> SelectView {
+    let default = styles.default_fg;
+    let mut rows: Vec<Vec<crate::render::Cell>> = Vec::new();
+
+    let mut title_row = blank_row(width, default, surface);
+    let title = crate::wrap::take_width(&content.title, width.saturating_sub(12).max(8));
+    put_text(&mut title_row, 4, &title, styles.text, surface, 1);
+    put_text_end(&mut title_row, width - 4, "esc", styles.muted, surface, 0);
+    rows.push(title_row);
+    rows.push(blank_row(width, default, surface));
+
+    for line in &content.rows {
+        let mut row = blank_row(width, default, surface);
+        let text = crate::wrap::take_width(line, width.saturating_sub(8).max(8));
+        put_text(&mut row, 4, &text, styles.muted, surface, 0);
+        rows.push(row);
+    }
+    rows.push(blank_row(width, default, surface));
+
+    SelectView { rows, width }
 }
 
 /// `DialogPrompt` (rename): title row + input row with the session
@@ -694,5 +753,134 @@ mod tests {
         );
         assert_eq!(outcome, DialogKeyOutcome::Unhandled, "printables pass through help");
         assert!(store.top_dialog().unwrap().select.filter.is_empty(), "no filter state on help");
+    }
+
+    /// Wave 3 — `DialogKind::Plugin` with rows-only content: the title
+    /// + `esc` hint header, the rows verbatim, printables passing
+    /// through (static, like help), escape closing.
+    #[test]
+    fn plugin_dialog_renders_rows_and_closes_on_escape() {
+        let theme = crate::theme::ThemeState::v2_dark();
+        let store = Store::new(Runtime::new());
+        store.open_plugin_dialog_with(
+            "plugin:omos:about",
+            crate::store::PluginDialogContent {
+                title: "About omos".into(),
+                rows: vec!["version 3.0.3".into(), "preset: zhipuai".into()],
+                options: vec![],
+            },
+        );
+        let mut frame = blank_base(80, 24);
+        render_overlay(&mut frame, &store, &theme, (80, 24));
+        let rows = frame.text_grid();
+        assert!(rows[7].contains("About omos"), "the title row: {:?}", rows[7]);
+        assert!(rows[7].contains("esc"), "the close hint: {:?}", rows[7]);
+        assert!(rows[9].contains("version 3.0.3"), "row 1: {:?}", rows[9]);
+        assert!(rows[10].contains("preset: zhipuai"), "row 2: {:?}", rows[10]);
+
+        let mut keymap = Keymap::new();
+        keymap.push_mode("dialog");
+        let clock = crate::keymap::ManualClock::default();
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("x").unwrap(),
+            (80, 24),
+        );
+        assert_eq!(outcome, DialogKeyOutcome::Unhandled, "printables pass through");
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("escape").unwrap(),
+            (80, 24),
+        );
+        assert_eq!(outcome, DialogKeyOutcome::Closed);
+        assert_eq!(store.dialogs().len(), 0);
+    }
+
+    /// Wave 3 — a plugin dialog WITH options is a select: the native
+    /// pipeline (typing filters, submit returns the option's value —
+    /// dispatchable through the palette dispatcher).
+    #[test]
+    fn plugin_dialog_with_options_selects_and_submits() {
+        let theme = crate::theme::ThemeState::v2_dark();
+        let store = Store::new(Runtime::new());
+        store.open_plugin_dialog_with(
+            "plugin:omos:preset",
+            crate::store::PluginDialogContent {
+                title: "Switch preset".into(),
+                rows: vec![],
+                options: vec![
+                    crate::store::PluginDialogOption {
+                        title: "zhipuai".into(),
+                        value: "preset.zhipuai".into(),
+                        description: "own/glm".into(),
+                    },
+                    crate::store::PluginDialogOption {
+                        title: "openai".into(),
+                        value: "preset.openai".into(),
+                        description: String::new(),
+                    },
+                ],
+            },
+        );
+        let mut frame = blank_base(80, 24);
+        render_overlay(&mut frame, &store, &theme, (80, 24));
+        let rows = frame.text_grid();
+        assert!(rows[7].contains("Switch preset"), "the title: {:?}", rows[7]);
+        assert!(rows[9].contains("Search"), "the filter input: {:?}", rows[9]);
+        assert!(rows[11].contains("Plugin"), "the category group: {:?}", rows[11]);
+        assert!(rows[12].contains("zhipuai"), "option 1: {:?}", rows[12]);
+        assert!(rows[13].contains("openai"), "option 2: {:?}", rows[13]);
+
+        // Typing filters; submit returns the option's value.
+        let mut keymap = Keymap::new();
+        keymap.push_mode("dialog");
+        let clock = crate::keymap::ManualClock::default();
+        for key in ["o", "p", "e"] {
+            let outcome = handle_dialog_key(
+                &store,
+                &mut keymap,
+                &clock,
+                crate::keymap::KeyStroke::parse(key).unwrap(),
+                (80, 24),
+            );
+            assert_eq!(outcome, DialogKeyOutcome::Consumed);
+        }
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("return").unwrap(),
+            (80, 24),
+        );
+        assert_eq!(outcome, DialogKeyOutcome::Submitted("preset.openai".to_owned()));
+    }
+
+    /// The delegation seam: opening by id materializes through the
+    /// attached source (once per open — the hard timeout is the
+    /// source's contract); unknown ids no-op.
+    #[test]
+    fn open_plugin_dialog_materializes_through_the_source() {
+        struct Source;
+        impl crate::store::PluginDialogSource for Source {
+            fn content(&self, id: &str) -> Option<crate::store::PluginDialogContent> {
+                (id == "plugin:omos:preset").then(|| crate::store::PluginDialogContent {
+                    title: "Switch preset".into(),
+                    rows: vec!["materialized".into()],
+                    options: vec![],
+                })
+            }
+        }
+        let store = Store::new(Runtime::new());
+        store.set_plugin_dialog_source(std::rc::Rc::new(Source));
+        assert!(store.open_plugin_dialog("plugin:omos:preset"));
+        let top = store.top_dialog().expect("opened");
+        assert!(matches!(top.kind, DialogKind::Plugin { .. }));
+        let content = store.plugin_dialog_content("plugin:omos:preset").expect("cached");
+        assert_eq!(content.rows, ["materialized".to_owned()]);
+        assert!(!store.open_plugin_dialog("plugin:missing"), "unknown ids no-op");
     }
 }

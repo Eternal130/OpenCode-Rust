@@ -74,6 +74,7 @@
 //! compares digests and reloads changed plugins, refreshing the
 //! registration snapshot.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::{Arc, Mutex};
@@ -88,17 +89,20 @@ pub mod protocol;
 pub mod registrations;
 pub mod supervisor;
 pub mod tap;
+pub mod ui;
 
 pub use context::{
     install::{default_root as install_root, install, InstallOptions, Installed},
-    Bridge, HostState, NoSessionEngine, SessionPort, SESSION_METHODS,
+    Bridge, HostState, NoSessionEngine, NoToolEngine, SessionPort, ToolPort, SESSION_METHODS,
 };
 pub use registrations::{
-    PluginAgent, PluginCommand, PluginHook, PluginMcp, PluginSkill, PluginState, PluginStatus,
-    PluginTheme, PluginTool, RegistrationSnapshot,
+    PluginAgent, PluginCommand, PluginDialog, PluginGroupRule, PluginHomeAction, PluginHook,
+    PluginMcp, PluginSkill, PluginState, PluginStatus, PluginTheme, PluginTool,
+    RegistrationSnapshot,
 };
 pub use supervisor::{HostError, SupervisorConfig};
 pub use tap::{BroadcastTap, TapEvent};
+pub use ui::{PluginDialogOption, PluginDialogSpec, UiRequest};
 
 /// The embedded guest script (materialized into the sandbox at start).
 const HOST_JS: &str = include_str!("host/host.js");
@@ -124,6 +128,12 @@ pub struct PluginHostConfig {
     pub host_state: HostState,
     /// `ctx.session.*` routing target (the session-engine seam).
     pub session_port: Option<Arc<dyn SessionPort>>,
+    /// `tools.<name>(input)` routing from Code Mode programs (the
+    /// oc-core registry seam; wave 4).
+    pub tool_port: Option<Arc<dyn ToolPort>>,
+    /// Config-sourced plugin options keyed by entry path (`ctx.options`,
+    /// v2 plugin `{package, options}` entries).
+    pub entry_options: BTreeMap<String, Value>,
 }
 
 impl Default for PluginHostConfig {
@@ -138,8 +148,39 @@ impl Default for PluginHostConfig {
             max_restarts: 8,
             host_state: HostState::default(),
             session_port: None,
+            tool_port: None,
+            entry_options: BTreeMap::new(),
         }
     }
+}
+
+/// One catalog entry handed to a Code Mode program (the wire shape of
+/// oc-core's `CatalogEntry` at the guest bridge).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CodeModeToolSpec {
+    /// Qualified dotted path (`namespace.name`).
+    pub path: String,
+    pub description: String,
+    pub signature: String,
+}
+
+/// One observed tool call inside a Code Mode program (v2 `ExecuteCall`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CodeModeCallRecord {
+    pub tool: String,
+    /// `running` | `completed` | `error`.
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<Value>,
+}
+
+/// A finished program (the `codemode.evaluate` result).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CodeModeRun {
+    /// The completion value (`None` = `undefined`).
+    pub value: Option<Value>,
+    pub error: Option<String>,
+    pub tool_calls: Vec<CodeModeCallRecord>,
 }
 
 /// The plugin host facade. Constructed via [`PluginHost::detect`]
@@ -227,6 +268,8 @@ impl PluginHost {
             env: std::mem::take(&mut config.env),
             host_state: config.host_state,
             session_port: config.session_port.or_else(|| Some(Arc::new(NoSessionEngine))),
+            tool_port: config.tool_port.or_else(|| Some(Arc::new(NoToolEngine))),
+            entry_options: config.entry_options,
         };
         let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
         let (parts_tx, parts_rx) = std::sync::mpsc::channel::<FacadeParts>();
@@ -406,6 +449,135 @@ impl PluginHost {
         let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
         let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
         runtime.block_on(facade.shared.reload_changed()).map_err(|error| error.to_string())
+    }
+
+    /// Execute one plugin-registered tool by name (the `tool.transform`
+    /// executor dispatch — wave 4's wave-2 TODO). Blocks at most
+    /// `timeout`.
+    pub fn execute_tool(
+        &self,
+        name: &str,
+        input: &Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
+        runtime
+            .block_on(facade.shared.request("tool.execute", json!({ "name": name, "input": input }), timeout))
+            .map(|result| result.get("result").cloned().unwrap_or(Value::Null))
+            .map_err(|error| error.to_string())
+    }
+
+    /// [`PluginHost::execute_tool`] without parking a runtime worker —
+    /// the port/executor path (called from tasks that may live on the
+    /// supervisor's own runtime).
+    pub async fn execute_tool_async(
+        &self,
+        name: &str,
+        input: &Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        facade
+            .shared
+            .request("tool.execute", json!({ "name": name, "input": input }), timeout)
+            .await
+            .map(|result| result.get("result").cloned().unwrap_or(Value::Null))
+            .map_err(|error| error.to_string())
+    }
+
+    /// Run one Code Mode program in the guest runtime over `catalog`
+    /// (`tools.<path>` calls come back through the tool port). The
+    /// `timeout` is the HARD bound on the whole execution.
+    pub fn codemode_evaluate(
+        &self,
+        code: &str,
+        catalog: &[CodeModeToolSpec],
+        timeout: Duration,
+    ) -> Result<CodeModeRun, String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
+        runtime
+            .block_on(self.codemode_evaluate_async(code, catalog, timeout))
+    }
+
+    /// [`PluginHost::codemode_evaluate`] without parking a worker.
+    pub async fn codemode_evaluate_async(
+        &self,
+        code: &str,
+        catalog: &[CodeModeToolSpec],
+        timeout: Duration,
+    ) -> Result<CodeModeRun, String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let params = json!({
+            "code": code,
+            "tools": catalog,
+        });
+        let result = facade
+            .shared
+            .request("codemode.evaluate", params, timeout)
+            .await
+            .map_err(|error| error.to_string())?;
+        let error = result
+            .get("error")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .filter(|text| !text.is_empty());
+        // `value` absent = `undefined`; explicit `null` stays null.
+        let value = result.get("value").cloned();
+        let tool_calls = result
+            .get("calls")
+            .and_then(Value::as_array)
+            .map(|calls| {
+                calls
+                    .iter()
+                    .filter_map(|call| {
+                        Some(CodeModeCallRecord {
+                            tool: call.get("tool")?.as_str()?.to_string(),
+                            status: call.get("status")?.as_str()?.to_string(),
+                            input: call.get("input").cloned(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(CodeModeRun { value, error, tool_calls })
+    }
+
+    /// Drain the pending plugin → TUI UI requests (the wave-3 slot
+    /// bridge: toasts, sidebar sections, footer hints, dialog opens).
+    /// The embedder polls this between frames; empty on the disabled
+    /// host.
+    #[must_use]
+    pub fn drain_ui_requests(&self) -> Vec<UiRequest> {
+        let Some(facade) = &self.facade else { return Vec::new() };
+        facade.shared.drain_ui_requests()
+    }
+
+    /// Materialize one plugin dialog's content at OPEN time (the
+    /// delegation seam behind `DialogKind::Plugin`): the guest builds
+    /// the `{title, rows, options}` structure synchronously; this
+    /// call is bounded by `timeout` (the HARD bound — a hung plugin
+    /// costs exactly this call). The dialog then renders natively; no
+    /// per-frame IPC ever happens.
+    pub fn materialize_dialog(
+        &self,
+        dialog_id: &str,
+        timeout: Duration,
+    ) -> Result<PluginDialogSpec, String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
+        let Some(plugin_id) = facade.shared.plugin_for_dialog(dialog_id) else {
+            return Err(format!("{dialog_id}: no plugin dialog provider"));
+        };
+        let result = runtime
+            .block_on(facade.shared.request(
+                "dialog.materialize",
+                json!({ "pluginId": plugin_id, "id": dialog_id }),
+                timeout,
+            ))
+            .map_err(|error| error.to_string())?;
+        Ok(PluginDialogSpec::from_json(&result))
     }
 
     /// Diagnostics: events dispatched to the guest vs dropped

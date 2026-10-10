@@ -1,0 +1,40 @@
+ ! p10 renamed from tui          +
+
+     Switched variant to default                                                                                        p10 renamed from tui
+
+  ┃                                                                                                                     Context
+  ┃  Say hello.                                                                                                         18 tokens
+  ┃
+
+     Parity fake says hello.
+
+     Build · fake-model · 24ms · 0.0 tok/s
+
+     Switched variant to default
+
+  ┃
+  ┃  Now read the outside file please.
+  ┃
+
+     ⠼ Read /tmp/opencode/p10-tui-1761742/outside/secret.txt
+
+
+
+
+
+
+                                                                                                                          ⬖ Getting started                ✕
+
+  ┃                                                                                                                         OpenCode includes free models so
+  ┃  △ Permission required                                                                                                  you can start immediately.
+  ┃    ← Access external directory /tmp/opencode/p10-tui-1761742/outside
+  ┃                                                                                                                         Connect from 75+ providers to
+  ┃  Patterns                                                                                                               use other models, including
+  ┃                                                                                                                         Claude, GPT, Gemini etc
+  ┃  - /tmp/opencode/p10-tui-1761742/outside/*
+  ┃                                                                                                                         Connect provider        /connect
+  ┃
+  ┃   Allow once   Always allow   Reject                               ctrl+f fullscreen  ⇆ select  enter confirm
+  ┃                                                                                                                     /tmp/opencode/ref/packages/cli
+
+ ✓ Server  ⦿ UI  Theme  Tools  Experiments

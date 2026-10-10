@@ -27,17 +27,19 @@
 //!   first-divergent-cell classification, and degrade colors through the
 //!   TERM matrix (truecolor → 256 → 16).
 //!
-//! HTTP is performed by a private minimal localhost HTTP/1.1 client
-//! (`minih`, not public API): the harness only ever talks to `127.0.0.1`,
-//! and keeping it dependency-free keeps the harness buildable offline.
+//! HTTP is performed by a minimal localhost HTTP/1.1 client
+//! ([`minih`]): the harness only ever talks to `127.0.0.1`, and keeping it
+//! dependency-free keeps the harness buildable offline. The Phase-10 p10
+//! battery reuses it directly for raw error-path probing.
 
 pub mod golden;
 pub mod httpdiff;
 pub mod normalize;
+pub mod openapi_diff;
 pub mod reference;
 pub mod rust_server;
 pub mod scenario;
 pub mod sse;
 pub mod tui_frame;
 
-mod minih;
+pub mod minih;
