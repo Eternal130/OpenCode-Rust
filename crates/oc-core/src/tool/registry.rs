@@ -381,19 +381,39 @@ impl PipelineExecutor {
                     }
                     _ => ToolRunFailure::Error { message, metadata: None },
                 };
-                self.emit_after(
-                    &input,
-                    context,
-                    HookToolOutcome::Error {
-                        error: oc_schema::tool::ToolError {
-                            message: failure.message().to_string(),
-                            error: None,
-                            metadata: None,
+                // v2 fires `execute.after` on the error leg and returns
+                // the (possibly plugin-rewritten) error object
+                // (`return yield* afterEvent.error`, tool.ts:140): a
+                // plugin rewriting the message/metadata shapes the
+                // model-visible failure. Apply the mutation; keep the
+                // variant classification (Error vs PermissionRejected)
+                // ours carries.
+                let shaped = self
+                    .emit_after(
+                        &input,
+                        context,
+                        HookToolOutcome::Error {
+                            error: oc_schema::tool::ToolError {
+                                message: failure.message().to_string(),
+                                error: None,
+                                metadata: None,
+                            },
                         },
+                    )
+                    .await;
+                return Err(match failure {
+                    ToolRunFailure::Error { metadata, .. } => ToolRunFailure::Error {
+                        message: shaped.message,
+                        metadata: shaped.metadata.or(metadata),
                     },
-                )
-                .await;
-                return Err(failure);
+                    ToolRunFailure::PermissionRejected { metadata, .. } => {
+                        ToolRunFailure::PermissionRejected {
+                            message: shaped.message,
+                            metadata: shaped.metadata.or(metadata),
+                        }
+                    }
+                    other => other,
+                });
             }
         };
         // tool.execute.after (result mutation).
@@ -422,8 +442,20 @@ impl PipelineExecutor {
         let mut content = outcome.content;
         let mut metadata = outcome.metadata;
         if let HookToolOutcome::Completed { result } = &after.outcome {
+            // v2's normalizeContent applies an emptied array too (an
+            // empty content falls back to the stringified `output`,
+            // tool/runtime.ts:259) — a plugin suppressing output must
+            // suppress it here as well, not keep the original.
             if let Ok(parsed) = serde_json::from_value::<Vec<Content>>(result["content"].clone()) {
                 if !parsed.is_empty() {
+                    content = parsed;
+                } else if let Some(output) = result.get("output") {
+                    let text = match output {
+                        serde_json::Value::String(text) => text.clone(),
+                        other => other.to_string(),
+                    };
+                    content = vec![Content::Text { text }];
+                } else {
                     content = parsed;
                 }
             }
@@ -434,12 +466,24 @@ impl PipelineExecutor {
         Ok(ToolRunResult { content, metadata })
     }
 
+    /// Fires `tool.execute.after` for the error leg and returns the
+    /// SHAPED error (v2 `return yield* afterEvent.error` — plugin
+    /// rewrites apply). A dispatch failure returns the original
+    /// message: the failure channel is already taken.
     async fn emit_after(
         &self,
         input: &serde_json::Value,
         context: &ToolCallContext,
         outcome: HookToolOutcome,
-    ) {
+    ) -> oc_schema::tool::ToolError {
+        let fallback = match &outcome {
+            HookToolOutcome::Error { error } => error.clone(),
+            HookToolOutcome::Completed { .. } => oc_schema::tool::ToolError {
+                message: String::new(),
+                error: None,
+                metadata: None,
+            },
+        };
         let event = ToolExecuteAfterEvent {
             tool: self.name.clone(),
             session_id: context.session_id.clone(),
@@ -450,7 +494,13 @@ impl PipelineExecutor {
             input: input.clone(),
             outcome,
         };
-        let _ = self.hooks.dispatch_tool_execute_after(event).await;
+        match self.hooks.dispatch_tool_execute_after(event).await {
+            Ok(shaped) => match shaped.outcome {
+                HookToolOutcome::Error { error } => error,
+                HookToolOutcome::Completed { .. } => fallback,
+            },
+            Err(_) => fallback,
+        }
     }
 }
 

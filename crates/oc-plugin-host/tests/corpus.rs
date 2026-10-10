@@ -90,6 +90,41 @@ fn corpus_hook_mutation_ordering() {
     host.shutdown();
 }
 
+/// D-03: v2's trigger FAILS the dispatch on a handler error (later
+/// handlers skipped, the caller aborts — hooks.ts:88-95). A guest
+/// plugin whose handler throws must fail the whole prompt path, not
+/// silently continue with un-mutated state.
+#[test]
+fn corpus_hook_failure_fails_the_dispatch() {
+    let sandbox = common::sandbox("corpus-hookfail");
+    let entry = common::copy_fixture(&sandbox, "hookfail.ts");
+    let recording = Arc::new(common::RecordingSessionPort::default());
+    let config = PluginHostConfig {
+        env: vec![("OC_PLUGIN_TEST_SANDBOX".to_owned(), sandbox.display().to_string())],
+        session_port: Some(recording.clone()),
+        ..PluginHostConfig::default()
+    };
+    let host = PluginHost::detect().start_detached_with(config, &[entry]);
+    if !host.enabled() {
+        eprintln!("bun unavailable; skipping");
+        return;
+    }
+    assert!(host.wait_ready(Duration::from_secs(15)));
+
+    let asked = host.execute_command("hookfail.ask", None, Duration::from_secs(5));
+    let error = asked.expect_err("the failing context hook must fail the prompt");
+    assert!(
+        error.contains("hookfail: context rejected"),
+        "the plugin's own error text surfaces verbatim: {error}"
+    );
+    // Nothing was admitted past the failed chain.
+    assert!(
+        recording.contexts.lock().unwrap().is_empty(),
+        "no context event survives a failed dispatch"
+    );
+    host.shutdown();
+}
+
 #[test]
 fn corpus_config_sourced_plugin_options() {
     let sandbox = common::sandbox("corpus-options");

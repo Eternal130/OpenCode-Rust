@@ -692,7 +692,6 @@ macro_rules! oc_hook_points {
                 #[doc = concat!("Dispatch `", $key, "`: sequential in registration order, `&mut` event chaining, returns the final value.")]
                 #[allow(clippy::result_large_err, reason = "HookError is the shared wire error type")]
                 pub async fn $dispatch(&self, mut event: $event) -> Result<$event, HookError> {
-                    let provider = event.hook_provider();
                     let handlers = {
                         let guard = self.lists.$field.lock();
                         guard
@@ -704,6 +703,13 @@ macro_rules! oc_hook_points {
                             .collect::<Vec<_>>()
                     };
                     for (filter, handler) in handlers {
+                        // Provider scoping re-reads the LIVE event per
+                        // entry (v2 hooks.ts:90 evaluates
+                        // `eventProviderID(event)` inside the loop, so a
+                        // handler that rewrites `event.model.providerID`
+                        // re-scope every later entry — matching v2's
+                        // by-reference timing, not a pre-loop snapshot).
+                        let provider = event.hook_provider();
                         if let Some(filter) = filter.as_deref() {
                             if provider.as_deref() != Some(filter) {
                                 continue;
@@ -1598,6 +1604,77 @@ mod tests {
         assert!(registry.has_session_model_request(Some("anthropic")));
         assert!(!registry.has_session_model_request(Some("openai")));
         assert!(!registry.has_session_model_request(None));
+    }
+
+    /// v2 re-evaluates `eventProviderID(event)` PER ENTRY against the
+    /// live, possibly-mutated event (hooks.ts:90) — a handler that
+    /// rewrites `event.model.providerID` re-scopes every later entry.
+    /// The dispatch loop must re-read the provider instead of
+    /// snapshotting it before the chain.
+    #[tokio::test]
+    async fn hooks_provider_scoping_rereads_the_live_event_per_entry() {
+        let registry = HookRegistry::new();
+        let scope = HookScope::new();
+        let fired: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+        // 1. unscoped rewriter: flips the event's provider mid-chain.
+        scope.track(
+            registry
+                .register_session_model_request(
+                    {
+                        let fired = Arc::clone(&fired);
+                        fn_hook(move |event: &mut SessionModelRequestEvent| {
+                            fired.lock().push("rewriter");
+                            event.model.provider_id = ProviderId::parse("anthropic");
+                            Ok(())
+                        })
+                    },
+                    HookOptions::default(),
+                )
+                .await,
+        );
+        // 2. scoped to the POST-mutation provider: must fire in v2.
+        scope.track(
+            registry
+                .register_session_model_request(
+                    {
+                        let fired = Arc::clone(&fired);
+                        fn_hook(move |_event: &mut SessionModelRequestEvent| {
+                            fired.lock().push("anthropic-scoped");
+                            Ok(())
+                        })
+                    },
+                    HookOptions { provider_id: Some("anthropic".into()) },
+                )
+                .await,
+        );
+        // 3. scoped to the PRE-mutation provider: must be skipped.
+        scope.track(
+            registry
+                .register_session_model_request(
+                    {
+                        let fired = Arc::clone(&fired);
+                        fn_hook(move |_event: &mut SessionModelRequestEvent| {
+                            fired.lock().push("openai-scoped");
+                            Ok(())
+                        })
+                    },
+                    HookOptions { provider_id: Some("openai".into()) },
+                )
+                .await,
+        );
+
+        let event = SessionModelRequestEvent {
+            session_id: SessionId::new(),
+            agent: AgentId::parse("build"),
+            model: model_ref("openai", "m"),
+            kind: SessionRequestKind::Primary,
+            base_url: None,
+            headers: BTreeMap::new(),
+        };
+        let shaped = registry.dispatch_session_model_request(event).await.unwrap();
+        assert_eq!(shaped.model.provider_id.0, "anthropic");
+        assert_eq!(*fired.lock(), vec!["rewriter", "anthropic-scoped"]);
     }
 
     #[tokio::test]
