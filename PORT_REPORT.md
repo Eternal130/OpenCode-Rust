@@ -45,7 +45,7 @@
 - openai-responses 的 WebSocket 通道延后（SSE 回退路径完整，v2 默认亦可用 SSE）
 - 请求 schema 校验仅覆盖电池中的 2 条路由（session.create/list），其余路由对畸形载荷的 400 形状与 v2 有分歧（P10-N1 同类）
 - TUI 非空草稿上 leader 和弦不触发（v2 键位表对和弦挂起 textarea——行为差异已登记）
-- 写回带 JSONC 注释的配置：拒绝并要求 --force（v2 保留注释重写）——防数据丢失的保守选择
+- ~~写回带 JSONC 注释的配置：拒绝并要求 --force（v2 保留注释重写）~~ 已修复（D-01）：`oc-core/src/config/jsonc_edit.rs` 移植 jsonc-parser 3.3.1 的 modify/applyEdits（位置保持式拼接 + 行级重缩进，2 空格），mcp add/plugin add/remove 默认保留注释逐字节改写；`--force` 保留为 rust-extra 显式丢弃注释覆盖（非对象根的拒绝边缘已登记）
 - TUI 本地状态（tab/会话列表）channel 目录已对齐 v2 出厂默认（stable）；从旧版 `local` 目录迁移不自动（存量状态重新累积）
 
 **插件与 CodeMode 生产状态（门 12 审计→接线闭环）**：门 12 抓出"库级完成但生产未接线"，已由收尾接线泳道闭合并实测（真实二进制路径加载旗舰、零插件 CodeMode 快照、/api/plugin 真实列表），提交 `09bcc15`。

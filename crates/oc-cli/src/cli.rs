@@ -363,7 +363,7 @@ pub enum McpCommands {
         /// Write to the global config instead of the project config
         #[arg(long)]
         global: bool,
-        /// Rewrite the config even when it contains JSONC comments (comments are stripped)
+        /// Discard JSONC comments and rewrite the whole config (the default write preserves comments; rust-extra, v2 has no --force)
         #[arg(long)]
         force: bool,
     },
@@ -391,7 +391,7 @@ pub enum PluginCommands {
     Add {
         /// npm registry or Git package specifier
         package: String,
-        /// Rewrite the config even when it contains JSONC comments (comments are stripped)
+        /// Discard JSONC comments and rewrite the whole config (the default write preserves comments; rust-extra, v2 has no --force)
         #[arg(long)]
         force: bool,
     },
@@ -409,7 +409,7 @@ pub enum PluginCommands {
     Remove {
         /// configured package specifier
         package: String,
-        /// Rewrite the config even when it contains JSONC comments (comments are stripped)
+        /// Discard JSONC comments and rewrite the whole config (the default write preserves comments; rust-extra, v2 has no --force)
         #[arg(long)]
         force: bool,
     },

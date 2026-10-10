@@ -57,7 +57,7 @@
 
 | 编号 | 现状 | v2 行为 | 处置 |
 |---|---|---|---|
-| D-01 | JSONC 配置写回：拒绝+`--force` | 保留注释重写 | **修**：实现注释保留写回（jsonc-parser 位置保持式重写），beta.4 |
+| D-01 | ~~JSONC 配置写回：拒绝+`--force`~~ 已修复：注释保留写回 | 保留注释重写 | **已修**（beta.4）：`oc-core/src/config/jsonc_edit.rs` 移植 jsonc-parser 3.3.1 setProperty/format（拼接+行级重缩进，字节级对齐已用 37 例 golden 语料钉死）；`--force` 保留为 rust-extra 覆盖 |
 | D-02 | 非空草稿时 leader 和弦不触发 | 和弦挂起输入框后触发 | **修**：beta.4 |
 | D-03 | 插件 hook 可变对象 copy-in/copy-out | 引用可变（进程内） | **spike 评估**：bun 宿主内对象代间同步或等价语义；无法等价则永久登记并给出隔离性收益说明 |
 | D-04 | 请求 schema 校验仅 2 路由 | 全路由 400 形状 | **修**：按 openapi 契约生成全路由校验电池，beta.5 |
