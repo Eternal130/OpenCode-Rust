@@ -478,11 +478,9 @@ impl PipelineExecutor {
     ) -> oc_schema::tool::ToolError {
         let fallback = match &outcome {
             HookToolOutcome::Error { error } => error.clone(),
-            HookToolOutcome::Completed { .. } => oc_schema::tool::ToolError {
-                message: String::new(),
-                error: None,
-                metadata: None,
-            },
+            HookToolOutcome::Completed { .. } => {
+                oc_schema::tool::ToolError { message: String::new(), error: None, metadata: None }
+            }
         };
         let event = ToolExecuteAfterEvent {
             tool: self.name.clone(),
