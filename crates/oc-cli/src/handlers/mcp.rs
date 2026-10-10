@@ -114,127 +114,82 @@ pub(crate) fn read_config_json_pub(path: &std::path::Path) -> Result<Value, Stri
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => "{}".to_owned(),
         Err(error) => return Err(error.to_string()),
     };
-    // Strip // and /* */ comments so JSONC configs survive the parse (the
-    // rewrite itself is guarded by write_config_json_pub's JSONC refusal
-    // unless --force is passed — REGISTERED divergence from v2's jsonc
-    // applyEdits).
-    let mut cleaned = String::with_capacity(text.len());
-    let mut in_string = false;
-    let mut escape = false;
-    let mut line_comment = false;
-    let mut block_comment = false;
-    let bytes: Vec<char> = text.chars().collect();
-    let mut index = 0;
-    while index < bytes.len() {
-        let current = bytes[index];
-        let next = bytes.get(index + 1).copied();
-        if line_comment {
-            if current == '\n' {
-                line_comment = false;
-                cleaned.push('\n');
-            }
-            index += 1;
-            continue;
-        }
-        if block_comment {
-            if current == '*' && next == Some('/') {
-                block_comment = false;
-                index += 2;
-                continue;
-            }
-            index += 1;
-            continue;
-        }
-        if in_string {
-            cleaned.push(current);
-            if escape {
-                escape = false;
-            } else if current == '\\' {
-                escape = true;
-            } else if current == '"' {
-                in_string = false;
-            }
-            index += 1;
-            continue;
-        }
-        match current {
-            '"' => {
-                in_string = true;
-                cleaned.push('"');
-            }
-            '/' if next == Some('/') => line_comment = true,
-            '/' if next == Some('*') => block_comment = true,
-            _ => cleaned.push(current),
-        }
-        index += 1;
-    }
-    serde_json::from_str(&cleaned)
+    // json5 = the loader's JSONC tolerance class: comments, trailing
+    // commas, relaxed quoting (v2 reads configs with jsonc-parser's
+    // `parse(..., { allowTrailingComma: true })`).
+    json5::from_str(&text)
         .map_err(|error| format!("Invalid configuration {}: {error}", path.display()))
-}
-
-/// Naive JSONC comment scan: any `//` or `/*` outside a string literal
-/// (gate-7 F5). Used to refuse rewrites that would strip user comments.
-fn jsonc_has_comments(text: &str) -> bool {
-    let chars: Vec<char> = text.chars().collect();
-    let mut in_string = false;
-    let mut escape = false;
-    let mut index = 0;
-    while index < chars.len() {
-        let current = chars[index];
-        let next = chars.get(index + 1).copied();
-        if in_string {
-            if escape {
-                escape = false;
-            } else if current == '\\' {
-                escape = true;
-            } else if current == '"' {
-                in_string = false;
-            }
-        } else {
-            match current {
-                '"' => in_string = true,
-                '/' if next == Some('/') || next == Some('*') => return true,
-                _ => {}
-            }
-        }
-        index += 1;
-    }
-    false
-}
-
-fn write_config_json(path: &std::path::Path, config: &Value, force: bool) -> Result<(), String> {
-    write_config_json_pub(path, config, force)
 }
 
 /// Public re-export for the plugin config editor.
 ///
-/// Gate-7 F5: when the target file contains JSONC comments and `force` is
-/// false, REFUSE the rewrite — pretty-printing the parsed value would
-/// silently delete the user's comments (v2 preserves them via jsonc
-/// applyEdits, which the Rust port does not implement). `--force` opts into
-/// the stripping rewrite.
+/// The strip rewrite: pretty-print the whole document (comments lost).
+/// Only reached as the explicit `--force` override — v2 has no --force;
+/// the default write path is the comment-preserving
+/// [`write_config_set_pub`] (rust-extra documented divergence).
 pub(crate) fn write_config_json_pub(
     path: &std::path::Path,
     config: &Value,
     force: bool,
 ) -> Result<(), String> {
-    if !force {
-        if let Ok(existing) = std::fs::read_to_string(path) {
-            if jsonc_has_comments(&existing) {
-                return Err(format!(
-                    "{} contains JSONC comments; this command's rewrite would strip them. \
-                     Re-run with --force to rewrite anyway (comments are lost) or edit the file manually",
-                    path.display()
-                ));
-            }
-        }
-    }
+    debug_assert!(force, "non-force writes go through write_config_set_pub");
+    write_config_text(path, &{
+        let mut text = serde_json::to_string_pretty(config).expect("config serializes");
+        text.push('\n');
+        text
+    })
+}
+
+fn write_config_text(path: &std::path::Path, text: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let mut text = serde_json::to_string_pretty(config).expect("config serializes");
-    text.push('\n');
     std::fs::write(path, text).map_err(|error| error.to_string())
+}
+
+/// D-01 comment-preserving config write (v2 parity): applies the
+/// set-path mutation surgically to the ORIGINAL config text via
+/// `oc_core::config::jsonc_edit` (a port of jsonc-parser's
+/// `modify`/`applyEdits` with `tabSize: 2, insertSpaces: true`) —
+/// comments, formatting, and unrelated keys survive byte-for-byte.
+///
+/// Matches v2's writers: `mcp/add.ts` `write` (sets
+/// `["mcp","servers",<name>]`, no trailing-newline normalization) and
+/// plugin `add.ts`/`remove.ts` (`["plugins"]`, newline normalized).
+/// `force` keeps the rust-extra "discard comments" strip rewrite of the
+/// full mutated `full_config`.
+///
+/// Registered edge: when the existing file has no JSON object at its
+/// root the surgical edit is impossible — v2 throws (`Can not add
+/// property to parent of type …`); the port refuses with the old
+/// --force escape hatch instead.
+pub(crate) fn write_config_set_pub(
+    path: &std::path::Path,
+    segments: &[&str],
+    value: &Value,
+    full_config: &Value,
+    force: bool,
+    ensure_trailing_newline: bool,
+) -> Result<(), String> {
+    if force {
+        return write_config_json_pub(path, full_config, true);
+    }
+    let existing = std::fs::read_to_string(path).unwrap_or_else(|_| "{}".to_owned());
+    match oc_core::config::jsonc_edit::set_path(&existing, segments, Some(value)) {
+        Ok(Some(mut updated)) => {
+            if ensure_trailing_newline && !updated.ends_with('\n') {
+                updated.push('\n');
+            }
+            write_config_text(path, &updated)
+        }
+        // No-op (removal target absent): leave the file alone.
+        Ok(None) => Ok(()),
+        Err(_) => Err(format!(
+            "{} does not contain a JSON object at the root, so it cannot be edited in place. \
+             Re-run with --force to rewrite it anyway (comments are lost) or edit the file manually",
+            path.display()
+        )),
+    }
 }
 
 #[allow(clippy::unused_async)]
@@ -310,7 +265,21 @@ async fn add(
         .as_object_mut()
         .expect("servers is an object")
         .insert(name.to_owned(), server);
-    if let Err(message) = write_config_json(&config_path, &config, force) {
+    // v2 mcp/add.ts `write`: surgical jsonc edit, no newline fix-up.
+    let server_value = root
+        .get("mcp")
+        .and_then(|mcp| mcp.get("servers"))
+        .and_then(|servers| servers.get(name))
+        .cloned()
+        .expect("server inserted");
+    if let Err(message) = write_config_set_pub(
+        &config_path,
+        &["mcp", "servers", name],
+        &server_value,
+        &config,
+        force,
+        false,
+    ) {
         eprintln!("Error: {message}");
         return 1;
     }
@@ -490,30 +459,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn comment_scan_ignores_strings_and_urls() {
-        assert!(jsonc_has_comments("// line comment\n{}"));
-        assert!(jsonc_has_comments("{ /* block */ }"));
-        assert!(!jsonc_has_comments("{\"url\": \"https://example.com/x//y\"}"));
-        assert!(!jsonc_has_comments("{\"a\": 1}"));
-        assert!(!jsonc_has_comments(""));
-    }
-
-    #[test]
-    fn jsonc_rewrite_is_refused_without_force() {
+    fn jsonc_rewrite_preserves_comments_without_force() {
+        // D-01 inversion: the old gate-7 F5 refusal is gone. An
+        // auth-login-style config mutation (mcp add) against a commented
+        // jsonc file now applies surgically, v2-style — comments intact.
         let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
         let path = dir.path().join("opencode.json");
         std::fs::write(&path, "{\n  // my carefully annotated config\n  \"mcp\": {}\n}\n")
             .expect("write jsonc");
 
-        let error = write_config_json(&path, &json!({"mcp": {}}), false).expect_err("refused");
-        assert!(error.contains("JSONC comments"), "{error}");
-        assert!(error.contains("--force"), "the error must mention --force: {error}");
-        // The commented file is untouched.
+        write_config_set_pub(
+            &path,
+            &["mcp", "servers", "github"],
+            &json!({"type": "remote", "url": "https://example.com/sse"}),
+            &json!({"mcp": {"servers": {"github": {"type": "remote", "url": "https://example.com/sse"}}}}),
+            false,
+            false,
+        )
+        .expect("surgical write succeeds");
+
         let text = std::fs::read_to_string(&path).expect("read back");
-        assert!(
-            text.contains("my carefully annotated config"),
-            "comments must survive the refusal"
+        assert_eq!(
+            text,
+            "{\n  // my carefully annotated config\n  \"mcp\": {\n    \"servers\": {\n      \"github\": {\n        \"type\": \"remote\",\n        \"url\": \"https://example.com/sse\"\n      }\n    }\n  }\n}\n",
+            "v2 jsonc modify byte shape"
         );
+        assert!(text.contains("my carefully annotated config"), "comments survive");
+        let value: Value = json5::from_str(&text).expect("result parses");
+        assert_eq!(value["mcp"]["servers"]["github"]["url"], json!("https://example.com/sse"));
     }
 
     #[test]
@@ -522,10 +495,61 @@ mod tests {
         let path = dir.path().join("opencode.json");
         std::fs::write(&path, "{\n  /* notes */\n  \"mcp\": {}\n}\n").expect("write jsonc");
 
-        write_config_json(&path, &json!({"mcp": {"servers": {}}}), true).expect("forced rewrite");
+        write_config_set_pub(
+            &path,
+            &["mcp"],
+            &json!({"servers": {}}),
+            &json!({"mcp": {"servers": {}}}),
+            true,
+            true,
+        )
+        .expect("forced rewrite");
         let text = std::fs::read_to_string(&path).expect("read back");
         assert!(!text.contains("notes"), "force proceeds with the stripping rewrite");
         assert!(text.contains("servers"));
+    }
+
+    #[test]
+    fn plugin_style_set_normalizes_trailing_newline() {
+        // v2 writePluginConfig appends a missing trailing newline.
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let path = dir.path().join("opencode.json");
+        std::fs::write(&path, "{\n  // plugins\n  \"plugins\": [\"a\"]\n}").expect("write jsonc");
+
+        write_config_set_pub(
+            &path,
+            &["plugins"],
+            &json!(["a", "b"]),
+            &json!({"plugins": ["a", "b"]}),
+            false,
+            true,
+        )
+        .expect("plugin write");
+        let text = std::fs::read_to_string(&path).expect("read back");
+        assert_eq!(text, "{\n  // plugins\n  \"plugins\": [\n    \"a\",\n    \"b\"\n  ]\n}\n");
+    }
+
+    #[test]
+    fn non_object_root_is_refused_without_force() {
+        // Registered edge (v2 throws `Can not add property to parent of
+        // type array`): the port keeps the refuse + --force escape.
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let path = dir.path().join("opencode.json");
+        std::fs::write(&path, "[\n  // not an object\n]\n").expect("write array root");
+
+        let error = write_config_set_pub(
+            &path,
+            &["mcp"],
+            &json!({"servers": {}}),
+            &json!({"mcp": {"servers": {}}}),
+            false,
+            false,
+        )
+        .expect_err("refused");
+        assert!(error.contains("--force"), "the error must mention --force: {error}");
+        // The commented file is untouched.
+        let text = std::fs::read_to_string(&path).expect("read back");
+        assert!(text.contains("not an object"), "refusal leaves the file alone");
     }
 
     #[test]
@@ -534,7 +558,15 @@ mod tests {
         let path = dir.path().join("opencode.json");
         std::fs::write(&path, "{\n  \"mcp\": {}\n}\n").expect("write json");
 
-        write_config_json(&path, &json!({"mcp": {"servers": {}}}), false).expect("plain rewrite");
+        write_config_set_pub(
+            &path,
+            &["mcp"],
+            &json!({"servers": {}}),
+            &json!({"mcp": {"servers": {}}}),
+            false,
+            false,
+        )
+        .expect("plain rewrite");
         assert!(std::fs::read_to_string(&path).expect("read back").contains("servers"));
     }
 
@@ -542,7 +574,8 @@ mod tests {
     fn missing_file_rewrite_needs_no_force() {
         let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
         let path = dir.path().join("nested").join("opencode.json");
-        write_config_json(&path, &json!({"mcp": {}}), false).expect("creates the config");
+        write_config_set_pub(&path, &["mcp"], &json!({}), &json!({"mcp": {}}), false, false)
+            .expect("creates the config");
         assert!(path.is_file());
     }
 }
