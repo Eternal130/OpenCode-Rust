@@ -209,6 +209,28 @@ pub enum KeyOutcome {
     Edited,
     /// Submit produced a prompt.
     Submitted(SubmittedPrompt),
+    /// The `prompt.paste` command consumed the key (D-05): the paste
+    /// handler's own `preventDefault`+`stopPropagation` parity — the
+    /// stroke never reaches the draft or lower layers.
+    Paste(PasteDisposition),
+}
+
+/// The `prompt.paste` command's event disposition. v2 binds ctrl+v as
+/// a binding OBJECT with `preventDefault: false` (config/keybind.ts:
+/// 205) — the keymap layer does NOT auto-suppress the matched event;
+/// the handler decides, calling `event?.preventDefault()` +
+/// `event?.stopPropagation()` synchronously, ONLY when the keymap
+/// handed it a real key event (prompt/index.tsx:470-492). A
+/// programmatic `keymap.dispatch("prompt.paste")` (the empty
+/// bracketed-paste path, prompt/index.tsx:1787) has no event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasteDisposition {
+    /// Key-event driven: suppressed — the terminal's default ctrl+v
+    /// (^V byte) never reaches the input, and the stroke stops here.
+    Prevented,
+    /// Dispatched without an event: nothing to prevent; the paste
+    /// command runs identically.
+    NoEvent,
 }
 
 impl Composer {
@@ -364,6 +386,25 @@ impl Composer {
     pub fn paste(&mut self, text: &str) {
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
         self.insert_text(&normalized);
+    }
+
+    /// `prompt.paste` — the ctrl+v COMMAND (D-05 object-binding
+    /// semantics). The keymap binds ctrl+v with `preventDefault:
+    /// false` and leaves suppression to this handler: with a key
+    /// event the stroke is consumed here (the terminal default and
+    /// every lower layer skipped); without one (programmatic
+    /// dispatch) nothing is prevented and the command still runs.
+    /// The port's clipboard READ seam is out of scope (clipboard.rs
+    /// writes only), so the enqueue arm of v2's `enqueuePaste`
+    /// inserts nothing by itself — bracketed-paste text lands through
+    /// [`Self::paste`] (the `onPaste` path, prompt/index.tsx:1786-
+    /// 1802).
+    pub fn prompt_paste(&mut self, from_event: bool) -> KeyOutcome {
+        KeyOutcome::Paste(if from_event {
+            PasteDisposition::Prevented
+        } else {
+            PasteDisposition::NoEvent
+        })
     }
 
     /// Left/right by one cluster.
@@ -544,11 +585,15 @@ impl Composer {
                 self.clear();
                 KeyOutcome::Edited
             }
+            // `prompt.paste`: the ctrl+v stroke resolves as the paste
+            // COMMAND with an event — suppressed at the handler (the
+            // ^V byte never inserts).
+            ComposerKey::CtrlV => self.prompt_paste(true),
             ComposerKey::Escape => {
                 self.autocomplete.close();
                 KeyOutcome::Ignored
             }
-            _ => KeyOutcome::Ignored,
+            ComposerKey::Tab => KeyOutcome::Ignored,
         }
     }
 
@@ -708,6 +753,31 @@ mod tests {
         let mut state = Composer::default();
         state.paste("a\r\nb\rc");
         assert_eq!(state.draft.text, "a\nb\nc");
+    }
+
+    /// D-05 — `input_paste` preventDefault object semantics: the
+    /// ctrl+v STROKE resolves as the paste command WITH an event —
+    /// suppressed at the handler (nothing inserts; the ^V byte never
+    /// reaches the draft), while a programmatic dispatch carries no
+    /// event to prevent. Both run the same command.
+    #[test]
+    fn prompt_paste_prevents_the_key_event_but_not_a_dispatch() {
+        let mut state = Composer::default();
+        state.set(PromptDraft { text: "draft".into(), ..PromptDraft::default() });
+        // The stroke (handle_key / the keymap layer handing the event
+        // over): consumed + prevented.
+        assert_eq!(
+            state.handle_key(&ComposerKey::CtrlV),
+            KeyOutcome::Paste(PasteDisposition::Prevented)
+        );
+        assert_eq!(state.draft.text, "draft", "suppressed — no ^V inserted");
+        // The dispatch path (keymap.dispatch("prompt.paste") — the
+        // empty-bracketed-paste arm): no event, no prevention.
+        assert_eq!(state.prompt_paste(false), KeyOutcome::Paste(PasteDisposition::NoEvent));
+        assert_eq!(state.draft.text, "draft");
+        // Bracketed paste (the onPaste path) still inserts text.
+        state.paste("pasted");
+        assert_eq!(state.draft.text, "draftpasted");
     }
 
     #[test]

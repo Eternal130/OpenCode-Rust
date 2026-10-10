@@ -1,0 +1,24 @@
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                          Worktrees                                                                                                esc                          
+                                                                                                                                                                
+                          Search                                                                                                                                
+                                                                                                                                                                
+                          Current                                                                                                                               
+                        ● ~/project                                                                                                                             
+                                                                                                                                                                
+                          Other                                                                                                                                 
+                          ~/.worktrees/feat-a                                                                                                                   
+                                                                                                                                                                
+                          move ctrl+m  new ctrl+a  delete ctrl+d  refresh ctrl+r                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                

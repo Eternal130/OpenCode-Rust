@@ -334,11 +334,23 @@ impl App {
     fn submit_rename(&mut self, value: &str) {
         let dialogs = self.store.dialogs();
         if let Some(entry) = dialogs.last() {
-            if let crate::store::DialogKind::SessionRename { session_id } = &entry.kind {
-                let session_id = session_id.clone();
-                if !value.is_empty() {
-                    self.store.open_tab(&session_id, Some(value.to_owned()));
+            match &entry.kind {
+                crate::store::DialogKind::SessionRename { session_id } => {
+                    let session_id = session_id.clone();
+                    if !value.is_empty() {
+                        self.store.open_tab(&session_id, Some(value.to_owned()));
+                    }
                 }
+                // `DialogWorktreeName`'s enter (`confirm()`): slugify
+                // (empty → generated), fire `worktree.create` — the
+                // created directory lands through the event loop
+                // (`apply_worktree_created`).
+                crate::store::DialogKind::WorktreeName => {
+                    let seed =
+                        value.chars().map(|ch| u64::from(ch as u32)).fold(0u64, u64::wrapping_add);
+                    self.store.worktree_create_from_name(value, seed);
+                }
+                _ => {}
             }
         }
         self.store.clear_dialogs();
@@ -835,6 +847,202 @@ pub enum ServerListEvent {
     Agents(Result<Vec<crate::store::ServerAgent>, String>),
 }
 
+/// One `worktree.list` call mapped into the dialog's row type.
+async fn fetch_worktree_list(
+    client: &oc_client::Client,
+    project_id: &str,
+) -> Result<Vec<crate::components::dialog_worktrees::WorktreeEntry>, String> {
+    client
+        .worktree()
+        .list(&oc_client::types::WorktreeListQuery { project_id: project_id.to_owned() })
+        .await
+        .map(|directories| {
+            directories
+                .iter()
+                .map(|entry| crate::components::dialog_worktrees::WorktreeEntry {
+                    directory: entry.directory.clone(),
+                    strategy: entry.strategy.clone(),
+                })
+                .collect()
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// The worktree worker's requests (the sink → the spawned task).
+#[derive(Debug)]
+enum WorktreeRequest {
+    List(String),
+    Refresh(String),
+    Create { project_id: String, name: String },
+    Remove { project_id: String, directory: String, force: bool },
+    MoveSession { session_id: String, directory: String },
+}
+
+/// The worktree worker's events (the spawned task → the pump → the
+/// store's worktree setters).
+#[derive(Debug)]
+pub enum WorktreeEvent {
+    /// Boot project resolution (`projectID` + the current checkout).
+    Resolved { project_id: String, current: Option<String> },
+    /// A `worktree.list` result.
+    Listed(Result<Vec<crate::components::dialog_worktrees::WorktreeEntry>, String>),
+    /// A `worktree.create` result (the new directory).
+    Created(Result<String, String>),
+    /// A `worktree.remove` result; the error pair carries
+    /// (message, forceRequired).
+    RemoveResult { directory: String, result: Result<(), (String, bool)> },
+}
+
+/// The Worktrees dialog's production seam: a spawned worker owning
+/// the oc-client calls (the dialog actions send requests; results
+/// arrive as [`WorktreeEvent`]s the pump applies to the store —
+/// mirroring v2's SSE `worktree.updated` refetch flow).
+fn spawn_worktree_worker(
+    client: oc_client::Client,
+    cwd: String,
+) -> (tokio::sync::mpsc::Sender<WorktreeRequest>, tokio::sync::mpsc::Receiver<WorktreeEvent>) {
+    let (req_tx, mut req_rx) = tokio::sync::mpsc::channel::<WorktreeRequest>(16);
+    let (tx, rx) = tokio::sync::mpsc::channel::<WorktreeEvent>(16);
+    tokio::spawn(async move {
+        // Boot: resolve the project (v2 goes through the location
+        // service; the port matches the cwd beneath a project
+        // `canonical`, else the first project).
+        let project = client.project().list().await.ok().and_then(|projects| {
+            projects
+                .iter()
+                .find(|project| {
+                    crate::components::dialog_worktrees::contains(&project.canonical, &cwd)
+                })
+                .or_else(|| projects.first())
+                .cloned()
+        });
+        let Some(project) = project else { return };
+        let _ = tx
+            .send(WorktreeEvent::Resolved {
+                project_id: project.id.clone(),
+                current: Some(project.canonical.clone()),
+            })
+            .await;
+        let list = fetch_worktree_list(&client, &project.id).await;
+        let _ = tx.send(WorktreeEvent::Listed(list)).await;
+
+        while let Some(request) = req_rx.recv().await {
+            match request {
+                WorktreeRequest::List(project_id) => {
+                    let list = fetch_worktree_list(&client, &project_id).await;
+                    let _ = tx.send(WorktreeEvent::Listed(list)).await;
+                }
+                WorktreeRequest::Refresh(project_id) => {
+                    let _ = client
+                        .worktree()
+                        .refresh(&oc_client::types::WorktreeRefreshBody {
+                            project_id: project_id.clone(),
+                        })
+                        .await;
+                    let list = fetch_worktree_list(&client, &project_id).await;
+                    let _ = tx.send(WorktreeEvent::Listed(list)).await;
+                }
+                WorktreeRequest::Create { project_id, name } => {
+                    let result = client
+                        .worktree()
+                        .create(&oc_client::types::WorktreeCreateInput {
+                            project_id,
+                            name: Some(name),
+                            ..Default::default()
+                        })
+                        .await
+                        .map(|info| info.directory)
+                        .map_err(|error| error.to_string());
+                    let _ = tx.send(WorktreeEvent::Created(result)).await;
+                }
+                WorktreeRequest::Remove { project_id, directory, force } => {
+                    let result = client
+                        .worktree()
+                        .remove(&oc_client::types::WorktreeRemoveInput {
+                            project_id,
+                            directory: directory.clone(),
+                            force,
+                        })
+                        .await
+                        .map_err(|error| {
+                            let force_required = match &error {
+                                oc_client::ClientError::Api { fields, .. } => {
+                                    fields.get("forceRequired").and_then(serde_json::Value::as_bool)
+                                        == Some(true)
+                                        || fields
+                                            .get("data")
+                                            .and_then(|data| data.get("forceRequired"))
+                                            .and_then(serde_json::Value::as_bool)
+                                            == Some(true)
+                                }
+                                _ => false,
+                            };
+                            (error.to_string(), force_required)
+                        });
+                    let _ = tx.send(WorktreeEvent::RemoveResult { directory, result }).await;
+                }
+                WorktreeRequest::MoveSession { session_id, directory } => {
+                    // `session.move` POST — failures log (v2 toasts
+                    // through `catch(toast.error)`; the port's move
+                    // result needs no dialog state).
+                    if let Err(error) = client
+                        .session()
+                        .move_(
+                            &session_id,
+                            &oc_client::types::SessionMoveBody {
+                                directory: directory.clone(),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                    {
+                        crate::keymap::log_skip(&format!("session move: {error}"));
+                    }
+                }
+            }
+        }
+    });
+    (req_tx, rx)
+}
+
+/// The production worktree sink: dialog actions become worker
+/// requests (fire-and-forget; results arrive as events).
+struct HttpWorktreeSink {
+    tx: tokio::sync::mpsc::Sender<WorktreeRequest>,
+}
+
+impl crate::store::WorktreeSink for HttpWorktreeSink {
+    fn list(&self, project_id: &str) {
+        let _ = self.tx.blocking_send(WorktreeRequest::List(project_id.to_owned()));
+    }
+
+    fn refresh(&self, project_id: &str) {
+        let _ = self.tx.blocking_send(WorktreeRequest::Refresh(project_id.to_owned()));
+    }
+
+    fn create(&self, project_id: &str, name: &str) {
+        let _ = self.tx.blocking_send(WorktreeRequest::Create {
+            project_id: project_id.to_owned(),
+            name: name.to_owned(),
+        });
+    }
+
+    fn remove(&self, project_id: &str, directory: &str, force: bool) {
+        let _ = self.tx.blocking_send(WorktreeRequest::Remove {
+            project_id: project_id.to_owned(),
+            directory: directory.to_owned(),
+            force,
+        });
+    }
+
+    fn move_session(&self, session_id: &str, directory: &str) {
+        let _ = self.tx.blocking_send(WorktreeRequest::MoveSession {
+            session_id: session_id.to_owned(),
+            directory: directory.to_owned(),
+        });
+    }
+}
+
 /// Fetch the picker lists once against the resolved server
 /// (`model.list` + `provider.list` + `agent.list`; failures land as
 /// the picker's error state, never a crash).
@@ -876,6 +1084,7 @@ pub fn spawn_server_lists(
                         free: !model.cost.is_empty() && model.cost.iter().all(|c| c.input == 0.0),
                         deprecated: model.status == oc_client::types::ModelInfoStatus::Deprecated,
                         variants: model.variants.iter().map(|variant| variant.id.clone()).collect(),
+                        released: model.time.released,
                     })
                     .collect();
                 let providers = providers
@@ -1206,6 +1415,14 @@ pub async fn run_with_size(
     // Server-backed picker lists (model/provider/agent).
     let (mut list_rx, lists_task) = spawn_server_lists(client.clone());
 
+    // The Worktrees dialog's worker (R-05): boot resolves the project
+    // + list; dialog actions flow through the sink.
+    let (worktree_tx, mut worktree_rx) = spawn_worktree_worker(
+        client.clone(),
+        std::env::current_dir().map(|path| path.to_string_lossy().into_owned()).unwrap_or_default(),
+    );
+    app.store.set_worktree_sink(std::rc::Rc::new(HttpWorktreeSink { tx: worktree_tx }));
+
     // Tabs persistence (v2's useStorage contract — see storage.rs):
     // restore on boot, save on change. The home selection stages with
     // the created session (open + commit the staged pick). The boot
@@ -1370,6 +1587,44 @@ pub async fn run_with_size(
                 ServerListEvent::Agents(Err(error)) => {
                     app.store.set_agents(crate::store::ListState::Failed(error));
                 }
+            }
+        }
+        // Drain the worktree worker (R-05): project resolution, list
+        // refreshes, create/remove results — v2's `worktree.updated`
+        // SSE refetch flow, port-side.
+        while let Ok(event) = worktree_rx.try_recv() {
+            match event {
+                WorktreeEvent::Resolved { project_id, current } => {
+                    app.store.set_worktree_project(&project_id, current.as_deref());
+                }
+                WorktreeEvent::Listed(Ok(rows)) => {
+                    app.store.set_worktree_list(crate::store::ListState::Loaded(rows));
+                }
+                WorktreeEvent::Listed(Err(error)) => {
+                    app.store.set_worktree_list(crate::store::ListState::Failed(error));
+                }
+                WorktreeEvent::Created(Ok(directory)) => {
+                    app.store.apply_worktree_created(&directory);
+                }
+                WorktreeEvent::Created(Err(error)) => {
+                    app.store.toast_show(crate::components::toast::ToastOptions {
+                        title: Some("Creating workspace failed".to_owned()),
+                        message: error,
+                        variant: "error",
+                        duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
+                        action_label: None,
+                    });
+                }
+                WorktreeEvent::RemoveResult { directory, result } => match result {
+                    Ok(()) => app.store.apply_worktree_removed(&directory),
+                    Err((message, force_required)) => {
+                        app.store.apply_worktree_remove_failed(
+                            &directory,
+                            &message,
+                            force_required,
+                        );
+                    }
+                },
             }
         }
         // Drain the prompt-sink events (home submissions creating
@@ -1726,6 +1981,7 @@ mod tests {
                     free: true,
                     deprecated: false,
                     variants: Vec::new(),
+                    released: 0.0,
                 },
                 crate::store::ServerModel {
                     provider_id: "opencode".into(),
@@ -1735,6 +1991,7 @@ mod tests {
                     free: true,
                     deprecated: false,
                     variants: Vec::new(),
+                    released: 0.0,
                 },
             ]),
             vec![crate::store::ServerProvider { id: "opencode".into(), name: "OpenCode".into() }],
@@ -1875,6 +2132,7 @@ mod tests {
                 free: false,
                 deprecated: false,
                 variants: Vec::new(),
+                released: 0.0,
             }]),
             Vec::new(),
         );

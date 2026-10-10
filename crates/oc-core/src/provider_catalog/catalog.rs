@@ -92,6 +92,25 @@ impl Catalog {
     pub fn model(&self, provider_id: &str, model_id: &str) -> Option<&schema_model::Info> {
         self.provider(provider_id)?.models.iter().find(|model| model.id.as_str() == model_id)
     }
+
+    /// The flattened catalog pairs **stable-sorted by `time.released`
+    /// descending** — v2's `all` list (`packages/core/src/model.ts:
+    /// 218-220`), the order `GET /api/model` serves
+    /// (`models.available()` filters `all`, never re-sorts). Ties keep
+    /// the provider-id/source iteration order (JS `toSorted` is
+    /// stable; so is `sort_by`).
+    #[must_use]
+    pub fn flat_models_by_release(&self) -> Vec<(&Snapshot, &schema_model::Info)> {
+        let mut pairs: Vec<(&Snapshot, &schema_model::Info)> = self
+            .providers
+            .iter()
+            .flat_map(|snapshot| snapshot.models.iter().map(move |model| (snapshot, model)))
+            .collect();
+        pairs.sort_by(|(_, left), (_, right)| {
+            right.time.released.0.total_cmp(&left.time.released.0)
+        });
+        pairs
+    }
 }
 
 // -- normalization (models-dev.ts) --------------------------------------------
@@ -422,6 +441,44 @@ mod tests {
         // 8390 models + 105 experimental modes).
         assert_eq!(catalog.provider_count(), 226);
         assert_eq!(catalog.model_count(), 8495);
+    }
+
+    /// D-05: the flat list is released-descending (model.ts:218-220 —
+    /// the `GET /api/model` wire order), stable on ties.
+    #[test]
+    fn provider_catalog_flat_models_sort_by_release_descending() {
+        let catalog = Catalog::embedded();
+        let flat = catalog.flat_models_by_release();
+        assert_eq!(flat.len(), catalog.model_count(), "every model exactly once");
+        let mut prev = f64::INFINITY;
+        for (_, model) in &flat {
+            assert!(
+                model.time.released.0 <= prev,
+                "released descending: {} after {prev}",
+                model.time.released.0
+            );
+            prev = model.time.released.0;
+        }
+    }
+
+    /// The sort is stable: equal release dates keep provider-grouped
+    /// source order (JS `toSorted` stability parity).
+    #[test]
+    fn provider_catalog_flat_models_sort_is_stable_on_ties() {
+        let text = r#"{
+            "a": {"id": "a", "name": "A", "models": {
+                "old-a": {"id": "old-a", "name": "Old A", "release_date": "2024-01-01", "limit": {"context": 1, "output": 1}},
+                "same-a": {"id": "same-a", "name": "Same A", "release_date": "2024-06-01", "limit": {"context": 1, "output": 1}}
+            }},
+            "b": {"id": "b", "name": "B", "models": {
+                "same-b": {"id": "same-b", "name": "Same B", "release_date": "2024-06-01", "limit": {"context": 1, "output": 1}},
+                "new-b": {"id": "new-b", "name": "New B", "release_date": "2025-01-01", "limit": {"context": 1, "output": 1}}
+            }}
+        }"#;
+        let catalog = Catalog::parse(text).expect("valid catalog");
+        let names: Vec<String> =
+            catalog.flat_models_by_release().into_iter().map(|(_, m)| m.name.clone()).collect();
+        assert_eq!(names, vec!["New B", "Same A", "Same B", "Old A"]);
     }
 
     #[test]
