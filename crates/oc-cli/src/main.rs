@@ -4,6 +4,7 @@
 mod acp;
 mod cli;
 mod handlers;
+mod mini;
 mod run;
 mod run_ui;
 mod services;
@@ -98,7 +99,34 @@ async fn dispatch(cli: Cli) -> i32 {
             };
             handlers::stats::run(&flags, &server).await
         }
-        Some(Commands::Mini { .. }) => handlers::misc::mini(),
+        Some(Commands::Mini {
+            continue_,
+            session,
+            fork,
+            replay,
+            mini_no_replay,
+            replay_limit,
+            model,
+            agent,
+            prompt,
+            demo,
+        }) => {
+            let input = mini::MiniInput {
+                continue_,
+                session,
+                fork,
+                model,
+                agent,
+                prompt,
+                // v2: `input.replay ?? resolved.mini?.replay ?? true`
+                // (`handlers/mini.ts:37`) — default ON, `--no-replay`
+                // flips it (the `overrides_with` negation pair).
+                replay: replay && !mini_no_replay,
+                replay_limit,
+                demo,
+            };
+            handlers::misc::mini(input, &server).await
+        }
         Some(Commands::Run {
             message,
             continue_,

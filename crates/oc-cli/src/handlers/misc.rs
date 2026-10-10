@@ -155,10 +155,11 @@ pub async fn acp() -> i32 {
     crate::acp::run().await
 }
 
-/// `opencode mini` — REGISTERED interim (phase 8).
-pub fn mini() -> i32 {
-    eprintln!("Error: mini is not yet ported (phase 8)");
-    1
+/// `opencode mini` — the split-footer interactive frontend (R-02):
+/// [`crate::mini::run_mini`] (the `runMini` port) over the resolved
+/// server endpoint.
+pub async fn mini(input: crate::mini::MiniInput, server: &crate::cli::ServerParams) -> i32 {
+    crate::mini::run_mini(input, server).await
 }
 
 /// `opencode models` — `provider/model` lines, sorted.

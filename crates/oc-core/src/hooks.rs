@@ -690,6 +690,7 @@ macro_rules! oc_hook_points {
                 }
 
                 #[doc = concat!("Dispatch `", $key, "`: sequential in registration order, `&mut` event chaining, returns the final value.")]
+                #[allow(clippy::result_large_err, reason = "HookError is the shared wire error type")]
                 pub async fn $dispatch(&self, mut event: $event) -> Result<$event, HookError> {
                     let provider = event.hook_provider();
                     let handlers = {
@@ -1515,6 +1516,8 @@ mod tests {
     // The `assert!(x.is_empty())` spelling reads better than the lint's
     // suggested `assert_eq!(x, [])` form.
     #![allow(clippy::assert_is_empty)]
+    // The fn_hook test closures all return the shared wire error type.
+    #![allow(clippy::result_large_err)]
 
     use super::*;
     use oc_schema::id::{ModelId, ProviderId};
