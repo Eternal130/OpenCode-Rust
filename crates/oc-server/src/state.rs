@@ -60,9 +60,13 @@ pub struct AppState {
     pub tickets: DashMap<String, TicketEntry>,
     /// CORS origins allowed beyond the default same-origin policy.
     pub cors_origins: Vec<String>,
-    /// Embedded web assets (filename -> brotli bytes); empty map = API-only
-    /// until Phase 10 packaging embeds the reference-built app/dist.
-    pub assets: dashmap::DashMap<String, Vec<u8>>,
+    /// Web-UI assets (path -> bytes). Directly-inserted entries (tests)
+    /// shadow the installed [`crate::app_archive::AppArchive`], which
+    /// decompresses its brotli entries on demand through a bounded
+    /// cache. Empty store = API-only binary (no archive embedded at
+    /// build time nor overridden via `OPENCODE_APP_ASSETS`) — the
+    /// default for every dev/test build (R-04).
+    pub assets: crate::app_archive::AssetStore,
     /// Global tmp path reported by /api/info.
     pub tmp_dir: PathBuf,
     /// The PTY machine (bus-backed; v2 mounts it in the route builder's
@@ -111,7 +115,7 @@ impl AppState {
             pairing: DashMap::new(),
             tickets: DashMap::new(),
             cors_origins: Vec::new(),
-            assets: dashmap::DashMap::new(),
+            assets: crate::app_archive::AssetStore::new(),
             tmp_dir,
             pty,
             persistent_pty,
