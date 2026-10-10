@@ -150,6 +150,41 @@ struct SessionTarget {
     resume: bool,
 }
 
+/// The mini-facing re-export of the target resolver: `run`'s
+/// [`resolve_session_target`] over the mini flag surface (`runMini`
+/// shares `resolveSessionTarget` with the run command,
+/// `mini.ts:51-61`). Returns the session id / title / directory /
+/// model / agent and whether the session resumed.
+pub async fn resolve_mini_session_target(
+    client: &Client,
+    input: &RunInput,
+    directory: &str,
+) -> Result<MiniSessionTarget, String> {
+    let target = resolve_session_target(client, input, directory, None).await?;
+    let model_label =
+        target.model.as_ref().map(|model| format!("{}/{}", model.provider_id, model.id));
+    Ok(MiniSessionTarget {
+        session_id: target.session.id,
+        session_title: target.session.title,
+        directory: target.directory,
+        model_label,
+        agent: target.agent,
+        resume: target.resume,
+    })
+}
+
+/// The resolved target the mini frontend consumes
+/// (`ResolvedSession`, `tui/mini/runtime.ts:104-113`).
+#[derive(Debug, Clone, Default)]
+pub struct MiniSessionTarget {
+    pub session_id: String,
+    pub session_title: Option<String>,
+    pub directory: String,
+    pub model_label: Option<String>,
+    pub agent: Option<String>,
+    pub resume: bool,
+}
+
 fn client_error(error: &oc_client::ClientError) -> String {
     util::error_message(&error.to_string())
 }

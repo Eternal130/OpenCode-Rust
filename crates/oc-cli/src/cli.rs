@@ -194,8 +194,12 @@ pub enum Commands {
         #[arg(long)]
         fork: bool,
         /// Restore session history on resume and resize (disable with --no-replay)
-        #[arg(long, action = ArgAction::Set, default_value_t = true)]
+        #[arg(long, default_value_t = true, overrides_with = "mini_no_replay")]
         replay: bool,
+        /// `--no-replay` (v2 `Flag.boolean("replay").optional`'s
+        /// negation form).
+        #[arg(long = "no-replay", hide = true)]
+        mini_no_replay: bool,
         /// Limit replay to the newest N messages (default: 200)
         #[arg(long)]
         replay_limit: Option<u32>,

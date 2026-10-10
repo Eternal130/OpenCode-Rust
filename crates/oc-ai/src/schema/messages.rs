@@ -403,6 +403,7 @@ pub struct ToolNamespace {
 /// A flat tool or a namespace (port of `ToolEntry`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[allow(clippy::large_enum_variant)] // the wire shape mirrors v2's union
 pub enum ToolEntry {
     #[serde(rename = "tool")]
     Definition(ToolDefinition),
