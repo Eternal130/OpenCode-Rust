@@ -53,7 +53,9 @@ PORT_REPORT §3):
   `opencode-rust v2.0.24` — the binary-name divergence is registered
   (see "Identity" above); the version STRING itself is unchanged.
 * `crates/oc-cli/build.rs` additionally stamps the git short hash +
-  compilation profile for the hidden `--version-rust` flag.
+  compilation profile for the hidden `--version-rust` flag, plus
+  `OC_RELEASE_TAG` (the release workflow's git tag, `"dev"` locally)
+  — the update channel's release identity.
 * Never report a TS-stream version (`2.0.25+`) — see the upgrade
   policy below.
 
@@ -77,33 +79,107 @@ Install destination `~/.opencode/bin/opencode-rust`, mode 755, PATH hint
 written to the detected shell rc (zsh/bash/fish/ash/sh lists identical
 to v2), `$GITHUB_PATH` appended in Actions.
 
-## `opencode-rust upgrade` / `opencode-rust uninstall` (real, Phase 10)
+## `opencode-rust upgrade` / `opencode-rust uninstall` (real, Phase 10 + lane C)
 
-* **Auto-update stays default-OFF** (oracle gate 1 / incident-era
-  decision): the Rust port ships no background update loop. Only the
-  explicit `opencode-rust upgrade` ever replaces the binary; the default
-  invocation (no target) reports "already installed" and says so.
+* **Update channel (lane C)**: `opencode-rust upgrade` with NO target
+  queries the port's own GitHub releases feed and installs the newest
+  channel-eligible release (see "Update channel" below). A
+  policy-driven background checker (`update: disable|notify|auto`)
+  announces or auto-installs; the failure-isolation contract — network
+  failures NEVER affect program operation — is a hard requirement of
+  the lane. Source/dev builds (`RELEASE_TAG == "dev"`) are told they
+  are source builds and skipped cleanly.
 * Methods (`--method`):
   * `local-file` *(Rust-port extension, real)* — target is a path to a
     binary / tar.gz / zip on disk; payload extracted, staged, and
     atomically renamed over the running binary (unix self-replace;
-    mode 755).
-  * `github` *(wired, network-optional)* — downloads
-    `$OPENCODE_RELEASE_URL` (with `{version}`/`{target}` placeholders),
-    extracts, replaces. Without the env it is a clean typed error — it
-    will NOT fall back to opencode.ai (TS-stream protection).
+    mode 755). No network, no checksum requirement (offline installs).
+  * `github` *(wired, network-optional)* — with an explicit target,
+    downloads `$OPENCODE_RELEASE_URL` (with `{version}`/`{target}`
+    placeholders), verifies against the `<url>.sha256` sidecar when
+    one is reachable, extracts, replaces. Without the env it is a
+    clean typed error — it will NOT fall back to opencode.ai
+    (TS-stream protection).
   * `curl` — auto-detected when the running binary IS
     `~/.opencode/bin/opencode-rust`; behaves as `github` (same env).
   * `brew` — detected under a Cellar prefix; errors with the
     `brew upgrade opencode` guidance.
   * `npm`/`pnpm`/`bun`/`yarn`/`vp` — typed error: those streams carry
     TS releases this port must not adopt.
+* Extraction accepts the `package/opencode-rust` member (lane B
+  naming, what the release tarballs carry) with legacy `opencode`
+  kept as a fallback for the beta.1-era tarballs, plus zip and
+  raw-binary artifacts.
 * `uninstall` (v2 flag surface: `--keep-config`, `--keep-data`,
   `--dry-run`, `--force`): stops every `service*.json` registration
   (safekill path), removes data/cache/state (+config unless kept),
   cleans the `~/.opencode/bin` PATH lines from shell configs, then
   self-unlinks the binary. Non-TTY without `--force` errors with v2's
   `requireInteractive` message.
+
+## Update channel (lane C)
+
+**Feed**: `https://api.github.com/repos/Eternal130/OpenCode-Rust/releases`
+(`?per_page=20`, `User-Agent: opencode-rust-updater`,
+`Accept: application/vnd.github+json`). The feed is the DEFAULT for
+`upgrade` with no target and for the background checker;
+`OPENCODE_RELEASE_URL` keeps overriding the explicit-target download
+path exactly as before (tests/harness depend on it).
+
+**Release identity**: `build.rs` stamps `OC_RELEASE_TAG` (the release
+workflow sets it to `github.ref_name`); local/source builds get
+`"dev"` and NEVER touch the network for updates. `--version-rust`
+appends `, release <tag>` for stamped builds.
+
+**Channel rule**: a build from a beta tag (`v2.0.24.beta.1`) sees ALL
+releases (betas + finals); a build from a final tag sees only
+`prerelease == false` releases. Tags parse as
+`v?(\d+)\.(\d+)\.(\d+)(?:\.beta\.(\d+))?`; final > beta for the same
+triple, betas order numerically. Unparseable tags and releases
+without the expected asset (`opencode-<version>-linux-x64.tar.gz`,
+target a constant for now) are never candidates. GitHub 403/429 rate
+limits read as "no update", not an error.
+
+**sha256 policy**: every feed-driven install (manual latest AND
+`update: auto`) REQUIRES the `.sha256` sidecar (the tarball asset URL
++ `.sha256`, `sha256sum` two-space format, case-insensitive) and
+refuses on mismatch or unreachable sidecar — all-or-nothing: download
+→ verify → extract → atomic sibling-rename. The one exception is the
+EXPLICIT-target `github`/`curl` path, which keeps its pre-lane-C
+contract (verify when a sidecar is reachable, proceed with a note
+when not) so offline/harness installs against a bare tarball keep
+working.
+
+**Config** (`update` field, v2 semantics, in the global
+`opencode.json(c)` / legacy `config.json`):
+
+* `"disable"` — never check.
+* `"notify"` *(default when unset)* — check and announce.
+* `"auto"` — check and install (verified), announce the result.
+
+The legacy v1 `autoupdate` key maps the same way as oc-core's
+normalize (`false`→disable, `true`→auto, `"notify"`→notify).
+`OPENCODE_DISABLE_AUTOUPDATE` (any truthy value: `1`, `true`, …)
+forces disable above everything.
+
+**Announcement channels**: `notify`/`auto` messages go to stderr once
+per detected version — except inside the TUI, where they are appended
+to `~/.local/state/opencode-rust/update-notice.log` instead (printing
+over the TUI screen would corrupt it). The background checker runs
+only for the long-running entry points (default/TUI and `serve`), on
+a single detached thread, re-checking every 10 minutes.
+
+**Failure isolation (hard requirement)**: the background check never
+adds boot latency and never affects operation. Feed requests are
+bounded (5 s connect / 15 s total, one retry after 2 s); ANY failure —
+DNS, connect refused, TLS garbage, HTTP error, parse error, rate
+limit — is a silent no-op (no stderr noise, no exit-code impact, no
+panic — the thread body is `catch_unwind`-wrapped). Repeated failures
+accumulate nothing: one thread, fixed resources, PID-unique
+`update-download-*` temps under the cache dir cleaned on failure and
+swept on the next run. The explicit `opencode-rust upgrade` command
+is the exception: it reports the network error clearly and exits
+non-zero, with the installed binary untouched.
 
 ## Bun handling (the plugin runtime dependency)
 
@@ -179,7 +255,9 @@ The repo ships two workflows:
   box pre-creates it, runners do not). Toolchain pinned via
   `rust-toolchain.toml` (1.99.0 = the version every gate ran on).
 - **`.github/workflows/release.yml`** — tag-triggered (`v*`): builds
-  `cargo build --release -p oc-cli --locked` on `ubuntu-latest`, packages
+  `cargo build --release -p oc-cli --locked` (with
+  `OC_RELEASE_TAG=${{ github.ref_name }}` stamped for the update
+  channel) on `ubuntu-latest`, packages
   `opencode-<version>-linux-x64.tar.gz` (a `package/opencode-rust` member — the
   layout the installer and `opencode-rust upgrade` accept) plus the
   `sha256sum`-format sidecar, smoke-tests the packaged binary

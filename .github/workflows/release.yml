@@ -23,6 +23,11 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release -p oc-cli --locked
+        env:
+          # Stamps the update channel's release identity (lane C):
+          # the built binary knows which tag it came from and can
+          # compare itself against the releases feed.
+          OC_RELEASE_TAG: ${{ github.ref_name }}
 
       - name: Package tarball + sha256 sidecar
         run: |
