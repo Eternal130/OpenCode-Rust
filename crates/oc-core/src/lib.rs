@@ -16,6 +16,7 @@ pub mod location_services;
 pub mod mcp;
 pub mod permission;
 pub mod persistent_pty;
+pub mod plugin_apply;
 pub mod project;
 pub mod provider_catalog;
 pub mod pty;
