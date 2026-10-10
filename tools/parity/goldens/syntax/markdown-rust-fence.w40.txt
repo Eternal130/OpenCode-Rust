@@ -1,0 +1,28 @@
+StyledSpan { text: "// greet the user", style: Style::new().fg(Color::Rgb(128, 128, 128)).bg(Color::Rgb(10, 10, 10)).italic() }
+--
+StyledSpan { text: "fn", style: Style::new().fg(Color::Rgb(157, 124, 216)).bg(Color::Rgb(10, 10, 10)).italic() }
+StyledSpan { text: " ", style: Style::new().fg(Color::Rgb(238, 238, 238)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: "greet", style: Style::new().fg(Color::Rgb(250, 178, 131)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: "(", style: Style::new().fg(Color::Rgb(238, 238, 238)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: "name", style: Style::new().fg(Color::Rgb(224, 108, 117)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: ":", style: Style::new().fg(Color::Rgb(86, 182, 194)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: " ", style: Style::new().fg(Color::Rgb(238, 238, 238)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: "&", style: Style::new().fg(Color::Rgb(86, 182, 194)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: "str", style: Style::new().fg(Color::Rgb(224, 108, 117)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: ") -> ", style: Style::new().fg(Color::Rgb(238, 238, 238)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: "String", style: Style::new().fg(Color::Rgb(229, 192, 123)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: " {", style: Style::new().fg(Color::Rgb(238, 238, 238)).bg(Color::Rgb(10, 10, 10)) }
+--
+StyledSpan { text: "    ", style: Style::new().fg(Color::Rgb(238, 238, 238)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: "let", style: Style::new().fg(Color::Rgb(157, 124, 216)).bg(Color::Rgb(10, 10, 10)).italic() }
+StyledSpan { text: " msg = ", style: Style::new().fg(Color::Rgb(238, 238, 238)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: "format!", style: Style::new().fg(Color::Rgb(250, 178, 131)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: "(", style: Style::new().fg(Color::Rgb(238, 238, 238)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: "\"hi {name}\"", style: Style::new().fg(Color::Rgb(127, 216, 143)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: ")", style: Style::new().fg(Color::Rgb(238, 238, 238)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: ";", style: Style::new().fg(Color::Rgb(86, 182, 194)).bg(Color::Rgb(10, 10, 10)) }
+--
+StyledSpan { text: "    msg", style: Style::new().fg(Color::Rgb(238, 238, 238)).bg(Color::Rgb(10, 10, 10)) }
+--
+StyledSpan { text: "}", style: Style::new().fg(Color::Rgb(238, 238, 238)).bg(Color::Rgb(10, 10, 10)) }
+--

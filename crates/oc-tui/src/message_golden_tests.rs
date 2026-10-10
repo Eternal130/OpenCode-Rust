@@ -195,6 +195,58 @@ fn assert_ansi_byte_match(id: &str, width: usize, frame: &Frame) {
     );
 }
 
+// -- markdown rust fence (R-01 syntax spike) -------------------------------------
+
+/// The R-01 spike golden: a fenced **rust** block rendered through the
+/// oc-syntax highlight path (tree-sitter parse → per-line styled spans
+/// at v2-dark, clipped at the content width). Self-pinned through the
+/// parity golden helper — the file bootstraps on first run and
+/// `PARITY_UPDATE=1` refreshes it; reference-side ANSI parity for
+/// tree-sitter colors is follow-up work (the reference dump pipeline
+/// runs the wasm grammars host-side).
+#[test]
+fn markdown_rust_fence_golden_render() {
+    let theme = theme();
+    let source = [
+        "```rust",
+        "// greet the user",
+        "fn greet(name: &str) -> String {",
+        "    let msg = format!(\"hi {name}\");",
+        "    msg",
+        "}",
+        "```",
+    ]
+    .join("\n");
+    let lines = render_markdown(&source, 40, &MarkdownStyles::from_theme(&theme.styles()));
+    let mut rendered = String::new();
+    for line in &lines {
+        for span in &line.0 {
+            use std::fmt::Write as _;
+            let _ = writeln!(rendered, "{span:?}");
+        }
+        rendered.push_str("--\n");
+    }
+    let directory = goldens().parent().expect("goldens parent").join("syntax");
+    parity::golden::assert_bytes_in(&directory, "markdown-rust-fence.w40.txt", rendered.as_bytes())
+        .expect("rust fence golden");
+}
+
+/// Unknown filetypes must render exactly today's plain code-block lines
+/// (one base-styled span per line, clipped at the width): the unknown
+/// render is byte/style-identical to an empty-info fence, which never
+/// routes through the highlighter.
+#[test]
+fn markdown_unknown_fence_stays_plain() {
+    let theme = theme();
+    let styles = MarkdownStyles::from_theme(&theme.styles());
+    let unknown = render_markdown("```brainfuck\nlet x = \"s\";\n```", 40, &styles);
+    let plain = render_markdown("```\nlet x = \"s\";\n```", 40, &styles);
+    assert_eq!(unknown, plain, "unknown filetype renders the plain path");
+    assert_eq!(unknown.len(), 1);
+    assert_eq!(unknown[0].0.len(), 1, "one plain span: {:?}", unknown[0].0);
+    assert_eq!(unknown[0].text(), "let x = \"s\";");
+}
+
 // -- message-groups ------------------------------------------------------------
 
 // -- group-view-instructions -----------------------------------------------------
