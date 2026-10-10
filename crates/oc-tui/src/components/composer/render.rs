@@ -81,6 +81,30 @@ pub struct PromptView<'a> {
     pub footer: FooterHints,
     /// The mount's y (the golden harness pads 2 rows above the box).
     pub top: usize,
+    /// The composer rail's agent color (`borderHighlight()` at fade
+    /// alpha 1): v2 paints the left border + `╹` corner in the ACTIVE
+    /// AGENT's categorical color whenever an agent resolved — the
+    /// golden corpus (no session/agent in the state fixture) captures
+    /// the no-agent fallback `border.base`, so `None` keeps that byte
+    /// shape and the live routes pass the resolved color.
+    pub rail: Option<CellColor>,
+    /// The caret as a blinking block cursor (`input.cursorColor =
+    /// theme.text.base`): `Some(char offset)` paints it at its visual
+    /// cell; `None` paints nothing (the golden frames pin the resting
+    /// glyph-less state — the caller gates this on the blink phase).
+    pub caret: Option<usize>,
+}
+
+/// The composer cursor's blink period (`input.cursor.blinking`'s
+/// toggle): 500 ms visible / 500 ms hidden, driven by the store clock
+/// (the run loop's 100 ms tick re-renders, so no extra wake source).
+pub const CURSOR_BLINK_INTERVAL_MS: u64 = 500;
+
+/// Whether the cursor is in its visible phase at `clock_ms`
+/// (deterministic: golden harnesses inject the clock).
+#[must_use]
+pub fn cursor_blink_on(clock_ms: u64) -> bool {
+    (clock_ms / CURSOR_BLINK_INTERVAL_MS).is_multiple_of(2)
 }
 
 /// One styled fragment of a laid-out line (`chip` marks a file
@@ -98,6 +122,12 @@ enum UnitKind {
     Space,
     Word,
     BreakAnywhere,
+}
+
+impl UnitKind {
+    fn is_space(&self) -> bool {
+        matches!(self, Self::Space)
+    }
 }
 
 struct Unit {
@@ -188,6 +218,71 @@ fn draft_units(draft: &PromptDraft) -> Vec<Unit> {
         }
     }
     units
+}
+
+/// The caret's visual cell `(row, col)` for a char offset in the
+/// draft, walking the SAME unit/wrap model [`layout_draft_lines`]
+/// paints (consumed wrap spaces advance the char count without
+/// painting — the mapping re-derives the break decisions, so the
+/// cursor lands exactly where the text around it renders).
+///
+/// The wrap model here is intentionally aligned with (but simpler
+/// than) [`layout_draft_lines`]; the golden harness only pins
+/// caret-less frames, so this mapping's contract is the live cursor
+/// position (unit tests below pin the exact cells).
+#[must_use]
+pub fn caret_cell(draft: &PromptDraft, inner: usize, caret: usize) -> (usize, usize) {
+    let mut row = 0usize;
+    let mut col = 0usize;
+    let mut consumed = 0usize; // chars consumed so far (incl. newlines)
+    let mut line_width = 0usize;
+    for unit in draft_units(draft) {
+        if unit.text == "\n" {
+            if consumed >= caret {
+                break;
+            }
+            consumed += 1;
+            row += 1;
+            col = 0;
+            line_width = 0;
+            continue;
+        }
+        // The same break decision as `layout_draft_lines`: any unit
+        // that does not fit closes the current row (overwide units
+        // close it unconditionally, then hard-fill).
+        if line_width + unit.width > inner {
+            row += 1;
+            col = 0;
+            line_width = 0;
+            // A boundary SPACE is consumed by the break (not painted).
+            if unit.kind.is_space() {
+                if consumed >= caret {
+                    break;
+                }
+                consumed += 1;
+                continue;
+            }
+        }
+        // Walk the unit's chars: overwide units hard-fill row by row.
+        let mut unit_width_used = 0usize;
+        for ch in unit.text.chars() {
+            if consumed >= caret {
+                break;
+            }
+            let ch_width = display_width(&ch.to_string()).max(1);
+            if unit_width_used + ch_width > inner {
+                row += 1;
+                col = 0;
+                unit_width_used = 0;
+                line_width = 0;
+            }
+            consumed += 1;
+            col += ch_width;
+            unit_width_used += ch_width;
+            line_width += ch_width;
+        }
+    }
+    (row, col)
 }
 
 /// Lay the draft out at `inner` columns: source lines wrap
@@ -309,6 +404,7 @@ struct Palette {
     base: CellColor,
     prompt_bg: CellColor,
     border: CellColor,
+    rail: CellColor,
     text_base: CellColor,
     muted: CellColor,
     default_fg: CellColor,
@@ -320,10 +416,12 @@ struct Palette {
 
 fn palette(theme: &ThemeState) -> Palette {
     let tokens = &theme.resolved.tokens;
+    let border = cell_color(tokens.border.base);
     Palette {
         base: cell_color(tokens.background.base),
         prompt_bg: cell_color(tokens.decrease(tokens.background.raised.base, 1.0)),
-        border: cell_color(tokens.border.base),
+        rail: border,
+        border,
         text_base: cell_color(tokens.text.base),
         muted: cell_color(tokens.text.muted),
         default_fg: cell_color(Rgba { r: 255, g: 255, b: 255, a: 255 }),
@@ -342,6 +440,7 @@ pub fn render_prompt_frame(
     theme: &ThemeState,
 ) -> Frame {
     let colors = palette(theme);
+    let colors = Palette { rail: view.rail.unwrap_or(colors.border), ..colors };
     let mut frame = Frame { cells: vec![vec![Cell::default(); width]; height], width, height };
     // Page fill: the renderer's default foreground over background.base.
     for row in &mut frame.cells {
@@ -371,6 +470,19 @@ pub fn render_prompt_frame(
         width,
         height,
     );
+    // The blinking block cursor (`cursorColor = theme.text.base`):
+    // painted only when the caller resolved BOTH a caret offset and
+    // the visible blink phase.
+    if let Some(offset) = view.caret {
+        let (row, col) = caret_cell(view.draft, inner, offset);
+        if row < textarea_rows {
+            let (x, y) = (1 + pad + col, top + 1 + row);
+            if let Some(cell) = frame.cells.get_mut(y).and_then(|line| line.get_mut(x)) {
+                cell.bg = colors.text_base;
+                cell.fg = colors.prompt_bg;
+            }
+        }
+    }
     paint_footer_row(&mut frame, view, &colors, top + content_h + 1, width, height);
     if let Some(popup) = &view.autocomplete {
         paint_autocomplete_popup(&mut frame, popup, &colors, top, width, height);
@@ -396,7 +508,9 @@ fn paint_composer_box(
     let top = view.top;
     for row in top..(top + content_h).min(height) {
         let line = &mut frame.cells[row];
-        line[0] = Cell { ch: '┃', attrs: 0, fg: colors.border, bg: colors.base };
+        // The left border in `borderHighlight()` (the agent color at
+        // fade alpha 1; `border.base` while no agent resolved).
+        line[0] = Cell { ch: '┃', attrs: 0, fg: colors.rail, bg: colors.base };
         for cell in &mut line[1..] {
             cell.fg = colors.default_fg;
             cell.bg = colors.prompt_bg;
@@ -422,10 +536,12 @@ fn paint_composer_box(
             }
         }
     }
-    // Bottom transition: ╹ + ▀ row (upper-half blocks in promptBg).
+    // Bottom transition: ╹ + ▀ row (the corner in the rail color —
+    // the transition box's left border is `borderHighlight()` — and
+    // upper-half blocks in promptBg).
     if top + content_h < height {
         let row = &mut frame.cells[top + content_h];
-        row[0] = Cell { ch: '╹', attrs: 0, fg: colors.border, bg: colors.base };
+        row[0] = Cell { ch: '╹', attrs: 0, fg: colors.rail, bg: colors.base };
         for cell in &mut row[1..] {
             *cell = Cell { ch: '▀', attrs: 0, fg: colors.prompt_bg, bg: colors.base };
         }
@@ -628,6 +744,97 @@ mod tests {
 
     fn draft(text: &str) -> PromptDraft {
         PromptDraft { text: text.to_owned(), ..PromptDraft::default() }
+    }
+
+    /// The blink phase is a pure function of the injected clock: on
+    /// for the first 500 ms, off for the next 500, cycling.
+    #[test]
+    fn cursor_blink_follows_the_clock() {
+        assert!(cursor_blink_on(0), "visible at t=0 (start visible)");
+        assert!(cursor_blink_on(499));
+        assert!(!cursor_blink_on(500), "hidden in the second half-phase");
+        assert!(!cursor_blink_on(999));
+        assert!(cursor_blink_on(1000), "the phase cycles");
+        // Deterministic: the same clock always yields the same phase.
+        assert_eq!(cursor_blink_on(1234), cursor_blink_on(1234));
+    }
+
+    /// The caret lands where the surrounding text renders: within a
+    /// word, at wrap boundaries (the consumed break space), across
+    /// explicit newlines, and on an empty draft.
+    #[test]
+    fn caret_cell_tracks_the_wrap_layout() {
+        // Empty draft: the block sits at the text origin.
+        assert_eq!(caret_cell(&draft(""), 37, 0), (0, 0));
+        // Mid-word: col = chars before the caret.
+        assert_eq!(caret_cell(&draft("hello"), 37, 2), (0, 2));
+        // End of text: col = full width.
+        assert_eq!(caret_cell(&draft("hello"), 37, 5), (0, 5));
+        // A wrap that fits exactly then breaks: the boundary space is
+        // consumed by the break (layout keeps it out of both rows).
+        let wrapped = "word word word word word word word word word word";
+        let (row, col) = caret_cell(&draft(wrapped), 37, wrapped.chars().count());
+        assert_eq!(row, 1, "the tail wraps to the second row");
+        assert!(col <= 37, "col within the inner width: {col}");
+        // Explicit newline: the caret moves to the next row's start.
+        assert_eq!(caret_cell(&draft("ab\ncd"), 37, 3), (1, 0));
+        assert_eq!(caret_cell(&draft("ab\ncd"), 37, 5), (1, 2));
+    }
+
+    /// The block cursor paints ONLY when the caller passes the caret
+    /// (blink phase on): bg = `text.base` over the prompt-bg cell, fg
+    /// inverted for legibility; `None` keeps the golden bytes.
+    #[test]
+    fn frame_paints_the_blinking_block_cursor() {
+        let theme = ThemeState::v2_dark();
+        let owned = draft("hi");
+        let view = |caret: Option<usize>| PromptView {
+            draft: &owned,
+            placeholder: String::new(),
+            autocomplete: None,
+            footer: FooterHints::default(),
+            top: 0,
+            rail: None,
+            caret,
+        };
+        let with = render_prompt_frame(&view(Some(2)), 40, 8, &theme);
+        // text_x = 1 + pad(1 <44) = 2, text_y = top + 1 = 1.
+        let cell = with.cell(1, 4);
+        assert_eq!(cell.bg, CellColor::Rgb(238, 238, 238), "text.base block");
+        assert_eq!(cell.fg, CellColor::Rgb(30, 30, 30), "prompt-bg fg over the block");
+        let without = render_prompt_frame(&view(None), 40, 8, &theme);
+        assert_ne!(
+            without.cell(1, 4).bg,
+            CellColor::Rgb(238, 238, 238),
+            "no block without the caret"
+        );
+    }
+
+    /// The agent-colored rail: `rail: Some(blue)` recolors the `┃`
+    /// border and `╹` corner; `None` keeps the golden `border.base`
+    /// gray (the no-agent capture state).
+    #[test]
+    fn rail_color_follows_the_agent_override() {
+        let theme = ThemeState::v2_dark();
+        let owned = draft("");
+        let view = |rail: Option<CellColor>| PromptView {
+            draft: &owned,
+            placeholder: "Ask".into(),
+            autocomplete: None,
+            footer: FooterHints::default(),
+            top: 0,
+            rail,
+            caret: None,
+        };
+        let gray = render_prompt_frame(&view(None), 40, 8, &theme);
+        assert_eq!(gray.cell(1, 0).fg, CellColor::Rgb(72, 72, 72), "border.base fallback");
+        let blue = render_prompt_frame(&view(Some(CellColor::Rgb(92, 156, 245))), 40, 8, &theme);
+        assert_eq!(blue.cell(1, 0).fg, CellColor::Rgb(92, 156, 245), "categorical[0] rail");
+        // The ╹ corner carries the same rail color.
+        let corner_y = blue.cells.iter().rposition(|row| row[0].ch == '╹').expect("corner");
+        assert_eq!(blue.cell(corner_y, 0).fg, CellColor::Rgb(92, 156, 245));
+        // The AUTOCOMPLETE popup rails stay border.base (v2:
+        // autocomplete.tsx borderColor={theme.border.base}).
     }
 
     #[test]

@@ -23,6 +23,9 @@ taffy = { version = "0.9", default-features = false, features = ["std", "flexbox
 crossterm = "0.28"
 unicode-width = "0.2"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 parity = { path = "../../tools/parity" }
 tokio = { workspace = true }

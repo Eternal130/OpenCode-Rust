@@ -464,11 +464,16 @@ impl SelectionSink for RecordingSelectionSink {
 
 /// The store root.
 /// The composer's store slice: per-session drafts (the draft stash),
-/// the shared prompt history, and the engine prompt sink.
+/// the shared prompt history, the per-session autocomplete popup
+/// state, and the engine prompt sink.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PromptState {
     /// Drafts keyed by session (the stash `PromptRef.set` restores).
     pub drafts: std::collections::HashMap<String, PromptDraft>,
+    /// The live `/`,`@` popup state keyed by session (wave-6: survives
+    /// the composer store round-trip between keypresses).
+    pub autocomplete:
+        std::collections::HashMap<String, crate::components::composer::AutocompleteState>,
     pub history: PromptHistory,
 }
 
@@ -919,16 +924,21 @@ impl Store {
     }
 
     /// The composer editing state for a session (draft + history),
-    /// ready for the renderers and the keypress pump.
+    /// ready for the renderers and the keypress pump. The autocomplete
+    /// state (popup visibility/selection) persists per session so the
+    /// popup survives the store round-trip between keypresses.
     #[must_use]
     pub fn composer(&self, session_id: &str) -> Composer {
         let state = self.prompt.get();
         let draft = state.drafts.get(session_id).cloned().unwrap_or_default();
         let caret = draft.text.chars().count();
-        Composer { draft, caret, history: state.history, ..Composer::default() }
+        let autocomplete =
+            state.autocomplete.get(session_id).cloned().unwrap_or_else(Composer::live_autocomplete);
+        Composer { draft, caret, history: state.history, autocomplete, ..Composer::default() }
     }
 
-    /// Store a composer edit (draft + history advance together).
+    /// Store a composer edit (draft + history + autocomplete advance
+    /// together — the popup state rides the same write).
     pub fn set_composer(&self, session_id: &str, composer: &Composer) {
         self.prompt.update(|state| {
             if composer.draft.is_empty() {
@@ -936,6 +946,7 @@ impl Store {
             } else {
                 state.drafts.insert(session_id.to_owned(), composer.draft.clone());
             }
+            state.autocomplete.insert(session_id.to_owned(), composer.autocomplete.clone());
             state.history = composer.history.clone();
         });
     }
@@ -950,6 +961,7 @@ impl Store {
         }
         self.prompt.update(|state| {
             state.drafts.remove(session_id);
+            state.autocomplete.remove(session_id);
             state.history = state.history.clone().push(&draft.text);
         });
         let prompt = SubmittedPrompt { text: draft.text, files: draft.files, agents: draft.agents };
@@ -968,6 +980,26 @@ impl Store {
     /// wires the oc-client call).
     pub fn set_prompt_sink(&mut self, sink: std::rc::Rc<dyn PromptSink>) {
         self.prompt_sink = sink;
+    }
+
+    /// The composer rail's agent color (`local.agent.color(agent)`):
+    /// the active agent's index among the non-hidden server agents,
+    /// modulo the theme's categorical palette. `None` while the agent
+    /// list has not loaded (v2's `promptDisplay` keeps its previous —
+    /// initially undefined — agentColor, so the rail stays
+    /// `border.base`) or when no agent is visible.
+    #[must_use]
+    pub fn composer_rail_color(&self, session_key: &str) -> Option<ratatui::style::Color> {
+        let lists = self.server_lists();
+        let rows = lists.agents.rows()?;
+        let visible: Vec<&ServerAgent> = rows.iter().filter(|agent| !agent.hidden).collect();
+        if visible.is_empty() {
+            return None;
+        }
+        let selected = self.selection_for(session_key).agent;
+        let index =
+            selected.and_then(|id| visible.iter().position(|agent| agent.id == id)).unwrap_or(0);
+        Some(self.theme().styles().agent_color(index))
     }
 
     // -- server-backed pickers + selection (F3.i) ------------------------
@@ -1991,6 +2023,7 @@ impl Store {
                                 model,
                                 parts: Vec::new(),
                                 finish: None,
+                                error: None,
                                 time: PartTime { created, completed: None },
                             });
                         }
@@ -2092,6 +2125,7 @@ fn with_part(
             model: String::new(),
             parts: Vec::new(),
             finish: None,
+            error: None,
             time: PartTime::default(),
         });
         messages.len() - 1
@@ -2140,6 +2174,7 @@ fn with_tool_part(
             model: String::new(),
             parts: Vec::new(),
             finish: None,
+            error: None,
             time: PartTime::default(),
         });
     }
@@ -2228,6 +2263,13 @@ fn message_from_event(event: &BusEvent) -> Option<Message> {
                 model,
                 parts,
                 finish: event.string("finish"),
+                // `message.error.message` (SessionStructuredError): the
+                // `Error: …` transcript row + muted footer agent label.
+                error: event
+                    .data
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
                 time,
             })
         }
@@ -3049,6 +3091,7 @@ mod tests {
                 id: "msg_a".into(),
                 agent: "build".into(),
                 model: String::new(),
+                error: None,
                 parts: vec![Part::Text {
                     text: "final answer".into(),
                     time: PartTime { created: Some(1), completed: Some(2) },
