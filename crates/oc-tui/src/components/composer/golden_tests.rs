@@ -147,6 +147,8 @@ fn chip_composer() -> Composer {
             name: "screenshot.png".into(),
             start: text[..start].chars().count(),
             end: text[..end].chars().count(),
+            payload: None,
+            mention: Some("[Image 1]".into()),
         }],
         ..PromptDraft::default()
     });

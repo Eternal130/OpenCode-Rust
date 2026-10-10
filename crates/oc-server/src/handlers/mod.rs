@@ -28,6 +28,7 @@
 //! - `shell.rs` — shell
 
 pub mod agent;
+pub mod attachment;
 pub mod common;
 pub mod config;
 pub mod credential;
