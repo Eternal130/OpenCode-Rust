@@ -30,7 +30,9 @@
 //! * the whole footer hides below 44 cols or 12 rows, the logo below
 //!   12 rows (`homeFooterVisibility` / `Logo`).
 
-use crate::components::composer::render::{render_prompt_frame, FooterHints, PromptView};
+use crate::components::composer::render::{
+    render_prompt_frame, AutocompleteView, FooterHints, PromptView,
+};
 use crate::components::composer::PromptDraft;
 use crate::render::{Cell, CellColor, Frame};
 use crate::theme::ThemeState;
@@ -90,6 +92,16 @@ pub struct HomeView<'a> {
     /// the footer row's left, ` · `-joined, only when non-empty so
     /// every golden stays byte-exact).
     pub plugin_actions: Vec<String>,
+    /// The live slash-palette popup (`None` in the golden harness —
+    /// the fixture drafts never open it).
+    pub autocomplete: Option<AutocompleteView<'a>>,
+    /// The rail's agent color (`None` = the golden `border.base`
+    /// fallback; the live route passes the resolved categorical
+    /// color).
+    pub rail: Option<CellColor>,
+    /// The blinking block caret offset (`None` = hidden phase / golden
+    /// frames).
+    pub caret: Option<usize>,
 }
 
 /// Render the home route at `size` (the golden-pinned layout).
@@ -126,11 +138,23 @@ pub fn render_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u16)) -
         y += 4 + 1; // logo + the 1-row spacer
     }
     // The prompt mount (the composer's own frame, pinned at `top` 1
-    // for the wrapper's paddingTop).
+    // for the wrapper's paddingTop). The slash-palette popup floats
+    // ABOVE it: the prompt frame grows by `popup_rows` rows (the
+    // composer at `top = 1 + popup_rows`), pasted at
+    // `y - popup_rows` so the composer itself never moves (no popup ⇒
+    // the golden single-mount geometry).
+    let popup_rows = match view.autocomplete.as_ref() {
+        Some(popup) => crate::components::composer::autocomplete::popup_height(
+            popup.options.len(),
+            y.saturating_sub(1),
+        )
+        .min(y),
+        None => 0,
+    };
     let prompt_view = PromptView {
         draft: view.draft,
         placeholder: view.placeholder.clone(),
-        autocomplete: None,
+        autocomplete: view.autocomplete.clone(),
         footer: FooterHints {
             location: view.location.clone(),
             agent_shortcut: "shift+tab".into(),
@@ -139,10 +163,12 @@ pub fn render_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u16)) -
             status_model: view.status_model.clone(),
             plugin_hints: view.plugin_hints.clone(),
         },
-        top: 1,
+        top: 1 + popup_rows,
+        rail: view.rail,
+        caret: view.caret,
     };
-    let prompt_frame = render_prompt_frame(&prompt_view, prompt_width, mount, theme);
-    paste(&mut frame, &prompt_frame, centered(prompt_width), y);
+    let prompt_frame = render_prompt_frame(&prompt_view, prompt_width, mount + popup_rows, theme);
+    paste(&mut frame, &prompt_frame, centered(prompt_width), y - popup_rows);
 
     // The home.footer slot: pad · version · pad at h≥16, else one row.
     if show_footer {
@@ -290,6 +316,16 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
     // composer's hint row (the prompt-idle statusline).
     let (status_agent, status_model) =
         crate::components::session::composer_statusline(store, crate::app::HOME_PROMPT_KEY);
+    // The live slash-palette popup + rail + blinking caret (the golden
+    // harness leaves all three absent — its HomeView defaults).
+    let autocomplete = match composer.autocomplete.visible {
+        Some(crate::components::composer::autocomplete::Mode::Command) => Some(AutocompleteView {
+            options: &composer.autocomplete.options,
+            selected: composer.autocomplete.selected,
+            title_width: composer.autocomplete.registry.display_width(),
+        }),
+        _ => None,
+    };
     let view = HomeView {
         draft: &composer.draft,
         placeholder,
@@ -303,6 +339,10 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
             .into_iter()
             .map(|action| action.label)
             .collect(),
+        autocomplete,
+        rail: store.composer_rail_color(crate::app::HOME_PROMPT_KEY).map(CellColor::from),
+        caret: crate::components::composer::render::cursor_blink_on(store.clock())
+            .then_some(composer.caret),
     };
     let _ = theme;
     render_home_view(&view, &state, size)

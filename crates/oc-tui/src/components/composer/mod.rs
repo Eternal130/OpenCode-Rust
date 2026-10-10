@@ -212,6 +212,14 @@ pub enum KeyOutcome {
 }
 
 impl Composer {
+    /// The live popup state over the v2 slash registry (the store's
+    /// composer constructor seeds fresh sessions with it — typing `/`
+    /// opens the command palette with descriptions).
+    #[must_use]
+    pub fn live_autocomplete() -> AutocompleteState {
+        AutocompleteState::with_registry(SlashRegistry::v2())
+    }
+
     /// `PromptRef.set` — the draft-restore path (stash/undo).
     pub fn set(&mut self, draft: PromptDraft) {
         self.draft = draft;

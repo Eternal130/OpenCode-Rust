@@ -156,12 +156,14 @@ impl App {
         self.store.set_registry(registry);
         // Plugin themes ride every registry rebuild (config reload).
         self.apply_plugin_themes();
-        // Theme name + mode.
+        // Theme name + mode. v2's default follows the terminal: the
+        // mode is `lock ?? renderer.themeMode ?? props.mode` — only an
+        // explicit dark/light pin overrides the probe
+        // (context/theme.tsx:134). The probe's dark fallback covers
+        // headless/timeout boots.
         let mode = match config.theme.mode.as_deref() {
             Some("light") => Mode::Light,
-            Some("dark") => Mode::Dark,
-            Some("system") => mode_hint,
-            _ => self.store.theme().mode,
+            _ => mode_hint,
         };
         let name = config.theme.name.clone().unwrap_or_else(|| "opencode".to_owned());
         let registry = self.store.registry();
@@ -767,6 +769,20 @@ pub fn ask_permission(store: &Store, request: &PermissionRequest) {
 pub enum PromptSinkEvent {
     /// A home submission created its session (open + navigate).
     SessionCreated { session_id: String, title: Option<String> },
+    /// A send FAILED at the transport layer (server 5xx, connection
+    /// refused): v2 surfaces the error as an error toast and restores
+    /// the composer draft (`fail()` in prompt/index.tsx:1194-1198 —
+    /// the toast carries a title like "Failed to send prompt" /
+    /// "Creating a session failed" and `restoreEntry()` puts the text
+    /// back when the user has not started typing something new).
+    SendFailed {
+        /// The composer key the failed send came from.
+        session_key: String,
+        title: String,
+        message: String,
+        /// The submitted text (the restore candidate).
+        draft: String,
+    },
 }
 
 /// Server-list fetch results (the pickers' data side).
@@ -953,9 +969,9 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
         let events = self.events.clone();
         let directory = self.directory.clone();
         let text = prompt.text.clone();
-        let session_id = session_id.to_owned();
+        let session_key = session_id.to_owned();
         tokio::spawn(async move {
-            let target = if session_id == HOME_PROMPT_KEY {
+            let target = if session_key == HOME_PROMPT_KEY {
                 // Home submission: create the session first.
                 let body = oc_client::types::SessionCreateBody {
                     location: Some(oc_client::types::LocationPublicRef { directory }),
@@ -970,18 +986,60 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
                         session.id
                     }
                     Err(error) => {
-                        crate::keymap::log_skip(&format!("session create: {error}"));
+                        // v2's `newSession.recover`: "Creating a session
+                        // failed" + the draft back in the composer.
+                        let _ = events.send(PromptSinkEvent::SendFailed {
+                            session_key: session_key.clone(),
+                            title: "Creating a session failed".to_owned(),
+                            message: client_error_message(&error),
+                            draft: text,
+                        });
                         return;
                     }
                 }
             } else {
-                session_id
+                session_key.clone()
             };
             let body = oc_client::types::SessionPromptBody { text, ..Default::default() };
             if let Err(error) = client.session().prompt(&target, &body).await {
-                crate::keymap::log_skip(&format!("prompt: {error}"));
+                // v2's `fail("Failed to send prompt", error)`: the
+                // error toast + `restoreEntry()`.
+                let _ = events.send(PromptSinkEvent::SendFailed {
+                    session_key,
+                    title: "Failed to send prompt".to_owned(),
+                    message: client_error_message(&error),
+                    draft: body.text,
+                });
             }
         });
+    }
+}
+
+/// `errorMessage` (util/error.ts): the client error's message text.
+fn client_error_message(error: &oc_client::ClientError) -> String {
+    error.to_string()
+}
+
+/// Apply one [`PromptSinkEvent::SendFailed`] to the store: the error
+/// toast (`fail()`'s `toast.show({ title, message, variant: "error" })`)
+/// plus `restoreEntry()` — the submitted text returns to the composer
+/// ONLY when the user has not started typing something new.
+pub fn apply_send_failure(store: &Store, event: PromptSinkEvent) {
+    let PromptSinkEvent::SendFailed { session_key, title, message, draft } = event else {
+        return;
+    };
+    store.toast_show(crate::components::toast::ToastOptions {
+        title: Some(title),
+        message,
+        variant: "error",
+        duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
+        action_label: None,
+    });
+    if store.prompt_draft(&session_key).text.is_empty() && !draft.is_empty() {
+        let mut composer = store.composer(&session_key);
+        composer
+            .set(crate::components::composer::PromptDraft { text: draft, ..Default::default() });
+        store.set_composer(&session_key, &composer);
     }
 }
 
@@ -1046,6 +1104,12 @@ pub async fn run_with_size(
         EnterAlternateScreen,
         crossterm::event::EnableFocusChange
     );
+    // The alternate screen owns the display from here: route EVERY
+    // stderr write to `<state>/tui.log` until teardown (subsystem
+    // errors, plugin-host lines, the bun child's forwarded stderr —
+    // none of it may splat over the frame; v2 never does). Panics
+    // still reach the real stderr through the guard's saved fd.
+    let mut stderr_guard = crate::stderr_redirect::install(&crate::stderr_redirect::log_path());
     let mut terminal = ratatui::Terminal::new(CrosstermBackend::new(std::io::stdout()))
         .map_err(|e| e.to_string())?;
     let size = size.unwrap_or((100, 30));
@@ -1248,25 +1312,37 @@ pub async fn run_with_size(
         }
         // Drain the prompt-sink events (home submissions creating
         // their session open a tab, commit the staged selection, and
-        // navigate).
+        // navigate; FAILED sends surface as the error toast + the
+        // restored draft — `fail()`/`recover()` in the reference's
+        // submit flow).
         while let Ok(event) = sink_rx.try_recv() {
-            match event {
-                PromptSinkEvent::SessionCreated { session_id, title } => {
-                    app.store.open_tab(&session_id, title);
-                    let staged = app.store.selection_for(HOME_PROMPT_KEY);
-                    if let Some(model) = &staged.model {
-                        app.store.select_model(&session_id, model);
-                    }
-                    if let Some(agent) = staged.agent {
-                        app.store.select_agent(&session_id, &agent);
-                    }
+            if let PromptSinkEvent::SessionCreated { session_id, title } = event {
+                app.store.open_tab(&session_id, title);
+                let staged = app.store.selection_for(HOME_PROMPT_KEY);
+                if let Some(model) = &staged.model {
+                    app.store.select_model(&session_id, model);
                 }
+                if let Some(agent) = staged.agent {
+                    app.store.select_agent(&session_id, &agent);
+                }
+            } else {
+                apply_send_failure(&app.store, event);
             }
+        }
+        // Config-error toasts (the F5 seam): every skipped config entry
+        // the boot/reload logged now surfaces in the app, never on the
+        // frame (the stderr guard carries the log copy).
+        for toast in crate::keymap::drain_config_error_toasts() {
+            app.store.toast_show(toast);
         }
         // The external editor (<leader>e / /editor): suspend → $EDITOR
         // over the focused draft → resume → replace on success (a
-        // non-zero exit keeps the old draft per v2).
+        // non-zero exit keeps the old draft per v2). The stderr guard
+        // steps aside for the editor window — the child inherits fd 2
+        // and its messages belong on the real terminal (v2 parity).
         if app.store.take_editor_request() {
+            let editor_guard =
+                stderr_guard.take().map(crate::stderr_redirect::StderrRedirect::restore);
             let key = app.prompt_key();
             let draft = app.store.prompt_draft(&key).text.clone();
             let cwd = std::env::current_dir().ok();
@@ -1278,6 +1354,9 @@ pub async fn run_with_size(
             let _ =
                 crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen);
             let _ = terminal.clear();
+            if editor_guard.is_some() {
+                stderr_guard = crate::stderr_redirect::install(&crate::stderr_redirect::log_path());
+            }
             match result {
                 Ok(Some(text)) => {
                     let normalized = crate::editor::normalize_prompt_content(&text);
@@ -1408,6 +1487,11 @@ pub async fn run_with_size(
     lists_task.abort();
     if let Some(runtime) = &plugin_runtime {
         runtime.shutdown();
+    }
+    // Give stderr back to the terminal BEFORE leaving the alternate
+    // screen: whatever the exit path prints lands on the real display.
+    if let Some(guard) = stderr_guard {
+        guard.restore();
     }
     let _ = disable_raw_mode();
     let _ = crossterm::execute!(
@@ -1633,6 +1717,7 @@ mod tests {
                 model: String::new(),
                 parts: vec![Part::Text { text: "Copy me.".into(), time: PartTime::default() }],
                 finish: None,
+                error: None,
                 time: PartTime::default(),
             }],
         );
@@ -1807,4 +1892,54 @@ mod tests {
         assert_eq!(fresh.route(), crate::store::Route::Session { session_id: "ses_1".to_owned() });
         let _ = std::fs::remove_dir_all(&root);
     }
+}
+
+/// Wave-6 live palette: typing `/` through the PUMP opens the popup
+/// (with descriptions), arrows move, Enter ACCEPTS into the draft —
+/// the popup state survives the composer store round-trip between
+/// keypresses.
+#[test]
+fn slash_palette_opens_accepts_and_restores_the_popup_state() {
+    let mut app = App::new((80, 24));
+    app.store.open_tab("s1", Some("S".to_owned()));
+    app.press("/");
+    let composer = app.store.composer("s1");
+    let visible = composer.autocomplete.visible;
+    assert_eq!(visible, Some(crate::components::composer::autocomplete::Mode::Command));
+    assert!(
+        composer.autocomplete.options.iter().take(3).any(|option| option.display == "/agents"),
+        "the v2 table loaded: {:?}",
+        composer.autocomplete.options.iter().map(|o| o.display.clone()).take(5).collect::<Vec<_>>()
+    );
+    assert!(
+        composer
+            .autocomplete
+            .options
+            .iter()
+            .any(|option| option.description.as_deref().is_some_and(|d| d.contains("agent"))),
+        "descriptions attached (the preview column)"
+    );
+
+    // Filter to /ex: typing narrows the list — the display prefix
+    // doubles the score, so /exit leads; /quit and /q ride the
+    // DESCRIPTION match ("Exit the app" — v2 matches descriptions for
+    // slash commands).
+    app.press("e");
+    app.press("x");
+    let composer = app.store.composer("s1");
+    assert_eq!(
+        composer.autocomplete.options.first().map(|o| o.display.clone()),
+        Some("/exit".to_owned())
+    );
+    assert!(
+        composer.autocomplete.options.iter().all(|option| option.display.starts_with("/e")
+            || option.description.as_deref().is_some_and(|d| d.to_lowercase().contains("ex"))),
+        "filtered: {:?}",
+        composer.autocomplete.options.iter().map(|o| o.display.clone()).collect::<Vec<_>>()
+    );
+
+    // Enter accepts the selected command into the draft (`/exit `).
+    app.press("enter");
+    assert_eq!(app.store.prompt_draft("s1").text, "/exit ", "the accept inserts the command");
+    assert!(app.store.composer("s1").autocomplete.visible.is_none(), "accept closes the popup");
 }

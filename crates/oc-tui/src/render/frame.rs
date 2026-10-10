@@ -10,6 +10,16 @@ pub enum CellColor {
     Rgb(u8, u8, u8),
 }
 
+impl From<ratatui::style::Color> for CellColor {
+    fn from(color: ratatui::style::Color) -> Self {
+        match color {
+            ratatui::style::Color::Rgb(r, g, b) => Self::Rgb(r, g, b),
+            ratatui::style::Color::Indexed(index) => Self::Indexed(index),
+            _ => Self::Default,
+        }
+    }
+}
+
 /// One styled cell of an output frame (same shape as the parity golden
 /// cell).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

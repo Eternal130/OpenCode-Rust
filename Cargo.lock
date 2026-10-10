@@ -1831,6 +1831,7 @@ dependencies = [
  "async-trait",
  "crossterm",
  "json5",
+ "libc",
  "oc-client",
  "oc-plugin-host",
  "oc-theme",
