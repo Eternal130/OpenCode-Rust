@@ -153,13 +153,18 @@ async fn read(
     // would mangle names that legitimately contain `%` (`a%25b` → `a%b`).
     let relative = path.as_str();
     let real = resolve_contained(&location, relative).await?;
-    let metadata =
-        tokio::fs::metadata(&real).await.map_err(|_| ApiError::file_not_found(relative))?;
+    let metadata = tokio::fs::metadata(&real).await.map_err(|error| {
+        crate::errors::debug_cause("fs:file_not_found", &error);
+        ApiError::file_not_found(relative)
+    })?;
     if !metadata.is_file() {
         // `Path is not a file` dies in v2 (500).
         return Err(ApiError::unknown_ref());
     }
-    let bytes = tokio::fs::read(&real).await.map_err(|_| ApiError::file_not_found(relative))?;
+    let bytes = tokio::fs::read(&real).await.map_err(|error| {
+        crate::errors::debug_cause("fs:file_not_found", &error);
+        ApiError::file_not_found(relative)
+    })?;
     let mime = detect_mime(&bytes).map_or_else(
         || {
             if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) || utf8_valid(&bytes) {
@@ -221,8 +226,10 @@ async fn list(
         return Err(ApiError::file_not_found(&relative));
     }
     let mut entries = Vec::new();
-    let mut read_dir =
-        tokio::fs::read_dir(&absolute).await.map_err(|_| ApiError::file_not_found(&relative))?;
+    let mut read_dir = tokio::fs::read_dir(&absolute).await.map_err(|error| {
+        crate::errors::debug_cause("fs:file_not_found", &error);
+        ApiError::file_not_found(&relative)
+    })?;
     while let Ok(Some(entry)) = read_dir.next_entry().await {
         let is_dir = entry.file_type().await.is_ok_and(|kind| kind.is_dir());
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -323,9 +330,15 @@ async fn write(
     let relative = query_field(&uri, "path").unwrap_or_default();
     let absolute = location.as_path().join(&relative);
     if let Some(parent) = absolute.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|_| ApiError::unknown_ref())?;
+        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+            crate::errors::debug_cause("fs:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
     }
-    tokio::fs::write(&absolute, &body).await.map_err(|_| ApiError::unknown_ref())?;
+    tokio::fs::write(&absolute, &body).await.map_err(|error| {
+        crate::errors::debug_cause("fs:unknown_ref", &error);
+        ApiError::unknown_ref()
+    })?;
     Ok(super::common::json_location_data(
         &location.as_path().to_string_lossy(),
         json!({ "path": absolute.to_string_lossy() }),

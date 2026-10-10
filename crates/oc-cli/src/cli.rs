@@ -16,6 +16,7 @@ pub struct ServerParams {
 }
 
 #[derive(Parser, Debug)]
+#[allow(clippy::struct_excessive_bools)] // the v2 flag surface, mirrored
 #[command(
     name = "opencode",
     version = concat!("v", env!("CARGO_PKG_VERSION")),
@@ -24,6 +25,10 @@ pub struct ServerParams {
     arg_required_else_help = false
 )]
 pub struct Cli {
+    /// Print the Rust-port build stamp (version + git hash + profile)
+    #[arg(long, hide = true)]
+    pub version_rust: bool,
+
     /// Print logs to stderr (server logs require --standalone)
     #[arg(long, global = true)]
     pub print_logs: bool,

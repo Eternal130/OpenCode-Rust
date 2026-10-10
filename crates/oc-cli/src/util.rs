@@ -7,10 +7,13 @@ use std::io::Read;
 /// target; TS releases beyond it must never be adopted (oracle gate 1).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// `OPENCODE_CHANNEL` (version.ts): release channel, default `latest`.
+/// `OPENCODE_CHANNEL` (version.ts): release channel. Delegates to the
+/// ONE workspace channel source (`oc_util::channel::current`) so the
+/// CLI, the server engine's DB-path resolution, and channel-scoped
+/// v2 builds all agree on the channel (P10-DB1).
 #[must_use]
 pub fn channel() -> String {
-    std::env::var("OPENCODE_CHANNEL").unwrap_or_else(|_| "latest".to_owned())
+    oc_util::channel::current()
 }
 
 /// `Env.password`: `OPENCODE_PASSWORD`, legacy `OPENCODE_SERVER_PASSWORD`.

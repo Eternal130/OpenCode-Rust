@@ -11,8 +11,11 @@
 //! ```
 //!
 //! `Global.data` comes from [`oc_util::global_roots`]. Unlike the TypeScript
-//! build-time `OPENCODE_CHANNEL` define, the Rust port reads the channel from
-//! the `OPENCODE_CHANNEL` environment variable (default `stable`).
+//! build-time `OPENCODE_CHANNEL` define, the Rust port reads the channel
+//! from the `OPENCODE_CHANNEL` environment variable through the ONE
+//! workspace-wide channel source, [`oc_util::channel::current`] (default
+//! `latest`; the pinned reference build's `stable` is selected by setting
+//! the variable — see P10-DB1 in `goldens/p10/VERIFICATION.md`).
 
 use std::env;
 use std::ffi::OsStr;
@@ -20,10 +23,6 @@ use std::path::{Path, PathBuf};
 
 /// Channels that use the un-suffixed `opencode.db` filename.
 pub const SHARED_DB_CHANNELS: [&str; 5] = ["latest", "dev", "beta", "next", "prod"];
-
-/// Fallback channel when `OPENCODE_CHANNEL` is unset (matches the pinned
-/// reference build's `OPENCODE_CHANNEL="stable"` define).
-pub const DEFAULT_CHANNEL: &str = "stable";
 
 /// Where a database lives: a file on disk, or a private in-memory database.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,11 +83,23 @@ fn location_from_filename(data: &Path, filename: &OsStr) -> DbLocation {
 }
 
 /// Resolves the default database location for this process: `Global.data` +
-/// the channel scheme with the channel from `OPENCODE_CHANNEL`.
+/// the channel scheme with the channel from [`oc_util::channel::current`].
 #[must_use]
 pub fn default_location() -> DbLocation {
-    let channel = env::var("OPENCODE_CHANNEL").unwrap_or_else(|_| DEFAULT_CHANNEL.to_string());
-    db_location(&oc_util::global_roots::resolve().data, &channel)
+    db_location(&oc_util::global_roots::resolve().data, &oc_util::channel::current())
+}
+
+/// Resolves a database location for an EXPLICIT data root using the same
+/// channel scheme (P10-DB1): this is what `Engine::boot` resolves instead
+/// of hard-pinning `<data>/opencode.db`, so a channel-scoped build (e.g.
+/// `OPENCODE_CHANNEL=stable`, matching the pinned reference build) opens
+/// the SAME file v2 would (`opencode-stable.db`) while the shared-list
+/// channels and `OPENCODE_DISABLE_CHANNEL_DB` keep `opencode.db`.
+/// `OPENCODE_DB` (absolute/relative/`:memory:`) wins over the scheme,
+/// exactly like v2's `databasePath`.
+#[must_use]
+pub fn engine_location(data: &Path) -> DbLocation {
+    db_location(data, &oc_util::channel::current())
 }
 
 #[cfg(test)]
@@ -180,5 +191,30 @@ mod tests {
         let data = Path::new("/data");
         assert_eq!(db_location(data, "stable"), DbLocation::File(data.join("opencode-stable.db")));
         assert_eq!(db_location(data, "next"), DbLocation::File(data.join("opencode.db")));
+    }
+
+    /// P10-DB1: the engine helper is the channel scheme over an explicit
+    /// data root, reading the SAME channel source the CLI does.
+    #[test]
+    fn engine_location_follows_the_channel_scheme() {
+        let env = locked_env(&["OPENCODE_DB", "OPENCODE_DISABLE_CHANNEL_DB", "OPENCODE_CHANNEL"]);
+        let data = Path::new("/data");
+
+        // Default channel (`latest`, the npm release) → the shared file.
+        assert_eq!(engine_location(data), DbLocation::File(data.join("opencode.db")));
+
+        // The pinned reference build's channel → the suffixed file v2 opens.
+        env.set("OPENCODE_CHANNEL", "stable");
+        assert_eq!(engine_location(data), DbLocation::File(data.join("opencode-stable.db")));
+
+        // Odd channels are sanitized like v2's replace().
+        env.set("OPENCODE_CHANNEL", "edge/1");
+        assert_eq!(engine_location(data), DbLocation::File(data.join("opencode-edge-1.db")));
+
+        // The kill-switch and OPENCODE_DB keep their precedence.
+        env.set("OPENCODE_DISABLE_CHANNEL_DB", "1");
+        assert_eq!(engine_location(data), DbLocation::File(data.join("opencode.db")));
+        env.set("OPENCODE_DB", ":memory:");
+        assert_eq!(engine_location(data), DbLocation::Memory);
     }
 }

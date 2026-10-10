@@ -171,6 +171,12 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 fn opencode_binary() -> PathBuf {
+    // `OPENCODE_SMOKE_BIN` points the whole battery at an arbitrary
+    // build (tools/release-smoke.sh drives it with the RELEASE
+    // binary); unset, the cargo-built binary is the subject.
+    if let Some(path) = std::env::var_os("OPENCODE_SMOKE_BIN") {
+        return PathBuf::from(path);
+    }
     PathBuf::from(env!("CARGO_BIN_EXE_opencode"))
 }
 
@@ -479,4 +485,139 @@ async fn ssh_askpass_forwards_compiled_binary_argv_shape() {
         }),
         "the compiled-binary argv [bin, prompt] forwards the prompt text"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 10 packaging: real upgrade/uninstall against the compiled binary.
+// ---------------------------------------------------------------------------
+
+/// A fake "release tarball" carrying a package/opencode payload.
+fn release_tarball(sandbox: &Sandbox, payload: &str) -> PathBuf {
+    let staging = sandbox.root.join("release-src").join("package");
+    std::fs::create_dir_all(&staging).expect("tarball staging dir");
+    std::fs::write(staging.join("opencode"), payload).expect("payload");
+    let tarball = sandbox.root.join("release.tar.gz");
+    let status = std::process::Command::new("tar")
+        .args(["-czf"])
+        .arg(&tarball)
+        .arg("-C")
+        .arg(sandbox.root.join("release-src"))
+        .arg("package")
+        .status()
+        .expect("tar exists (the upgrade path requires it)");
+    assert!(status.success(), "tarball packs");
+    tarball
+}
+
+#[tokio::test]
+async fn upgrade_without_target_reports_already_installed() {
+    let sandbox = sandbox("upgrade-noop");
+    let output =
+        run_command(&opencode_binary(), &sandbox.project, &["upgrade", "-m", "local-file"])
+            .output()
+            .await
+            .expect("run upgrade");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("already installed"), "{stdout}");
+    assert!(stdout.contains("2.0.24"), "{stdout}");
+    assert!(stdout.contains("Auto-update is disabled"), "{stdout}");
+}
+
+#[tokio::test]
+async fn upgrade_local_file_replaces_the_binary() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let sandbox = sandbox("upgrade-local");
+    // The "installed" binary is a COPY of the real one; self-replacement
+    // targets the copy's current_exe, never the cargo artifact.
+    let installed = sandbox.root.join("opencode-installed");
+    std::fs::copy(opencode_binary(), &installed).expect("copy binary");
+    let payload = "#!/bin/sh\necho replaced-opencode\n";
+    let tarball = release_tarball(&sandbox, payload);
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        run_command(
+            &installed,
+            &sandbox.project,
+            &["upgrade", tarball.to_str().expect("path"), "--method", "local-file"],
+        )
+        .output(),
+    )
+    .await
+    .expect("upgrade finishes")
+    .expect("upgrade spawns");
+    assert!(output.status.success(), "exit: {}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Upgrade complete"), "{stdout}");
+    assert_eq!(std::fs::read_to_string(&installed).expect("read replaced"), payload);
+    let mode = std::fs::metadata(&installed).expect("stat").permissions().mode() & 0o777;
+    assert_eq!(mode, 0o755, "replacement is executable");
+}
+
+#[tokio::test]
+async fn uninstall_dry_run_lists_and_force_removes() {
+    let sandbox = sandbox("uninstall");
+    let home = sandbox.root.join("home");
+    // Sentinel state: data/db, cache/bin/x, config/opencode.json, and a
+    // (stale) service registration in state/.
+    std::fs::create_dir_all(home.join(".local/share/opencode")).expect("data dir");
+    std::fs::write(home.join(".local/share/opencode/db"), "db").expect("data sentinel");
+    std::fs::create_dir_all(home.join(".cache/opencode/bin")).expect("cache dir");
+    std::fs::write(home.join(".cache/opencode/bin/x"), "x").expect("cache sentinel");
+    std::fs::create_dir_all(home.join(".config/opencode")).expect("config dir");
+    std::fs::write(home.join(".config/opencode/opencode.json"), "{}").expect("config sentinel");
+    std::fs::create_dir_all(home.join(".local/state/opencode")).expect("state dir");
+    std::fs::write(
+        home.join(".local/state/opencode/service.json"),
+        r#"{"id":"x","version":"2.0.24","url":"http://127.0.0.1:1","pid":99999999,"password":"x"}"#,
+    )
+    .expect("registration sentinel");
+    let installed = sandbox.root.join("opencode-installed");
+    std::fs::copy(opencode_binary(), &installed).expect("copy binary");
+
+    // Dry run: lists the plan, changes nothing.
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        run_command(&installed, &sandbox.project, &["uninstall", "--dry-run"]).output(),
+    )
+    .await
+    .expect("dry run finishes")
+    .expect("dry run spawns");
+    assert!(output.status.success(), "exit: {}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Dry run - no changes made"), "{stdout}");
+    assert!(stdout.contains("Stop background service"), "{stdout}");
+    assert!(home.join(".local/share/opencode/db").exists(), "dry run removes nothing");
+
+    // Force (non-TTY): removes data/cache/state + the binary, keeps
+    // config via --keep-config. The stale registration is deleted by the
+    // safekill path (foreign pid), never signalled.
+    let output = tokio::time::timeout(
+        Duration::from_secs(60),
+        run_command(&installed, &sandbox.project, &["uninstall", "--force", "--keep-config"])
+            .output(),
+    )
+    .await
+    .expect("uninstall finishes")
+    .expect("uninstall spawns");
+    assert!(output.status.success(), "exit: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(!home.join(".local/share/opencode").exists(), "data removed");
+    assert!(!home.join(".cache/opencode").exists(), "cache removed");
+    assert!(!home.join(".local/state/opencode").exists(), "state removed");
+    assert!(home.join(".config/opencode/opencode.json").exists(), "config kept");
+    assert!(!installed.exists(), "binary self-unlinked");
+}
+
+#[tokio::test]
+async fn uninstall_without_force_in_non_tty_errors() {
+    let sandbox = sandbox("uninstall-tty");
+    let output = run_command(&opencode_binary(), &sandbox.project, &["uninstall"])
+        .output()
+        .await
+        .expect("run uninstall");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--force"), "{stderr}");
+    assert!(stderr.contains("--dry-run"), "{stderr}");
 }

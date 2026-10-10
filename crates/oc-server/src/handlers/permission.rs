@@ -108,7 +108,10 @@ async fn saved_list(
             Ok(rows)
         })
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| {
+            crate::errors::debug_cause("permission:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
     let data: Vec<Value> = rows
         .into_iter()
         .map(|(id, project_id, action, resource, created, updated)| {
@@ -143,7 +146,10 @@ async fn saved_remove(
         Ok(())
     })
     .await
-    .map_err(|_| ApiError::unknown_ref())?;
+    .map_err(|error| {
+        crate::errors::debug_cause("permission:unknown_ref", &error);
+        ApiError::unknown_ref()
+    })?;
     Ok(no_content())
 }
 
@@ -179,7 +185,10 @@ async fn session_create(
         metadata: None,
         source: None,
     };
-    let result = services.permission.ask(input).await.map_err(|_| ApiError::unknown_ref())?;
+    let result = services.permission.ask(input).await.map_err(|error| {
+        crate::errors::debug_cause("permission:unknown_ref", &error);
+        ApiError::unknown_ref()
+    })?;
     Ok(json_data(json!({
         "id": result.id.as_str(),
         "effect": serde_json::to_value(result.effect).unwrap_or_else(|_| json!("ask")),
@@ -222,11 +231,10 @@ async fn session_reply(
         reply,
         message: body["message"].as_str().map(String::from),
     };
-    services
-        .permission
-        .reply(input)
-        .await
-        .map_err(|_| ApiError::permission_not_found(&request_id))?;
+    services.permission.reply(input).await.map_err(|error| {
+        crate::errors::debug_cause("permission:permission_not_found", &error);
+        ApiError::permission_not_found(&request_id)
+    })?;
     Ok(no_content())
 }
 

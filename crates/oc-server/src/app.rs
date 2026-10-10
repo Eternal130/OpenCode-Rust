@@ -301,5 +301,14 @@ async fn dispatch_ready(shell: &Arc<AppShell>, request: Request) -> Response {
     // built-ins above stay mounted in the table for standalone use but are
     // unreachable here — the built-ins win, exactly once per route).
     // `Infallible` service error: the result cannot be an error.
-    shell.handler_router.clone().oneshot(request).await.unwrap_or_else(|never| match never {})
+    let response =
+        shell.handler_router.clone().oneshot(request).await.unwrap_or_else(|never| match never {});
+    // P10-E3: v2's Effect router has no 405 — a method mismatch on a
+    // known path answers the same empty-body 404 as an unknown route
+    // (axum's default method-not-allowed is rewritten; the web-UI asset
+    // 405 is a different seam, served before this one).
+    if response.status() == axum::http::StatusCode::METHOD_NOT_ALLOWED {
+        return crate::errors::empty(axum::http::StatusCode::NOT_FOUND);
+    }
+    response
 }

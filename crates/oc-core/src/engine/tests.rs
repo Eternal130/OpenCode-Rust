@@ -1111,3 +1111,71 @@ async fn per_location_overlay_daemon_booted_at_a_serves_b() {
         .resolve_selected(&overlay_row(None), &model_ref("boot-probe", "boot-one"))
         .is_ok());
 }
+
+// ---------------------------------------------------------------------------
+// P10-DB1: the engine's database path goes through the channel scheme
+// ---------------------------------------------------------------------------
+
+/// Env save/restore guard (the path tests' pattern): `Engine::boot` reads
+/// the channel through `oc_util::channel::current`, so the test pins the
+/// process env while booting.
+struct ChannelEnv {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    saved: Vec<(&'static str, Option<String>)>,
+}
+
+impl ChannelEnv {
+    fn lock(vars: &'static [&'static str]) -> Self {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let guard = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let saved = vars.iter().map(|&name| (name, std::env::var(name).ok())).collect();
+        for name in vars {
+            std::env::remove_var(name);
+        }
+        Self { _guard: guard, saved }
+    }
+}
+
+impl Drop for ChannelEnv {
+    fn drop(&mut self) {
+        for (name, value) in &self.saved {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn engine_boot_opens_the_channel_suffixed_database() {
+    let vars = &["OPENCODE_CHANNEL", "OPENCODE_DISABLE_CHANNEL_DB", "OPENCODE_DB"];
+    for (channel, disable, expected) in [
+        (None, None, "opencode.db"),
+        (Some("stable"), None, "opencode-stable.db"),
+        (Some("stable"), Some("1"), "opencode.db"),
+        (Some("beta"), None, "opencode.db"),
+    ] {
+        let _env = ChannelEnv::lock(vars);
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        if let Some(channel) = channel {
+            std::env::set_var("OPENCODE_CHANNEL", channel);
+        }
+        if let Some(disable) = disable {
+            std::env::set_var("OPENCODE_DISABLE_CHANNEL_DB", disable);
+        }
+        let engine = Engine::boot(EngineOptions {
+            activity_sweeper: false,
+            clock: fixed_clock(),
+            ..EngineOptions::new(root.path().join("data"), root.path().join("home"))
+        })
+        .await;
+        let path = engine.db.path().expect("file-backed database").to_path_buf();
+        assert_eq!(
+            path,
+            root.path().join("data").join(expected),
+            "channel={channel:?} disable={disable:?}"
+        );
+        drop(engine);
+    }
+}

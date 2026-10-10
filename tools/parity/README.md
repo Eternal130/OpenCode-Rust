@@ -200,11 +200,12 @@ OC_P10=1 cargo nextest run -p parity --run-ignored only -E 'test(p10_)'
 | `p10_error_paths` | 7 representative error routes probed on a booted reference AND port side-by-side; normalized bodies byte-compared; `goldens/p10/error-paths.json` pins each side + the divergence report (fails on new OR stale divergences). |
 | `p10_cross_tui` | The real v2.0.24 TUI (bun + tmux) against the Rust server: prompt+reply (`FakeLlm`), rename (`ctrl+r`, verified server-side), permission-once (external read → footer → TUI replies → tool proceeds). Captures in `goldens/p10/tui/`. |
 | `p10_cross_client` | The generated `oc-client` (dev-dependency) against a booted reference server: create → prompt → parked ask → permission reply → `message.list`, every response decoded. |
-| `p10_db_interop` | One shared data home, three boots: reference writes NULL-heavy rows → port re-opens (migration journal byte-identical = 0 reruns) + continues → reference re-opens + continues. Journal manifest golden-pinned. Runs on `opencode.db` (v2 `OPENCODE_DISABLE_CHANNEL_DB=1`) — see finding P10-DB1 in `goldens/p10/VERIFICATION.md`. |
+| `p10_db_interop` | One shared data home, three boots: reference writes NULL-heavy rows → port re-opens (migration journal byte-identical = 0 reruns) + continues → reference re-opens + continues. Journal manifest golden-pinned. Shared-file lane on `opencode.db` (v2 `OPENCODE_DISABLE_CHANNEL_DB=1`) + the stable-channel lane `p10_db_interop_stable_channel_same_file`: the reference build (baked `stable`) and an `OPENCODE_CHANNEL=stable` Rust boot interoperate on `opencode-stable.db` (P10-DB1 closed — the engine resolves DB paths through the channel scheme). |
 
 Shared helpers: `tests/p10_common/mod.rs` (guards, `minih`-based API sugar,
 the scripted fake LLM with tool calls, `bun:sqlite` DB dumps). Harness seams
 added for the battery: `minih` is now `pub`, `openapi_diff` is a new module,
 and `reference::spawn_reference` accepts seed files + env (mirroring
-`RustSpawn`). The full battery ledger — table, whitelist, findings — is
+`RustSpawn`). The full battery ledger — table, whitelist, findings (all
+closed by the final remediation sweep except note P10-N1) — is
 `goldens/p10/VERIFICATION.md`.

@@ -29,8 +29,12 @@
 //! 6.  Copy: `<leader>y` → the OSC-52 sequence in the raw pane stream +
 //!     the "Message copied to clipboard!" toast (the live toast layer).
 //! 7.  Theme: `<leader>t` → select `dracula` → the ANSI captures differ.
-//!     (The external editor step is skipped per the lane brief — no
-//!     `$EDITOR` in the sandbox; the theme dialog replaces it.)
+//!
+//! 7b. External editor (G11-F2): `<leader>e` spawns the stub `$EDITOR`
+//!     (one-line script: append + exit 0) → the draft comes back
+//!     replaced and the TUI still takes input after the resume (the
+//!     run loop's raw-mode/alternate-screen surgery, exercised for
+//!     real — opt-in like every M2 step, needs the tmux sandbox).
 //! 8.  Kill the TUI, reboot against the same server → tabs restored from
 //!     `<XDG_STATE_HOME>/opencode/local/tui/tabs.json`, transcripts
 //!     hydrated on the FIRST connect (the boot resync fetches
@@ -410,6 +414,7 @@ impl Ledger {
         println!("[m2] FINDING {step}: {note}");
         self.rows.push((step, false, note));
     }
+    #[allow(dead_code)] // kept for future opt-in steps (the 7b editor step replaced its last call)
     fn skip(&mut self, step: &'static str, note: impl Into<String>) {
         let note = note.into();
         println!("[m2] SKIP {step}: {note}");
@@ -428,6 +433,9 @@ const H: &str = "40";
 /// Launch the TUI in tmux against `url` with the sandbox env; returns the
 /// stderr log path. `raw_log` receives the pane's raw byte stream
 /// (pipe-pane) — the bell bytes + OSC-52 sequences land there.
+/// `editor` mounts a stub `$EDITOR`/`$VISUAL` (the external-editor step)
+/// instead of stripping the variables.
+#[allow(clippy::too_many_arguments)]
 fn launch_tui(
     cli: &Path,
     url: &str,
@@ -436,16 +444,22 @@ fn launch_tui(
     project: &Path,
     stderr_log: &Path,
     raw_log: &Path,
+    editor: Option<&Path>,
 ) -> Result<()> {
     let _ = Command::new("tmux").args(["kill-session", "-t", SESSION]).output();
+    let editor_env = match editor {
+        Some(path) => format!("EDITOR={p} VISUAL={p} ", p = path.display()),
+        None => "env -u EDITOR -u VISUAL ".to_owned(),
+    };
     let launch = format!(
-        "cd {project} && env -u EDITOR -u VISUAL \
+        "cd {project} && {editor_env}\
          TERM=xterm-256color HOME={home} \
          XDG_DATA_HOME={data} XDG_CACHE_HOME={cache} XDG_CONFIG_HOME={config} \
          XDG_STATE_HOME={state} TMPDIR={tmp} \
          OPENCODE_PASSWORD={password} OC_TUI_DEBUG=1 \
          {cli} --server {url} 2>{stderr}",
         project = project.display(),
+        editor_env = editor_env,
         home = home.display(),
         data = home.join(".local/share").display(),
         cache = home.join(".cache").display(),
@@ -558,9 +572,29 @@ async fn m2_daily_work_rust_tui_against_rust_server() -> Result<()> {
     let password = server.password().to_owned();
 
     // -- step 1: boot the TUI ----------------------------------------------
+    // The $EDITOR stub for step 7b: a one-line script that appends text
+    // and exits 0 (oracle gate 11's named residual — the run loop's
+    // suspend/resume block around $EDITOR is invisible to unit tests).
+    let editor_script = artifacts.join("stub-editor.sh");
+    std::fs::write(&editor_script, "#!/bin/sh\nprintf 'EDITED-BY-STUB' >> \"$1\"\n")?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&editor_script)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&editor_script, permissions)?;
+    }
     let stderr_log = artifacts.join("tui-stderr.txt");
     let raw_log = artifacts.join("pane-raw.log");
-    launch_tui(&cli, &url, &password, &home, &project, &stderr_log, &raw_log)?;
+    launch_tui(
+        &cli,
+        &url,
+        &password,
+        &home,
+        &project,
+        &stderr_log,
+        &raw_log,
+        Some(&editor_script),
+    )?;
     let mut boot = String::new();
     for _ in 0..30 {
         sleep(2).await;
@@ -913,8 +947,7 @@ async fn m2_daily_work_rust_tui_against_rust_server() -> Result<()> {
     );
     ledger.pass("6-copy", "leader+y → OSC-52 with the reply text in the raw pane stream");
 
-    // -- step 7: theme (replaces /editor — no $EDITOR in the sandbox) -------
-    ledger.skip("7-editor", "$EDITOR unavailable in the sandbox; theme dialog replaces it");
+    // -- step 7: theme -------------------------------------------------------
     let ansi_before = capture_ansi(SESSION);
     std::fs::write(artifacts.join("step-07-theme-before.ansi"), &ansi_before)?;
     leader(SESSION, "t");
@@ -940,6 +973,39 @@ async fn m2_daily_work_rust_tui_against_rust_server() -> Result<()> {
         ledger.finding("7-theme", "theme selected but ANSI capture unchanged");
     } else {
         ledger.pass("7-theme", "leader+t → dracula selected; ANSI captures differ");
+    }
+
+    // -- step 7b: external editor ($EDITOR over the focused draft) ---------
+    // G11-F2: the run loop's suspend/resume block (leave alternate
+    // screen, disable raw mode, run $EDITOR, resume, clear) is terminal
+    // state surgery unit tests stub out. Exercise it for real: leader+e
+    // must run the stub EDITOR (appends + exit 0) and the draft must
+    // come back replaced. Driven on the EMPTY draft — the port's stroke
+    // routing feeds printables to the composer whenever a draft is
+    // non-empty, so the leader continuation only completes on an empty
+    // composer (v2's keymap suspends textarea handling for chord
+    // resolution; that ordering difference is a NAMED residual for the
+    // TUI lane, out of this sweep's scope).
+    leader(SESSION, "e");
+    let edited = wait_capture(SESSION, "EDITED-BY-STUB", 10, 1).await?;
+    std::fs::write(artifacts.join("step-07b-editor-draft.txt"), &edited)?;
+    anyhow::ensure!(
+        edited.contains("EDITED-BY-STUB"),
+        "step 7b: the draft was not replaced with the editor's output:\n{edited}"
+    );
+    ledger.pass("7b-editor-draft", "leader+e → $EDITOR ran (append + exit 0), draft replaced");
+    anyhow::ensure!(
+        edited.contains("The outside file says m2-secret."),
+        "step 7b: the session frame did not survive the editor suspend/resume:\n{edited}"
+    );
+    type_text(SESSION, "!");
+    let resumed = wait_capture(SESSION, "EDITED-BY-STUB!", 10, 1).await?;
+    std::fs::write(artifacts.join("step-07b-editor-resumed.txt"), &resumed)?;
+    ledger.pass("7b-editor-resume", "raw mode intact after resume (composer still takes input)");
+    // Clear the draft so step 8's captures stay canonical (tmux's key
+    // name is BSpace — "Backspace" would be typed literally).
+    for _ in 0..20 {
+        key(SESSION, "BSpace");
     }
 
     // -- step 8: kill + reboot → tabs restored ------------------------------
@@ -985,7 +1051,7 @@ async fn m2_daily_work_rust_tui_against_rust_server() -> Result<()> {
 
     let stderr_log2 = artifacts.join("tui-stderr-2.txt");
     let raw_log2 = artifacts.join("pane-raw-2.log");
-    launch_tui(&cli, &url, &password, &home, &project, &stderr_log2, &raw_log2)?;
+    launch_tui(&cli, &url, &password, &home, &project, &stderr_log2, &raw_log2, None)?;
     // The restored first tab is the route; the FIRST-connect boot resync
     // (session.list + message.list per restored tab) replays its
     // transcript from the server (the D4 fix — no reconnect needed).

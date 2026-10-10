@@ -3,56 +3,27 @@
 //! degradation — the plugin subsystem disables itself with a clear
 //! log, never crashes the host).
 //!
-//! Search order: `OC_PLUGIN_BUN` override (tests), then `bun` on the
-//! `PATH`, then the system install (`/usr/local/bin/bun`), then the
-//! user install (`~/.bun/bin/bun`). Any executable found wins; none
-//! found → [`None`] and the caller stays disabled.
+//! The managed pinned-download decision (MIGRATION §2.3, Phase 10
+//! packaging) lives in `oc_util::bunman`: resolution order
+//! `OC_PLUGIN_BUN` override → `~/.cache/opencode/bin/bun` (the
+//! managed pinned 1.3.10 download) → `/usr/local/bin/bun` → `PATH`
+//! → `~/.bun/bin/bun`; [`crate::PluginHost::start_detached_with`]
+//! bootstraps the pinned download when plugins are requested and no
+//! bun exists, degrading to a clear message on failure.
 
-use std::path::PathBuf;
-
-/// Environment override for the bun binary (test hook).
-pub const BUN_ENV: &str = "OC_PLUGIN_BUN";
+pub use oc_util::bunman::{BunSource, BUN_ENV};
 
 /// Resolve the bun executable. `None` = absent → plugin subsystem
 /// disabled (one clear log line at startup, every host op no-ops).
 #[must_use]
-pub fn resolve_bun() -> Option<PathBuf> {
-    if let Ok(override_path) = std::env::var(BUN_ENV) {
-        let path = PathBuf::from(override_path);
-        if is_executable(&path) {
-            return Some(path);
-        }
-        eprintln!(
-            "opencode plugin-host: {BUN_ENV}={} is not executable; plugin subsystem disabled",
-            path.display()
-        );
-        return None;
-    }
-    if let Some(path) = on_path() {
-        return Some(path);
-    }
-    [PathBuf::from("/usr/local/bin/bun"), home_bun()]
-        .into_iter()
-        .find(|candidate| is_executable(candidate))
+pub fn resolve_bun() -> Option<std::path::PathBuf> {
+    oc_util::bunman::resolve()
 }
 
-/// `bun` via the `PATH` entries (no `which` dependency).
-fn on_path() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join("bun"))
-        .find(|candidate| is_executable(candidate))
-}
-
-fn home_bun() -> PathBuf {
-    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/root"), PathBuf::from);
-    home.join(".bun").join("bin").join("bun")
-}
-
-fn is_executable(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::metadata(path)
-        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+/// Where a resolution found bun (diagnostics).
+#[must_use]
+pub fn locate_bun() -> Option<(std::path::PathBuf, BunSource)> {
+    oc_util::bunman::locate()
 }
 
 #[cfg(test)]

@@ -52,7 +52,10 @@ async fn read_rows(state: &SharedState) -> Result<Vec<Row>, ApiError> {
         Ok(rows)
     })
     .await
-    .map_err(|_| ApiError::unknown_ref())
+    .map_err(|error| {
+        crate::errors::debug_cause("credential:unknown_ref", &error);
+        ApiError::unknown_ref()
+    })
 }
 
 async fn list(State(state): State<SharedState>) -> Result<Response, ApiError> {
@@ -130,7 +133,7 @@ async fn create(
             Ok(Some((id, now)))
         })
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| { crate::errors::debug_cause("credential:unknown_ref", &error); ApiError::unknown_ref() })?;
 
     let Some((id, now)) = inserted else {
         let id = body["id"].as_str().unwrap_or_default();
@@ -162,7 +165,10 @@ async fn update(
             )
         })
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| {
+            crate::errors::debug_cause("credential:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
     let _ = updated;
     Ok(no_content())
 }
@@ -193,7 +199,10 @@ async fn activate(
             Ok(true)
         })
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| {
+            crate::errors::debug_cause("credential:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
     let _ = result;
     Ok(no_content())
 }
@@ -209,6 +218,9 @@ async fn remove(
         Ok(())
     })
     .await
-    .map_err(|_| ApiError::unknown_ref())?;
+    .map_err(|error| {
+        crate::errors::debug_cause("credential:unknown_ref", &error);
+        ApiError::unknown_ref()
+    })?;
     Ok(no_content())
 }

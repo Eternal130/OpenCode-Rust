@@ -99,7 +99,10 @@ pub(crate) async fn services(
     state: &SharedState,
     location: &LocationRef,
 ) -> Result<std::sync::Arc<LocationServices>, ApiError> {
-    state.engine.location(location.clone()).await.map_err(|_| ApiError::unknown_ref())
+    state.engine.location(location.clone()).await.map_err(|error| {
+        crate::errors::debug_cause("session:unknown_ref", &error);
+        ApiError::unknown_ref()
+    })
 }
 
 /// Resolves the session (404 when missing) and its location's services.
@@ -197,6 +200,13 @@ async fn list(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    // P10-E2: v2's schema middleware validates the query before the
+    // handler (limit: NumberFromString→PositiveInt, order: "asc"|"desc")
+    // and 400s with InvalidRequestError kind=Query — byte-pinned by the
+    // Phase-10 error-path battery.
+    if let Err(message) = super::schema_check::session_list_query(uri.query().unwrap_or_default()) {
+        return Err(ApiError::schema_rejection(message, "Query"));
+    }
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let _ = &location;
     // The list read goes through the global store (v2 `Session.Service`)
@@ -210,12 +220,12 @@ async fn list(
     let search = query_field(&uri, "search");
     let parent_id = query_field(&uri, "parentID");
     let order_param = query_field(&uri, "order");
+    // Schema validation upstream (P10-E2) guarantees limit parses as a
+    // positive integer; the parse fallback only guards absurdly large
+    // JS-safe integers beyond i64 (v2 accepts them; the store clamps).
     let limit = query_field(&uri, "limit")
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(DEFAULT_LIMIT);
-    if limit <= 0 {
-        return Err(ApiError::invalid_request("limit must be a positive integer"));
-    }
 
     let cursor_param = query_field(&uri, "cursor");
     let decoded_cursor = match &cursor_param {
@@ -252,7 +262,10 @@ async fn list(
         ..ListInput::default()
     };
 
-    let rows = store.list(input).await.map_err(|_| ApiError::unknown_ref())?;
+    let rows = store.list(input).await.map_err(|error| {
+        crate::errors::debug_cause("session:unknown_ref", &error);
+        ApiError::unknown_ref()
+    })?;
 
     // direction=previous: the store flipped the order; restore display order.
     let mut rows = rows;
@@ -315,6 +328,13 @@ async fn create(
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
+    // P10-E1: v2's schema middleware validates the payload before the
+    // handler (wrongly-typed fields 400 with InvalidRequestError
+    // kind=Payload, unknown fields stripped) — byte-pinned by the
+    // Phase-10 error-path battery.
+    if let Err(message) = super::schema_check::session_create_payload(&body) {
+        return Err(ApiError::schema_rejection(message, "Payload"));
+    }
     // v2 takes the location in the request body for session create; the
     // query/header derivation is the fallback (deep-map §1).
     let location = if let Some(directory) = body["location"]["directory"].as_str() {
@@ -330,7 +350,15 @@ async fn create(
 
     let parent_id = body["parentID"].as_str().map(parse_session_id);
     if let Some(parent) = &parent_id {
-        if services.store.get(parent.as_str()).await.map_err(|_| ApiError::unknown_ref())?.is_none()
+        if services
+            .store
+            .get(parent.as_str())
+            .await
+            .map_err(|error| {
+                crate::errors::debug_cause("session:unknown_ref", &error);
+                ApiError::unknown_ref()
+            })?
+            .is_none()
         {
             return Err(ApiError::session_not_found(parent.as_str()));
         }
@@ -358,8 +386,10 @@ async fn create(
         version: state.version.clone(),
     };
 
-    let row =
-        state.engine.create_session(&location, input).await.map_err(|_| ApiError::unknown_ref())?;
+    let row = state.engine.create_session(&location, input).await.map_err(|error| {
+        crate::errors::debug_cause("session:unknown_ref", &error);
+        ApiError::unknown_ref()
+    })?;
     Ok(json_data(session_row_to_info(&row)))
 }
 
@@ -417,7 +447,10 @@ async fn remove(
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
     let bus = services.graph.bus.as_ref().clone();
-    services.store.remove(&bus, &session_id).await.map_err(|_| ApiError::unknown_ref())?;
+    services.store.remove(&bus, &session_id).await.map_err(|error| {
+        crate::errors::debug_cause("session:unknown_ref", &error);
+        ApiError::unknown_ref()
+    })?;
     Ok(no_content())
 }
 
@@ -709,7 +742,10 @@ async fn fork(
             ..Default::default()
         })
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| {
+            crate::errors::debug_cause("session:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
     let before = body["before"].as_str().map(String::from);
     let boundary_messages: Vec<_> = match &before {
         Some(before) => match messages.iter().position(|message| message.id == *before) {
@@ -750,7 +786,10 @@ async fn fork(
             },
         )
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| {
+            crate::errors::debug_cause("session:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
 
     // Copy the boundary messages into the fork via the message projector.
     for message in boundary_messages {
@@ -820,7 +859,10 @@ async fn context(
             ..Default::default()
         })
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| {
+            crate::errors::debug_cause("session:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
     let data: Vec<Value> = rows.iter().map(message_row_to_info).collect();
     Ok(json_data(Value::Array(data)))
 }
@@ -993,7 +1035,10 @@ async fn revert_commit(
     let revert_state =
         oc_core::session::revert::read_revert(&state.engine.db, &parse_session_id(&session_id))
             .await
-            .map_err(|_| ApiError::unknown_ref())?
+            .map_err(|error| {
+                crate::errors::debug_cause("session:unknown_ref", &error);
+                ApiError::unknown_ref()
+            })?
             .ok_or_else(|| ApiError::conflict("No revert staged"))?;
     state
         .engine
@@ -1012,7 +1057,10 @@ async fn inbox_list(
     Path(session_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
-    let pending = services.inbox.list(&session_id).await.map_err(|_| ApiError::unknown_ref())?;
+    let pending = services.inbox.list(&session_id).await.map_err(|error| {
+        crate::errors::debug_cause("session:unknown_ref", &error);
+        ApiError::unknown_ref()
+    })?;
     let data: Vec<Value> = pending.iter().map(inbox_info_json).collect();
     Ok(json_data(Value::Array(data)))
 }
@@ -1069,7 +1117,7 @@ async fn instruction_entry_list(
             Ok(rows)
         })
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| { crate::errors::debug_cause("session:unknown_ref", &error); ApiError::unknown_ref() })?;
     let data: Vec<Value> = rows
         .into_iter()
         .map(|(key, value)| json!({ "key": key, "value": parse_json_or_null(value.as_deref()) }))
@@ -1096,7 +1144,7 @@ async fn instruction_entry_remove(
         Ok(())
     })
     .await
-    .map_err(|_| ApiError::unknown_ref())?;
+    .map_err(|error| { crate::errors::debug_cause("session:unknown_ref", &error); ApiError::unknown_ref() })?;
     Ok(no_content())
 }
 
@@ -1115,8 +1163,10 @@ async fn instruction_entry_put(
 ) -> Result<Response, ApiError> {
     let _ = session_services(&state, &session_id).await?;
     let value = body["value"].clone();
-    let encoded =
-        serde_json::to_string(&value).map_err(|_| ApiError::invalid_request("invalid value"))?;
+    let encoded = serde_json::to_string(&value).map_err(|error| {
+        crate::errors::debug_cause("session:invalid_request", &error);
+        ApiError::invalid_request("invalid value")
+    })?;
     if encoded.len() as i64 > INSTRUCTION_ENTRY_MAX_BYTES {
         return Err(ApiError::instruction_too_large(
             encoded.len() as i64,
@@ -1135,7 +1185,7 @@ async fn instruction_entry_put(
         Ok(())
     })
     .await
-    .map_err(|_| ApiError::unknown_ref())?;
+    .map_err(|error| { crate::errors::debug_cause("session:unknown_ref", &error); ApiError::unknown_ref() })?;
     Ok(no_content())
 }
 
@@ -1203,7 +1253,10 @@ async fn import(
         .store
         .get(&session_id)
         .await
-        .map_err(|_| ApiError::unknown_ref())?
+        .map_err(|error| {
+            crate::errors::debug_cause("session:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?
         .is_some()
     {
         return Err(ApiError::conflict(format!("Session already exists: {session_id}")));
@@ -1243,7 +1296,10 @@ async fn import(
             },
         )
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| {
+            crate::errors::debug_cause("session:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
 
     // Replay the imported messages in order through the message projector.
     if let Some(messages) = body["messages"].as_array() {
@@ -1284,7 +1340,10 @@ async fn export(
             ..Default::default()
         })
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| {
+            crate::errors::debug_cause("session:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
     let mut info = session_row_to_info(&row);
     let mut message_values: Vec<Value> = messages.iter().map(message_row_to_info).collect();
     if sanitize {
@@ -1313,8 +1372,10 @@ async fn stats(
     );
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
-    let sessions =
-        services.store.list(ListInput::default()).await.map_err(|_| ApiError::unknown_ref())?;
+    let sessions = services.store.list(ListInput::default()).await.map_err(|error| {
+        crate::errors::debug_cause("session:unknown_ref", &error);
+        ApiError::unknown_ref()
+    })?;
     // Aggregate a minimal stats view (session count + usage totals);
     // the binned activity/model breakdown is TODO(phase-9).
     let mut input = 0i64;

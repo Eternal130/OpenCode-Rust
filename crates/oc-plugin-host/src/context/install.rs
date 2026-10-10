@@ -147,8 +147,25 @@ fn write_install_manifest(dir: &Path, package: &str, version: &str) -> Result<()
 /// Pick the runner + freeze policy: `bun install --frozen-lockfile`
 /// over `bun.lock`, `npm ci` over `package-lock.json`, else
 /// `bun install` (preferred) / `npm install --no-save`.
+///
+/// A missing bun triggers the managed pinned bootstrap once
+/// (`opencode plugin add` is a plugins-requested path) before the npm
+/// fallback — a failed bootstrap degrades to npm with a log.
 fn run_installer(dir: &Path, options: &InstallOptions) -> Result<(), String> {
-    let bun = options.bun.clone().or_else(crate::bun::resolve_bun);
+    let mut bun = options.bun.clone().or_else(crate::bun::resolve_bun);
+    if bun.is_none() {
+        match oc_util::bunman::ensure() {
+            Ok(path) => {
+                eprintln!(
+                    "opencode: no system bun; using the managed pinned bun for plugin install"
+                );
+                bun = Some(path);
+            }
+            Err(error) => {
+                eprintln!("opencode: bun bootstrap unavailable ({error}); falling back to npm");
+            }
+        }
+    }
     let (program, args): (PathBuf, Vec<String>) = if dir.join("bun.lock").exists()
         || dir.join("bun.lockb").exists()
     {

@@ -3,3 +3,4 @@
 pub mod server_connection;
 pub mod service_config;
 pub mod standalone;
+pub mod updater;

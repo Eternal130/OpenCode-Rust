@@ -1,5 +1,7 @@
 //! opencode util: XDG roots, retry, hash, wildcard, flock, determinism traits.
 
+pub mod bunman;
+pub mod channel;
 pub mod determinism;
 pub mod encode;
 pub mod flock;

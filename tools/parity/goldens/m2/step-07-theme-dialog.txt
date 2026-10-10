@@ -9,7 +9,7 @@
 
      The notes file is present.
 
-     Build · parityfake/fake-model · 34ms             Themes                                           esc
+     Build · parityfake/fake-model · 109ms            Themes                                           esc
 
   ┃                                                   Search
   ┃  Now read the outside file please.

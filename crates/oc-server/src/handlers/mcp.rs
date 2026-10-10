@@ -69,7 +69,10 @@ async fn remove(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
-    services.mcp.remove(&server).await.map_err(|_| ApiError::mcp_server_not_found(&server))?;
+    services.mcp.remove(&server).await.map_err(|error| {
+        crate::errors::debug_cause("mcp:mcp_server_not_found", &error);
+        ApiError::mcp_server_not_found(&server)
+    })?;
     Ok(no_content())
 }
 
@@ -81,7 +84,10 @@ async fn connect(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
-    services.mcp.connect(&server).await.map_err(|_| ApiError::mcp_server_not_found(&server))?;
+    services.mcp.connect(&server).await.map_err(|error| {
+        crate::errors::debug_cause("mcp:mcp_server_not_found", &error);
+        ApiError::mcp_server_not_found(&server)
+    })?;
     Ok(no_content())
 }
 
@@ -93,7 +99,10 @@ async fn disconnect(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
-    services.mcp.disconnect(&server).await.map_err(|_| ApiError::mcp_server_not_found(&server))?;
+    services.mcp.disconnect(&server).await.map_err(|error| {
+        crate::errors::debug_cause("mcp:mcp_server_not_found", &error);
+        ApiError::mcp_server_not_found(&server)
+    })?;
     Ok(no_content())
 }
 

@@ -1,5 +1,6 @@
-//! The root handler (the TUI launch), upgrade/uninstall no-ops, acp/mini
-//! placeholders, models, reload, pair, and the debug subcommands.
+//! The root handler (the TUI launch), the real upgrade/uninstall
+//! (Phase 10), acp/mini placeholders, models, reload, pair, and the
+//! debug subcommands.
 
 use crate::cli::{DebugCommands, ServerParams};
 use crate::handlers::connect;
@@ -41,40 +42,111 @@ pub async fn root(directory: Option<&str>, server: &crate::cli::ServerParams) ->
     }
 }
 
-/// `opencode upgrade` — REGISTERED no-op: self-upgrade is disabled in the
-/// Rust port (oracle gate 1: the 2.0.24 pin must never adopt newer TS
-/// releases; auto-update is disabled).
-pub fn upgrade(target: Option<&str>) -> i32 {
-    match target {
-        Some(target) => {
-            println!("Upgrade to {target} skipped: self-upgrade is disabled in the Rust port (pinned to v{}).", util::VERSION);
-        }
-        None => {
+/// `opencode upgrade` — REAL self-download-and-replace (Phase 10
+/// packaging): `local-file` installs from a path on disk, `github`
+/// downloads the Rust port's own release tarball (network-optional,
+/// `OPENCODE_RELEASE_URL`), package-manager methods explain themselves.
+/// The background AUTO-update loop stays default-OFF (oracle gate 1 /
+/// the incident-era decision — only this explicit command replaces
+/// the binary).
+pub async fn upgrade(target: Option<&str>, method: Option<&str>) -> i32 {
+    crate::services::updater::upgrade(crate::services::updater::UpgradeRequest {
+        method: method.unwrap_or("auto").to_owned(),
+        target: target.map(str::to_owned),
+    })
+    .await
+}
+
+/// `opencode uninstall` — REAL (Phase 10): stops every registered
+/// background service, removes the global roots (respecting
+/// `--keep-config`/`--keep-data`), cleans the shell PATH entry, then
+/// removes the binary itself (unix self-unlink). `--dry-run` previews,
+/// `--force` skips the confirmation prompt (non-TTY without either is
+/// an error, v2's `requireInteractive` message).
+#[allow(clippy::fn_params_excessive_bools)] // the v2 flag surface, mirrored
+pub async fn uninstall(dry_run: bool, keep_config: bool, keep_data: bool, force: bool) -> i32 {
+    let plan = crate::services::updater::removal_plan(keep_config, keep_data);
+    let services = crate::services::updater::registration_files();
+    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("opencode"));
+
+    println!("Uninstall OpenCode");
+    println!(
+        "The following global files will be removed (shared by OpenCode versions and channels):"
+    );
+    for removal in &plan {
+        if removal.path.exists() {
             println!(
-                "Upgrade skipped: self-upgrade is disabled in the Rust port (pinned to v{}).",
-                util::VERSION
+                "  {}: {}{}",
+                removal.label,
+                removal.path.display(),
+                if removal.keep { " (keeping)" } else { "" }
             );
         }
     }
-    println!("Auto-update is disabled; install updates with your package manager.");
-    0
-}
+    for file in &services {
+        println!("  Stop background service and persistent terminals: {}", file.display());
+    }
+    println!("  Binary: {}", exe.display());
 
-/// `opencode uninstall` — REGISTERED no-op with the same rationale.
-pub fn uninstall(dry_run: bool, keep_config: bool, keep_data: bool) -> i32 {
     if dry_run {
-        println!("Dry run - no changes made (uninstall is disabled in the Rust port)");
+        println!("Dry run - no changes made");
         return 0;
     }
-    println!(
-        "Uninstall is disabled in the Rust port; remove the binary and these directories manually:"
-    );
-    let roots = oc_util::global_roots::resolve();
-    println!("  Data: {}{}", roots.data.display(), if keep_data { " (keeping)" } else { "" });
-    println!("  Cache: {}", roots.cache.display());
-    println!("  Config: {}{}", roots.config.display(), if keep_config { " (keeping)" } else { "" });
-    println!("  State: {}", roots.state.display());
-    0
+    if !force {
+        if !is_tty() {
+            eprintln!(
+                "Error: Use --force to uninstall without an interactive terminal, or --dry-run to preview."
+            );
+            return 1;
+        }
+        let confirmed = dialoguer::Confirm::new()
+            .with_prompt("Are you sure you want to uninstall?")
+            .default(false)
+            .interact()
+            .unwrap_or(false);
+        if !confirmed {
+            println!("Cancelled");
+            return 0;
+        }
+    }
+    if !services.is_empty() {
+        println!("Stopping background services...");
+        crate::services::updater::stop_services(&services).await;
+        println!("Background services stopped");
+    }
+
+    let mut errors = crate::services::updater::execute_removals(&plan);
+    for config in crate::services::updater::shell_configs() {
+        let Ok(content) = std::fs::read_to_string(&config) else { continue };
+        let cleaned = crate::services::updater::clean_shell_config(&content);
+        if cleaned == content {
+            continue;
+        }
+        if let Err(error) = std::fs::write(&config, cleaned) {
+            errors.push(format!("Shell config {}: {error}", config.display()));
+        }
+    }
+    // Self-unlink (unix keeps the running inode alive until exit).
+    if let Err(error) = std::fs::remove_file(&exe) {
+        if exe.exists() {
+            errors.push(format!("Binary: {error}"));
+        }
+    }
+    if errors.is_empty() {
+        println!("Done");
+        0
+    } else {
+        for error in &errors {
+            eprintln!("Error: {error}");
+        }
+        1
+    }
+}
+
+/// stdin-on-a-tty check (`requireInteractive`'s gate).
+fn is_tty() -> bool {
+    use std::io::IsTerminal as _;
+    std::io::stdin().is_terminal()
 }
 
 /// `opencode acp` — REGISTERED interim (deferred until after the phase-7 TUI

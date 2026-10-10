@@ -1,14 +1,14 @@
    New session                   +
 
-     Switched variant to default                                                                                        New session - 2026-10-10T06:11:35.
-                                                                                                                        247Z
+     Switched variant to default                                                                                        New session - 2026-10-10T08:05:39.
+                                                                                                                        744Z
   ┃
   ┃  Say hello.                                                                                                         Context
   ┃                                                                                                                     18 tokens
 
      Parity fake says hello.
 
-     Build · fake-model · 24ms · 0.0 tok/s
+     Build · fake-model · 23ms · 0.0 tok/s
 
 
 

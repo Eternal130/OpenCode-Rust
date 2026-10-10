@@ -1,1 +1,1 @@
-SIGTERM shutdown elapsed: 24.699031ms
+SIGTERM shutdown elapsed: 34.415002ms

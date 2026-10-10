@@ -529,17 +529,39 @@ pub fn truncate_reason(reason: &str) -> String {
     format!("{head}... ({} more chars)", count - REASON_LIMIT)
 }
 
-/// The `SchemaError` middleware outcome: warn-log + `InvalidRequestError{kind}`.
+/// The `SchemaError` middleware outcome: warn-log + `InvalidRequestError{kind}`
+/// (v2's middleware fails with exactly `{message, kind}` — no `field`).
 #[must_use]
 pub fn schema_rejection(reason: &str, kind: &str) -> ApiError {
     let truncated = truncate_reason(reason);
     tracing_like_warn(kind, &truncated);
-    invalid_request_field(truncated, kind, "")
+    invalid_request_kind(truncated, kind)
 }
 
 /// Minimal warn log (the crate has no tracing dep; v2 logs via Effect).
 fn tracing_like_warn(kind: &str, reason: &str) {
     eprintln!("[schema-error] schema rejection kind={kind} reason={reason}");
+}
+
+/// Debug-level cause capture for the handler `map_err(|_| …)` sites
+/// (G11-F3): the public error shape intentionally discards the cause
+/// (leak-prevention, mirroring v2); this logs it to stderr when
+/// `OPENCODE_DEBUG_ERRORS` ∈ {1,true} so any collapsed failure can be
+/// traced to its source. Zero output and near-zero cost when disabled —
+/// the wire behavior is unchanged either way.
+pub fn debug_cause(site: &str, error: impl std::fmt::Debug) {
+    if debug_errors_enabled() {
+        eprintln!("[api-cause] {site}: {error:?}");
+    }
+}
+
+/// `OPENCODE_DEBUG_ERRORS` (resolved once; env reads are not free on the
+/// hot path).
+fn debug_errors_enabled() -> bool {
+    static ENABLED: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        matches!(std::env::var("OPENCODE_DEBUG_ERRORS").as_deref(), Ok("1" | "true"))
+    });
+    *ENABLED
 }
 
 /// An empty-bodied response (unmatched API 404, WS handshake errors).

@@ -104,13 +104,17 @@
     }
   },
   {
-    "divergence": "status: reference=400 port=200",
-    "finding": "P10-E1: port accepts wrongly-typed payload fields (200) where v2 400s with InvalidRequestError kind=Payload — schema-error middleware parity gap",
+    "divergence": null,
+    "finding": null,
     "name": "payload_schema_reject_400",
     "port": {
-      "body": "<success-body-elided>",
+      "body": {
+        "_tag": "InvalidRequestError",
+        "kind": "Payload",
+        "message": "Expected string | null\n  at [\"title\"]"
+      },
       "content_type": "application/json",
-      "status": 200
+      "status": 400
     },
     "reference": {
       "body": {
@@ -131,13 +135,17 @@
     }
   },
   {
-    "divergence": "status: reference=400 port=200",
-    "finding": "P10-E2: port ignores invalid query values (200) where v2 400s with InvalidRequestError kind=Query",
+    "divergence": null,
+    "finding": null,
     "name": "query_schema_reject_400",
     "port": {
-      "body": "<success-body-elided>",
+      "body": {
+        "_tag": "InvalidRequestError",
+        "kind": "Query",
+        "message": "Expected an integer\n  at [\"limit\"]"
+      },
       "content_type": "application/json",
-      "status": 200
+      "status": 400
     },
     "reference": {
       "body": {
@@ -156,13 +164,13 @@
     }
   },
   {
-    "divergence": "status: reference=404 port=405",
-    "finding": "P10-E3: port answers method mismatch with 405 (axum default), v2 with 404 + empty body",
+    "divergence": null,
+    "finding": null,
     "name": "method_mismatch_delete_info",
     "port": {
       "body": "<empty>",
       "content_type": "",
-      "status": 405
+      "status": 404
     },
     "reference": {
       "body": "<empty>",

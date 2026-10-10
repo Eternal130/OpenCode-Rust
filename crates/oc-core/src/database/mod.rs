@@ -32,7 +32,7 @@ mod tests;
 
 pub use error::{DbError, Result};
 pub use migrations::{ApplyReport, Migration, MigrationOptions, MIGRATIONS};
-pub use path::DbLocation;
+pub use path::{engine_location, DbLocation};
 
 use std::fs;
 use std::io;

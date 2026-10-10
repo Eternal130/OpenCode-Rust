@@ -43,6 +43,7 @@ pub mod persistent_pty;
 pub mod project;
 pub mod pty;
 pub mod pty_state;
+pub mod schema_check;
 pub mod server;
 pub mod session;
 pub mod shell;

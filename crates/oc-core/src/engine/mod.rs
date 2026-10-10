@@ -338,8 +338,20 @@ impl Engine {
     /// projectors, catalog, global ports, and the location map.
     pub async fn boot(options: EngineOptions) -> Engine {
         std::fs::create_dir_all(&options.data_root).expect("data root");
+        // P10-DB1: the engine's database path goes through the channel
+        // scheme (`database::path`, the port of v2's `databasePath`) —
+        // NOT a hard-pinned `opencode.db`. The channel comes from the
+        // one workspace source (`oc_util::channel::current`), so the
+        // engine, `oc-cli serve`, and a channel-matched v2 build all
+        // resolve the SAME file (e.g. `OPENCODE_CHANNEL=stable` opens
+        // `opencode-stable.db` like the pinned reference build).
         let db = Arc::new(
-            Database::open_file(options.data_root.join("opencode.db")).await.expect("database"),
+            Database::open_location(
+                crate::database::engine_location(&options.data_root),
+                crate::database::MigrationOptions::default(),
+            )
+            .await
+            .expect("database"),
         );
         let bus = Arc::new(Bus::new(
             (*db).clone(),
