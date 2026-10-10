@@ -33,7 +33,16 @@ parking_lot = "0.12"
 dashmap = "6"
 subtle = "2"
 libc = "0.2"
+# R-04: the web-UI archive is decompressed at runtime only — compression
+# happens in CI (tools/web-assets/package.ts, node:zlib brotli). This is
+# the lighter decompress-only crate (already a transitive lock entry via
+# tower-http's compression-br).
+brotli-decompressor = "6"
 
 [dev-dependencies]
 tempfile = "3"
 oc-tui = { workspace = true }
+# In-test fixture compression (app-archive round-trip + serving parity
+# tests) — same crate the CI-equivalent quality (q6) exercises. Already
+# a transitive lock entry; dev-only.
+brotli = "9"
