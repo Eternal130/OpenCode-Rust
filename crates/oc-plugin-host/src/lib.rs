@@ -12,9 +12,19 @@
 //! * [`BroadcastTap`] — the post-ingest event tap the TUI store
 //!   publishes through after its reducers ran.
 //! * [`RegistrationSnapshot`] — the ONLY synchronous surface:
-//!   commands (with owned keymap entries) and theme JSON documents
-//!   resolve into native Rust structures at registration time;
-//!   nothing crosses IPC per-frame.
+//!   commands (with owned keymap entries), theme JSON documents,
+//!   agents/skills/tools/MCP servers (wave 2 transform-domain
+//!   materialization) and runtime-hook coverage resolve into native
+//!   Rust structures at registration time; nothing crosses IPC
+//!   per-frame.
+//! * [`context`] (wave 2) — the minimal flagship-driven Context
+//!   backing: [`context::HostState`] (the host-owned agent/MCP tables
+//!   seeded INTO the guest at load), [`context::SessionPort`] (the
+//!   `ctx.session.*` engine seam — answered asynchronously off the IO
+//!   reader so ports may dispatch hooks back into the guest through
+//!   [`context::Bridge::dispatch_hook`]), and
+//!   [`context::install`] (the pinned, frozen npm/bun install path
+//!   behind `opencode plugin add`).
 //!
 //! ## 1. Deadlock protocol (binding)
 //!
@@ -72,14 +82,20 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 pub mod bun;
+pub mod context;
 pub mod host_js;
 pub mod protocol;
 pub mod registrations;
 pub mod supervisor;
 pub mod tap;
 
+pub use context::{
+    install::{default_root as install_root, install, InstallOptions, Installed},
+    Bridge, HostState, NoSessionEngine, SessionPort, SESSION_METHODS,
+};
 pub use registrations::{
-    PluginCommand, PluginState, PluginStatus, PluginTheme, RegistrationSnapshot,
+    PluginAgent, PluginCommand, PluginHook, PluginMcp, PluginSkill, PluginState, PluginStatus,
+    PluginTheme, PluginTool, RegistrationSnapshot,
 };
 pub use supervisor::{HostError, SupervisorConfig};
 pub use tap::{BroadcastTap, TapEvent};
@@ -92,7 +108,7 @@ const HOST_JS: &str = include_str!("host/host.js");
 const SANDBOX_ROOT: &str = "/tmp/opencode";
 
 /// Caller-facing configuration (timeouts tunable for tests).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PluginHostConfig {
     /// Extra env for the guest (test fixtures).
     pub env: Vec<(String, String)>,
@@ -103,6 +119,11 @@ pub struct PluginHostConfig {
     pub max_plugin_crashes: u32,
     /// Consecutive restart attempts before the host gives up.
     pub max_restarts: u32,
+    /// Host-owned transform-domain base state (the agent/MCP tables
+    /// seeded into the guest; `ctx.directory`/`ctx.location`).
+    pub host_state: HostState,
+    /// `ctx.session.*` routing target (the session-engine seam).
+    pub session_port: Option<Arc<dyn SessionPort>>,
 }
 
 impl Default for PluginHostConfig {
@@ -115,6 +136,8 @@ impl Default for PluginHostConfig {
             restart_backoff_max: Duration::from_secs(4),
             max_plugin_crashes: 3,
             max_restarts: 8,
+            host_state: HostState::default(),
+            session_port: None,
         }
     }
 }
@@ -202,6 +225,8 @@ impl PluginHost {
             max_plugin_crashes: config.max_plugin_crashes,
             max_restarts: config.max_restarts,
             env: std::mem::take(&mut config.env),
+            host_state: config.host_state,
+            session_port: config.session_port.or_else(|| Some(Arc::new(NoSessionEngine))),
         };
         let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
         let (parts_tx, parts_rx) = std::sync::mpsc::channel::<FacadeParts>();
@@ -338,6 +363,19 @@ impl PluginHost {
         args: Option<&str>,
         timeout: Duration,
     ) -> Result<Value, String> {
+        self.execute_command_in_session(name, args, "", timeout)
+    }
+
+    /// [`PluginHost::execute_command`] with the invoking session id
+    /// (v2 `CommandInvocation.sessionID` — marker-style commands
+    /// submit their prompt into that session).
+    pub fn execute_command_in_session(
+        &self,
+        name: &str,
+        args: Option<&str>,
+        session_id: &str,
+        timeout: Duration,
+    ) -> Result<Value, String> {
         let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
         let Some(plugin_id) = facade.shared.plugin_for_command(name) else {
             return Err(format!("{name}: no such plugin command"));
@@ -350,7 +388,12 @@ impl PluginHost {
         runtime
             .block_on(facade.shared.request(
                 "command.execute",
-                json!({ "pluginId": plugin_id, "name": name, "args": args }),
+                json!({
+                    "pluginId": plugin_id,
+                    "name": name,
+                    "args": args,
+                    "sessionID": session_id,
+                }),
                 timeout,
             ))
             .map(|result| result.get("result").cloned().unwrap_or(Value::Null))

@@ -1,8 +1,10 @@
 //! The guest-side host script (`bun host.js`): module loading via
 //! dynamic `import()` (native ESM + npm + CJS resolution — whatever
-//! Bun runs), per-plugin error containment, the registration-time
-//! `ctx` bridge, event fan-out, and the digest-scan hot-reload
-//! watcher.
+//! Bun runs), per-plugin error containment, the Context bridge
+//! (wave 1: commands/themes/events; wave 2: the flagship's minimal
+//! domain set — agent/mcp/skill/tool/command transforms, hooks,
+//! storage KV, session routing, the async-iterable event stream),
+//! event fan-out, and the digest-scan hot-reload watcher.
 //!
 //! Productionized from the `/tmp/opencode/spike-bun` `host.ts`
 //! prototype (spike-plugin-runtime.md): NDJSON JSON-RPC over stdio,
@@ -10,6 +12,14 @@
 //! by supervisor replies; the read loop NEVER awaits a handler before
 //! reading the next line (the mirrored deadlock rule — see the crate
 //! docs §Deadlock protocol).
+//!
+//! Transform-domain semantics (v2 `State.Transformable`, mirrored by
+//! oc-core's `TransformDomain`): the domain state is process-global,
+//! seeded from the host at load (the registration-time pre-resolution
+//! flowing host→guest); each `transform(cb)` appends a SYNC editor
+//! that runs immediately and replays on `reload()`; the derived table
+//! materializes to the supervisor after every change. Nothing crosses
+//! IPC at render time.
 
 // The script runs under Bun; `require` is constructed for the CJS
 // cache eviction the hot-reload parity needs.
@@ -23,7 +33,11 @@ const require = createRequire(import.meta.url);
 // Wire plumbing
 // ---------------------------------------------------------------------------
 
-const GUEST_ID_BASE = 1 << 40;
+// Guest request ids start at 2^40 — written as the literal, NOT
+// `1 << 40` (JavaScript shifts are 32-bit: `1 << 40 === 256`), so the
+// host's (small) and guest's (huge) id spaces are genuinely disjoint
+// (mirrors protocol::GUEST_ID_BASE).
+const GUEST_ID_BASE = 1099511627776;
 let nextGuestId = GUEST_ID_BASE;
 const pendingGuest = new Map(); // id -> { resolve, reject }
 
@@ -98,28 +112,464 @@ function classify(defaultExport) {
   return { kind: "none" };
 }
 
+// ---------------------------------------------------------------------------
+// Transform domains (process-global state, seeded from the host)
+// ---------------------------------------------------------------------------
+
+/** The seeded base (host state; agents/mcps from the embedder). */
+let domainBase = { agents: [], mcps: {}, appVersion: "2.0.24", directory: process.cwd(), project: { id: "global" } };
+
+/** Current derived state: base ⊕ editors (editors replayed on reload). */
+const domainStores = {
+  agents: new Map(), // id -> Agent.Info (v2 agent.ts editor semantics)
+  agentDefault: undefined,
+  mcps: new Map(), // name -> Mcp.ServerConfig
+  skills: new Map(), // id -> Skill.Info
+  tools: new Map(), // name -> tool definition
+};
+
+/** Registered editors per domain, in registration order. */
+const domainEditors = { agent: [], mcp: [], skill: [], tool: [], command: [] };
+
+function defaultAgent(id) {
+  // v2 Agent.Info.default (packages/schema/src/agent.ts).
+  return {
+    id,
+    name: id,
+    request: { settings: {}, headers: {}, body: {} },
+    mode: "primary",
+    hidden: false,
+    permissions: [
+      { action: "*", resource: "*", effect: "allow" },
+      { action: "read", resource: "*.env", effect: "ask" },
+      { action: "read", resource: "*.env.*", effect: "ask" },
+      { action: "read", resource: "*.env.example", effect: "allow" },
+    ],
+  };
+}
+
+const editors = {
+  agent: {
+    list: () => Array.from(domainStores.agents.values()),
+    get: (id) => domainStores.agents.get(id),
+    default: (id) => {
+      domainStores.agentDefault = id;
+    },
+    update: (id, fn) => {
+      let current = domainStores.agents.get(id);
+      if (!current) {
+        current = defaultAgent(id);
+        domainStores.agents.set(id, current);
+      }
+      fn(current);
+      current.id = id;
+    },
+    remove: (id) => {
+      domainStores.agents.delete(id);
+    },
+  },
+  mcp: {
+    list: () => Array.from(domainStores.mcps.entries()),
+    get: (name) => domainStores.mcps.get(name),
+    set: (name, config) => {
+      domainStores.mcps.set(name, config);
+    },
+    update: (name, fn) => {
+      let current = domainStores.mcps.get(name);
+      if (!current) {
+        current = {};
+        domainStores.mcps.set(name, current);
+      }
+      fn(current);
+    },
+    remove: (name) => {
+      domainStores.mcps.delete(name);
+    },
+  },
+  skill: {
+    list: () => Array.from(domainStores.skills.values()),
+    get: (id) => domainStores.skills.get(id),
+    add: (info) => {
+      const id = typeof info?.id === "string" && info.id ? info.id : info?.name;
+      if (!id) throw new Error("skill.add requires an id");
+      domainStores.skills.set(id, info);
+    },
+    update: (id, fn) => {
+      const current = domainStores.skills.get(id);
+      if (!current) return;
+      fn(current);
+      current.id = id;
+    },
+    remove: (id) => {
+      domainStores.skills.delete(id);
+    },
+  },
+  tool: {
+    list: () => Array.from(domainStores.tools.values()),
+    get: (name) => domainStores.tools.get(name),
+    add: (def) => {
+      const name = typeof def?.name === "string" ? def.name : "";
+      if (!name) throw new Error("tool.add requires a name");
+      domainStores.tools.set(name, def);
+    },
+    update: (name, fn) => {
+      const current = domainStores.tools.get(name);
+      if (!current) return;
+      fn(current);
+    },
+    remove: (name) => {
+      domainStores.tools.delete(name);
+    },
+  },
+  command: {
+    add: (definition) => definition, // shaped in the domain wrapper
+  },
+};
+
+function cloneJson(value) {
+  return structuredClone(value);
+}
+
+/** Reset every domain to the seeded base (pre-replay). */
+function resetDomainsToBase() {
+  domainStores.agents = new Map(domainBase.agents.filter((a) => a?.id).map((a) => [a.id, cloneJson(a)]));
+  domainStores.agentDefault = undefined;
+  domainStores.mcps = new Map(Object.entries(domainBase.mcps ?? {}).map(([k, v]) => [k, cloneJson(v)]));
+  // skills/tools have no host-discovered base in this wave; editors
+  // fully own their tables.
+  domainStores.skills = new Map();
+  domainStores.tools = new Map();
+}
+
+let domainsSeeded = false;
+
+function seedDomains(seed) {
+  domainBase = {
+    agents: Array.isArray(seed?.agents) ? seed.agents : [],
+    mcps: seed?.mcps && typeof seed.mcps === "object" ? seed.mcps : {},
+    appVersion: typeof seed?.appVersion === "string" && seed.appVersion ? seed.appVersion : "2.0.24",
+    directory: typeof seed?.directory === "string" && seed.directory ? seed.directory : process.cwd(),
+    project: { id: seed?.project?.id ?? "global" },
+  };
+  // Seed ONCE (the host's base state): later loads (a second plugin,
+  // or a hot reload after unload disposed every editor) re-derive from
+  // this base instead of wiping contributions mid-flight. The one
+  // reset case: a reload generation with NO surviving editors starts
+  // from a clean base.
+  if (domainsSeeded) {
+    const editorsAlive = Object.values(domainEditors).some((list) => list.length > 0);
+    if (editorsAlive) return;
+    resetDomainsToBase();
+    return;
+  }
+  domainsSeeded = true;
+  resetDomainsToBase();
+}
+
+async function materializeDomain(kind, pluginId) {
+  if (kind === "agent") {
+    await hostRequest("agent.transform", {
+      pluginId,
+      agents: Array.from(domainStores.agents.values()),
+      default: domainStores.agentDefault ?? null,
+    });
+  } else if (kind === "mcp") {
+    await hostRequest("mcp.transform", {
+      pluginId,
+      servers: Object.fromEntries(domainStores.mcps),
+    });
+  } else if (kind === "skill") {
+    await hostRequest("skill.transform", {
+      pluginId,
+      skills: Array.from(domainStores.skills.values()),
+    });
+  } else if (kind === "tool") {
+    await hostRequest("tool.transform", {
+      pluginId,
+      tools: Array.from(domainStores.tools.values()),
+    });
+  }
+}
+
+/**
+ * Re-derive one domain: base ⊕ its editors (in order), then
+ * materialize. `reload()` and editor disposal both land here.
+ */
+async function rederiveDomain(kind, pluginId) {
+  const bases = {
+    agent: () => {
+      domainStores.agents = new Map(domainBase.agents.filter((a) => a?.id).map((a) => [a.id, cloneJson(a)]));
+      domainStores.agentDefault = undefined;
+    },
+    mcp: () => {
+      domainStores.mcps = new Map(Object.entries(domainBase.mcps ?? {}).map(([k, v]) => [k, cloneJson(v)]));
+    },
+    skill: () => {
+      domainStores.skills = new Map();
+    },
+    tool: () => {
+      domainStores.tools = new Map();
+    },
+  };
+  (bases[kind] ?? (() => {}))();
+  for (const entry of domainEditors[kind]) {
+    entry.cb(editors[kind]);
+  }
+  await materializeDomain(kind, pluginId);
+}
+
+// ---------------------------------------------------------------------------
+// Runtime hook registry (guest-side handlers; coverage registered)
+// ---------------------------------------------------------------------------
+
+const hookHandlers = { session: new Map(), tool: new Map() };
+
+const SESSION_HOOKS = new Set([
+  "prompt", "context", "compaction", "generate", "title", "model.request",
+  "http.request", "http.response",
+  "experimental.ws.handshake", "experimental.ws.send", "experimental.ws.receive",
+  "retry",
+]);
+const TOOL_HOOKS = new Set(["execute.before", "execute.after"]);
+
+async function registerHook(pluginId, domain, name, handlers) {
+  if (domain === "session" ? !SESSION_HOOKS.has(name) : !TOOL_HOOKS.has(name)) {
+    throw new Error(`unknown ${domain} hook ${name}`);
+  }
+  const map = hookHandlers[domain];
+  if (!map.has(name)) map.set(name, []);
+  map.get(name).push({ pluginId, handler: handlers });
+  await hostRequest("hook.register", { pluginId, domain, name });
+  return {
+    async dispose() {
+      const list = map.get(name) ?? [];
+      const at = list.indexOf(list.find((e) => e.handler === handlers));
+      if (at >= 0) list.splice(at, 1);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The Context
+// ---------------------------------------------------------------------------
+
 function makeCtx(pluginId) {
   const commands = plugins.get(pluginId).commands;
   const subscriptions = plugins.get(pluginId).subscriptions;
+
+  const commandAdd = async (spec) => {
+    const name = String(spec?.name ?? "");
+    if (!name) throw new Error("command.add requires a name");
+    await hostRequest("command.add", {
+      pluginId,
+      name,
+      description: String(spec?.description ?? ""),
+      keybinds: Array.isArray(spec?.keybinds) ? spec.keybinds.map(String) : [],
+      palette: spec?.palette !== false,
+    });
+    commands.set(name, spec?.execute);
+    return { async dispose() { commands.delete(name); } };
+  };
+
+  const sessionMethod = (name) => async (args) => {
+    const result = await hostRequest(`session.${name}`, { pluginId, args: args ?? {} });
+    return result && typeof result === "object" && "value" in result ? result.value : result;
+  };
+
   return {
     plugin: { id: pluginId },
-    // The registration-time sync bridge: every add lands in the
-    // supervisor's native structures BEFORE the `load` reply.
-    command: {
-      async add(spec) {
-        const name = String(spec?.name ?? "");
-        if (!name) throw new Error("command.add requires a name");
-        await hostRequest("command.add", {
-          pluginId,
-          name,
-          description: String(spec?.description ?? ""),
-          keybinds: Array.isArray(spec?.keybinds) ? spec.keybinds.map(String) : [],
-          palette: spec?.palette !== false,
-        });
-        commands.set(name, spec?.execute);
-        return { async dispose() { commands.delete(name); } };
+    app: { version: domainBase.appVersion },
+    directory: domainBase.directory,
+    location: { directory: domainBase.directory, project: { id: domainBase.project.id } },
+    hostFlavor: "v2",
+
+    // -- agent (REQUIRED by the flagship: setup bails without
+    //    agent.transform) ------------------------------------------------
+    agent: {
+      async transform(cb) {
+        const entry = { cb };
+        domainEditors.agent.push(entry);
+        cb(editors.agent);
+        await materializeDomain("agent", pluginId);
+        return {
+          async dispose() {
+            const at = domainEditors.agent.indexOf(entry);
+            if (at >= 0) domainEditors.agent.splice(at, 1);
+            await rederiveDomain("agent", pluginId);
+          },
+        };
+      },
+      async reload() {
+        await rederiveDomain("agent", pluginId);
+      },
+      async list() {
+        return editors.agent.list();
+      },
+      async get(id) {
+        return editors.agent.get(id);
       },
     },
+
+    // -- mcp --------------------------------------------------------------
+    mcp: {
+      async transform(cb) {
+        const entry = { cb };
+        domainEditors.mcp.push(entry);
+        cb(editors.mcp);
+        await materializeDomain("mcp", pluginId);
+        return {
+          async dispose() {
+            const at = domainEditors.mcp.indexOf(entry);
+            if (at >= 0) domainEditors.mcp.splice(at, 1);
+            await rederiveDomain("mcp", pluginId);
+          },
+        };
+      },
+      async reload() {
+        await rederiveDomain("mcp", pluginId);
+      },
+      async list() {
+        return editors.mcp.list();
+      },
+    },
+
+    // -- command ----------------------------------------------------------
+    command: {
+      add: commandAdd,
+      async transform(cb) {
+        const added = [];
+        const draft = {
+          add: (definition) => {
+            // v2 CommandDefinition: {name, description?, execute}. The
+            // registration is the same native path as command.add. Some
+            // plugins call draft.add() without awaiting — contain the
+            // floating rejection (it still lands before the `load`
+            // reply: the supervisor answers on its IO thread).
+            const registration = commandAdd(definition);
+            registration.catch((error) => {
+              notify("log", {
+                pluginId,
+                level: "error",
+                message: `command registration failed: ${errText(error)}`,
+              });
+            });
+            added.push(String(definition?.name ?? ""));
+            return registration;
+          },
+        };
+        const entry = { cb: (d) => d };
+        domainEditors.command.push(entry);
+        await cb(draft);
+        return {
+          async dispose() {
+            for (const name of added) commands.delete(name);
+            const at = domainEditors.command.indexOf(entry);
+            if (at >= 0) domainEditors.command.splice(at, 1);
+          },
+        };
+      },
+      async reload() {},
+      async list() {
+        return Array.from(commands.keys()).map((name) => ({ name }));
+      },
+    },
+
+    // -- skill ------------------------------------------------------------
+    skill: {
+      async transform(cb) {
+        const entry = { cb };
+        domainEditors.skill.push(entry);
+        cb(editors.skill);
+        await materializeDomain("skill", pluginId);
+        return {
+          async dispose() {
+            const at = domainEditors.skill.indexOf(entry);
+            if (at >= 0) domainEditors.skill.splice(at, 1);
+            await rederiveDomain("skill", pluginId);
+          },
+        };
+      },
+      async reload() {
+        await rederiveDomain("skill", pluginId);
+      },
+      async list() {
+        return editors.skill.list();
+      },
+    },
+
+    // -- tool ---------------------------------------------------------------
+    tool: {
+      async transform(cb) {
+        const entry = { cb };
+        domainEditors.tool.push(entry);
+        cb(editors.tool);
+        await materializeDomain("tool", pluginId);
+        return {
+          async dispose() {
+            const at = domainEditors.tool.indexOf(entry);
+            if (at >= 0) domainEditors.tool.splice(at, 1);
+            await rederiveDomain("tool", pluginId);
+          },
+        };
+      },
+      async reload() {
+        await rederiveDomain("tool", pluginId);
+      },
+      async list() {
+        return editors.tool.list();
+      },
+      hook: (name, handler) => registerHook(pluginId, "tool", name, handler),
+    },
+
+    // -- session (hook registration + engine routing) ------------------------
+    session: {
+      hook: (name, handler) => registerHook(pluginId, "session", name, handler),
+      get: sessionMethod("get"),
+      interrupt: sessionMethod("interrupt"),
+      context: sessionMethod("context"),
+      messages: sessionMethod("messages"),
+      list: sessionMethod("list"),
+      prompt: sessionMethod("prompt"),
+      synthetic: sessionMethod("synthetic"),
+      update: sessionMethod("update"),
+      remove: sessionMethod("remove"),
+      wait: sessionMethod("wait"),
+      switchModel: sessionMethod("switchModel"),
+    },
+
+    // -- permission --------------------------------------------------------
+    permission: {
+      async reply(args) {
+        return hostRequest("permission.reply", { pluginId, args: args ?? {} });
+      },
+    },
+
+    // -- storage (plugin-ID-scoped durable KV) --------------------------------
+    storage: {
+      async get(key) {
+        const result = await hostRequest("storage.get", { pluginId, key: String(key ?? "") });
+        return result && typeof result === "object" && result.value !== null ? result.value : undefined;
+      },
+      async set(key, value) {
+        await hostRequest("storage.set", { pluginId, key: String(key ?? ""), value: value ?? null });
+      },
+      async remove(key) {
+        await hostRequest("storage.remove", { pluginId, key: String(key ?? "") });
+      },
+      async scan(options) {
+        const scan = options ?? {};
+        return hostRequest("storage.scan", {
+          pluginId,
+          prefix: typeof scan.prefix === "string" ? scan.prefix : "",
+          after: typeof scan.after === "string" ? scan.after : null,
+          limit: Number.isFinite(scan.limit) ? scan.limit : null,
+        });
+      },
+    },
+
+    // -- registration-time sync bridge (wave 1) -------------------------------
+    // Every add lands in the supervisor's native structures BEFORE the
+    // `load` reply.
     theme: {
       async register(theme) {
         const name = String(theme?.name ?? "");
@@ -129,21 +579,81 @@ function makeCtx(pluginId) {
       },
     },
     event: {
-      // (handler) | (types, handler) | (types[]) — the last form is a
-      // filter-only subscription (no callback; parity with the client
-      // EventApi shape).
-      async subscribe(first, second) {
-        const types = Array.isArray(first) ? first : null;
-        const handler = typeof first === "function" ? first : second;
-        const entry = { types, handler: handler ?? null };
+      // (handler) | (types, handler) | (types[]) — the handler forms
+      // register a callback subscription (wave 1) and return a plain
+      // Promise<Registration>. The NO-ARG form is the v2 EventApi
+      // shape: returns an AsyncIterable SYNCHRONOUSLY (the flagship
+      // calls `.subscribe()[Symbol.asyncIterator]()` without
+      // awaiting). NB: never resolve awaits through a hand-rolled
+      // thenable whose `then` returns a derived promise — Bun
+      // 1.3.10 wedges on that shape (verified: then() returning
+      // `inner.then(() => v)` never settles the awaiting frame).
+      subscribe(first, second) {
+        if (typeof first === "function" || Array.isArray(first)) {
+          return (async () => {
+            const types = Array.isArray(first) ? first : null;
+            const handler = typeof first === "function" ? first : second;
+            const entry = { types, handler: handler ?? null, queue: null };
+            subscriptions.push(entry);
+            await hostRequest("event.subscribe", { pluginId, types });
+            return {
+              async dispose() {
+                const at = subscriptions.indexOf(entry);
+                if (at >= 0) subscriptions.splice(at, 1);
+              },
+            };
+          })();
+        }
+        // Async-iterable form (v2 `ctx.event.subscribe()`).
+        const queue = [];
+        let waiters = [];
+        let finished = false;
+        const entry = { types: null, handler: null, queue: { push, finish } };
+        function push(event) {
+          if (finished) return;
+          if (queue.length >= 512) {
+            queue.shift(); // backpressure: drop oldest, log once
+            notify("log", { pluginId, level: "warn", message: "event queue overflow; dropped oldest" });
+          }
+          queue.push(event);
+          flush();
+        }
+        function flush() {
+          while (waiters.length > 0 && queue.length > 0) {
+            const waiter = waiters.shift();
+            waiter({ value: queue.shift(), done: false });
+          }
+        }
+        function finish() {
+          finished = true;
+          for (const waiter of waiters) waiter({ value: undefined, done: true });
+          waiters = [];
+        }
         subscriptions.push(entry);
-        await hostRequest("event.subscribe", { pluginId, types });
-        return {
-          async dispose() {
-            const at = subscriptions.indexOf(entry);
-            if (at >= 0) subscriptions.splice(at, 1);
+        hostRequest("event.subscribe", { pluginId, types: null }).catch((error) => {
+          notify("log", { pluginId, level: "error", message: `event.subscribe failed: ${errText(error)}` });
+          finish();
+        });
+        const iterable = {
+          [Symbol.asyncIterator]() {
+            return {
+              next() {
+                if (queue.length > 0) return Promise.resolve({ value: queue.shift(), done: false });
+                if (finished) return Promise.resolve({ value: undefined, done: true });
+                return new Promise((resolve) => {
+                  waiters.push(resolve);
+                });
+              },
+              async return() {
+                const at = subscriptions.indexOf(entry);
+                if (at >= 0) subscriptions.splice(at, 1);
+                finish();
+                return { value: undefined, done: true };
+              },
+            };
           },
         };
+        return iterable;
       },
     },
     // Nested sync RPC — the deadlock-rule hammer: a guest→host request
@@ -159,18 +669,23 @@ function makeCtx(pluginId) {
 // Supervisor-facing methods
 // ---------------------------------------------------------------------------
 
-async function handleLoad({ entry, generation }) {
+async function handleLoad({ entry, generation, seed }) {
   const abs = require("node:path").resolve(entry);
   // v2 source.bun parity: evict CJS cache under the plugin dir, then
-  // re-import with a generation cache-bust.
+  // re-import with a generation cache-bust. The FIRST load (generation
+  // 1) imports without the `?t=` query — plugins legitimately derive
+  // their package root from `import.meta.url` and Node's
+  // `fileURLToPath` rejects query strings.
   const dir = require("node:path").dirname(abs);
   for (const key of Object.keys(require.cache)) {
     if (key.startsWith(dir)) delete require.cache[key];
   }
+  if (seed) seedDomains(seed);
   loadingEntries.add(abs);
   let mod;
   try {
-    mod = await import(`file://${abs}?t=${generation ?? Date.now()}`);
+    const bust = generation && generation > 1 ? `?t=${generation}` : "";
+    mod = await import(`file://${abs}${bust}`);
   } finally {
     loadingEntries.delete(abs);
   }
@@ -230,10 +745,15 @@ async function handleDispatch({ event }) {
     notify("plugin.busy", { pluginId });
     try {
       for (const sub of matching) {
-        if (!sub.handler) { delivered++; continue; }
+        if (!sub.handler && !sub.queue) { delivered++; continue; }
         try {
-          await sub.handler(event);
-          delivered++;
+          if (sub.queue) {
+            sub.queue.push(event);
+            delivered++;
+          } else {
+            await sub.handler(event);
+            delivered++;
+          }
         } catch (error) {
           errors.push(`${pluginId}: ${errText(error)}`);
         }
@@ -245,14 +765,41 @@ async function handleDispatch({ event }) {
   return { ok: errors.length === 0, delivered, errors };
 }
 
-async function handleCommandExecute({ pluginId, name, args }) {
+async function handleCommandExecute({ pluginId, name, args, sessionID }) {
   const record = plugins.get(pluginId);
   const execute = record?.commands.get(name);
   if (typeof execute !== "function") {
     throw new Error(`${pluginId}:${name}: no such command`);
   }
-  const result = await execute({ args: args ?? null }, makeCtx(pluginId));
+  const invocation = {
+    sessionID: typeof sessionID === "string" ? sessionID : "",
+    agent: undefined,
+    delivery: "steer",
+    prompt: { text: typeof args === "string" ? args : args?.text ?? null },
+    args,
+  };
+  const result = await execute(invocation, makeCtx(pluginId));
   return { ok: true, result: result ?? null };
+}
+
+async function handleHookDispatch({ pluginId, domain, name, event }) {
+  const list = hookHandlers[domain]?.get(name) ?? [];
+  const errors = [];
+  const target = list.filter((entry) => !pluginId || entry.pluginId === pluginId);
+  if (target.length === 0) return { ok: true, event: event ?? null, errors };
+  notify("plugin.busy", { pluginId: target[0].pluginId });
+  try {
+    for (const entry of target) {
+      try {
+        await entry.handler(event);
+      } catch (error) {
+        errors.push(`${entry.pluginId}: ${errText(error)}`);
+      }
+    }
+  } finally {
+    notify("plugin.idle", { pluginId: target[0].pluginId });
+  }
+  return { ok: errors.length === 0, event: event ?? null, errors };
 }
 
 // ---------------------------------------------------------------------------
@@ -313,6 +860,7 @@ const METHODS = {
   unload: handleUnload,
   dispatch: handleDispatch,
   "command.execute": handleCommandExecute,
+  "hook.dispatch": handleHookDispatch,
   scan: async ({ entry }) => ({ digests: await scanDigests(entry) }),
 };
 

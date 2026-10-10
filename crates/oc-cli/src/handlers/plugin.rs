@@ -1,6 +1,7 @@
-//! `opencode plugin *` — plugin management (handlers/plugin/*). npm-driven
-//! install/update is a REGISTERED divergence: the Rust port config-manages
-//! without fetching packages.
+//! `opencode plugin *` — plugin management (handlers/plugin/*). `add`
+//! performs a real pinned install (wave 2: the oc-plugin-host
+//! install path — frozen when a lockfile exists, reuse-first); update
+//! remains config-managed (REGISTERED divergence).
 
 use serde_json::{json, Value};
 
@@ -111,7 +112,6 @@ fn configured(plugins: Option<&Vec<Value>>, spec: &str) -> bool {
 }
 
 fn add(package: &str, force: bool) -> i32 {
-    // REGISTERED divergence: no npm install — only the config entry.
     if package.starts_with('-')
         || package == "*"
         || package.ends_with(".*")
@@ -129,19 +129,38 @@ fn add(package: &str, force: bool) -> i32 {
         }
     };
     let plugins = config.get("plugins").and_then(Value::as_array).cloned();
-    if configured(plugins.as_ref(), package) {
+    let already = configured(plugins.as_ref(), package);
+    if already {
         println!("Plugin \"{package}\" is already configured in {}", config_path.display());
-        return 0;
+    } else {
+        let root = config.as_object_mut().expect("config object");
+        let entry = root.entry("plugins".to_owned()).or_insert_with(|| json!([]));
+        entry.as_array_mut().expect("plugins array").push(json!(package));
+        if let Err(message) = write_global_config(&config, force) {
+            eprintln!("Error: {message}");
+            return 1;
+        }
     }
-    let root = config.as_object_mut().expect("config object");
-    let entry = root.entry("plugins".to_owned()).or_insert_with(|| json!([]));
-    entry.as_array_mut().expect("plugins array").push(json!(package));
-    if let Err(message) = write_global_config(&config, force) {
-        eprintln!("Error: {message}");
-        return 1;
+    // Real installation (wave 2): pinned + frozen npm/bun install via
+    // the plugin host's install path. An existing installation for the
+    // pinned version is reused; unpinned specs are pinned via
+    // `npm view <pkg> version` first.
+    match oc_plugin_host::install(package, &oc_plugin_host::InstallOptions::default()) {
+        Ok(installed) => {
+            println!(
+                "Plugin \"{package}\" added to {} ({} {} → {})",
+                config_path.display(),
+                if installed.reused { "already installed" } else { "installed" },
+                installed.version,
+                installed.entry.display()
+            );
+            0
+        }
+        Err(error) => {
+            eprintln!("Plugin \"{package}\" configured, but installation failed: {error}");
+            1
+        }
     }
-    println!("Plugin \"{package}\" added to {} (installation pending)", config_path.display());
-    0
 }
 
 fn remove(package: &str, force: bool) -> i32 {
