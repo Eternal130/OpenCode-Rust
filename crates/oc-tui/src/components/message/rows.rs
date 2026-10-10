@@ -228,9 +228,11 @@ impl ImageStripOptions {
 /// `paddingBottom 1`) — at most [`ImageStripOptions::MAX_VISIBLE`]
 /// visible plus a `+N more` cell box. With a drawable protocol the
 /// thumb rects become image placements (the placeholder cells stay
-/// underneath); otherwise the boxes render as bordered placeholders
-/// with the `[Image N]`-style label centered (v2's "No preview"
-/// fallback shape). Empty when disabled or image-less.
+/// underneath); with none (or sixel without raw sixel data) the
+/// decoded PNG renders as Unicode block glyphs — v2's `blocks`
+/// fallback (R-08) — and only undecodable payloads keep the
+/// bordered placeholder (v2's onError → "No preview"). Empty when
+/// disabled or image-less.
 #[must_use]
 pub fn image_strip_row(
     files: &[crate::components::message::model::UserFile],
@@ -264,10 +266,22 @@ pub fn image_strip_row(
                 cols: thumb_width as u16,
                 rows: height as u16,
             });
+            // The placeholder box (border + centered label) — the cells
+            // under the graphic and the no-protocol fallback.
+            paint_placeholder_box(&mut row, x, 1, thumb_width, height, &label_of(index), theme);
+        } else if let Some(cells) = blocks_thumbnail(&data, thumb_width, height) {
+            // v2's fallback IS the block renderer (`resolveImage­
+            // RenderProtocol` → "blocks" for terminals without a
+            // graphics protocol — and for sixel without pixel
+            // resolution): the decoded image quantizes to Unicode
+            // block glyphs, aspect-fit and centered in the thumb
+            // rect. No border, no label (the box is only the
+            // load-error fallback, mini/scrollback.surface.ts:390).
+            paint_blocks(&mut row, x, 1, thumb_width, height, &cells);
+        } else {
+            // Undecodable payload: v2's onError → "No preview".
+            paint_placeholder_box(&mut row, x, 1, thumb_width, height, &label_of(index), theme);
         }
-        // The placeholder box (border + centered label) — the cells
-        // under the graphic and the no-protocol fallback.
-        paint_placeholder_box(&mut row, x, 1, thumb_width, height, &label_of(index), theme);
         x += thumb_width + 1; // gap 1
     }
     if overflow > 0 {
@@ -320,6 +334,61 @@ fn paint_placeholder_box(
     let left = (inner.saturating_sub(label_width)) / 2;
     let mid = y + height / 2;
     row.placed.push(text_at(x + 1 + left, mid, trimmed, label_style));
+}
+
+/// Decode + quantize a thumbnail's PNG into block cells, aspect-
+/// fit inside `max_cols × max_rows` (`None` when the payload does
+/// not decode — the "No preview" fallback's condition).
+fn blocks_thumbnail(
+    data: &crate::image::ImageData,
+    max_cols: usize,
+    max_rows: usize,
+) -> Option<Vec<Vec<crate::image_blocks::BlockCell>>> {
+    let crate::image::ImageData::Png(bytes) = data else {
+        return None;
+    };
+    let image = crate::image_blocks::decode_png(bytes)?;
+    let (cols, rows) =
+        crate::image_blocks::fit_cells(image.width, image.height, max_cols, max_rows);
+    Some(crate::image_blocks::blocks_cells(&image, cols, rows))
+}
+
+/// Paint a blocks thumbnail centered in its thumb rect: one
+/// [`Placed`] per cell row, one styled run per cell (truecolor fg
+/// paints the glyph's filled quadrants, bg the rest).
+fn paint_blocks(
+    row: &mut RowRender,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    cells: &[Vec<crate::image_blocks::BlockCell>],
+) {
+    let block_rows = cells.len();
+    if block_rows == 0 {
+        return;
+    }
+    let block_cols = cells[0].len();
+    let offset_x = x + width.saturating_sub(block_cols) / 2;
+    let offset_y = y + height.saturating_sub(block_rows) / 2;
+    for (line_index, line) in cells.iter().enumerate() {
+        let runs = line
+            .iter()
+            .map(|cell| crate::layout::StyledSpan {
+                text: cell.glyph.to_string(),
+                style: Style::new()
+                    .fg(Color::Rgb(cell.fg[0], cell.fg[1], cell.fg[2]))
+                    .bg(Color::Rgb(cell.bg[0], cell.bg[1], cell.bg[2])),
+            })
+            .collect();
+        row.placed.push(Placed {
+            x: offset_x,
+            y: offset_y + line_index,
+            width: block_cols,
+            lines: vec![PlacedLine { runs }],
+            tag: None,
+        });
+    }
 }
 
 /// The user-message block (`UserMessage`): a raised-background box with
