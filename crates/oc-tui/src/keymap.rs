@@ -30,18 +30,22 @@ pub const LEADER_TIMEOUT_MS: u64 = 2000;
 
 /// One key stroke: key name plus modifiers. Key names use the opentui
 /// vocabulary (`return`, `escape`, `up`, `f2`, single letters).
+#[allow(clippy::struct_excessive_bools)] // modifier flags mirror the wire shape
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KeyStroke {
     pub key: String,
     pub ctrl: bool,
     pub shift: bool,
     pub alt: bool,
+    /// Super/hyper modifier (the `super+a`-style bindings): tracked so
+    /// `super+a` ≠ plain `a` (the reference's `input.select.all`).
+    pub super_key: bool,
 }
 
 impl KeyStroke {
     #[must_use]
     pub fn new(key: &str) -> Self {
-        Self { key: key.to_owned(), ctrl: false, shift: false, alt: false }
+        Self { key: key.to_owned(), ctrl: false, shift: false, alt: false, super_key: false }
     }
 
     #[must_use]
@@ -59,15 +63,20 @@ impl KeyStroke {
         Self { shift: true, ..Self::new(key) }
     }
 
-    /// Parse one stroke ("ctrl+x", "alt+down", "E", "return").
+    /// Parse one stroke ("ctrl+x", "alt+down", "E", "return"). The
+    /// final key token keeps interior meaning: a single space is a
+    /// valid key, so only the split segments are trimmed around the
+    /// `+` separators.
     #[must_use]
     pub fn parse(spec: &str) -> Option<Self> {
         let mut stroke = Self::new("");
+        // NB: the spec is NOT trimmed whole — a lone space is a valid
+        // key; only the `+`-separated segments trim.
         let tokens: Vec<&str> = spec.split('+').collect();
         for (index, token) in tokens.iter().enumerate() {
             let last = index + 1 == tokens.len();
             let token = token.trim();
-            if token.is_empty() {
+            if !last && token.is_empty() {
                 return None;
             }
             if !last {
@@ -75,11 +84,16 @@ impl KeyStroke {
                     "ctrl" => stroke.ctrl = true,
                     "shift" => stroke.shift = true,
                     "alt" | "meta" => stroke.alt = true,
-                    // Recognized but unused by the default table.
-                    "super" | "hyper" => {}
+                    "super" | "hyper" => stroke.super_key = true,
                     _ => return None,
                 }
                 continue;
+            }
+            // The key itself: an untrimmed single character (space is a
+            // key) or a trimmed name.
+            let token = if tokens[index].chars().count() == 1 { tokens[index] } else { token };
+            if token.is_empty() {
+                return None;
             }
             if token.chars().count() == 1 {
                 let ch = token.chars().next().expect("one char");
@@ -112,6 +126,9 @@ impl KeyStroke {
         }
         if self.shift {
             parts.push("shift".into());
+        }
+        if self.super_key {
+            parts.push("super".into());
         }
         parts.push(self.key.clone());
         parts.join("+")
@@ -203,6 +220,103 @@ pub struct CommandDef {
     pub layer: &'static str,
     pub palette: bool,
     pub group: Option<CommandGroup>,
+}
+
+/// One user keybind override (`cli.json` → `keybinds`): the v2 config
+/// schema keys overrides by the dot command (`"app.exit"`); the v1
+/// config used the bind name (`"app_exit"`) — both are accepted, the
+/// dot id first.
+///
+/// Values follow `BindingValueSchema`: a comma-separated alternatives
+/// string (`"ctrl+q,<leader>x"`), an array of those, or an unset
+/// (`false` / `"none"` / empty).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeybindOverride {
+    /// The override key as written (`app.exit` or `app_exit`).
+    pub name: String,
+    /// Parsed alternatives; empty = unset (removes the binding).
+    pub specs: Vec<String>,
+}
+
+impl KeybindOverride {
+    /// Parse one override value (`BindingValueSchema` subset): string
+    /// (comma alternatives), array of strings/`{key}` objects, `false`
+    /// or `"none"` (unset). `None` = unparseable (logged + skipped by
+    /// the caller).
+    #[must_use]
+    pub fn parse_value(name: &str, value: &serde_json::Value) -> Option<Self> {
+        let specs = match value {
+            serde_json::Value::String(text) => parse_binding_string(text),
+            serde_json::Value::Array(items) => {
+                let mut specs = Vec::new();
+                for item in items {
+                    match item {
+                        serde_json::Value::String(text) => specs.extend(parse_binding_string(text)),
+                        serde_json::Value::Object(object) => {
+                            // BindingObject: `{ key: "…" | {name,…} }`.
+                            let text = match object.get("key")? {
+                                serde_json::Value::String(text) => text.clone(),
+                                serde_json::Value::Object(stroke) => {
+                                    let key = stroke.get("name")?.as_str()?.to_owned();
+                                    let mut parts = Vec::new();
+                                    for modifier in
+                                        ["ctrl", "shift", "alt", "meta", "super", "hyper"]
+                                    {
+                                        if stroke.get(modifier).and_then(serde_json::Value::as_bool)
+                                            == Some(true)
+                                        {
+                                            parts.push(modifier.to_owned());
+                                        }
+                                    }
+                                    parts.push(key);
+                                    parts.join("+")
+                                }
+                                _ => return None,
+                            };
+                            specs.extend(parse_binding_string(&text));
+                        }
+                        _ => return None,
+                    }
+                }
+                specs
+            }
+            serde_json::Value::Bool(false) => Vec::new(),
+            _ => return None,
+        };
+        Some(Self { name: name.to_owned(), specs })
+    }
+}
+
+/// Split a comma-form binding string into alternatives; `"none"`
+/// unsets.
+fn parse_binding_string(text: &str) -> Vec<String> {
+    if text.trim().eq_ignore_ascii_case("none") {
+        return Vec::new();
+    }
+    text.split(',').map(str::trim).filter(|spec| !spec.is_empty()).map(str::to_owned).collect()
+}
+
+/// Parse the whole `keybinds` config object into overrides. Unknown
+/// keys and unparseable values are logged and skipped (the reference's
+/// `parse()` throws; the Rust port must never brick the TUI on a bad
+/// user config — the entry is dropped, the default stands).
+#[must_use]
+pub fn parse_keybind_overrides(value: &serde_json::Value) -> Vec<KeybindOverride> {
+    let Some(object) = value.as_object() else { return Vec::new() };
+    let mut out = Vec::new();
+    for (name, raw) in object {
+        match KeybindOverride::parse_value(name, raw) {
+            Some(entry) => out.push(entry),
+            None => log_skip(&format!("keybind {name:?}: unparseable value {raw} (skipped)")),
+        }
+    }
+    out
+}
+
+/// Config-load skip logging (the reference routes these to the toast
+/// system; the port logs to stderr and keeps running).
+pub(crate) fn log_skip(reason: &str) {
+    eprintln!("opencode tui: {reason}");
 }
 
 /// The FULL v2 default binding table (`config/v1/keybind.ts`,
@@ -436,6 +550,12 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "terminal_title_toggle" => "terminal.title.toggle", "none", "Toggle terminal title", "base";
 };
 
+/// The comma-separated default specs of one table entry, `none`
+/// filtered.
+fn table_specs(defaults: &str) -> Vec<&str> {
+    defaults.split(',').map(str::trim).filter(|spec| !spec.is_empty() && *spec != "none").collect()
+}
+
 /// Clock abstraction so leader-timeout behavior is testable with a
 /// [`ManualClock`].
 pub trait Clock {
@@ -464,6 +584,12 @@ impl ManualClock {
     pub fn advance(&self, ms: u64) {
         self.now.set(self.now.get() + ms);
     }
+
+    /// The current reading (tests).
+    #[must_use]
+    pub fn now_ms_value(&self) -> u64 {
+        self.now.get()
+    }
 }
 
 impl Clock for ManualClock {
@@ -491,14 +617,27 @@ struct Pending {
     expires_at: u64,
 }
 
-/// The keymap engine: default table + leader sequencing + mode stack.
+/// The keymap engine: default table + leader sequencing + mode stack,
+/// plus the user-override merge (`cli.json` → `keybinds`: user wins,
+/// unset removes, comma alternatives) and the enable/disable gate the
+/// reference implements through `Keymap.createLayer({ enabled })`.
 pub struct Keymap {
     leader: KeyStroke,
     timeout_ms: u64,
     /// layer name → (chord, command) rules.
-    layers: HashMap<&'static str, Vec<(Chord, &'static str)>>,
+    layers: HashMap<&'static str, Vec<(Chord, String)>>,
     /// registry by dot command (for palette + binding display).
     registry: HashMap<&'static str, &'static CommandDef>,
+    /// Effective binding specs per dot command (defaults overridden by
+    /// the user table) — the palette's binding display reads these.
+    effective: HashMap<String, Vec<String>>,
+    /// Commands whose bindings are currently disabled (the reference's
+    /// conditional layers — e.g. `app.exit` off while the prompt has
+    /// text).
+    disabled: Vec<String>,
+    /// While set, [`Keymap::lookup_base`] resolves: only the base
+    /// layer matches (input/dialog mode shadowing suspended).
+    base_only: bool,
     modes: Vec<String>,
     pending: Option<Pending>,
 }
@@ -519,8 +658,9 @@ impl Keymap {
     #[must_use]
     pub fn with_table(table: &'static [CommandDef]) -> Self {
         let leader = KeyStroke::parse(LEADER_DEFAULT).expect("leader parses");
-        let mut layers: HashMap<&'static str, Vec<(Chord, &'static str)>> = HashMap::new();
+        let mut layers: HashMap<&'static str, Vec<(Chord, String)>> = HashMap::new();
         let mut registry = HashMap::new();
+        let mut effective = HashMap::new();
         for def in table {
             registry.insert(def.command, def);
             for spec in def.defaults.split(',') {
@@ -529,18 +669,110 @@ impl Keymap {
                     continue;
                 }
                 if let Some(chord) = Chord::parse(spec, &leader) {
-                    layers.entry(def.layer).or_default().push((chord, def.command));
+                    layers.entry(def.layer).or_default().push((chord, def.command.to_owned()));
                 }
             }
+            effective.insert(
+                def.command.to_owned(),
+                table_specs(def.defaults).into_iter().map(str::to_owned).collect(),
+            );
         }
         Self {
             leader,
             timeout_ms: LEADER_TIMEOUT_MS,
             layers,
             registry,
+            effective,
+            disabled: Vec::new(),
+            base_only: false,
             modes: Vec::new(),
             pending: None,
         }
+    }
+
+    /// Apply user keybind overrides (`parse_keybind_overrides` output):
+    /// user bindings replace the defaults for that command (unset
+    /// removes them); the `leader` override rebinds the leader stroke.
+    /// Unknown keys are logged + skipped (defaults stand). Returns the
+    /// number of overrides applied.
+    pub fn apply_overrides(&mut self, overrides: &[KeybindOverride]) -> usize {
+        let mut applied = 0usize;
+        for entry in overrides {
+            if entry.name == "leader" {
+                if let Some(spec) = entry.specs.first() {
+                    if let Some(stroke) = KeyStroke::parse(spec.trim()) {
+                        self.rebind_leader(stroke);
+                        applied += 1;
+                    }
+                }
+                continue;
+            }
+            // v2 dot command first, v1 bind name second.
+            let def = self
+                .registry
+                .values()
+                .find(|def| def.command == entry.name || def.bind_name == entry.name)
+                .copied();
+            let Some(def) = def else {
+                log_skip(&format!("keybind {:?}: unknown command (skipped)", entry.name));
+                continue;
+            };
+            // Remove every existing chord for the command, then bind
+            // the override specs in the command's layer.
+            for rules in self.layers.values_mut() {
+                rules.retain(|(_, command)| command != def.command);
+            }
+            for spec in &entry.specs {
+                if let Some(chord) = Chord::parse(spec, &self.leader) {
+                    self.layers.entry(def.layer).or_default().push((chord, def.command.to_owned()));
+                } else {
+                    log_skip(&format!("keybind {spec:?}: unparseable stroke (skipped)"));
+                }
+            }
+            self.effective.insert(def.command.to_owned(), entry.specs.clone());
+            applied += 1;
+        }
+        applied
+    }
+
+    /// Rebind the leader stroke: chords mentioning `<leader>` are
+    /// stored as SPECS in `effective` and re-parsed lazily against the
+    /// current leader, so a leader override re-binds every affected
+    /// chord here.
+    fn rebind_leader(&mut self, leader: KeyStroke) {
+        self.leader = leader;
+        let defs: Vec<&'static CommandDef> = self.registry.values().copied().collect();
+        let effective = std::mem::take(&mut self.effective);
+        for def in defs {
+            let Some(specs) = effective.get(def.command) else { continue };
+            if !specs.iter().any(|spec| spec.contains("leader")) {
+                continue;
+            }
+            for rules in self.layers.values_mut() {
+                rules.retain(|(_, command)| command != def.command);
+            }
+            for spec in specs {
+                if let Some(chord) = Chord::parse(spec, &self.leader) {
+                    self.layers.entry(def.layer).or_default().push((chord, def.command.to_owned()));
+                }
+            }
+        }
+        self.effective = effective;
+    }
+
+    /// Disable/enable one command's bindings (the reference's
+    /// conditional layers): a disabled command never matches.
+    pub fn set_command_enabled(&mut self, command: &str, enabled: bool) {
+        if enabled {
+            self.disabled.retain(|entry| entry != command);
+        } else if !self.disabled.iter().any(|entry| entry == command) {
+            self.disabled.push(command.to_owned());
+        }
+    }
+
+    #[must_use]
+    pub fn command_enabled(&self, command: &str) -> bool {
+        !self.disabled.iter().any(|entry| entry == command)
     }
 
     /// Override the leader timeout (tests / user config `leader.timeout`).
@@ -551,6 +783,18 @@ impl Keymap {
     #[must_use]
     pub fn is_leader(&self, stroke: &KeyStroke) -> bool {
         *stroke == self.leader
+    }
+
+    /// Replace the whole mode stack (the pump recomputes it from
+    /// scratch each stroke — dialog over input over base — avoiding
+    /// LIFO ordering hazards when layers appear/disappear together).
+    /// A change clears any half-typed sequence.
+    pub fn set_modes(&mut self, modes: &[&str]) {
+        let wanted: Vec<String> = modes.iter().map(|mode| (*mode).to_owned()).collect();
+        if wanted != self.modes {
+            self.modes = wanted;
+            self.pending = None;
+        }
     }
 
     /// Push an input mode (dialog, autocomplete, …); returns a guard id
@@ -589,6 +833,24 @@ impl Keymap {
         false
     }
 
+    /// Resolve one stroke against the **base layer only** (the
+    /// conditional `app.exit` layer sits above the managed textarea
+    /// layer, so its chords must resolve before any input-mode
+    /// shadowing) — same pending/leader machinery as [`Keymap::lookup`].
+    pub fn lookup_base(&mut self, stroke: KeyStroke, clock: &dyn Clock) -> Outcome {
+        self.base_only = true;
+        let outcome = self.lookup(stroke, clock);
+        self.base_only = false;
+        outcome
+    }
+
+    /// Drop any pending leader sequence (a composer-consumed stroke
+    /// invalidates it — the reference's textarea layer swallows the
+    /// continuation).
+    pub fn clear_pending(&mut self) {
+        self.pending = None;
+    }
+
     /// Resolve one stroke. See the module docs for the escape and leader
     /// special-cases.
     pub fn lookup(&mut self, stroke: KeyStroke, clock: &dyn Clock) -> Outcome {
@@ -603,8 +865,8 @@ impl Keymap {
             let mut candidate = pending.strokes.clone();
             candidate.push(stroke.clone());
             match self.match_chord(&candidate) {
-                ChordMatch::Exact(command) => {
-                    return Outcome::Command { command: command.to_owned(), args: None };
+                ChordMatch::Owned(command) => {
+                    return Outcome::Command { command, args: None };
                 }
                 ChordMatch::Prefix => {
                     self.pending = Some(Pending {
@@ -626,9 +888,7 @@ impl Keymap {
             return Outcome::Pending { display: self.pending_display().expect("just set") };
         }
         match self.match_chord(std::slice::from_ref(&stroke)) {
-            ChordMatch::Exact(command) => {
-                Outcome::Command { command: command.to_owned(), args: None }
-            }
+            ChordMatch::Owned(command) => Outcome::Command { command, args: None },
             _ => Outcome::Unhandled,
         }
     }
@@ -638,16 +898,24 @@ impl Keymap {
         self.layers.values().flatten().any(|(chord, _)| chord.strokes.first() == Some(&self.leader))
     }
 
-    fn match_chord(&self, strokes: &[KeyStroke]) -> ChordMatch<'_> {
-        // Most recently pushed mode first, base last.
-        let mut order: Vec<&str> = self.modes.iter().rev().map(String::as_str).collect();
+    fn match_chord(&self, strokes: &[KeyStroke]) -> ChordMatch {
+        // Most recently pushed mode first, base last (unless suspended
+        // by `lookup_base`).
+        let mut order: Vec<&str> = if self.base_only {
+            Vec::new()
+        } else {
+            self.modes.iter().rev().map(String::as_str).collect()
+        };
         order.push("base");
         let mut prefix = false;
         for mode in order {
             let Some(rules) = self.layers.get(mode) else { continue };
             for (chord, command) in rules {
                 if chord.strokes == strokes {
-                    return ChordMatch::Exact(command);
+                    if self.disabled.iter().any(|entry| entry == command) {
+                        continue;
+                    }
+                    return ChordMatch::Owned(command.clone());
                 }
                 if chord.strokes.len() > strokes.len()
                     && chord.strokes.starts_with(strokes)
@@ -670,12 +938,15 @@ impl Keymap {
         default_table().iter().filter(|def| def.palette).collect()
     }
 
-    /// Display bindings for a command ("ctrl+x n" style), in table order.
+    /// Display bindings for a command ("ctrl+x n" style), in table
+    /// order — the user overrides' effective specs (not the defaults).
     #[must_use]
     pub fn bindings_for(&self, command: &str) -> Vec<String> {
         let mut out = Vec::new();
         if let Some(def) = self.registry.get(command) {
-            for spec in def.defaults.split(',') {
+            let empty = Vec::new();
+            let specs = self.effective.get(def.command).unwrap_or(&empty);
+            for spec in specs {
                 let spec = spec.trim();
                 if spec.is_empty() || spec == "none" {
                     continue;
@@ -694,8 +965,8 @@ impl Keymap {
     }
 }
 
-enum ChordMatch<'a> {
-    Exact(&'a str),
+enum ChordMatch {
+    Owned(String),
     Prefix,
     None,
 }
@@ -964,5 +1235,137 @@ mod dialog_layer_tests {
         let keymap = Keymap::new();
         assert_eq!(keymap.bindings_for("dialog.move_session.new"), vec!["ctrl+a".to_owned()]);
         assert_eq!(keymap.bindings_for("dialog.move_session.delete"), vec!["ctrl+d".to_owned()]);
+    }
+}
+
+#[cfg(test)]
+mod override_tests {
+    use super::*;
+
+    fn stroke(spec: &str) -> KeyStroke {
+        KeyStroke::parse(spec).expect("test stroke parses")
+    }
+
+    fn overrides(json: &serde_json::Value) -> Vec<KeybindOverride> {
+        parse_keybind_overrides(json)
+    }
+
+    /// User wins over defaults, unset removes, comma alternatives all
+    /// bind, and the palette's binding display reflects the override.
+    #[test]
+    fn user_overrides_replace_defaults() {
+        let mut keymap = Keymap::new();
+        let clock = ManualClock::default();
+        keymap.apply_overrides(&overrides(&serde_json::json!({
+            "app.exit": "ctrl+q,<leader>z",
+            "command.palette.show": "none",
+            "session.rename": ["ctrl+shift+r", "f9"],
+        })));
+        // ctrl+q exits now.
+        assert_eq!(
+            keymap.lookup(stroke("ctrl+q"), &clock),
+            Outcome::Command { command: "app.exit".to_owned(), args: None }
+        );
+        // <leader>z too (multi-stroke alternative).
+        assert!(matches!(keymap.lookup(stroke("ctrl+x"), &clock), Outcome::Pending { .. }));
+        assert_eq!(
+            keymap.lookup(stroke("z"), &clock),
+            Outcome::Command { command: "app.exit".to_owned(), args: None }
+        );
+        // The old ctrl+c default is REPLACED (user wins, not merged).
+        assert_eq!(keymap.lookup(stroke("ctrl+c"), &clock), Outcome::Unhandled);
+        // "none" unsets: ctrl+p no longer opens the palette.
+        assert_eq!(keymap.lookup(stroke("ctrl+p"), &clock), Outcome::Unhandled);
+        // Array form binds every alternative.
+        assert_eq!(
+            keymap.lookup(stroke("ctrl+shift+r"), &clock),
+            Outcome::Command { command: "session.rename".to_owned(), args: None }
+        );
+        assert_eq!(
+            keymap.lookup(stroke("f9"), &clock),
+            Outcome::Command { command: "session.rename".to_owned(), args: None }
+        );
+        // Binding displays reflect the overrides.
+        assert_eq!(
+            keymap.bindings_for("app.exit"),
+            vec!["ctrl+q".to_owned(), "ctrl+x z".to_owned()]
+        );
+        assert_eq!(keymap.bindings_for("command.palette.show"), Vec::<String>::new());
+    }
+
+    /// The v1 bind-name keys are accepted as aliases of the dot ids.
+    #[test]
+    fn v1_bind_names_are_accepted() {
+        let mut keymap = Keymap::new();
+        let clock = ManualClock::default();
+        keymap.apply_overrides(&overrides(&serde_json::json!({ "command_list": "ctrl+shift+p" })));
+        assert_eq!(
+            keymap.lookup(stroke("ctrl+shift+p"), &clock),
+            Outcome::Command { command: "command.palette.show".to_owned(), args: None }
+        );
+    }
+
+    /// Unknown keys and unparseable values are skipped (logged), never
+    /// fatal; the default bindings keep working.
+    #[test]
+    fn unknown_and_invalid_entries_are_skipped() {
+        let mut keymap = Keymap::new();
+        let clock = ManualClock::default();
+        keymap.apply_overrides(&overrides(&serde_json::json!({
+            "no.such.command": "ctrl+q",
+            "app.exit": 42,
+            "app.console": { "event": "press" },
+        })));
+        assert_eq!(
+            keymap.lookup(stroke("ctrl+c"), &clock),
+            Outcome::Command { command: "app.exit".to_owned(), args: None },
+            "app.exit default intact"
+        );
+        // The `{key}`-less BindingObject shape is skipped but a proper
+        // one binds.
+        keymap
+            .apply_overrides(&overrides(&serde_json::json!({ "app.exit": [{ "key": "ctrl+q" }] })));
+        assert_eq!(
+            keymap.lookup(stroke("ctrl+q"), &clock),
+            Outcome::Command { command: "app.exit".to_owned(), args: None }
+        );
+    }
+
+    /// The leader override rebinds every `<leader>` chord.
+    #[test]
+    fn leader_override_rebinds_chords() {
+        let mut keymap = Keymap::new();
+        let clock = ManualClock::default();
+        keymap.apply_overrides(&overrides(&serde_json::json!({ "leader": "ctrl+\\" })));
+        assert!(matches!(keymap.lookup(stroke("ctrl+\\"), &clock), Outcome::Pending { .. }));
+        assert_eq!(
+            keymap.lookup(stroke("n"), &clock),
+            Outcome::Command { command: "session.new".to_owned(), args: None },
+            "leader+n resolves under the new leader"
+        );
+        assert!(keymap.bindings_for("session.new").contains(&"ctrl+\\ n".to_owned()));
+    }
+
+    /// Disabled commands never match — the reference's conditional
+    /// layer (`app.exit` off while the prompt has text).
+    #[test]
+    fn disabled_commands_do_not_match() {
+        let mut keymap = Keymap::new();
+        let clock = ManualClock::default();
+        keymap.set_command_enabled("app.exit", false);
+        assert_eq!(keymap.lookup(stroke("ctrl+c"), &clock), Outcome::Unhandled);
+        assert!(matches!(keymap.lookup(stroke("ctrl+x"), &clock), Outcome::Pending { .. }));
+        // The leader chord falls through to the OTHER <leader>q binding
+        // (`session.queued_prompts`); the pump's textarea layer is what
+        // keeps the q in the composer (app.tsx layer order).
+        assert_eq!(
+            keymap.lookup(stroke("q"), &clock),
+            Outcome::Command { command: "session.queued_prompts".to_owned(), args: None }
+        );
+        keymap.set_command_enabled("app.exit", true);
+        assert_eq!(
+            keymap.lookup(stroke("ctrl+c"), &clock),
+            Outcome::Command { command: "app.exit".to_owned(), args: None }
+        );
     }
 }

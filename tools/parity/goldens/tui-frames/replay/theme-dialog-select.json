@@ -1,0 +1,76 @@
+{
+  "id": "theme-dialog-select",
+  "description": "Theme selection: the command palette filtered to 'theme' runs 'Switch theme' opening the Themes dialog (registry names sorted, the current theme marked); filtering to 'nord' narrows to the one row and Enter selects it, closing the dialog",
+  "source": "recorded against the booted reference app (createAppFixture) — src/app.tsx theme.switch via the palette; component/dialog-theme-list.tsx lists Object.keys(themes.all()).sort() with themes.set(opt.value) on select",
+  "keys": "kitty",
+  "steps": [
+    {
+      "keys": [
+        "ctrl+p"
+      ],
+      "expect": {
+        "frameIncludes": [
+          "Commands"
+        ],
+        "dialogs": 1,
+        "focus": "dialog"
+      }
+    },
+    {
+      "keys": [
+        "t",
+        "h",
+        "e",
+        "m",
+        "e"
+      ],
+      "expect": {
+        "frameIncludes": [
+          "Switch theme"
+        ],
+        "dialogs": 1,
+        "focus": "dialog"
+      }
+    },
+    {
+      "keys": [
+        "enter"
+      ],
+      "expect": {
+        "frameIncludes": [
+          "Themes",
+          "opencode"
+        ],
+        "dialogs": 1,
+        "focus": "dialog"
+      }
+    },
+    {
+      "keys": [
+        "n",
+        "o",
+        "r",
+        "d"
+      ],
+      "expect": {
+        "frameIncludes": [
+          "nord"
+        ],
+        "dialogs": 1,
+        "focus": "dialog"
+      }
+    },
+    {
+      "keys": [
+        "enter"
+      ],
+      "expect": {
+        "frameExcludes": [
+          "Themes"
+        ],
+        "dialogs": 0,
+        "focus": "prompt"
+      }
+    }
+  ]
+}

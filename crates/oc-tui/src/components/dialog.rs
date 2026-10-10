@@ -336,13 +336,10 @@ pub fn execute_submission(
     value: &str,
 ) -> crate::components::command_palette::Dispatch {
     let command = crate::components::command_palette::command_of_value(value);
-    // Theme selections resolve without the command layer.
+    // Theme selections resolve through the registry (the dialog's
+    // values are registry names).
     if matches!(store.top_dialog().map(|entry| entry.kind), Some(DialogKind::ThemeList)) {
-        if let Some(theme) = crate::components::command_palette::theme_of_value(command) {
-            store.set_theme(theme);
-            store.clear_dialogs();
-            return crate::components::command_palette::Dispatch::Handled;
-        }
+        store.set_theme_by_name(command);
         store.clear_dialogs();
         return crate::components::command_palette::Dispatch::Handled;
     }

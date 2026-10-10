@@ -25,7 +25,9 @@
 //! * [`spike`] — the wave-7.0 renderer-substrate spike, now a thin shim
 //!   over the production modules (kept as the absorption proof).
 
+pub mod app;
 pub mod components;
+pub mod config;
 pub mod data;
 pub mod diff_viewer_golden_tests;
 pub mod golden_tests;

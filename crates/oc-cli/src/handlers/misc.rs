@@ -1,4 +1,4 @@
-//! The root handler (TUI placeholder), upgrade/uninstall no-ops, acp/mini
+//! The root handler (the TUI launch), upgrade/uninstall no-ops, acp/mini
 //! placeholders, models, reload, pair, and the debug subcommands.
 
 use crate::cli::{DebugCommands, ServerParams};
@@ -7,7 +7,8 @@ use crate::services::server_connection::{self, Mismatch};
 use crate::util;
 
 /// Root `opencode [directory]` — chdir, ensure the server (mismatch:
-/// replace), then the registered Phase-7 TUI placeholder.
+/// replace), then launch the TUI against the resolved endpoint
+/// (the Phase-7.2 port; errors clearly without a TTY).
 pub async fn root(directory: Option<&str>, server: &crate::cli::ServerParams) -> i32 {
     if let Some(directory) = directory {
         if let Err(error) = std::env::set_current_dir(directory) {
@@ -28,11 +29,16 @@ pub async fn root(directory: Option<&str>, server: &crate::cli::ServerParams) ->
             return 1;
         }
     };
-    // REGISTERED INTERIM (phase 7): the TUI itself is not yet ported; keep
-    // the ensured server alive only long enough to report it.
-    println!("TUI not yet ported (phase 7); server running at {}", resolved.endpoint.url);
-    drop(resolved);
-    0
+    // The TUI owns the terminal from here; the ensured server stays
+    // alive for the duration (the guard drops after).
+    let client = resolved.endpoint.client();
+    match oc_tui::app::run(client).await {
+        Ok(()) => 0,
+        Err(message) => {
+            eprintln!("Error: {message}");
+            1
+        }
+    }
 }
 
 /// `opencode upgrade` — REGISTERED no-op: self-upgrade is disabled in the

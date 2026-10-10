@@ -1497,8 +1497,19 @@ mod tests {
         assert_eq!(narrow.variants.len(), 1);
         assert_eq!(narrow.variants[0].width, 40);
 
-        // Replay scripts: pinned, parsed, and self-consistent.
-        assert_eq!(manifest.replay.len(), 3, "three replay flows");
+        // Replay scripts: pinned, parsed, and self-consistent (the
+        // wave-1 trio + the wave-3 recorded pair).
+        assert_eq!(manifest.replay.len(), 5, "five replay flows");
+        let recorded = [
+            "exit-leader-q",
+            "palette-ctrl-p",
+            "permission-once-always-deny",
+            "session-list-leader-l",
+            "theme-dialog-select",
+        ];
+        for id in recorded {
+            assert!(manifest.replay.iter().any(|entry| entry.id == id), "{id} pinned");
+        }
         for entry in &manifest.replay {
             let script = load_replay_script(&dir, &entry.id).expect("replay script parses");
             assert_eq!(script.id, entry.id);

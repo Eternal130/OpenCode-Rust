@@ -288,7 +288,25 @@ pub fn palette_props(store: &Store) -> SelectProps {
 pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
     match kind {
         DialogKind::CommandPalette => palette_props(store),
-        DialogKind::ThemeList => theme_list_props(),
+        DialogKind::ThemeList => theme_list_props(store),
+        DialogKind::ServerList { command: "session.list", title } => {
+            // The session list renders the known sessions — the open
+            // tabs (the server-backed fetch lands with the wave-3+ data
+            // wiring; the store's tabs are today's source of truth).
+            let tabs = store.tabs();
+            let options: Vec<SelectOption> = tabs
+                .tabs
+                .iter()
+                .map(|tab| {
+                    SelectOption::titled(
+                        tab.title.clone().unwrap_or_else(|| tab.session_id.clone()),
+                        tab.session_id.clone(),
+                    )
+                    .categorized("Sessions")
+                })
+                .collect();
+            SelectProps::new(*title, options)
+        }
         DialogKind::ServerList { title, .. } => SelectProps::new(
             *title,
             vec![
@@ -311,23 +329,20 @@ impl SelectOption {
     }
 }
 
-/// The built-in theme registry (`theme/discovery.ts` full registry is
-/// wave 3; the corpus theme resolves today).
+/// The theme registry listing (`dialog-theme-list.tsx`):
+/// `Object.keys(themes.all()).sort(localeCompare base)` — the store's
+/// registry (builtins + discovered customs), value = the name,
+/// `current` = the active theme.
 #[must_use]
-pub fn theme_list_props() -> SelectProps {
-    let mut options = vec![SelectOption::titled("opencode", "builtin:v2/opencode")
-        .categorized("Built-in")
-        .with_footer("v2")];
-    for name in oc_theme::builtins::builtin_v1_names() {
-        // TODO(7.3 theme discovery): v1 documents need the legacy
-        // resolver; listed so the palette shape matches the reference.
-        options.push(
-            SelectOption::titled(name, format!("builtin:v1/{name}"))
-                .categorized("Legacy")
-                .with_footer("v1"),
-        );
-    }
-    SelectProps::new("Themes", options).with_current(Some("builtin:v2/opencode".to_owned()))
+pub fn theme_list_props(store: &Store) -> SelectProps {
+    let registry = store.registry();
+    let current = store.theme().name;
+    let options: Vec<SelectOption> = registry
+        .names()
+        .into_iter()
+        .map(|name| SelectOption::titled(name.clone(), name).categorized("Themes"))
+        .collect();
+    SelectProps::new("Themes", options).with_current(Some(current))
 }
 
 // -- command execution --------------------------------------------------------
@@ -386,6 +401,28 @@ impl CommandDispatcher for StoreDispatcher {
                 let _ = store.reopen_tab(None);
                 Dispatch::Handled
             }
+            "session.tab.next" | "session.tab.previous" => {
+                let direction = if command == "session.tab.next" { 1 } else { -1 };
+                let _ = store.cycle_tab(direction, false);
+                Dispatch::Handled
+            }
+            "session.tab.next_unread" | "session.tab.previous_unread" => {
+                let direction = if command == "session.tab.next_unread" { 1 } else { -1 };
+                let _ = store.cycle_tab(direction, true);
+                Dispatch::Handled
+            }
+            command
+                if command.starts_with("session.tab.select.")
+                    || command.starts_with("session.quick_switch.") =>
+            {
+                let slot = command
+                    .rsplit('.')
+                    .next()
+                    .and_then(|digit| digit.parse::<u8>().ok())
+                    .unwrap_or(1);
+                let _ = store.select_quick_slot(slot);
+                Dispatch::Handled
+            }
             "session.rename" => {
                 let session_id = match store.route() {
                     Route::Session { session_id } => session_id,
@@ -402,8 +439,13 @@ impl CommandDispatcher for StoreDispatcher {
             | "open.menu" | "provider.connect" | "opencode.settings" | "opencode.status"
             | "session.share" | "session.fork" | "session.move" | "server.pair"
             | "location.reload" | "opencode.debug" | "help.show" | "docs.open" => {
-                let entry = palette_command(command);
-                let title = entry.map_or("", |entry| entry.title);
+                // DialogSessions mounts titled "Sessions"; every other
+                // listing takes the palette entry's title.
+                let title: &'static str = if command == "session.list" {
+                    "Sessions"
+                } else {
+                    palette_command(command).map_or("", |entry| entry.title)
+                };
                 let size =
                     if command == "open.menu" { DialogSize::Large } else { DialogSize::Medium };
                 store.replace_dialog(
@@ -434,16 +476,6 @@ fn static_command(command: &str) -> &'static str {
 #[must_use]
 pub fn command_of_value(value: &str) -> &str {
     value.strip_prefix("suggested:").unwrap_or(value)
-}
-
-/// The theme a `ThemeList` selection resolves to (the corpus theme
-/// today; v1 legacy documents resolve in the theme-discovery wave).
-#[must_use]
-pub fn theme_of_value(value: &str) -> Option<crate::theme::ThemeState> {
-    match value {
-        "builtin:v2/opencode" => Some(crate::theme::ThemeState::v2_dark()),
-        _ => None,
-    }
 }
 
 /// Initialize a freshly-opened select dialog's state (focus `current`).
