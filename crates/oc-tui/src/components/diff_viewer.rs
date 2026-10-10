@@ -30,6 +30,15 @@
 //! `n/p` file jumps, `b` tree, `s` single patch, `d` source, `v`
 //! split/unified, `enter/space` toggle, `tab` focus, `]/[` hunks,
 //! `?` help, `escape/q` close.
+//!
+//! ## Syntax (R-01b)
+//!
+//! The text column highlights through oc-syntax (the file's extension
+//! → filetype, one parse per file via the engine's content-keyed
+//! cache; rows map to highlighted lines). The gutter and the diff row
+//! backgrounds paint exactly as before — highlight spans recolor the
+//! foreground only, their background pinned to the row's diff bg.
+//! Unknown extensions render the original plain rows.
 
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::too_many_lines)]
@@ -37,6 +46,7 @@
 use crate::layout::{Placed, PlacedLine, StyledSpan};
 use crate::render::{paint_placed_with_fills, Fill, Frame};
 use crate::theme::{DiffStyles, ThemeStyles};
+use oc_syntax::HighlightedBlock;
 use ratatui::style::{Color, Modifier, Style};
 
 /// `MIN_SPLIT_WIDTH` — the patch pane needs this many columns before
@@ -397,7 +407,9 @@ pub fn diff_viewer_fixture() -> Vec<DiffFile> {
 // -- rendering ----------------------------------------------------------------
 
 /// One hunk row's paint colors (gutter background, sign, text
-/// background, number, text).
+/// background, number, text) plus the row's line index into the file's
+/// highlighted source (R-01b: the text column highlights through
+/// oc-syntax by file extension).
 #[derive(Debug, Clone)]
 struct RowColors {
     gutter_bg: Color,
@@ -406,6 +418,9 @@ struct RowColors {
     text_bg: Color,
     number: u64,
     text: String,
+    /// This row's line index into the file-wide joined row text (the
+    /// `oc_syntax::HighlightedBlock` line it renders as).
+    line: usize,
 }
 
 /// One hunk row pair for the split view (either side may be absent —
@@ -429,10 +444,22 @@ fn flush_split_pairs(
     adds.clear();
 }
 
+/// A hunk row's text (the payload shared by every row shape).
+fn row_text(row: &PatchRow) -> &str {
+    match row {
+        PatchRow::Context { text, .. }
+        | PatchRow::Deleted { text, .. }
+        | PatchRow::Added { text, .. } => text,
+    }
+}
+
 /// Pair hunk rows for the split panes: contexts go to both sides,
-/// deletion runs zip with the following addition run.
-fn split_pairs(rows: &[PatchRow], diff: &DiffStyles) -> Vec<SplitPair> {
-    fn row_colors(row: &PatchRow, diff: &DiffStyles, deleted: bool) -> RowColors {
+/// deletion runs zip with the following addition run. `base_line` is
+/// the hunk's first row's line index into the file's highlighted
+/// source; each source row consumes one line (a context pair paints
+/// the same line on both sides).
+fn split_pairs(rows: &[PatchRow], diff: &DiffStyles, base_line: usize) -> Vec<SplitPair> {
+    fn row_colors(row: &PatchRow, diff: &DiffStyles, deleted: bool, line: usize) -> RowColors {
         match row {
             PatchRow::Context { old, new, text } => RowColors {
                 gutter_bg: diff.background_context,
@@ -441,6 +468,7 @@ fn split_pairs(rows: &[PatchRow], diff: &DiffStyles) -> Vec<SplitPair> {
                 text_bg: diff.background_context,
                 number: if deleted { *old } else { *new },
                 text: text.clone(),
+                line,
             },
             PatchRow::Deleted { old, text } => RowColors {
                 gutter_bg: diff.line_number_removed,
@@ -449,6 +477,7 @@ fn split_pairs(rows: &[PatchRow], diff: &DiffStyles) -> Vec<SplitPair> {
                 text_bg: diff.background_removed,
                 number: *old,
                 text: text.clone(),
+                line,
             },
             PatchRow::Added { new, text } => RowColors {
                 gutter_bg: diff.line_number_added,
@@ -457,23 +486,25 @@ fn split_pairs(rows: &[PatchRow], diff: &DiffStyles) -> Vec<SplitPair> {
                 text_bg: diff.background_added,
                 number: *new,
                 text: text.clone(),
+                line,
             },
         }
     }
     let mut pairs = Vec::new();
     let mut pending_dels: Vec<RowColors> = Vec::new();
     let mut pending_adds: Vec<RowColors> = Vec::new();
-    for row in rows {
+    for (offset, row) in rows.iter().enumerate() {
+        let line = base_line + offset;
         match row {
             PatchRow::Context { .. } => {
                 flush_split_pairs(&mut pairs, &mut pending_dels, &mut pending_adds);
                 pairs.push(SplitPair {
-                    left: Some(row_colors(row, diff, true)),
-                    right: Some(row_colors(row, diff, false)),
+                    left: Some(row_colors(row, diff, true, line)),
+                    right: Some(row_colors(row, diff, false, line)),
                 });
             }
-            PatchRow::Deleted { .. } => pending_dels.push(row_colors(row, diff, true)),
-            PatchRow::Added { .. } => pending_adds.push(row_colors(row, diff, false)),
+            PatchRow::Deleted { .. } => pending_dels.push(row_colors(row, diff, true, line)),
+            PatchRow::Added { .. } => pending_adds.push(row_colors(row, diff, false, line)),
         }
     }
     flush_split_pairs(&mut pairs, &mut pending_dels, &mut pending_adds);
@@ -728,9 +759,20 @@ pub fn render_diff_viewer(
         });
         y += 2; // header row + its paddingBottom
 
-        // The hunks.
+        // The hunks. R-01b: the file's rows highlight through oc-syntax
+        // (file extension → filetype, one parse per file, content-keyed
+        // engine cache); every hunk row is one line of the joined row
+        // text, so `file_line` maps rows to highlighted lines. Unknown
+        // extensions (`.txt`, …) leave `highlighted` None — today's
+        // plain rows, byte-exact.
+        let hunks = file.hunks();
+        let row_texts: Vec<&str> =
+            hunks.iter().flat_map(|hunk| hunk.rows.iter().map(row_text)).collect();
+        let source = row_texts.join("\n");
+        let highlighted = crate::components::syntax::highlight_for_path(&source, &file.file);
+        let mut file_line = 0usize;
         let digits = file.number_digits();
-        for hunk in file.hunks() {
+        for hunk in &hunks {
             if hunk.old_start != 1 {
                 let header = format!(" {}", hunk.header);
                 fill_rects.push(Fill {
@@ -757,7 +799,7 @@ pub fn render_diff_viewer(
             match view {
                 DiffView::Unified => {
                     for row in &hunk.rows {
-                        let colors = unified_colors(row, &diff);
+                        let colors = unified_colors(row, &diff, file_line);
                         paint_diff_row(
                             &mut placed,
                             &mut fill_rects,
@@ -768,13 +810,16 @@ pub fn render_diff_viewer(
                             &colors,
                             fg_base,
                             &diff,
+                            highlighted.as_ref(),
+                            &styles.syntax,
                         );
+                        file_line += 1;
                         y += 1;
                     }
                 }
                 DiffView::Split => {
                     let pane = patch_w / 2;
-                    for pair in split_pairs(&hunk.rows, &diff) {
+                    for pair in split_pairs(&hunk.rows, &diff, file_line) {
                         match pair.left {
                             Some(left) => paint_diff_row(
                                 &mut placed,
@@ -786,6 +831,8 @@ pub fn render_diff_viewer(
                                 &left,
                                 fg_base,
                                 &diff,
+                                highlighted.as_ref(),
+                                &styles.syntax,
                             ),
                             None => fill_rects.push(Fill {
                                 x: patch_x as u16,
@@ -808,6 +855,8 @@ pub fn render_diff_viewer(
                                 &right,
                                 fg_base,
                                 &diff,
+                                highlighted.as_ref(),
+                                &styles.syntax,
                             ),
                             None => fill_rects.push(Fill {
                                 x: (patch_x + pane) as u16,
@@ -821,6 +870,7 @@ pub fn render_diff_viewer(
                         }
                         y += 1;
                     }
+                    file_line += hunk.rows.len();
                 }
             }
         }
@@ -829,7 +879,7 @@ pub fn render_diff_viewer(
     paint_placed_with_fills(&placed, &fill_rects, (width as u16, height as u16), base)
 }
 
-fn unified_colors(row: &PatchRow, diff: &DiffStyles) -> RowColors {
+fn unified_colors(row: &PatchRow, diff: &DiffStyles, line: usize) -> RowColors {
     match row {
         PatchRow::Context { old, new, text } => RowColors {
             gutter_bg: diff.background_context,
@@ -838,6 +888,7 @@ fn unified_colors(row: &PatchRow, diff: &DiffStyles) -> RowColors {
             text_bg: diff.background_context,
             number: (*old).max(*new),
             text: text.clone(),
+            line,
         },
         PatchRow::Deleted { old, text } => RowColors {
             gutter_bg: diff.line_number_removed,
@@ -846,6 +897,7 @@ fn unified_colors(row: &PatchRow, diff: &DiffStyles) -> RowColors {
             text_bg: diff.background_removed,
             number: *old,
             text: text.clone(),
+            line,
         },
         PatchRow::Added { new, text } => RowColors {
             gutter_bg: diff.line_number_added,
@@ -854,6 +906,7 @@ fn unified_colors(row: &PatchRow, diff: &DiffStyles) -> RowColors {
             text_bg: diff.background_added,
             number: *new,
             text: text.clone(),
+            line,
         },
     }
 }
@@ -862,6 +915,11 @@ fn unified_colors(row: &PatchRow, diff: &DiffStyles) -> RowColors {
 /// `␣` + line number (left-aligned, natural width) + sign (`␣−`/`␣+`
 /// immediately after the number) + padding — text starts at
 /// `x + 1 + digits + 3`.
+///
+/// R-01b: with a highlighted block the text column renders the row's
+/// oc-syntax spans (theme fg, bg pinned to the row's diff background —
+/// the gutter and diff-bg painting are untouched by highlighting);
+/// without one it is exactly the original plain single-run row.
 #[allow(clippy::too_many_arguments)] // an internal painter over precomputed inputs
 fn paint_diff_row(
     placed: &mut Vec<Placed>,
@@ -873,6 +931,8 @@ fn paint_diff_row(
     colors: &RowColors,
     text_fg: Color,
     diff: &DiffStyles,
+    highlighted: Option<&HighlightedBlock>,
+    syntax: &oc_syntax::SyntaxStyles,
 ) {
     // The gutter: `␣` + number field + sign column + `␣` (text starts
     // 1 + digits + 3 columns in).
@@ -923,8 +983,25 @@ fn paint_diff_row(
         height: 1,
         style: Style::new().fg(crate::components::tool_rows::DEFAULT_FOREGROUND).bg(colors.text_bg),
     });
-    if !colors.text.is_empty() {
-        placed.push(Placed {
+    if colors.text.is_empty() {
+        return;
+    }
+    match highlighted {
+        Some(block) => {
+            let base = Style::new().fg(text_fg).bg(colors.text_bg);
+            let runs = crate::components::syntax::line_spans(block, colors.line, base, syntax);
+            placed.push(Placed {
+                x: text_x,
+                y,
+                width: text_w,
+                lines: vec![PlacedLine {
+                    runs: crate::components::syntax::clip_spans(runs, text_w),
+                }],
+                tag: None,
+            });
+        }
+        // The original plain row (unknown extensions): unchanged bytes.
+        None => placed.push(Placed {
             x: text_x,
             y,
             width: crate::wrap::display_width(&colors.text).min(text_w),
@@ -933,7 +1010,7 @@ fn paint_diff_row(
                 Style::new().fg(text_fg).bg(colors.text_bg),
             )],
             tag: None,
-        });
+        }),
     }
 }
 
@@ -1047,11 +1124,72 @@ mod tests {
     fn split_pairs_zip_dels_and_adds() {
         let diff = theme().diff;
         let rows = diff_viewer_fixture()[0].hunks().remove(0).rows;
-        let pairs = split_pairs(&rows, &diff);
+        let pairs = split_pairs(&rows, &diff, 0);
         assert_eq!(pairs.len(), 3);
         assert!(pairs[0].left.is_some() && pairs[0].right.is_some(), "context both sides");
         assert!(matches!(&pairs[1].left, Some(c) if c.sign == " -"));
         assert!(matches!(&pairs[1].right, Some(c) if c.sign == " +"));
+        // Line indices: one per source row, contexts shared by both
+        // sides, the del/add pair on rows 1 and 2 of the joined text.
+        assert_eq!(pairs[0].left.as_ref().map(|c| c.line), Some(0));
+        assert_eq!(pairs[1].left.as_ref().map(|c| c.line), Some(1));
+        assert_eq!(pairs[1].right.as_ref().map(|c| c.line), Some(2));
+    }
+
+    /// R-01b: a rust file's text column renders oc-syntax spans — the
+    /// comment row carries a themed fg (≠ the base text color) while
+    /// the diff backgrounds and gutter stay exactly the plain-file
+    /// colors; a `.txt` file keeps the original single-run plain rows.
+    #[test]
+    fn rust_file_text_column_highlights_and_txt_stays_plain() {
+        let theme = theme();
+        let patch = "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,2 +1,2 @@\n// keep\n-fn old() {}\n+fn new() {}\n";
+        let files = vec![DiffFile {
+            file: "src/main.rs".into(),
+            additions: 1,
+            deletions: 1,
+            status: FileStatus::Modified,
+            patch: patch.into(),
+        }];
+        let frame = render_diff_viewer(
+            &files,
+            &DiffViewerState::default(),
+            &DiffViewerOptions::default(),
+            &theme,
+            80,
+            24,
+        );
+        let grid = frame.text_grid();
+        // Row 4 is the context comment; glyphs unchanged (this file's
+        // widest number is one digit, so the text starts at col 7).
+        assert!(grid[4].starts_with("   1   // keep"), "row 4: {:?}", grid[4]);
+        let fg_base = theme.text.fg.unwrap_or(crate::components::tool_rows::DEFAULT_FOREGROUND);
+        let base_cell = crate::render::CellColor::from(fg_base);
+        assert_ne!(frame.cell(4, 7).fg, base_cell, "comment themed, not base");
+        // The diff row background is untouched by highlighting.
+        assert_eq!(
+            frame.cell(4, 7).bg,
+            crate::render::CellColor::from(theme.diff.background_context)
+        );
+        // The deleted row keeps its removal background under spans.
+        assert!(grid[5].starts_with("   2 - fn old() {}"), "row 5: {:?}", grid[5]);
+        assert_eq!(
+            frame.cell(5, 7).bg,
+            crate::render::CellColor::from(theme.diff.background_removed)
+        );
+        assert_ne!(frame.cell(5, 7).fg, base_cell, "fn keyword themed");
+        // Plain fixture (.txt): every text cell stays the base fg.
+        let plain = render_diff_viewer(
+            &diff_viewer_fixture(),
+            &DiffViewerState::default(),
+            &DiffViewerOptions::default(),
+            &theme,
+            80,
+            24,
+        );
+        let grid = plain.text_grid();
+        assert!(grid[4].starts_with("   1    const first = true"));
+        assert_eq!(plain.cell(4, 8).fg, base_cell, "plain rows keep base fg");
     }
 
     /// The unified render at 80: toolbar + card rows + the `?` square.

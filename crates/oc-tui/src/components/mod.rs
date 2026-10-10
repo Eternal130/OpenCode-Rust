@@ -19,6 +19,7 @@ pub mod session;
 pub mod session_screen;
 pub mod session_tabs;
 pub mod sidebar;
+pub mod syntax;
 pub mod tab_pulse;
 pub mod toast;
 pub mod tool_rows;

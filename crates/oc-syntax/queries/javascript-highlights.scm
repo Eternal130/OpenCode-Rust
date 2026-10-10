@@ -8,6 +8,10 @@
 ; `; inherits: javascript` composition (see the parsers-config.ts warning about
 ; including query dependencies), against the typescript grammar (a superset of
 ; the v0.23.1 javascript node set the query was written for).
+; R-01b: this file is now ALSO the `javascript` registry entry's highlight
+; query, verbatim — oc-syntax pins the tree-sitter-javascript crate at
+; v0.23.1 exactly (the tag this file was vendored from), so grammar and
+; query stay ABI-coherent for both consumers.
 
 ; Variables
 ;----------

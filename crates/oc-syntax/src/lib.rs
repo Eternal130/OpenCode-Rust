@@ -15,13 +15,18 @@
 //! * tree-sitter types never leak: the public surface is spans, styles
 //!   and one opaque block handle.
 //!
-//! ## Spike status (R-01)
+//! ## Catalog status (R-01b)
 //!
-//! Three languages wired (rust, python, typescript — queries vendored at
-//! the exact crate-version tags, see `queries/*.scm` headers); the v2
-//! catalog shape (aliases like `udiff`/`patch`, `make`/`makefile`) is
-//! carried by the registry design in [`queries`]. Go/no-go findings live
-//! in the spike report; binary-size and perf measurements accompany it.
+//! The full catalog: the spike's 3 languages (rust, python, typescript)
+//! plus 16 more filetypes (go, c, cpp, csharp, java, json, yaml, toml,
+//! html, css, diff, javascript, kotlin, ruby, php, swift — 19 registry
+//! entries, queries vendored at the exact crate-version tags, see
+//! `queries/*.scm` headers and [`queries`] for the v2 routing notes).
+//! kotlin and toml grammars ship as vendored path crates under
+//! `third_party/`. v2's tail languages (lua, vim, scala, …) stay
+//! unregistered, as does `make` (not in the oracle list); the registry
+//! design carries the alias convention (`udiff`/`patch` for diff).
+//! Binary-size and perf measurements accompany the R-01b report.
 
 mod engine;
 mod queries;
@@ -146,6 +151,163 @@ mod tests {
         assert_captures(&rs, &["keyword"]);
         let ts = highlight(source, "ts").expect("ts alias");
         assert_captures(&ts, &["keyword"]);
+        let js = highlight(source, "js").expect("js alias");
+        assert_captures(&js, &["keyword"]);
+    }
+
+    // -- R-01b catalog: per-language capture coverage -------------------
+
+    #[test]
+    fn go_snippet_captures_the_core_scopes() {
+        let block = highlight(
+            "// note\nfunc greet(name string) string {\n\tmsg := \"hello\"\n\treturn msg\n}\n",
+            "go",
+        )
+        .expect("go parses");
+        assert_captures(&block, &["comment", "keyword", "function", "type", "string"]);
+    }
+
+    #[test]
+    fn c_snippet_captures_the_core_scopes() {
+        // The pinned parser-repo query types primitives as plain @type
+        // (no type.builtin split — that's nvim's).
+        let block = highlight("/* note */\nint add(int a, int b) {\n  return a + b;\n}\n", "c")
+            .expect("c parses");
+        assert_captures(&block, &["comment", "keyword", "function", "type", "operator"]);
+    }
+
+    #[test]
+    fn cpp_snippet_captures_the_core_scopes() {
+        // The pinned parser-repo cpp query is the minimal upstream one:
+        // no comment pattern (comments render base-styled), functions
+        // only through template/qualified declarators, strings via raw
+        // literals — the trade of exact-tag ABI coherence over nvim's
+        // fuller cross-repo query. The core scopes still hold.
+        let block = highlight(
+            "namespace App {\nclass Point {};\ntemplate <typename T> T id(T v) { return v; }\nint best = std::max(1, 2);\nconst char* msg = R\"(hi)\";\n}\n",
+            "cpp",
+        )
+        .expect("cpp parses");
+        assert_captures(&block, &["keyword", "type", "function", "string"]);
+    }
+
+    #[test]
+    fn csharp_snippet_captures_the_core_scopes() {
+        let block = highlight(
+            "// note\nclass Point {\n  string Greet(string name) => \"hi\";\n}\n",
+            "csharp",
+        )
+        .expect("csharp parses");
+        assert_captures(&block, &["comment", "keyword", "type.builtin", "function", "string"]);
+    }
+
+    #[test]
+    fn java_snippet_captures_the_core_scopes() {
+        let block = highlight(
+            "// note\nclass Point {\n  String greet(String name) {\n    return \"hi\";\n  }\n}\n",
+            "java",
+        )
+        .expect("java parses");
+        assert_captures(&block, &["comment", "keyword", "type", "string"]);
+    }
+
+    #[test]
+    fn json_snippet_captures_the_core_scopes() {
+        let block =
+            highlight("{\n  \"key\": \"value\",\n  \"n\": 1\n}\n", "json").expect("json parses");
+        assert_captures(&block, &["string.special.key", "string", "number"]);
+    }
+
+    #[test]
+    fn yaml_snippet_captures_the_core_scopes() {
+        let block = highlight("# note\nname: value\nlist:\n  - 1\n  - \"two\"\n", "yaml")
+            .expect("yaml parses");
+        assert_captures(&block, &["comment", "property", "number", "string"]);
+    }
+
+    #[test]
+    fn toml_snippet_captures_the_core_scopes() {
+        let block = highlight("# note\nkey = \"value\"\nnum = 1\n", "toml").expect("toml parses");
+        assert_captures(&block, &["comment", "property", "string", "number"]);
+    }
+
+    #[test]
+    fn html_snippet_captures_the_core_scopes() {
+        let block =
+            highlight("<!-- note -->\n<p class=\"x\">hi</p>\n", "html").expect("html parses");
+        assert_captures(&block, &["comment", "tag", "attribute", "string"]);
+    }
+
+    #[test]
+    fn css_snippet_captures_the_core_scopes() {
+        let block =
+            highlight("/* note */\np.cls {\n  color: red;\n}\n", "css").expect("css parses");
+        assert_captures(&block, &["comment", "tag", "property"]);
+    }
+
+    #[test]
+    fn diff_snippet_captures_the_core_scopes() {
+        // The unified-patch shape the diff viewer and ```diff fences
+        // carry; the udiff/patch aliases route to the same grammar.
+        let source = "--- a/file.rs\n+++ b/file.rs\n@@ -1,2 +1,2 @@\n const\n-old\n+new\n";
+        let block = highlight(source, "diff").expect("diff parses");
+        assert_captures(&block, &["diff.plus", "diff.minus"]);
+        let alias = highlight(source, "patch").expect("patch alias");
+        assert_captures(&alias, &["diff.plus", "diff.minus"]);
+    }
+
+    #[test]
+    fn javascript_snippet_captures_the_core_scopes() {
+        // The js entry runs the same vendored query the typescript
+        // composition uses — against the javascript grammar itself.
+        let block = highlight(
+            "// note\nconst msg = \"hi\";\nfunction greet(p) {\n  return msg;\n}\n",
+            "javascript",
+        )
+        .expect("javascript parses");
+        assert_captures(&block, &["comment", "keyword", "string", "function"]);
+    }
+
+    #[test]
+    fn kotlin_snippet_captures_the_core_scopes() {
+        // Grammar + query both from fwcd at tag 0.3.8 (the vendored
+        // third_party crate), per parsers-config.ts:106-110.
+        let block = highlight(
+            "// note\nfun greet(name: String): String {\n    val msg = \"hi\"\n    return msg\n}\n",
+            "kotlin",
+        )
+        .expect("kotlin parses");
+        assert_captures(&block, &["comment", "keyword.function", "type", "string"]);
+    }
+
+    #[test]
+    fn ruby_snippet_captures_the_core_scopes() {
+        let block = highlight("# note\ndef greet(name)\n  msg = \"hi\"\n  msg\nend\n", "ruby")
+            .expect("ruby parses");
+        assert_captures(&block, &["comment", "keyword", "function.method", "string"]);
+    }
+
+    #[test]
+    fn php_snippet_captures_the_core_scopes() {
+        let block =
+            highlight("<?php\n// note\nfunction greet($name) {\n  return \"hi\";\n}\n", "php")
+                .expect("php parses");
+        assert_captures(&block, &["comment", "keyword", "function", "string"]);
+    }
+
+    #[test]
+    fn swift_snippet_captures_the_core_scopes() {
+        // Parser-repo query per parsers-config.ts:267-269 (nvim's uses
+        // #lua-match? predicates a non-neovim runtime can't run).
+        let block = highlight(
+            "// note\nfunc greet(name: String) -> String {\n  let msg = \"hi\"\n  return msg\n}\n",
+            "swift",
+        )
+        .expect("swift parses");
+        assert_captures(
+            &block,
+            &["comment", "keyword.function", "variable.parameter", "type", "string"],
+        );
     }
 
     // -- measurement (spike report: parse-once + span materialization) --

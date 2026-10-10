@@ -1,0 +1,18 @@
+StyledSpan { text: "---", style: Style::new().fg(Color::Rgb(86, 182, 194)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: " ", style: Style::new().fg(Color::Rgb(197, 59, 83)).bg(Color::Rgb(55, 34, 44)) }
+StyledSpan { text: "a/src/main.rs", style: Style::new().fg(Color::Rgb(250, 178, 131)).bg(Color::Rgb(10, 10, 10)).underlined() }
+--
+StyledSpan { text: "+++", style: Style::new().fg(Color::Rgb(86, 182, 194)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: " ", style: Style::new().fg(Color::Rgb(79, 214, 190)).bg(Color::Rgb(32, 48, 59)) }
+StyledSpan { text: "b/src/main.rs", style: Style::new().fg(Color::Rgb(250, 178, 131)).bg(Color::Rgb(10, 10, 10)).underlined() }
+--
+StyledSpan { text: "@@ -1,2 +1,2 @@", style: Style::new().fg(Color::Rgb(245, 167, 66)).bg(Color::Rgb(10, 10, 10)) }
+--
+StyledSpan { text: " const first = true", style: Style::new().fg(Color::Rgb(238, 238, 238)).bg(Color::Rgb(10, 10, 10)) }
+--
+StyledSpan { text: "-", style: Style::new().fg(Color::Rgb(86, 182, 194)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: "const oldFirst = true", style: Style::new().fg(Color::Rgb(197, 59, 83)).bg(Color::Rgb(55, 34, 44)) }
+--
+StyledSpan { text: "+", style: Style::new().fg(Color::Rgb(86, 182, 194)).bg(Color::Rgb(10, 10, 10)) }
+StyledSpan { text: "const newFirst = true", style: Style::new().fg(Color::Rgb(79, 214, 190)).bg(Color::Rgb(32, 48, 59)) }
+--

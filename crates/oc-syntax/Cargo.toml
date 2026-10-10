@@ -17,6 +17,25 @@ tree-sitter-language = "0.1"
 tree-sitter-rust = "0.24.2"
 tree-sitter-python = "0.25"
 tree-sitter-typescript = "0.23.2"
+tree-sitter-javascript = "0.23.1"
+tree-sitter-go = "0.25.0"
+tree-sitter-c = "0.24.2"
+tree-sitter-cpp = "0.23.4"
+tree-sitter-c-sharp = "0.23.5"
+tree-sitter-java = "0.23.5"
+tree-sitter-json = "0.24.8"
+tree-sitter-yaml = "0.7.2"
+# kotlin + toml: path crates under third_party/ (patched over any registry
+# version below) — the grammar lineages have no tree-sitter-language release
+# on crates.io; the vendored C sources sit at the exact .scm tags.
+tree-sitter-kotlin = "0.3.8"
+tree-sitter-toml = "0.7.0"
+tree-sitter-html = "0.23.2"
+tree-sitter-css = "0.25.0"
+tree-sitter-diff = "0.1.0"
+tree-sitter-ruby = "0.23.1"
+tree-sitter-php = "0.25.1"
+tree-sitter-swift = "0.7.4"
 
 [dev-dependencies]
 serde_json = { workspace = true }

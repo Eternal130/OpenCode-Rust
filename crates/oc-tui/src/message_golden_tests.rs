@@ -247,6 +247,47 @@ fn markdown_unknown_fence_stays_plain() {
     assert_eq!(unknown[0].text(), "let x = \"s\";");
 }
 
+/// R-01b golden: a fenced **diff** block through the catalog's diff
+/// grammar (the `udiff`/`patch` aliases route to the same entry —
+/// asserted here so the golden pins the alias convention too).
+/// Self-pinned like the rust-fence golden (bootstraps on first run,
+/// `PARITY_UPDATE=1` refreshes).
+#[test]
+fn markdown_diff_fence_golden_render() {
+    let theme = theme();
+    let source = [
+        "```diff",
+        "--- a/src/main.rs",
+        "+++ b/src/main.rs",
+        "@@ -1,2 +1,2 @@",
+        " const first = true",
+        "-const oldFirst = true",
+        "+const newFirst = true",
+        "```",
+    ]
+    .join("\n");
+    let lines = render_markdown(&source, 40, &MarkdownStyles::from_theme(&theme.styles()));
+    let mut rendered = String::new();
+    for line in &lines {
+        for span in &line.0 {
+            use std::fmt::Write as _;
+            let _ = writeln!(rendered, "{span:?}");
+        }
+        rendered.push_str("--\n");
+    }
+    let directory = goldens().parent().expect("goldens parent").join("syntax");
+    parity::golden::assert_bytes_in(&directory, "markdown-diff-fence.w40.txt", rendered.as_bytes())
+        .expect("diff fence golden");
+    // The alias routes to the same grammar: `patch` renders the same
+    // captures as `diff`.
+    let aliased = render_markdown(
+        &source.replace("```diff", "```patch"),
+        40,
+        &MarkdownStyles::from_theme(&theme.styles()),
+    );
+    assert_eq!(aliased, lines, "udiff/patch aliases render identically");
+}
+
 // -- message-groups ------------------------------------------------------------
 
 // -- group-view-instructions -----------------------------------------------------
