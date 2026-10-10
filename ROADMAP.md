@@ -26,14 +26,14 @@
 | B3-04 | 新验证类补盲（应答 PTY / 真实库副本测试） | done（beta.3） |
 | B4-H1 | provider/model 大小写解析（`own` 键 vs `Own/glm-5.3` 引用；根因 resolver.rs 大小写敏感+错误映射丢模型 ID） | done（beta.4） |
 | B4-H2 | 回合失败浮出：未上屏错误补 v2 形态 error part + 服务端恒定一行日志；顺带修无限重试（per-attempt 重建 RetryPolicy）与连接期错误静默两个潜伏 bug | done（beta.4） |
-| B4-H3 | 已知边界：升级后旧守护不自动换血（parity 钉版使 beta.N 握手不可区分）——手动重启过渡，正式版前给守护握手加 build 标识 | pending |
+| B4-H3 | 升级后旧守护自动换血：`/api/info` 响应头 `x-opencode-build`（<tag>@<hash>，golden 不可见），build 不匹配→Mismatch::Replace | **done（beta.5）** |
 
 ## 一点五、beta.4 功能落地
 
 | 编号 | 项 | 状态 |
 |---|---|---|
 | R-01a | tree-sitter spike：oc-syntax crate + rust/python/ts 三语言 + markdown 代码块接线（+3.1MiB，18 语言外推 18.6MiB<20 阈值，性能 19× 余量） | done（beta.4） |
-| R-01b | 剩余 15 语言机械铺开 + diff_viewer/tool-row 接线 | pending（下一批） |
+| R-01b | 15 语言铺开 + diff/tool-row 接线；体积护栏触发（72.7MiB>67.6 上限）→ 裁掉 swift/c-sharp/kotlin 三重语法，16 filetypes 约 64MiB；再加回路径=cargo feature 门控 | done（beta.5） |
 | R-02 | `opencode mini` 分屏前端（滚动回显+4 行活动底栏+权限/表单+demo 模式，PTY 集成测试） | done（beta.4） |
 | R-03 | `acp` 编辑器协议（官方 crate vendor，13 方法+权限/表单桥接，二进制级集成测试） | done（beta.4） |
 
@@ -58,7 +58,7 @@
 | 编号 | 现状 | v2 行为 | 处置 |
 |---|---|---|---|
 | D-01 | ~~JSONC 配置写回：拒绝+`--force`~~ 已修复：注释保留写回 | 保留注释重写 | **已修**（beta.4）：`oc-core/src/config/jsonc_edit.rs` 移植 jsonc-parser 3.3.1 setProperty/format（拼接+行级重缩进，字节级对齐已用 37 例 golden 语料钉死）；`--force` 保留为 rust-extra 覆盖 |
-| D-02 | 非空草稿时 leader 和弦不触发 | 和弦挂起输入框后触发 | **修**：beta.4 |
+| D-02 | 非空草稿时 leader 和弦不触发 | 和弦挂起输入框后触发 | **done（beta.5）** |
 | D-03 | 插件 hook 可变对象 copy-in/copy-out | 引用可变（进程内） | **spike 评估**：bun 宿主内对象代间同步或等价语义；无法等价则永久登记并给出隔离性收益说明 |
 | D-04 | 请求 schema 校验仅 2 路由 | 全路由 400 形状 | **修**：按 openapi 契约生成全路由校验电池，beta.5 |
 | D-05 | /help clamp；模型 release-date 精细序简化；input_paste preventDefault 未移植 | 各自精确行为 | **修**：beta.6 |
@@ -105,3 +105,5 @@
 ## 六、变更记录
 
 - 2026-10-11：初版。范围扩大（Web UI 入、桌面端维持排除）；功能缺失全量消项令；beta.3 批次定义。
+
+- 2026-10-11（beta.5 批）：D-01/02/06、B4-H3、R-01b(裁剪)、热点二号（整数参数/消息端点 panic 容器/目录容错 404）落地；已知小项：m1 双胞胎测试共享 artifact 路径的并发竞态（登记待修）。
