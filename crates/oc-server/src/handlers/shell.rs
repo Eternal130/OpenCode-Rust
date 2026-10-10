@@ -49,11 +49,10 @@ async fn create(
         timeout: body.get("timeout").and_then(Value::as_u64),
         metadata: body["metadata"].as_object().map(|map| map.clone().into_iter().collect()),
     };
-    let info = services
-        .shell
-        .create(input, None, None, None)
-        .await
-        .map_err(|_| ApiError::unknown_ref())?;
+    let info = services.shell.create(input, None, None, None).await.map_err(|error| {
+        crate::errors::debug_cause("shell:unknown_ref", &error);
+        ApiError::unknown_ref()
+    })?;
     Ok(json_location_data(&location.as_path().to_string_lossy(), shell_json(&info)))
 }
 
@@ -65,10 +64,10 @@ async fn get(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
-    let info = services
-        .shell
-        .get(&oc_schema::id::ShellId(id.clone()))
-        .map_err(|_| ApiError::shell_not_found(&id))?;
+    let info = services.shell.get(&oc_schema::id::ShellId(id.clone())).map_err(|error| {
+        crate::errors::debug_cause("shell:shell_not_found", &error);
+        ApiError::shell_not_found(&id)
+    })?;
     let _ = query_field(&uri, "location");
     Ok(json_location_data(&location.as_path().to_string_lossy(), shell_json(&info)))
 }
@@ -85,11 +84,13 @@ async fn output(
         cursor: query_field(&uri, "cursor").and_then(|value| value.parse::<u64>().ok()),
         limit: query_field(&uri, "limit").and_then(|value| value.parse::<u64>().ok()),
     };
-    let output = services
-        .shell
-        .output(&oc_schema::id::ShellId(id.clone()), Some(input))
-        .await
-        .map_err(|_| ApiError::shell_not_found(&id))?;
+    let output =
+        services.shell.output(&oc_schema::id::ShellId(id.clone()), Some(input)).await.map_err(
+            |error| {
+                crate::errors::debug_cause("shell:shell_not_found", &error);
+                ApiError::shell_not_found(&id)
+            },
+        )?;
     Ok(json_location_data(
         &location.as_path().to_string_lossy(),
         json!({
@@ -109,10 +110,9 @@ async fn remove(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
-    services
-        .shell
-        .remove(&oc_schema::id::ShellId(id.clone()))
-        .await
-        .map_err(|_| ApiError::shell_not_found(&id))?;
+    services.shell.remove(&oc_schema::id::ShellId(id.clone())).await.map_err(|error| {
+        crate::errors::debug_cause("shell:shell_not_found", &error);
+        ApiError::shell_not_found(&id)
+    })?;
     Ok(no_content())
 }

@@ -80,7 +80,10 @@ async fn list(
             cursor,
         })
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| {
+            crate::errors::debug_cause("message:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
 
     let has_more = rows.len() as i64 > limit;
     let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
@@ -134,7 +137,10 @@ async fn get(
         .store
         .messages(MessagesInput { session_id: session_id.clone(), ..Default::default() })
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| {
+            crate::errors::debug_cause("message:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
     let row = rows
         .into_iter()
         .find(|row| row.id == message_id)

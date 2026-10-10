@@ -157,6 +157,11 @@ impl ApiError {
     pub fn unknown() -> Self {
         crate::errors::unknown_with_ref()
     }
+    /// The `SchemaError` middleware outcome for payload/query rejections
+    /// (`{message, kind}`, no `field` — P10-E1/E2).
+    pub fn schema_rejection(reason: impl Into<String>, kind: &str) -> Self {
+        crate::errors::schema_rejection(&reason.into(), kind)
+    }
 
     // 503 / 501 / 400-worktree
     pub fn service_unavailable(message: impl Into<String>, service: Option<&str>) -> Self {
@@ -281,7 +286,10 @@ pub async fn session_location(
     let row = store
         .get(session_id)
         .await
-        .map_err(|_| ApiError::unknown_ref())?
+        .map_err(|error| {
+            crate::errors::debug_cause("common:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?
         .ok_or_else(|| ApiError::session_not_found(session_id))?;
     let location =
         LocationRef::new(std::path::PathBuf::from(&row.directory), row.workspace_id.clone());

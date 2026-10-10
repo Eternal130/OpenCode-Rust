@@ -60,7 +60,10 @@ async fn project_list(State(state): State<SharedState>) -> Result<Response, ApiE
             Ok(rows)
         })
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| {
+            crate::errors::debug_cause("project:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
     let data: Vec<Value> = rows.into_iter().map(|row| project_json(&row)).collect();
     Ok(axum::Json(Value::Array(data)).into_response())
 }
@@ -139,7 +142,10 @@ async fn project_update(
             )
         })
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| {
+            crate::errors::debug_cause("project:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
     if updated == 0 {
         return Err(ApiError::project_not_found(&project_id));
     }
@@ -183,7 +189,7 @@ async fn worktrees_for(
         Ok(rows)
     })
     .await
-    .map_err(|_| ApiError::unknown_ref())
+    .map_err(|error| { crate::errors::debug_cause("project:unknown_ref", &error); ApiError::unknown_ref() })
 }
 
 async fn worktree_list(
@@ -249,7 +255,10 @@ async fn worktree_create(
             Ok(Some(directory_str))
         })
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| {
+            crate::errors::debug_cause("project:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
     let Some(directory) = directory else {
         return Err(ApiError::project_not_found(&body_project_id(&body)));
     };
@@ -282,7 +291,10 @@ async fn worktree_remove(
             )
         })
         .await
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| {
+            crate::errors::debug_cause("project:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
     if removed == 0 && !force {
         return Err(ApiError::worktree(
             "not_found",
@@ -448,7 +460,10 @@ async fn vcs_init(
         .arg("init")
         .current_dir(services.project.canonical.as_path())
         .output()
-        .map_err(|_| ApiError::unknown_ref())?;
+        .map_err(|error| {
+            crate::errors::debug_cause("project:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
     if !output.status.success() {
         return Err(ApiError::unknown_ref());
     }

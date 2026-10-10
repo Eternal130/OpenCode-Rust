@@ -224,7 +224,7 @@ impl PluginHost {
             Self { facade: None, bun: Some(path) }
         } else {
             eprintln!(
-                "opencode plugin-host: bun not found (looked on PATH, /usr/local/bin/bun, ~/.bun/bin/bun); plugin subsystem disabled"
+                "opencode plugin-host: bun not found (looked in ~/.cache/opencode/bin, /usr/local/bin/bun, PATH, ~/.bun/bin/bun); plugin subsystem disabled"
             );
             Self { facade: None, bun: None }
         }
@@ -246,15 +246,29 @@ impl PluginHost {
     }
 
     /// [`PluginHost::start_detached`] with explicit timeouts/env.
+    ///
+    /// When bun is absent but plugin `entries` were requested, the
+    /// managed pinned download runs first (MIGRATION §2.3: pinned
+    /// bun 1.3.10 + sha256 into `~/.cache/opencode/bin/`); any
+    /// failure degrades to disabled with one clear message.
     #[must_use]
     pub fn start_detached_with(
         mut self,
         mut config: PluginHostConfig,
         entries: &[PathBuf],
     ) -> Self {
-        let Some(bun) = self.bun.clone() else {
-            eprintln!("opencode plugin-host: start requested but bun is absent; staying disabled");
-            return self;
+        let bun = match self.bun.clone() {
+            Some(bun) => bun,
+            None if entries.is_empty() => {
+                eprintln!(
+                    "opencode plugin-host: start requested but bun is absent; staying disabled"
+                );
+                return self;
+            }
+            None => match self.bootstrap_bun() {
+                Some(bun) => bun,
+                None => return self,
+            },
         };
         let sandbox = sandbox_dir();
         if let Err(error) = host_js::materialize(&sandbox, HOST_JS) {
@@ -347,6 +361,28 @@ impl PluginHost {
             }));
         }
         self
+    }
+
+    /// The managed-bun bootstrap ([`PluginHost::start_detached_with`]'s
+    /// absent-bun arm): pinned download per MIGRATION §2.3, graceful
+    /// disable on any failure.
+    fn bootstrap_bun(&mut self) -> Option<PathBuf> {
+        match oc_util::bunman::ensure() {
+            Ok(bun) => {
+                self.bun = Some(bun.clone());
+                eprintln!(
+                    "opencode plugin-host: plugins requested without a system bun; managed bun bootstrapped"
+                );
+                Some(bun)
+            }
+            Err(error) => {
+                eprintln!(
+                    "opencode plugin-host: bun bootstrap failed ({error}); plugin subsystem disabled. Install bun or set {}=1 to silence this, then retry.",
+                    oc_util::bunman::DISABLE_DOWNLOAD_ENV
+                );
+                None
+            }
+        }
     }
 
     /// Block until the initial registration pass finished (spawn +
