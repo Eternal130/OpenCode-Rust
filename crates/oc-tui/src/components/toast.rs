@@ -10,7 +10,7 @@
 
 use crate::components::footer::canvas::{Canvas, Span};
 use crate::components::footer::theme::{feedback_color, FooterTheme};
-use crate::render::Frame;
+use crate::render::{Cell, Frame};
 use crate::theme::ThemeState;
 use crate::wrap::display_width;
 use oc_theme::types::ResolvedThemeTokens;
@@ -252,6 +252,52 @@ pub fn render_toast_fallback_dark(
     let theme_state = ThemeState::v2_dark();
     let footer = FooterTheme::from_resolved(&theme_state.resolved.tokens);
     render_toast_over_blank(toast, pending, width, height, &footer, &theme_state.resolved.tokens)
+}
+
+/// The toast's panel rows: 5 with a title (paddingTop · title · margin
+/// · message · paddingBottom), 2 without.
+fn panel_rows(toast: &ToastOptions) -> usize {
+    if toast.title.is_some() {
+        5
+    } else {
+        2
+    }
+}
+
+/// Composite the toast over a LIVE frame (`toast-over-session`): the
+/// panel interior replaces the content cells, while the two `┃` rails
+/// keep the UNDERLYING cell's background — the reference surface is
+/// transparent at its edges (the golden pins the rails over the
+/// user-message fill AND over the blank base, per row).
+pub fn overlay_toast_over_frame(
+    frame: &mut Frame,
+    toast: &ToastOptions,
+    pending: usize,
+    theme: &FooterTheme,
+    feedback: &ResolvedThemeTokens,
+) {
+    let term_width = frame.width;
+    let surface =
+        render_toast_over_blank(toast, pending, term_width, frame.height, theme, feedback);
+    let message_width = display_width(&toast.message);
+    let title_width = toast.title.as_deref().map_or(0, display_width);
+    let (left, panel_width, top) = toast_geometry(message_width, title_width, term_width);
+    let right = left + panel_width - 1;
+    for row in top..top + panel_rows(toast) {
+        for col in left..=right {
+            let Some(slot) = frame.cells.get_mut(row).and_then(|line| line.get_mut(col)) else {
+                continue;
+            };
+            let overlay = surface.cell(row, col);
+            if col == left || col == right {
+                // Rail: the glyph + feedback foreground over whatever
+                // background renders behind the toast.
+                *slot = Cell { bg: slot.bg, ..overlay };
+            } else {
+                *slot = overlay;
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -137,6 +137,7 @@ async function main() {
     await import("./scenarios/markdown_frame"),
     await import("./scenarios/spinner_frozen"),
     await import("./scenarios/session_app"),
+    await import("./scenarios/home"),
   ]
   const all = modules.flatMap((m) => m.scenarios)
   const selected = only ? all.filter((s) => only.includes(s.id)) : all
@@ -332,7 +333,7 @@ const { serializeAnsi } = await import("./frame")
 async function capture(
   scenario: { mount: (v: { width: number; height: number }) => Promise<any> },
   variant: { width: number; height: number },
-  cleanup: (app: any) => void,
+  cleanup: (app: any) => Promise<void> | void,
 ): Promise<CapturedVariant> {
   const app = await scenario.mount(variant)
   try {
@@ -342,7 +343,8 @@ async function capture(
     return { width: variant.width, height: variant.height, rows: spans.rows, cols: spans.cols, txt, ansi }
   } finally {
     try {
-      cleanup(app)
+      // Await full teardown before the next mount (double-mount flake fix).
+      await (cleanup(app) ?? Promise.resolve())
     } catch {
       app.renderer.destroy()
     }

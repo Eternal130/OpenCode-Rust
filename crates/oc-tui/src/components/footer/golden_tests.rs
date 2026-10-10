@@ -22,7 +22,8 @@ use super::prompt_idle::{render_prompt_idle, PromptIdleState};
 use crate::components::footer::canvas::{Canvas, Span};
 use crate::components::footer::form::{render_form_body, FormBodyState};
 use crate::components::footer::theme::FooterTheme;
-use crate::components::toast::{render_toast_fallback_dark, ToastOptions};
+use crate::components::sidebar::SidebarMode;
+use crate::components::toast::ToastOptions;
 use crate::render::{serialize_canonical, Frame};
 use parity::tui_frame as pf;
 
@@ -279,16 +280,16 @@ fn form_authorization_matches_golden() {
     }
 }
 
-/// The toast overlay region of `toast-over-session` (tier-c1): the
-/// full frame needs the session route (message-flow lane) and the
-/// composer (wave 2), so this pins the toast's own cells against the
-/// golden sub-rect (rows 1..5 at w80). The panel **interior**
-/// (x38..76 — columns the toast surface fully owns) compares whole
-/// styles; the two rail columns compare glyph + foreground only, since
-/// their background is compositing with whatever renders behind (the
-/// session screen — another lane's surface).
+/// `toast-over-session` (tier-c1) — the **full-frame** golden (the F4
+/// upgrade from the region-level pin): the complete session route
+/// (transcript + tabs-off + the REAL composer via
+/// [`ComposerSlot::Sibling`]) with the toast composited over the live
+/// content — panel interior cells replace the frame, the two `┃`
+/// rails keep the UNDERLYING background (the surface is transparent at
+/// its edges: the golden pins them over the user-message fill on rows
+/// 1-3 and over the blank base on rows 4-5).
 #[test]
-fn toast_over_session_region_matches_golden() {
+fn toast_over_session_matches_the_full_frame() {
     let toast = ToastOptions {
         title: Some("Fixture notice".into()),
         message: "Toast rendered over session content".into(),
@@ -296,28 +297,41 @@ fn toast_over_session_region_matches_golden() {
         duration_ms: 60_000,
         action_label: None,
     };
-    let frame = render_toast_fallback_dark(&toast, 0, 80, 30);
-    let golden = pf::load_ansi_frame(&goldens(), "toast-over-session", 80).expect("ansi golden");
-    let rendered = pf::parse_ansi(&serialize_canonical(&frame), Some((30, 80))).expect("parses");
-    for row in 1..=5 {
-        for col in 37..=77 {
-            let expected = golden.cell(row, col);
-            let actual = rendered.cell(row, col);
-            if (38..=76).contains(&col) {
-                assert_eq!(
-                    (expected.ch, expected.style.fg, expected.style.bg, expected.style.attrs),
-                    (actual.ch, actual.style.fg, actual.style.bg, actual.style.attrs),
-                    "toast interior cell ({row},{col}) — golden {expected:?} vs rendered {actual:?}"
-                );
-            } else {
-                assert_eq!(
-                    (expected.ch, expected.style.fg),
-                    (actual.ch, actual.style.fg),
-                    "toast rail cell ({row},{col}) — golden {expected:?} vs rendered {actual:?}"
-                );
-            }
-        }
-    }
+    let theme_state = crate::theme::ThemeState::v2_dark();
+    let screen = crate::components::session_screen::SessionScreen {
+        tabs: None,
+        sidebar: SidebarMode::Auto,
+        sidebar_view: crate::components::sidebar::SidebarView::fixture(
+            "Toast fixture",
+            crate::components::session_screen::FIXTURE_LOCATION,
+        ),
+        follow: crate::components::message::list::FollowState::Sticky,
+        location: crate::components::session_screen::FIXTURE_LOCATION,
+    };
+    let composer = crate::components::session_screen::session_composer_frame(
+        &crate::components::composer::PromptDraft::default(),
+        76,
+        &theme_state,
+        crate::components::session_screen::FIXTURE_LOCATION,
+    );
+    let mut frame = crate::components::session_screen::paint_session_screen(
+        &crate::components::message::list::message_groups_fixture(),
+        &crate::components::message::list::TranscriptOptions::default(),
+        &screen,
+        &theme_state,
+        80,
+        30,
+        crate::components::session_screen::ComposerSlot::Sibling(&composer),
+    );
+    let footer = FooterTheme::from_resolved(&theme_state.resolved.tokens);
+    super::super::toast::overlay_toast_over_frame(
+        &mut frame,
+        &toast,
+        0,
+        &footer,
+        &theme_state.resolved.tokens,
+    );
+    assert_golden("toast-over-session", 80, &frame);
 }
 
 /// The unstyled toast surface is directly constructible by other

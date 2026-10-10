@@ -56,9 +56,15 @@ pub fn handle_dialog_key(
     let Some(entry) = store.top_dialog() else { return DialogKeyOutcome::Unhandled };
     let props = select_props_for(&entry.kind, store);
     let is_select = !matches!(entry.kind, DialogKind::SessionRename { .. });
+    let is_help = matches!(entry.kind, DialogKind::Help);
 
     // -- modal layer (dialog.tsx) -------------------------------------------
     if stroke.key == "escape" && !stroke.ctrl && !stroke.alt {
+        store.close_dialog();
+        return DialogKeyOutcome::Closed;
+    }
+    // `DialogHelp` binds return/escape to "Close help" (dialog-help.tsx).
+    if is_help && stroke.key == "return" && !stroke.ctrl && !stroke.alt {
         store.close_dialog();
         return DialogKeyOutcome::Closed;
     }
@@ -81,7 +87,7 @@ pub fn handle_dialog_key(
     }
 
     // -- the focused input renderable ---------------------------------------
-    if !stroke.ctrl && !stroke.alt && stroke.key.chars().count() == 1 {
+    if !is_help && !stroke.ctrl && !stroke.alt && stroke.key.chars().count() == 1 {
         if let Some(ch) = stroke.key.chars().next() {
             let text = if stroke.shift { ch.to_ascii_uppercase() } else { ch };
             store.update_dialog(|top| {
@@ -96,7 +102,7 @@ pub fn handle_dialog_key(
             return DialogKeyOutcome::Consumed;
         }
     }
-    if stroke.key == "backspace" && !stroke.ctrl && !stroke.alt && !stroke.shift {
+    if !is_help && stroke.key == "backspace" && !stroke.ctrl && !stroke.alt && !stroke.shift {
         store.update_dialog(|top| {
             if matches!(top.kind, DialogKind::SessionRename { .. }) {
                 top.value.pop();
@@ -184,6 +190,7 @@ pub fn render_overlay_with(
         DialogKind::SessionRename { .. } => {
             render_rename_prompt(entry, &styles, dialog_bg, box_width)
         }
+        DialogKind::Help => render_help_content(&styles, dialog_bg, box_width),
         _ => render_select(
             props,
             &entry.select,
@@ -275,6 +282,123 @@ fn render_rename_prompt(
     SelectView { rows, width }
 }
 
+/// `DialogHelp` (`ui/dialog-help.tsx`): the bold "Help" title with
+/// the `esc/enter` close hint, the command-palette hint line
+/// ("Press ctrl+p to see all available actions and commands in any
+/// context."), then the keybinding table grouped by mode — built from
+/// the keymap's default table (bound entries only; "none" rows stay
+/// out). The binding column shows every alternative, `<leader>`
+/// expanded (`ctrl+x m`).
+fn render_help_content(styles: &DialogStyles, surface: Color, width: usize) -> SelectView {
+    let default = styles.default_fg;
+    let mut rows: Vec<Vec<crate::render::Cell>> = Vec::new();
+
+    // Header: bold "Help", right-aligned "esc/enter".
+    let mut header = blank_row(width, default, surface);
+    put_text(&mut header, 4, "Help", styles.text, surface, 1);
+    put_text_end(&mut header, width - 4, "esc/enter", styles.muted, surface, 0);
+    rows.push(header);
+    rows.push(blank_row(width, default, surface));
+
+    // The palette hint (dialog-help.tsx's body copy; the binding is
+    // the palette command's default).
+    let mut hint = blank_row(width, default, surface);
+    let palette = crate::keymap::default_table()
+        .iter()
+        .find(|def| def.command == "command.palette.show")
+        .map_or_else(
+            || "ctrl+p".to_owned(),
+            |def| spec_display(def.defaults.split(',').next().unwrap_or("none")),
+        );
+    put_text(
+        &mut hint,
+        4,
+        &format!("Press {palette} to see all available actions and commands in any context."),
+        styles.muted,
+        surface,
+        0,
+    );
+    rows.push(hint);
+    rows.push(blank_row(width, default, surface));
+
+    // The binding table grouped by layer (mode), bound entries only.
+    let layers = ["base", "input", "dialog", "diff", "autocomplete"];
+    let leader =
+        crate::keymap::KeyStroke::parse("ctrl+x").unwrap_or_else(|| crate::keymap::KeyStroke {
+            key: "x".into(),
+            ctrl: true,
+            alt: false,
+            shift: false,
+            super_key: false,
+        });
+    for layer in layers {
+        let entries: Vec<&crate::keymap::CommandDef> = crate::keymap::default_table()
+            .iter()
+            .filter(|def| def.layer == layer && def.defaults != "none" && def.command != "leader")
+            .collect();
+        if entries.is_empty() {
+            continue;
+        }
+        let binding_width = entries
+            .iter()
+            .map(|def| display_width(&def.bindings_display(&leader)))
+            .max()
+            .unwrap_or(8)
+            .min(22);
+        let mut section = blank_row(width, default, surface);
+        put_text(&mut section, 4, layer, styles.text, surface, 1);
+        rows.push(section);
+        for def in entries {
+            let mut row = blank_row(width, default, surface);
+            let binding = def.bindings_display(&leader);
+            let at = 4 + binding_width + 2;
+            put_text(&mut row, 4, &binding, styles.formfield_fg, surface, 0);
+            let description =
+                crate::wrap::take_width(def.description, width.saturating_sub(at + 2).max(8));
+            put_text(&mut row, at, &description, styles.muted, surface, 0);
+            rows.push(row);
+        }
+        rows.push(blank_row(width, default, surface));
+    }
+
+    SelectView { rows, width }
+}
+
+/// Display one binding spec alternative with `<leader>` expanded.
+fn spec_display(spec: &str) -> String {
+    let leader =
+        crate::keymap::KeyStroke::parse("ctrl+x").unwrap_or_else(|| crate::keymap::KeyStroke {
+            key: "x".into(),
+            ctrl: true,
+            alt: false,
+            shift: false,
+            super_key: false,
+        });
+    crate::keymap::Chord::parse(spec, &leader)
+        .map_or_else(|| spec.to_owned(), |chord| chord.display())
+}
+
+fn display_width(text: &str) -> usize {
+    crate::wrap::display_width(text)
+}
+
+impl crate::keymap::CommandDef {
+    /// Every default alternative's display, comma-joined
+    /// (`shortcuts.all`).
+    fn bindings_display(&self, leader: &crate::keymap::KeyStroke) -> String {
+        self.defaults
+            .split(',')
+            .map(str::trim)
+            .filter(|spec| !spec.is_empty() && *spec != "none")
+            .map(|spec| {
+                crate::keymap::Chord::parse(spec, leader)
+                    .map_or_else(|| spec.to_owned(), |chord| chord.display())
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
 // -- small paint helpers (cell-level, shared with the prompt) -----------------
 
 type CellRow = Vec<crate::render::Cell>;
@@ -337,11 +461,22 @@ pub fn execute_submission(
 ) -> crate::components::command_palette::Dispatch {
     let command = crate::components::command_palette::command_of_value(value);
     // Theme selections resolve through the registry (the dialog's
-    // values are registry names).
-    if matches!(store.top_dialog().map(|entry| entry.kind), Some(DialogKind::ThemeList)) {
-        store.set_theme_by_name(command);
-        store.clear_dialogs();
-        return crate::components::command_palette::Dispatch::Handled;
+    // values are registry names); server-list rows route by the
+    // picker's own command (model/agent/session selections).
+    match store.top_dialog().map(|entry| entry.kind) {
+        Some(DialogKind::ThemeList) => {
+            store.set_theme_by_name(command);
+            store.clear_dialogs();
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        Some(DialogKind::ServerList { command: picker, .. }) => {
+            let selection = value.to_owned();
+            store.clear_dialogs();
+            return crate::components::command_palette::execute_server_list_selection(
+                store, picker, &selection,
+            );
+        }
+        _ => {}
     }
     store.clear_dialogs();
     dispatcher.dispatch(store, command, None)
@@ -498,5 +633,66 @@ mod tests {
         assert!(row.contains("Rename session"), "{row}");
         let input: String = frame.cells[9].iter().map(|cell| cell.ch).collect();
         assert!(input.contains("Session title"), "{input}");
+    }
+
+    /// `DialogHelp`: the v2 header (bold "Help" + `esc/enter` close
+    /// hint, the palette hint line) plus the keybinding table grouped
+    /// by mode; return and escape both close.
+    #[test]
+    fn help_dialog_lists_bindings_and_closes_on_return() {
+        let theme = crate::theme::ThemeState::v2_dark();
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", None);
+        store.replace_dialog(DialogKind::Help, DialogSize::Large);
+        let mut frame = blank_base(80, 24);
+        render_overlay(&mut frame, &store, &theme, (80, 24));
+        let rows: Vec<String> = frame.text_grid();
+        assert!(rows[7].contains("Help"), "title row: {:?}", rows[7]);
+        assert!(rows[7].contains("esc/enter"), "close hint: {:?}", rows[7]);
+        // The palette hint (dialog-help.tsx's body copy).
+        assert!(
+            rows[9].contains("Press ctrl+p to see all available actions and commands"),
+            "hint row: {:?}",
+            rows[9]
+        );
+        // The binding table: grouped by mode, `<leader>` expanded,
+        // bound entries with their descriptions. (The overlay clamps
+        // to the terminal height — a 24-row terminal shows the head
+        // of the list; the early rows pin the shape.)
+        let text = rows.join("\n");
+        assert!(text.contains("base"), "mode sections present");
+        assert!(
+            text.contains("ctrl+x q"),
+            "leader binding expanded (app.exit's third alternative)"
+        );
+        assert!(text.contains("Exit the application"), "descriptions present");
+        assert!(!text.contains("app.console"), "unbound (none) entries stay out");
+        assert!(!text.contains("Leader key for"), "the leader definition row stays out");
+
+        // return closes (dialog-help binds return + escape).
+        let mut keymap = Keymap::new();
+        keymap.push_mode("dialog");
+        let clock = crate::keymap::ManualClock::default();
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("return").unwrap(),
+            (80, 24),
+        );
+        assert_eq!(outcome, DialogKeyOutcome::Closed);
+        assert_eq!(store.dialogs().len(), 0);
+
+        // Typing in the help dialog neither filters nor moves anything.
+        store.replace_dialog(DialogKind::Help, DialogSize::Large);
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("x").unwrap(),
+            (80, 24),
+        );
+        assert_eq!(outcome, DialogKeyOutcome::Unhandled, "printables pass through help");
+        assert!(store.top_dialog().unwrap().select.filter.is_empty(), "no filter state on help");
     }
 }

@@ -17,11 +17,13 @@
 //! counter between ticks.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 use serde_json::Value;
 
+use crate::attention::AttentionState;
+use crate::clipboard::ClipboardSink;
 use crate::components::composer::{
     Composer, PromptDraft, PromptHistory, PromptSink, RecordingPromptSink, SubmittedPrompt,
 };
@@ -33,6 +35,10 @@ use crate::data::{BusEvent, ConnectionState, Ingest};
 use crate::keymap::KeybindOverride;
 use crate::reactive::{Effect, Runtime, Signal};
 use crate::theme::{ThemeRegistry, ThemeState};
+
+/// How many bus-event ids the replay-dedup window remembers (the F2
+/// contract — see [`Store::ingest_all`] and `data.rs`).
+const SEEN_EVENT_WINDOW: usize = 4096;
 
 /// Route (`context/route.tsx`): home or a session view.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,9 +89,12 @@ pub enum DialogKind {
     SessionRename { session_id: String },
     /// `DialogThemeList`: the built-in theme registry.
     ThemeList,
-    /// Server-backed listings (model/agent/session lists): the
-    /// oc-client fetches land in wave 3 — a placeholder select until
-    /// then (TODO(7.3): wire the `*.list` fetches).
+    /// `DialogHelp` (`ui/dialog-help.tsx`): the palette hint + the
+    /// keybinding table grouped by mode.
+    Help,
+    /// Server-backed listings (model/agent/session lists): populated
+    /// from the store's server-list state ([`ServerLists`]) — loading,
+    /// error, and empty states included.
     ServerList { command: &'static str, title: &'static str },
 }
 
@@ -312,6 +321,141 @@ pub struct MessageState {
     pub by_session: HashMap<String, Vec<Message>>,
 }
 
+// -- server-backed pickers (F3.i) -----------------------------------------
+
+/// One fetchable server list's state (loading → loaded/failed).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum ListState<T> {
+    /// The fetch is in flight (the picker shows its loading row).
+    #[default]
+    Loading,
+    /// The fetch landed.
+    Loaded(Vec<T>),
+    /// The fetch failed (the picker shows the error row).
+    Failed(String),
+}
+
+impl<T> ListState<T> {
+    /// The loaded rows, if any.
+    #[must_use]
+    pub fn rows(&self) -> Option<&[T]> {
+        match self {
+            Self::Loaded(rows) => Some(rows),
+            _ => None,
+        }
+    }
+}
+
+/// One `model.list` row (`ModelInfo` subset the pickers render).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ServerModel {
+    pub provider_id: String,
+    pub id: String,
+    pub name: String,
+    /// `cost[0].input` (USD per M tokens) — the footer panel's Free
+    /// logic input.
+    pub cost_input: f64,
+    /// `cost` non-empty with every input zero (`free()` in
+    /// dialog-model) — the dialog's "Free" footer.
+    pub free: bool,
+    /// `status == "deprecated"` filters the row out (dialog-model).
+    pub deprecated: bool,
+    /// `ModelInfo.variants[].id` — the variant picker's source.
+    pub variants: Vec<String>,
+}
+
+/// One `provider.list` row (`ProviderInfo` subset).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServerProvider {
+    pub id: String,
+    pub name: String,
+}
+
+/// One `agent.list` row (`AgentInfo` subset).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServerAgent {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// `all` | `primary` | `subagent`.
+    pub mode: String,
+    pub hidden: bool,
+}
+
+/// The model/agent/provider lists the pickers read (`data.location.*`
+/// in the reference — fetched once per connect, refreshed on
+/// connection loss).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ServerLists {
+    pub models: ListState<ServerModel>,
+    pub providers: Vec<ServerProvider>,
+    pub agents: ListState<ServerAgent>,
+}
+
+/// A model selection (`providerID` + `modelID` + optional variant).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelSelection {
+    pub provider_id: String,
+    pub model_id: String,
+    pub variant: Option<String>,
+}
+
+/// The per-session model/agent selection the composer commits (the
+/// `local` context's draft state in the reference).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SelectionState {
+    pub by_session: HashMap<String, SessionSelection>,
+}
+
+/// One session's pending selection.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SessionSelection {
+    pub model: Option<ModelSelection>,
+    pub agent: Option<String>,
+}
+
+/// The server selection seam: applying a model/agent pick POSTs
+/// `session.switchModel` / `session.switchAgent` (the reference's
+/// commit path — `prompt/index.tsx` `prepareAgent`/`commitModel`, the
+/// mini footer's `admitPromptTurn`). Tests record; production calls
+/// oc-client.
+pub trait SelectionSink {
+    fn switch_model(&self, session_id: &str, model: &ModelSelection);
+    fn switch_agent(&self, session_id: &str, agent: &str);
+}
+
+/// The default recording sink (tests assert against its log).
+#[derive(Debug, Default)]
+pub struct RecordingSelectionSink {
+    pub calls: std::cell::RefCell<Vec<(String, SelectionCall)>>,
+}
+
+/// One recorded sink call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectionCall {
+    Model { provider_id: String, model_id: String, variant: Option<String> },
+    Agent(String),
+}
+
+impl SelectionSink for RecordingSelectionSink {
+    fn switch_model(&self, session_id: &str, model: &ModelSelection) {
+        self.calls.borrow_mut().push((
+            session_id.to_owned(),
+            SelectionCall::Model {
+                provider_id: model.provider_id.clone(),
+                model_id: model.model_id.clone(),
+                variant: model.variant.clone(),
+            },
+        ));
+    }
+
+    fn switch_agent(&self, session_id: &str, agent: &str) {
+        self.calls
+            .borrow_mut()
+            .push((session_id.to_owned(), SelectionCall::Agent(agent.to_owned())));
+    }
+}
+
 /// The store root.
 /// The composer's store slice: per-session drafts (the draft stash),
 /// the shared prompt history, and the engine prompt sink.
@@ -345,9 +489,23 @@ pub struct Store {
     messages: Signal<MessageState>,
     /// The composer state (drafts + history) for the session route.
     prompt: Signal<PromptState>,
-    /// The engine prompt API stub submissions forward to
-    /// (TODO(7.3): the real `session.prompt` oc-client call).
+    /// The server-backed picker lists (model/provider/agent).
+    server_lists: Signal<ServerLists>,
+    /// The per-session model/agent selection (composer commits).
+    selection: Signal<SelectionState>,
+    /// The engine prompt API stub submissions forward to.
     prompt_sink: std::rc::Rc<dyn PromptSink>,
+    /// The server selection API (model/agent switch POSTs).
+    selection_sink: Rc<dyn SelectionSink>,
+    /// The clipboard sink (`messages.copy` writes OSC 52 through it).
+    clipboard_sink: Rc<dyn ClipboardSink>,
+    /// The external `$EDITOR` request flag (the run loop drains it:
+    /// suspend → run → resume → replace the focused draft).
+    editor_requested: Cell<bool>,
+    /// Attention (bell + pending marker) — see `attention.rs`.
+    attention: Cell<AttentionState>,
+    /// Replay-dedup window: the recent bus-event ids (F2 contract).
+    seen_events: std::cell::RefCell<(VecDeque<String>, HashSet<String>)>,
     /// The injected clock (ms since boot) — the ONLY time source
     /// animations may read (`ManualClock` semantics: a frozen clock pins
     /// spinner frame 0; render happens on tick, only when it advances).
@@ -372,6 +530,8 @@ impl Store {
         let toasts = Signal::new(&runtime, ToastQueue::new());
         let messages = Signal::new(&runtime, MessageState::default());
         let prompt = Signal::new(&runtime, PromptState::default());
+        let server_lists = Signal::new(&runtime, ServerLists::default());
+        let selection = Signal::new(&runtime, SelectionState::default());
         let prompt_sink: std::rc::Rc<dyn PromptSink> =
             std::rc::Rc::new(RecordingPromptSink::default());
         let clock = Signal::new(&runtime, 0u64);
@@ -389,6 +549,8 @@ impl Store {
         let watch_toasts = toasts.clone();
         let watch_messages = messages.clone();
         let watch_prompt = prompt.clone();
+        let watch_server_lists = server_lists.clone();
+        let watch_selection = selection.clone();
         let watch_clock = clock.clone();
         let redraw_effect = Effect::new(&runtime, move || {
             let _ = (
@@ -403,6 +565,8 @@ impl Store {
                 watch_toasts.get(),
                 watch_messages.get(),
                 watch_prompt.get(),
+                watch_server_lists.get(),
+                watch_selection.get(),
                 watch_clock.get(),
             );
             bump.set(bump.get() + 1);
@@ -420,7 +584,14 @@ impl Store {
             toasts,
             messages,
             prompt,
+            server_lists,
+            selection,
             prompt_sink,
+            selection_sink: Rc::new(RecordingSelectionSink::default()),
+            clipboard_sink: Rc::new(crate::clipboard::RecordingClipboardSink::default()),
+            editor_requested: Cell::new(false),
+            attention: Cell::new(AttentionState::default()),
+            seen_events: std::cell::RefCell::new((VecDeque::new(), HashSet::new())),
             clock,
             redraw_requests,
             _redraw_effect: redraw_effect,
@@ -582,6 +753,134 @@ impl Store {
         self.prompt_sink = sink;
     }
 
+    // -- server-backed pickers + selection (F3.i) ------------------------
+
+    /// The server-backed picker lists.
+    #[must_use]
+    pub fn server_lists(&self) -> ServerLists {
+        self.server_lists.get()
+    }
+
+    /// Merge one list fetch result (loading/loaded/failed states per
+    /// v2 — the picker rows re-derive from this).
+    pub fn set_models(&self, models: ListState<ServerModel>, providers: Vec<ServerProvider>) {
+        self.server_lists.update(|lists| {
+            lists.models = models;
+            lists.providers = providers;
+        });
+    }
+
+    /// Merge the agent list fetch result.
+    pub fn set_agents(&self, agents: ListState<ServerAgent>) {
+        self.server_lists.update(|lists| lists.agents = agents);
+    }
+
+    /// Swap the server selection sink.
+    pub fn set_selection_sink(&mut self, sink: Rc<dyn SelectionSink>) {
+        self.selection_sink = sink;
+    }
+
+    /// The selection state (per-session model/agent drafts).
+    #[must_use]
+    pub fn selection(&self) -> SelectionState {
+        self.selection.get()
+    }
+
+    /// The active session's selection (home carries the draft for the
+    /// next-created session).
+    #[must_use]
+    pub fn selection_for(&self, session_id: &str) -> SessionSelection {
+        self.selection.get().by_session.get(session_id).cloned().unwrap_or_default()
+    }
+
+    /// Select a model: update the session's selection state and
+    /// commit it through the server sink (`session.switchModel`).
+    pub fn select_model(&self, session_id: &str, model: &ModelSelection) {
+        self.selection.update(|state| {
+            state.by_session.entry(session_id.to_owned()).or_default().model = Some(model.clone());
+        });
+        self.selection_sink.switch_model(session_id, model);
+    }
+
+    /// Select an agent: update the session's selection and commit it
+    /// through the server sink (`session.switchAgent`).
+    pub fn select_agent(&self, session_id: &str, agent: &str) {
+        self.selection.update(|state| {
+            state.by_session.entry(session_id.to_owned()).or_default().agent =
+                Some(agent.to_owned());
+        });
+        self.selection_sink.switch_agent(session_id, agent);
+    }
+
+    /// Stage a model selection WITHOUT the server call (the home
+    /// route: the pick drafts for the session the next submission
+    /// creates — v2 keeps it local until the session exists).
+    pub fn stage_model(&self, session_id: &str, model: ModelSelection) {
+        self.selection.update(|state| {
+            state.by_session.entry(session_id.to_owned()).or_default().model = Some(model);
+        });
+    }
+
+    /// Stage an agent selection without the server call (home route).
+    pub fn stage_agent(&self, session_id: &str, agent: &str) {
+        self.selection.update(|state| {
+            state.by_session.entry(session_id.to_owned()).or_default().agent =
+                Some(agent.to_owned());
+        });
+    }
+
+    // -- clipboard --------------------------------------------------------
+
+    /// Swap the clipboard sink (production writes OSC 52).
+    pub fn set_clipboard_sink(&mut self, sink: Rc<dyn ClipboardSink>) {
+        self.clipboard_sink = sink;
+    }
+
+    /// Write text through the clipboard sink.
+    pub fn clipboard_write(&self, text: &str) -> Result<(), crate::clipboard::ClipboardError> {
+        self.clipboard_sink.write(text)
+    }
+
+    // -- external editor ---------------------------------------------------
+
+    /// Request the external `$EDITOR` flow (<leader>e / `/editor`):
+    /// the run loop suspends the terminal, runs the editor over the
+    /// focused draft, and replaces it on success.
+    pub fn request_editor(&self) {
+        self.editor_requested.set(true);
+        self.request_redraw();
+    }
+
+    /// Take the editor request (the run loop's side).
+    #[must_use]
+    pub fn take_editor_request(&self) -> bool {
+        self.editor_requested.replace(false)
+    }
+
+    // -- attention (bell) ---------------------------------------------------
+
+    /// The attention state (bell request + pending marker).
+    #[must_use]
+    pub fn attention(&self) -> AttentionState {
+        self.attention.get()
+    }
+
+    /// Take the bell request (the run loop writes `\x07` once).
+    #[must_use]
+    pub fn take_bell(&self) -> bool {
+        let mut attention = self.attention.get();
+        let bell = attention.take_bell();
+        self.attention.set(attention);
+        bell
+    }
+
+    /// Terminal focus returned: consume the pending attention marker.
+    pub fn set_focused(&self) {
+        let mut attention = self.attention.get();
+        attention.focused();
+        self.attention.set(attention);
+    }
+
     // -- messages (lane C) -----------------------------------------------------
 
     /// The ordered messages of one session (the transcript's input).
@@ -655,6 +954,22 @@ impl Store {
             state.history = model::record_tab_history(&state.history, session_id);
         });
         self.navigate(Route::Session { session_id: session_id.to_owned() });
+    }
+
+    /// Restore the persisted tab list on boot (v2's
+    /// `useStorage().store("tabs")` hydration): tabs land wholesale
+    /// (order + titles preserved), the first tab becomes the route
+    /// (v2 has no persisted active marker), an empty list stays home.
+    pub fn restore_tabs(&self, tabs: Vec<SessionTab>) {
+        if tabs.is_empty() {
+            return;
+        }
+        let first = tabs[0].session_id.clone();
+        self.tabs.update(|state| {
+            state.tabs = tabs;
+            state.history = model::record_tab_history(&state.history, &first);
+        });
+        self.navigate(Route::Session { session_id: first });
     }
 
     /// Close a tab (`session_id = None` closes the new-session pseudo
@@ -932,17 +1247,63 @@ impl Store {
     /// are serialized through one channel (see [`crate::data`]) and must
     /// be fully drained before this call so a snapshot can never overtake
     /// queued live events (drain-before-reconcile).
+    ///
+    /// ## Replay dedup (the F2 decision)
+    ///
+    /// Reconnects re-subscribe with the SSE `Last-Event-ID` header. A
+    /// server that honors it REPLAYS events after the cursor — events
+    /// the store already reduced before the disconnect. The store
+    /// therefore remembers the last [`SEEN_EVENT_WINDOW`] bus-event ids
+    /// and **drops exact re-deliveries** before any reducer runs, so a
+    /// replaying server can never double-append `session.text.delta`
+    /// onto a message tree (the gate-10 F2 hazard). The window spans
+    /// resync snapshots deliberately: a replay crosses exactly that
+    /// boundary. Events without ids pass untouched (fixture streams).
+    /// See `data.rs` for the full contract.
     pub fn ingest_all(&self, batch: impl IntoIterator<Item = Ingest>) {
         for message in batch {
             self.ingest_one(message);
         }
     }
 
+    /// F2 replay dedup: `true` when `event`'s id was already reduced
+    /// (a replayed frame — drop it). Fresh ids are remembered.
+    fn is_replayed(&self, event: &BusEvent) -> bool {
+        if event.id.is_empty() {
+            return false;
+        }
+        let mut window = self.seen_events.borrow_mut();
+        let (order, set) = &mut *window;
+        if set.contains(&event.id) {
+            return true;
+        }
+        set.insert(event.id.clone());
+        order.push_back(event.id.clone());
+        while order.len() > SEEN_EVENT_WINDOW {
+            if let Some(evicted) = order.pop_front() {
+                set.remove(&evicted);
+            }
+        }
+        false
+    }
+
     fn ingest_one(&self, message: Ingest) {
         match message {
             Ingest::Connected => self.set_connection(ConnectionState::Connected),
             Ingest::Connection(state) => self.set_connection(state),
-            Ingest::Event(event) => self.reduce_event(&event),
+            Ingest::Event(event) => {
+                if self.is_replayed(&event) {
+                    return;
+                }
+                // Attention (the notifications plugin's always-on
+                // channel): permission asks and forms ring the bell.
+                if crate::attention::AttentionState::rings_on(&event) {
+                    let mut attention = self.attention.get();
+                    attention.ring();
+                    self.attention.set(attention);
+                }
+                self.reduce_event(&event);
+            }
             Ingest::Resync { sessions, unread, messages } => {
                 // Reconcile AFTER the channel drained: refresh session
                 // titles in place (tab order preserved), keep unread
@@ -1062,6 +1423,16 @@ impl Store {
                 let Some(id) = event.string("sessionID") else { return };
                 let active = self.tabs.get().active(&self.route.get());
                 if active.as_deref() != Some(id.as_str()) {
+                    // The unread TRANSITION is an attention event
+                    // (background activity): ring the bell unless the
+                    // tab was already unread (v2's dedup-by-session
+                    // discipline in the notifications plugin).
+                    let was_unread = self.tabs.get().unread.contains_key(&id);
+                    if !was_unread {
+                        let mut attention = self.attention.get();
+                        attention.ring();
+                        self.attention.set(attention);
+                    }
                     self.set_unread(&id, Some(Unread::Activity));
                 }
                 // Lane C: a full message payload projects into the tree
@@ -1078,6 +1449,13 @@ impl Store {
                 let Some(session) = event.string("sessionID") else { return };
                 let active = self.tabs.get().active(&self.route.get());
                 if active.as_deref() != Some(session.as_str()) {
+                    // Same unread-transition attention as message.updated.
+                    let was_unread = self.tabs.get().unread.contains_key(&session);
+                    if !was_unread {
+                        let mut attention = self.attention.get();
+                        attention.ring();
+                        self.attention.set(attention);
+                    }
                     self.set_unread(&session, Some(Unread::Activity));
                 }
                 let Some(item) = event.data.get("item") else { return };
@@ -2060,5 +2438,158 @@ mod tests {
         assert_eq!(model, "fixture/fixture");
         assert_eq!(time.created, Some(101));
         assert_eq!(time.completed, Some(103));
+    }
+
+    // -- Phase 8 lane B: attention / replay dedup / restore / selection --
+
+    /// The bell fires once per permission ask (the run loop's `\x07`
+    /// write drains it); the pending marker survives until focus.
+    #[test]
+    fn permission_asks_ring_the_bell_once() {
+        let store = Store::new(Runtime::new());
+        assert!(!store.take_bell(), "nothing rings at boot");
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "permission.asked",
+            serde_json::json!({ "id": "p1", "sessionID": "ses", "action": "read" }),
+        ))]);
+        assert!(store.take_bell(), "permission.asked rings");
+        assert!(!store.take_bell(), "exactly once");
+        assert!(store.attention().pending, "the marker outlives the bell");
+        store.set_focused();
+        assert!(!store.attention().pending, "focus consumes the marker");
+        // form.created rings too (the question channel).
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "form.created",
+            serde_json::json!({ "form": { "id": "f1", "sessionID": "ses", "title": "T", "fields": [] } }),
+        ))]);
+        assert!(store.take_bell());
+    }
+
+    /// Background activity rings only on the unread TRANSITION (a
+    /// stream of updates into an already-unread tab bells once), and
+    /// never for the active session.
+    #[test]
+    fn unread_transitions_ring_only_on_the_transition() {
+        let store = store_with_tabs(&["a", "b"]);
+        store.select_tab("a");
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "message.updated",
+            serde_json::json!({ "sessionID": "b" }),
+        ))]);
+        assert!(store.take_bell(), "the first background message rings");
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "message.updated",
+            serde_json::json!({ "sessionID": "b" }),
+        ))]);
+        assert!(!store.take_bell(), "already unread — no re-ring");
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "message.updated",
+            serde_json::json!({ "sessionID": "a" }),
+        ))]);
+        assert!(!store.take_bell(), "the active session never rings");
+    }
+
+    /// F2 replay dedup at the store seam: the same event id reduces
+    /// exactly once (a replaying server cannot double-append deltas);
+    /// id-less events pass untouched.
+    #[test]
+    fn replayed_event_ids_reduce_once() {
+        let store = Store::new(Runtime::new());
+        let delta = |id: &str, text: &str| {
+            let mut event = BusEvent::new(
+                "session.text.delta",
+                serde_json::json!({ "sessionID": "s", "assistantMessageID": "a", "delta": text }),
+            );
+            event.id = id.to_owned();
+            Ingest::Event(event)
+        };
+        store.ingest_all([delta("evt_1", "Hello")]);
+        // The replayed frame (same id, same payload) is dropped.
+        store.ingest_all([delta("evt_1", "Hello")]);
+        let messages = store.messages("s");
+        assert_eq!(messages[0].parts()[0].text(), "Hello", "no double append");
+        // A fresh id applies.
+        store.ingest_all([delta("evt_2", " World")]);
+        assert_eq!(store.messages("s")[0].parts()[0].text(), "Hello World");
+        // Id-less events (fixture streams) pass through every time.
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.text.delta",
+            serde_json::json!({ "sessionID": "s", "assistantMessageID": "a", "delta": "!" }),
+        ))]);
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.text.delta",
+            serde_json::json!({ "sessionID": "s", "assistantMessageID": "a", "delta": "!" }),
+        ))]);
+        assert_eq!(store.messages("s")[0].parts()[0].text(), "Hello World!!");
+    }
+
+    /// Restored tabs land wholesale (order + titles), the first tab
+    /// becomes the route; an empty document stays home.
+    #[test]
+    fn restore_tabs_hydrates_in_order() {
+        let store = Store::new(Runtime::new());
+        store.restore_tabs(Vec::new());
+        assert_eq!(store.route(), Route::Home, "empty document stays home");
+        store.restore_tabs(vec![
+            SessionTab { session_id: "ses_1".into(), title: Some("First".into()) },
+            SessionTab { session_id: "ses_2".into(), title: None },
+        ]);
+        let tabs = store.tabs();
+        assert_eq!(tabs.tabs.len(), 2);
+        assert_eq!(tabs.tabs[0].title.as_deref(), Some("First"));
+        assert_eq!(
+            store.route(),
+            Route::Session { session_id: "ses_1".to_owned() },
+            "the first restored tab is the route"
+        );
+    }
+
+    /// The selection state and the sink contract: select_* updates the
+    /// state AND fires the sink; stage_* is state-only (the home
+    /// route's next-session draft).
+    #[test]
+    fn selection_state_and_sink_contract() {
+        use super::{RecordingSelectionSink, SelectionCall};
+        let mut store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(RecordingSelectionSink::default());
+        let sink_dyn: std::rc::Rc<dyn crate::store::SelectionSink> = sink.clone();
+        store.set_selection_sink(sink_dyn);
+        store.open_tab("s1", None);
+        store.select_model(
+            "s1",
+            &ModelSelection {
+                provider_id: "anthropic".into(),
+                model_id: "claude".into(),
+                variant: Some("high".into()),
+            },
+        );
+        store.select_agent("s1", "plan");
+        assert_eq!(
+            sink.calls.borrow().as_slice(),
+            &[
+                (
+                    "s1".into(),
+                    SelectionCall::Model {
+                        provider_id: "anthropic".into(),
+                        model_id: "claude".into(),
+                        variant: Some("high".into())
+                    }
+                ),
+                ("s1".into(), SelectionCall::Agent("plan".into())),
+            ]
+        );
+        assert_eq!(store.selection_for("s1").model.as_ref().unwrap().model_id, "claude");
+        assert_eq!(store.selection_for("s1").agent.as_deref(), Some("plan"));
+
+        store.stage_model(
+            "home",
+            ModelSelection {
+                provider_id: "opencode".into(),
+                model_id: "grok".into(),
+                variant: None,
+            },
+        );
+        assert_eq!(sink.calls.borrow().len(), 2, "staging fires no sink call");
+        assert_eq!(store.selection_for("home").model.as_ref().unwrap().model_id, "grok");
     }
 }

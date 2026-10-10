@@ -13,6 +13,41 @@
 //! consumer-drain discipline, promoted to the design rule for the TUI
 //! data layer from day one (gate-7 risk 3).
 //!
+//! ## The F2 decision: replay dedup by event id (gate-10)
+//!
+//! Reconnects re-subscribe with the tracked cursor as the SSE
+//! `Last-Event-ID` header (below). No v2.0.24 server honors it today,
+//! so the header is speculative — but a future server that DOES
+//! replays events the client already reduced, and the delta reducers
+//! blindly `push_str`, so a replay would double-append text onto the
+//! message trees.
+//!
+//! **Decision (Phase 8): keep sending the header; dedup by event id
+//! in the store.** [`crate::store::Store::ingest_all`] remembers the
+//! last 4096 bus-event ids and drops exact re-deliveries before any
+//! reducer runs. The contract, in order:
+//!
+//! 1. live events reduce as they arrive (ids recorded);
+//! 2. a disconnect triggers reconnect: `Last-Event-ID: <cursor>` +
+//!    the resync fetches (session list + open `message.list`) queue
+//!    ahead of the new stream;
+//! 3. the snapshot rebuilds the open sessions' trees wholesale
+//!    (drain-before-reconcile);
+//! 4. a replay-honoring server re-sends post-cursor events — the
+//!    store drops any whose id is in the window (step 1 recorded
+//!    them), so nothing double-applies onto the rebuilt tree;
+//! 5. genuinely new events (fresh ids) apply on top.
+//!
+//! Exact-id matching (not a numeric high-water mark) is the honest
+//! option: bus event ids are opaque strings (`evt_*`), there is no
+//! monotonic ordering to compare against, and replay re-sends the
+//! SAME ids. Events without ids pass untouched (fixture streams).
+//! The 4096-id window bounds memory while comfortably covering any
+//! plausible offline burst between resubscribes; a server replaying
+//! more than 4096 events past the cursor would exceed the resync's
+//! own consistency net anyway (the snapshot is the backstop, not the
+//! reverse).
+//!
 //! Wire shape: `/api/event` SSE frames are JSON-in-string
 //! (`V2EventEncoded`, double-decoded by [`oc_client::SseStream`]) whose
 //! payload is the bus `Event` — `{ id, created, type, data }` with
@@ -853,5 +888,161 @@ mod tests {
         // refreshed in place.
         assert_eq!(store.tabs().tabs[0].title.as_deref(), Some("Resynced"));
         assert!(store.tabs().unread.contains_key("s1"));
+    }
+
+    /// **The F2 decision test**: a scripted server that HONORS
+    /// `Last-Event-ID` on resubscribe REPLAYS the post-cursor events
+    /// (same ids) — the store's replay-dedup window must drop them so
+    /// nothing double-appends onto the resync-rebuilt tree.
+    ///
+    /// Timeline: live delta e2 ("Hello") → disconnect (the server's
+    /// message list already contains the full "Hello") → reconnect
+    /// (Last-Event-ID: e2) → the resync rebuilds the tree from
+    /// `message.list` ("Hello") → the server replays e2 ("Hello"!)
+    /// and then sends e3 (" World"). Without dedup the tree would end
+    /// `"HelloHello World"`; the contract says "Hello World".
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // scripted end-to-end listener
+    async fn replaying_last_event_id_server_does_not_double_append() {
+        use crate::reactive::Runtime;
+        use crate::store::{Route, Store};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        // The server-side message list at resync time: the turn already
+        // completed (text "Hello").
+        let messages = r#"{"cursor":{},"data":[
+            {"type":"assistant","id":"msg_a1","agent":"build",
+             "model":{"providerID":"fixture","id":"fixture"},
+             "time":{"created":1},
+             "content":[{"type":"text","text":"Hello"}]}
+        ]}"#;
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.expect("accept");
+                let (mut reader, _) = socket.split();
+                let mut request = vec![0u8; 8192];
+                let _ = reader.read(&mut request).await;
+                let head = String::from_utf8_lossy(&request);
+                let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
+                let respond = |body: String, kind: &'static str| {
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                };
+                if path.starts_with("/api/event") {
+                    // The replay-honoring arm: on resubscription re-send
+                    // the post-cursor events (SAME ids) plus one fresh.
+                    let resumed = head.to_lowercase().contains("last-event-id: e2");
+                    let body = if resumed {
+                        sse_frame(
+                            "e2",
+                            "session.text.delta",
+                            r#"{"sessionID":"s1","assistantMessageID":"msg_a1","delta":"Hello"}"#,
+                        ) + &sse_frame(
+                            "e3",
+                            "session.text.delta",
+                            r#"{"sessionID":"s1","assistantMessageID":"msg_a1","delta":" World"}"#,
+                        )
+                    } else {
+                        sse_frame("e1", "server.connected", "{}")
+                            + &sse_frame(
+                                "e2",
+                                "session.text.delta",
+                                r#"{"sessionID":"s1","assistantMessageID":"msg_a1","delta":"Hello"}"#,
+                            )
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{body}"
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                } else if path == "/api/session" {
+                    let body = concat!(
+                        r#"{"cursor":{},"data":[{"#,
+                        r#""id":"s1","title":"Replay","#,
+                        r#""time":{"created":0,"updated":0,"idle":1,"viewed":1},"#,
+                        r#""location":{"directory":"/tmp"},"projectID":"p","cost":0,"#,
+                        r#""tokens":{"cache":{"read":0,"write":0},"input":0,"output":0,"read":0,"write":0,"reasoning":0}}]}"#,
+                    )
+                    .to_owned();
+                    let _ = socket.write_all(respond(body, "application/json").as_bytes()).await;
+                } else if path == "/api/session/s1/message" {
+                    let _ = socket
+                        .write_all(respond(messages.to_owned(), "application/json").as_bytes())
+                        .await;
+                } else {
+                    let _ = socket
+                        .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
+                        .await;
+                }
+            }
+        });
+
+        let client = Client::new(&format!("http://{addr}")).expect("client");
+        let resync = HttpResync::new(client.clone());
+        let open_sessions = resync.open_sessions_handle();
+        if let Ok(mut ids) = open_sessions.lock() {
+            *ids = vec!["s1".to_owned()];
+        }
+        let connection = Connection::with_config(
+            client,
+            ConnectionConfig {
+                backoff_base: Duration::from_millis(10),
+                backoff_max: Duration::from_millis(10),
+                max_attempts: Some(2),
+            },
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let runner = tokio::spawn(connection.run(tx, resync));
+
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Session one".to_owned()));
+        store.navigate(Route::Home);
+
+        let mut observed = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while observed.len() < 7 {
+            let Some(message) =
+                tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
+            else {
+                break;
+            };
+            if let Ok(mut ids) = open_sessions.lock() {
+                *ids = store.open_session_ids();
+            }
+            store.ingest_all([message.clone()]);
+            observed.push(message);
+        }
+        let _ = runner.await;
+        server.abort();
+
+        // connected + live delta → reconnect → resync → replayed e2
+        // (delivered, but dropped by the store's dedup window) + e3.
+        assert_eq!(observed.len(), 7, "observed: {observed:?}");
+        assert!(matches!(&observed[1], Ingest::Event(event) if event.id == "e1"));
+        assert!(matches!(&observed[2], Ingest::Event(event) if event.id == "e2"));
+        assert!(matches!(
+            &observed[4],
+            Ingest::Resync { messages, .. } if matches!(
+                messages.as_slice(),
+                [(_, list)] if list.len() == 1
+            )
+        ));
+        assert!(
+            matches!(&observed[5], Ingest::Event(event) if event.id == "e2"),
+            "the replayed frame DID arrive (same id)"
+        );
+        assert!(matches!(&observed[6], Ingest::Event(event) if event.id == "e3"));
+        // THE CONTRACT: the replayed e2 did not double-append onto the
+        // resync-rebuilt tree ("HelloHello World" without dedup).
+        let messages = store.messages("s1");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].parts()[0].text(),
+            "Hello World",
+            "replay deduped; fresh delta applied"
+        );
     }
 }

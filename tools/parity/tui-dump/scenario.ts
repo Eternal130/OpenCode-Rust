@@ -59,7 +59,7 @@ export const REF = "/tmp/opencode/ref/packages/tui"
  */
 export const CORPUS_THEME = { id: "opencode", label: "v2-dark", mode: "dark" } as const
 
-export function cleanup(app: TestRendererSetup) {
+export function cleanup(app: TestRendererSetup): Promise<void> | void {
   try {
     app.renderer.currentFocusedRenderable?.blur()
     app.renderer.currentFocusedEditor?.blur()
@@ -70,7 +70,9 @@ export function cleanup(app: TestRendererSetup) {
   // Full-app fixtures additionally own a fixture server + app Effect task;
   // dispose them (fire-and-forget — renderer.destroy() already unblocked both).
   const dispose = (app as { dispose?: () => Promise<void> }).dispose
-  if (dispose) void dispose().catch(() => {})
+  // Fire-and-forget here raced the NEXT mount (message-groups double-mount
+  // flake): return the promise so the exporter can await full teardown.
+  if (dispose) return dispose().catch(() => {})
 }
 
 export const WIDE_VARIANTS = (height: number): ScenarioVariant[] => [
