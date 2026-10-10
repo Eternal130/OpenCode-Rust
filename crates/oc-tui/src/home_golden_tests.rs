@@ -26,6 +26,8 @@ fn view(draft: &PromptDraft) -> HomeView<'_> {
         placeholder: "Ask anything… \"Fix a TODO in the codebase\"".into(),
         location: "/tmp/opencode/packages/tui:main".into(),
         version: "test".into(),
+        status_agent: String::new(),
+        status_model: String::new(),
     }
 }
 

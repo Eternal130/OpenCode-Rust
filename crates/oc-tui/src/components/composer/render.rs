@@ -51,14 +51,20 @@ pub struct AutocompleteView<'a> {
     pub title_width: usize,
 }
 
-/// The footer row's inputs: the location label and the two hint
-/// prefixes ("" in the golden harness — unbound shortcuts render as
-/// nothing, leaving ` agents` / ` commands`).
+/// The footer row's inputs: the location label, the two hint prefixes
+/// ("" in the golden harness — unbound shortcuts render as nothing,
+/// leaving ` agents` / ` commands`), and the optional agent · model
+/// statusline (v2's `footerStatuslinePolicy` hint row — empty in every
+/// pinned composer golden, populated on the live routes).
 #[derive(Debug, Clone, Default)]
 pub struct FooterHints {
     pub location: String,
     pub agent_shortcut: String,
     pub command_shortcut: String,
+    /// The staged agent label ("" = none).
+    pub status_agent: String,
+    /// The staged model label ("" = none).
+    pub status_model: String,
 }
 
 /// Everything [`render_prompt_frame`] paints.
@@ -424,7 +430,8 @@ fn paint_composer_box(
 }
 
 /// The footer row: the `{directory}:{branch}` label muted at the left,
-/// the plugin hints right-aligned (gated at ≥ 44 cols).
+/// the agent · model statusline + the plugin hints right-aligned
+/// (gated at ≥ 44 cols).
 fn paint_footer_row(
     frame: &mut Frame,
     view: &PromptView,
@@ -440,10 +447,56 @@ fn paint_footer_row(
     let agent_hint = format!("{} agents", view.footer.agent_shortcut);
     let command_hint = format!("{} commands", view.footer.command_shortcut);
     let block_width = display_width(&agent_hint) + 2 + display_width(&command_hint);
+    // The statusline: `{agent} · {model}` (the prompt-idle hint row);
+    // empty labels paint nothing.
+    let status_text =
+        match (view.footer.status_agent.is_empty(), view.footer.status_model.is_empty()) {
+            (true, true) => String::new(),
+            (false, false) => {
+                format!("{} · {}", view.footer.status_agent, view.footer.status_model)
+            }
+            (false, true) => view.footer.status_agent.clone(),
+            (true, false) => view.footer.status_model.clone(),
+        };
+    let status_width = display_width(&status_text);
+    let right_block = if hints_shown {
+        block_width + if status_width > 0 { status_width + 2 } else { 0 }
+    } else {
+        status_width
+    };
     let location_width =
-        if hints_shown { width.saturating_sub(block_width + 2).max(1) } else { width };
+        if right_block > 0 { width.saturating_sub(right_block + 2).max(1) } else { width };
     let location = truncate_width(&view.footer.location, location_width);
     paint_text(frame, 0, row_index, &location, colors.muted, colors.base, 0);
+    if status_width > 0 {
+        let x = width.saturating_sub(right_block);
+        let budget = width.saturating_sub(x).min(status_width);
+        // Three segments (the statusline policy's tones): agent label
+        // in text.base, the `·` separator muted, model in text.base.
+        let separator =
+            if view.footer.status_agent.is_empty() || view.footer.status_model.is_empty() {
+                ""
+            } else {
+                " · "
+            };
+        let mut cursor = x;
+        for (text, color) in [
+            (view.footer.status_agent.as_str(), colors.text_base),
+            (separator, colors.muted),
+            (view.footer.status_model.as_str(), colors.text_base),
+        ] {
+            let remaining = budget.saturating_sub(cursor - x);
+            if remaining == 0 {
+                break;
+            }
+            let segment = truncate_width(text, remaining);
+            if segment.is_empty() {
+                continue;
+            }
+            paint_text(frame, cursor, row_index, &segment, color, colors.base, 0);
+            cursor += display_width(&segment);
+        }
+    }
     if hints_shown {
         let mut x = width - block_width;
         for (hint, label) in [(&agent_hint, "agents"), (&command_hint, "commands")] {

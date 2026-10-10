@@ -56,6 +56,7 @@ fn harness_view<'a>(
             location: "/tmp/opencode/packages/tui:main".into(),
             agent_shortcut: String::new(),
             command_shortcut: String::new(),
+            ..FooterHints::default()
         },
         top: 2,
     }

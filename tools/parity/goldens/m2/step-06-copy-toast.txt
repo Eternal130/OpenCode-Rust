@@ -1,0 +1,40 @@
+   Untitled session              • Untitled session              +
+  Untitled session                                                                                                          ┃                                ┃
+                                                                                                                            ┃  Message copied to clipboard!  ┃
+  ┃
+  ┃  What files are here?
+  ┃
+
+     → Explored: 1 read
+
+     The notes file is present.
+
+     Build · parityfake/fake-model · 34ms
+
+  ┃
+  ┃  Now read the outside file please.
+  ┃
+
+     → Explored: 1 read
+
+     The outside file says m2-secret.
+
+     Build · parityfake/fake-model · 3.0s
+
+
+
+
+
+
+
+
+
+
+
+
+┃
+┃
+┃
+┃
+╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                                                 fake-model-a  shift+tab agents  ctrl+p commands
