@@ -16,21 +16,33 @@
 
 ---
 
-## 一、当前批次 beta.3（in-flight，修复真实使用反馈）
+## 一、当前批次 beta.3（已发布）+ beta.4（已落地待发）
 
 | 编号 | 项 | 状态 |
 |---|---|---|
-| B3-01 | DB 行映射 NULL 容忍：按真实 v2 库普查逐列改 Option（session_v2×22 列、project×7、credential×3、project_directory×2、worktree×1、event_sequence.owner_id）；500 必落服务端日志（不再静默） | in-flight |
-| B3-02 | TUI 终端交互六连修：stderr 不再糊屏（子进程与引导错误入日志文件）、会话错误按 v2 形态在转录中渲染、OSC 11 查询/应答消费时序对齐（应答不得进输入流）、主题强调色解析链修复（灰条→蓝条）、composer 光标闪烁（v2 时序）、`/` 命令面板预览区 | in-flight |
-| B3-03 | rust 独立默认服务端口（sha1 派生：latest=52568 等；显式配置优先）——已落码，随本批门禁合并 | done(待门禁) |
-| B3-04 | 新验证类补盲：「会应答转义序列的 PTY」集成测试；「真实库副本」集成测试（创建/列表/载入/重放） | in-flight |
+| B3-01 | DB 行映射 NULL 容忍 + 500 必落服务端日志 | done（beta.3） |
+| B3-02 | TUI 终端交互六连修 + 应答型 PTY 测试类 | done（beta.3） |
+| B3-03 | rust 独立默认服务端口 | done（beta.3） |
+| B3-04 | 新验证类补盲（应答 PTY / 真实库副本测试） | done（beta.3） |
+| B4-H1 | provider/model 大小写解析（`own` 键 vs `Own/glm-5.3` 引用；根因 resolver.rs 大小写敏感+错误映射丢模型 ID） | done（beta.4） |
+| B4-H2 | 回合失败浮出：未上屏错误补 v2 形态 error part + 服务端恒定一行日志；顺带修无限重试（per-attempt 重建 RetryPolicy）与连接期错误静默两个潜伏 bug | done（beta.4） |
+| B4-H3 | 已知边界：升级后旧守护不自动换血（parity 钉版使 beta.N 握手不可区分）——手动重启过渡，正式版前给守护握手加 build 标识 | pending |
+
+## 一点五、beta.4 功能落地
+
+| 编号 | 项 | 状态 |
+|---|---|---|
+| R-01a | tree-sitter spike：oc-syntax crate + rust/python/ts 三语言 + markdown 代码块接线（+3.1MiB，18 语言外推 18.6MiB<20 阈值，性能 19× 余量） | done（beta.4） |
+| R-01b | 剩余 15 语言机械铺开 + diff_viewer/tool-row 接线 | pending（下一批） |
+| R-02 | `opencode mini` 分屏前端（滚动回显+4 行活动底栏+权限/表单+demo 模式，PTY 集成测试） | done（beta.4） |
+| R-03 | `acp` 编辑器协议（官方 crate vendor，13 方法+权限/表单桥接，二进制级集成测试） | done（beta.4） |
 
 ## 二、功能缺失（全量消项——用户指令：全部解决）
 
 | 编号 | 项 | v2 来源 | 优先级 | 目标批次 |
 |---|---|---|---|---|
 | R-01 | tree-sitter 语法高亮（diff/代码着色） | core 高亮管线 | P1 | beta.4；**方案已裁定（oracle）**：新叶 crate `oc-syntax`，原生精选 18 语言编译内置（bash/pwsh 已有；+rust/python/ts/js/go/c/cpp/c#/java/json/yaml/toml/html/css/diff），.scm 查询按 v2 的逐语言来源选择钉版 vendor（修复 v2 指向 nvim master 的不可复现性）；未覆盖语言回退纯文本（=现状）；禁运行时拉取（断网独立）；边界 API `highlight(block, filetype)`，markdown.rs/diff_viewer.rs/tool-row 三处接线；先行 spike（3 语言+体积/性能测量）后铺全量 |
-| R-02 | `opencode mini` 第二前端 | cli/handlers/mini.ts | P1 | beta.4 |
+| R-02 | `opencode mini` 第二前端 | cli/handlers/mini.ts | P1 | **done（beta.4）** |
 | R-03 | `acp` 编辑器协议（Zed/Neovim 等） | cli/handlers/acp.ts | P1 | beta.4；**已定栈（librarian）**：官方 `agent-client-protocol =3.3.0`（Apache-2.0，Zed 自家客户端同款）+ `stdio` feature + v1 builder API + `unstable_session_fork`（v2 参照含 fork，parity 必带）；钉精确版本、升级需回归（1.11.0 收紧了接收严格性）；能力宣告精确对齐 `acp/service.ts:106-130`；桥接层映射到现有 oc-client SSE/权限应答地基 |
 | R-04 | **Web UI**：`serve` 托管 `packages/app`（PWA）+ 前端功能等价 | packages/app + serve 静态托管 | P1（大体量） | beta.5 起、跨多批 |
 | R-05 | worktree UI | TUI/worktree | P2 | beta.6 |
