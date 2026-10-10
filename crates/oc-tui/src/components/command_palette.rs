@@ -302,6 +302,31 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         DialogKind::CommandPalette => palette_props(store),
         DialogKind::ThemeList => theme_list_props(store),
         DialogKind::Help | DialogKind::SessionRename { .. } => SelectProps::new("", Vec::new()),
+        DialogKind::Plugin { id } => {
+            // The delegation payload: plugin-supplied options at open
+            // time. Rows-only content returns empty props (the dialog
+            // renders its static rows; keys pass through except the
+            // close bindings).
+            match store.plugin_dialog_content(id) {
+                Some(content) if content.is_select() => {
+                    let options = content
+                        .options
+                        .iter()
+                        .map(|option| {
+                            let mut built =
+                                SelectOption::titled(option.title.clone(), option.value.clone())
+                                    .categorized("Plugin");
+                            if !option.description.is_empty() {
+                                built = built.with_footer(option.description.clone());
+                            }
+                            built
+                        })
+                        .collect();
+                    SelectProps::new(content.title, options).flat(true).threshold(0.7)
+                }
+                _ => SelectProps::new("", Vec::new()),
+            }
+        }
         DialogKind::ServerList { command: "model.list", title } => {
             model_list_props(store, title).with_current(model_current_value(store))
         }

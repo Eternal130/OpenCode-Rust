@@ -37,11 +37,11 @@ use crate::tool::ToolServices;
 
 const SESSION: &str = "ses_tool_test";
 
-struct Harness {
+pub(super) struct Harness {
     dir: PathBuf,
     outside: PathBuf,
     tools: Arc<ToolRegistryState>,
-    services: Arc<ToolServices>,
+    pub(super) services: Arc<ToolServices>,
     #[allow(dead_code)]
     permission: Permission,
     _keep: tempfile::TempDir,
@@ -82,6 +82,11 @@ fn deny_action(action: &str) -> oc_schema::permission::Ruleset {
 
 async fn harness() -> Harness {
     harness_with(allow_all()).await
+}
+
+/// The same harness for codemode's executor tests (crate-internal).
+pub(super) async fn harness_for_codemode() -> Harness {
+    harness().await
 }
 
 async fn harness_with(rules: oc_schema::permission::Ruleset) -> Harness {
@@ -138,7 +143,7 @@ async fn harness_with(rules: oc_schema::permission::Ruleset) -> Harness {
     }
 }
 
-fn context() -> ToolCallContext {
+pub(super) fn context() -> ToolCallContext {
     ToolCallContext {
         session_id: SessionId(SESSION.into()),
         agent: AgentId::parse("build"),
@@ -147,7 +152,7 @@ fn context() -> ToolCallContext {
     }
 }
 
-async fn call(
+pub(super) async fn call(
     tools: &ToolRegistryState,
     name: &str,
     input: serde_json::Value,

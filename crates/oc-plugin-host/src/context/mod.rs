@@ -19,6 +19,7 @@
 //! * [`install`] — the pinned, frozen npm/bun install path
 //!   (`opencode plugin add` → real installation).
 
+pub mod codemode_defaults;
 pub mod install;
 
 use std::collections::BTreeMap;
@@ -50,15 +51,23 @@ pub struct HostState {
 }
 
 impl HostState {
-    /// The serialized seed sent in the `load` params.
+    /// The serialized seed sent in the `load` params. The MCP table
+    /// passes through the v2 `opencode.mcp.codemode.defaults`
+    /// transform first (executor.sh / `executor mcp` ⇒ our Code Mode
+    /// off; PostHog ⇒ the `tools` header) — the guest's editors
+    /// snapshot the defaulted base.
     #[must_use]
     pub fn to_seed_json(&self) -> Value {
+        let mut mcps = self.mcps.clone();
+        if let Some(table) = mcps.as_object_mut() {
+            codemode_defaults::apply_to_servers(table);
+        }
         serde_json::json!({
             "appVersion": self.app_version,
             "project": { "id": self.project_id },
             "directory": self.directory,
             "agents": self.agents,
-            "mcps": self.mcps,
+            "mcps": mcps,
         })
     }
 }
@@ -158,6 +167,40 @@ pub const SESSION_METHODS: &[&str] = &[
     "wait",
     "switchModel",
 ];
+
+/// The Code Mode bridge methods (`codemode.*`) — the same
+/// async-off-the-reader routing the session methods use (deadlock rule
+/// 1), applied to `tools.<path>(input)` calls from inside an `execute`
+/// program.
+pub const CODEMODE_METHODS: &[&str] = &["codemode.tool"];
+
+/// The `ctx.generate.*` methods routed through the session port (the
+/// engine seam owns one-off generation, `GenerateApi`).
+pub const GENERATE_METHODS: &[&str] = &["generate.text"];
+
+/// `ctx.tool` execution routing target (the wave-4 dispatch seam): a
+/// nested `tools.<name>(input)` call inside a Code Mode program lands
+/// here. The implementation owns the real engine loop — typically
+/// resolving the tool from the oc-core registry (the full pipeline:
+/// hooks fire per nested call) and answering with the tool's JSON
+/// result; `Err` rejects inside the program.
+///
+/// Calls arrive spawned off the IO reader exactly like
+/// [`SessionPort::call`].
+#[async_trait]
+pub trait ToolPort: Send + Sync {
+    async fn call(&self, bridge: &Bridge, name: &str, input: &Value) -> Result<Value, String>;
+}
+
+/// The declining default: every tool call errors with a clear message.
+pub struct NoToolEngine;
+
+#[async_trait]
+impl ToolPort for NoToolEngine {
+    async fn call(&self, _bridge: &Bridge, name: &str, _input: &Value) -> Result<Value, String> {
+        Err(format!("tool call {name}: no tool engine attached to the plugin host"))
+    }
+}
 
 #[cfg(test)]
 mod tests {

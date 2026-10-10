@@ -575,7 +575,7 @@ fn command_palette_frame(width: u16, height: u16) -> Frame {
         width: usize::from(width),
         height: usize::from(height),
     };
-    render_overlay_with(&mut base, &entry, &props, &theme, (width, height));
+    render_overlay_with(&mut base, &entry, &props, None, &theme, (width, height));
     base
 }
 

@@ -360,17 +360,53 @@ pub async fn spawn() -> Result<ReferenceServer> {
 /// e.g. `OPENCODE_SIMULATE=1` (see `tools/parity/src/scenario.rs` docs for
 /// what simulation mode does and does not provide).
 pub async fn spawn_with_env(extra_env: &[(&str, &str)]) -> Result<ReferenceServer> {
+    spawn_reference(ReferenceSpawn { extra_env: extra_env.to_vec(), seed_files: Vec::new() }).await
+}
+
+/// Options for [`spawn_reference`] (mirrors [`crate::rust_server::RustSpawn`]).
+#[derive(Default)]
+pub struct ReferenceSpawn<'a> {
+    /// Extra child environment entries, applied after the hermetic base
+    /// (so they can override `HOME`/`XDG_*` — used by the Phase-10 DB
+    /// interop battery to point two servers at one shared data home).
+    /// `{sandbox}` in a value expands to this server's sandbox root.
+    pub extra_env: Vec<(&'a str, &'a str)>,
+    /// Files to write inside the sandbox before spawning
+    /// (relative path, contents) — e.g. a pre-seeded project
+    /// `opencode.json` provider config.
+    pub seed_files: Vec<(PathBuf, String)>,
+}
+
+/// [`spawn`] with full options: pre-seeded sandbox files + extra child env.
+pub async fn spawn_reference(options: ReferenceSpawn<'_>) -> Result<ReferenceServer> {
     let bun = bun_path().ok_or_else(|| anyhow!("bun not found (set PARITY_BUN)"))?;
     ensure_reference_checkout()?;
     let root = ref_root();
     let port = free_port()?;
     let sandbox = sandbox_root().join(format!("ref-{}-{}", std::process::id(), port));
     let (home, tmp) = prepare_sandbox(&sandbox)?;
+    for (path, contents) in &options.seed_files {
+        let path = sandbox.join(path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
+        std::fs::write(&path, contents).with_context(|| format!("write {}", path.display()))?;
+    }
+    let expanded: Vec<(String, String)> = options
+        .extra_env
+        .iter()
+        .map(|(key, value)| {
+            ((*key).to_string(), value.replace("{sandbox}", sandbox.to_string_lossy().as_ref()))
+        })
+        .collect();
+    let expanded_refs: Vec<(&str, &str)> =
+        expanded.iter().map(|(key, value)| (key.as_str(), value.as_str())).collect();
 
     let url = format!("http://127.0.0.1:{port}");
     let auth = minih::basic_auth("opencode", REF_PASSWORD);
 
-    let mut child = build_command(&bun, &root, port, &home, &tmp, extra_env)
+    let mut child = build_command(&bun, &root, port, &home, &tmp, &expanded_refs)
         .spawn()
         .with_context(|| format!("spawn {}", bun.display()))?;
 

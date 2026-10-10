@@ -96,6 +96,12 @@ pub enum DialogKind {
     /// from the store's server-list state ([`ServerLists`]) — loading,
     /// error, and empty states included.
     ServerList { command: &'static str, title: &'static str },
+    /// A plugin dialog (`DialogKind::Plugin`, wave 3's open dialog
+    /// seam): the content was materialized at OPEN time through
+    /// [`PluginDialogSource`] (or arrived fully-built on a
+    /// `ui.dialog.open` request) and renders natively — the id keys
+    /// the store's [`PluginDialogContent`].
+    Plugin { id: String },
 }
 
 /// One stack entry: the dialog kind, chrome size and content state.
@@ -479,6 +485,59 @@ pub struct PluginCommandEntry {
     pub plugin_id: String,
 }
 
+/// One select option of a plugin dialog (the delegation payload's
+/// option row — submit dispatches `value` through the palette
+/// dispatcher).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginDialogOption {
+    pub title: String,
+    pub value: String,
+    pub description: String,
+}
+
+/// The content structure a plugin dialog renders natively from (the
+/// delegation trait's payload): a title, informational rows, and
+/// optional select semantics. Materialized ONCE at open time —
+/// synchronously through the host bridge (HARD timeout there), never
+/// per-frame.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginDialogContent {
+    pub title: String,
+    /// Static rows (rendered verbatim when no options).
+    pub rows: Vec<String>,
+    /// When non-empty the dialog is a select (the native pipeline:
+    /// filter/move/submit; submit dispatches the option's value).
+    pub options: Vec<PluginDialogOption>,
+}
+
+impl PluginDialogContent {
+    /// Whether this content carries select semantics.
+    #[must_use]
+    pub fn is_select(&self) -> bool {
+        !self.options.is_empty()
+    }
+}
+
+/// Open-time dialog content source (the delegation seam behind
+/// [`DialogKind::Plugin`]): the app wires this to the plugin host's
+/// materialization call (the guest builds the structure
+/// synchronously; the host bounds the whole call with a hard
+/// timeout). Called once per open — never per frame.
+pub trait PluginDialogSource {
+    /// The dialog id (`plugin:local` qualified or raw local id).
+    fn content(&self, id: &str) -> Option<PluginDialogContent>;
+}
+
+/// The no-op source (no plugin host attached).
+#[derive(Debug, Default)]
+pub struct NoPluginDialogs;
+
+impl PluginDialogSource for NoPluginDialogs {
+    fn content(&self, _id: &str) -> Option<PluginDialogContent> {
+        None
+    }
+}
+
 /// Execution sink for plugin commands: the app layer wires this to the
 /// plugin host's `execute_command` (timeout-bounded there); the store
 /// itself never talks IPC.
@@ -548,6 +607,19 @@ pub struct Store {
     seen_events: std::cell::RefCell<(VecDeque<String>, HashSet<String>)>,
     /// Plugin-registered palette commands (registration-time only).
     plugin_commands: Signal<Vec<PluginCommandEntry>>,
+    /// Plugin dialog contents keyed by dialog id (materialized at open
+    /// or delivered built on a `ui.dialog.open` request).
+    plugin_dialogs: Signal<HashMap<String, PluginDialogContent>>,
+    /// The open-time dialog content source (delegation seam).
+    plugin_dialog_source: std::cell::RefCell<Rc<dyn PluginDialogSource>>,
+    /// Plugin sidebar sections (one per plugin, latest wins).
+    plugin_sections: Signal<Vec<crate::components::sidebar::SidebarSection>>,
+    /// Plugin footer hint segments (one per plugin, latest wins).
+    plugin_hints: Signal<Vec<(String, String)>>,
+    /// Plugin home quick actions (registration-time).
+    plugin_home_actions: Signal<Vec<crate::components::home::PluginQuickAction>>,
+    /// Plugin message-grouping rules (registration-time).
+    plugin_group_rules: Signal<crate::components::message::model::GroupRules>,
     /// The post-ingest event tap (plugin-host broadcast seam).
     event_tap: std::cell::RefCell<Option<std::sync::Arc<dyn EventTap>>>,
     /// Plugin command execution (bridges the palette to the host).
@@ -579,6 +651,15 @@ impl Store {
         let server_lists = Signal::new(&runtime, ServerLists::default());
         let selection = Signal::new(&runtime, SelectionState::default());
         let plugin_commands = Signal::new(&runtime, Vec::<PluginCommandEntry>::new());
+        let plugin_dialogs =
+            Signal::new(&runtime, std::collections::HashMap::<String, PluginDialogContent>::new());
+        let plugin_sections =
+            Signal::new(&runtime, Vec::<crate::components::sidebar::SidebarSection>::new());
+        let plugin_hints = Signal::new(&runtime, Vec::<(String, String)>::new());
+        let plugin_home_actions =
+            Signal::new(&runtime, Vec::<crate::components::home::PluginQuickAction>::new());
+        let plugin_group_rules =
+            Signal::new(&runtime, crate::components::message::model::GroupRules::empty());
         let prompt_sink: std::rc::Rc<dyn PromptSink> =
             std::rc::Rc::new(RecordingPromptSink::default());
         let clock = Signal::new(&runtime, 0u64);
@@ -599,6 +680,11 @@ impl Store {
         let watch_server_lists = server_lists.clone();
         let watch_selection = selection.clone();
         let watch_plugin_commands = plugin_commands.clone();
+        let watch_plugin_dialogs = plugin_dialogs.clone();
+        let watch_plugin_sections = plugin_sections.clone();
+        let watch_plugin_hints = plugin_hints.clone();
+        let watch_plugin_home_actions = plugin_home_actions.clone();
+        let watch_plugin_group_rules = plugin_group_rules.clone();
         let watch_clock = clock.clone();
         let redraw_effect = Effect::new(&runtime, move || {
             let _ = (
@@ -616,6 +702,11 @@ impl Store {
                 watch_server_lists.get(),
                 watch_selection.get(),
                 watch_plugin_commands.get(),
+                watch_plugin_dialogs.get(),
+                watch_plugin_sections.get(),
+                watch_plugin_hints.get(),
+                watch_plugin_home_actions.get(),
+                watch_plugin_group_rules.get(),
                 watch_clock.get(),
             );
             bump.set(bump.get() + 1);
@@ -637,6 +728,12 @@ impl Store {
             selection,
             prompt_sink,
             plugin_commands,
+            plugin_dialogs,
+            plugin_dialog_source: std::cell::RefCell::new(Rc::new(NoPluginDialogs)),
+            plugin_sections,
+            plugin_hints,
+            plugin_home_actions,
+            plugin_group_rules,
             event_tap: std::cell::RefCell::new(None),
             plugin_sink: std::cell::RefCell::new(Rc::new(NoPluginCommands)),
             selection_sink: Rc::new(RecordingSelectionSink::default()),
@@ -1323,6 +1420,107 @@ impl Store {
             return false;
         }
         self.plugin_sink.borrow().execute(command, args)
+    }
+
+    // -- plugin seams (wave 3: the TUI slot bridge) -----------------------------
+
+    /// Attach the open-time plugin dialog content source (the
+    /// delegation seam behind [`DialogKind::Plugin`]). The source
+    /// materializes content ONCE per open — the app wires it to the
+    /// host's hard-timeout-bounded call.
+    pub fn set_plugin_dialog_source(&self, source: Rc<dyn PluginDialogSource>) {
+        *self.plugin_dialog_source.borrow_mut() = source;
+    }
+
+    /// One dialog's content: the store's materialized copy if present
+    /// (a `ui.dialog.open` delivery), else the source's answer at
+    /// OPEN time (synchronous, hard-timeout-bounded by the host).
+    #[must_use]
+    pub fn plugin_dialog_content(&self, id: &str) -> Option<PluginDialogContent> {
+        if let Some(content) = self.plugin_dialogs.get().get(id) {
+            return Some(content.clone());
+        }
+        self.plugin_dialog_source.borrow().content(id)
+    }
+
+    /// Register one dialog's content (a fully-built `ui.dialog.open`
+    /// delivery) and open it natively.
+    pub fn open_plugin_dialog_with(&self, id: &str, content: PluginDialogContent) {
+        self.plugin_dialogs.update(|dialogs| {
+            dialogs.insert(id.to_owned(), content);
+        });
+        self.open_dialog(DialogKind::Plugin { id: id.to_owned() }, DialogSize::default());
+    }
+
+    /// Open a plugin dialog by id: materialize at open (the source),
+    /// then push [`DialogKind::Plugin`]. Unknown ids are a no-op (a
+    /// missing plugin never breaks the palette).
+    pub fn open_plugin_dialog(&self, id: &str) -> bool {
+        let Some(content) = self.plugin_dialog_content(id) else { return false };
+        self.plugin_dialogs.update(|dialogs| {
+            dialogs.insert(id.to_owned(), content);
+        });
+        self.open_dialog(DialogKind::Plugin { id: id.to_owned() }, DialogSize::default());
+        true
+    }
+
+    /// Upsert one plugin's sidebar section (latest wins; an empty
+    /// title + empty rows removes the section).
+    pub fn set_plugin_sidebar_section(&self, section: crate::components::sidebar::SidebarSection) {
+        let remove = section.title.is_empty() && section.rows.is_empty();
+        self.plugin_sections.update(|sections| {
+            sections.retain(|existing| existing.plugin_id != section.plugin_id);
+            if !remove {
+                sections.push(section.clone());
+            }
+        });
+    }
+
+    /// The plugin sidebar sections (render order = registration order).
+    #[must_use]
+    pub fn plugin_sidebar_sections(&self) -> Vec<crate::components::sidebar::SidebarSection> {
+        self.plugin_sections.get()
+    }
+
+    /// Upsert one plugin's footer hint segment (empty text removes).
+    pub fn set_plugin_footer_hint(&self, plugin_id: &str, text: &str) {
+        self.plugin_hints.update(|hints| {
+            hints.retain(|(owner, _)| owner != plugin_id);
+            if !text.is_empty() {
+                hints.push((plugin_id.to_owned(), text.to_owned()));
+            }
+        });
+    }
+
+    /// The plugin footer hint segments (render order).
+    #[must_use]
+    pub fn plugin_footer_hints(&self) -> Vec<String> {
+        self.plugin_hints.get().iter().map(|(_, text)| text.clone()).collect()
+    }
+
+    /// Replace the plugin home quick actions (registration-time).
+    pub fn set_plugin_home_actions(
+        &self,
+        actions: Vec<crate::components::home::PluginQuickAction>,
+    ) {
+        self.plugin_home_actions.set(actions);
+    }
+
+    /// The plugin home quick actions.
+    #[must_use]
+    pub fn plugin_home_actions(&self) -> Vec<crate::components::home::PluginQuickAction> {
+        self.plugin_home_actions.get()
+    }
+
+    /// Replace the plugin message-grouping rules (registration-time).
+    pub fn set_plugin_group_rules(&self, rules: crate::components::message::model::GroupRules) {
+        self.plugin_group_rules.set(rules);
+    }
+
+    /// The plugin message-grouping rules.
+    #[must_use]
+    pub fn plugin_group_rules(&self) -> crate::components::message::model::GroupRules {
+        self.plugin_group_rules.get()
     }
 
     /// The open session IDs (tab order) — the resync's message.list

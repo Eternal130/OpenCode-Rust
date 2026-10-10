@@ -184,3 +184,27 @@ Not yet implemented (module seams exist):
   `tests/m1_tui_smoke.rs` additionally boots the official v2.0.24 TUI
   against the Rust server inside tmux (opt-in: `OC_M1_TUI=1` +
   `--run-ignored only`); its pane captures live in `goldens/m1/`.
+
+## Phase-10 verification battery (`tests/p10_*.rs`)
+
+Opt-in twice (`#[ignore]` + `OC_P10=1`), so the default suite never needs
+bun/reference/tmux:
+
+```bash
+OC_P10=1 cargo nextest run -p parity --run-ignored only -E 'test(p10_)'
+```
+
+| Test | What it pins |
+| --- | --- |
+| `p10_openapi` | `GET /openapi.json` from the booted port vs the pinned `/opt/opencode-ref/packages/protocol/openapi.json`: semantic diff (`src/openapi_diff.rs` — path×method sets, per-op operationId/parameters/`$ref` sets, schema names) must be empty minus `goldens/p10/openapi-whitelist.json`; the summary golden pins counts + byte-identity. |
+| `p10_error_paths` | 7 representative error routes probed on a booted reference AND port side-by-side; normalized bodies byte-compared; `goldens/p10/error-paths.json` pins each side + the divergence report (fails on new OR stale divergences). |
+| `p10_cross_tui` | The real v2.0.24 TUI (bun + tmux) against the Rust server: prompt+reply (`FakeLlm`), rename (`ctrl+r`, verified server-side), permission-once (external read → footer → TUI replies → tool proceeds). Captures in `goldens/p10/tui/`. |
+| `p10_cross_client` | The generated `oc-client` (dev-dependency) against a booted reference server: create → prompt → parked ask → permission reply → `message.list`, every response decoded. |
+| `p10_db_interop` | One shared data home, three boots: reference writes NULL-heavy rows → port re-opens (migration journal byte-identical = 0 reruns) + continues → reference re-opens + continues. Journal manifest golden-pinned. Runs on `opencode.db` (v2 `OPENCODE_DISABLE_CHANNEL_DB=1`) — see finding P10-DB1 in `goldens/p10/VERIFICATION.md`. |
+
+Shared helpers: `tests/p10_common/mod.rs` (guards, `minih`-based API sugar,
+the scripted fake LLM with tool calls, `bun:sqlite` DB dumps). Harness seams
+added for the battery: `minih` is now `pub`, `openapi_diff` is a new module,
+and `reference::spawn_reference` accepts seed files + env (mirroring
+`RustSpawn`). The full battery ledger — table, whitelist, findings — is
+`goldens/p10/VERIFICATION.md`.

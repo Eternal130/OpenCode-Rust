@@ -1,5 +1,5 @@
-//! Minimal localhost HTTP/1.1 client (private plumbing for the parity
-//! harness). Supports exactly what the harness needs and nothing more:
+//! Minimal localhost HTTP/1.1 client (plumbing for the parity harness).
+//! Supports exactly what the harness needs and nothing more:
 //!
 //! - plain `http://` to loopback only,
 //! - Basic auth,
@@ -18,16 +18,16 @@ use tokio::net::TcpStream;
 
 /// A fully-buffered HTTP response.
 #[derive(Debug)]
-pub(crate) struct Response {
-    pub(crate) status: u16,
+pub struct Response {
+    pub status: u16,
     /// Header names lowercased, values trimmed.
-    pub(crate) headers: Vec<(String, String)>,
-    pub(crate) body: Vec<u8>,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
 }
 
 impl Response {
-    #[allow(dead_code)] // used by future phases; kept next to the struct it belongs to
-    pub(crate) fn header(&self, name: &str) -> Option<&str> {
+    #[must_use]
+    pub fn header(&self, name: &str) -> Option<&str> {
         self.headers.iter().find(|(key, _)| key == name).map(|(_, value)| value.as_str())
     }
 }
@@ -70,7 +70,8 @@ pub(crate) fn base64_encode(input: &[u8]) -> String {
 }
 
 /// `Basic <base64(user:password)>` header value.
-pub(crate) fn basic_auth(user: &str, password: &str) -> String {
+#[must_use]
+pub fn basic_auth(user: &str, password: &str) -> String {
     format!("Basic {}", base64_encode(format!("{user}:{password}").as_bytes()))
 }
 
@@ -342,7 +343,7 @@ impl BodyStream {
 }
 
 /// Buffer a full response for `method path` on `base`.
-pub(crate) async fn request(
+pub async fn request(
     base: &str,
     auth: Option<&str>,
     method: &str,
