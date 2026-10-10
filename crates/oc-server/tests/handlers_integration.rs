@@ -724,6 +724,17 @@ async fn handlers_catalog_surfaces_decode() {
 
     let models = client.model().list(&ModelListQuery::default()).await.expect("model list");
     assert!(!models.data.is_empty(), "catalog models decode with location+data envelope");
+    // D-05: the wire order is `time.released` DESCENDING (core
+    // model.ts:218-220 — `all` is sorted, `available()` only filters).
+    let mut prev = f64::INFINITY;
+    for model in &models.data {
+        assert!(
+            model.time.released <= prev,
+            "model list is released-descending ({} after {prev})",
+            model.time.released
+        );
+        prev = model.time.released;
+    }
 
     let providers =
         client.provider().list(&ProviderListQuery::default()).await.expect("provider list");
