@@ -29,10 +29,9 @@ repository = "https://github.com/Eternal130/OpenCode-Rust"
 [patch.crates-io]
 agent-client-protocol = { path = "third_party/agent-client-protocol" }
 agent-client-protocol-schema = { path = "third_party/agent-client-protocol-schema" }
-# Vendored grammars (R-01b): kotlin 0.3.8 (fwcd) and toml v0.7.0
+# Vendored grammar (R-01b): toml v0.7.0
 # (tree-sitter-grammars) carry no tree-sitter-language release on crates.io
 # — see each third_party/*/README.md.
-tree-sitter-kotlin = { path = "third_party/tree-sitter-kotlin" }
 tree-sitter-toml = { path = "third_party/tree-sitter-toml" }
 
 [workspace.dependencies]

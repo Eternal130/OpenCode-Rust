@@ -10,13 +10,15 @@
 //! v2's tail languages beyond it stay unregistered). Routing follows
 //! v2's notes: python/php/html highlights from the parser repo (the nvim
 //! queries are marked broken at parsers-config.ts:12-16, 129-131,
-//! 149-151), swift from the parser repo (`#lua-match?` predicates,
-//! :267-269), kotlin from fwcd's repo (:106-110) — everything else is
-//! vendored from the parser repo's own query **at the exact crate tag**
-//! (guaranteed grammar/query ABI coherence; nvim master is a moving
-//! target). kotlin and toml ship as vendored path crates under
-//! `third_party/` (their lineages have no tree-sitter-language release
-//! on crates.io); their queries sit at the same tags as the C sources.
+//! 149-151) — everything else is vendored from the parser repo's own
+//! query **at the exact crate tag** (guaranteed grammar/query ABI
+//! coherence; nvim master is a moving target). toml ships as a vendored
+//! path crate under `third_party/` (its lineage has no
+//! tree-sitter-language release on crates.io); its query sits at the
+//! same tag as the C source. swift/c-sharp/kotlin were implemented and
+//! then DROPPED for release-binary size (ROADMAP R-01b: 72.7 MiB vs the
+//! 67.6 ceiling; the three heaviest grammars — re-add behind cargo
+//! features if ever needed).
 
 use std::sync::{Arc, OnceLock};
 
@@ -53,8 +55,6 @@ mod scm {
     /// — the parser repo inlines the C base patterns; only nvim's
     /// variant `; inherits: c`).
     pub const CPP_HIGHLIGHTS: &str = include_str!("../queries/cpp-highlights.scm");
-    /// `tree-sitter-c-sharp` v0.23.5 `queries/highlights.scm`.
-    pub const CSHARP_HIGHLIGHTS: &str = include_str!("../queries/csharp-highlights.scm");
     /// `tree-sitter-java` v0.23.5 `queries/highlights.scm`.
     pub const JAVA_HIGHLIGHTS: &str = include_str!("../queries/java-highlights.scm");
     /// `tree-sitter-json` v0.24.8 `queries/highlights.scm`.
@@ -80,11 +80,6 @@ mod scm {
     /// its own for the `javascript` filetype (crate pinned at the
     /// matching v0.23.1).
     pub const JAVASCRIPT_HIGHLIGHTS: &str = include_str!("../queries/javascript-highlights.scm");
-    /// fwcd `tree-sitter-kotlin` 0.3.8 `queries/highlights.scm` (v2
-    /// routes kotlin highlights from fwcd, not nvim —
-    /// parsers-config.ts:106-110; grammar vendored at the same tag under
-    /// `third_party/tree-sitter-kotlin`).
-    pub const KOTLIN_HIGHLIGHTS: &str = include_str!("../queries/kotlin-highlights.scm");
     /// `tree-sitter-ruby` v0.23.1 `queries/highlights.scm`.
     pub const RUBY_HIGHLIGHTS: &str = include_str!("../queries/ruby-highlights.scm");
     /// `tree-sitter-ruby` v0.23.1 `queries/locals.scm`.
@@ -92,10 +87,6 @@ mod scm {
     /// `tree-sitter-php` v0.25.1 `queries/highlights.scm` (v2 routes php
     /// highlights from the parser repo — parsers-config.ts:129-131).
     pub const PHP_HIGHLIGHTS: &str = include_str!("../queries/php-highlights.scm");
-    /// alex-pinkus `tree-sitter-swift` 0.7.4 `queries/highlights.scm` (v2
-    /// routes swift highlights from the parser repo — nvim's query uses
-    /// `#lua-match?` predicates, parsers-config.ts:267-269).
-    pub const SWIFT_HIGHLIGHTS: &str = include_str!("../queries/swift-highlights.scm");
 }
 
 /// One registry entry: a filetype, its v2-style aliases, the native grammar
@@ -168,13 +159,6 @@ pub fn registry() -> &'static [GrammarEntry] {
             locals_query: None,
         },
         GrammarEntry {
-            filetype: "csharp",
-            aliases: &["c-sharp", "c#", "cs"],
-            language: tree_sitter_c_sharp::LANGUAGE,
-            highlight_query: scm::CSHARP_HIGHLIGHTS,
-            locals_query: None,
-        },
-        GrammarEntry {
             filetype: "java",
             aliases: &[],
             language: tree_sitter_java::LANGUAGE,
@@ -231,13 +215,6 @@ pub fn registry() -> &'static [GrammarEntry] {
             locals_query: None,
         },
         GrammarEntry {
-            filetype: "kotlin",
-            aliases: &["kt", "kts"],
-            language: tree_sitter_kotlin::LANGUAGE,
-            highlight_query: scm::KOTLIN_HIGHLIGHTS,
-            locals_query: None,
-        },
-        GrammarEntry {
             filetype: "ruby",
             aliases: &["rb"],
             language: tree_sitter_ruby::LANGUAGE,
@@ -249,13 +226,6 @@ pub fn registry() -> &'static [GrammarEntry] {
             aliases: &[],
             language: tree_sitter_php::LANGUAGE_PHP,
             highlight_query: scm::PHP_HIGHLIGHTS,
-            locals_query: None,
-        },
-        GrammarEntry {
-            filetype: "swift",
-            aliases: &[],
-            language: tree_sitter_swift::LANGUAGE,
-            highlight_query: scm::SWIFT_HIGHLIGHTS,
             locals_query: None,
         },
     ]
@@ -346,7 +316,7 @@ mod tests {
     /// R-01b: auto-covers every catalog addition.
     #[test]
     fn every_registry_query_constructs() {
-        assert_eq!(registry().len(), 19, "3 spike + 16 R-01b filetypes");
+        assert_eq!(registry().len(), 16, "3 spike + 13 R-01b filetypes (swift/c-sharp/kotlin dropped for binary size; see ROADMAP R-01b)");
         for entry in registry() {
             let language = tree_sitter::Language::new(entry.language);
             let highlight = Query::new(&language, entry.highlight_query)
@@ -398,11 +368,7 @@ mod tests {
         assert_eq!(lookup("udiff").map(|entry| entry.filetype), Some("diff"));
         assert_eq!(lookup("patch").map(|entry| entry.filetype), Some("diff"));
         assert_eq!(lookup("yml").map(|entry| entry.filetype), Some("yaml"));
-        assert_eq!(lookup("c#").map(|entry| entry.filetype), Some("csharp"));
-        assert_eq!(lookup("c-sharp").map(|entry| entry.filetype), Some("csharp"));
-        assert_eq!(lookup("cs").map(|entry| entry.filetype), Some("csharp"));
         assert_eq!(lookup("js").map(|entry| entry.filetype), Some("javascript"));
-        assert_eq!(lookup("kt").map(|entry| entry.filetype), Some("kotlin"));
         assert_eq!(lookup("rb").map(|entry| entry.filetype), Some("ruby"));
         assert!(lookup("make").is_none(), "make is not in the oracle list");
         assert!(lookup("makefile").is_none());

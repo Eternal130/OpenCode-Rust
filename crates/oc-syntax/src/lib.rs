@@ -192,16 +192,6 @@ mod tests {
     }
 
     #[test]
-    fn csharp_snippet_captures_the_core_scopes() {
-        let block = highlight(
-            "// note\nclass Point {\n  string Greet(string name) => \"hi\";\n}\n",
-            "csharp",
-        )
-        .expect("csharp parses");
-        assert_captures(&block, &["comment", "keyword", "type.builtin", "function", "string"]);
-    }
-
-    #[test]
     fn java_snippet_captures_the_core_scopes() {
         let block = highlight(
             "// note\nclass Point {\n  String greet(String name) {\n    return \"hi\";\n  }\n}\n",
@@ -269,18 +259,6 @@ mod tests {
     }
 
     #[test]
-    fn kotlin_snippet_captures_the_core_scopes() {
-        // Grammar + query both from fwcd at tag 0.3.8 (the vendored
-        // third_party crate), per parsers-config.ts:106-110.
-        let block = highlight(
-            "// note\nfun greet(name: String): String {\n    val msg = \"hi\"\n    return msg\n}\n",
-            "kotlin",
-        )
-        .expect("kotlin parses");
-        assert_captures(&block, &["comment", "keyword.function", "type", "string"]);
-    }
-
-    #[test]
     fn ruby_snippet_captures_the_core_scopes() {
         let block = highlight("# note\ndef greet(name)\n  msg = \"hi\"\n  msg\nend\n", "ruby")
             .expect("ruby parses");
@@ -293,21 +271,6 @@ mod tests {
             highlight("<?php\n// note\nfunction greet($name) {\n  return \"hi\";\n}\n", "php")
                 .expect("php parses");
         assert_captures(&block, &["comment", "keyword", "function", "string"]);
-    }
-
-    #[test]
-    fn swift_snippet_captures_the_core_scopes() {
-        // Parser-repo query per parsers-config.ts:267-269 (nvim's uses
-        // #lua-match? predicates a non-neovim runtime can't run).
-        let block = highlight(
-            "// note\nfunc greet(name: String) -> String {\n  let msg = \"hi\"\n  return msg\n}\n",
-            "swift",
-        )
-        .expect("swift parses");
-        assert_captures(
-            &block,
-            &["comment", "keyword.function", "variable.parameter", "type", "string"],
-        );
     }
 
     // -- measurement (spike report: parse-once + span materialization) --
