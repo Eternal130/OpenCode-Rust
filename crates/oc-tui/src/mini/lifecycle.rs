@@ -432,12 +432,20 @@ pub struct LifecycleInput {
 }
 
 /// The split-footer renderer handle (`createRuntimeLifecycle`'s
+/// Pending scrollback rows: plain text (mono/default styling) or
+/// styled spans (the exit splash's per-cell half-block mark).
+#[derive(Debug, Clone)]
+enum PendingRows {
+    Plain(Vec<String>),
+    Styled(Vec<Vec<crate::layout::StyledSpan>>),
+}
+
 /// `Lifecycle`, `runtime.lifecycle.ts:85-92`).
 #[allow(clippy::struct_excessive_bools)] // the renderer flag set mirrors the reference
 pub struct Lifecycle {
     terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
     pub pane: FooterPane,
-    pending: Vec<Vec<String>>,
+    pending: Vec<PendingRows>,
     /// The last committed transcript row (separator decisions).
     last_commit: Option<Commit>,
     width: usize,
@@ -514,7 +522,16 @@ impl Lifecycle {
 
     fn queue_rows(&mut self, rows: Vec<String>) {
         if !rows.is_empty() {
-            self.pending.push(rows);
+            self.pending.push(PendingRows::Plain(rows));
+        }
+    }
+
+    /// Queue styled scrollback rows (the exit splash's half-block
+    /// mark — one style per cell, like v2's per-cell
+    /// `TextRenderable` pushes).
+    fn queue_styled_rows(&mut self, rows: Vec<Vec<crate::layout::StyledSpan>>) {
+        if !rows.is_empty() {
+            self.pending.push(PendingRows::Styled(rows));
         }
     }
 
@@ -536,22 +553,43 @@ impl Lifecycle {
     /// [`crate::wrap::flatten`] seam the canvas uses).
     pub fn flush(&mut self) -> Result<(), String> {
         while let Some(rows) = self.pending.first().cloned() {
-            let height = rows.len() as u16;
+            let height = match &rows {
+                PendingRows::Plain(rows) => rows.len(),
+                PendingRows::Styled(rows) => rows.len(),
+            } as u16;
             self.terminal
                 .insert_before(height, |buffer| {
                     let origin = {
                         let area = buffer.area();
                         (area.x, area.y)
                     };
-                    for (index, row) in rows.iter().enumerate() {
-                        let mut x: u16 = 0;
-                        for atom in crate::wrap::flatten(row, ratatui::style::Style::new()) {
-                            if let Some(cell) =
-                                buffer.cell_mut((origin.0 + x, origin.1 + index as u16))
-                            {
-                                cell.set_symbol(&atom.text);
+                    match &rows {
+                        PendingRows::Plain(rows) => {
+                            for (index, row) in rows.iter().enumerate() {
+                                let mut x: u16 = 0;
+                                for atom in crate::wrap::flatten(row, ratatui::style::Style::new())
+                                {
+                                    if let Some(cell) =
+                                        buffer.cell_mut((origin.0 + x, origin.1 + index as u16))
+                                    {
+                                        cell.set_symbol(&atom.text);
+                                    }
+                                    x += atom.width.max(1) as u16;
+                                }
                             }
-                            x += atom.width.max(1) as u16;
+                        }
+                        PendingRows::Styled(rows) => {
+                            for (index, row) in rows.iter().enumerate() {
+                                let mut x: u16 = 0;
+                                for atom in crate::wrap::flatten_spans(row) {
+                                    if let Some(cell) =
+                                        buffer.cell_mut((origin.0 + x, origin.1 + index as u16))
+                                    {
+                                        cell.set_symbol(&atom.text).set_style(atom.style);
+                                    }
+                                    x += atom.width.max(1) as u16;
+                                }
+                            }
                         }
                     }
                 })
@@ -598,13 +636,29 @@ impl Lifecycle {
         self.closed = true;
         let mut wrote_exit = false;
         if show_exit && self.splash_enabled {
-            let rows = exit_splash_rows(
-                title,
-                session_id.unwrap_or_default(),
-                self.mono,
-                self.width.max(1),
-            );
-            self.queue_rows(rows);
+            if self.mono {
+                let rows = exit_splash_rows(
+                    title,
+                    session_id.unwrap_or_default(),
+                    true,
+                    self.width.max(1),
+                );
+                self.queue_rows(rows);
+            } else {
+                // The styled banner (R-08): the `go` mark's `_`
+                // cells paint as full shadow cells and `^`/`~` as
+                // half-block mixes — v2's `cells()`/`draw()`
+                // (`splash.ts:46-68, 142-170`), colors from the
+                // mini theme's splash triple (`theme.ts:173-175`).
+                let rows = super::splash::exit_splash_styled_rows(
+                    title,
+                    session_id.unwrap_or_default(),
+                    false,
+                    self.width.max(1),
+                    &super::splash::SplashColors::from_footer_theme(&self.pane.theme),
+                );
+                self.queue_styled_rows(rows);
+            }
             wrote_exit = true;
         }
         let _ = self.flush();

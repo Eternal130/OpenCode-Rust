@@ -13,14 +13,20 @@
 //!   `m=1` continuations, `q=2` (no reply), stable per-image ids so a
 //!   redraw replaces in place and `a=d` clears the ones that left.
 //! * **sixel** — detected, and *raw sixel bytes* (DCS `q` … `ST`)
-//!   pass through at the cursor. Transcoding PNG → sixel needs an
-//!   image decoder (the R-08 half-block/subpixel lane owns pixel
-//!   decode); until then a sixel-only terminal gets the placeholder
-//!   box, exactly like a terminal with no protocol.
-//! * **fallback** — the placeholder: v2's error fallback renders the
-//!   text "No preview" centered in the thumb box; terminals without a
-//!   graphics protocol get the same box shape (border + centered
-//!   label), so the strip's *layout* is identical everywhere.
+//!   pass through at the cursor. PNG → sixel transcoding is not
+//!   implemented; a sixel terminal without raw sixel data gets the
+//!   **blocks** rendering (v2's own no-resolution path:
+//!   `resolveImageRenderProtocol` maps `sixel` without a pixel
+//!   resolution to `blocks`), exactly like a terminal with no
+//!   protocol.
+//! * **fallback** — the blocks renderer (R-08,
+//!   [`crate::image_blocks`]): the decoded PNG quantizes to
+//!   Unicode block glyphs with truecolor fg/bg — the port of
+//!   opentui's `blocks` image protocol, which is what v2's
+//!   `protocol="auto"` resolves to on terminals without kitty
+//!   graphics / sixel. The bordered box + label placeholder
+//!   remains only for payloads that fail to decode (v2's onError
+//!   → "No preview", mini/scrollback.surface.ts:390).
 //!
 //! Detection: v2/opentui probes the terminal at runtime (DA1 /
 //! graphics-capability queries). The Rust port detects from the
