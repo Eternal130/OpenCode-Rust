@@ -36,7 +36,9 @@
 //!     run loop's raw-mode/alternate-screen surgery, exercised for
 //!     real — opt-in like every M2 step, needs the tmux sandbox).
 //! 8.  Kill the TUI, reboot against the same server → tabs restored from
-//!     `<XDG_STATE_HOME>/opencode/local/tui/tabs.json`, transcripts
+//!     `<XDG_STATE_HOME>/opencode/stable/tui/tabs.json` (the baked
+//!     release channel — gate-12 §3.2; the port's shipped-build default
+//!     matches the pinned v2.0.24 stable reference), transcripts
 //!     hydrated on the FIRST connect (the boot resync fetches
 //!     `message.list` per restored tab), both sessions switchable.
 //! 9.  Clean exit (`<leader>q`) + SIGTERM-safe server shutdown < 5s.
@@ -1026,7 +1028,7 @@ async fn m2_daily_work_rust_tui_against_rust_server() -> Result<()> {
     let renamed = wait_capture(SESSION, "Alpha notes", 10, 1).await?;
     std::fs::write(artifacts.join("step-08-renamed-live.txt"), &renamed)?;
 
-    let tabs_json = home.join(".local/state/opencode/local/tui/tabs.json");
+    let tabs_json = home.join(".local/state/opencode/stable/tui/tabs.json");
     let mut persisted = String::new();
     for _ in 0..10 {
         if tabs_json.is_file() {

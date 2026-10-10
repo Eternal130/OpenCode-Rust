@@ -12,18 +12,6 @@
 
 
 
-                                                                                              ▄
-                                                             █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
-                                                             █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
-                                                             ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
-
-
-                                           ┃
-                                           ┃  Ask anything… "What is the tech stack of this project?"
-                                           ┃
-                                           ┃  Build · fake-model parityfake
-                                           ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-                                           /tmp/opencode/ref/packages/cli            shift+tab agents  ctrl+p commands
 
 
 
@@ -35,6 +23,18 @@
 
 
 
-                                                                                                                                                         local
+
+
+
+
+
+
+
+
+
+
+
+
+
 
  ✓ Server  ○ UI  Theme  Tools  Experiments
