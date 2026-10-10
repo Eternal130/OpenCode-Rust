@@ -38,6 +38,10 @@ pub struct ToolRowFixture {
     /// `failed={true}`: the row paints the error color even while the
     /// error text itself stays hidden (`errorExpanded` off).
     pub failed: bool,
+    /// `error`: the row's error payload — rendered under the row when
+    /// failed AND `errorExpanded` (`InlineToolRow`'s second box:
+    /// `paddingLeft={INLINE_TOOL_ICON_WIDTH}`, `fg={errorColor}`).
+    pub error: Option<String>,
 }
 
 /// The five tool rows of `inline-tool-wrap-snapshot.test.tsx`
@@ -45,33 +49,51 @@ pub struct ToolRowFixture {
 /// error stays hidden without `errorExpanded` but its color shows).
 #[must_use]
 pub fn tool_wrap_fixture() -> Vec<ToolRowFixture> {
-    vec![
-        ToolRowFixture {
-            icon: '✱',
-            label: r#"Grep "OPENCODE.*DB|database|sqlite|drizzle|dev.*db|data.*dir|xdg|APPDATA" in packages/opencode/src (151 matches)"#.into(),
-            failed: false,
-        },
-        ToolRowFixture {
-            icon: '✱',
-            label: r#"Glob "**/*db*" in packages/opencode (6 matches)"#.into(),
-            failed: false,
-        },
-        ToolRowFixture {
-            icon: '→',
-            label: "Read packages/opencode/src/storage/db.ts [offset=1, limit=130]".into(),
-            failed: false,
-        },
-        ToolRowFixture {
-            icon: '→',
-            label: "Read packages/opencode/src/index.ts [offset=1, limit=100]".into(),
-            failed: true,
-        },
-        ToolRowFixture {
-            icon: '✱',
-            label: r#"Grep "export const OPENCODE_DB|OPENCODE_DB|OPENCODE_DEV|Global\.Path\.data|data =" in packages/opencode/src (115 matches)"#.into(),
-            failed: false,
-        },
+    tool_wrap_rows()
+        .map(|(icon, label, failed, _)| ToolRowFixture {
+            icon,
+            label: label.into(),
+            failed,
+            error: None,
+        })
+        .collect()
+}
+
+/// The `tool-wrap-error-expanded` rows: the same five with the failed
+/// read carrying the LSP error payload (rendered under the row).
+#[must_use]
+pub fn tool_wrap_error_fixture() -> Vec<ToolRowFixture> {
+    tool_wrap_rows()
+        .map(|(icon, label, failed, error)| ToolRowFixture {
+            icon,
+            label: label.into(),
+            failed,
+            error: error.map(str::to_owned),
+        })
+        .collect()
+}
+
+type ToolRowSource = (char, &'static str, bool, Option<&'static str>);
+
+fn tool_wrap_rows() -> impl Iterator<Item = ToolRowSource> {
+    [
+        (
+            '✱',
+            r#"Grep "OPENCODE.*DB|database|sqlite|drizzle|dev.*db|data.*dir|xdg|APPDATA" in packages/opencode/src (151 matches)"#,
+            false,
+            None,
+        ),
+        ('✱', r#"Glob "**/*db*" in packages/opencode (6 matches)"#, false, None),
+        ('→', "Read packages/opencode/src/storage/db.ts [offset=1, limit=130]", false, None),
+        ('→', "Read packages/opencode/src/index.ts [offset=1, limit=100]", true, Some("No LSP server available for this file type.")),
+        (
+            '✱',
+            r#"Grep "export const OPENCODE_DB|OPENCODE_DB|OPENCODE_DEV|Global\.Path\.data|data =" in packages/opencode/src (115 matches)"#,
+            false,
+            None,
+        ),
     ]
+    .into_iter()
 }
 
 /// The frame fill style: renderer default foreground over the theme
@@ -102,6 +124,20 @@ pub fn layout_tool_wrap(
     fixture: &[ToolRowFixture],
     theme: &ThemeStyles,
 ) -> Vec<crate::layout::Placed> {
+    layout_tool_rows(fixture, theme, false)
+}
+
+/// Build the tool-wrap box tree; `error_expanded` renders each failed
+/// row's error payload under the row (`InlineToolRow`'s
+/// `<Show when={failed && errorExpanded}>` box: one more paddingLeft
+/// `INLINE_TOOL_ICON_WIDTH` inside the row's paddingLeft 3, the text
+/// in the error color).
+#[must_use]
+pub fn layout_tool_rows(
+    fixture: &[ToolRowFixture],
+    theme: &ThemeStyles,
+    error_expanded: bool,
+) -> Vec<crate::layout::Placed> {
     let mut tree = LayoutTree::new();
     let wrappers: Vec<_> = fixture
         .iter()
@@ -116,7 +152,19 @@ pub fn layout_tool_wrap(
                 &BoxSpec::default().grow(1.0).shrink(1.0).min_width(0.0),
             );
             let content = tree.box_node(&BoxSpec::row(), &[icon, label]);
-            tree.box_node(&BoxSpec::default().padding_left(3.0), &[content])
+            let wrapper_spec = BoxSpec::column().padding_left(3.0);
+            if error_expanded && row.failed {
+                if let Some(error) = &row.error {
+                    let error_text = tree.text_styled(
+                        vec![StyledSpan { text: error.clone(), style }],
+                        &BoxSpec::default().grow(1.0).shrink(1.0).min_width(0.0),
+                    );
+                    let error_box =
+                        tree.box_node(&BoxSpec::row().padding_left(ICON_WIDTH), &[error_text]);
+                    return tree.box_node(&wrapper_spec, &[content, error_box]);
+                }
+            }
+            tree.box_node(&wrapper_spec, &[content])
         })
         .collect();
     let column = tree.box_node(&BoxSpec::column(), &wrappers);
@@ -130,5 +178,13 @@ pub fn layout_tool_wrap(
 #[must_use]
 pub fn render_tool_wrap(theme: &ThemeStyles, width: u16, height: u16) -> Frame {
     let placed = layout_tool_wrap(&tool_wrap_fixture(), theme);
+    paint_placed(&placed, (width, height), fill_style(theme))
+}
+
+/// Render the `tool-wrap-error-expanded` scenario: the same rows with
+/// the failed read's LSP error expanded under it.
+#[must_use]
+pub fn render_tool_wrap_error_expanded(theme: &ThemeStyles, width: u16, height: u16) -> Frame {
+    let placed = layout_tool_rows(&tool_wrap_error_fixture(), theme, true);
     paint_placed(&placed, (width, height), fill_style(theme))
 }

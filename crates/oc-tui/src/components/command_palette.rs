@@ -23,7 +23,7 @@
 //!   the replay corpus never distinguishes.
 
 use crate::components::dialog_select::{SelectOption, SelectProps, SelectState};
-use crate::store::{DialogKind, DialogSize, Route, Store};
+use crate::store::{DialogKind, DialogSize, ListState, ModelSelection, Route, ServerAgent, Store};
 
 /// One palette-visible command (`KeymapCommand` from the app tables).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,10 +289,15 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
     match kind {
         DialogKind::CommandPalette => palette_props(store),
         DialogKind::ThemeList => theme_list_props(store),
+        DialogKind::Help | DialogKind::SessionRename { .. } => SelectProps::new("", Vec::new()),
+        DialogKind::ServerList { command: "model.list", title } => {
+            model_list_props(store, title).with_current(model_current_value(store))
+        }
+        DialogKind::ServerList { command: "agent.list", title } => agent_list_props(store, title),
         DialogKind::ServerList { command: "session.list", title } => {
             // The session list renders the known sessions — the open
-            // tabs (the server-backed fetch lands with the wave-3+ data
-            // wiring; the store's tabs are today's source of truth).
+            // tabs (a server-backed session-list fetch would mirror
+            // the resync's; tabs are today's source of truth).
             let tabs = store.tabs();
             let options: Vec<SelectOption> = tabs
                 .tabs
@@ -309,23 +314,223 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         }
         DialogKind::ServerList { title, .. } => SelectProps::new(
             *title,
-            vec![
-                // TODO(7.3): server-backed listings — populate from the
-                // oc-client `*.list` fetches when the data layer lands.
-                SelectOption::titled("Waiting for server… (wave 3 wiring)", "stub")
-                    .muted_placeholder(),
-            ],
+            vec![SelectOption::titled("Not wired in this build", "stub").muted_placeholder()],
         ),
-        DialogKind::SessionRename { .. } => SelectProps::new("", Vec::new()),
     }
 }
 
+/// The model picker's props from the store's `model.list` state
+/// (`component/dialog-model.tsx`): non-deprecated rows, provider-name
+/// categories, the "Free" footer (`cost.length > 0 && every input
+/// zero`), `providerID/modelID` values. Loading/error show a muted
+/// status row (the reference's empty state); an empty list renders
+/// the select's "No items available".
+#[must_use]
+pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
+    let lists = store.server_lists();
+    let provider_name = |id: &str| -> String {
+        lists
+            .providers
+            .iter()
+            .find(|provider| provider.id == id)
+            .map_or_else(|| id.to_owned(), |provider| provider.name.clone())
+    };
+    let options = match &lists.models {
+        ListState::Loading => vec![status_option("Loading models…")],
+        ListState::Failed(error) => vec![status_option(&format!("Models unavailable: {error}"))],
+        ListState::Loaded(models) => models
+            .iter()
+            .filter(|model| !model.deprecated)
+            .map(|model| {
+                let title =
+                    if model.name.is_empty() { model.id.clone() } else { model.name.clone() };
+                let value = format!("{}/{}", model.provider_id, model.id);
+                let mut option = SelectOption::titled(title, value)
+                    .categorized(provider_name(&model.provider_id))
+                    .with_search(format!("{} {}", model.provider_id, model.id));
+                if model.free {
+                    option = option.with_footer("Free");
+                }
+                option
+            })
+            .collect(),
+    };
+    // Provider grouping order: `opencode-go` first, `opencode` second
+    // (sortModelOptions), free rows ahead within a provider, then name.
+    let mut props = SelectProps::new(title, options);
+    props = props.flat(true);
+    props
+}
+
+/// The agent picker's props from the store's `agent.list` state
+/// (`component/dialog-agent.tsx`): non-hidden non-subagent rows, the
+/// id as title, the description beside it, `current` = the active
+/// session's selection.
+#[must_use]
+pub fn agent_list_props(store: &Store, title: &'static str) -> SelectProps {
+    let lists = store.server_lists();
+    let current = active_selection(store).agent;
+    let options = match &lists.agents {
+        ListState::Loading => vec![status_option("Loading agents…")],
+        ListState::Failed(error) => vec![status_option(&format!("Agents unavailable: {error}"))],
+        ListState::Loaded(agents) => agents
+            .iter()
+            .filter(|agent| agent.mode != "subagent" && !agent.hidden)
+            .map(|agent| {
+                let mut option = SelectOption::titled(agent.id.clone(), agent.id.clone());
+                if let Some(description) = &agent.description {
+                    option = option.described(description.clone());
+                }
+                option
+            })
+            .collect(),
+    };
+    SelectProps::new(title, options).with_current(current)
+}
+
+/// The active session's model selection as a picker `current` value
+/// (`providerID/modelID`).
+fn model_current_value(store: &Store) -> Option<String> {
+    active_selection(store).model.map(|model| format!("{}/{}", model.provider_id, model.model_id))
+}
+
+/// The selection state of the focused route's session (home carries
+/// the next-created session's draft).
+fn active_selection(store: &Store) -> crate::store::SessionSelection {
+    let key = match store.route() {
+        Route::Session { session_id } => session_id,
+        Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
+    };
+    store.selection_for(&key)
+}
+
+/// A muted status row (loading/error) — the placeholder surface.
+fn status_option(text: &str) -> SelectOption {
+    SelectOption::titled(text, "status").muted_placeholder()
+}
+
 impl SelectOption {
-    /// Marker helper for server-stub rows.
+    /// Marker helper for status/stub rows.
     #[must_use]
     pub fn muted_placeholder(mut self) -> Self {
-        self.description = Some("(server-backed list — oc-client wiring lands in wave 3)".into());
+        self.description = Some("(server-backed list — fetch in flight or unavailable)".into());
         self
+    }
+}
+
+/// Execute a submitted server-list row by the picker's command:
+/// model/agent selections stage + commit through the selection sink,
+/// session rows switch tabs (`DialogModel.onSelect` /
+/// `DialogAgent.onSelect` / the session list's navigate).
+pub fn execute_server_list_selection(
+    store: &Store,
+    command: &str,
+    value: &str,
+) -> crate::components::command_palette::Dispatch {
+    match command {
+        "model.list" => {
+            let Some((provider_id, model_id)) = value.split_once('/') else {
+                return Dispatch::Handled;
+            };
+            let model = ModelSelection {
+                provider_id: provider_id.to_owned(),
+                model_id: model_id.to_owned(),
+                variant: None,
+            };
+            match store.route() {
+                Route::Session { session_id } => store.select_model(&session_id, &model),
+                Route::Home => store.stage_model(crate::app::HOME_PROMPT_KEY, model),
+            }
+            Dispatch::Handled
+        }
+        "agent.list" => {
+            // The reference validates against the agent list and warns
+            // on unknown ids (`local.agent.set`).
+            let known = match store.server_lists().agents {
+                ListState::Loaded(agents) => {
+                    agents.iter().any(|agent: &ServerAgent| agent.id == value)
+                }
+                _ => true, // list unavailable: trust the row we rendered
+            };
+            if !known {
+                store.toast_show(crate::components::toast::ToastOptions {
+                    message: format!("Agent not found: {value}"),
+                    variant: "warning",
+                    ..crate::components::toast::ToastOptions::info("")
+                });
+                return Dispatch::Handled;
+            }
+            match store.route() {
+                Route::Session { session_id } => store.select_agent(&session_id, value),
+                Route::Home => store.stage_agent(crate::app::HOME_PROMPT_KEY, value),
+            }
+            Dispatch::Handled
+        }
+        "session.list" => {
+            store.select_tab(value);
+            Dispatch::Handled
+        }
+        _ => Dispatch::Handled,
+    }
+}
+
+/// The `messages.copy` payload (`routes/session/index.tsx:1129`):
+/// the LAST assistant message's text parts joined `\n` and trimmed.
+/// `Err` carries the exact v2 toast message for the miss case.
+pub fn copy_last_assistant_text(store: &Store, session_id: &str) -> Result<String, &'static str> {
+    use crate::components::message::model::Message;
+    let messages = store.messages(session_id);
+    let Some(Message::Assistant { parts, .. }) =
+        messages.iter().rev().find(|message| matches!(message, Message::Assistant { .. }))
+    else {
+        return Err("No assistant messages found");
+    };
+    let texts: Vec<&str> = parts
+        .iter()
+        .filter(|part| part.kind() == "text")
+        .map(crate::components::message::model::Part::text)
+        .collect();
+    if texts.is_empty() {
+        return Err("No text parts found in last assistant message");
+    }
+    let text = texts.join("\n").trim().to_owned();
+    if text.is_empty() {
+        return Err("No text content found in last assistant message");
+    }
+    Ok(text)
+}
+
+/// Run `messages.copy` end to end: resolve the text (exact v2 toast
+/// messages on each miss), write it through the clipboard sink (OSC 52
+/// in production), toast the outcome.
+pub fn copy_message_to_clipboard(store: &Store) {
+    let miss = |message: &str| {
+        store.toast_show(crate::components::toast::ToastOptions {
+            message: message.to_owned(),
+            variant: "error",
+            ..crate::components::toast::ToastOptions::info("")
+        });
+    };
+    let hit = |message: &str| {
+        store.toast_show(crate::components::toast::ToastOptions {
+            message: message.to_owned(),
+            variant: "success",
+            ..crate::components::toast::ToastOptions::info("")
+        });
+    };
+    let session_id = match store.route() {
+        Route::Session { session_id } => session_id,
+        Route::Home => {
+            miss("No assistant messages found");
+            return;
+        }
+    };
+    match copy_last_assistant_text(store, &session_id) {
+        Err(message) => miss(message),
+        Ok(text) => match store.clipboard_write(&text) {
+            Ok(()) => hit("Message copied to clipboard!"),
+            Err(_) => miss("Failed to copy to clipboard"),
+        },
     }
 }
 
@@ -435,10 +640,24 @@ impl CommandDispatcher for StoreDispatcher {
                 store.replace_dialog(DialogKind::ThemeList, DialogSize::Medium);
                 Dispatch::Handled
             }
+            "help.show" => {
+                store.replace_dialog(DialogKind::Help, DialogSize::Large);
+                Dispatch::Handled
+            }
+            "prompt.editor" => {
+                // The run loop drains the flag: suspend → $EDITOR →
+                // resume → replace the focused draft (`editor.rs`).
+                store.request_editor();
+                Dispatch::Handled
+            }
+            "messages.copy" => {
+                copy_message_to_clipboard(store);
+                Dispatch::Handled
+            }
             "model.list" | "agent.list" | "mcp.list" | "variant.list" | "session.list"
             | "open.menu" | "provider.connect" | "opencode.settings" | "opencode.status"
             | "session.share" | "session.fork" | "session.move" | "server.pair"
-            | "location.reload" | "opencode.debug" | "help.show" | "docs.open" => {
+            | "location.reload" | "opencode.debug" | "docs.open" => {
                 // DialogSessions mounts titled "Sessions"; every other
                 // listing takes the palette entry's title.
                 let title: &'static str = if command == "session.list" {
@@ -487,6 +706,7 @@ pub fn init_select_state(state: &mut SelectState, props: &SelectProps) {
 mod tests {
     use super::*;
     use crate::reactive::Runtime;
+    use crate::store::{ListState, ServerProvider};
 
     #[test]
     fn registry_covers_the_replay_anchors() {
@@ -530,7 +750,7 @@ mod tests {
         assert_eq!(store.top_dialog().unwrap().kind, DialogKind::CommandPalette);
         assert_eq!(dispatcher.dispatch(&store, "theme.switch", None), Dispatch::Handled);
         assert_eq!(store.top_dialog().unwrap().kind, DialogKind::ThemeList);
-        // Server-backed listings open the stub surface.
+        // Server-backed listings open the live-data surface.
         assert_eq!(dispatcher.dispatch(&store, "model.list", None), Dispatch::Handled);
         match &store.top_dialog().unwrap().kind {
             DialogKind::ServerList { command, title } => {
@@ -540,5 +760,237 @@ mod tests {
             other => panic!("unexpected dialog {other:?}"),
         }
         assert_eq!(dispatcher.dispatch(&store, "nope.nope", None), Dispatch::Unknown);
+    }
+
+    // -- F3.i: the server-backed pickers ---------------------------------
+
+    fn model(
+        provider: &str,
+        id: &str,
+        name: &str,
+        free: bool,
+        deprecated: bool,
+    ) -> crate::store::ServerModel {
+        crate::store::ServerModel {
+            provider_id: provider.into(),
+            id: id.into(),
+            name: name.into(),
+            cost_input: if free { 0.0 } else { 1.25 },
+            free,
+            deprecated,
+            variants: Vec::new(),
+        }
+    }
+
+    fn agent(id: &str, mode: &str, hidden: bool) -> crate::store::ServerAgent {
+        crate::store::ServerAgent {
+            id: id.into(),
+            name: id.into(),
+            description: Some("Does things".into()),
+            mode: mode.into(),
+            hidden,
+        }
+    }
+
+    /// The model picker renders loaded rows (provider categories, Free
+    /// footers, provider/model values), a muted loading row while the
+    /// fetch is in flight, and the error text when it failed.
+    #[test]
+    fn model_list_props_cover_loaded_loading_and_error_states() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", None);
+
+        // Loading: one muted status row.
+        let props = model_list_props(&store, "Switch model");
+        assert_eq!(props.options.len(), 1);
+        assert!(props.options[0].title.contains("Loading models"));
+
+        // Loaded: deprecated filtered, Free footer, provider name as
+        // the category (falling back to the providerID).
+        store.set_models(
+            ListState::Loaded(vec![
+                model("anthropic", "claude", "Claude", true, false),
+                model("anthropic", "old", "Old", false, true),
+                model("custom", "local-1", "Local One", false, false),
+            ]),
+            vec![ServerProvider { id: "anthropic".into(), name: "Anthropic".into() }],
+        );
+        let props = model_list_props(&store, "Switch model");
+        assert_eq!(props.options.len(), 2, "deprecated row filtered");
+        assert_eq!(props.options[0].title, "Claude");
+        assert_eq!(props.options[0].value, "anthropic/claude");
+        assert_eq!(props.options[0].category.as_deref(), Some("Anthropic"));
+        assert_eq!(props.options[0].footer.as_deref(), Some("Free"));
+        assert_eq!(props.options[1].category.as_deref(), Some("custom"), "no provider row");
+        assert_eq!(props.options[1].footer, None, "paid model has no footer");
+
+        // Failed: the error surfaces in the row.
+        store.set_models(ListState::Failed("503".into()), Vec::new());
+        let props = model_list_props(&store, "Switch model");
+        assert!(props.options[0].title.contains("Models unavailable"));
+        assert!(props.options[0].title.contains("503"));
+    }
+
+    /// The agent picker filters subagent/hidden rows, carries the
+    /// description, and marks the active session's selection current.
+    #[test]
+    fn agent_list_props_filter_and_mark_current() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", None);
+        store.set_agents(ListState::Loaded(vec![
+            agent("build", "all", false),
+            agent("explore", "subagent", false),
+            agent("secret", "all", true),
+        ]));
+        store.select_agent("s1", "build");
+        // Re-point the sink log assertion: the default recording sink
+        // captured the call.
+        let props = agent_list_props(&store, "Switch agent");
+        assert_eq!(props.options.len(), 1, "subagent + hidden filtered");
+        assert_eq!(props.options[0].title, "build");
+        assert_eq!(props.options[0].description.as_deref(), Some("Does things"));
+        assert_eq!(props.current.as_deref(), Some("build"), "current from the selection");
+    }
+
+    /// Model/agent submissions apply through the selection sink on a
+    /// session route and stage without a POST on home; unknown agents
+    /// warn (v2's `local.agent.set` toast).
+    #[test]
+    fn server_list_submissions_apply_via_the_sink() {
+        use crate::store::{RecordingSelectionSink, SelectionCall};
+        let mut store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(RecordingSelectionSink::default());
+        let sink_dyn: std::rc::Rc<dyn crate::store::SelectionSink> = sink.clone();
+        store.set_selection_sink(sink_dyn);
+        store.open_tab("s1", None);
+
+        // Model on the session route: state + sink.
+        assert_eq!(
+            execute_server_list_selection(&store, "model.list", "anthropic/claude"),
+            Dispatch::Handled
+        );
+        assert_eq!(
+            sink.calls.borrow().as_slice(),
+            &[(
+                "s1".into(),
+                SelectionCall::Model {
+                    provider_id: "anthropic".into(),
+                    model_id: "claude".into(),
+                    variant: None
+                }
+            )]
+        );
+        let selection = store.selection_for("s1");
+        assert_eq!(selection.model.as_ref().unwrap().model_id, "claude");
+
+        // Agent on the session route: state + sink.
+        store.set_agents(ListState::Loaded(vec![agent("review", "primary", false)]));
+        assert_eq!(
+            execute_server_list_selection(&store, "agent.list", "review"),
+            Dispatch::Handled
+        );
+        assert_eq!(
+            sink.calls.borrow().last(),
+            Some(&("s1".into(), SelectionCall::Agent("review".into())))
+        );
+
+        // Home: staged only — no sink call.
+        store.navigate(Route::Home);
+        execute_server_list_selection(&store, "model.list", "opencode/grok");
+        assert_eq!(sink.calls.borrow().len(), 2, "no third call from the home stage");
+        assert_eq!(
+            store.selection_for(crate::app::HOME_PROMPT_KEY).model.as_ref().unwrap().model_id,
+            "grok"
+        );
+
+        // Unknown agent (list loaded, id absent): warning toast, no call.
+        execute_server_list_selection(&store, "agent.list", "ghost");
+        assert_eq!(sink.calls.borrow().len(), 2);
+        let toasts = store.toasts();
+        assert_eq!(
+            toasts.current().map(|toast| toast.message.as_str()),
+            Some("Agent not found: ghost")
+        );
+        assert_eq!(toasts.current().unwrap().variant, "warning");
+    }
+
+    /// `messages.copy`: the exact v2 toasts for every miss, the OSC-52
+    /// write through the clipboard sink on hit.
+    #[test]
+    fn messages_copy_resolves_text_and_toasts() {
+        use crate::components::message::model::{Message, PartTime};
+        let mut store = Store::new(Runtime::new());
+        let clipboard = std::rc::Rc::new(crate::clipboard::RecordingClipboardSink::default());
+        let clipboard_dyn: std::rc::Rc<dyn crate::clipboard::ClipboardSink> = clipboard.clone();
+        store.set_clipboard_sink(clipboard_dyn);
+        store.open_tab("s1", None);
+
+        // No assistant messages yet.
+        copy_message_to_clipboard(&store);
+        assert!(
+            clipboard.writes.lock().unwrap().is_empty(),
+            "nothing written without an assistant message"
+        );
+        assert_eq!(
+            store.toasts().current().map(|toast| toast.message.as_str()),
+            Some("No assistant messages found")
+        );
+        assert_eq!(store.toasts().current().unwrap().variant, "error");
+
+        // An assistant message whose LAST turn has the text parts.
+        store.set_messages(
+            "s1",
+            vec![
+                Message::User { id: "u1".into(), text: "question".into(), created: 0 },
+                Message::Assistant {
+                    id: "a1".into(),
+                    agent: "build".into(),
+                    model: String::new(),
+                    parts: vec![
+                        crate::components::message::model::Part::Tool {
+                            id: "t1".into(),
+                            name: "read".into(),
+                            time: PartTime::default(),
+                        },
+                        crate::components::message::model::Part::Text {
+                            text: "first ".into(),
+                            time: PartTime::default(),
+                        },
+                        crate::components::message::model::Part::Text {
+                            text: "second".into(),
+                            time: PartTime::default(),
+                        },
+                    ],
+                    finish: None,
+                    time: PartTime::default(),
+                },
+            ],
+        );
+        copy_message_to_clipboard(&store);
+        assert_eq!(
+            clipboard.writes.lock().unwrap().as_slice(),
+            &["first \nsecond".to_owned()],
+            "text parts joined \\n and trimmed"
+        );
+        assert_eq!(
+            store.toasts().current().map(|toast| toast.message.as_str()),
+            Some("Message copied to clipboard!")
+        );
+        assert_eq!(store.toasts().current().unwrap().variant, "success");
+    }
+
+    /// `<leader>e` requests the editor flow; `help.show` opens the Help
+    /// dialog.
+    #[test]
+    fn editor_request_and_help_dialog_commands() {
+        let store = Store::new(Runtime::new());
+        let mut dispatcher = StoreDispatcher;
+        assert!(!store.take_editor_request());
+        assert_eq!(dispatcher.dispatch(&store, "prompt.editor", None), Dispatch::Handled);
+        assert!(store.take_editor_request(), "the flag drained once");
+        assert!(!store.take_editor_request(), "and exactly once");
+
+        assert_eq!(dispatcher.dispatch(&store, "help.show", None), Dispatch::Handled);
+        assert_eq!(store.top_dialog().unwrap().kind, DialogKind::Help);
     }
 }

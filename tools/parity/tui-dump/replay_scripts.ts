@@ -135,4 +135,132 @@ export const replayScripts: ReplayScript[] = [
       },
     ],
   },
+
+  {
+    id: "session-list-leader-l",
+    description: "Session list dialog: <leader>l opens the Sessions dialog (search + the project's sessions listed, delete/rename + all-projects footer); typing filters the search field; Escape closes back to the prompt",
+    source: "recorded against the booted reference app (createAppFixture, sessions Alpha/Beta served by the fixture server) — src/app.tsx session.list via DialogSessions; keys ctrl+x then l per config/keybind.ts session.list = '<leader>l'",
+    keys: "kitty",
+    steps: [
+      {
+            "keys": [
+                  "ctrl+x",
+                  "l"
+            ],
+            "expect": {
+                  "frameIncludes": [
+                        "Sessions",
+                        "Alpha",
+                        "Beta"
+                  ],
+                  "dialogs": 1,
+                  "focus": "dialog"
+            }
+      },
+      {
+            "keys": [
+                  "B",
+                  "e",
+                  "t",
+                  "a"
+            ],
+            "expect": {
+                  "frameIncludes": [
+                        "Beta"
+                  ],
+                  "dialogs": 1,
+                  "focus": "dialog"
+            }
+      },
+      {
+            "keys": [
+                  "escape"
+            ],
+            "expect": {
+                  "frameExcludes": [
+                        "Sessions"
+                  ],
+                  "dialogs": 0,
+                  "focus": "prompt"
+            }
+      }
+],
+  },
+
+  {
+    id: "theme-dialog-select",
+    description: "Theme selection: the command palette filtered to 'theme' runs 'Switch theme' opening the Themes dialog (registry names sorted, the current theme marked); filtering to 'nord' narrows to the one row and Enter selects it, closing the dialog",
+    source: "recorded against the booted reference app (createAppFixture) — src/app.tsx theme.switch via the palette; component/dialog-theme-list.tsx lists Object.keys(themes.all()).sort() with themes.set(opt.value) on select",
+    keys: "kitty",
+    steps: [
+      {
+            "keys": [
+                  "ctrl+p"
+            ],
+            "expect": {
+                  "frameIncludes": [
+                        "Commands"
+                  ],
+                  "dialogs": 1,
+                  "focus": "dialog"
+            }
+      },
+      {
+            "keys": [
+                  "t",
+                  "h",
+                  "e",
+                  "m",
+                  "e"
+            ],
+            "expect": {
+                  "frameIncludes": [
+                        "Switch theme"
+                  ],
+                  "dialogs": 1,
+                  "focus": "dialog"
+            }
+      },
+      {
+            "keys": [
+                  "enter"
+            ],
+            "expect": {
+                  "frameIncludes": [
+                        "Themes",
+                        "opencode"
+                  ],
+                  "dialogs": 1,
+                  "focus": "dialog"
+            }
+      },
+      {
+            "keys": [
+                  "n",
+                  "o",
+                  "r",
+                  "d"
+            ],
+            "expect": {
+                  "frameIncludes": [
+                        "nord"
+                  ],
+                  "dialogs": 1,
+                  "focus": "dialog"
+            }
+      },
+      {
+            "keys": [
+                  "enter"
+            ],
+            "expect": {
+                  "frameExcludes": [
+                        "Themes"
+                  ],
+                  "dialogs": 0,
+                  "focus": "prompt"
+            }
+      }
+],
+  },
 ]

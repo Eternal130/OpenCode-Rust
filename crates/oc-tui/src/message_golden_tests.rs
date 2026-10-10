@@ -197,6 +197,66 @@ fn assert_ansi_byte_match(id: &str, width: usize, frame: &Frame) {
 
 // -- message-groups ------------------------------------------------------------
 
+// -- group-view-instructions -----------------------------------------------------
+
+/// The `group-view-instructions` fixture (`tui-dump/scenarios/
+/// session_ui.tsx` `mountGroupView`): two synthetic instruction loads
+/// (one file each), collapsed — the summary row at paddingTop 2.
+fn instructions_fixture(
+) -> (Vec<crate::components::message::model::Message>, crate::components::message::model::Row) {
+    use crate::components::message::model::{Entry, GroupKind, Message, Row};
+    let messages = vec![
+        Message::Synthetic {
+            id: "AGENTS.md".into(),
+            instruction_paths: vec!["AGENTS.md".into()],
+            created: 1,
+        },
+        Message::Synthetic {
+            id: "packages/tui/AGENTS.md".into(),
+            instruction_paths: vec!["packages/tui/AGENTS.md".into()],
+            created: 1,
+        },
+    ];
+    let row = Row::Group {
+        kind: GroupKind::Instructions,
+        children: messages
+            .iter()
+            .map(|message| Row::Entry(Entry::Message { message_id: message.id().to_owned() }))
+            .collect(),
+        size: messages.len(),
+        completed: true,
+    };
+    (messages, row)
+}
+
+fn group_view_instructions_frame(width: u16) -> Frame {
+    let theme = theme();
+    let (messages, row) = instructions_fixture();
+    crate::components::message::list::group_view_frame(
+        &row,
+        &messages,
+        &TranscriptOptions::default(),
+        &theme.styles(),
+        width,
+        24,
+        2,
+    )
+}
+
+#[test]
+fn group_view_instructions_matches_text_grid_and_ansi_at_80() {
+    let frame = group_view_instructions_frame(80);
+    assert_text_grid_match("group-view-instructions", 80, &frame);
+    assert_ansi_byte_match("group-view-instructions", 80, &frame);
+}
+
+#[test]
+fn group_view_instructions_matches_text_grid_and_ansi_at_160() {
+    let frame = group_view_instructions_frame(160);
+    assert_text_grid_match("group-view-instructions", 160, &frame);
+    assert_ansi_byte_match("group-view-instructions", 160, &frame);
+}
+
 /// The transcript rows (production): 23 rows at 80 — content (21),
 /// `paddingBottom 1`, the jump-to-latest slot row.
 fn transcript_frame(width: u16, transcript_height: u16, theme: &ThemeState) -> Frame {
@@ -210,19 +270,29 @@ fn transcript_frame(width: u16, transcript_height: u16, theme: &ThemeState) -> F
     transcript.paint(FollowState::Sticky, &theme.styles(), (width, transcript_height), None)
 }
 
-/// **Wave-2 composer stub** — the bottom chrome rows the golden frame
-/// carries below the transcript. The seam now lives in
-/// [`crate::components::session_screen::composer_bottom_chrome`]
-/// (the wave-2 assembly's placeholder composer slot); these wrappers
-/// keep this file's call sites unchanged. Replace with the real
-/// composer component in wave 2 (the sibling lane swaps the slot
-/// 1:1).
+/// The bottom chrome rows the golden frame carries below the
+/// transcript — the REAL composer mounted at the session route's shape
+/// (the F4 swap: the placeholder stub is retired from the goldens),
+/// pasted at the column's inset into a full-width frame.
 fn composer_bottom_chrome(width: u16, theme: &ThemeState) -> Frame {
-    crate::components::session_screen::composer_bottom_chrome(
-        width,
+    let inset: u16 = if width < 44 { 1 } else { 2 };
+    let composer = crate::components::session_screen::session_composer_frame(
+        &crate::components::composer::PromptDraft::default(),
+        width - inset * 2,
         theme,
         "/tmp/opencode/packages/tui:main",
+    );
+    let mut cells = crate::render::paint_placed(
+        &[],
+        (width, 7),
+        crate::components::tool_rows::fill_style(&theme.styles()),
     )
+    .cells;
+    for (row, line) in composer.cells.iter().enumerate() {
+        let slot = &mut cells[row];
+        slot[inset as usize..inset as usize + line.len()].clone_from_slice(line);
+    }
+    Frame { cells, width: usize::from(width), height: 7 }
 }
 
 /// Stitch the production transcript rows with the composer stub into

@@ -52,6 +52,10 @@ pub const HOME_PROMPT_KEY: &str = "home";
 /// The docked height of the permission body while a blocker is live.
 const PERMISSION_MOUNT_HEIGHT: usize = 16;
 
+/// The docked height of a footer picker panel (the mini footer family's
+/// `RUN_COMMAND_PANEL_ROWS + 1` mount).
+const FOOTER_PANEL_MOUNT_HEIGHT: usize = 17;
+
 /// The headless/live application: the full keymap dispatch over the
 /// store, with the keymap's `dialog`/`input` modes kept in sync with
 /// the dialog stack and the focused composer.
@@ -410,13 +414,13 @@ impl App {
     pub fn frame(&self) -> Frame {
         let theme = self.store.theme();
         let mut frame = render_app(&self.store, &theme, self.size);
+        let footer_theme = FooterTheme::from_resolved(&theme.resolved.tokens);
         if let FooterView::Permission { request } = self.store.footer().view.clone() {
             let state = self
                 .permission_states
                 .get(&request.id)
                 .cloned()
                 .unwrap_or_else(|| create_permission_body_state(&request));
-            let footer_theme = FooterTheme::from_resolved(&theme.resolved.tokens);
             let mount_height = PERMISSION_MOUNT_HEIGHT.min(usize::from(self.size.1));
             let body = crate::components::footer::permission::render_permission_body(
                 &request,
@@ -426,10 +430,23 @@ impl App {
                 &footer_theme,
             );
             let y = usize::from(self.size.1) - mount_height;
-            for (row, cells) in body.cells.iter().enumerate() {
-                let Some(slot) = frame.cells.get_mut(y + row) else { break };
-                let count = cells.len().min(slot.len());
-                slot[..count].clone_from_slice(&cells[..count]);
+            paste_frame(&mut frame, &body, y);
+        } else {
+            // A footer picker panel mounts over the composer from LIVE
+            // store data (the mini footer family's docked pickers).
+            let footer = self.store.footer();
+            if matches!(footer.view, FooterView::Prompt) && footer.route.is_panel() {
+                let mount_height = FOOTER_PANEL_MOUNT_HEIGHT.min(usize::from(self.size.1));
+                if let Some(panel) = footer_panel_frame(
+                    &self.store,
+                    footer.route,
+                    usize::from(self.size.0),
+                    mount_height,
+                    &footer_theme,
+                ) {
+                    let y = usize::from(self.size.1) - mount_height;
+                    paste_frame(&mut frame, &panel, y);
+                }
             }
         }
         frame
@@ -450,6 +467,166 @@ impl App {
             "prompt"
         }
     }
+}
+
+/// Paste `region`'s rows at absolute y (right-clamped to the frame).
+fn paste_frame(target: &mut Frame, region: &Frame, y: usize) {
+    for (row, cells) in region.cells.iter().enumerate() {
+        let Some(slot) = target.cells.get_mut(y + row) else { break };
+        let count = cells.len().min(slot.len());
+        slot[..count].clone_from_slice(&cells[..count]);
+    }
+}
+
+/// The live footer panel for one picker route — the mini footer
+/// family's docked pickers (`footer.command.tsx`) fed from the
+/// store's server lists (model/agent/variant) and settings state:
+///
+/// * **model**: provider-grouped `model.list` rows, the active
+///   session's selection as `current`, "Models loading" /
+///   "No results found" empty states (`footer-model-select`);
+/// * **agent**: non-hidden non-subagent `agent.list` rows;
+/// * **variant**: "Default" + the active model's variants;
+/// * **command/settings**: the static entry lists (the golden
+///   fixtures' data source).
+fn footer_panel_frame(
+    store: &Store,
+    route: crate::components::footer::PromptRoute,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Option<Frame> {
+    use crate::components::footer::panels as footer_panels;
+    use crate::components::footer::PromptRoute;
+
+    // The selection the panel marks `current`: the active session's,
+    // or the home route's staged next-session selection.
+    let active = match store.route() {
+        crate::store::Route::Session { session_id } => session_id,
+        crate::store::Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
+    };
+    let session_selection = store.selection_for(&active);
+
+    match route {
+        PromptRoute::Composer => None,
+        PromptRoute::Model => Some(model_panel_frame(
+            &store.server_lists(),
+            session_selection
+                .model
+                .as_ref()
+                .map(|model| (model.provider_id.as_str(), model.model_id.as_str())),
+            width,
+            height,
+            theme,
+        )),
+        PromptRoute::Agent => {
+            let agents: Vec<footer_panels::RunAgent> = store
+                .server_lists()
+                .agents
+                .rows()
+                .map(|rows| {
+                    rows.iter()
+                        .map(|agent| footer_panels::RunAgent {
+                            id: agent.id.clone(),
+                            name: agent.name.clone(),
+                            description: agent.description.clone(),
+                            mode: agent.mode.clone(),
+                            hidden: agent.hidden,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let current = session_selection.agent;
+            Some(footer_panels::render_agent_select(
+                &agents,
+                current.as_deref(),
+                width,
+                height,
+                theme,
+            ))
+        }
+        PromptRoute::Variant => {
+            // The active model's variant list (Default + variants).
+            let variants = store
+                .server_lists()
+                .models
+                .rows()
+                .and_then(|models| {
+                    session_selection.model.as_ref().and_then(|selection| {
+                        models
+                            .iter()
+                            .find(|model| {
+                                model.provider_id == selection.provider_id
+                                    && model.id == selection.model_id
+                            })
+                            .map(|model| model.variants.clone())
+                    })
+                })
+                .unwrap_or_default();
+            let current = session_selection.model.as_ref().and_then(|m| m.variant.clone());
+            Some(footer_panels::render_variant_select(
+                &variants,
+                current.as_deref(),
+                width,
+                height,
+                theme,
+            ))
+        }
+        PromptRoute::Command => Some(footer_panels::render_command_menu(width, height, theme)),
+        PromptRoute::Settings => Some(footer_panels::render_settings(
+            &footer_panels::resolve_mini_settings(),
+            width,
+            height,
+            theme,
+        )),
+    }
+}
+
+/// The model picker panel from the server-list state: provider-
+/// grouped rows (provider.list names; orphan models keep a synthetic
+/// provider row), the current selection revealed; loading/failed
+/// render the shell with its loading label ("Models loading" — the
+/// mini footer's empty state).
+fn model_panel_frame(
+    lists: &crate::store::ServerLists,
+    current: Option<(&str, &str)>,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Frame {
+    use crate::components::footer::panels as footer_panels;
+    let Some(models) = lists.models.rows() else {
+        // Loading / failed — the empty-list mount still renders the
+        // shell with its loading label.
+        return footer_panels::render_model_select(&[], None, width, height, theme);
+    };
+    let mut providers: Vec<crate::store::ServerProvider> = lists.providers.clone();
+    providers.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut by_provider: HashMap<String, Vec<footer_panels::RunModel>> = HashMap::new();
+    for model in models {
+        by_provider.entry(model.provider_id.clone()).or_default().push(footer_panels::RunModel {
+            id: model.id.clone(),
+            name: model.name.clone(),
+            cost_input: model.cost_input,
+            deprecated: model.deprecated,
+        });
+    }
+    // Orphan models (no provider row) get a synthetic provider entry.
+    for id in by_provider.keys().cloned().collect::<Vec<_>>() {
+        if !providers.iter().any(|provider| provider.id == id) {
+            providers.push(crate::store::ServerProvider { id: id.clone(), name: id });
+        }
+    }
+    providers.retain(|provider| by_provider.contains_key(&provider.id));
+    let run_providers: Vec<footer_panels::RunProvider> = providers
+        .into_iter()
+        .map(|provider| footer_panels::RunProvider {
+            id: provider.id.clone(),
+            name: provider.name,
+            models: by_provider.remove(&provider.id).unwrap_or_default(),
+        })
+        .collect();
+    footer_panels::render_model_select(&run_providers, current, width, height, theme)
 }
 
 /// Map a stroke onto the composer's key vocabulary (printable unmodified
@@ -531,6 +708,130 @@ pub fn ask_permission(store: &Store, request: &PermissionRequest) {
 pub enum PromptSinkEvent {
     /// A home submission created its session (open + navigate).
     SessionCreated { session_id: String, title: Option<String> },
+}
+
+/// Server-list fetch results (the pickers' data side).
+#[derive(Debug, Clone)]
+pub enum ServerListEvent {
+    Models(Result<(Vec<crate::store::ServerModel>, Vec<crate::store::ServerProvider>), String>),
+    Agents(Result<Vec<crate::store::ServerAgent>, String>),
+}
+
+/// Fetch the picker lists once against the resolved server
+/// (`model.list` + `provider.list` + `agent.list`; failures land as
+/// the picker's error state, never a crash).
+#[must_use]
+pub fn spawn_server_lists(
+    client: oc_client::Client,
+) -> (tokio::sync::mpsc::Receiver<ServerListEvent>, tokio::task::JoinHandle<()>) {
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    let task = tokio::spawn(async move {
+        let to_string = |error: oc_client::ClientError| error.to_string();
+        let models = client
+            .model()
+            .list(&oc_client::types::ModelListQuery { location: None })
+            .await
+            .map_err(to_string);
+        let providers = client
+            .provider()
+            .list(&oc_client::types::ProviderListQuery { location: None })
+            .await
+            .map_err(|_| ());
+        let agents = client
+            .agent()
+            .list(&oc_client::types::AgentListQuery { location: None })
+            .await
+            .map_err(|error| error.to_string());
+        let providers = providers.unwrap_or_default().data;
+        let _ = tx
+            .send(ServerListEvent::Models(models.map(|response| {
+                let models = response
+                    .data
+                    .iter()
+                    .map(|model| crate::store::ServerModel {
+                        provider_id: model.provider_id.clone(),
+                        id: model.id.clone(),
+                        name: model.name.clone(),
+                        // `free` = a non-empty cost table whose inputs
+                        // are all zero (dialog-model's `free()`).
+                        cost_input: model.cost.first().map_or(0.0, |cost| cost.input),
+                        free: !model.cost.is_empty() && model.cost.iter().all(|c| c.input == 0.0),
+                        deprecated: model.status == oc_client::types::ModelInfoStatus::Deprecated,
+                        variants: model.variants.iter().map(|variant| variant.id.clone()).collect(),
+                    })
+                    .collect();
+                let providers = providers
+                    .iter()
+                    .map(|provider| crate::store::ServerProvider {
+                        id: provider.id.clone(),
+                        name: provider.name.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                (models, providers)
+            })))
+            .await;
+        let _ = tx
+            .send(ServerListEvent::Agents(agents.map(|response| {
+                response
+                    .data
+                    .iter()
+                    .map(|agent| crate::store::ServerAgent {
+                        id: agent.id.clone(),
+                        name: agent.name.clone(),
+                        description: agent.description.clone(),
+                        mode: agent.mode.as_str().to_owned(),
+                        hidden: agent.hidden,
+                    })
+                    .collect()
+            })))
+            .await;
+    });
+    (rx, task)
+}
+
+/// The production selection sink: model/agent picks POST
+/// `session.switchModel` / `session.switchAgent` fire-and-forget (the
+/// reference commits selections the same way — failures log, the
+/// store keeps the optimistic selection).
+pub struct HttpSelectionSink {
+    client: oc_client::Client,
+}
+
+impl HttpSelectionSink {
+    #[must_use]
+    pub fn new(client: oc_client::Client) -> Self {
+        Self { client }
+    }
+}
+
+impl crate::store::SelectionSink for HttpSelectionSink {
+    fn switch_model(&self, session_id: &str, model: &crate::store::ModelSelection) {
+        let client = self.client.clone();
+        let session_id = session_id.to_owned();
+        let body = oc_client::types::SessionSwitchModelBody {
+            model: oc_client::types::ModelRef {
+                id: model.model_id.clone(),
+                provider_id: model.provider_id.clone(),
+                variant: model.variant.clone(),
+            },
+        };
+        tokio::spawn(async move {
+            if let Err(error) = client.session().switch_model(&session_id, &body).await {
+                crate::keymap::log_skip(&format!("switch model: {error}"));
+            }
+        });
+    }
+
+    fn switch_agent(&self, session_id: &str, agent: &str) {
+        let client = self.client.clone();
+        let session_id = session_id.to_owned();
+        let body = oc_client::types::SessionSwitchAgentBody { agent: agent.to_owned() };
+        tokio::spawn(async move {
+            if let Err(error) = client.session().switch_agent(&session_id, &body).await {
+                crate::keymap::log_skip(&format!("switch agent: {error}"));
+            }
+        });
+    }
 }
 
 /// The production engine prompt sink: submitting from an open session
@@ -644,9 +945,14 @@ pub async fn run_with_size(
     use ratatui::backend::CrosstermBackend;
 
     // Terminal acquire (app.tsx's renderer acquire/release): raw mode +
-    // alternate screen, restored on every exit path.
+    // alternate screen, restored on every exit path. Focus events feed
+    // the attention module (the pending marker consumes on FocusGained).
     enable_raw_mode().map_err(|e| e.to_string())?;
-    let _ = crossterm::execute!(std::io::stdout(), EnterAlternateScreen);
+    let _ = crossterm::execute!(
+        std::io::stdout(),
+        EnterAlternateScreen,
+        crossterm::event::EnableFocusChange
+    );
     let mut terminal = ratatui::Terminal::new(CrosstermBackend::new(std::io::stdout()))
         .map_err(|e| e.to_string())?;
     let size = size.unwrap_or((100, 30));
@@ -667,7 +973,40 @@ pub async fn run_with_size(
     let (sink_tx, mut sink_rx) = tokio::sync::mpsc::unbounded_channel::<PromptSinkEvent>();
     let directory =
         std::env::current_dir().map(|path| path.display().to_string()).unwrap_or_default();
-    app.store.set_prompt_sink(std::rc::Rc::new(HttpPromptSink::new(client, directory, sink_tx)));
+    app.store.set_prompt_sink(std::rc::Rc::new(HttpPromptSink::new(
+        client.clone(),
+        directory,
+        sink_tx,
+    )));
+
+    // Production sinks: clipboard writes OSC 52; model/agent picks POST
+    // session.switchModel / session.switchAgent.
+    app.store
+        .set_clipboard_sink(std::rc::Rc::new(crate::clipboard::Osc52Sink::new(std::io::stdout())));
+    app.store.set_selection_sink(std::rc::Rc::new(HttpSelectionSink::new(client.clone())));
+
+    // Server-backed picker lists (model/provider/agent).
+    let (mut list_rx, lists_task) = spawn_server_lists(client.clone());
+
+    // Tabs persistence (v2's useStorage contract — see storage.rs):
+    // restore on boot, save on change. The home selection stages with
+    // the created session (open + commit the staged pick).
+    let tabs_storage = crate::storage::ChannelStorage::open_default().ok();
+    if let Some(storage) = &tabs_storage {
+        let document: crate::storage::TabsDocument =
+            storage.read_or_default(crate::storage::KEY_TABS);
+        let tabs = document
+            .global
+            .tabs
+            .iter()
+            .map(|entry| crate::store::SessionTab {
+                session_id: entry.session_id.clone(),
+                title: entry.title.clone(),
+            })
+            .collect();
+        app.store.restore_tabs(tabs);
+    }
+    let mut persisted_tabs = app.store.tabs().tabs.clone();
 
     // Config reload: mtime check per tick (the reference watches the dir).
     let mut config_mtime = config
@@ -711,12 +1050,101 @@ pub async fn run_with_size(
             }
             app.store.ingest_all([message]);
         }
+        // Attention: the bell request set by permission asks / unread
+        // transitions — write `\x07` once (raw mode passes it through
+        // to the terminal, audible/visible over ssh).
+        if app.store.take_bell() {
+            use std::io::Write as _;
+            let mut out = std::io::stdout();
+            let _ = out.write_all(b"\x07");
+            let _ = out.flush();
+        }
+        // Drain the server-list fetches into the picker state.
+        while let Ok(event) = list_rx.try_recv() {
+            match event {
+                ServerListEvent::Models(Ok((models, providers))) => {
+                    app.store.set_models(crate::store::ListState::Loaded(models), providers);
+                }
+                ServerListEvent::Models(Err(error)) => {
+                    app.store.set_models(crate::store::ListState::Failed(error), Vec::new());
+                }
+                ServerListEvent::Agents(Ok(agents)) => {
+                    app.store.set_agents(crate::store::ListState::Loaded(agents));
+                }
+                ServerListEvent::Agents(Err(error)) => {
+                    app.store.set_agents(crate::store::ListState::Failed(error));
+                }
+            }
+        }
         // Drain the prompt-sink events (home submissions creating
-        // their session open a tab and navigate).
+        // their session open a tab, commit the staged selection, and
+        // navigate).
         while let Ok(event) = sink_rx.try_recv() {
             match event {
                 PromptSinkEvent::SessionCreated { session_id, title } => {
                     app.store.open_tab(&session_id, title);
+                    let staged = app.store.selection_for(HOME_PROMPT_KEY);
+                    if let Some(model) = &staged.model {
+                        app.store.select_model(&session_id, model);
+                    }
+                    if let Some(agent) = staged.agent {
+                        app.store.select_agent(&session_id, &agent);
+                    }
+                }
+            }
+        }
+        // The external editor (<leader>e / /editor): suspend → $EDITOR
+        // over the focused draft → resume → replace on success (a
+        // non-zero exit keeps the old draft per v2).
+        if app.store.take_editor_request() {
+            let key = app.prompt_key();
+            let draft = app.store.prompt_draft(&key).text.clone();
+            let cwd = std::env::current_dir().ok();
+            let _ = disable_raw_mode();
+            let _ =
+                crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+            let result = crate::editor::open_editor(&draft, cwd.as_deref(), || {}, || {});
+            let _ = enable_raw_mode();
+            let _ =
+                crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen);
+            let _ = terminal.clear();
+            match result {
+                Ok(Some(text)) => {
+                    let normalized = crate::editor::normalize_prompt_content(&text);
+                    let mut composer = app.store.composer(&key);
+                    composer.draft.text = normalized;
+                    app.store.set_composer(&key, &composer);
+                }
+                Err(crate::editor::EditorError::Exit(reason)) => {
+                    eprintln!("opencode tui: {reason} (draft unchanged)");
+                }
+                Err(error) => eprintln!("opencode tui: {error:?}"),
+                Ok(None) => {}
+            }
+            app.store.request_redraw();
+        }
+        // Tabs persistence: save when the tab list changed.
+        let tabs_now = app.store.tabs().tabs.clone();
+        if tabs_now != persisted_tabs {
+            persisted_tabs = tabs_now.clone();
+            if let Some(storage) = &tabs_storage {
+                let document = crate::storage::TabsDocument {
+                    global: crate::storage::TabsScope {
+                        tabs: tabs_now
+                            .iter()
+                            .map(|tab| crate::storage::TabEntry {
+                                session_id: tab.session_id.clone(),
+                                title: tab.title.clone(),
+                            })
+                            .collect(),
+                        unread: std::collections::BTreeMap::new(),
+                    },
+                    cwd: std::collections::BTreeMap::new(),
+                };
+                if let Err(error) = storage.write_typed(crate::storage::KEY_TABS, &document) {
+                    // Failed writes lose only tab layout — but silence
+                    // would hide tabs resetting every launch (v2 logs).
+                    eprintln!("opencode tui: failed to persist session tabs: {error}");
                 }
             }
         }
@@ -794,6 +1222,10 @@ pub async fn run_with_size(
                 app.resize((width, height));
                 redraw_at = 0; // force one redraw
             }
+            // Focus: the attention marker consumes on FocusGained (the
+            // bell itself fired regardless — the sound channel is
+            // "always" in v2's notifications plugin).
+            Some(CrosstermEvent::FocusGained) => app.store.set_focused(),
             _ => {}
         }
         if app.exit_requested {
@@ -803,8 +1235,13 @@ pub async fn run_with_size(
 
     // Teardown.
     connection_task.abort();
+    lists_task.abort();
     let _ = disable_raw_mode();
-    let _ = crossterm::execute!(std::io::stdout(), LeaveAlternateScreen);
+    let _ = crossterm::execute!(
+        std::io::stdout(),
+        LeaveAlternateScreen,
+        crossterm::event::DisableFocusChange
+    );
     result
 }
 
@@ -942,5 +1379,217 @@ mod tests {
         let mut app = App::new((100, 30));
         app.apply_config(&config, Mode::Dark);
         assert_eq!(app.store.theme().mode, Mode::Dark, "dark terminal → dark mode");
+    }
+
+    // -- Phase 8 lane B: live pickers / editor / copy / persistence ---
+
+    /// The footer model panel renders from LIVE store data: loading
+    /// ("Models loading") until the fetch lands, then the provider-
+    /// grouped rows with the active session's selection as `current`.
+    #[test]
+    fn footer_model_panel_renders_live_data() {
+        let app = App::new((100, 30));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.open_footer_route(crate::components::footer::PromptRoute::Model);
+        let loading = app.frame_text();
+        assert!(loading.contains("Models loading"), "loading state: {loading}");
+        assert!(loading.contains("Select model"));
+
+        app.store.set_models(
+            crate::store::ListState::Loaded(vec![
+                crate::store::ServerModel {
+                    provider_id: "opencode".into(),
+                    id: "grok".into(),
+                    name: "Grok".into(),
+                    cost_input: 0.0,
+                    free: true,
+                    deprecated: false,
+                    variants: Vec::new(),
+                },
+                crate::store::ServerModel {
+                    provider_id: "opencode".into(),
+                    id: "stage".into(),
+                    name: "Stage".into(),
+                    cost_input: 0.0,
+                    free: true,
+                    deprecated: false,
+                    variants: Vec::new(),
+                },
+            ]),
+            vec![crate::store::ServerProvider { id: "opencode".into(), name: "OpenCode".into() }],
+        );
+        app.store.select_model(
+            "s1",
+            &crate::store::ModelSelection {
+                provider_id: "opencode".into(),
+                model_id: "grok".into(),
+                variant: None,
+            },
+        );
+        let loaded = app.frame_text();
+        assert!(loaded.contains("Grok"), "the model row: {loaded}");
+        assert!(loaded.contains("OpenCode"), "the provider group");
+        assert!(loaded.contains("current"), "the current marker");
+        // The mini footer's Free rule: zero-cost opencode models that
+        // are not the current one carry the "Free" footer.
+        assert!(loaded.contains("Free"), "zero-cost opencode models mark Free");
+
+        // Collapsing the panel removes it from the frame.
+        app.store.close_footer_panel();
+        let collapsed = app.frame_text();
+        assert!(!collapsed.contains("Select model"), "panel gone: {collapsed}");
+    }
+
+    /// `<leader>y` runs the copy flow through the pump: the clipboard
+    /// sink receives the last assistant text and the success toast
+    /// surfaces.
+    #[test]
+    fn leader_y_copies_the_last_assistant_message() {
+        use crate::components::message::model::{Message, Part, PartTime};
+        let clipboard = std::rc::Rc::new(crate::clipboard::RecordingClipboardSink::default());
+        let clipboard_dyn: std::rc::Rc<dyn crate::clipboard::ClipboardSink> = clipboard.clone();
+        let mut store = Store::new(crate::reactive::Runtime::new());
+        store.set_clipboard_sink(clipboard_dyn);
+        let mut app = App::with_store(store, (100, 30));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.set_messages(
+            "s1",
+            vec![Message::Assistant {
+                id: "a1".into(),
+                agent: "build".into(),
+                model: String::new(),
+                parts: vec![Part::Text { text: "Copy me.".into(), time: PartTime::default() }],
+                finish: None,
+                time: PartTime::default(),
+            }],
+        );
+        app.press("ctrl+x");
+        app.press("y");
+        assert_eq!(
+            clipboard.writes.lock().unwrap().as_slice(),
+            &["Copy me.".to_owned()],
+            "OSC-52 sink received the text"
+        );
+        assert_eq!(
+            app.store.toasts().current().map(|toast| toast.message.as_str()),
+            Some("Message copied to clipboard!")
+        );
+    }
+
+    /// `<leader>e` sets the editor request the run loop drains (the
+    /// suspend/resume itself is a terminal-only flow — the invocation
+    /// is unit-tested in `editor.rs`).
+    #[test]
+    fn leader_e_requests_the_external_editor() {
+        let mut app = App::new((100, 30));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        assert!(!app.store.take_editor_request());
+        app.press("ctrl+x");
+        app.press("e");
+        assert!(app.store.take_editor_request(), "the pump set the request");
+        assert!(!app.store.take_editor_request());
+    }
+
+    /// A model pick through the DIALOG applies server-side: the sink
+    /// receives switchModel for the active session and the dialog
+    /// stack clears.
+    #[test]
+    fn model_dialog_pick_applies_through_the_sink() {
+        use crate::store::{RecordingSelectionSink, SelectionCall};
+        let sink = std::rc::Rc::new(RecordingSelectionSink::default());
+        let sink_dyn: std::rc::Rc<dyn crate::store::SelectionSink> = sink.clone();
+        let mut store = Store::new(crate::reactive::Runtime::new());
+        store.set_selection_sink(sink_dyn);
+        let mut app = App::with_store(store, (100, 30));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.set_models(
+            crate::store::ListState::Loaded(vec![crate::store::ServerModel {
+                provider_id: "anthropic".into(),
+                id: "claude".into(),
+                name: "Claude".into(),
+                cost_input: 3.0,
+                free: false,
+                deprecated: false,
+                variants: Vec::new(),
+            }]),
+            Vec::new(),
+        );
+        app.press("ctrl+x");
+        app.press("m");
+        assert!(matches!(
+            app.store.top_dialog().map(|entry| entry.kind),
+            Some(crate::store::DialogKind::ServerList { command: "model.list", .. })
+        ));
+        // Submit the (only) row.
+        app.press("return");
+        assert_eq!(app.store.dialogs().len(), 0, "the picker closed");
+        assert_eq!(
+            sink.calls.borrow().as_slice(),
+            &[(
+                "s1".into(),
+                SelectionCall::Model {
+                    provider_id: "anthropic".into(),
+                    model_id: "claude".into(),
+                    variant: None
+                }
+            )],
+            "switchModel posted for the active session"
+        );
+    }
+
+    /// The tabs persistence round-trip at the seam the run loop uses:
+    /// store tabs → the v2 `tabs` document shape → a fresh store.
+    #[test]
+    fn tabs_persist_and_restore_through_the_v2_document() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        store.open_tab("ses_1", Some("First".to_owned()));
+        store.open_tab("ses_2", None);
+        store.navigate(crate::store::Route::Home);
+
+        // Persist exactly like the run loop does.
+        let document = crate::storage::TabsDocument {
+            global: crate::storage::TabsScope {
+                tabs: store
+                    .tabs()
+                    .tabs
+                    .iter()
+                    .map(|tab| crate::storage::TabEntry {
+                        session_id: tab.session_id.clone(),
+                        title: tab.title.clone(),
+                    })
+                    .collect(),
+                unread: std::collections::BTreeMap::new(),
+            },
+            cwd: std::collections::BTreeMap::new(),
+        };
+        let root = std::env::temp_dir().join(format!(
+            "oc-tui-tabs-rt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.subsec_nanos())
+        ));
+        let storage = crate::storage::ChannelStorage::open(&root, "local").expect("open");
+        storage.write_typed(crate::storage::KEY_TABS, &document).expect("write");
+
+        // Boot a fresh store from the same file.
+        let restored: crate::storage::TabsDocument =
+            storage.read_or_default(crate::storage::KEY_TABS);
+        let fresh = Store::new(crate::reactive::Runtime::new());
+        fresh.restore_tabs(
+            restored
+                .global
+                .tabs
+                .iter()
+                .map(|entry| crate::store::SessionTab {
+                    session_id: entry.session_id.clone(),
+                    title: entry.title.clone(),
+                })
+                .collect(),
+        );
+        assert_eq!(fresh.tabs().tabs.len(), 2);
+        assert_eq!(fresh.tabs().tabs[0].title.as_deref(), Some("First"));
+        assert_eq!(fresh.route(), crate::store::Route::Session { session_id: "ses_1".to_owned() });
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

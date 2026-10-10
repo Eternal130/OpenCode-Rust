@@ -189,6 +189,54 @@ fn tool_wrap_rows_matches_text_grid_and_ansi_at_160() {
     );
 }
 
+/// `tool-wrap-error-expanded` (Tier A): the same rows with the failed
+/// read's LSP error rendered under it (`errorExpanded`).
+#[test]
+fn tool_wrap_error_expanded_matches_text_grid_and_ansi_at_80() {
+    let scenario = scenario("tool-wrap-error-expanded");
+    let variant = scenario.variants.iter().find(|v| v.width == 80).expect("w80 variant");
+    let theme = ThemeState::v2_dark();
+    let frame = crate::components::tool_rows::render_tool_wrap_error_expanded(
+        &theme.styles(),
+        80,
+        variant.height as u16,
+    );
+    let render = AnsiFrameRender::from_frame(&frame);
+    assert_text_grid_match("tool-wrap-error-expanded", 80, &render);
+    let depth = manifest().comparison_depth_for(&scenario);
+    let golden_ansi = std::fs::read_to_string(goldens().join("tool-wrap-error-expanded.w80.ansi"))
+        .expect("golden ansi");
+    let diff = pf::compare_ansi_bytes_at(&golden_ansi, &render.ansi, depth).expect("ansi parses");
+    assert!(
+        diff.equal,
+        "tool-wrap-error-expanded@80 ansi differs at manifest depth {depth}: first divergence {:?}",
+        diff.first_divergent_offset
+    );
+}
+
+#[test]
+fn tool_wrap_error_expanded_matches_text_grid_and_ansi_at_160() {
+    let scenario = scenario("tool-wrap-error-expanded");
+    let variant = scenario.variants.iter().find(|v| v.width == 160).expect("w160 variant");
+    let theme = ThemeState::v2_dark();
+    let frame = crate::components::tool_rows::render_tool_wrap_error_expanded(
+        &theme.styles(),
+        160,
+        variant.height as u16,
+    );
+    let render = AnsiFrameRender::from_frame(&frame);
+    assert_text_grid_match("tool-wrap-error-expanded", 160, &render);
+    let depth = manifest().comparison_depth_for(&scenario);
+    let golden_ansi = std::fs::read_to_string(goldens().join("tool-wrap-error-expanded.w160.ansi"))
+        .expect("golden ansi");
+    let diff = pf::compare_ansi_bytes_at(&golden_ansi, &render.ansi, depth).expect("ansi parses");
+    assert!(
+        diff.equal,
+        "tool-wrap-error-expanded@160 ansi differs at manifest depth {depth}: first divergence {:?}",
+        diff.first_divergent_offset
+    );
+}
+
 /// Fidelity-classified comparison through the full parity pipeline
 /// (`compare_ansi_frames_at` at the manifest depth) for the
 /// session-tabs scenarios — since the 7.2 glow upgrade the frames are

@@ -443,12 +443,18 @@ impl Composer {
     }
 
     /// `Ask anything… "{entry}"` — the placeholder for the selected
-    /// list entry (`placeholderText`).
+    /// list entry (`placeholderText`). An EMPTY list renders no
+    /// placeholder at all (the reference returns `undefined` when
+    /// `list().length === 0` — the session route mounts `Prompt`
+    /// without placeholders), so the empty-list form yields "".
     #[must_use]
     pub fn placeholder_text(&self) -> String {
+        if self.placeholders.is_empty() {
+            return String::new();
+        }
         let entry = self
             .placeholders
-            .get(self.placeholder_index % self.placeholders.len().max(1))
+            .get(self.placeholder_index % self.placeholders.len())
             .cloned()
             .unwrap_or_default();
         format!("Ask anything… \"{entry}\"")
