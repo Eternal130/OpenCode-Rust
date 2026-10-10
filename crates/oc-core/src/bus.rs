@@ -247,6 +247,7 @@ pub struct ReplayOptions {
 
 /// Marker/event union emitted by [`Bus::log`].
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)] // the union mirrors the wire shapes
 pub enum LogItem {
     Event(Event),
     Synced(LogSynced),
