@@ -40,6 +40,22 @@ pub struct FileAttachment {
     pub mention: Option<Mention>,
 }
 
+/// `PromptInput.FileAttachment` (prompt-input.ts) — the *wire* form
+/// the client POSTs (`session.prompt`'s `files` array): a data/file
+/// URI the server materializes into a resolved [`FileAttachment`]
+/// (core/session/prompt.ts `materializeAttachment`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct InputFileAttachment {
+    /// `data:` (inline base64) or `file://` URI.
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mention: Option<Mention>,
+}
+
 /// `Prompt.AgentAttachment`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentAttachment {
@@ -88,6 +104,29 @@ mod tests {
             serde_json::to_value(FileSource::Inline).unwrap(),
             serde_json::json!({"type": "inline"})
         );
+    }
+
+    #[test]
+    fn input_file_attachment_wire() {
+        // The PromptInput shape the TUI POSTs (uri form, unlike the
+        // resolved FileAttachment's data/mime/source).
+        let value = serde_json::json!({
+            "uri": "data:image/png;base64,AAECAw==",
+            "name": "screenshot.png",
+            "mention": {"start": 0.0, "end": 9.0, "text": "[Image 1]"}
+        });
+        let parsed: InputFileAttachment = serde_json::from_value(value.clone()).unwrap();
+        // Round-trip: `Num` serializes compact integers (9, not 9.0),
+        // so compare via re-parse instead of raw JSON equality.
+        let round: InputFileAttachment =
+            serde_json::from_value(serde_json::to_value(&parsed).unwrap()).unwrap();
+        assert_eq!(round, parsed);
+        assert_eq!(parsed.name.as_deref(), Some("screenshot.png"));
+        assert_eq!(parsed.mention.as_ref().map(|m| m.text.as_str()), Some("[Image 1]"));
+        // `uri` is the only required field.
+        let minimal: InputFileAttachment =
+            serde_json::from_value(serde_json::json!({"uri": "file:///tmp/x.pdf"})).unwrap();
+        assert_eq!(minimal.name, None);
     }
 
     #[test]

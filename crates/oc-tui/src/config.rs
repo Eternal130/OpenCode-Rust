@@ -39,6 +39,10 @@ pub struct TuiConfig {
     pub keybinds: Value,
     pub theme: ThemeConfig,
     pub leader_timeout_ms: Option<u64>,
+    /// `session.image_preview` (R-07): show user attachment and
+    /// tool-result images in the transcript (default off — v2's falsy
+    /// check at session/index.tsx:2459).
+    pub session_image_preview: bool,
     /// The file this was loaded from (`None` when no config file
     /// exists — all defaults).
     pub path: Option<PathBuf>,
@@ -70,10 +74,13 @@ impl TuiConfig {
         let theme = value.get("theme").map(ThemeConfig::from_json).unwrap_or_default();
         let leader_timeout_ms =
             value.pointer("/leader/timeout").and_then(Value::as_u64).filter(|ms| *ms > 0);
+        let session_image_preview =
+            value.pointer("/session/image_preview").and_then(Value::as_bool).unwrap_or(false);
         Self {
             keybinds: value.get("keybinds").cloned().unwrap_or(Value::Null),
             theme,
             leader_timeout_ms,
+            session_image_preview,
             path,
         }
     }
@@ -91,6 +98,20 @@ impl TuiConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_session_image_preview_defaulting_off() {
+        // R-07: `session.image_preview` gates the transcript strip;
+        // absent (v2's falsy default) or false keeps it off.
+        assert!(!TuiConfig::parse("{}", None).session_image_preview);
+        assert!(
+            !TuiConfig::parse(r#"{"session": {"image_preview": false}}"#, None)
+                .session_image_preview
+        );
+        assert!(
+            TuiConfig::parse(r#"{"session": {"image_preview": true}}"#, None).session_image_preview
+        );
+    }
 
     #[test]
     fn parses_the_tui_slice() {

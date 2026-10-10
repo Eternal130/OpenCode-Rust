@@ -18,12 +18,47 @@
 //! height is `min(maxHeight, wrappedLines + 1)` — the +1 being the
 //! cursor row under the last line.
 
+pub mod attachment;
 pub mod autocomplete;
 pub mod golden_tests;
 pub mod render;
 
+pub use attachment::{
+    parse_pasted_filepaths, prompt_attachment_label, resolve_pasted_attachments, PastedAttachment,
+};
 pub use autocomplete::{AutocompleteState, SlashEntry, SlashRegistry};
 pub use render::{render_prompt_frame, AutocompleteView, FooterHints, PromptView};
+
+/// An inline attachment payload staged in the composer (the resolved
+/// half of a `PromptInput.FileAttachment`: the data URI decoded into
+/// base64 + mime, ready for `session.prompt`'s `files` wire shape).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentPayload {
+    pub mime: String,
+    /// Base64 bytes (`data:<mime>;base64,<data>` reassembles on send).
+    pub data: String,
+}
+
+impl AttachmentPayload {
+    /// Decode a `data:<mime>;base64,<payload>` URI (the attachment
+    /// form `pasteAttachment` stages); `None` for foreign shapes.
+    #[must_use]
+    pub fn from_data_uri(uri: &str) -> Option<Self> {
+        let rest = uri.strip_prefix("data:")?;
+        let (header, payload) = rest.split_once(',')?;
+        if !header.to_ascii_lowercase().contains("base64") {
+            return None;
+        }
+        let mime = header.split(';').next().unwrap_or_default();
+        Some(Self { mime: mime.to_owned(), data: payload.to_owned() })
+    }
+
+    /// Reassemble the data URI (the `session.prompt` wire form).
+    #[must_use]
+    pub fn to_data_uri(&self) -> String {
+        format!("data:{};base64,{}", self.mime, self.data)
+    }
+}
 
 /// One file attachment rendered as an extmark chip inside the text
 /// (`PromptInfo.files`): `name` + the char-range of the mention text.
@@ -34,27 +69,21 @@ pub struct FileMention {
     pub start: usize,
     /// Char index one past the last mention character.
     pub end: usize,
+    /// The inline payload when this chip is a staged *attachment*
+    /// (image/PDF); `None` for plain @-file mentions.
+    pub payload: Option<AttachmentPayload>,
+    /// The assigned chip label (`[Image 2]`, `promptAttachmentLabel`)
+    /// for attachments; `None` for plain mentions (label = name).
+    pub mention: Option<String>,
 }
 
 impl FileMention {
-    /// The chip's mention text (`[Image N]` for images, else the name).
+    /// The chip's mention text (the stored label for attachments,
+    /// else the name).
     #[must_use]
     pub fn mention_text(&self) -> String {
-        if std::path::Path::new(&self.name)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
-        {
-            format!("[{}]", image_label(&self.name))
-        } else {
-            self.name.clone()
-        }
+        self.mention.clone().unwrap_or_else(|| self.name.clone())
     }
-}
-
-/// `[Image 1]` — pasted images label by arrival order of the name's
-/// stem (`restoreExtmarksFromPrompt`'s chip shape).
-fn image_label(_name: &str) -> String {
-    "Image 1".to_owned()
 }
 
 /// One agent mention (`@build`-style chips).
@@ -364,6 +393,55 @@ impl Composer {
     pub fn paste(&mut self, text: &str) {
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
         self.insert_text(&normalized);
+    }
+
+    /// `pasteAttachment` (prompt/index.tsx:1477): stage one data-URI
+    /// attachment — the `[Image N]`/`[PDF N]` label (numbered past the
+    /// staged mentions, reused for identical payloads) inserts at the
+    /// caret as an atomic chip followed by a space.
+    pub fn paste_attachment(&mut self, filename: Option<&str>, uri: &str) {
+        let payload = AttachmentPayload::from_data_uri(uri);
+        let label = attachment::prompt_attachment_label(&self.draft.files, &payload, filename);
+        let start = self.caret;
+        self.insert_text(&format!("{label} "));
+        let end = start + label.chars().count();
+        self.draft.files.push(FileMention {
+            name: filename.unwrap_or("file").to_owned(),
+            start,
+            end,
+            payload,
+            mention: Some(label),
+        });
+    }
+
+    /// `pasteInputText`'s attachment arm (prompt/index.tsx:1437): a
+    /// resolved paste stages its attachments (SVG text inserts as
+    /// text) instead of the pasted path; plain text inserts verbatim.
+    /// Returns whether any attachment staged.
+    pub fn paste_resolved(
+        &mut self,
+        text: &str,
+        platform: &str,
+        files: &dyn attachment::LocalFiles,
+    ) -> bool {
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        let pasted = normalized.trim();
+        if let Some(attachments) = attachment::resolve_pasted_attachments(pasted, platform, files) {
+            for item in attachments {
+                match item {
+                    attachment::PastedAttachment::Text { filename, content } => {
+                        self.paste(&content);
+                        let _ = filename; // the `[SVG: name]` extmark stays C2
+                    }
+                    attachment::PastedAttachment::File { filename, uri } => {
+                        self.paste_attachment(Some(&filename), &uri);
+                    }
+                }
+            }
+            return true;
+        }
+        self.paste(&normalized);
+        false
     }
 
     /// Left/right by one cluster.
@@ -711,6 +789,51 @@ mod tests {
     }
 
     #[test]
+    fn paste_attachment_stages_a_labeled_chip_with_payload() {
+        let mut state = Composer::default();
+        state.paste_attachment(Some("shot.png"), "data:image/png;base64,AAECAw==");
+        assert_eq!(state.draft.text, "[Image 1] ");
+        assert_eq!(state.caret, 10);
+        assert_eq!(state.draft.files.len(), 1);
+        let file = &state.draft.files[0];
+        assert_eq!(file.mention_text(), "[Image 1]");
+        assert_eq!(file.payload.as_ref().unwrap().mime, "image/png");
+        assert_eq!(file.payload.as_ref().unwrap().data, "AAECAw==");
+        assert_eq!(file.payload.as_ref().unwrap().to_data_uri(), "data:image/png;base64,AAECAw==");
+
+        // A second, different image numbers past the first; the same
+        // payload reuses its mention (promptAttachmentLabel).
+        state.paste_attachment(Some("other.jpg"), "data:image/jpeg;base64,/9j/AA==");
+        assert_eq!(state.draft.text, "[Image 1] [Image 2] ");
+        state.paste_attachment(Some("shot.png"), "data:image/png;base64,AAECAw==");
+        assert_eq!(state.draft.text, "[Image 1] [Image 2] [Image 1] ");
+        // Backspace first removes the trailing space, then the chip
+        // deletes atomically (the extmark range).
+        state.handle_key(&ComposerKey::Backspace);
+        state.handle_key(&ComposerKey::Backspace);
+        assert_eq!(state.draft.text, "[Image 1] [Image 2] ");
+        assert_eq!(state.draft.files.len(), 2);
+    }
+
+    #[test]
+    fn paste_resolved_stages_attachments_and_falls_back_to_text() {
+        use attachment::MapFiles;
+        let files = MapFiles {
+            files: [("/tmp/shot.png".to_owned(), b"\x89PNG".to_vec())].into_iter().collect(),
+        };
+        let mut state = Composer::default();
+        assert!(state.paste_resolved("/tmp/shot.png", "linux", &files));
+        assert_eq!(state.draft.text, "[Image 1] ");
+        assert_eq!(state.draft.files.len(), 1);
+
+        let plain =
+            MapFiles { files: [("/tmp/a.txt".to_owned(), b"hi".to_vec())].into_iter().collect() };
+        let mut text_state = Composer::default();
+        assert!(!text_state.paste_resolved("just some words", "linux", &plain));
+        assert_eq!(text_state.draft.text, "just some words");
+    }
+
+    #[test]
     fn chip_backspace_deletes_the_whole_mention() {
         let text = "Compare [Image 1] now";
         let start = text.find("[Image").expect("mention");
@@ -722,6 +845,8 @@ mod tests {
                 name: "screenshot.png".into(),
                 start: text[..start].chars().count(),
                 end: text[..end].chars().count(),
+                payload: None,
+                mention: Some("[Image 1]".into()),
             }],
             ..PromptDraft::default()
         });

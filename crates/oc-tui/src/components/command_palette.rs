@@ -982,7 +982,12 @@ mod tests {
         store.set_messages(
             "s1",
             vec![
-                Message::User { id: "u1".into(), text: "question".into(), created: 0 },
+                Message::User {
+                    id: "u1".into(),
+                    text: "question".into(),
+                    created: 0,
+                    files: Vec::new(),
+                },
                 Message::Assistant {
                     id: "a1".into(),
                     agent: "build".into(),
