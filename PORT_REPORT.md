@@ -11,7 +11,7 @@
 | 功能一致性（CLI+Server，不含桌面端） | ✅ openapi 语义 diff **空**（服务文档与钉版契约逐字节相同）；错误路径 7/7 逐字节；141 操作全实现；双向互替实测（官方 v2.0.24 TUI 连 Rust 服务器 3/3 交互；Rust 客户端连 v2 服务器全流程解码）；DB 双向互通（v2 写库→Rust 0 重跑续写→v2 再读；含 v2 产生的 NULL 重行与 stable 频道文件名方案） |
 | 外观一致性（TUI） | ✅ golden 帧体系：37 场景/66 变体 ×（文本网格+ANSI 字节）按 Tier A/B/C1 分级验收——Tier-A 31/31 场景**文本+ANSI 逐字节**（含 tabs glow 确定性 tint 数学、composer 五态、fuzzysort 排序位精确）；Tier-B（diff）文本精确+256 降级样式；C1（markdown 文本网格/冻结 spinner/toast）；5 个按键回放脚本全过；CJK/emoji/ZWJ 宽度以 opentui 实测侧车钉死 |
 | 全线 Rust 重写 | ✅ 12 个 crate（util/schema/theme/ai/core/plugin-host/server/client/tui/cli+工具），零 TS 运行时依赖（插件宿主的 bun 子进程除外，见 §4） |
-| 插件支持等同 | 见 §3 状态说明：插件运行时**库级完整且旗舰实测通过**（oh-my-opencode-slim v3.0.3 自检 12 agents/12 tools/8 skills；reflect 技能端到端；codemode 解释器全量；对抗 fuzz 有界）；生产二进制的装配接线状态见 §3 末"集成状态"（以门 12 后的最终提交为准） |
+| 插件支持等同 | ✅ bun 子进程宿主（决定依据=spike 实测：deno_core 结构性败于 CJS/node 内建）；**生产接线完成**（config `plugins[]` 在 oc-server 与 oc-tui 双入口启动宿主、每 location 应用注册、CodeMode 按 v2 语义核心化——零插件时 MCP/opencode.* 工具也仅经 `execute` 暴露、/api/plugin 真实）；**旗舰 oh-my-opencode-slim v3.0.3 经真实二进制路径实测通过**（自检 12 agents/12 tools/8 skills、agents 入列、命令入面板、marker 提示词往返真会话、reflect 技能端到端）；codemode 解释器全量；对抗 fuzz（kill -9/全表面超慢）有界无死锁；V1/V2 双格式 |
 
 **里程碑**：M1（官方 v2.0.24 TUI 可用 Rust 服务端）✅ 门 6/8 达成｜M2（Rust TUI 日常全流程）✅ 门 11 GRANTED，23/23 步实测（提示→工具→权限→tab→切换→复制→主题→**$EDITOR 挂起恢复**→重启恢复→安全关机）｜M3 近似（社区插件不修改直接可用）✅ 旗舰验证。
 
@@ -45,9 +45,9 @@
 - 请求 schema 校验仅覆盖电池中的 2 条路由（session.create/list），其余路由对畸形载荷的 400 形状与 v2 有分歧（P10-N1 同类）
 - TUI 非空草稿上 leader 和弦不触发（v2 键位表对和弦挂起 textarea——行为差异已登记）
 - 写回带 JSONC 注释的配置：拒绝并要求 --force（v2 保留注释重写）——防数据丢失的保守选择
-- oc-tui 本地状态（tab/会话列表）的 channel 目录默认值与 v2 出厂构建的差异（接线泳道处理中，终稿更新）
+- TUI 本地状态（tab/会话列表）channel 目录已对齐 v2 出厂默认（stable）；从旧版 `local` 目录迁移不自动（存量状态重新累积）
 
-**集成状态（门 12 审计结论）**：插件宿主/CodeMode 的生产装配（config `plugins[]` 启动、`/api/plugin`、`code_mode_runtime` 挂接）在库级完成与旗舰证明之后，由收尾接线泳道补齐——本报告终稿以该泳道的实测结果为准（含真实二进制加载旗舰、MCP 工具仅经 `execute` 暴露的快照验证）。若接线未达，上述"插件支持"应读作"库级完成、二进制未启用"。
+**插件与 CodeMode 生产状态（门 12 审计→接线闭环）**：门 12 抓出"库级完成但生产未接线"，已由收尾接线泳道闭合并实测（真实二进制路径加载旗舰、零插件 CodeMode 快照、/api/plugin 真实列表），提交 `09bcc15`。
 
 ## 4. 打包与分发
 
