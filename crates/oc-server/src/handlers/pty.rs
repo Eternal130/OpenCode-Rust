@@ -93,7 +93,10 @@ async fn create(
             .as_object()
             .and_then(|size| Some((size["cols"].as_u64()? as u16, size["rows"].as_u64()? as u16))),
     };
-    let info = shared.pty.create(&input).map_err(|_| ApiError::unknown_ref())?;
+    let info = shared.pty.create(&input).map_err(|error| {
+        crate::errors::debug_cause("pty:unknown_ref", &error);
+        ApiError::unknown_ref()
+    })?;
     Ok(json_location_data(&location.as_path().to_string_lossy(), info_json(&info)))
 }
 
@@ -105,10 +108,10 @@ async fn get(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let shared = pty_state::shared(&state);
-    let info = shared
-        .pty
-        .get(&oc_core::pty::PtyId(pty_id.clone()))
-        .map_err(|_| ApiError::pty_not_found(&pty_id))?;
+    let info = shared.pty.get(&oc_core::pty::PtyId(pty_id.clone())).map_err(|error| {
+        crate::errors::debug_cause("pty:pty_not_found", &error);
+        ApiError::pty_not_found(&pty_id)
+    })?;
     Ok(json_location_data(&location.as_path().to_string_lossy(), info_json(&info)))
 }
 
@@ -127,11 +130,11 @@ async fn update(
             .as_object()
             .and_then(|size| Some((size["cols"].as_u64()? as u16, size["rows"].as_u64()? as u16))),
     };
-    let info = shared
-        .pty
-        .update(&oc_core::pty::PtyId(pty_id.clone()), input)
-        .await
-        .map_err(|_| ApiError::pty_not_found(&pty_id))?;
+    let info =
+        shared.pty.update(&oc_core::pty::PtyId(pty_id.clone()), input).await.map_err(|error| {
+            crate::errors::debug_cause("pty:pty_not_found", &error);
+            ApiError::pty_not_found(&pty_id)
+        })?;
     Ok(json_location_data(&location.as_path().to_string_lossy(), info_json(&info)))
 }
 
@@ -140,11 +143,10 @@ async fn remove(
     Path(pty_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let shared = pty_state::shared(&state);
-    shared
-        .pty
-        .remove(&oc_core::pty::PtyId(pty_id.clone()))
-        .await
-        .map_err(|_| ApiError::pty_not_found(&pty_id))?;
+    shared.pty.remove(&oc_core::pty::PtyId(pty_id.clone())).await.map_err(|error| {
+        crate::errors::debug_cause("pty:pty_not_found", &error);
+        ApiError::pty_not_found(&pty_id)
+    })?;
     Ok(no_content())
 }
 

@@ -19,16 +19,12 @@
 //! | 6 | `GET /api/session?limit=…` bad query type | 400 `InvalidRequestError` kind=Query |
 //! | 7 | `DELETE /api/info` (method mismatch) | **404 empty body** (v2's Effect router has no 405) |
 //!
-//! Findings pinned by this test (do not fix crate code in this lane —
-//! filed in `goldens/p10/VERIFICATION.md`):
-//!
-//! - **P10-E1** (case 5): the port accepts payload fields with wrong
-//!   types / extra unknown fields (serde defaults) where v2 400-rejects
-//!   with `InvalidRequestError` — schema-error middleware parity gap.
-//! - **P10-E2** (case 6): same class for query parameters (`limit`,
-//!   `order`): the port ignores invalid values; v2 400s.
-//! - **P10-E3** (case 7): the port answers method-mismatch with 405
-//!   (axum), v2 with 404 + empty body.
+//! Cases 5-7 were the Phase-10 findings P10-E1/E2/E3 (schema-validation
+//! gap, query-validation gap, 405-vs-404) — CLOSED by the final
+//! remediation sweep: `handlers/schema_check.rs` ports the Effect
+//! `TreeFormatter` message shapes for `session.create` payloads and
+//! `session.list` queries, and the dispatch rewrites axum's 405 to the
+//! empty 404. All seven routes are byte-equal now.
 //!
 //! Opt-in: `#[ignore]`d AND `OC_P10=1` at runtime (needs bun + reference):
 //!
@@ -98,10 +94,8 @@ fn probes() -> Vec<Probe> {
             path: "/api/session",
             body: Some(json!({"title": 12345})),
             auth: true,
-            finding: Some(
-                "P10-E1: port accepts wrongly-typed payload fields (200) where v2 400s with \
-             InvalidRequestError kind=Payload — schema-error middleware parity gap",
-            ),
+            // P10-E1 — CLOSED: the port 400s byte-equal (schema_check).
+            finding: None,
         },
         Probe {
             name: "query_schema_reject_400",
@@ -109,10 +103,8 @@ fn probes() -> Vec<Probe> {
             path: "/api/session?limit=notanumber",
             body: None,
             auth: true,
-            finding: Some(
-                "P10-E2: port ignores invalid query values (200) where v2 400s with \
-             InvalidRequestError kind=Query",
-            ),
+            // P10-E2 — CLOSED: the port 400s byte-equal (schema_check).
+            finding: None,
         },
         Probe {
             name: "method_mismatch_delete_info",
@@ -120,10 +112,8 @@ fn probes() -> Vec<Probe> {
             path: "/api/info",
             body: None,
             auth: true,
-            finding: Some(
-                "P10-E3: port answers method mismatch with 405 (axum default), v2 with 404 + \
-             empty body",
-            ),
+            // P10-E3 — CLOSED: the dispatch answers 404 empty byte-equal.
+            finding: None,
         },
     ]
 }

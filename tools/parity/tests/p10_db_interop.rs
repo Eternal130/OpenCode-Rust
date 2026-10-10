@@ -45,14 +45,13 @@ use parity::scenario::ScenarioHost;
 /// at the shared data root. `TMPDIR` stays per-sandbox.
 fn shared_env(home: &Path) -> Vec<(&'static str, String)> {
     vec![
-        // **Finding P10-DB1**: the reference build pins channel `stable` →
-        // `opencode-stable.db` (database-path.ts channel scheme); the port's
-        // `Engine::boot` hard-pins `data_root/opencode.db` regardless of
-        // `OPENCODE_CHANNEL`/`OPENCODE_DISABLE_CHANNEL_DB` (path.rs implements
-        // the scheme, but the server's engine path bypasses it). v2's runtime
-        // `OPENCODE_DISABLE_CHANNEL_DB=1` switch selects the unsuffixed
-        // `opencode.db` — the ONE filename both implementations open, so the
-        // interop battery drives on it.
+        // **P10-DB1 — FIXED**: both sides now resolve the database through
+        // the channel scheme (the engine uses `database::path`, the channel
+        // comes from the one workspace source). This mode keeps v2's
+        // `OPENCODE_DISABLE_CHANNEL_DB=1` runtime switch — the unsuffixed
+        // `opencode.db` both implementations share — as the battery's
+        // regression lane; the stable-channel lane below exercises the
+        // channel-suffixed file for real.
         ("OPENCODE_DISABLE_CHANNEL_DB", "1".to_owned()),
         ("HOME", home.display().to_string()),
         ("OPENCODE_TEST_HOME", home.display().to_string()),
@@ -494,5 +493,158 @@ async fn p10_db_interop_v2_written_null_rows() -> Result<()> {
          reruns + continued both, v2 re-opened + read port writes + continued; journal stable at \
          48 across all three phases"
     );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// P10-DB1 stable-channel lane: with the channel scheme wired into
+// `Engine::boot`, a channel-matched Rust boot opens the SAME
+// channel-suffixed file the (stable-pinned) reference build opens —
+// `opencode-stable.db` — with no DISABLE switch on either side.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "Phase-10 battery: opt in with OC_P10=1 (needs bun + reference)"]
+#[allow(clippy::too_many_lines)]
+async fn p10_db_interop_stable_channel_same_file() -> Result<()> {
+    if !enabled() {
+        skip("OC_P10 != 1");
+        return Ok(());
+    }
+    if !p10_common::reference_runnable() {
+        skip("bun or the reference checkout is unavailable");
+        return Ok(());
+    }
+    if parity::rust_server::skip_if_no_cargo() {
+        skip("cargo not found on PATH");
+        return Ok(());
+    }
+    let bun = bun_path()?;
+
+    let root = PathBuf::from(format!("/tmp/opencode/p10-db-stable-{}", std::process::id()));
+    let home = root.join("home");
+    let data = home.join(".local/share/opencode");
+    std::fs::create_dir_all(&data)?;
+    // The stable-channel env: the reference build's baked channel define
+    // IS `stable` (spawn pins OPENCODE_CHANNEL="stable"), so it needs no
+    // runtime switch; the Rust engine reads OPENCODE_CHANNEL.
+    let env = |home: &Path| {
+        vec![
+            ("HOME", home.display().to_string()),
+            ("OPENCODE_TEST_HOME", home.display().to_string()),
+            ("XDG_DATA_HOME", home.join(".local/share").display().to_string()),
+            ("XDG_STATE_HOME", home.join(".local/state").display().to_string()),
+            ("XDG_CONFIG_HOME", home.join(".config").display().to_string()),
+            ("XDG_CACHE_HOME", home.join(".cache").display().to_string()),
+        ]
+    };
+    let static_env: Vec<(&'static str, &'static str)> = env(&home)
+        .into_iter()
+        .map(|(k, v)| (k, Box::leak(v.into_boxed_str()) as &'static str))
+        .collect();
+    let mut rust_env = static_env.clone();
+    rust_env.push(("OPENCODE_CHANNEL", "stable"));
+    let stable_db = data.join("opencode-stable.db");
+
+    // Phase A — the reference writes through its channel-suffixed file.
+    let reference = parity::reference::spawn_reference(parity::reference::ReferenceSpawn {
+        extra_env: static_env.clone(),
+        seed_files: Vec::new(),
+    })
+    .await?;
+    let (base, password) = (reference.url().to_owned(), reference.password().to_owned());
+    let (status, row) = api(
+        &base,
+        &password,
+        "POST",
+        "/api/session".to_owned(),
+        Some(json!({"title": "p10 stable A written by v2"}).to_string()),
+    )
+    .await?;
+    ensure!(status == 200, "stable create A: {status} {row}");
+    let a = row["data"]["id"].as_str().context("A id").unwrap().to_owned();
+    reference.stop().await?;
+    ensure!(stable_db.is_file(), "reference did not open {stable_db:?}");
+    ensure!(
+        !data.join("opencode.db").exists(),
+        "an unsuffixed opencode.db appeared next to the stable file"
+    );
+
+    // Phase B — the Rust boot with OPENCODE_CHANNEL=stable opens the SAME
+    // file: v2's row is visible, a port-written row lands beside it, and
+    // the migration journal did not re-run.
+    let port = parity::rust_server::spawn_rust(parity::rust_server::RustSpawn {
+        extra_env: rust_env,
+        seed_files: Vec::new(),
+    })
+    .await?;
+    let (base, password) = (port.url().to_owned(), port.password().to_owned());
+    let seen = p10_common::wait_api(
+        &base,
+        &password,
+        "GET",
+        "/api/session",
+        None,
+        |value| {
+            value["data"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|row| row["id"] == json!(a)))
+        },
+        10,
+        2,
+    )
+    .await
+    .context("the stable-channel Rust boot did not see v2's session (wrong file?)")?;
+    let _ = seen;
+    let (status, row) = api(
+        &base,
+        &password,
+        "POST",
+        "/api/session".to_owned(),
+        Some(json!({"title": "p10 stable B written by the port"}).to_string()),
+    )
+    .await?;
+    ensure!(status == 200, "stable create B through the port: {status} {row}");
+    let b = row["data"]["id"].as_str().context("B id").unwrap().to_owned();
+    port.stop().await?;
+    ensure!(stable_db.is_file(), "the port did not keep the stable file");
+    let dump = bun_db_dump(&bun, &stable_db)?;
+    let ids: Vec<&str> = dump["migrations"]
+        .as_array()
+        .map_or(vec![], |rows| rows.iter().map(|m| m["id"].as_str().unwrap_or("")).collect());
+    ensure!(ids.len() == 48, "stable file journal has {} rows (want 48)", ids.len());
+    // The dump's session projection is (id, parent_id, agent, model) —
+    // `session_row` panics when the id is absent, so this is the
+    // port-write-landed assertion.
+    let _ = session_row(&dump, &b);
+
+    // Phase C — the reference re-opens the same file and reads the port's row.
+    let reference = parity::reference::spawn_reference(parity::reference::ReferenceSpawn {
+        extra_env: static_env,
+        seed_files: Vec::new(),
+    })
+    .await?;
+    let (base, password) = (reference.url().to_owned(), reference.password().to_owned());
+    let seen = p10_common::wait_api(
+        &base,
+        &password,
+        "GET",
+        "/api/session",
+        None,
+        |value| {
+            value["data"].as_array().is_some_and(|rows| {
+                rows.iter().any(|row| row["id"] == json!(a))
+                    && rows.iter().any(|row| row["id"] == json!(b))
+            })
+        },
+        10,
+        2,
+    )
+    .await
+    .context("v2 did not see both rows in the stable file after the port's write")?;
+    let _ = seen;
+    reference.stop().await?;
+
+    eprintln!("[p10-db-stable] PASS — v2 and a OPENCODE_CHANNEL=stable Rust boot inter-operated on opencode-stable.db (A by v2, B by the port, journal 48)");
     Ok(())
 }

@@ -1,2 +1,9 @@
 [profile.default]
 slow-timeout = "60s"
+
+[profile.default.env]
+# Test processes must never bootstrap the managed pinned bun download
+# (Phase 10 packaging lane): the bun-spawning integration tests skip
+# when bun is absent instead of fetching ~40 MiB from the network
+# (MIGRATION §2.3 graceful degradation; oc-util::bunman kill switch).
+set = { OPENCODE_DISABLE_BUN_DOWNLOAD = "1" }

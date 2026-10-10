@@ -96,6 +96,26 @@ const GROUP_MESSAGES: SessionMessageInfo[] = [
   ]),
 ]
 
+/**
+ * Settle condition for GROUP_MESSAGES mounts (the message-groups
+ * double-mount flake, G11-F4): the USER rows paint before the assistant
+ * TEXT parts (their renderable resolves on a later task), so waiting for
+ * "failure modes" (the last user row) can capture the blank pre-paint
+ * state — byte-unstable across mounts under load. Wait for BOTH
+ * assistant texts (fragments chosen to survive the w40 wrap) so the
+ * capture only happens once the deferred rows have painted.
+ */
+async function settleGroups(setup: Awaited<ReturnType<typeof createTestRenderer>>) {
+  await setup.waitForFrame(
+    (frame) =>
+      frame.includes("It reads the configuration") &&
+      frame.includes("Three failure modes dominate") &&
+      frame.includes("failure modes"),
+  )
+  await setup.waitForVisualIdle()
+  await setup.renderOnce()
+}
+
 /** vscroll fixture: ten short turns, ~6 rows each — transcript ≫ a 24-row viewport. */
 const VSCROLL_MESSAGES: SessionMessageInfo[] = Array.from({ length: 10 }, (_, index) => [
   user(`vs-user-${index}`, `Turn ${index} asks about section ${index} of the document`, index * 10),
@@ -220,9 +240,7 @@ async function mountGroups(variant: ScenarioVariant) {
     title: "Message groups",
     messages: GROUP_MESSAGES,
     drive: async (setup) => {
-      await setup.waitForFrame((frame) => frame.includes("failure modes"))
-      await setup.waitForVisualIdle()
-      await setup.renderOnce()
+      await settleGroups(setup)
     },
   })
   return app
@@ -296,9 +314,7 @@ async function mountSidebar(sidebar: "auto" | "hide", variant: ScenarioVariant) 
     drive: async (setup) => {
       // With the pane hidden the session title never renders (it lives in
       // the sidebar), so only the transcript anchors the wait.
-      await setup.waitForFrame((frame) => frame.includes("failure modes"))
-      await setup.waitForVisualIdle()
-      await setup.renderOnce()
+      await settleGroups(setup)
     },
   })
   return app
@@ -312,9 +328,7 @@ async function mountScreen40(variant: ScenarioVariant) {
     messages: GROUP_MESSAGES,
     config: { tabs: { mode: "on" } },
     drive: async (setup) => {
-      await setup.waitForFrame((frame) => frame.includes("failure modes"))
-      await setup.waitForVisualIdle()
-      await setup.renderOnce()
+      await settleGroups(setup)
     },
   })
   return app
@@ -327,8 +341,7 @@ async function mountToast(variant: ScenarioVariant) {
     title: "Toast fixture",
     messages: GROUP_MESSAGES,
     drive: async (setup, events) => {
-      await setup.waitForFrame((frame) => frame.includes("failure modes"))
-      await setup.waitForVisualIdle()
+      await settleGroups(setup)
       events.emit({
         id: "evt_toast_show",
         created: 200,

@@ -20,6 +20,15 @@ async fn main() {
     }
 
     let cli = Cli::parse();
+    if cli.version_rust {
+        println!(
+            "opencode v{} (rust port build {}, {} profile)",
+            util::VERSION,
+            option_env!("OC_BUILD_GIT_HASH").unwrap_or("unknown"),
+            option_env!("OC_BUILD_PROFILE").unwrap_or("unknown"),
+        );
+        std::process::exit(0);
+    }
     let code = dispatch(cli).await;
     std::process::exit(code);
 }
@@ -30,9 +39,11 @@ async fn dispatch(cli: Cli) -> i32 {
     let auto = cli.permission.effective_auto();
     match cli.command {
         None => handlers::misc::root(cli.directory.as_deref(), &server).await,
-        Some(Commands::Upgrade { target, .. }) => handlers::misc::upgrade(target.as_deref()),
-        Some(Commands::Uninstall { keep_config, keep_data, dry_run, .. }) => {
-            handlers::misc::uninstall(dry_run, keep_config, keep_data)
+        Some(Commands::Upgrade { target, method }) => {
+            handlers::misc::upgrade(target.as_deref(), method.as_deref()).await
+        }
+        Some(Commands::Uninstall { keep_config, keep_data, dry_run, force }) => {
+            handlers::misc::uninstall(dry_run, keep_config, keep_data, force).await
         }
         Some(Commands::Acp) => handlers::misc::acp(),
         Some(Commands::Api { request, data, header, param }) => {
