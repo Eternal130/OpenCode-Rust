@@ -1,6 +1,6 @@
 //! Version stamping (MIGRATION §2.4): the release binary must report
 //! exactly `2.0.24` (service version negotiation is exact-string;
-//! `opencode --version` prints `opencode v2.0.24`). The hidden
+//! `opencode-rust --version` prints `opencode-rust v2.0.24`). The hidden
 //! `--version-rust` flag exposes the port's own build stamp:
 //! git hash + rustc + profile, captured here at compile time.
 

@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # OpenCode (Rust port) installer — mirrors the v2 installer's UX shape
 # (install/install.sh in the reference: versioned download, ~/.opencode/bin
-# destination, shell-config PATH hint, ASCII banner) with two port
-# differences, both REGISTERED in tools/RELEASE.md:
+# destination, shell-config PATH hint, ASCII banner) with three port
+# differences, all REGISTERED in tools/RELEASE.md:
+#   * the binary installs as `opencode-rust` (the port's isolated
+#     identity; upstream `opencode` may coexist in $HOME/.opencode/bin);
 #   * the tarball URL is PARAMETERIZED (no opencode.ai latest-version
 #     probe: this stream must never adopt TS releases beyond 2.0.24);
 #   * the download is verified against a sha256 when one is supplied
 #     (--sha256, $SHA256, or a <url>.sha256 sidecar).
 set -euo pipefail
-APP=opencode
+APP=opencode-rust
 
 MUTED='\033[0;2m'
 RED='\033[0;31m'
@@ -31,7 +33,7 @@ Options:
 
 Examples:
     curl -fsSL <release-host>/install.sh | bash -s -- --version 2.0.24 --url <tarball-url> --sha256 <hash>
-    ./install.sh --binary /path/to/opencode
+    ./install.sh --binary /path/to/opencode-rust
     RELEASE_URL=https://example.com/opencode-2.0.24-linux-x64.tar.gz ./install.sh
 EOF
 }
@@ -117,8 +119,8 @@ extract_binary() {
             dir=$(mktemp -d "${TMPDIR:-/tmp}/opencode_extract_XXXXXX")
             tar -xzf "$file" -C "$dir"
             local found
-            found=$(find "$dir" -maxdepth 2 -type f -name opencode | head -n 1)
-            [ -n "$found" ] || { echo -e "${RED}Error: no opencode binary inside $file${NC}" >&2; exit 1; }
+            found=$(find "$dir" -maxdepth 2 -type f -name "$APP" | head -n 1)
+            [ -n "$found" ] || { echo -e "${RED}Error: no $APP binary inside $file${NC}" >&2; exit 1; }
             printf '%s' "$found"
             ;;
         504b0304)
@@ -126,8 +128,8 @@ extract_binary() {
             dir=$(mktemp -d "${TMPDIR:-/tmp}/opencode_extract_XXXXXX")
             unzip -q -o "$file" -d "$dir"
             local found
-            found=$(find "$dir" -type f -name opencode | head -n 1)
-            [ -n "$found" ] || { echo -e "${RED}Error: no opencode binary inside $file${NC}" >&2; exit 1; }
+            found=$(find "$dir" -type f -name "$APP" | head -n 1)
+            [ -n "$found" ] || { echo -e "${RED}Error: no $APP binary inside $file${NC}" >&2; exit 1; }
             printf '%s' "$found"
             ;;
         *)
@@ -276,8 +278,8 @@ echo -e ""
 echo -e ""
 echo -e "${MUTED}OpenCode includes free models, to start:${NC}"
 echo -e ""
-echo -e "cd <project>  ${MUTED}# Open directory${NC}"
-echo -e "opencode      ${MUTED}# Run command${NC}"
+echo -e "cd <project>      ${MUTED}# Open directory${NC}"
+echo -e "opencode-rust     ${MUTED}# Run command${NC}"
 echo -e ""
 echo -e "${MUTED}For more information visit ${NC}https://opencode.ai/v2/docs"
 echo -e ""

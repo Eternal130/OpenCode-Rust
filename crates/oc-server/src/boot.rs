@@ -92,6 +92,10 @@ impl Default for BootOptions {
 /// Boots the engine + app shell + handler table and serves: the single
 /// production entry (`main.rs` calls this).
 pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
+    // One-way v2→rust data migration (lane B), BEFORE any database or
+    // config resolution so the boot reads migrated state. Marker-latched:
+    // the second entry point (after the CLI's own call) is one stat.
+    oc_core::v2_migration::ensure_migrated_logged();
     let config_location = options
         .config_location
         .clone()
@@ -106,7 +110,7 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     let loader = Loader::new(
         config_location.clone(),
         GlobalDirs {
-            config: options.home.join(".config").join("opencode"),
+            config: options.home.join(".config").join(oc_util::global_roots::APP_NAME),
             home: options.home.clone(),
         },
     );
@@ -233,7 +237,7 @@ pub fn location_config(
     Loader::new(
         location.as_path().to_path_buf(),
         GlobalDirs {
-            config: engine.home.join(".config").join("opencode"),
+            config: engine.home.join(".config").join(oc_util::global_roots::APP_NAME),
             home: engine.home.clone(),
         },
     )
@@ -265,6 +269,44 @@ mod tests {
     use crate::state::Readiness;
     use oc_core::location::LocationRef;
 
+    /// Redirects the env-resolved roots (HOME/XDG/OPENCODE_*) into a
+    /// sandbox for the duration of a test, restoring on drop — the
+    /// v2-migration call inside `boot_and_serve` resolves from env, so
+    /// boot tests must never run against the developer's real $HOME.
+    struct Env(Vec<(&'static str, Option<String>)>);
+    impl Drop for Env {
+        fn drop(&mut self) {
+            for (name, value) in &self.0 {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    impl Env {
+        fn redirect_into(home: &std::path::Path) -> Self {
+            let vars = [
+                "HOME",
+                "XDG_CONFIG_HOME",
+                "XDG_DATA_HOME",
+                "XDG_STATE_HOME",
+                "XDG_CACHE_HOME",
+                "OPENCODE_CONFIG_DIR",
+                "OPENCODE_TEST_HOME",
+                "OPENCODE_DB",
+                "TMPDIR",
+            ];
+            let env = Self(vars.iter().map(|&name| (name, std::env::var(name).ok())).collect());
+            for name in vars {
+                std::env::remove_var(name);
+            }
+            std::env::set_var("HOME", home);
+            env
+        }
+    }
+
     /// Ready ordering + lazy parity (the standalone-boot race, mechanism
     /// (a)): config seeding is synchronous BEFORE the engine boots and
     /// the listener binds — readiness can never precede provider
@@ -293,6 +335,12 @@ mod tests {
         .expect("project config");
         let home = root.path().join("home");
         std::fs::create_dir_all(&home).expect("home");
+
+        // `boot_and_serve` runs the one-way v2 migration against the
+        // ENV-resolved roots (both production entries derive
+        // `BootOptions` from env) — redirect env into the sandbox so
+        // the test never touches the developer's real $HOME.
+        let _env = Env::redirect_into(&home);
 
         let options = BootOptions {
             serve: ServeOptions { hostname: IpAddr::from([127, 0, 0, 1]), port: Some(0) },

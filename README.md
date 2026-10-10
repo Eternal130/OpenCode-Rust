@@ -45,7 +45,7 @@ Performance (measured on Linux, vs upstream v2 on Bun): `--version` 3 ms vs 744 
 | `oc-server` | HTTP server, SSE, boot/composition root |
 | `oc-client` | Client SDK for the server API |
 | `oc-tui` | Terminal UI (ratatui + taffy) |
-| `oc-cli` | The `opencode` binary and its 40 commands |
+| `oc-cli` | The `opencode-rust` binary and its 40 commands |
 | `tools/parity` | Parity harness: golden frames, scenarios, replays, acceptance batteries |
 | `tools/openapi-gen` | OpenAPI contract generator |
 
@@ -57,16 +57,16 @@ Requires Rust stable.
 
 ```sh
 cargo build --release
-# binary: target/release/opencode
+# binary: target/release/opencode-rust
 ```
 
 Run:
 
 ```sh
-opencode            # TUI
-opencode serve      # HTTP server
-opencode run "..."  # headless
-opencode --help     # 40 commands
+opencode-rust            # TUI
+opencode-rust serve      # HTTP server
+opencode-rust run "..."  # headless
+opencode-rust --help     # 40 commands
 ```
 
 ## Test

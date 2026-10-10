@@ -102,14 +102,14 @@ fn sandbox(tag: &str) -> Sandbox {
 }
 
 impl Sandbox {
-    /// Stage the flagship install into `<home>/.cache/opencode/npm`
+    /// Stage the flagship install into `<home>/.cache/opencode-rust/npm`
     /// (the layout `plugin add` writes and `resolve` scans) + the
     /// preset into the redirected config dir.
     fn stage_flagship(&self, source: &Path) {
         let node_modules = self
             .home
             .join(".cache")
-            .join("opencode")
+            .join("opencode-rust")
             .join("npm")
             .join("oh-my-opencode-slim@latest")
             .join("1791474452027")
@@ -127,7 +127,7 @@ impl Sandbox {
                 copy_dir(&dep, &node_modules.join("jsonc-parser"));
             }
         }
-        let config = self.home.join(".config").join("opencode");
+        let config = self.home.join(".config").join("opencode-rust");
         std::fs::create_dir_all(&config).expect("config dir");
         if let Some(preset) = flagship_preset() {
             std::fs::copy(preset, config.join("oh-my-opencode-slim.json")).expect("preset");
@@ -150,7 +150,7 @@ impl Sandbox {
         std::env::set_var("XDG_DATA_HOME", self.home.join(".local").join("share"));
         std::env::set_var("XDG_STATE_HOME", self.home.join(".local").join("state"));
         // The flagship's primary config lookup.
-        std::env::set_var("OPENCODE_CONFIG_DIR", self.home.join(".config").join("opencode"));
+        std::env::set_var("OPENCODE_CONFIG_DIR", self.home.join(".config").join("opencode-rust"));
         std::env::remove_var("OPENCODE_CONFIG");
     }
 
@@ -255,7 +255,7 @@ async fn flagship_boots_through_the_real_server_and_tui_app_path() {
     let booted = oc_tui::plugin_boot::TuiPluginRuntime::boot(
         &client,
         agents_seed,
-        &box_.home.join(".config").join("opencode"),
+        &box_.home.join(".config").join("opencode-rust"),
         &box_.project,
         "2.0.24",
     )

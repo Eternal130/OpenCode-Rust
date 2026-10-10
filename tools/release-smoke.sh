@@ -5,10 +5,10 @@
 #   tools/release-smoke.sh [path-to-release-binary]
 #
 # Checks (all sandboxed under /tmp/opencode; NEVER binds 49374):
-#   1. `opencode --version` reports exactly `opencode v2.0.24`
+#   1. `opencode-rust --version` reports exactly `opencode-rust v2.0.24`
 #      (service version negotiation is exact-string; MIGRATION §2.4).
-#   2. `opencode --version-rust` reports the build stamp (git hash).
-#   3. `opencode serve` boots in a sandbox home on a RANDOM port
+#   2. `opencode-rust --version-rust` reports the build stamp (git hash).
+#   3. `opencode-rust serve` boots in a sandbox home on a RANDOM port
 #      (--port 0), answers /api/info with the pinned version over
 #      Basic auth, and exits cleanly on SIGTERM.
 #   4. The full FakeLlm e2e battery (oc-cli tests/run_e2e.rs — the
@@ -17,8 +17,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="${1:-${OPENCODE_RELEASE_BIN:-$ROOT/target/release/opencode}}"
-EXPECTED_VERSION="opencode v2.0.24"
+BIN="${1:-${OPENCODE_RELEASE_BIN:-$ROOT/target/release/opencode-rust}}"
+EXPECTED_VERSION="opencode-rust v2.0.24"
 
 if [ ! -x "$BIN" ]; then
     echo "release smoke: building release binary first ($BIN)"
@@ -34,7 +34,7 @@ got=$("$BIN" --version)
 pass "--version == '$EXPECTED_VERSION'"
 
 got=$("$BIN" --version-rust)
-echo "$got" | grep -Eq 'opencode v2\.0\.24 \(rust port build [0-9a-f]+, (debug|release) profile\)$' \
+echo "$got" | grep -Eq 'opencode-rust v2\.0\.24 \(rust port build [0-9a-f]+, (debug|release) profile\)$' \
     || fail "--version-rust malformed: '$got'"
 pass "--version-rust stamp: $got"
 

@@ -45,10 +45,10 @@ impl std::fmt::Display for UpgradeError {
 impl std::error::Error for UpgradeError {}
 
 /// The curl-method install location (v2 `curlBinary`):
-/// `$HOME/.opencode/bin/opencode`.
+/// `$HOME/.opencode/bin/opencode-rust`.
 #[must_use]
 pub fn curl_binary() -> PathBuf {
-    oc_util::global_roots::resolve().home.join(".opencode").join("bin").join("opencode")
+    oc_util::global_roots::resolve().home.join(".opencode").join("bin").join("opencode-rust")
 }
 
 /// `Updater.method()` (reduced): `curl` when the running binary IS the

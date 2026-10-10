@@ -22,13 +22,16 @@ async fn main() {
     let cli = Cli::parse();
     if cli.version_rust {
         println!(
-            "opencode v{} (rust port build {}, {} profile)",
+            "opencode-rust v{} (rust port build {}, {} profile)",
             util::VERSION,
             option_env!("OC_BUILD_GIT_HASH").unwrap_or("unknown"),
             option_env!("OC_BUILD_PROFILE").unwrap_or("unknown"),
         );
         std::process::exit(0);
     }
+    // One-way v2→rust data migration (lane B): runs once, marker-latched.
+    // Failures warn on stderr and never block boot.
+    oc_core::v2_migration::ensure_migrated_logged();
     let code = dispatch(cli).await;
     std::process::exit(code);
 }

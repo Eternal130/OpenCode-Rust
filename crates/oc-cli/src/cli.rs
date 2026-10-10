@@ -18,7 +18,7 @@ pub struct ServerParams {
 #[derive(Parser, Debug)]
 #[allow(clippy::struct_excessive_bools)] // the v2 flag surface, mirrored
 #[command(
-    name = "opencode",
+    name = "opencode-rust",
     version = concat!("v", env!("CARGO_PKG_VERSION")),
     about = "OpenCode command line interface",
     disable_help_subcommand = true,

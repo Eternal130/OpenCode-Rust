@@ -27,3 +27,4 @@ pub mod subagent;
 pub mod subagent_jobs_adapter;
 pub mod tool;
 pub mod tool_output;
+pub mod v2_migration;

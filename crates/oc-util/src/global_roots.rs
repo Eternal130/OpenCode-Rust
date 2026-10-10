@@ -22,8 +22,20 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Application name applied to every XDG root.
-pub const APP_NAME: &str = "opencode";
+/// Application name applied to every XDG root. The Rust port installs
+/// under its own `opencode-rust` suffix so it can coexist with an
+/// upstream v2 install (whose directories stay `opencode` — see
+/// [`legacy_v2_roots`], the one-way migration source).
+pub const APP_NAME: &str = "opencode-rust";
+
+/// The upstream v2 (TS) application name — the migration SOURCE roots
+/// (`~/.config/opencode`, `~/.local/share/opencode`, …), resolved under
+/// the SAME home/env rules as [`resolve`] (`OPENCODE_TEST_HOME`,
+/// `XDG_*`, `OPENCODE_CONFIG_DIR` all honored).
+#[must_use]
+pub fn legacy_v2_roots() -> Roots {
+    resolve_app("opencode")
+}
 
 /// Default database filename under the data root
 /// (`packages/cli/src/database-path.ts`).
@@ -215,10 +227,30 @@ mod tests {
         env.set("HOME", home.path().to_str().unwrap());
         let roots = resolve();
         assert_eq!(roots.home, home.path());
+        assert_eq!(roots.config, home.path().join(".config/opencode-rust"));
+        assert_eq!(roots.data, home.path().join(".local/share/opencode-rust"));
+        assert_eq!(roots.state, home.path().join(".local/state/opencode-rust"));
+        assert_eq!(roots.cache, home.path().join(".cache/opencode-rust"));
+    }
+
+    /// The migration source: upstream v2's `opencode`-suffixed roots
+    /// resolve under the same home/env rules as our own.
+    #[test]
+    fn legacy_v2_roots_use_the_opencode_suffix() {
+        let env = Env::lock();
+        let home = tempfile::tempdir().unwrap();
+        env.set("HOME", home.path().to_str().unwrap());
+        let roots = legacy_v2_roots();
         assert_eq!(roots.config, home.path().join(".config/opencode"));
         assert_eq!(roots.data, home.path().join(".local/share/opencode"));
         assert_eq!(roots.state, home.path().join(".local/state/opencode"));
         assert_eq!(roots.cache, home.path().join(".cache/opencode"));
+        // Env overrides keep working for the legacy roots too.
+        let custom = tempfile::tempdir().unwrap();
+        env.set("XDG_DATA_HOME", custom.path().to_str().unwrap());
+        assert_eq!(legacy_v2_roots().data, custom.path().join("opencode"));
+        env.set("OPENCODE_TEST_HOME", custom.path().to_str().unwrap());
+        assert_eq!(legacy_v2_roots().config, custom.path().join(".config/opencode"));
     }
 
     #[test]
@@ -232,10 +264,10 @@ mod tests {
         env.set("XDG_STATE_HOME", custom.path().to_str().unwrap());
         env.set("XDG_CACHE_HOME", custom.path().to_str().unwrap());
         let roots = resolve();
-        assert_eq!(roots.config, custom.path().join("opencode"));
-        assert_eq!(roots.data, custom.path().join("opencode"));
-        assert_eq!(roots.state, custom.path().join("opencode"));
-        assert_eq!(roots.cache, custom.path().join("opencode"));
+        assert_eq!(roots.config, custom.path().join("opencode-rust"));
+        assert_eq!(roots.data, custom.path().join("opencode-rust"));
+        assert_eq!(roots.state, custom.path().join("opencode-rust"));
+        assert_eq!(roots.cache, custom.path().join("opencode-rust"));
     }
 
     #[test]
@@ -246,8 +278,8 @@ mod tests {
         env.set("XDG_CONFIG_HOME", "");
         env.set("XDG_DATA_HOME", "");
         let roots = resolve();
-        assert_eq!(roots.config, home.path().join(".config/opencode"));
-        assert_eq!(roots.data, home.path().join(".local/share/opencode"));
+        assert_eq!(roots.config, home.path().join(".config/opencode-rust"));
+        assert_eq!(roots.data, home.path().join(".local/share/opencode-rust"));
     }
 
     #[test]
@@ -282,10 +314,10 @@ mod tests {
         env.set("OPENCODE_TEST_HOME", test.path().to_str().unwrap());
         let roots = resolve();
         assert_eq!(roots.home, test.path());
-        assert_eq!(roots.config, test.path().join(".config/opencode"));
-        assert_eq!(roots.data, test.path().join(".local/share/opencode"));
-        assert_eq!(roots.state, test.path().join(".local/state/opencode"));
-        assert_eq!(roots.cache, test.path().join(".cache/opencode"));
+        assert_eq!(roots.config, test.path().join(".config/opencode-rust"));
+        assert_eq!(roots.data, test.path().join(".local/share/opencode-rust"));
+        assert_eq!(roots.state, test.path().join(".local/state/opencode-rust"));
+        assert_eq!(roots.cache, test.path().join(".cache/opencode-rust"));
     }
 
     #[test]
@@ -295,7 +327,7 @@ mod tests {
         let xdg = tempfile::tempdir().unwrap();
         env.set("OPENCODE_TEST_HOME", test.path().to_str().unwrap());
         env.set("XDG_DATA_HOME", xdg.path().to_str().unwrap());
-        assert_eq!(resolve().data, xdg.path().join("opencode"));
+        assert_eq!(resolve().data, xdg.path().join("opencode-rust"));
     }
 
     #[test]
@@ -303,7 +335,7 @@ mod tests {
         let env = Env::lock();
         let tmp = tempfile::tempdir().unwrap();
         env.set("TMPDIR", tmp.path().to_str().unwrap());
-        assert_eq!(resolve().tmp, tmp.path().join("opencode"));
+        assert_eq!(resolve().tmp, tmp.path().join("opencode-rust"));
     }
 
     #[test]
