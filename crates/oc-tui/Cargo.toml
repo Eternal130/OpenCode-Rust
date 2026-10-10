@@ -12,9 +12,12 @@ workspace = true
 oc-util = { workspace = true }
 oc-theme = { workspace = true }
 oc-client = { workspace = true }
+oc-plugin-host = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+json5 = "0.4"
+async-trait = "0.1"
 ratatui = "0.29"
 taffy = { version = "0.9", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
 crossterm = "0.28"
