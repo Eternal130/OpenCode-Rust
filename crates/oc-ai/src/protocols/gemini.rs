@@ -1388,7 +1388,11 @@ fn body_from(request: &LLMRequest) -> Result<Value, AiError> {
         if let Some(budget) = config.thinking_budget {
             entry.insert(
                 "thinkingBudget".into(),
-                json!(fit_thinking_budget(budget, generation.max_tokens, MIN_THINKING_BUDGET)),
+                shared::number(fit_thinking_budget(
+                    budget,
+                    generation.max_tokens,
+                    MIN_THINKING_BUDGET,
+                )),
             );
         }
         entry.insert("includeThoughts".into(), json!(config.include_thoughts.unwrap_or(true)));
@@ -1400,25 +1404,25 @@ fn body_from(request: &LLMRequest) -> Result<Value, AiError> {
 
     let mut generation_config = Map::new();
     if let Some(max_tokens) = generation.max_tokens {
-        generation_config.insert("maxOutputTokens".into(), json!(max_tokens));
+        generation_config.insert("maxOutputTokens".into(), shared::number(max_tokens));
     }
     if let Some(temperature) = generation.temperature {
-        generation_config.insert("temperature".into(), json!(temperature));
+        generation_config.insert("temperature".into(), shared::number(temperature));
     }
     if let Some(top_p) = generation.top_p {
-        generation_config.insert("topP".into(), json!(top_p));
+        generation_config.insert("topP".into(), shared::number(top_p));
     }
     if let Some(top_k) = generation.top_k {
-        generation_config.insert("topK".into(), json!(top_k));
+        generation_config.insert("topK".into(), shared::number(top_k));
     }
     if let Some(frequency_penalty) = generation.frequency_penalty {
-        generation_config.insert("frequencyPenalty".into(), json!(frequency_penalty));
+        generation_config.insert("frequencyPenalty".into(), shared::number(frequency_penalty));
     }
     if let Some(presence_penalty) = generation.presence_penalty {
-        generation_config.insert("presencePenalty".into(), json!(presence_penalty));
+        generation_config.insert("presencePenalty".into(), shared::number(presence_penalty));
     }
     if let Some(seed) = generation.seed {
-        generation_config.insert("seed".into(), json!(seed));
+        generation_config.insert("seed".into(), shared::number(seed));
     }
     if let Some(stop) = &generation.stop {
         generation_config.insert("stopSequences".into(), json!(stop));

@@ -599,3 +599,91 @@ fn body_golden_corpus_shape() {
     assert_eq!(counts["openai-chat"], 7, "seven family groups incl. extension providers");
     assert_eq!(counts["gemini"], 2);
 }
+
+// ---------------------------------------------------------------------------
+// Wire-number form (hotfix BUG-C): integral LLM params must serialize as
+// JSON integers, byte-level — strict-uint providers (Go/newapi) reject
+// `32000.0`, and v2's JSON.stringify never emits the integral fraction.
+// ---------------------------------------------------------------------------
+
+/// The compiled body's exact `serde_json` text (the wire bytes modulo key
+/// order, which transport preserves as built).
+fn body_text(route: &Route, request: &LLMRequest) -> String {
+    serde_json::to_string(&compiled_body(route, request)).expect("body serializes")
+}
+
+#[test]
+fn wire_integer_params_custom_provider_openai_compatible() {
+    // The live newapi case: a custom openai-compatible provider (unknown
+    // name + baseURL → `max_completion_tokens`) carrying the session
+    // runner's output limit (f64 32000.0 from OUTPUT_TOKEN_FALLBACK).
+    let route = openai_compatible_chat_configured(
+        failing_transport(),
+        "newapi",
+        "https://newapi.example.com/v1",
+    );
+    let model = route.model("glm-5.3", None).expect("model builds");
+    let mut request = LLMRequest::new(model);
+    request.messages = vec![Message::user("hi")];
+    request.generation = Some(oc_ai::schema::options::GenerationOptions {
+        max_tokens: Some(32_000.0),
+        temperature: Some(0.0),
+        top_p: Some(0.5),
+        seed: Some(42.0),
+        presence_penalty: Some(1.0),
+        frequency_penalty: Some(-1.5),
+        ..Default::default()
+    });
+    let body = compiled_body(&route, &request);
+    let text = body_text(&route, &request);
+
+    assert!(
+        body["max_completion_tokens"].is_u64(),
+        "max_completion_tokens must be an integer: {text}"
+    );
+    assert_eq!(body["max_completion_tokens"], 32_000);
+    assert!(
+        !text.contains("32000.0") && !text.contains("32000.0"),
+        "no integral fraction on the wire: {text}"
+    );
+    assert!(body["temperature"].is_u64(), "integral 0.0 → 0: {text}");
+    assert!(body["seed"].is_u64(), "seed integral: {text}");
+    assert!(body["presence_penalty"].is_u64(), "integral 1.0 → 1: {text}");
+    // Genuinely fractional values stay floats.
+    assert_eq!(body["top_p"].as_f64(), Some(0.5));
+    assert_eq!(body["frequency_penalty"].as_f64(), Some(-1.5));
+    assert!(text.contains("\"top_p\":0.5"), "fractional float kept: {text}");
+}
+
+#[test]
+fn wire_integer_params_anthropic_messages() {
+    let route = anthropic_messages_route(failing_transport())
+        .with(RoutePatch { provider: Some("anthropic".to_string()), ..Default::default() });
+    let model = route.model("claude-sonnet-4-5", None).expect("model builds");
+    let mut request = LLMRequest::new(model);
+    request.messages = vec![Message::user("hi")];
+    // Default path: max_tokens falls back to DEFAULT_MAX_TOKENS (32_000.0).
+    let body = compiled_body(&route, &request);
+    let text = body_text(&route, &request);
+    assert!(body["max_tokens"].is_u64(), "default max_tokens integral: {text}");
+    assert_eq!(body["max_tokens"], 32_000);
+    assert!(!text.contains("32000.0"), "no integral fraction on the wire: {text}");
+
+    // Explicit generation overrides: integral floats collapse, fractional
+    // stay, thinking budget integral.
+    let mut tuned = LLMRequest::new(route.model("claude-sonnet-4-5", None).expect("model"));
+    tuned.messages = vec![Message::user("hi")];
+    tuned.generation = Some(oc_ai::schema::options::GenerationOptions {
+        max_tokens: Some(1_024.0),
+        temperature: Some(1.0),
+        top_p: Some(0.9),
+        top_k: Some(8.0),
+        ..Default::default()
+    });
+    let tuned_body = compiled_body(&route, &tuned);
+    let tuned_text = body_text(&route, &tuned);
+    assert!(tuned_body["max_tokens"].is_u64(), "{}", tuned_text);
+    assert!(tuned_body["temperature"].is_u64(), "1.0 → 1: {tuned_text}");
+    assert!(tuned_body["top_k"].is_u64(), "8.0 → 8: {tuned_text}");
+    assert_eq!(tuned_body["top_p"].as_f64(), Some(0.9));
+}

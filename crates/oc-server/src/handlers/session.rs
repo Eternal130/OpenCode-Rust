@@ -94,12 +94,20 @@ pub(crate) fn query_field(uri: &Uri, name: &str) -> Option<String> {
     super::common::parse_query_field(query, name).map(|value| super::common::percent_decode(&value))
 }
 
-/// Assembles the location's services, mapping boot failures.
+/// Assembles the location's services, mapping boot failures. A vanished
+/// session directory is v2's `LocationNotFoundError` 404 (the session row
+/// resolves, the location does not) — never a 500.
 pub(crate) async fn services(
     state: &SharedState,
     location: &LocationRef,
 ) -> Result<std::sync::Arc<LocationServices>, ApiError> {
     state.engine.location(location.clone()).await.map_err(|error| {
+        match &error {
+            oc_core::location::BootError::MissingDirectory(directory) => {
+                return crate::errors::location_not_found_path(directory.display());
+            }
+            oc_core::location::BootError::Database(_) => {}
+        }
         crate::errors::debug_cause("session:unknown_ref", &error);
         ApiError::unknown_ref()
     })

@@ -34,7 +34,7 @@ use serde_json::{json, Map, Value};
 use crate::effort_updates::resolve_effort_updates;
 use crate::protocols::shared::{
     decode_json, encode_json, event_error, fit_thinking_budget, flatten_tools, invalid_request,
-    sum_non_cached_to_inclusive, sum_tokens, total_tokens,
+    number, sum_non_cached_to_inclusive, sum_tokens, total_tokens,
 };
 use crate::protocols::utils::{lifecycle, tool_stream};
 use crate::provider_error::{classify_provider_failure, ProviderFailure};
@@ -1531,7 +1531,7 @@ fn thinking_to_value(thinking: &Thinking) -> Value {
         Thinking::Enabled { budget_tokens, display, block_binding } => {
             let mut object = Map::new();
             object.insert("type".into(), json!("enabled"));
-            object.insert("budget_tokens".into(), json!(budget_tokens));
+            object.insert("budget_tokens".into(), number(*budget_tokens));
             if let Some(display) = display {
                 object.insert("display".into(), json!(display));
             }
@@ -1729,15 +1729,15 @@ pub fn body_from_request(request: &LLMRequest) -> Result<Value, AiError> {
         body.insert("tool_choice".into(), tool_choice);
     }
     body.insert("stream".into(), json!(true));
-    body.insert("max_tokens".into(), json!(max_tokens));
+    body.insert("max_tokens".into(), number(max_tokens));
     if let Some(temperature) = generation.temperature {
-        body.insert("temperature".into(), json!(temperature));
+        body.insert("temperature".into(), number(temperature));
     }
     if let Some(top_p) = generation.top_p {
-        body.insert("top_p".into(), json!(top_p));
+        body.insert("top_p".into(), number(top_p));
     }
     if let Some(top_k) = generation.top_k {
-        body.insert("top_k".into(), json!(top_k));
+        body.insert("top_k".into(), number(top_k));
     }
     if let Some(stop) = &generation.stop {
         body.insert("stop_sequences".into(), json!(stop));

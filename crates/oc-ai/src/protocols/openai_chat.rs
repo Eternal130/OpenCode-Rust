@@ -2593,13 +2593,13 @@ pub fn from_request(request: &LLMRequest, ext: &OpenAiChatExt) -> Result<Value, 
         MaxTokensFieldCompatibility::MaxCompletionTokens => {
             body.insert(
                 "max_completion_tokens".to_string(),
-                generation.and_then(|g| g.max_tokens).map_or(Value::Null, Value::from),
+                generation.and_then(|g| g.max_tokens).map_or(Value::Null, shared::number),
             );
         }
         MaxTokensFieldCompatibility::MaxTokens => {
             body.insert(
                 "max_tokens".to_string(),
-                generation.and_then(|g| g.max_tokens).map_or(Value::Null, Value::from),
+                generation.and_then(|g| g.max_tokens).map_or(Value::Null, shared::number),
             );
         }
     }
@@ -2611,7 +2611,7 @@ pub fn from_request(request: &LLMRequest, ext: &OpenAiChatExt) -> Result<Value, 
         ("seed", generation.and_then(|g| g.seed)),
     ] {
         if let Some(value) = value {
-            body.insert(key.to_string(), Value::from(value));
+            body.insert(key.to_string(), shared::number(value));
         }
     }
     if let Some(stop) = generation.and_then(|g| g.stop.clone()) {
@@ -2786,7 +2786,7 @@ fn openrouter_body_overlay(request: &LLMRequest, body: &mut Map<String, Value>) 
                 let mut fitted = reasoning.clone();
                 fitted.insert(
                     "max_tokens".into(),
-                    Value::from(fit_thinking_budget(max_tokens, max, 1024.0)),
+                    shared::number(fit_thinking_budget(max_tokens, max, 1024.0)),
                 );
                 fitted
             }
@@ -2874,7 +2874,10 @@ fn alibaba_body_overlay(request: &LLMRequest, body: &mut Map<String, Value>) {
     }
     if let Some(budget) = options.get("thinkingBudget").and_then(Value::as_f64) {
         let max = request.generation.as_ref().and_then(|g| g.max_tokens);
-        body.insert("thinking_budget".into(), Value::from(fit_thinking_budget(budget, max, 1.0)));
+        body.insert(
+            "thinking_budget".into(),
+            shared::number(fit_thinking_budget(budget, max, 1.0)),
+        );
     }
     if let Some(preserve) = option_bool(&options, "preserveThinking") {
         body.insert("preserve_thinking".into(), preserve.clone());
@@ -2897,10 +2900,10 @@ fn alibaba_body_overlay(request: &LLMRequest, body: &mut Map<String, Value>) {
         body.insert("parallel_tool_calls".into(), parallel);
     }
     if let Some(penalty) = options.get("repetitionPenalty").and_then(Value::as_f64) {
-        body.insert("repetition_penalty".into(), Value::from(penalty));
+        body.insert("repetition_penalty".into(), shared::number(penalty));
     }
     if let Some(top_k) = request.generation.as_ref().and_then(|g| g.top_k) {
-        body.insert("top_k".into(), Value::from(top_k));
+        body.insert("top_k".into(), shared::number(top_k));
     }
     if let Some(response_format) = option_object(&options, "responseFormat") {
         body.insert("response_format".into(), Value::Object(response_format));
@@ -2989,7 +2992,7 @@ fn venice_body_overlay(request: &LLMRequest, body: &mut Map<String, Value>) {
         .or(options.get("maxTokens").and_then(Value::as_f64))
         .or(request.generation.as_ref().and_then(|g| g.max_tokens));
     if let Some(max_completion) = max_completion {
-        body.insert("max_completion_tokens".into(), Value::from(max_completion));
+        body.insert("max_completion_tokens".into(), shared::number(max_completion));
     }
     body.remove("reasoning_effort");
     let reasoning = match option_string(&options, "reasoningEffort") {
@@ -3032,10 +3035,10 @@ fn venice_body_overlay(request: &LLMRequest, body: &mut Map<String, Value>) {
         body.insert("parallel_tool_calls".into(), parallel.clone());
     }
     if let Some(min_p) = options.get("minP").and_then(Value::as_f64) {
-        body.insert("min_p".into(), Value::from(min_p));
+        body.insert("min_p".into(), shared::number(min_p));
     }
     if let Some(top_k) = request.generation.as_ref().and_then(|g| g.top_k) {
-        body.insert("top_k".into(), Value::from(top_k));
+        body.insert("top_k".into(), shared::number(top_k));
     }
     for (option, field) in [("logprobs", "logprobs"), ("topLogprobs", "top_logprobs")] {
         if let Some(value) = option_bool(&options, option) {

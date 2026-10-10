@@ -231,7 +231,7 @@ fn gemini_prepares_target() {
         json!({
             "contents": [{ "role": "user", "parts": [{ "text": "Say hello." }] }],
             "systemInstruction": { "parts": [{ "text": "You are concise." }] },
-            "generationConfig": { "maxOutputTokens": 20.0, "temperature": 0.0 }
+            "generationConfig": { "maxOutputTokens": 20, "temperature": 0 }
         })
     );
 }
@@ -260,7 +260,7 @@ fn gemini_normalizes_thinking_options() {
 
     assert_eq!(
         prepared["generationConfig"]["thinkingConfig"],
-        json!({ "thinkingBudget": 0.0, "includeThoughts": false, "thinkingLevel": "high" })
+        json!({ "thinkingBudget": 0, "includeThoughts": false, "thinkingLevel": "high" })
     );
     assert_eq!(prepared["cachedContent"], json!("cachedContents/example"));
     assert_eq!(
@@ -321,13 +321,13 @@ fn gemini_forwards_standard_generation_options() {
     assert_eq!(
         body["generationConfig"],
         json!({
-            "maxOutputTokens": 40.0,
+            "maxOutputTokens": 40,
             "temperature": 0.2,
             "topP": 0.8,
-            "topK": 12.0,
+            "topK": 12,
             "frequencyPenalty": 0.3,
             "presencePenalty": 0.4,
-            "seed": 42.0,
+            "seed": 42,
             "stopSequences": ["done"]
         })
     );
