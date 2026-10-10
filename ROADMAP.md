@@ -69,6 +69,17 @@
 - **beta.7+**：R-08/09、D-03 结论落地、R-11 按用户排期。
 - 验收全部通过后发正式 **v2.0.24**（发布即终态，台账清零或带已具名豁免）。
 
+### R-04 Web UI 架构决策（2026-10-11 侦察后裁定）
+
+事实基础：Rust 侧托管契约已全量就绪（`oc-server/src/assets.rs` 的 serveUI 移植：SPA 回退、`_assets|icons` 404、immutable/no-cache 拆分、CSP+内联脚本哈希、nosniff、HEAD；`auth.rs` Basic+`auth_token`+同名端口 cookie；`pairing.rs` 配对；SSE 事件流）——**唯一缺口是 `state.rs` 的资产 map 为空**。v2.0.24 不发布独立 app 产物：app（Solid+Vite8+PWA，`packages/app`，无任何 `@opencode/desktop` 依赖）构建产物在 v2 内以 brotli+base64 归档**编译期嵌入 CLI**；dist 不入库、必须源码构建。
+
+裁定（镜像 v2 语义、适配我们的发布管线）：
+1. **构建**：release workflow 新增 `web-assets` job——拉取钉版参照源码（anomalyco/opencode @ e7a34f09bf tarball）→ `bun install` → `VITE_OPENCODE_SERVER_MODE=origin bun run build`（packages/app）→ 逐文件 brotli(q6) → 归档产物 job 间传递。不在开发机构建（无本地构建纪律），不依赖任何已安装二进制。
+2. **嵌入**：Rust 侧新增 `oc-server/build.rs` 读归档（`include_bytes!` 等价），编译期写入资产 map；`OPENCODE_APP_ASSETS` 环境可指向磁盘归档（对应 v2 的 `OPENCODE_LOCAL` dist 回退），运行时惰性解压。
+3. **一致性纪律**：归档携带 provenance 清单（ref commit、app 构建输入哈希）；`_assets` 内容哈希与 SW 完整性校验天然拒绝混版部署。
+4. **验证**：浏览器端到端冒烟（serve → 登录屏 → Basic/配对链接登录 → 会话列表/发送/PTY WS）；套件内用微型 fixture 资产 map 钉版 headers/CSP/回退行为（不依赖真实归档）。
+5. 体积预期：含 ui 包字体/图标/音频，dist brotli 后估计数 MB—十余 MB 级，随二进制分发（与 v2 嵌入 bun 单文件的做法对等）。
+
 ## 六、变更记录
 
 - 2026-10-11：初版。范围扩大（Web UI 入、桌面端维持排除）；功能缺失全量消项令；beta.3 批次定义。
