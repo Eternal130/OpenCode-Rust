@@ -54,7 +54,7 @@
 
 - release 二进制（thin-LTO+strip）产物为 **`opencode-rust`**，自报 `opencode-rust v2.0.24`（`--version-rust` 暴露构建戳）；数据目录隔离 `opencode-rust` 后缀 + v2 存量单向拷贝迁移（见 §3）；发布冒烟脚本全绿（含 release 二进制的 FakeLlm run e2e 11/11）
 - **bun 分发决策**（保守方案）：托管钉版下载 bun 1.3.10（sha256 f57bc018… 钉入源码，取自真实下载）至 ~/.cache/opencode-rust/bin/，发现顺序 缓存→系统→PATH；缺失且需要插件时自动引导下载，全程可禁用（OPENCODE_DISABLE_BUN_DOWNLOAD），失败优雅降级为核心功能不受影响
-- install/install.sh（v2 形态安装器，校验和验证）；`opencode upgrade/uninstall` 真实现；**自动更新默认关闭**（版本伪装 2.0.24 下的自我覆盖=自毁，门 2 即裁定）
+- install/install.sh（v2 形态安装器，校验和验证）；`opencode upgrade/uninstall` 真实现；**更新通道（Lane C）**：`opencode-rust upgrade`（无目标）查询本仓库 GitHub Releases feed，按通道规则（beta 构建=beta+final 可见，final 构建=仅 final）选候选，sha256 边车校验后原子替换；后台检查器（默认 TUI/serve 入口拉起，10 分钟周期）按 `update: disable|notify|auto` 配置（默认 notify，旧 `autoupdate` 键兼容映射，`OPENCODE_DISABLE_AUTOUPDATE` 环境斩波；dev 构建完全跳过）。**自动检查的失败隔离为超出上游的刻意加固（REGISTERED）**：网络故障（DNS/连接/TLS 垃圾/HTTP 错误/限流/解析失败）一律静默无操作——零启动延迟、无 stderr 噪声、无 panic（catch_unwind 兜底）、线程/临时文件零积累（PID 唯一缓存临时文件，失败即清、下次运行清扫）；v2 上游**没有** sha256 校验，本端口的手动与自动安装全部强制边车校验、校验不过即拒装（tamper-proof all-or-nothing）。此前"自动更新默认关闭"的门 2 裁定由本通道的失败隔离契约取代：自毁风险由"校验+原子替换+静默失败"三重保障消除，且默认策略仅 notify（不自动安装）。
 
 ## 5. 安全加固（事故后）
 

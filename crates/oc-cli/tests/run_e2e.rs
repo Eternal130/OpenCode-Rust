@@ -491,11 +491,13 @@ async fn ssh_askpass_forwards_compiled_binary_argv_shape() {
 // Phase 10 packaging: real upgrade/uninstall against the compiled binary.
 // ---------------------------------------------------------------------------
 
-/// A fake "release tarball" carrying a package/opencode payload.
+/// A fake "release tarball" carrying a package/opencode-rust payload
+/// (the lane B naming; the legacy `opencode` member stays supported as
+/// a fallback, covered by unit tests).
 fn release_tarball(sandbox: &Sandbox, payload: &str) -> PathBuf {
     let staging = sandbox.root.join("release-src").join("package");
     std::fs::create_dir_all(&staging).expect("tarball staging dir");
-    std::fs::write(staging.join("opencode"), payload).expect("payload");
+    std::fs::write(staging.join("opencode-rust"), payload).expect("payload");
     let tarball = sandbox.root.join("release.tar.gz");
     let status = std::process::Command::new("tar")
         .args(["-czf"])
@@ -510,18 +512,27 @@ fn release_tarball(sandbox: &Sandbox, payload: &str) -> PathBuf {
 }
 
 #[tokio::test]
-async fn upgrade_without_target_reports_already_installed() {
+async fn upgrade_without_target_skips_source_builds() {
     let sandbox = sandbox("upgrade-noop");
+    // No target on a dev build (the test binary carries no release
+    // tag): the release channel is skipped cleanly, exit 0, no network.
+    let output = run_command(&opencode_binary(), &sandbox.project, &["upgrade"])
+        .output()
+        .await
+        .expect("run upgrade");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("source build"), "{stdout}");
+    assert!(stdout.contains("2.0.24"), "{stdout}");
+    // local-file without a path stays a clear error.
     let output =
         run_command(&opencode_binary(), &sandbox.project, &["upgrade", "-m", "local-file"])
             .output()
             .await
             .expect("run upgrade");
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("already installed"), "{stdout}");
-    assert!(stdout.contains("2.0.24"), "{stdout}");
-    assert!(stdout.contains("Auto-update is disabled"), "{stdout}");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("need a path"), "{stderr}");
 }
 
 #[tokio::test]
