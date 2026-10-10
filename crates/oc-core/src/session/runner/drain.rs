@@ -23,7 +23,6 @@ use crate::session::runner::compaction::{
 };
 use crate::session::runner::context::{self, Loaded, SessionContext};
 use crate::session::runner::model_request::{prepare_primary, SessionModelRequest};
-use crate::session::runner::retry::RetryPolicy;
 use crate::session::runner::step::{AttemptFailure, AttemptInput, Outcome, StepDeps};
 use crate::session::runner::title::SessionTitle;
 use crate::session::runner::LlmClient;
@@ -413,7 +412,7 @@ impl SessionRunner {
     async fn manual_compaction(&self, session_id: &str, input_id: &str) -> Result<(), RunFailure> {
         let selected = self.context.select(session_id).await?;
         let model = self.context.resolve_model(&selected.session).map_err(|error| {
-            RunFailure::Failed(oc_schema::common::SessionError {
+            RunFailure::unsurfaced(oc_schema::common::SessionError {
                 error_type: "provider.no-route".into(),
                 message: error.to_string(),
                 status: None,
@@ -455,8 +454,10 @@ impl SessionRunner {
             crate::session::runner::compaction::CompactStatus::Skipped => Ok(()),
             crate::session::runner::compaction::CompactStatus::Failed { error } => {
                 // The compaction service already published
-                // Compaction.Failed; surface the failure to the drain.
-                Err(RunFailure::Failed(error))
+                // Compaction.Failed; surface the failure to the drain. The
+                // compaction message itself carries the error (the
+                // message updater projects it), so the failure is visible.
+                Err(RunFailure::surfaced(error))
             }
         }
     }
@@ -477,6 +478,15 @@ impl SessionRunner {
         let recover_overflow = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let mut recover_continuation = true;
         let mut step = step;
+        // The retry policy is PER STEP (llm.ts creates it once per
+        // `runStep`): its schedule counter caps the whole retry ladder
+        // (MAX_RECURS). Constructing it inside the attempt loop reset the
+        // counter every attempt — a retryable failure (dead endpoint)
+        // retried forever instead of surfacing after the 10th attempt.
+        let policy = Arc::new(crate::session::runner::retry::RetryPolicy::new(
+            session_id.clone(),
+            Arc::clone(&self.rng),
+        ));
         loop {
             // Reuse boundary preparation once; retries refresh context
             // without delivering more input.
@@ -498,7 +508,7 @@ impl SessionRunner {
                 .await;
             match outcome {
                 crate::session::runner::compaction::CompactStatus::Failed { error } => {
-                    return Err(RunFailure::Failed(error));
+                    return Err(RunFailure::surfaced(error));
                 }
                 crate::session::runner::compaction::CompactStatus::Completed => {
                     assistant_message_id = self.new_message_id();
@@ -522,7 +532,7 @@ impl SessionRunner {
             )
             .await
             .map_err(|error| {
-                RunFailure::Failed(oc_schema::common::SessionError {
+                RunFailure::unsurfaced(oc_schema::common::SessionError {
                     error_type: "provider.no-route".into(),
                     message: error.to_string(),
                     status: None,
@@ -531,8 +541,9 @@ impl SessionRunner {
             })?;
 
             // The retry decider wires the attempt's prepared hook into the
-            // per-step policy.
-            let policy = Arc::new(RetryPolicy::new(session_id.clone(), Arc::clone(&self.rng)));
+            // per-step policy (hoisted above the loop — the schedule
+            // counter must survive across attempts).
+            let policy = Arc::clone(&policy);
             let retry_hook = Arc::clone(&prepared.retry);
             let retry_agent = loaded.agent_id.clone();
             let retry_model = loaded.model.reference.clone();
@@ -818,17 +829,38 @@ fn def(type_: &str) -> &'static crate::bus::EventDefinition {
 
 /// The runner's drain failure channel, mapped onto
 /// [`crate::session::execution::RunError`].
+///
+/// Drain failures beyond the typed outcome, classified for the terminal
+/// event: whether the error already surfaced on an assistant message
+/// (`session.step.failed` from the step publisher) decides the synthetic
+/// error-part emission in `settled` (pre-step failures — model
+/// resolution, context select — never do).
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunFailure {
-    Failed(oc_schema::common::SessionError),
+    Failed { error: oc_schema::common::SessionError, surfaced: bool },
     Interrupted,
     Defect(String),
+}
+
+impl RunFailure {
+    /// A failure whose error is already visible in the message stream.
+    #[must_use]
+    pub fn surfaced(error: oc_schema::common::SessionError) -> Self {
+        Self::Failed { error, surfaced: true }
+    }
+
+    /// A failure the message stream never saw (pre-step: the model never
+    /// resolved, no assistant message exists).
+    #[must_use]
+    pub fn unsurfaced(error: oc_schema::common::SessionError) -> Self {
+        Self::Failed { error, surfaced: false }
+    }
 }
 
 impl std::fmt::Display for RunFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RunFailure::Failed(error) => write!(f, "drain failed: {}", error.message),
+            RunFailure::Failed { error, .. } => write!(f, "drain failed: {}", error.message),
             RunFailure::Interrupted => write!(f, "drain interrupted"),
             RunFailure::Defect(message) => write!(f, "defect: {message}"),
         }
@@ -843,14 +875,14 @@ impl From<crate::session::runner::context::SelectError> for RunFailure {
             SelectError::NotFound(session) => {
                 RunFailure::Defect(format!("Session not found: {session}"))
             }
-            other => RunFailure::Failed(other.to_session_error()),
+            other => RunFailure::unsurfaced(other.to_session_error()),
         }
     }
 }
 
 impl From<crate::session::runner::ModelError> for RunFailure {
     fn from(error: crate::session::runner::ModelError) -> Self {
-        RunFailure::Failed(oc_schema::common::SessionError {
+        RunFailure::unsurfaced(oc_schema::common::SessionError {
             error_type: "provider.no-route".into(),
             message: error.to_string(),
             status: None,
@@ -861,7 +893,7 @@ impl From<crate::session::runner::ModelError> for RunFailure {
 
 fn run_error_of(failure: RunFailure) -> RunError {
     match failure {
-        RunFailure::Failed(error) => RunError::Failed(error),
+        RunFailure::Failed { error, surfaced } => RunError::Failed { error, surfaced },
         RunFailure::Interrupted => RunError::Interrupted,
         RunFailure::Defect(message) => RunError::Defect(message),
     }
@@ -877,10 +909,18 @@ fn map_attempt_failure(outcome: Result<Outcome, AttemptFailure>) -> Result<Outco
     match outcome {
         Ok(outcome) => Ok(outcome),
         Err(AttemptFailure::Interrupted) => Err(RunFailure::Interrupted),
-        Err(AttemptFailure::Stream(error)) | Err(AttemptFailure::ToolDie(error)) => {
-            Err(RunFailure::Failed(crate::session::runner::to_session_error(&error)))
+        // A stream failure always passes `failAssistant` + `publishStepFailure`
+        // first (step.rs steps 7-11, mirroring v2 step.ts:197,239): the
+        // assistant message already carries the error.
+        Err(AttemptFailure::Stream(error)) => {
+            Err(RunFailure::surfaced(crate::session::runner::to_session_error(&error)))
         }
-        Err(AttemptFailure::StepFailed(error)) => Err(RunFailure::Failed(error)),
+        // A tool-fiber die settles tool parts but the turn error itself
+        // never reaches an assistant message — synthetic emission applies.
+        Err(AttemptFailure::ToolDie(error)) => {
+            Err(RunFailure::unsurfaced(crate::session::runner::to_session_error(&error)))
+        }
+        Err(AttemptFailure::StepFailed(error)) => Err(RunFailure::surfaced(error)),
         Err(AttemptFailure::Defect(message)) => Err(RunFailure::Defect(message)),
     }
 }
