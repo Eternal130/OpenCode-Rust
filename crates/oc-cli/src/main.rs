@@ -1,6 +1,7 @@
 //! `opencode` — the CLI entry (port of `cli/src/index.ts`): hidden SSH
 //! askpass dispatch, clap parsing, command dispatch, `--version`.
 
+mod acp;
 mod cli;
 mod handlers;
 mod run;
@@ -62,7 +63,7 @@ async fn dispatch(cli: Cli) -> i32 {
         Some(Commands::Uninstall { keep_config, keep_data, dry_run, force }) => {
             handlers::misc::uninstall(dry_run, keep_config, keep_data, force).await
         }
-        Some(Commands::Acp) => handlers::misc::acp(),
+        Some(Commands::Acp) => handlers::misc::acp().await,
         Some(Commands::Api { request, data, header, param }) => {
             handlers::api::run(&server, &request, data.as_deref(), &header, &param).await
         }
