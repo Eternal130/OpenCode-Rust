@@ -175,7 +175,9 @@ impl Chord {
     }
 }
 
-/// Command palette group (`KeymapCommand.group` / `category`).
+/// Command palette group (`KeymapCommand.group` / `category`). The
+/// [`CommandGroup::Plugin`] variant marks plugin-registered commands
+/// (the owned keymap layer's entries — wave 9.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandGroup {
     Session,
@@ -187,6 +189,7 @@ pub enum CommandGroup {
     View,
     Prompt,
     System,
+    Plugin,
 }
 
 impl CommandGroup {
@@ -202,6 +205,7 @@ impl CommandGroup {
             Self::View => "View",
             Self::Prompt => "Prompt",
             Self::System => "System",
+            Self::Plugin => "Plugin",
         }
     }
 }
@@ -220,6 +224,29 @@ pub struct CommandDef {
     pub layer: &'static str,
     pub palette: bool,
     pub group: Option<CommandGroup>,
+}
+
+/// An OWNED registry entry for plugin-registered commands (wave 9.1
+/// seam): everything [`CommandDef`] carries, but heap-allocated —
+/// plugin ids/descriptions/bindings arrive over IPC at registration
+/// time and cannot be `&'static str`s. Owned entries live in a
+/// separate layer of the [`Keymap`] and are resolved **after** the
+/// static table: a plugin binding for `ctrl+p` never shadows the
+/// built-in palette command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedCommandDef {
+    /// Runtime dot command id (`hw.hello`).
+    pub command: String,
+    pub description: String,
+    /// Binding specs (`"ctrl+x h"`; comma alternatives allowed) — may
+    /// be empty (palette-only command).
+    pub defaults: Vec<String>,
+    /// Layer the binding activates in (`"base"`).
+    pub layer: String,
+    pub palette: bool,
+    /// Owning plugin id (display provenance; the palette marks the
+    /// group "Plugin").
+    pub plugin: String,
 }
 
 /// One user keybind override (`cli.json` → `keybinds`): the v2 config
@@ -705,6 +732,11 @@ pub struct Keymap {
     /// Effective binding specs per dot command (defaults overridden by
     /// the user table) — the palette's binding display reads these.
     effective: HashMap<String, Vec<String>>,
+    /// The OWNED layer (plugin commands): resolved after the static
+    /// table at every lookup. Keyed by layer name like `layers`.
+    owned_layers: HashMap<String, Vec<(Chord, String)>>,
+    /// Owned registry (insertion order preserved for the palette).
+    owned_registry: Vec<OwnedCommandDef>,
     /// Commands whose bindings are currently disabled (the reference's
     /// conditional layers — e.g. `app.exit` off while the prompt has
     /// text).
@@ -757,11 +789,58 @@ impl Keymap {
             layers,
             registry,
             effective,
+            owned_layers: HashMap::new(),
+            owned_registry: Vec::new(),
             disabled: Vec::new(),
             base_only: false,
             modes: Vec::new(),
             pending: None,
         }
+    }
+
+    /// Register one OWNED (plugin) command entry. Re-registering the
+    /// same command id replaces it (hot reload); chords land in the
+    /// owned layer alongside the static ones — lookups consult the
+    /// static table FIRST, the owned entries SECOND.
+    pub fn register_owned(&mut self, def: OwnedCommandDef) {
+        // Replace-in-place keeps palette ordering stable.
+        if let Some(existing) =
+            self.owned_registry.iter().position(|entry| entry.command == def.command)
+        {
+            self.owned_registry[existing] = def.clone();
+        } else {
+            self.owned_registry.push(def.clone());
+        }
+        let layer = if def.layer.is_empty() { "base".to_owned() } else { def.layer };
+        if let Some(rules) = self.owned_layers.get_mut(&layer) {
+            rules.retain(|(_, command)| *command != def.command);
+        }
+        for spec in &def.defaults {
+            // Plugin-facing convenience: accept "ctrl+x h" (space
+            // style, the display form) as well as the canonical
+            // "ctrl+x>h" / "<leader>h" spec syntax.
+            let normalized = if spec.contains(' ') { spec.replace(' ', ">") } else { spec.clone() };
+            if let Some(chord) = Chord::parse(&normalized, &self.leader) {
+                self.owned_layers
+                    .entry(layer.clone())
+                    .or_default()
+                    .push((chord, def.command.clone()));
+            } else {
+                log_skip(&format!("plugin keybind {spec:?}: unparseable stroke (skipped)"));
+            }
+        }
+    }
+
+    /// Drop every owned (plugin) entry — full plugin-registry refresh.
+    pub fn clear_owned(&mut self) {
+        self.owned_layers.clear();
+        self.owned_registry.clear();
+    }
+
+    /// The owned (plugin) registry, insertion order.
+    #[must_use]
+    pub fn owned_commands(&self) -> &[OwnedCommandDef] {
+        &self.owned_registry
     }
 
     /// Apply user keybind overrides (`parse_keybind_overrides` output):
@@ -975,27 +1054,44 @@ impl Keymap {
     fn match_chord(&self, strokes: &[KeyStroke]) -> ChordMatch {
         // Most recently pushed mode first, base last (unless suspended
         // by `lookup_base`).
-        let mut order: Vec<&str> = if self.base_only {
-            Vec::new()
-        } else {
-            self.modes.iter().rev().map(String::as_str).collect()
-        };
-        order.push("base");
+        let mut order: Vec<String> =
+            if self.base_only { Vec::new() } else { self.modes.iter().rev().cloned().collect() };
+        order.push("base".to_owned());
         let mut prefix = false;
-        for mode in order {
-            let Some(rules) = self.layers.get(mode) else { continue };
-            for (chord, command) in rules {
-                if chord.strokes == strokes {
-                    if self.disabled.iter().any(|entry| entry == command) {
-                        continue;
+        for mode in &order {
+            if let Some(rules) = self.layers.get(mode.as_str()) {
+                for (chord, command) in rules {
+                    if chord.strokes == strokes {
+                        if self.disabled.iter().any(|entry| entry == command) {
+                            continue;
+                        }
+                        return ChordMatch::Owned(command.clone());
                     }
-                    return ChordMatch::Owned(command.clone());
+                    if chord.strokes.len() > strokes.len()
+                        && chord.strokes.starts_with(strokes)
+                        && strokes.first() == Some(&self.leader)
+                    {
+                        prefix = true;
+                    }
                 }
-                if chord.strokes.len() > strokes.len()
-                    && chord.strokes.starts_with(strokes)
-                    && strokes.first() == Some(&self.leader)
-                {
-                    prefix = true;
+            }
+            // The OWNED (plugin) layer: consulted strictly AFTER the
+            // static table within the same mode — a plugin binding can
+            // never shadow a built-in command's chord.
+            if let Some(rules) = self.owned_layers.get(mode.as_str()) {
+                for (chord, command) in rules {
+                    if chord.strokes == strokes {
+                        if self.disabled.iter().any(|entry| entry == command) {
+                            continue;
+                        }
+                        return ChordMatch::Owned(command.clone());
+                    }
+                    if chord.strokes.len() > strokes.len()
+                        && chord.strokes.starts_with(strokes)
+                        && strokes.first() == Some(&self.leader)
+                    {
+                        prefix = true;
+                    }
                 }
             }
         }
@@ -1013,7 +1109,8 @@ impl Keymap {
     }
 
     /// Display bindings for a command ("ctrl+x n" style), in table
-    /// order — the user overrides' effective specs (not the defaults).
+    /// order — the user overrides' effective specs (not the defaults);
+    /// owned (plugin) entries resolve from their registered specs.
     #[must_use]
     pub fn bindings_for(&self, command: &str) -> Vec<String> {
         let mut out = Vec::new();
@@ -1026,6 +1123,16 @@ impl Keymap {
                     continue;
                 }
                 if let Some(chord) = Chord::parse(spec, &self.leader) {
+                    out.push(chord.display());
+                }
+            }
+            return out;
+        }
+        if let Some(owned) = self.owned_registry.iter().find(|entry| entry.command == command) {
+            for spec in &owned.defaults {
+                let normalized =
+                    if spec.contains(' ') { spec.replace(' ', ">") } else { spec.clone() };
+                if let Some(chord) = Chord::parse(&normalized, &self.leader) {
                     out.push(chord.display());
                 }
             }
@@ -1466,6 +1573,62 @@ mod override_tests {
         assert_eq!(
             keymap.lookup(stroke("ctrl+c"), &clock),
             Outcome::Command { command: "app.exit".to_owned(), args: None }
+        );
+    }
+
+    fn owned(command: &str, defaults: &[&str]) -> OwnedCommandDef {
+        OwnedCommandDef {
+            command: command.to_owned(),
+            description: format!("{command} description"),
+            defaults: defaults.iter().map(|spec| (*spec).to_owned()).collect(),
+            layer: "base".to_owned(),
+            palette: true,
+            plugin: "helloworld".to_owned(),
+        }
+    }
+
+    #[test]
+    fn owned_entries_resolve_after_static() {
+        let mut keymap = Keymap::new();
+        let clock = ManualClock::default();
+        keymap.register_owned(owned("hw.hello", &["ctrl+x h"]));
+
+        // The plugin chord resolves (leader sequence).
+        assert_eq!(
+            keymap.lookup(stroke("ctrl+x"), &clock),
+            Outcome::Pending { display: "ctrl+x".to_owned() }
+        );
+        assert_eq!(
+            keymap.lookup(stroke("h"), &clock),
+            Outcome::Command { command: "hw.hello".to_owned(), args: None }
+        );
+        assert_eq!(keymap.bindings_for("hw.hello"), vec!["ctrl+x h".to_owned()]);
+        assert_eq!(keymap.owned_commands().len(), 1);
+
+        // Static wins on chord collision: a plugin binding for ctrl+p
+        // never shadows the palette.
+        keymap.register_owned(owned("hw.grab", &["ctrl+p"]));
+        assert_eq!(
+            keymap.lookup(stroke("ctrl+p"), &clock),
+            Outcome::Command { command: "command.palette.show".to_owned(), args: None }
+        );
+
+        // Re-registering replaces (hot reload), clear_owned drops all.
+        keymap.register_owned(owned("hw.hello", &["ctrl+x j"]));
+        assert_eq!(keymap.owned_commands().len(), 2);
+        assert!(matches!(keymap.lookup(stroke("ctrl+x"), &clock), Outcome::Pending { .. }));
+        assert_eq!(
+            keymap.lookup(stroke("j"), &clock),
+            Outcome::Command { command: "hw.hello".to_owned(), args: None }
+        );
+        // The old chord is gone (replaced, not duplicated).
+        assert!(matches!(keymap.lookup(stroke("ctrl+x"), &clock), Outcome::Pending { .. }));
+        assert_eq!(keymap.lookup(stroke("h"), &clock), Outcome::Unhandled);
+        keymap.clear_owned();
+        assert!(matches!(keymap.owned_commands(), []));
+        assert_eq!(
+            keymap.lookup(stroke("ctrl+p"), &clock),
+            Outcome::Command { command: "command.palette.show".to_owned(), args: None }
         );
     }
 }
