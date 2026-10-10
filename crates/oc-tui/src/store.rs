@@ -608,6 +608,15 @@ pub struct Store {
     editor_requested: Cell<bool>,
     /// Attention (bell + pending marker) — see `attention.rs`.
     attention: Cell<AttentionState>,
+    /// The attention engine (R-06): OS notifications + sounds behind
+    /// the emitter seam — see `attention.rs`.
+    attention_engine: std::cell::RefCell<crate::attention::Attention>,
+    /// The notifications plugin (v2's `opencode.notifications`
+    /// trigger map) — see `notifications_plugin.rs`.
+    notifications: std::cell::RefCell<crate::notifications_plugin::NotificationsPlugin>,
+    /// The plugin's session index (titles + parentIDs from the session
+    /// lifecycle events).
+    session_index: std::cell::RefCell<crate::notifications_plugin::SessionIndex>,
     /// Replay-dedup window: the recent bus-event ids (F2 contract).
     seen_events: std::cell::RefCell<(VecDeque<String>, HashSet<String>)>,
     /// Plugin-registered palette commands (registration-time only).
@@ -762,6 +771,13 @@ impl Store {
             clipboard_sink: Rc::new(crate::clipboard::RecordingClipboardSink::default()),
             editor_requested: Cell::new(false),
             attention: Cell::new(AttentionState::default()),
+            attention_engine: std::cell::RefCell::new(crate::attention::Attention::new()),
+            notifications: std::cell::RefCell::new(
+                crate::notifications_plugin::NotificationsPlugin::default(),
+            ),
+            session_index: std::cell::RefCell::new(
+                crate::notifications_plugin::SessionIndex::default(),
+            ),
             seen_events: std::cell::RefCell::new((VecDeque::new(), HashSet::new())),
             clock,
             redraw_requests,
@@ -1123,11 +1139,48 @@ impl Store {
         bell
     }
 
-    /// Terminal focus returned: consume the pending attention marker.
+    /// Terminal focus returned: consume the pending attention marker
+    /// and un-blur the attention engine (the notification channel's
+    /// focus gate).
     pub fn set_focused(&self) {
         let mut attention = self.attention.get();
         attention.focused();
         self.attention.set(attention);
+        self.attention_engine.borrow().set_focus(crate::attention::FocusState::Focused);
+    }
+
+    /// Terminal focus lost: the attention engine blurs (OS
+    /// notifications become eligible). The bell pending marker is
+    /// unaffected (consumed only on focus return).
+    pub fn set_blurred(&self) {
+        self.attention_engine.borrow().set_focus(crate::attention::FocusState::Blurred);
+    }
+
+    // -- attention (engine: OS notifications + sounds, R-06) ------------------
+
+    /// Install the emission seam (production: OSC notifier + sound
+    /// player; tests: recorder). See `attention.rs`.
+    pub fn set_attention_emitter(
+        &self,
+        emitter: std::rc::Rc<dyn crate::attention::AttentionEmitter>,
+    ) {
+        self.attention_engine.borrow().set_emitter(emitter);
+    }
+
+    /// Install the built-in sound resolver (production: the embedded
+    /// pack extracted into the cache dir).
+    pub fn set_attention_builtin_sounds(
+        &self,
+        resolve: std::rc::Rc<
+            dyn Fn(crate::attention::AttentionSoundName) -> Option<std::path::PathBuf>,
+        >,
+    ) {
+        self.attention_engine.borrow().set_builtin_sounds(resolve);
+    }
+
+    /// Apply the resolved `attention` config (boot + config reload).
+    pub fn set_attention_config(&self, config: crate::attention::AttentionConfig) {
+        self.attention_engine.borrow().set_config(config);
     }
 
     // -- messages (lane C) -----------------------------------------------------
@@ -1701,9 +1754,32 @@ impl Store {
                 if self.is_replayed(&event) {
                     return;
                 }
+                // R-06 — the notifications plugin (v2's
+                // `opencode.notifications`): forms, permissions, and the
+                // execution lifecycle drive the attention channels (OS
+                // notification + sound), and execution failures show a
+                // session-failed toast. A sound that actually played
+                // suppresses the bell fallback (the bell is the
+                // zero-config stand-in for the sound channel).
+                self.session_index.borrow_mut().observe(&event);
+                let (sound_played, failure_toast) = self.notifications.borrow_mut().handle(
+                    &event,
+                    &self.session_index.borrow(),
+                    &*self.attention_engine.borrow(),
+                );
+                if let Some(toast) = failure_toast {
+                    self.toast_show(ToastOptions {
+                        title: Some("Session failed".to_owned()),
+                        message: toast.message,
+                        variant: "error",
+                        duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
+                        action_label: None,
+                    });
+                }
                 // Attention (the notifications plugin's always-on
-                // channel): permission asks and forms ring the bell.
-                if crate::attention::AttentionState::rings_on(&event) {
+                // channel): permission asks and forms ring the bell
+                // unless a real sound already played.
+                if crate::attention::AttentionState::rings_on(&event) && !sound_played {
                     let mut attention = self.attention.get();
                     attention.ring();
                     self.attention.set(attention);
@@ -2911,6 +2987,145 @@ mod tests {
             serde_json::json!({ "form": { "id": "f1", "sessionID": "ses", "title": "T", "fields": [] } }),
         ))]);
         assert!(store.take_bell());
+    }
+
+    // -- R-06: the attention engine wiring (sounds + OS notifications) --
+
+    /// A recorder over the store's emission seam.
+    struct AttentionRecorder {
+        notifications: std::cell::RefCell<Vec<(String, String)>>,
+        sounds: std::cell::RefCell<Vec<std::path::PathBuf>>,
+        play_ok: bool,
+    }
+
+    impl Default for AttentionRecorder {
+        fn default() -> Self {
+            Self {
+                notifications: std::cell::RefCell::new(Vec::new()),
+                sounds: std::cell::RefCell::new(Vec::new()),
+                play_ok: true,
+            }
+        }
+    }
+
+    impl crate::attention::AttentionEmitter for AttentionRecorder {
+        fn notify(&self, title: &str, message: &str) -> bool {
+            self.notifications.borrow_mut().push((title.to_owned(), message.to_owned()));
+            true
+        }
+
+        fn play(&self, candidates: &[crate::attention::SoundCandidate], _volume: f64) -> bool {
+            let played = self.play_ok && !candidates.is_empty();
+            if played {
+                self.sounds.borrow_mut().push(candidates[0].path.clone());
+            }
+            played
+        }
+    }
+
+    fn store_with_attention(
+        config: crate::attention::AttentionConfig,
+    ) -> (Store, std::rc::Rc<AttentionRecorder>) {
+        let store = Store::new(Runtime::new());
+        store.set_attention_config(config);
+        let recorder = std::rc::Rc::new(AttentionRecorder::default());
+        store.set_attention_emitter(recorder.clone());
+        store.set_attention_builtin_sounds(std::rc::Rc::new(|name| {
+            Some(std::path::PathBuf::from(format!("/builtin/{}.mp3", name.as_str())))
+        }));
+        (store, recorder)
+    }
+
+    /// A played sound suppresses the bell fallback on the same event
+    /// (no double attention); with sounds disabled the bell stands.
+    #[test]
+    fn a_played_sound_suppresses_the_bell() {
+        // Default config (sound off): the bell rings.
+        let store = Store::new(Runtime::new());
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "permission.asked",
+            serde_json::json!({ "id": "p1", "sessionID": "ses", "action": "read" }),
+        ))]);
+        assert!(store.take_bell(), "the zero-config bell fallback");
+
+        // Sound enabled + emitter plays: the bell is suppressed.
+        let (store, recorder) = store_with_attention(crate::attention::AttentionConfig {
+            sound: true,
+            ..crate::attention::AttentionConfig::default()
+        });
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "permission.asked",
+            serde_json::json!({ "id": "p1", "sessionID": "ses", "action": "read" }),
+        ))]);
+        assert!(!store.take_bell(), "a real sound replaced the bell");
+        assert_eq!(recorder.sounds.borrow().len(), 1);
+        assert_eq!(
+            recorder.sounds.borrow()[0],
+            std::path::PathBuf::from("/builtin/permission.mp3"),
+            "the permission event maps to the permission sound"
+        );
+        assert!(!store.attention().pending, "the ring (bell + marker) was fully suppressed");
+    }
+
+    /// Execution failures show the session-failed toast and play the
+    /// error sound; the following idle success is suppressed (v2's
+    /// error-once discipline).
+    #[test]
+    fn execution_failure_toasts_and_plays_error_sound() {
+        let (store, recorder) = store_with_attention(crate::attention::AttentionConfig {
+            sound: true,
+            ..crate::attention::AttentionConfig::default()
+        });
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.execution.failed",
+            serde_json::json!({ "sessionID": "ses", "error": { "type": "unknown", "message": "boom" } }),
+        ))]);
+        assert_eq!(
+            recorder.sounds.borrow().last().cloned(),
+            Some(std::path::PathBuf::from("/builtin/error.mp3"))
+        );
+        let toasts = store.toasts();
+        let toast = toasts.current().expect("the failure toast is showing");
+        assert_eq!(toast.title.as_deref(), Some("Session failed"));
+        assert_eq!(toast.message, "boom");
+        assert_eq!(toast.variant, "error");
+
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.execution.succeeded",
+            serde_json::json!({ "sessionID": "ses" }),
+        ))]);
+        assert_eq!(
+            recorder.sounds.borrow().len(),
+            1,
+            "the idle done after the error is suppressed"
+        );
+        assert!(!store.take_bell(), "execution events never bell");
+    }
+
+    /// Focus wiring: FocusGained/Blur flip the engine's gate — an OS
+    /// notification (blurred-only channel) fires blurred, not focused.
+    #[test]
+    fn focus_events_gate_the_notification_channel() {
+        let (store, recorder) = store_with_attention(crate::attention::AttentionConfig {
+            notifications: true,
+            ..crate::attention::AttentionConfig::default()
+        });
+        let ask = |id: &str| {
+            Ingest::Event(BusEvent::new(
+                "permission.asked",
+                serde_json::json!({ "id": id, "sessionID": "ses", "action": "read" }),
+            ))
+        };
+        store.ingest_all([ask("p1")]);
+        assert!(recorder.notifications.borrow().is_empty(), "focus unknown → no notification");
+
+        store.set_blurred();
+        store.ingest_all([ask("p2")]);
+        assert_eq!(recorder.notifications.borrow().len(), 1, "blurred → notified");
+
+        store.set_focused();
+        store.ingest_all([ask("p3")]);
+        assert_eq!(recorder.notifications.borrow().len(), 1, "focused → skipped");
     }
 
     /// Background activity rings only on the unread TRANSITION (a

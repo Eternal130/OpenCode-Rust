@@ -10,9 +10,12 @@
 //! it when the file's mtime changes and re-merges keybinds + theme
 //! through the store (the reference watches the config dir).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+
+use crate::attention::{AttentionConfig, AttentionSoundName};
 
 /// The `theme` config section (`config.theme`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -33,12 +36,47 @@ impl ThemeConfig {
     }
 }
 
+/// Parse the `attention` section of the config document (v2's
+/// `packages/tui/src/config/index.tsx:99` — "System notification and
+/// sound settings"). Resolution applies v2's defaults
+/// (`notifications ?? false, sound ?? false, volume ?? 0.4,
+/// sound_pack ?? "opencode.default", sounds ?? {}`).
+fn attention_from_json(value: Option<&Value>) -> AttentionConfig {
+    let Some(value) = value else { return AttentionConfig::default() };
+    let volume = value
+        .get("volume")
+        .and_then(Value::as_f64)
+        .filter(|volume| volume.is_finite() && (0.0..=1.0).contains(volume))
+        .unwrap_or(0.4);
+    let mut sounds = HashMap::new();
+    if let Some(overrides) = value.get("sounds").and_then(Value::as_object) {
+        for (name, path) in overrides {
+            if let (Some(name), Some(path)) = (AttentionSoundName::parse(name), path.as_str()) {
+                sounds.insert(name, PathBuf::from(path));
+            }
+        }
+    }
+    AttentionConfig {
+        notifications: value.get("notifications").and_then(Value::as_bool).unwrap_or(false),
+        sound: value.get("sound").and_then(Value::as_bool).unwrap_or(false),
+        volume,
+        sound_pack: value
+            .get("sound_pack")
+            .and_then(Value::as_str)
+            .unwrap_or("opencode.default")
+            .to_owned(),
+        sounds,
+    }
+}
+
 /// The TUI-relevant slice of `cli.json`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TuiConfig {
     pub keybinds: Value,
     pub theme: ThemeConfig,
     pub leader_timeout_ms: Option<u64>,
+    /// The `attention` section (sounds + OS notifications).
+    pub attention: AttentionConfig,
     /// The file this was loaded from (`None` when no config file
     /// exists — all defaults).
     pub path: Option<PathBuf>,
@@ -70,10 +108,12 @@ impl TuiConfig {
         let theme = value.get("theme").map(ThemeConfig::from_json).unwrap_or_default();
         let leader_timeout_ms =
             value.pointer("/leader/timeout").and_then(Value::as_u64).filter(|ms| *ms > 0);
+        let attention = attention_from_json(value.get("attention"));
         Self {
             keybinds: value.get("keybinds").cloned().unwrap_or(Value::Null),
             theme,
             leader_timeout_ms,
+            attention,
             path,
         }
     }
@@ -108,6 +148,51 @@ mod tests {
         assert_eq!(config.leader_timeout_ms, Some(500));
         let overrides = crate::keymap::parse_keybind_overrides(&config.keybinds);
         assert_eq!(overrides.len(), 2, "unknown keys parse but are skipped at apply time");
+    }
+
+    /// The `attention` section: v2 defaults when absent, explicit
+    /// values when set, out-of-range volume falls back, unknown sound
+    /// names skip their override entry.
+    #[test]
+    fn parses_attention_with_v2_defaults() {
+        let default = TuiConfig::parse("{}", None);
+        assert_eq!(default.attention, AttentionConfig::default());
+        assert!(
+            !default.attention.notifications && !default.attention.sound,
+            "both off by default"
+        );
+        assert_eq!(default.attention.volume, 0.4);
+        assert_eq!(default.attention.sound_pack, "opencode.default");
+
+        let config = TuiConfig::parse(
+            r#"{
+              "attention": {
+                "notifications": true,
+                "sound": true,
+                "volume": 0.8,
+                "sound_pack": "custom.pack",
+                "sounds": {
+                  "error": "/sounds/custom-error.mp3",
+                  "bogus_name": "/sounds/ignored.mp3"
+                }
+              }
+            }"#,
+            None,
+        );
+        let attention = config.attention;
+        assert!(attention.notifications && attention.sound);
+        assert_eq!(attention.volume, 0.8);
+        assert_eq!(attention.sound_pack, "custom.pack");
+        assert_eq!(
+            attention.sounds.get(&AttentionSoundName::Error),
+            Some(&PathBuf::from("/sounds/custom-error.mp3"))
+        );
+        assert_eq!(attention.sounds.len(), 1, "unknown names skipped");
+
+        // Out-of-range volume → v2's schema rejects > 1; we fall back
+        // to the default.
+        let clamped = TuiConfig::parse(r#"{ "attention": { "volume": 2 } }"#, None);
+        assert_eq!(clamped.attention.volume, 0.4);
     }
 
     #[test]
