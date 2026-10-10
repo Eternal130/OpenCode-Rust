@@ -17,8 +17,19 @@
 //! - Rust keywords used as column names (`type`) get a trailing underscore in
 //!   Rust (`type_`); the SQL name strips it.
 //!
-//! Column order in every struct matches the DDL declaration order (primary-key
-//! columns lead in every table), so positional `SELECT *` mapping works.
+//! **Row mapping is by column NAME, not position.** v2's drizzle layer
+//! always selects named columns, so it is immune to physical column order —
+//! and order genuinely varies between real databases: a fresh v2 (or port)
+//! bootstrap declares `time_idle`/`time_viewed`/`idle_outcome` mid-table
+//! (`schema.gen.ts` order, mirrored by our `bootstrap.rs` DDL), while any
+//! database created by an older v2 and altered forward (the migrated-DB
+//! norm) has those three columns physically LAST. Positional `SELECT *`
+//! decoding against such a database silently reads the wrong columns (or
+//! fails on NULL, e.g. `resume_attempts` reading `idle_outcome`'s NULL) —
+//! the exact class of the real-DB 500s this mapping was hardened against.
+//! NULL tolerance itself comes from the `Option<T>` field types: a column
+//! nullable in drizzle OR observed NULL in the real-v2 census maps to
+//! `Option<T>`, and `NULL → None` matches v2's read semantics.
 
 use rusqlite::OptionalExtension;
 
@@ -138,18 +149,16 @@ macro_rules! table {
             pub const PK_COLUMNS: &'static [&'static str] =
                 &[$(stringify!($pk)),+];
 
+            /// Decodes a row by COLUMN NAME (see the module header: physical
+            /// column order differs between fresh-DDL and alter-migrated v2
+            /// databases, so positional `SELECT *` decoding is unsound).
+            /// `NULL` decodes into `None` for `Option<T>` fields; a column
+            /// missing entirely is an error (migrations guarantee presence).
             fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
-                let mut index = 0usize;
-                $(
-                    let $pk: $pkty = row.get(index)?;
-                    index += 1;
-                )+
-                $(
-                    let $col: $colty = row.get(index)?;
-                    index += 1;
-                )*
-                let _ = index;
-                Ok(Self { $($pk,)+ $($col,)* })
+                Ok(Self {
+                    $($pk: row.get::<&str, $pkty>(Self::sql_name(stringify!($pk)))?,)+
+                    $($col: row.get::<&str, $colty>(Self::sql_name(stringify!($col)))?,)*
+                })
             }
 
             /// Inserts the row; errors on primary-key conflicts.

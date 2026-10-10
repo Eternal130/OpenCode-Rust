@@ -31,8 +31,18 @@ impl ApiError {
     }
 
     /// Renders the envelope into an axum response (application/json).
+    ///
+    /// 5xx envelopes are ALWAYS logged (one line, stderr + the
+    /// `<data>/log/server.log` sink) — the catch-all guarantee that a 500
+    /// is never silent even at call sites without a `debug_cause` map:
+    /// the envelope carries the `err_<…>` ref that correlates with the
+    /// `[api-cause]` cause line. v2 parity: the TS server logs every
+    /// `HttpApi` failure; the silent port was the gap.
     #[must_use]
     pub fn into_response(self) -> Response {
+        if self.status.as_u16() >= 500 && !is_expected_readiness(&self.body) {
+            append_server_log(&format!("[api-error] {} {}", self.status.as_u16(), self.body));
+        }
         let Self { status, body } = self;
         let mut response = (status, axum::body::Body::from(body.to_string())).into_response();
         response.headers_mut().insert(
@@ -545,14 +555,64 @@ fn tracing_like_warn(kind: &str, reason: &str) {
 
 /// Debug-level cause capture for the handler `map_err(|_| …)` sites
 /// (G11-F3): the public error shape intentionally discards the cause
-/// (leak-prevention, mirroring v2); this logs it to stderr when
-/// `OPENCODE_DEBUG_ERRORS` ∈ {1,true} so any collapsed failure can be
-/// traced to its source. Zero output and near-zero cost when disabled —
-/// the wire behavior is unchanged either way.
+/// (leak-prevention, mirroring v2). The one-line cause is ALWAYS captured
+/// now — written to stderr (foreground `serve` sees it live) AND appended
+/// to the server log file under `<data>/log/` (the managed/standalone
+/// daemon is spawned with stderr redirected to /dev/null unless
+/// `OPENCODE_PRINT_LOGS=1`, so stderr alone loses the line — the port gap
+/// behind "500s were silent"; v2's Effect logger writes the same
+/// information to `Global.Path.log`). `OPENCODE_DEBUG_ERRORS` ∈ {1,true}
+/// additionally prints the verbose `{error:#?}` form to stderr; the wire
+/// behavior is unchanged either way.
 pub fn debug_cause(site: &str, error: impl std::fmt::Debug) {
+    let line = format!("[api-cause] {site}: {error:?}");
+    eprintln!("{line}");
+    append_server_log(&line);
     if debug_errors_enabled() {
-        eprintln!("[api-cause] {site}: {error:?}");
+        eprintln!("[api-cause:verbose] {site}: {error:#?}");
     }
+}
+
+/// The benign readiness probes (`service_starting`/`service_stopping`)
+/// poll repeatedly during lifecycle transitions — expected control flow,
+/// not failures, so they stay out of the always-on 5xx sink.
+/// `service_failed` and every real 500/503 envelope still logs.
+fn is_expected_readiness(body: &Value) -> bool {
+    matches!(
+        body.get("code").and_then(Value::as_str),
+        Some("service_starting" | "service_stopping")
+    )
+}
+
+/// Appends one line to the server log sink
+/// (`OPENCODE_LOG_FILE`, else `<data>/log/server.log`), prefixed with a
+/// unix-ms timestamp. Failures are silent — logging must never take a
+/// request down — and the file is opened per line (error rates are low;
+/// no lifecycle to manage across forked daemons).
+pub fn append_server_log(line: &str) {
+    use std::io::Write as _;
+    let path = server_log_path();
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_millis());
+        let _ = writeln!(file, "[ts {ms}] {line}");
+    }
+}
+
+/// The log sink location: `OPENCODE_LOG_FILE` when set (tests and
+/// embedders), else the env-resolved roots' `data/log/server.log`
+/// (`Global.Path.log` in v2).
+fn server_log_path() -> std::path::PathBuf {
+    if let Some(path) = std::env::var_os("OPENCODE_LOG_FILE").filter(|v| !v.is_empty()) {
+        return std::path::PathBuf::from(path);
+    }
+    oc_util::global_roots::resolve().log().join("server.log")
 }
 
 /// `OPENCODE_DEBUG_ERRORS` (resolved once; env reads are not free on the
@@ -749,5 +809,77 @@ mod tests {
             body(&command_execution_error("git", "exit 1")),
             json!({"_tag": "CommandExecutionError", "command": "git", "message": "exit 1"})
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Cause logging (always-on one-line capture + file sink)
+    // ------------------------------------------------------------------
+
+    /// Serializes env mutation for the log-sink tests (one process, many
+    /// parallel tests).
+    static LOG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn server_errors_debug_cause_always_writes_the_sink() {
+        let _guard = LOG_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let log = dir.path().join("server.log");
+        let saved = std::env::var_os("OPENCODE_LOG_FILE");
+
+        std::env::set_var("OPENCODE_LOG_FILE", &log);
+        debug_cause("site:probe", "sqlite error: boom");
+        if let Some(saved) = saved {
+            std::env::set_var("OPENCODE_LOG_FILE", saved);
+        } else {
+            std::env::remove_var("OPENCODE_LOG_FILE");
+        }
+
+        let contents = std::fs::read_to_string(&log).expect("sink file written");
+        assert!(contents.contains("[api-cause] site:probe: \"sqlite error: boom\""), "{contents}");
+        assert!(contents.contains("[ts "), "unix-ms timestamp prefix present");
+    }
+
+    #[test]
+    fn server_errors_5xx_envelope_logged_on_render() {
+        let _guard = LOG_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let log = dir.path().join("server.log");
+        let saved = std::env::var_os("OPENCODE_LOG_FILE");
+
+        std::env::set_var("OPENCODE_LOG_FILE", &log);
+        let error = unknown("err_deadbeef");
+        let response = error.into_response();
+        if let Some(saved) = saved {
+            std::env::set_var("OPENCODE_LOG_FILE", saved);
+        } else {
+            std::env::remove_var("OPENCODE_LOG_FILE");
+        }
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let contents = std::fs::read_to_string(&log).expect("sink file written");
+        assert!(contents.contains("[api-error] 500"), "{contents}");
+        assert!(
+            contents.contains("err_deadbeef"),
+            "ref correlates with the cause line: {contents}"
+        );
+    }
+
+    #[test]
+    fn server_errors_4xx_envelope_not_logged() {
+        let _guard = LOG_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let log = dir.path().join("server.log");
+        let saved = std::env::var_os("OPENCODE_LOG_FILE");
+
+        std::env::set_var("OPENCODE_LOG_FILE", &log);
+        let response = session_not_found("ses_x").into_response();
+        if let Some(saved) = saved {
+            std::env::set_var("OPENCODE_LOG_FILE", saved);
+        } else {
+            std::env::remove_var("OPENCODE_LOG_FILE");
+        }
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(!log.exists(), "4xx envelopes are not logged");
     }
 }
