@@ -205,12 +205,22 @@ async fn worktree_list(
     if project_id != services.project.id {
         return Err(ApiError::project_not_found(&project_id));
     }
+    // v2 `Worktree.List` is a BARE ARRAY of `{directory, strategy?}`
+    // (schema/worktree.ts `List = Schema.Array(Directory)` — the core
+    // ops.list rows); the strategy rides along for the TUI's
+    // managed-root ordering (dialog-workspaces.tsx).
     let directories: Vec<Value> = worktrees_for(&state, &project_id)
         .await?
         .into_iter()
-        .map(|(_, directory, _)| json!({ "directory": directory }))
+        .map(|(_, directory, strategy)| {
+            let mut entry = json!({ "directory": directory });
+            if !strategy.is_empty() {
+                entry["strategy"] = json!(strategy);
+            }
+            entry
+        })
         .collect();
-    Ok(axum::Json(json!({ "projectID": project_id, "directories": directories })).into_response())
+    Ok(axum::Json(Value::Array(directories)).into_response())
 }
 
 fn body_project_id(body: &Value) -> String {

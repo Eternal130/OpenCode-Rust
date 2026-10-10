@@ -224,6 +224,14 @@ pub struct CommandDef {
     pub layer: &'static str,
     pub palette: bool,
     pub group: Option<CommandGroup>,
+    /// The default binding's `preventDefault` (binding-object form,
+    /// `config/keybind.ts:14-29`): `true` — the keymap consumes the
+    /// matched key event itself; `false` — the layer leaves
+    /// suppression to the command's handler (v2's `prompt.paste`
+    /// calls `event?.preventDefault()` + `stopPropagation()` only
+    /// when an event is present — prompt/index.tsx:470-492; a
+    /// programmatic `keymap.dispatch` has none, :1787).
+    pub prevent_default: bool,
 }
 
 /// An OWNED registry entry for plugin-registered commands (wave 9.1
@@ -445,9 +453,24 @@ macro_rules! palette_of {
         true
     };
 }
+/// `preventDefault` of one entry's DEFAULT binding: v2's `keybind()`
+/// takes a string (binding objects may set `preventDefault: false` —
+/// the keymap then leaves suppression to the command's handler). Only
+/// `prompt.paste` ships `false` (config/keybind.ts:205).
+macro_rules! prevent_default_of {
+    () => {
+        true
+    };
+    (false) => {
+        false
+    };
+    (true) => {
+        true
+    };
+}
 
 macro_rules! defs {
-    ($( $bind:literal => $cmd:literal, $default:literal, $desc:literal, $layer:literal $(, palette $group:ident)? $(,)? ; )+) => {
+    ($( $bind:literal => $cmd:literal, $default:literal, $desc:literal, $layer:literal $(, palette $group:ident)? $(, prevent_default $pd:tt)? $(,)? ; )+) => {
         &[ $( CommandDef {
             bind_name: $bind,
             command: $cmd,
@@ -456,6 +479,7 @@ macro_rules! defs {
             layer: $layer,
             palette: palette_of!($($group)?),
             group: group_of!($($group)?),
+            prevent_default: prevent_default_of!($($pd)?),
         } ),+ ]
     };
 }
@@ -583,7 +607,7 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "prompt_stash_pop" => "prompt.stash.pop", "none", "Pop stashed prompt", "input";
     "prompt_stash_list" => "prompt.stash.list", "none", "List stashed prompts", "input";
     "input_clear" => "prompt.clear", "ctrl+c", "Clear input field", "input";
-    "input_paste" => "prompt.paste", "ctrl+v", "Paste from clipboard", "input";
+    "input_paste" => "prompt.paste", "ctrl+v", "Paste from clipboard", "input", prevent_default false;
     "input_submit" => "input.submit", "return", "Submit input", "input";
     "input_newline" => "input.newline", "shift+return,ctrl+return,alt+return,ctrl+j", "Insert newline in input", "input";
     "input_move_left" => "input.move.left", "left,ctrl+b", "Move cursor left in input", "input";
@@ -1140,6 +1164,26 @@ impl Keymap {
         out
     }
 
+    /// Whether `stroke` triggers `command` under the EFFECTIVE
+    /// bindings (overrides honored): the stroke-level matcher behind
+    /// dialog-scoped commands the generic layer lookup cannot
+    /// disambiguate (e.g. `dialog.move_session.delete` vs the earlier
+    /// `queued_prompt.delete` on the same `ctrl+d` — v2 binds the
+    /// `DialogSelect` actions in their own higher-priority keymap layer).
+    #[must_use]
+    pub fn stroke_triggers(&self, stroke: &KeyStroke, command: &str) -> bool {
+        let Some(def) = self.registry.get(command) else { return false };
+        let empty = Vec::new();
+        let specs = self.effective.get(def.command).unwrap_or(&empty);
+        specs.iter().any(|spec| {
+            let spec = spec.trim();
+            !spec.is_empty()
+                && spec != "none"
+                && Chord::parse(spec, &self.leader)
+                    .is_some_and(|chord| chord.strokes.len() == 1 && &chord.strokes[0] == stroke)
+        })
+    }
+
     #[must_use]
     pub fn command_def(&self, command: &str) -> Option<&'static CommandDef> {
         self.registry.get(command).copied()
@@ -1416,6 +1460,43 @@ mod dialog_layer_tests {
         let keymap = Keymap::new();
         assert_eq!(keymap.bindings_for("dialog.move_session.new"), vec!["ctrl+a".to_owned()]);
         assert_eq!(keymap.bindings_for("dialog.move_session.delete"), vec!["ctrl+d".to_owned()]);
+    }
+
+    /// D-05 — `input_paste` ships the binding-OBJECT form
+    /// `{ key: "ctrl+v", preventDefault: false }` (config/keybind.ts:
+    /// 205): the only default whose keymap layer does not
+    /// auto-suppress the matched event — the paste handler prevents
+    /// it itself (prompt/index.tsx:470-492). Every other default is a
+    /// plain string (preventDefault true).
+    #[test]
+    fn input_paste_is_the_only_no_prevent_default_binding() {
+        let mut no_prevent: Vec<&str> = default_table()
+            .iter()
+            .filter(|def| !def.prevent_default)
+            .map(|def| def.bind_name)
+            .collect();
+        no_prevent.sort_unstable();
+        assert_eq!(no_prevent, vec!["input_paste"]);
+        let paste = default_table().iter().find(|def| def.bind_name == "input_paste").unwrap();
+        assert_eq!(paste.defaults, "ctrl+v");
+        assert_eq!(paste.layer, "input");
+    }
+
+    /// R-05 — the Worktrees dialog resolves its action commands by
+    /// their own effective bindings (`stroke_triggers`): the
+    /// same-layer table conflict (`queued_prompt.delete` also claims
+    /// ctrl+d, earlier in the table) must not shadow the dialog's
+    /// actions.
+    #[test]
+    fn stroke_triggers_resolves_move_session_commands() {
+        let keymap = Keymap::new();
+        let ctrl = |spec: &str| KeyStroke::parse(spec).expect("stroke");
+        assert!(keymap.stroke_triggers(&ctrl("ctrl+d"), "dialog.move_session.delete"));
+        assert!(keymap.stroke_triggers(&ctrl("ctrl+a"), "dialog.move_session.new"));
+        assert!(keymap.stroke_triggers(&ctrl("ctrl+m"), "dialog.move_session.move"));
+        assert!(keymap.stroke_triggers(&ctrl("ctrl+r"), "dialog.move_session.refresh"));
+        assert!(!keymap.stroke_triggers(&ctrl("ctrl+d"), "dialog.move_session.new"));
+        assert!(!keymap.stroke_triggers(&ctrl("ctrl+x"), "dialog.move_session.delete"));
     }
 }
 

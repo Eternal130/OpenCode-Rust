@@ -11,6 +11,7 @@ pub mod command_palette;
 pub mod composer;
 pub mod dialog;
 pub mod dialog_select;
+pub mod dialog_worktrees;
 pub mod diff_viewer;
 pub mod footer;
 pub mod home;
