@@ -156,6 +156,9 @@ impl App {
     /// theme name/mode applies, and the keybind overrides merge into
     /// the live keymap.
     pub fn apply_config(&mut self, config: &crate::config::TuiConfig, mode_hint: Mode) {
+        // Attention (R-06): the resolved sounds/notifications config
+        // reaches the engine on boot AND every reload.
+        self.store.set_attention_config(config.attention.clone());
         // Registry: builtins + discovered customs (discovery ran in the
         // caller — the config only carries overrides here).
         let mut registry = ThemeRegistry::builtins();
@@ -1159,6 +1162,24 @@ pub async fn run_with_size(
     let store = Store::new(crate::reactive::Runtime::new());
     let mut app = App::with_store(store, size);
     let config = crate::config::TuiConfig::load(&oc_util::global_roots::resolve().config);
+
+    // R-06 — the attention channels (v2's sounds + OS notifications):
+    // the production emitter writes OSC notification sequences to
+    // stdout and plays the embedded sound pack through the first
+    // available system player; the built-in resolver extracts the
+    // pack into the cache dir. The resolved config gates both
+    // channels (both default OFF, like v2).
+    {
+        let roots = oc_util::global_roots::resolve();
+        app.store.set_attention_emitter(std::rc::Rc::new(crate::sound::TerminalAttention {
+            notifier: std::cell::RefCell::new(crate::os_notify::OscNotifier::from_env(
+                std::io::stdout(),
+            )),
+            sounds: crate::sound::ProcessSoundPlayer::default(),
+        }));
+        app.store.set_attention_builtin_sounds(crate::sound::builtin_sound_resolver(roots.cache));
+        app.store.set_attention_config(config.attention.clone());
+    }
     // The system-mode hint comes from the terminal probe — run inside
     // the input thread below; dark until it reports.
     let mut system_mode = Mode::Dark;
@@ -1514,8 +1535,10 @@ pub async fn run_with_size(
             }
             // Focus: the attention marker consumes on FocusGained (the
             // bell itself fired regardless — the sound channel is
-            // "always" in v2's notifications plugin).
+            // "always" in v2's notifications plugin). FocusLost blurs
+            // the attention engine (OS notifications become eligible).
             Some(CrosstermEvent::FocusGained) => app.store.set_focused(),
+            Some(CrosstermEvent::FocusLost) => app.store.set_blurred(),
             _ => {}
         }
         if app.exit_requested {
