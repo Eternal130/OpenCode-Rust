@@ -22,7 +22,7 @@ use crate::components::command_palette::{select_props_for, CommandDispatcher, St
 use crate::components::dialog_select::{render_select, DialogStyles, SelectView};
 use crate::keymap::{Clock, KeyStroke, Keymap, Outcome};
 use crate::render::Frame;
-use crate::store::{DialogEntry, DialogKind, Focus, Store};
+use crate::store::{DialogEntry, DialogKind, DialogSize, Focus, Store};
 use ratatui::style::Color;
 
 /// The backdrop's alpha (RGBA.fromInts(0, 0, 0, 150)).
@@ -46,6 +46,10 @@ pub enum DialogKeyOutcome {
 
 /// The modal key layer (`ui/dialog.tsx` + the select's dialog
 /// commands): route one stroke while a dialog holds focus.
+// The modal layer is inherently a key-by-key walk (escape → ctrl+c →
+// input → per-kind actions → the select commands); the R-05 worktree
+// actions pushed it past the lint budget.
+#[allow(clippy::too_many_lines)]
 pub fn handle_dialog_key(
     store: &Store,
     keymap: &mut Keymap,
@@ -56,7 +60,9 @@ pub fn handle_dialog_key(
     let Some(entry) = store.top_dialog() else { return DialogKeyOutcome::Unhandled };
     let props = select_props_for(&entry.kind, store);
     let is_select = match &entry.kind {
-        DialogKind::SessionRename { .. } => false,
+        // The rename + worktree-name dialogs are the prompt-style
+        // inputs (not selects).
+        DialogKind::SessionRename { .. } | DialogKind::WorktreeName => false,
         // A rows-only plugin dialog is static (like help): printables
         // pass through; only the close bindings act.
         DialogKind::Plugin { id } => {
@@ -65,11 +71,14 @@ pub fn handle_dialog_key(
         DialogKind::CommandPalette
         | DialogKind::ThemeList
         | DialogKind::Help
+        | DialogKind::Worktrees
+        | DialogKind::WorktreeDeleteConfirm { .. }
         | DialogKind::ServerList { .. } => true,
     };
     let is_help = matches!(entry.kind, DialogKind::Help);
-    let is_static =
-        is_help || !is_select && !matches!(entry.kind, DialogKind::SessionRename { .. });
+    let is_static = is_help
+        || !is_select
+            && !matches!(entry.kind, DialogKind::SessionRename { .. } | DialogKind::WorktreeName);
 
     // -- modal layer (dialog.tsx) -------------------------------------------
     if stroke.key == "escape" && !stroke.ctrl && !stroke.alt {
@@ -104,7 +113,7 @@ pub fn handle_dialog_key(
         if let Some(ch) = stroke.key.chars().next() {
             let text = if stroke.shift { ch.to_ascii_uppercase() } else { ch };
             store.update_dialog(|top| {
-                if matches!(top.kind, DialogKind::SessionRename { .. }) {
+                if matches!(top.kind, DialogKind::SessionRename { .. } | DialogKind::WorktreeName) {
                     top.value.push(text);
                 } else {
                     let mut filter = std::mem::take(&mut top.select.filter);
@@ -117,7 +126,7 @@ pub fn handle_dialog_key(
     }
     if !is_static && stroke.key == "backspace" && !stroke.ctrl && !stroke.alt && !stroke.shift {
         store.update_dialog(|top| {
-            if matches!(top.kind, DialogKind::SessionRename { .. }) {
+            if matches!(top.kind, DialogKind::SessionRename { .. } | DialogKind::WorktreeName) {
                 top.value.pop();
             } else if !top.select.filter.is_empty() {
                 let mut filter = std::mem::take(&mut top.select.filter);
@@ -126,6 +135,66 @@ pub fn handle_dialog_key(
             }
         });
         return DialogKeyOutcome::Consumed;
+    }
+
+    // -- the Worktrees dialog actions (R-05) --------------------------------
+    // v2 wires these as DialogSelect `actions` through the keymap
+    // (`dialog.move_session.*`, config/keybind.ts:268-271); the name
+    // dialog's tab is `dialog.worktree.generate` (:267).
+    if let DialogKind::Worktrees = entry.kind {
+        let selected = entry.select.submit(&props).map(|option| option.value.clone());
+        // The DialogSelect action layer: these resolve by their OWN
+        // effective bindings (a same-layer table conflict —
+        // `queued_prompt.delete` also claims ctrl+d — must not shadow
+        // the dialog's actions; v2 binds them in a higher-priority
+        // keymap layer).
+        let triggers =
+            |command: &'static str, keymap: &Keymap| keymap.stroke_triggers(&stroke, command);
+        if triggers("dialog.move_session.new", keymap) {
+            // v2 REPLACES the workspaces dialog with the name
+            // dialog (`DialogWorktreeName.show` → `dialog.replace`)
+            // at the default medium size.
+            store.replace_dialog(DialogKind::WorktreeName, DialogSize::Medium);
+            return DialogKeyOutcome::Consumed;
+        }
+        if triggers("dialog.move_session.refresh", keymap) {
+            let project = store.worktree_dialog().project_id;
+            if !project.is_empty() {
+                store.worktree_sink_refresh(&project);
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+        if triggers("dialog.move_session.delete", keymap) {
+            if let Some(directory) = selected {
+                if let crate::store::DeleteStep::Confirmed =
+                    store.worktree_delete_pressed(&directory)
+                {
+                    let project = store.worktree_dialog().project_id;
+                    store.worktree_sink_remove(&project, &directory, false);
+                }
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+        if triggers("dialog.move_session.move", keymap) {
+            if let crate::store::Route::Session { session_id } = store.route() {
+                if let Some(directory) = selected {
+                    store.move_session_to_worktree(&session_id, &directory);
+                }
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+    }
+    if let DialogKind::WorktreeName = entry.kind {
+        // tab = `dialog.worktree.generate` (Slug.create into the
+        // input, caret to the end — the dialog's own keybind).
+        if stroke.key == "tab" && !stroke.ctrl && !stroke.alt {
+            store.update_dialog(|top| {
+                let seed =
+                    top.value.chars().map(|ch| u64::from(ch as u32)).fold(0u64, u64::wrapping_add);
+                top.value = crate::components::dialog_worktrees::generate_slug(seed);
+            });
+            return DialogKeyOutcome::Consumed;
+        }
     }
 
     // -- the dialog keymap layer (dialog.select.*) ---------------------------
@@ -154,6 +223,11 @@ pub fn handle_dialog_key(
     }
     state.reveal(&props, usize::from(terminal.1));
     store.update_dialog(|top| top.select = state);
+    // v2's DialogSelect clears a pending destructive action on any
+    // selection move (`onMove: () => setToDelete(undefined)`).
+    if matches!(entry.kind, DialogKind::Worktrees) {
+        store.clear_worktree_delete();
+    }
     DialogKeyOutcome::Consumed
 }
 
@@ -209,6 +283,9 @@ pub fn render_overlay_with(
     let content = match &entry.kind {
         DialogKind::SessionRename { .. } => {
             render_rename_prompt(entry, &styles, dialog_bg, box_width)
+        }
+        DialogKind::WorktreeName => {
+            render_worktree_name_prompt(entry, &styles, dialog_bg, box_width)
         }
         DialogKind::Help => render_help_content(&styles, dialog_bg, box_width),
         DialogKind::Plugin { .. } if plugin.is_some_and(|content| !content.is_select()) => {
@@ -341,13 +418,64 @@ fn render_rename_prompt(
     SelectView { rows, width }
 }
 
-/// `DialogHelp` (`ui/dialog-help.tsx`): the bold "Help" title with
-/// the `esc/enter` close hint, the command-palette hint line
-/// ("Press ctrl+p to see all available actions and commands in any
-/// context."), then the keybinding table grouped by mode — built from
-/// the keymap's default table (bound entries only; "none" rows stay
-/// out). The binding column shows every alternative, `<leader>`
-/// expanded (`ctrl+x m`).
+/// `DialogWorktreeName` (`component/dialog-worktree-name.tsx`): the
+/// bold "Name worktree" title with the `esc` hint, the input over
+/// the formfield background ("Worktree name" placeholder), and the
+/// `enter submit` / `tab generate one` footer hints.
+fn render_worktree_name_prompt(
+    entry: &DialogEntry,
+    styles: &DialogStyles,
+    surface: Color,
+    width: usize,
+) -> SelectView {
+    let default = styles.default_fg;
+    let mut rows: Vec<Vec<crate::render::Cell>> = Vec::new();
+
+    let mut title_row = blank_row(width, default, surface);
+    put_text(&mut title_row, 4, "Name worktree", styles.text, surface, 1);
+    put_text_end(&mut title_row, width - 4, "esc", styles.muted, surface, 0);
+    rows.push(title_row);
+
+    rows.push(blank_row(width, default, surface));
+
+    let mut input = blank_row(width, default, surface);
+    let input_width = width.saturating_sub(8);
+    for slot in input.iter_mut().skip(4).take(input_width) {
+        *slot = crate_render_cell(' ', 0, default, styles.formfield_bg);
+    }
+    if entry.value.is_empty() {
+        put_text(&mut input, 4, "Worktree name", styles.muted, styles.formfield_bg, 0);
+    } else {
+        let end =
+            put_text(&mut input, 4, &entry.value, styles.formfield_fg, styles.formfield_bg, 0);
+        if end < 4 + input_width {
+            input[end] = crate_render_cell(' ', 0, surface, styles.formfield_fg);
+        }
+    }
+    rows.push(input);
+
+    rows.push(blank_row(width, default, surface));
+
+    // The footer hints (enter submit · tab generate one).
+    let mut footer = blank_row(width, default, surface);
+    let end = put_text(&mut footer, 4, "enter", styles.text, surface, 0);
+    put_text(&mut footer, end + 1, "submit", styles.muted, surface, 0);
+    let end = put_text(&mut footer, 16, "tab", styles.text, surface, 0);
+    put_text(&mut footer, end + 1, "generate one", styles.muted, surface, 0);
+    rows.push(footer);
+
+    SelectView { rows, width }
+}
+
+/// `DialogHelp` (`ui/dialog-help.tsx`) — v2's help is NOT a keybind
+/// table: the bold "Help" title with the `esc/enter` close hint, the
+/// command-palette hint line ("Press ctrl+p to see all available
+/// actions and commands in any context."), and a right-justified
+/// `ok` button (`paddingHorizontal 3` over
+/// `background.action.primary.focused` /
+/// `text.action.primary.focused`). D-05: the port's earlier
+/// keybinding table (and its 22-column binding clamp) is gone — v2
+/// renders no list here.
 fn render_help_content(styles: &DialogStyles, surface: Color, width: usize) -> SelectView {
     let default = styles.default_fg;
     let mut rows: Vec<Vec<crate::render::Cell>> = Vec::new();
@@ -380,45 +508,17 @@ fn render_help_content(styles: &DialogStyles, surface: Color, width: usize) -> S
     rows.push(hint);
     rows.push(blank_row(width, default, surface));
 
-    // The binding table grouped by layer (mode), bound entries only.
-    let layers = ["base", "input", "dialog", "diff", "autocomplete"];
-    let leader =
-        crate::keymap::KeyStroke::parse("ctrl+x").unwrap_or_else(|| crate::keymap::KeyStroke {
-            key: "x".into(),
-            ctrl: true,
-            alt: false,
-            shift: false,
-            super_key: false,
-        });
-    for layer in layers {
-        let entries: Vec<&crate::keymap::CommandDef> = crate::keymap::default_table()
-            .iter()
-            .filter(|def| def.layer == layer && def.defaults != "none" && def.command != "leader")
-            .collect();
-        if entries.is_empty() {
-            continue;
-        }
-        let binding_width = entries
-            .iter()
-            .map(|def| display_width(&def.bindings_display(&leader)))
-            .max()
-            .unwrap_or(8)
-            .min(22);
-        let mut section = blank_row(width, default, surface);
-        put_text(&mut section, 4, layer, styles.text, surface, 1);
-        rows.push(section);
-        for def in entries {
-            let mut row = blank_row(width, default, surface);
-            let binding = def.bindings_display(&leader);
-            let at = 4 + binding_width + 2;
-            put_text(&mut row, 4, &binding, styles.formfield_fg, surface, 0);
-            let description =
-                crate::wrap::take_width(def.description, width.saturating_sub(at + 2).max(8));
-            put_text(&mut row, at, &description, styles.muted, surface, 0);
-            rows.push(row);
-        }
-        rows.push(blank_row(width, default, surface));
+    // The right-justified `ok` button: paddingLeft/Right 3 over the
+    // focused primary action pair, text `text.action.primary.focused`.
+    let mut button = blank_row(width, default, surface);
+    let button_width = 3 + 2 + 3;
+    let start = width.saturating_sub(4 + button_width).max(4);
+    for cell in &mut button[start..start + button_width] {
+        cell.bg = to_cell_color(styles.selected_bg);
+        cell.fg = to_cell_color(styles.selected_fg);
     }
+    put_text(&mut button, start + 3, "ok", styles.selected_fg, styles.selected_bg, 0);
+    rows.push(button);
 
     SelectView { rows, width }
 }
@@ -435,27 +535,6 @@ fn spec_display(spec: &str) -> String {
         });
     crate::keymap::Chord::parse(spec, &leader)
         .map_or_else(|| spec.to_owned(), |chord| chord.display())
-}
-
-fn display_width(text: &str) -> usize {
-    crate::wrap::display_width(text)
-}
-
-impl crate::keymap::CommandDef {
-    /// Every default alternative's display, comma-joined
-    /// (`shortcuts.all`).
-    fn bindings_display(&self, leader: &crate::keymap::KeyStroke) -> String {
-        self.defaults
-            .split(',')
-            .map(str::trim)
-            .filter(|spec| !spec.is_empty() && *spec != "none")
-            .map(|spec| {
-                crate::keymap::Chord::parse(spec, leader)
-                    .map_or_else(|| spec.to_owned(), |chord| chord.display())
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
 }
 
 // -- small paint helpers (cell-level, shared with the prompt) -----------------
@@ -534,6 +613,25 @@ pub fn execute_submission(
             return crate::components::command_palette::execute_server_list_selection(
                 store, picker, &selection,
             );
+        }
+        // A Worktrees row submit: v2's `onSelect` → `selectWorkspace` —
+        // close + navigate home at the directory.
+        Some(DialogKind::Worktrees) => {
+            let directory = value.to_owned();
+            store.select_worktree(&directory);
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // The forced-delete confirm: "yes" re-fires the remove with
+        // `force: true`; anything else just closes (v2's
+        // `DialogWorkspaceFileChanges` yes/no).
+        Some(DialogKind::WorktreeDeleteConfirm { directory }) => {
+            let forced = value == "yes";
+            if forced {
+                let project = store.worktree_dialog().project_id;
+                store.worktree_sink_remove(&project, &directory, true);
+            }
+            store.clear_dialogs();
+            return crate::components::command_palette::Dispatch::Handled;
         }
         _ => {}
     }
@@ -694,15 +792,16 @@ mod tests {
         assert!(input.contains("Session title"), "{input}");
     }
 
-    /// `DialogHelp`: the v2 header (bold "Help" + `esc/enter` close
-    /// hint, the palette hint line) plus the keybinding table grouped
-    /// by mode; return and escape both close.
+    /// `DialogHelp` (D-05): v2's help is the small surface — the bold
+    /// "Help" + `esc/enter` header, the palette hint line, and the
+    /// right-justified `ok` button. NO keybinding table (the port's
+    /// clamped table is removed); return and escape both close.
     #[test]
     fn help_dialog_lists_bindings_and_closes_on_return() {
         let theme = crate::theme::ThemeState::v2_dark();
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
-        store.replace_dialog(DialogKind::Help, DialogSize::Large);
+        store.replace_dialog(DialogKind::Help, DialogSize::Medium);
         let mut frame = blank_base(80, 24);
         render_overlay(&mut frame, &store, &theme, (80, 24));
         let rows: Vec<String> = frame.text_grid();
@@ -714,19 +813,41 @@ mod tests {
             "hint row: {:?}",
             rows[9]
         );
-        // The binding table: grouped by mode, `<leader>` expanded,
-        // bound entries with their descriptions. (The overlay clamps
-        // to the terminal height — a 24-row terminal shows the head
-        // of the list; the early rows pin the shape.)
-        let text = rows.join("\n");
-        assert!(text.contains("base"), "mode sections present");
+        // The right-justified `ok` button (padding 3 each side over
+        // the focused primary action pair).
+        let ok_row = rows[11].trim_end();
+        assert!(ok_row.ends_with("ok"), "ok button right-justified: {ok_row:?}");
         assert!(
-            text.contains("ctrl+x q"),
-            "leader binding expanded (app.exit's third alternative)"
+            ok_row.ends_with("   ok"),
+            "three cells of focused-bg padding left of the label: {ok_row:?}"
         );
-        assert!(text.contains("Exit the application"), "descriptions present");
-        assert!(!text.contains("app.console"), "unbound (none) entries stay out");
-        assert!(!text.contains("Leader key for"), "the leader definition row stays out");
+        let styles = DialogStyles::from_theme(&theme);
+        let expected = match (styles.selected_fg, styles.selected_bg) {
+            (Color::Rgb(r, g, b), Color::Rgb(br, bg_, bb)) => ((r, g, b), (br, bg_, bb)),
+            _ => panic!("focused action tokens must be RGB"),
+        };
+        let button_cells = &frame.cells[11];
+        let ok_pos = rows[11].find("ok").expect("ok text");
+        let fg = match button_cells[ok_pos].fg {
+            CellColor::Rgb(r, g, b) => (r, g, b),
+            _ => (0, 0, 0),
+        };
+        let bg = match button_cells[ok_pos].bg {
+            CellColor::Rgb(r, g, b) => (r, g, b),
+            _ => (0, 0, 0),
+        };
+        assert_eq!((fg, bg), expected, "ok text uses the focused primary action pair");
+        let pad_bg = match button_cells[ok_pos - 3].bg {
+            CellColor::Rgb(r, g, b) => (r, g, b),
+            _ => (0, 0, 0),
+        };
+        assert_eq!(pad_bg, expected.1, "button padding carries the focused bg");
+        // No keybinding table: no mode sections, no binding rows, no
+        // clamp artifacts.
+        let text = rows.join("\n");
+        assert!(!text.contains("base"), "no mode sections in v2 help");
+        assert!(!text.contains("ctrl+x q"), "no binding table");
+        assert!(!text.contains("Exit the application"), "no descriptions");
 
         // return closes (dialog-help binds return + escape).
         let mut keymap = Keymap::new();
@@ -743,7 +864,7 @@ mod tests {
         assert_eq!(store.dialogs().len(), 0);
 
         // Typing in the help dialog neither filters nor moves anything.
-        store.replace_dialog(DialogKind::Help, DialogSize::Large);
+        store.replace_dialog(DialogKind::Help, DialogSize::Medium);
         let outcome = handle_dialog_key(
             &store,
             &mut keymap,

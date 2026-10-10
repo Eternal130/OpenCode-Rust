@@ -245,7 +245,17 @@ impl ModelsExecute {
             let own = |provider: &str| usize::from(own == Some(provider));
             own(&right.provider_id)
                 .cmp(&own(&left.provider_id))
-                .then_with(|| left.provider_id.cmp(&right.provider_id))
+                // v2 compares `left.providerID.localeCompare(right.providerID)`
+                // (tool/plugin/opencode.ts:159-165) — ICU primary is
+                // case-insensitive with lowercase-first tertiary ties; the
+                // repo's ASCII approximation (session/runner/context.rs)
+                // is case-fold then lowercase-first tie-break.
+                .then_with(|| {
+                    left.provider_id
+                        .to_lowercase()
+                        .cmp(&right.provider_id.to_lowercase())
+                        .then_with(|| right.provider_id.cmp(&left.provider_id))
+                })
                 .then_with(|| right.released.cmp(&left.released))
         });
         // Family dedup: newest per (provider, family) unless `all`.
@@ -494,5 +504,31 @@ mod tests {
         );
         assert_eq!(output.total, 2);
         assert_eq!(output.providers[0].id, "mine");
+    }
+
+    /// D-05: the provider key is `localeCompare` (ICU case-insensitive
+    /// primary), not a byte compare — `"anthropic"` sorts before
+    /// `"Z.ai"` even though `'Z' < 'a'` in ASCII.
+    #[test]
+    fn tool_opencode_models_provider_order_is_locale_collated() {
+        let mixed = crate::provider_catalog::catalog::Catalog::parse(
+            r#"{
+                "Z.ai": {
+                    "name": "Z.ai", "id": "Z.ai",
+                    "models": { "glm": { "id": "glm", "name": "GLM", "release_date": "2024-06-01",
+                        "limit": { "context": 1000, "output": 10 } } }
+                },
+                "anthropic": {
+                    "name": "Anthropic", "id": "anthropic",
+                    "models": { "claude": { "id": "claude", "name": "Claude", "release_date": "2024-06-01",
+                        "limit": { "context": 1000, "output": 10 } } }
+                }
+            }"#,
+        )
+        .expect("catalog parses");
+        let execute = ModelsExecute { catalog: mixed, own_provider: parking_lot::Mutex::new(None) };
+        let output = execute.list(&ModelsQuery::default(), None);
+        let order: Vec<&str> = output.providers.iter().map(|page| page.id.as_str()).collect();
+        assert_eq!(order, vec!["anthropic", "Z.ai"], "localeCompare, not byte order");
     }
 }

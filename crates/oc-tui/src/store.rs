@@ -96,6 +96,18 @@ pub enum DialogKind {
     /// from the store's server-list state ([`ServerLists`]) — loading,
     /// error, and empty states included.
     ServerList { command: &'static str, title: &'static str },
+    /// The Worktrees dialog (`component/dialog-workspaces.tsx`):
+    /// `session.move` / `/worktrees` — the project's worktree
+    /// directories with move/new/delete/refresh actions, driven by
+    /// the store's worktree state ([`WorktreeDialogState`]).
+    Worktrees,
+    /// `DialogWorktreeName` (`component/dialog-worktree-name.tsx`):
+    /// the new-worktree name input (tab generates a slug, enter
+    /// confirms the slugified value, esc cancels).
+    WorktreeName,
+    /// `DialogWorkspaceFileChanges` in its delete-confirm role: the
+    /// forced-remove question after a `forceRequired` rejection.
+    WorktreeDeleteConfirm { directory: String },
     /// A plugin dialog (`DialogKind::Plugin`, wave 3's open dialog
     /// seam): the content was materialized at OPEN time through
     /// [`PluginDialogSource`] (or arrived fully-built on a
@@ -368,6 +380,9 @@ pub struct ServerModel {
     pub deprecated: bool,
     /// `ModelInfo.variants[].id` — the variant picker's source.
     pub variants: Vec<String>,
+    /// `ModelInfo.time.released` (ms epoch; 0 unknown) — the dialog's
+    /// release-date ordering key (D-05).
+    pub released: f64,
 }
 
 /// One `provider.list` row (`ProviderInfo` subset).
@@ -460,6 +475,84 @@ impl SelectionSink for RecordingSelectionSink {
             .borrow_mut()
             .push((session_id.to_owned(), SelectionCall::Agent(agent.to_owned())));
     }
+}
+
+/// The worktree API seam (v2's `client.api.worktree.*` calls in
+/// `dialog-workspaces.tsx` / `prompt/move.tsx`): the dialog's actions
+/// run through it; tests record, production POSTs through oc-client
+/// (spawned — results land back via the store's worktree-result
+/// setters, mirroring the SSE `worktree.updated` refetch).
+pub trait WorktreeSink {
+    /// `worktree.list` (the dialog's open fetch).
+    fn list(&self, project_id: &str);
+    /// `worktree.refresh` (open-once + the ctrl+r action).
+    fn refresh(&self, project_id: &str);
+    /// `worktree.create` (the name dialog's confirm).
+    fn create(&self, project_id: &str, name: &str);
+    /// `worktree.remove` (two-press delete; `force` after the
+    /// file-changes confirm).
+    fn remove(&self, project_id: &str, directory: &str, force: bool);
+    /// `session.move` (the ctrl+m action).
+    fn move_session(&self, session_id: &str, directory: &str);
+}
+
+/// One recorded [`WorktreeSink`] call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorktreeCall {
+    List(String),
+    Refresh(String),
+    Create { project_id: String, name: String },
+    Remove { project_id: String, directory: String, force: bool },
+    MoveSession { session_id: String, directory: String },
+}
+
+/// The test sink: records every call.
+#[derive(Debug, Default)]
+pub struct RecordingWorktreeSink {
+    pub calls: std::cell::RefCell<Vec<WorktreeCall>>,
+}
+
+impl WorktreeSink for RecordingWorktreeSink {
+    fn list(&self, project_id: &str) {
+        self.calls.borrow_mut().push(WorktreeCall::List(project_id.to_owned()));
+    }
+
+    fn refresh(&self, project_id: &str) {
+        self.calls.borrow_mut().push(WorktreeCall::Refresh(project_id.to_owned()));
+    }
+
+    fn create(&self, project_id: &str, name: &str) {
+        self.calls.borrow_mut().push(WorktreeCall::Create {
+            project_id: project_id.to_owned(),
+            name: name.to_owned(),
+        });
+    }
+
+    fn remove(&self, project_id: &str, directory: &str, force: bool) {
+        self.calls.borrow_mut().push(WorktreeCall::Remove {
+            project_id: project_id.to_owned(),
+            directory: directory.to_owned(),
+            force,
+        });
+    }
+
+    fn move_session(&self, session_id: &str, directory: &str) {
+        self.calls.borrow_mut().push(WorktreeCall::MoveSession {
+            session_id: session_id.to_owned(),
+            directory: directory.to_owned(),
+        });
+    }
+}
+
+/// What one ctrl+d press did in the two-press delete machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteStep {
+    /// First press: the row armed ("Press ctrl+d again to confirm").
+    Armed,
+    /// Second press on the armed row: fire the remove.
+    Confirmed,
+    /// The row is not deletable (unmanaged root / not the armed row).
+    Invalid,
 }
 
 /// The store root.
@@ -597,6 +690,10 @@ pub struct Store {
     server_lists: Signal<ServerLists>,
     /// The per-session model/agent selection (composer commits).
     selection: Signal<SelectionState>,
+    /// The Worktrees dialog state (list + two-press delete).
+    worktrees: Signal<crate::components::dialog_worktrees::WorktreeDialogState>,
+    /// The worktree API seam (the dialog's actions).
+    worktree_sink: std::cell::RefCell<Rc<dyn WorktreeSink>>,
     /// The engine prompt API stub submissions forward to.
     prompt_sink: std::rc::Rc<dyn PromptSink>,
     /// The server selection API (model/agent switch POSTs).
@@ -665,6 +762,7 @@ struct StoreSignals {
     prompt: Signal<PromptState>,
     server_lists: Signal<ServerLists>,
     selection: Signal<SelectionState>,
+    worktrees: Signal<crate::components::dialog_worktrees::WorktreeDialogState>,
     plugin_commands: Signal<Vec<PluginCommandEntry>>,
     plugin_dialogs: Signal<HashMap<String, PluginDialogContent>>,
     plugin_sections: Signal<Vec<crate::components::sidebar::SidebarSection>>,
@@ -702,6 +800,7 @@ impl Store {
                 watchers.prompt.get(),
                 watchers.server_lists.get(),
                 watchers.selection.get(),
+                watchers.worktrees.get(),
                 watchers.plugin_commands.get(),
                 watchers.plugin_dialogs.get(),
                 watchers.plugin_sections.get(),
@@ -735,6 +834,7 @@ impl Store {
             prompt,
             server_lists,
             selection,
+            worktrees,
             plugin_commands,
             plugin_dialogs,
             plugin_sections,
@@ -757,6 +857,8 @@ impl Store {
             prompt,
             server_lists,
             selection,
+            worktrees,
+            worktree_sink: std::cell::RefCell::new(Rc::new(RecordingWorktreeSink::default())),
             prompt_sink,
             plugin_commands,
             plugin_dialogs,
@@ -800,6 +902,10 @@ impl Store {
         let prompt = Signal::new(&runtime, PromptState::default());
         let server_lists = Signal::new(&runtime, ServerLists::default());
         let selection = Signal::new(&runtime, SelectionState::default());
+        let worktrees = Signal::new(
+            &runtime,
+            crate::components::dialog_worktrees::WorktreeDialogState::default(),
+        );
         let plugin_commands = Signal::new(&runtime, Vec::<PluginCommandEntry>::new());
         let plugin_dialogs =
             Signal::new(&runtime, std::collections::HashMap::<String, PluginDialogContent>::new());
@@ -826,6 +932,7 @@ impl Store {
                 prompt,
                 server_lists,
                 selection,
+                worktrees,
                 plugin_commands,
                 plugin_dialogs,
                 plugin_sections,
@@ -1038,6 +1145,183 @@ impl Store {
     /// Merge the agent list fetch result.
     pub fn set_agents(&self, agents: ListState<ServerAgent>) {
         self.server_lists.update(|lists| lists.agents = agents);
+    }
+
+    // -- the Worktrees dialog (R-05) ---------------------------------------
+
+    /// The current worktree dialog state.
+    #[must_use]
+    pub fn worktree_dialog(&self) -> crate::components::dialog_worktrees::WorktreeDialogState {
+        self.worktrees.get()
+    }
+
+    /// Swap the worktree sink.
+    pub fn set_worktree_sink(&self, sink: Rc<dyn WorktreeSink>) {
+        *self.worktree_sink.borrow_mut() = sink;
+    }
+
+    /// Bind the dialog's project (`projectID` + the current checkout
+    /// directory — v2 resolves these through the location service at
+    /// open; the port receives them from the boot/project fetch).
+    pub fn set_worktree_project(&self, project_id: &str, current: Option<&str>) {
+        self.worktrees.update(|state| {
+            project_id.clone_into(&mut state.project_id);
+            state.current = current.map(String::from);
+        });
+    }
+
+    /// Open the Worktrees dialog (`session.move` / `/worktrees`):
+    /// XLARGE chrome (v2 `dialog.setSize("xlarge")`), the list reset
+    /// to loading + the fetch fired (tests set the list directly).
+    pub fn open_worktrees_dialog(&self) {
+        let project = self.worktrees.get().project_id;
+        self.worktrees.update(|state| {
+            state.list = ListState::Loading;
+            state.pending_delete = None;
+            state.removing = None;
+        });
+        self.replace_dialog(DialogKind::Worktrees, DialogSize::Xlarge);
+        if !project.is_empty() {
+            self.worktree_sink.borrow().list(&project);
+        }
+    }
+
+    /// A `worktree.list` result: replaces the rows and clears the
+    /// armed delete / in-flight removal.
+    pub fn set_worktree_list(
+        &self,
+        list: ListState<crate::components::dialog_worktrees::WorktreeEntry>,
+    ) {
+        self.worktrees.update(|state| {
+            state.list = list;
+            state.pending_delete = None;
+            state.removing = None;
+        });
+    }
+
+    /// One ctrl+d press on `directory` — v2's two-press delete
+    /// (dialog-workspaces.tsx:240-246): the first press arms the row,
+    /// the second on the SAME row confirms, anything else re-targets.
+    /// Deletable rows are strategy-managed roots only.
+    pub fn worktree_delete_pressed(&self, directory: &str) -> DeleteStep {
+        let managed = self.worktrees.get().list.rows().is_some_and(|rows| {
+            rows.iter().any(|row| row.directory == directory && row.strategy.is_some())
+        });
+        if !managed {
+            return DeleteStep::Invalid;
+        }
+        let armed = self.worktrees.get().pending_delete;
+        if armed.as_deref() == Some(directory) {
+            self.worktrees.update(|state| {
+                state.pending_delete = None;
+                state.removing = Some(directory.to_owned());
+            });
+            DeleteStep::Confirmed
+        } else {
+            self.worktrees.update(|state| state.pending_delete = Some(directory.to_owned()));
+            DeleteStep::Armed
+        }
+    }
+
+    /// Any selection move clears the armed delete (`onMove`).
+    pub fn clear_worktree_delete(&self) {
+        self.worktrees.update(|state| state.pending_delete = None);
+    }
+
+    /// A `worktree.remove` succeeded: drop the row (and the in-flight
+    /// marker). v2 refetches on `worktree.updated`; the port mutates
+    /// the loaded list.
+    pub fn apply_worktree_removed(&self, directory: &str) {
+        self.worktrees.update(|state| {
+            state.pending_delete = None;
+            state.removing = None;
+            if let ListState::Loaded(rows) = &mut state.list {
+                rows.retain(|row| row.directory != directory);
+            }
+        });
+    }
+
+    /// A `worktree.remove` failed. `force_required` (v2's
+    /// `error.data.forceRequired === true`) opens the file-changes
+    /// confirm dialog; anything else surfaces the error toast.
+    pub fn apply_worktree_remove_failed(&self, directory: &str, error: &str, force_required: bool) {
+        self.worktrees.update(|state| {
+            state.removing = None;
+            state.pending_delete = None;
+        });
+        if force_required {
+            self.replace_dialog(
+                DialogKind::WorktreeDeleteConfirm { directory: directory.to_owned() },
+                DialogSize::Medium,
+            );
+        } else {
+            self.toast_show(crate::components::toast::ToastOptions {
+                title: Some("Failed to delete worktree".to_owned()),
+                message: error.to_owned(),
+                variant: "error",
+                duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
+                action_label: None,
+            });
+        }
+    }
+
+    /// A `worktree.create` succeeded (`DialogWorktreeName` →
+    /// `worktree.create` → navigate home at the new directory — the
+    /// port's Home route carries no location, the row joins the
+    /// list).
+    pub fn apply_worktree_created(&self, directory: &str) {
+        self.worktrees.update(|state| {
+            if let ListState::Loaded(rows) = &mut state.list {
+                if !rows.iter().any(|row| row.directory == directory) {
+                    rows.push(crate::components::dialog_worktrees::WorktreeEntry {
+                        directory: directory.to_owned(),
+                        strategy: Some("manual".to_owned()),
+                    });
+                }
+            }
+        });
+        self.clear_dialogs();
+        self.navigate(Route::Home);
+    }
+
+    /// Submitting a row (v2's `onSelect` → `selectWorkspace`): close
+    /// and navigate home at the directory.
+    pub fn select_worktree(&self, _directory: &str) {
+        self.clear_dialogs();
+        self.navigate(Route::Home);
+    }
+
+    /// The ctrl+m action: `session.move` POST + close (v2 clears the
+    /// dialog first, then moves).
+    pub fn move_session_to_worktree(&self, session_id: &str, directory: &str) {
+        self.clear_dialogs();
+        self.worktree_sink.borrow().move_session(session_id, directory);
+    }
+
+    /// The ctrl+r action: `worktree.refresh` (fire-and-forget; the
+    /// refetch lands through the list setter).
+    pub fn worktree_sink_refresh(&self, project_id: &str) {
+        self.worktree_sink.borrow().refresh(project_id);
+    }
+
+    /// A confirmed delete: `worktree.remove` (fire-and-forget; the
+    /// result lands through `apply_worktree_removed` /
+    /// `apply_worktree_remove_failed`).
+    pub fn worktree_sink_remove(&self, project_id: &str, directory: &str, force: bool) {
+        self.worktree_sink.borrow().remove(project_id, directory, force);
+    }
+
+    /// The name dialog's confirm: slugify (empty falls back to a
+    /// generated slug — v2's `confirm()`), fire `worktree.create`.
+    pub fn worktree_create_from_name(&self, name: &str, slug_seed: u64) {
+        let name = crate::components::dialog_worktrees::slugify(name);
+        let name = if name.is_empty() {
+            crate::components::dialog_worktrees::generate_slug(slug_seed)
+        } else {
+            name
+        };
+        let project = self.worktrees.get().project_id;
+        self.worktree_sink.borrow().create(&project, &name);
     }
 
     /// Swap the server selection sink.
