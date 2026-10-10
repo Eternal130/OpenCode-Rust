@@ -294,6 +294,25 @@ impl ResyncSource for HttpResync {
     }
 }
 
+/// Convert the wire `files` array (resolved `Prompt.FileAttachment`)
+/// into the model's [`UserFile`] set — inline images only matter for
+/// display, and duplicates collapse (`deduplicateVisibleImages`).
+#[must_use]
+pub fn files_from_wire(
+    files: Option<&[oc_client::types::PromptFileAttachment]>,
+) -> Vec<crate::components::message::model::UserFile> {
+    let Some(files) = files else { return Vec::new() };
+    let mapped: Vec<crate::components::message::model::UserFile> = files
+        .iter()
+        .map(|file| crate::components::message::model::UserFile {
+            mime: file.mime.clone(),
+            data: file.data.clone(),
+            name: file.name.clone(),
+        })
+        .collect();
+    crate::components::message::model::deduplicate_visible_files(&mapped)
+}
+
 /// Convert one `message.list` wire entry into the transcript model
 /// (`SessionMessageInfo` subset the store reducers build — user /
 /// assistant-with-parts / idle; other kinds are skipped, matching the
@@ -311,6 +330,7 @@ pub fn message_from_info(
             id: user.id.clone(),
             text: user.text.clone(),
             created: epoch(Some(user.time.created)).unwrap_or(0),
+            files: files_from_wire(user.files.as_deref()),
         }),
         SessionMessageInfo::Assistant(assistant) => {
             let mut parts = Vec::new();

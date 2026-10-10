@@ -438,7 +438,12 @@ fn session_error_part_matches_text_grid_and_ansi() {
     store.set_messages(
         "ses_err",
         vec![
-            Message::User { id: "u1".into(), text: "please answer".into(), created: 0 },
+            Message::User {
+                id: "u1".into(),
+                text: "please answer".into(),
+                created: 0,
+                files: Vec::new(),
+            },
             Message::Assistant {
                 id: "a1".into(),
                 agent: "build".into(),
