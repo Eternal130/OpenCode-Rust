@@ -33,6 +33,10 @@ if [[ -n "${OPENCODE_DEV_GATE:-}" ]]; then
   exec bash -c "$1"
 fi
 
+# Target checkout: /opt/opencode-rust by default; lanes may set
+# OPENCODE_DEV_GATE_DIR to run against an isolated git worktree.
+GATE_DIR="${OPENCODE_DEV_GATE_DIR:-/opt/opencode-rust}"
+
 exec systemd-run --scope --quiet \
   --unit="opencode-gate-$(date +%s)-$$" \
   --uid=eternal130 --gid=eternal130 \
@@ -42,4 +46,4 @@ exec systemd-run --scope --quiet \
   --setenv=OPENCODE_DEV_GATE=1 \
   --setenv=HOME=/home/eternal130 \
   --setenv=PATH="/home/eternal130/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-  bash -c "cd /opt/opencode-rust && $1"
+  bash -c "cd ${GATE_DIR} && $1"
