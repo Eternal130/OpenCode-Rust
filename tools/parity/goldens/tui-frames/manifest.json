@@ -1415,13 +1415,13 @@
   "replay": [
     {
       "id": "exit-leader-q",
-      "description": "Leader-q exit sequence: with text in the prompt the app.exit binding is disabled (leader+q merely types q); once the draft is cleared, <leader> (ctrl+x) followed by q dispatches app.exit and tears the renderer down",
+      "description": "Leader-q exit sequence: with text in the prompt the app.exit binding is disabled and the chord suspends the textarea (D-02, v2 keymap semantics: <leader>q resolves through the base layer to session.queued_prompts — the q is dispatched, not typed, and the draft survives); once the draft is cleared, <leader> (ctrl+x) followed by q dispatches app.exit and tears the renderer down",
       "source": "test/app-lifecycle.test.tsx (exit ordering) + src/config/keybind.ts (app.exit = 'ctrl+c,ctrl+d,<leader>q', leader default ctrl+x) + src/app.tsx app.exit layer enabled only while the prompt is empty",
       "keys": "kitty",
       "steps": 4,
       "file": "replay/exit-leader-q.json",
-      "bytes": 1421,
-      "sha256": "eeb40d89e813b1156b2905e2c831b6ad7cadf5ff35a85701307f0fc3c15e3715"
+      "bytes": 1787,
+      "sha256": "95530303d2c370f5a8db057a1fcc797daa6f641283243bd9c7fe69bc4b316d28"
     },
     {
       "id": "palette-ctrl-p",

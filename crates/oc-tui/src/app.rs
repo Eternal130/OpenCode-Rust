@@ -11,13 +11,23 @@
 //! 2. **Permission blockers** (`routes/session/permission.tsx`): while a
 //!    permission ask is live, every key routes to the question body
 //!    (`app.exit` shadowed while open).
-//! 3. **The conditional `app.exit` layer**: enabled only while the
+//! 3. **The keymap's leader interception** (D-02): v2's keymap
+//!    prepends its key listener above every focused renderable
+//!    (`@opentui/keymap/opentui.ts` `onKeyPress` →
+//!    `renderer.keyInput.prependListener`), and the focused surfaces
+//!    skip the leader stroke and any stroke while a leader sequence is
+//!    pending (`terminal-pane.tsx:144` — `if (keymap.isLeader(event)
+//!    || leader()) return`; `prompt/index.tsx:192-193` mutes the
+//!    prompt while pending). Leader chords therefore fire with a
+//!    NON-EMPTY draft: the chord suspends the textarea, executes, and
+//!    the draft survives intact. `app.exit` stays conditional on the
+//!    empty prompt (`<leader>q` merely types `q` into text).
+//! 4. **The conditional `app.exit` layer**: enabled only while the
 //!    focused prompt is EMPTY (`Keymap.createLayer({ enabled: () =>
-//!    prompt.text === "" })`) — `<leader>q` exits on an empty prompt and
-//!    merely types `q` into a non-empty one.
-//! 4. **The managed textarea layer** (`registerManagedTextareaLayer`):
+//!    prompt.text === "" })`).
+//! 5. **The managed textarea layer** (`registerManagedTextareaLayer`):
 //!    with text present, printable/editing keys feed the composer.
-//! 5. **The base layer** (`ctrl+p`, leader chords, tab commands …).
+//! 6. **The base layer** (`ctrl+p`, leader chords, tab commands …).
 //!
 //! ## The run loop
 //!
@@ -355,6 +365,36 @@ impl App {
         //    falling through — the textarea/input layers sit above
         //    base for those.
         if draft_empty {
+            let had_pending = self.keymap.pending_display().is_some();
+            match self.keymap.lookup_base(stroke.clone(), &self.clock) {
+                Outcome::Command { command, .. } if command == "app.exit" => {
+                    self.request_exit();
+                    return;
+                }
+                Outcome::Command { command, args } if had_pending => {
+                    let dispatch = self.dispatcher.dispatch(&self.store, &command, args.as_deref());
+                    if let Dispatch::ServerPending(reason) = dispatch {
+                        let _ = reason;
+                    }
+                    return;
+                }
+                Outcome::Pending { .. } | Outcome::Cancelled => return,
+                Outcome::Command { .. } | Outcome::Unhandled => {}
+            }
+        }
+        // 1b. D-02 — leader chords with a NON-empty draft: v2's keymap
+        //     sees keys above the focused textarea (the prepended
+        //     keypress listener), and the focused surface skips the
+        //     leader stroke and any continuation while a sequence is
+        //     pending (`terminal-pane.tsx:144` — `if (keymap.isLeader-
+        //     (event) || leader()) return`). The leader therefore arms
+        //     over text, the continuation resolves through the base
+        //     layer, the chord executes, and the draft stays intact.
+        //     `app.exit` is disabled above while text exists, so
+        //     <leader>q falls through fresh and types `q`; an
+        //     unmatched/escape continuation is consumed by the keymap
+        //     (escape clears the pending sequence), never the textarea.
+        else if self.keymap.pending_display().is_some() || self.keymap.is_leader(stroke) {
             let had_pending = self.keymap.pending_display().is_some();
             match self.keymap.lookup_base(stroke.clone(), &self.clock) {
                 Outcome::Command { command, .. } if command == "app.exit" => {
@@ -1147,8 +1187,9 @@ pub async fn run_with_size(
 
     // Tabs persistence (v2's useStorage contract — see storage.rs):
     // restore on boot, save on change. The home selection stages with
-    // the created session (open + commit the staged pick).
-    let tabs_storage = crate::storage::ChannelStorage::open_default().ok();
+    // the created session (open + commit the staged pick). The boot
+    // load runs the one-time local→stable migration first (D-06).
+    let tabs_storage = crate::storage::ChannelStorage::open_default_migrated().ok();
     if let Some(storage) = &tabs_storage {
         let document: crate::storage::TabsDocument =
             storage.read_or_default(crate::storage::KEY_TABS);
