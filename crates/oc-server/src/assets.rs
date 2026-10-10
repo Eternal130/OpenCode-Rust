@@ -36,7 +36,7 @@ pub fn openapi_response() -> Response {
 #[must_use]
 pub fn serve(path: &str, method: &Method, state: &AppState) -> Response {
     let key = path.strip_prefix('/').unwrap_or(path);
-    let requested = state.assets.get(key).map(|entry| entry.value().clone());
+    let requested = state.assets.get(key);
 
     if (key.starts_with("_assets/") || key.starts_with("icons/")) && requested.is_none() {
         let mut response = crate::errors::empty(StatusCode::NOT_FOUND);
@@ -45,9 +45,7 @@ pub fn serve(path: &str, method: &Method, state: &AppState) -> Response {
     }
 
     let name = if requested.is_some() { key } else { "index.html" };
-    let Some(file) =
-        requested.or_else(|| state.assets.get("index.html").map(|entry| entry.value().clone()))
-    else {
+    let Some(file) = requested.or_else(|| state.assets.get("index.html")) else {
         return crate::errors::empty(StatusCode::NOT_FOUND);
     };
 

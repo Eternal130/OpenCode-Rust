@@ -83,7 +83,7 @@ async fn start_stub(mode: PromptMode) -> Stub {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             if probe.write_all(warm.as_bytes()).await.is_ok() {
                 let mut buf = [0u8; 256];
-                if probe.read(&mut buf).await.map_or(0, |n| n) > 0 {
+                if probe.read(&mut buf).await.unwrap_or(0) > 0 {
                     ready = true;
                     break;
                 }
