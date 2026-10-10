@@ -11,7 +11,10 @@
 //! `{directory}:{branch}` + keybind-hints inputs when its panel mounts
 //! over the composer.
 
-use crate::components::composer::render::{render_prompt_frame, FooterHints, PromptView};
+use crate::components::composer::autocomplete;
+use crate::components::composer::render::{
+    render_prompt_frame, AutocompleteView, FooterHints, PromptView,
+};
 use crate::components::message::list::{render_transcript, TranscriptOptions};
 use crate::components::session_tabs::{self, Attention, TabStatus, TabView};
 use crate::render::{paint_placed_with_fills, Frame};
@@ -112,28 +115,10 @@ pub fn render_session(
     // the transcript shift down under it.
     let strip = paint_live_tabs_bar(store, session_id, width, styles);
 
-    // The composer's mount frame (its own height grows with the
-    // draft); dock it at the bottom, transcript above.
-    let composer = store.composer(session_id);
-    let (status_agent, status_model) = composer_statusline(store, session_id);
-    let view = PromptView {
-        draft: &composer.draft,
-        placeholder: composer.placeholder_text(),
-        autocomplete: None,
-        footer: FooterHints {
-            location: String::new(),
-            agent_shortcut: "shift+tab".into(),
-            command_shortcut: "ctrl+p".into(),
-            status_agent,
-            status_model,
-            plugin_hints: store.plugin_footer_hints(),
-        },
-        top: 0,
-    };
-    let mount_height =
-        crate::components::composer::render::mount_height(&composer.draft, width, height)
-            .min(height);
-    let mount = render_prompt_frame(&view, width, mount_height, &theme);
+    // The composer's docked mount (popup rows above it when the
+    // slash palette is open) + the transcript's height budget.
+    let (mount, prompt_height, mount_height) =
+        composer_mount_frame(store, session_id, &theme, width, height);
     let spacing = usize::from(mount_height + 1 < height);
     let transcript_height = height.saturating_sub(mount_height + spacing + 2);
 
@@ -181,8 +166,79 @@ pub fn render_session(
     }
     let mut frame = paint_placed_with_fills(&placed, &fills, size, fill);
     paste(&mut frame, &strip, 0, 0);
-    paste(&mut frame, &mount, 0, height - mount_height);
+    paste(&mut frame, &mount, 0, height - prompt_height);
     frame
+}
+
+/// The session composer's docked prompt frame ([`render_session`]'s
+/// composer half): the live slash-palette popup (wave-6 — typing `/`
+/// opens the command list WITH each command's description), the
+/// agent-colored rail, the blinking block caret, and the mount/prompt
+/// heights the route's layout needs.
+#[must_use]
+fn composer_mount_frame(
+    store: &Store,
+    session_id: &str,
+    theme: &crate::theme::ThemeState,
+    width: usize,
+    height: usize,
+) -> (Frame, usize, usize) {
+    let composer = store.composer(session_id);
+    let (status_agent, status_model) = composer_statusline(store, session_id);
+    // The popup over the composer: live slash-palette state
+    // (`component/prompt/autocomplete.tsx`'s mount).
+    let popup_options = match composer.autocomplete.visible {
+        Some(autocomplete::Mode::Command) => Some(composer.autocomplete.options.clone()),
+        _ => None,
+    };
+    let autocomplete = popup_options.as_ref().map(|options| AutocompleteView {
+        options: options.as_slice(),
+        selected: composer.autocomplete.selected,
+        title_width: composer.autocomplete.registry.display_width(),
+    });
+    // The rail: the ACTIVE AGENT's categorical color once the agent
+    // list resolved (v2 `borderHighlight()` at fade alpha 1); while
+    // the list loads the no-agent fallback `border.base` stands
+    // (promptDisplay keeps its previous undefined color).
+    let rail = store.composer_rail_color(session_id).map(crate::render::CellColor::from);
+    // The blinking block cursor: painted only in its visible phase
+    // (the run loop's clock tick re-renders every 100 ms).
+    let caret = crate::components::composer::render::cursor_blink_on(store.clock())
+        .then_some(composer.caret);
+    let mount_height =
+        crate::components::composer::render::mount_height(&composer.draft, width, height)
+            .min(height);
+    // The popup floats ABOVE the composer mount: the prompt frame
+    // renders `popup_rows` popup rows with the composer at
+    // `top = popup_rows` inside it, pasted so the composer still docks
+    // at the bottom (no popup ⇒ the previous single-mount shape).
+    let anchor = height.saturating_sub(mount_height);
+    let popup_rows = if matches!(composer.autocomplete.visible, Some(autocomplete::Mode::Command)) {
+        crate::components::composer::autocomplete::popup_height(
+            composer.autocomplete.options.len(),
+            anchor,
+        )
+    } else {
+        0
+    };
+    let prompt_height = (mount_height + popup_rows).min(height);
+    let view = PromptView {
+        draft: &composer.draft,
+        placeholder: composer.placeholder_text(),
+        autocomplete,
+        footer: FooterHints {
+            location: String::new(),
+            agent_shortcut: "shift+tab".into(),
+            command_shortcut: "ctrl+p".into(),
+            status_agent,
+            status_model,
+            plugin_hints: store.plugin_footer_hints(),
+        },
+        top: prompt_height - mount_height,
+        rail,
+        caret,
+    };
+    (render_prompt_frame(&view, width, prompt_height, theme), prompt_height, mount_height)
 }
 
 /// Paste `region`'s cells at (`x`, `y`); anything left keeps the fill.

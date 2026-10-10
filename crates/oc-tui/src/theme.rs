@@ -479,14 +479,23 @@ pub fn detect_system_mode() -> Mode {
 }
 
 /// Query the terminal's default background color via OSC 11
-/// (`\x1b]11;?\x07`) through **crossterm's own event reader** (the
-/// probe must share the input thread — a second stdin reader would
-/// steal keystrokes). The live run loop calls this from its input
-/// thread before entering the read loop; `None` when the terminal is
-/// not a TTY, the query times out, or the answer does not parse.
+/// (`\x1b]11;?\x07`) with a **raw, self-contained read** of the tty
+/// (poll + read on fd 0). The probe runs BEFORE crossterm's event
+/// reader starts (the run loop's input thread calls it first), so it
+/// owns stdin exclusively for its short window; every byte that
+/// arrives inside the window is consumed here — the reply never leaks
+/// into the input stream (a responding terminal's `11;rgb:…` must
+/// never surface as typed text).
+///
+/// `None` when stdin/stdout is not a TTY, the write fails, or no
+/// parsable answer arrives within the timeout (headless pipes, dumb
+/// terminals) — the caller's dark fallback.
 #[must_use]
 pub fn query_terminal_background() -> Option<(u8, u8, u8)> {
     use std::io::{IsTerminal, Write};
+    use std::time::Duration;
+
+    const PROBE_TIMEOUT: Duration = Duration::from_millis(150);
 
     if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
         return None; // headless: dark fallback
@@ -501,21 +510,63 @@ pub fn query_terminal_background() -> Option<(u8, u8, u8)> {
                 return None;
             }
         }
-        // Terminals answer OSC queries within milliseconds; the poll
-        // bounds the wait and the single read keeps the input stream
-        // owned by this thread. crossterm 0.28 does not surface OSC
-        // replies as raw bytes (no `UnknownEscSeq`), so any parsed
-        // event or parse error resolves the probe as "no answer" — the
-        // dark fallback; the luminance classification itself is covered
-        // by `parse_osc_color`/`mode_for_background` unit tests.
-        if !crossterm::event::poll(std::time::Duration::from_millis(250)).unwrap_or(false) {
-            return None;
-        }
-        let _ = crossterm::event::read();
-        None
+        read_osc11_reply(PROBE_TIMEOUT)
     })();
     let _ = crossterm::terminal::disable_raw_mode();
     answer
+}
+
+/// Read the terminal's OSC 11 answer off fd 0, discarding anything
+/// else that arrives in the window (terminal responses only — user
+/// keystrokes during the 150 ms boot probe are dropped, matching v2's
+/// boot-time theme probe). Returns `None` on timeout or an unparsable
+/// reply.
+#[allow(unsafe_code)] // poll/read on fd 0 are only reachable through libc FFI
+fn read_osc11_reply(timeout: std::time::Duration) -> Option<(u8, u8, u8)> {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut buffer: Vec<u8> = Vec::with_capacity(64);
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return None;
+        }
+        let mut poll_fd = libc::pollfd { fd: libc::STDIN_FILENO, events: libc::POLLIN, revents: 0 };
+        #[allow(clippy::cast_possible_truncation)]
+        let remaining_ms =
+            i32::try_from((deadline - now).as_millis()).unwrap_or(0).min(i32::MAX - 1) + 1;
+        let ready = unsafe { libc::poll(std::ptr::from_mut(&mut poll_fd), 1, remaining_ms) };
+        if ready <= 0 {
+            return None; // timeout or poll failure: no answer
+        }
+        let mut chunk = [0u8; 64];
+        let read = unsafe {
+            libc::read(libc::STDIN_FILENO, chunk.as_mut_ptr().cast::<libc::c_void>(), chunk.len())
+        };
+        if read <= 0 {
+            return None;
+        }
+        #[allow(clippy::cast_sign_loss)]
+        buffer.extend_from_slice(&chunk[..read as usize]);
+        // A complete answer ends with BEL or ST after an OSC introducer.
+        if let Some(color) = parse_osc_reply(&buffer) {
+            return Some(color);
+        }
+        // Overlong garbage never matches: give up rather than spin.
+        if buffer.len() > 256 {
+            return None;
+        }
+    }
+}
+
+/// Extract an OSC 11 color reply from raw bytes: a `ESC ] 11 ;` prefix
+/// (the query echo in some terminals is tolerated by scanning for the
+/// `11;rgb:` body) terminated by BEL (`\x07`) or ST (`ESC \`).
+fn parse_osc_reply(bytes: &[u8]) -> Option<(u8, u8, u8)> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let start = text.find("11;rgb:")?;
+    let body = &text[start..];
+    let end = body.find(['\x07', '\x1b']).unwrap_or(body.len());
+    parse_osc_color(&body[..end])
 }
 
 /// Parse an OSC 11 answer (`\x1b]11;rgb:rrrr/gggg/bbbb` + ST/BEL).
@@ -595,6 +646,40 @@ mod tests {
         assert_eq!(parse_osc_color("garbage"), None);
         // Headless (no TTY) detection falls back to dark.
         assert_eq!(detect_system_mode(), Mode::Dark);
+    }
+
+    /// The reported beta.2 regression set, pinned on the user's actual
+    /// terminal: tmux answers OSC 11 with `rgb:1717/1717/1717`
+    /// (#171717 background). The reply must parse, classify DARK (the
+    /// luma rule), and the resolved default theme's composer accent —
+    /// categorical[0] at step 200 — must be the v2 blue (#5c9cf5), not
+    /// the gray border token the broken probe left behind.
+    #[test]
+    fn tmux_background_171717_resolves_dark_with_blue_accent() {
+        // The raw reply bytes exactly as a responding terminal emits
+        // them (and exactly the bytes that used to leak into the
+        // composer as typed text).
+        let reply = b"\x1b]11;rgb:1717/1717/1717\x1b\\";
+        let color = parse_osc_reply(reply).expect("the tmux reply parses");
+        assert_eq!(color, (0x17, 0x17, 0x17), "0x1717 = 23 decimal");
+        assert_eq!(mode_for_background(color.0, color.1, color.2), Mode::Dark);
+        // The BEL-terminated form parses identically.
+        assert_eq!(parse_osc_reply(b"\x1b]11;rgb:1717/1717/1717\x07"), Some((0x17, 0x17, 0x17)));
+        // Partial/garbled replies never resolve.
+        assert_eq!(parse_osc_reply(b"\x1b]11;rgb:171"), None);
+        assert_eq!(parse_osc_reply(b"garbage with no rgb at all"), None);
+
+        // The accent chain under that mode: the v2 default theme
+        // resolved in dark mode paints the composer rail in the FIRST
+        // categorical hue's 200 step — blue #5c9cf5 (v1 migration maps
+        // `secondary` → categorical[0]).
+        let state = ThemeState::v2_dark();
+        assert_eq!(state.mode, Mode::Dark);
+        let styles = state.styles();
+        assert_eq!(styles.agent_color(0), Color::Rgb(0x5C, 0x9C, 0xF5));
+        // …and the gray border token is a DIFFERENT color (the rail
+        // must never fall back to it when an agent is resolved).
+        assert_ne!(styles.agent_color(0), styles.border);
     }
 
     /// The builtin registry: 33 entries (v2 opencode + 32 v1), every

@@ -243,13 +243,13 @@ fn render_row(
             }
         }
         Row::Entry(Entry::AssistantFooter { message_id }) => {
-            let Some(Message::Assistant { agent, model, .. }) =
+            let Some(Message::Assistant { agent, model, error, .. }) =
                 messages.iter().find(|m| m.id() == message_id.as_str())
             else {
                 return RowRender::default();
             };
             let duration = crate::components::message::model::turn_duration(message_id, messages);
-            assistant_footer_row(agent, model, duration, theme, width)
+            assistant_footer_row(agent, model, duration, error.as_deref(), theme, width)
         }
         Row::Group { kind, children, completed, .. } => {
             group_row(kind.clone(), children, *completed, messages, options, theme, width)
@@ -586,6 +586,7 @@ pub fn message_groups_fixture() -> Vec<Message> {
                 },
             ],
             finish: Some("stop".into()),
+            error: None,
             time: PartTime { created: Some(1), completed: Some(2) },
         },
         Message::User {
@@ -608,6 +609,7 @@ pub fn message_groups_fixture() -> Vec<Message> {
                 },
             ],
             finish: Some("stop".into()),
+            error: None,
             time: PartTime { created: Some(11), completed: Some(14) },
         },
     ]
@@ -637,6 +639,7 @@ pub fn vscroll_messages_fixture() -> Vec<Message> {
                 time: PartTime::default(),
             }],
             finish: Some("stop".into()),
+            error: None,
             time: PartTime { created: Some(index * 10 + 1), completed: Some(index * 10 + 2) },
         });
     }
@@ -660,6 +663,7 @@ pub fn vscroll_appended_turn() -> Message {
             time: PartTime::default(),
         }],
         finish: Some("stop".into()),
+        error: None,
         time: PartTime { created: Some(101), completed: Some(103) },
     }
 }

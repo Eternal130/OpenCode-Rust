@@ -355,6 +355,7 @@ pub fn message_from_info(
                 model: format!("{}/{}", assistant.model.provider_id, assistant.model.id),
                 parts,
                 finish: None,
+                error: assistant.error.as_ref().map(|error| error.message.clone()),
                 time: PartTime {
                     created: epoch(Some(assistant.time.created)),
                     completed: epoch(assistant.time.completed),

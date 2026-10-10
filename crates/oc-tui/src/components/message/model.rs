@@ -91,6 +91,10 @@ pub enum Message {
         parts: Vec<Part>,
         /// `finish` of the terminal step (`None` while streaming).
         finish: Option<String>,
+        /// The step's structured error (`message.error`): renders the
+        /// `Error: …` row above the assistant footer
+        /// (`AssistantFooter`, ref session/index.tsx:1879).
+        error: Option<String>,
         time: PartTime,
     },
     /// `session.idle` marker: closes a turn (drives turn duration and
@@ -352,7 +356,7 @@ pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
         let is_pending = pending.contains(message.id());
         match message {
             Message::Idle { .. } => {}
-            Message::Assistant { id, parts, finish, .. } => {
+            Message::Assistant { id, parts, finish, error, .. } => {
                 let mut ordinals: HashMap<&str, usize> = HashMap::new();
                 for part in parts {
                     let (kind, part_id) = match part {
@@ -383,9 +387,14 @@ pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
                         reasoning_completed: part.time().completed.is_some(),
                     });
                 }
+                // `terminal` (rows.ts:403): a finish outside
+                // tool-calls/unknown OR a step error both close the
+                // step's rendering with the footer (which paints the
+                // error row).
                 let terminal = finish
                     .as_deref()
-                    .is_some_and(|finish| !["tool-calls", "unknown"].contains(&finish));
+                    .is_some_and(|finish| !["tool-calls", "unknown"].contains(&finish))
+                    || error.is_some();
                 if terminal {
                     projections.push(Projection {
                         entry: Entry::AssistantFooter { message_id: id.clone() },
@@ -668,6 +677,7 @@ mod tests {
             model: "fixture/fixture".into(),
             parts,
             finish: Some("stop".into()),
+            error: None,
             time: PartTime { created: Some(created), completed: Some(completed) },
         }
     }
@@ -773,6 +783,7 @@ mod tests {
                     },
                 ],
                 finish: None,
+                error: None,
                 time: PartTime { created: Some(1), completed: None },
             },
         ];
@@ -800,6 +811,7 @@ mod tests {
                 model: "m".into(),
                 parts: vec![Part::Text { text: "hi".into(), time: PartTime::default() }],
                 finish: Some("stop".into()),
+                error: None,
                 time: PartTime { created: Some(1), completed: Some(5) },
             },
             Message::Idle { id: "i".into(), created: 6 },
@@ -817,6 +829,7 @@ mod tests {
                 model: "m".into(),
                 parts: vec![Part::Text { text: "hi".into(), time: PartTime::default() }],
                 finish: Some("tool-calls".into()),
+                error: None,
                 time: PartTime { created: Some(1), completed: Some(5) },
             },
             Message::Assistant {
@@ -825,6 +838,7 @@ mod tests {
                 model: "m".into(),
                 parts: vec![Part::Text { text: "there".into(), time: PartTime::default() }],
                 finish: Some("stop".into()),
+                error: None,
                 time: PartTime { created: Some(6), completed: Some(9) },
             },
         ];
@@ -848,6 +862,7 @@ mod tests {
                 Part::Text { text: "real".into(), time: PartTime::default() },
             ],
             finish: None,
+            error: None,
             time: PartTime::default(),
         }];
         let rows = reduce_rows(&messages, &std::collections::HashSet::<String>::new());

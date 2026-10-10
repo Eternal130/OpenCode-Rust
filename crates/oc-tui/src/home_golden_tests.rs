@@ -30,6 +30,9 @@ fn view(draft: &PromptDraft) -> HomeView<'_> {
         status_model: String::new(),
         plugin_hints: Vec::new(),
         plugin_actions: Vec::new(),
+        autocomplete: None,
+        rail: None,
+        caret: None,
     }
 }
 

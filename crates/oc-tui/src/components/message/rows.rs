@@ -227,11 +227,18 @@ pub fn user_message_row(
 /// The assistant footer (`AssistantFooter`): `Build · model · 2ms` —
 /// titlecased agent in the agent color, the model and duration muted
 /// (` · ` separators), at `paddingLeft 3`.
+///
+/// A step error (`message.error`) prepends the `Error: …` row in
+/// `text.feedback.error.base` plus the footer's marginTop 1 blank
+/// row, and the agent label drops to muted (ref
+/// session/index.tsx:1879-1896: `props.message.error ?
+/// theme.text.muted : local.agent.color(...)`).
 #[must_use]
 pub fn assistant_footer_row(
     agent: &str,
     model: &str,
     duration_ms: u64,
+    error: Option<&str>,
     theme: &ThemeStyles,
     width: usize,
 ) -> RowRender {
@@ -239,8 +246,14 @@ pub fn assistant_footer_row(
     let muted = theme.text_muted;
     let agent = titlecase(agent);
     let duration = if duration_ms > 0 { locale_duration(duration_ms) } else { String::new() };
-    let mut spans =
-        vec![StyledSpan { text: agent, style: Style::new().fg(agent_color).bg(theme.background) }];
+    let mut spans = vec![StyledSpan {
+        text: agent,
+        style: if error.is_some() {
+            muted
+        } else {
+            Style::new().fg(agent_color).bg(theme.background)
+        },
+    }];
     if !model.is_empty() {
         spans.push(StyledSpan { text: format!(" · {model}"), style: muted });
     }
@@ -259,7 +272,54 @@ pub fn assistant_footer_row(
             tag: None,
         })
         .collect();
+    let footer = RowRender { placed, fills: Vec::new(), height: 1 };
+    match error {
+        None => footer,
+        Some(message) => {
+            // error row + the marginTop-1 blank + the (muted) footer.
+            let error_row = assistant_error_row(message, theme, width);
+            stack_rows(error_row, footer.offset_y(1))
+        }
+    }
+}
+
+/// The `Error: {message}` row (`AssistantFooter`'s error block):
+/// `paddingLeft 3`, `text.feedback.error.base` foreground.
+#[must_use]
+pub fn assistant_error_row(message: &str, theme: &ThemeStyles, width: usize) -> RowRender {
+    let error_style = Style::new().fg(theme.error).bg(theme.background);
+    let label_width = width.saturating_sub(ROW_PADDING_LEFT);
+    let text = format!("Error: {message}");
+    let placed = wrap_atoms(&crate::wrap::flatten(&text, error_style), label_width)
+        .into_iter()
+        .enumerate()
+        .map(|(line, atoms)| Placed {
+            x: ROW_PADDING_LEFT,
+            y: line,
+            width: label_width,
+            lines: vec![PlacedLine { runs: crate::wrap::styled_runs(&atoms) }],
+            tag: None,
+        })
+        .collect();
     RowRender { placed, fills: Vec::new(), height: 1 }
+}
+
+/// Stack two rows vertically (the upper row keeps its height; the
+/// lower one shifts down by it).
+#[must_use]
+pub fn stack_rows(upper: RowRender, mut lower: RowRender) -> RowRender {
+    let height = upper.height;
+    let mut combined = upper;
+    for item in &mut lower.placed {
+        item.y += height;
+    }
+    for fill in &mut lower.fills {
+        fill.y += height as u16;
+    }
+    combined.placed.extend(lower.placed);
+    combined.fills.extend(lower.fills);
+    combined.height += lower.height;
+    combined
 }
 
 /// Convenience: the footer's duration from the message list
@@ -384,7 +444,7 @@ mod tests {
     #[test]
     fn assistant_footer_matches_the_golden_line() {
         let theme = theme();
-        let row = assistant_footer_row("build", "fixture/fixture", 2, &theme, 76);
+        let row = assistant_footer_row("build", "fixture/fixture", 2, None, &theme, 76);
         let frame = crate::render::paint_placed(
             &row.placed,
             (76, 1),
@@ -394,5 +454,37 @@ mod tests {
         assert_eq!(line.trim(), "Build · fixture/fixture · 2ms");
         assert_eq!(frame.cell(0, 3).fg, crate::render::CellColor::Rgb(92, 156, 245));
         assert_eq!(frame.cell(0, 8).fg, crate::render::CellColor::Rgb(128, 128, 128));
+    }
+
+    /// The error footer (`AssistantFooter` with `message.error`): the
+    /// `Error: …` row in `text.feedback.error.base`, a marginTop-1
+    /// blank, then the footer with its agent label MUTED (ref
+    /// session/index.tsx:1879-1896).
+    #[test]
+    fn assistant_footer_with_error_renders_the_error_row_and_muted_label() {
+        let theme = theme();
+        let row = assistant_footer_row(
+            "build",
+            "fixture/fixture",
+            0,
+            Some("unexpected status 500"),
+            &theme,
+            76,
+        );
+        assert_eq!(row.height, 3, "error row + blank + footer");
+        let frame = crate::render::paint_placed(
+            &row.placed,
+            (76, 3),
+            crate::components::tool_rows::fill_style(&theme),
+        );
+        let grid = frame.text_grid();
+        assert_eq!(grid[0].trim(), "Error: unexpected status 500");
+        assert_eq!(grid[1].trim(), "", "the marginTop-1 blank row");
+        assert_eq!(grid[2].trim(), "Build · fixture/fixture");
+        // The error row paints the feedback error color…
+        assert_eq!(frame.cell(0, 3).fg, crate::render::CellColor::Rgb(224, 108, 117));
+        // …and the agent label dropped to muted (not the categorical
+        // blue the healthy footer carries).
+        assert_eq!(frame.cell(2, 3).fg, crate::render::CellColor::Rgb(128, 128, 128));
     }
 }

@@ -41,11 +41,23 @@ fn goldens() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/parity/goldens/tui-frames")
 }
 
+/// `PARITY_UPDATE=1` (re)writes the goldens instead of comparing —
+/// the sanctioned refresh path for intentionally changed/new scenarios
+/// (same contract as `parity::golden::update_mode`).
+fn update_mode() -> bool {
+    std::env::var("PARITY_UPDATE").is_ok_and(|value| value == "1")
+}
+
 fn theme() -> ThemeState {
     ThemeState::v2_dark()
 }
 
 fn assert_text_grid_match(id: &str, width: usize, frame: &Frame) {
+    let path = goldens().join(format!("{id}.w{width}.txt"));
+    if update_mode() || !path.is_file() {
+        std::fs::write(&path, frame.text_grid().join("\n") + "\n").expect("write golden txt");
+        return;
+    }
     let golden = pf::load_text_grid(&goldens(), id, width).expect("golden text grid");
     let rendered =
         pf::TextGrid { rows: frame.text_grid(), height: frame.height, width: frame.width };
@@ -67,8 +79,12 @@ fn assert_text_grid_match(id: &str, width: usize, frame: &Frame) {
 }
 
 fn assert_ansi_byte_match(id: &str, width: usize, frame: &Frame) {
-    let golden = std::fs::read_to_string(goldens().join(format!("{id}.w{width}.ansi")))
-        .expect("golden ansi");
+    let path = goldens().join(format!("{id}.w{width}.ansi"));
+    if update_mode() || !path.is_file() {
+        std::fs::write(&path, serialize_canonical(frame)).expect("write golden ansi");
+        return;
+    }
+    let golden = std::fs::read_to_string(&path).expect("golden ansi");
     let diff = pf::compare_ansi_bytes_at(
         &golden,
         &serialize_canonical(frame),
@@ -403,4 +419,71 @@ fn session_screen_40_matches_text_grid_and_ansi() {
     );
     assert_text_grid_match("session-screen-40", 40, &frame);
     assert_ansi_byte_match("session-screen-40", 40, &frame);
+}
+
+// -- wave-6 live-route scenarios: send-error part + slash palette -------
+
+use crate::components::message::model::{Message, PartTime};
+
+/// `session-error-part` (w80): a turn whose assistant step FAILED —
+/// the `Error: …` row renders in `text.feedback.error.base` above the
+/// muted-label footer (`AssistantFooter`, ref session/index.tsx:1879).
+/// The composer's blinking block cursor is pinned in its visible
+/// phase (store clock 0 — the run loop's ticks toggle it).
+#[test]
+fn session_error_part_matches_text_grid_and_ansi() {
+    let store = Store::new(Runtime::new());
+    store.set_theme(theme());
+    store.open_tab("ses_err", Some("Error session".to_owned()));
+    store.set_messages(
+        "ses_err",
+        vec![
+            Message::User { id: "u1".into(), text: "please answer".into(), created: 0 },
+            Message::Assistant {
+                id: "a1".into(),
+                agent: "build".into(),
+                model: "fixture/fixture".into(),
+                parts: Vec::new(),
+                finish: Some("error".into()),
+                error: Some("unexpected status 500".into()),
+                time: PartTime { created: Some(1), completed: Some(2) },
+            },
+        ],
+    );
+    let app = crate::app::App::with_store(store, (80, 24));
+    let frame = app.frame();
+    let grid = frame.text_grid().join("\n");
+    assert!(grid.contains("Error: unexpected status 500"), "the error row: {grid}");
+    assert_text_grid_match("session-error-part", 80, &frame);
+    assert_ansi_byte_match("session-error-part", 80, &frame);
+}
+
+/// `session-slash-palette` (w80): typing `/` opens the command palette
+/// OVER the composer with each command's DESCRIPTION in the preview
+/// column (`component/prompt/autocomplete.tsx` — the wave-6 live
+/// mount), the selected row highlighted, the rail in the resolved
+/// agent color (blue — categorical[0]) and the block cursor after the
+/// typed slash.
+#[test]
+fn session_slash_palette_matches_text_grid_and_ansi() {
+    let store = Store::new(Runtime::new());
+    store.set_theme(theme());
+    store.open_tab("ses_pal", Some("Palette session".to_owned()));
+    // Agents loaded → the rail resolves to the build agent's blue.
+    store.set_agents(crate::store::ListState::Loaded(vec![crate::store::ServerAgent {
+        id: "build".into(),
+        name: "Build".into(),
+        description: Some(String::new()),
+        mode: "primary".into(),
+        hidden: false,
+    }]));
+    let mut app = crate::app::App::with_store(store, (80, 24));
+    app.press("/");
+    let frame = app.frame();
+    let grid = frame.text_grid().join("\n");
+    assert!(grid.contains("/agents"), "palette rows list commands: {grid}");
+    assert!(grid.contains("Switch agent"), "the preview/description column: {grid}");
+    assert!(grid.contains("/exit"), "the full v2 slash table");
+    assert_text_grid_match("session-slash-palette", 80, &frame);
+    assert_ansi_byte_match("session-slash-palette", 80, &frame);
 }

@@ -1362,6 +1362,54 @@
           }
         }
       ]
+    },
+    {
+      "id": "session-error-part",
+      "source": "crates/oc-tui/src/components/session.rs (live route; App::frame with a failed assistant step)",
+      "description": "Send-failure transcript: the assistant step's error renders as the styled 'Error: …' part (text.feedback.error.base) above the muted-label assistant footer, with the blinking block cursor pinned in its visible phase",
+      "componentClass": "session",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 24,
+          "rows": 24,
+          "cols": 80,
+          "txt": {
+            "bytes": 2120,
+            "sha256": "dffb2db7ca2279f5a7e07d27c8c6384b3f66e560802888c8e864b21c99953c4a"
+          },
+          "ansi": {
+            "bytes": 4192,
+            "sha256": "d87524191ef5b8910ffd1c4c7a1884620561bc7730f41d4943e7eff972232d86"
+          }
+        }
+      ]
+    },
+    {
+      "id": "session-slash-palette",
+      "source": "crates/oc-tui/src/components/session.rs (live route; typing '/' opens the composer command palette)",
+      "description": "The slash-command palette over the composer: filtered rows with the description/preview column, selected row highlighted, agent-colored rail (categorical[0]) and the block cursor after the typed slash",
+      "componentClass": "session",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 24,
+          "rows": 24,
+          "cols": 80,
+          "txt": {
+            "bytes": 2152,
+            "sha256": "97e59001d92246eddcc79d2b45ba28f8cc4184e50b09614e15a1322a1375f193"
+          },
+          "ansi": {
+            "bytes": 5408,
+            "sha256": "0df80bf757940f21773e727a991cc208425fc4c99e087d5bc1b6da05da015560"
+          }
+        }
+      ]
     }
   ],
   "replay": [

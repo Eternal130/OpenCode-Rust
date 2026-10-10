@@ -59,6 +59,8 @@ fn harness_view<'a>(
             ..FooterHints::default()
         },
         top: 2,
+        rail: None,
+        caret: None,
     }
 }
 

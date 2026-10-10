@@ -187,7 +187,9 @@ impl AutocompleteState {
 
     /// `onInput`: recompute the trigger from the text + caret, closing
     /// when the cursor leaves the token (a space between the trigger
-    /// and the caret, or the cursor moving before the trigger).
+    /// and the caret, or the cursor moving before the trigger). The
+    /// filtered options reattach on every edit (the live popup and
+    /// `accept_autocomplete` read them without further plumbing).
     pub fn on_input(&mut self, text: &str, caret: usize) {
         let chars: Vec<char> = text.chars().collect();
         let trigger = trigger_for(text, caret);
@@ -217,6 +219,24 @@ impl AutocompleteState {
                 self.last_query = Some(query_between(text, index, caret));
             }
             _ => self.close(),
+        }
+        self.sync_options(text, caret);
+    }
+
+    /// Recompute `options` for the visible mode (command mode filters
+    /// the registry; reference mode has no live file source yet — an
+    /// empty list renders no popup, matching the port's scope).
+    pub fn sync_options(&mut self, text: &str, caret: usize) {
+        self.options = match self.visible {
+            Some(Mode::Command) => {
+                let query = query_between(text, self.trigger_index, caret);
+                filter_commands(&self.registry, &query)
+            }
+            _ => Vec::new(),
+        };
+        self.filtered_len = self.options.len();
+        if self.selected >= self.filtered_len {
+            self.selected = 0;
         }
     }
 

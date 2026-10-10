@@ -389,6 +389,7 @@ fn plugin_group_rule_renders_a_custom_header() {
                 },
             ],
             finish: None,
+            error: None,
             time: PartTime { created: Some(1), completed: None },
         },
         Message::Idle { id: "idle".into(), created: 9 },
@@ -427,6 +428,7 @@ fn plugin_group_rule_renders_a_custom_header() {
             time: PartTime { created: Some(1), completed: Some(2) },
         }],
         finish: None,
+        error: None,
         time: PartTime { created: Some(1), completed: None },
     }];
     let transcript = render_transcript(

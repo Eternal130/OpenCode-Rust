@@ -247,6 +247,8 @@ pub fn session_composer_frame(
             ..FooterHints::default()
         },
         top: 0,
+        rail: None,
+        caret: None,
     };
     render_prompt_frame(&view, usize::from(width), 7, theme)
 }

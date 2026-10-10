@@ -1003,6 +1003,7 @@ mod tests {
                         },
                     ],
                     finish: None,
+                    error: None,
                     time: PartTime::default(),
                 },
             ],

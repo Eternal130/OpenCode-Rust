@@ -45,6 +45,7 @@ pub mod render;
 pub mod replay;
 pub mod screen_golden_tests;
 pub mod spike;
+pub mod stderr_redirect;
 pub mod storage;
 pub mod store;
 pub mod theme;
