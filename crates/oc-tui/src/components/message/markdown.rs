@@ -30,10 +30,12 @@
 //! the renderer default foreground). Nested lists indent under the
 //! parent's content column.
 //!
-//! **Fenced code**: plain lines at `markdown.code_block`; the
-//! tree-sitter syntax highlight pass is C2 (golden pins its colors;
-//! text is identical). **Blockquotes**: a left border + one padding
-//! column around the raw content. **hr**: a full-width top-border row.
+//! **Fenced code**: highlighted lines via oc-syntax for registered
+//! grammars (R-01 spike: rust/python/typescript), plain
+//! `markdown.code_block` lines otherwise; spans clip at the content
+//! width like `wrapMode=none`. **Blockquotes**: a left border + one
+//! padding column around the raw content. **hr**: a full-width
+//! top-border row.
 //!
 //! Everything flows through the ONE wrap seam ([`crate::wrap`]) as
 //! styled atom streams — a bold run crossing a wrap boundary keeps its
@@ -61,8 +63,9 @@ impl MarkdownLine {
 }
 
 /// The markdown text renderer's theme-derived style set (plain
-/// `Style`s built from [`ThemeStyles::markdown`]).
-#[derive(Debug, Clone, Copy)]
+/// `Style`s built from [`ThemeStyles::markdown`], plus the flattened
+/// syntax scope map the fenced-code highlight path consumes).
+#[derive(Debug, Clone)]
 pub struct MarkdownStyles {
     body: Style,
     heading: Style,
@@ -77,6 +80,9 @@ pub struct MarkdownStyles {
     /// The renderer default foreground — list-item raw text and markers.
     default_fg: Style,
     background: ratatui::style::Color,
+    /// tree-sitter capture → style resolution (`convertThemeToStyles`
+    /// output; R-01 spike — fenced code blocks).
+    pub syntax: oc_syntax::SyntaxStyles,
 }
 
 impl MarkdownStyles {
@@ -99,6 +105,7 @@ impl MarkdownStyles {
                 .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
                 .bg(theme.background),
             background: theme.background,
+            syntax: theme.syntax.clone(),
         }
     }
 }
@@ -578,12 +585,28 @@ fn render_block(
             let spans = inline_spans(inline, styles.body, styles);
             push_wrapped(&spans, width, lines);
         }
-        Block::Code { lines: code, .. } => {
-            for code_line in code {
-                // Code does not word-wrap in the reference (horizontal
-                // scroll); clip at the content width like wrapMode=none.
-                let text = crate::wrap::take_width(code_line, width);
-                lines.push(MarkdownLine(vec![StyledSpan { text, style: styles.code_block }]));
+        Block::Code { lang, lines: code } => {
+            // Fenced code (R-01 spike): the fence info string becomes the
+            // filetype; a registered grammar renders the block through
+            // oc-syntax (parse once per block — content-keyed cache in
+            // the engine; this path only materializes spans). Unknown
+            // filetypes render today's plain `markdown.code_block` lines.
+            let highlighted = oc_syntax::highlight(&code.join("\n"), lang);
+            for (index, code_line) in code.iter().enumerate() {
+                let spans: Vec<StyledSpan> = match &highlighted {
+                    Some(block) => block
+                        .line_spans(index, styles.code_block, &styles.syntax)
+                        .into_iter()
+                        .map(|span| StyledSpan { text: span.text, style: span.style })
+                        .collect(),
+                    // Code does not word-wrap in the reference (horizontal
+                    // scroll); clip at the content width like wrapMode=none.
+                    None => vec![StyledSpan {
+                        text: crate::wrap::take_width(code_line, width),
+                        style: styles.code_block,
+                    }],
+                };
+                lines.push(MarkdownLine(clip_spans(spans, width)));
             }
         }
         Block::Rule => {
@@ -615,6 +638,27 @@ fn render_block(
             render_list(*ordered, *start, items, width, styles, lines);
         }
     }
+}
+
+/// Clip a line's styled spans at `width` display columns — the styled
+/// counterpart of `wrap::take_width` (same cluster-width math), with the
+/// budget shared across the line's spans so multi-span lines clip
+/// exactly where the plain single-span line always did.
+fn clip_spans(spans: Vec<StyledSpan>, width: usize) -> Vec<StyledSpan> {
+    let mut remaining = width;
+    let mut out = Vec::with_capacity(spans.len());
+    for span in spans {
+        if remaining == 0 {
+            break;
+        }
+        let text = crate::wrap::take_width(&span.text, remaining);
+        if text.is_empty() {
+            break;
+        }
+        remaining -= crate::wrap::display_width(&text);
+        out.push(StyledSpan { text, style: span.style });
+    }
+    out
 }
 
 fn render_list(

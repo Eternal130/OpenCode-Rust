@@ -6,6 +6,7 @@ members = [
     "crates/oc-theme",
     "crates/oc-ai",
     "crates/oc-core",
+    "crates/oc-syntax",
     "crates/oc-plugin-host",
     "crates/oc-server",
     "crates/oc-client",
@@ -27,6 +28,7 @@ oc-schema = { path = "crates/oc-schema" }
 oc-theme = { path = "crates/oc-theme" }
 oc-ai = { path = "crates/oc-ai" }
 oc-core = { path = "crates/oc-core" }
+oc-syntax = { path = "crates/oc-syntax" }
 oc-plugin-host = { path = "crates/oc-plugin-host" }
 oc-server = { path = "crates/oc-server" }
 oc-client = { path = "crates/oc-client" }

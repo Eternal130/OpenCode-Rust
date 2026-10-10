@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 oc-util = { workspace = true }
 oc-theme = { workspace = true }
+oc-syntax = { workspace = true }
 oc-client = { workspace = true }
 oc-plugin-host = { workspace = true }
 serde = { workspace = true }
@@ -22,6 +23,7 @@ ratatui = "0.29"
 taffy = { version = "0.9", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
 crossterm = "0.28"
 unicode-width = "0.2"
+uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -1,0 +1,22 @@
+[package]
+name = "oc-syntax"
+description = "tree-sitter syntax highlighting engine for fenced code blocks (native grammars, vendored queries)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+oc-theme = { workspace = true }
+ratatui = "0.29"
+streaming-iterator = "0.1"
+tree-sitter = "0.25"
+tree-sitter-language = "0.1"
+tree-sitter-rust = "0.24.2"
+tree-sitter-python = "0.25"
+tree-sitter-typescript = "0.23.2"
+
+[dev-dependencies]
+serde_json = { workspace = true }
