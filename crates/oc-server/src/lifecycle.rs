@@ -1423,7 +1423,7 @@ pub struct ServeHandle {
     task: tokio::task::JoinHandle<io::Result<()>>,
     /// The shared app state (readiness/engine observability; crate tests
     /// assert boot ordering through it).
-    pub(crate) state: Arc<AppState>,
+    pub state: Arc<AppState>,
 }
 
 impl ServeHandle {

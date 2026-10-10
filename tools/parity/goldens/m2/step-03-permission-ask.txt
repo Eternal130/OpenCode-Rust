@@ -9,7 +9,7 @@
 
      The notes file is present.
 
-     Build · parityfake/fake-model · 109ms
+     Build · parityfake/fake-model · 35ms
 
   ┃
   ┃  Now read the outside file please.
@@ -26,9 +26,9 @@
 
   △ Permission required
 
-   ← Access external directory /tmp/opencode/m2-sandbox-2262426/outside/*                                                                                   █
+   ← Access external directory /tmp/opencode/m2-sandbox-2612995/outside/*                                                                                   █
                                                                                                                                                             █
-  - /tmp/opencode/m2-sandbox-2262426/outside/*                                                                                                              █
+  - /tmp/opencode/m2-sandbox-2612995/outside/*                                                                                                              █
                                                                                                                                                             █
                                                                                                                                                             █
                                                                                                                                                             █

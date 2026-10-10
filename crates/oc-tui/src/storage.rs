@@ -10,10 +10,26 @@
 //! * `state-root` = `useTuiPaths().state` =
 //!   `${XDG_STATE_HOME:-~/.local/state}/opencode`
 //!   (`packages/util/src/global.ts` + `global-roots.ts`), and
-//! * `channel` = `OPENCODE_TUI_CHANNEL ?? OPENCODE_CHANNEL`, the build
-//!   channel constant whose dev fallback is `"local"`
-//!   (`packages/cli/src/commands/handlers/default.ts:100`,
-//!   `packages/cli/src/version.ts`).
+//! * `channel` = `OPENCODE_TUI_CHANNEL ?? OPENCODE_CHANNEL` — the
+//!   build-channel constant. A **shipped** build bakes
+//!   `OPENCODE_CHANNEL="stable"` (the pinned v2.0.24 reference build
+//!   compiles with exactly that), so the shipped TUI reads/writes
+//!   `<state>/stable/tui/…`; only from-source dev builds fall back to
+//!   `"local"`.
+//!
+//! The Rust port ships release-style binaries (the release build
+//! reports 2.0.24 and corresponds to the pinned stable reference), so
+//! the storage channel defaults to **`stable`** — the baked release
+//! channel (gate-12 §3.2). `OPENCODE_TUI_CHANNEL` overrides (the TUI
+//! kill-switch), then `OPENCODE_CHANNEL` when the operator pinned a
+//! process-wide channel (the runtime stand-in for v2's build constant;
+//! the DB/engine channel source reads the same variable).
+//!
+//! **Migration note (documented residual)**: earlier dev builds of the
+//! port wrote `<state>/local/tui/…`. That state is deliberately
+//! IGNORED — the channel change is a one-way rename (tabs/session-list
+//! prefs re-seed on first use); copy the `local` directory to `stable`
+//! by hand to carry it over.
 //!
 //! Writes are atomic (temp file + rename, compact
 //! `JSON.stringify`-shaped JSON, no trailing newline) and keys are
@@ -33,17 +49,28 @@
 
 use std::path::{Path, PathBuf};
 
-/// The build channel default (v2's `OPENCODE_CHANNEL` dev fallback).
-pub const DEFAULT_CHANNEL: &str = "local";
+/// The baked release channel (v2's shipped builds compile with
+/// `OPENCODE_CHANNEL="stable"`; the port's release binaries correspond
+/// to the pinned stable reference — gate-12 §3.2's residual).
+pub const DEFAULT_CHANNEL: &str = "stable";
 
-/// The TUI's channel: `OPENCODE_TUI_CHANNEL` → the build default.
-/// (v2: `process.env.OPENCODE_TUI_CHANNEL ?? OPENCODE_CHANNEL`.)
+/// The TUI's channel: `OPENCODE_TUI_CHANNEL` → `OPENCODE_CHANNEL` (when
+/// the operator pinned one) → the baked release channel.
+/// (v2: `process.env.OPENCODE_TUI_CHANNEL ?? OPENCODE_CHANNEL` with the
+/// constant baked at build time.)
 #[must_use]
 pub fn channel() -> String {
-    std::env::var("OPENCODE_TUI_CHANNEL")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_CHANNEL.to_owned())
+    if let Ok(value) = std::env::var("OPENCODE_TUI_CHANNEL") {
+        if !value.is_empty() {
+            return value;
+        }
+    }
+    if let Ok(value) = std::env::var("OPENCODE_CHANNEL") {
+        if !value.is_empty() {
+            return value;
+        }
+    }
+    DEFAULT_CHANNEL.to_owned()
 }
 
 /// `segment()` — validate one path segment of a storage key/channel
@@ -201,6 +228,40 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("oc-tui-storage-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    /// The default channel is the baked RELEASE channel (`stable`, the
+    /// pinned v2.0.24 reference build's `OPENCODE_CHANNEL` — gate-12
+    /// §3.2), with `OPENCODE_TUI_CHANNEL` and `OPENCODE_CHANNEL`
+    /// overriding in that order (v2's `??` chain).
+    #[test]
+    fn channel_defaults_to_the_release_channel() {
+        // Serialize env mutations (other tests in this binary may read
+        // the channel).
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let saved_tui = std::env::var_os("OPENCODE_TUI_CHANNEL");
+        let saved_channel = std::env::var_os("OPENCODE_CHANNEL");
+        let restore = move || {
+            match saved_tui {
+                Some(value) => std::env::set_var("OPENCODE_TUI_CHANNEL", value),
+                None => std::env::remove_var("OPENCODE_TUI_CHANNEL"),
+            }
+            match saved_channel {
+                Some(value) => std::env::set_var("OPENCODE_CHANNEL", value),
+                None => std::env::remove_var("OPENCODE_CHANNEL"),
+            }
+        };
+        std::env::remove_var("OPENCODE_TUI_CHANNEL");
+        std::env::remove_var("OPENCODE_CHANNEL");
+        assert_eq!(channel(), "stable", "the shipped-build default");
+        std::env::set_var("OPENCODE_CHANNEL", "latest");
+        assert_eq!(channel(), "latest", "a pinned process channel wins over the bake");
+        std::env::set_var("OPENCODE_TUI_CHANNEL", "edge9");
+        assert_eq!(channel(), "edge9", "the TUI-specific override wins");
+        std::env::set_var("OPENCODE_TUI_CHANNEL", "");
+        assert_eq!(channel(), "latest", "empty values are ignored");
+        restore();
     }
 
     /// The exact v2 tabs document shape round-trips: `global.tabs[]`

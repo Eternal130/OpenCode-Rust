@@ -190,6 +190,22 @@ pub const GENERATE_METHODS: &[&str] = &["generate.text"];
 #[async_trait]
 pub trait ToolPort: Send + Sync {
     async fn call(&self, bridge: &Bridge, name: &str, input: &Value) -> Result<Value, String>;
+
+    /// [`ToolPort::call`] with the evaluation token the host assigned
+    /// to the enclosing `codemode.evaluate` request (the production
+    /// adapter routes nested calls onto the REQUEST's executor closure
+    /// — the right location registry and session context — keyed by
+    /// it). The default ignores the token (port-owned routing).
+    async fn call_in(
+        &self,
+        bridge: &Bridge,
+        name: &str,
+        input: &Value,
+        token: u64,
+    ) -> Result<Value, String> {
+        let _ = token;
+        self.call(bridge, name, input).await
+    }
 }
 
 /// The declining default: every tool call errors with a clear message.
