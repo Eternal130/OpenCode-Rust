@@ -1,11 +1,61 @@
 //! Persistent PTY — port of `persistent-pty/index.ts` (core-runner-map
-//! §6.1) as an **in-process state machine**.
+//! §6.1) as an **in-process state machine**, plus the R-09 cross-restart
+//! handover lifecycle (`daemon.ts`).
 //!
 //! v2 runs the terminals in an out-of-process daemon (`opencode-pty`) so
 //! they survive CLI restarts, with handoff tickets and per-instance state
 //! directories. **The daemon process boundary is deferred to the Phase 9
 //! plugin-runtime wave** (see `spike-plugin-runtime.md`); this module
 //! implements the full client-facing state machine now:
+//!
+//! # Cross-restart handover (R-09, v2 citations)
+//!
+//! v2's pieces, all inside the v2 repo (the daemon binary itself is an
+//! external artifact):
+//!
+//! - **Runtime directory + registration**: each daemon instance owns
+//!   `<root>/<id>` with a `service.json` registration
+//!   `{instance_id, pid, protocol, socket, token}` and a held
+//!   `service.lock` (`daemon.ts:33-39`, `165-166`, `433-444`).
+//! - **`prepare_handoff`**: the stopping server asks its (live) daemon
+//!   for a single-use `{ticket, expires_at}` (`daemon.ts:356-380`,
+//!   server handler `persistent-pty.ts:62-66`), published to the
+//!   `<service-file>.pty-handoff` sidecar BEFORE the old process stops
+//!   (`pty-handoff.ts:17-43`), then injected into the replacement's env
+//!   as `OPENCODE_PTY_HANDOFF` (`pty-handoff.ts:68-78`), decoded at
+//!   server boot (`server-process.ts:46-57`).
+//! - **Adoption ladder** (`daemon.ts:403-428`): expiry check → discover
+//!   the registration → protocol check → instance check → claim with the
+//!   ticket. ANY failure logs "Discarding PTY restart handoff;
+//!   persistent terminals will start fresh", best-effort shuts the found
+//!   daemon down, and abandons (fresh directory, `daemon.ts:287-292`).
+//!
+//! The port maps those semantics onto the in-process machine (there is
+//! no daemon socket to claim): the **handoff snapshot** `state.json`
+//! (terminal infos + replay buffers, written only by [`PersistentPty::handoff`])
+//! plays the role of the live daemon — its presence is the difference
+//! between a clean restart chain and a crash/kill:
+//!
+//! - `handoff()` writes `state.json` + mints the ticket
+//!   ([`PersistentPty::handoff`]); the HTTP surface and the sidecar/env
+//!   plumbing already exist (`oc-server` lifecycle.rs `pty_handoff_*`).
+//! - [`PersistentPty::adopt`] runs the ladder: `Expired` →
+//!   `Unreachable` (no registration) → `Protocol` → `Changed`
+//!   (instance mismatch) → `Owned` (previous owner still holds the
+//!   lock — the Phase-9 boundary: no socket to transfer ownership
+//!   through) → `InvalidTicket`/`NoHandoffState` (died without a clean
+//!   handoff — v2's kill/refresh path when the daemon died:
+//!   `pty-handoff.ts:35-37` shuts terminals down and the next server
+//!   starts fresh).
+//! - On success the machine re-attaches to the inherited directory
+//!   (migrating `service.lock`/`service.json` inode-preservingly when
+//!   the root moved, `daemon.ts:435-444`), restores every terminal with
+//!   its pre-restart replay window (attach at a cursor replays
+//!   pre-restart bytes) marked `exited` — the child processes
+//!   themselves died with the old server, which is exactly what v2
+//!   does when the daemon died.
+//!
+//! The module otherwise implements:
 //!
 //! - ops `list` / `create` / `write` / `resize` / `control` / `input` /
 //!   `read_rows` (`read(sessionID, lines?)`) / `snapshot` / `terminate`
@@ -29,10 +79,11 @@
 #![allow(clippy::unused_async)]
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use oc_schema::id::SessionId;
-use oc_util::determinism::{AscendingIdGen, IdGen, SystemClock, SystemRng};
+use oc_util::determinism::{AscendingIdGen, Clock, IdGen, SystemClock, SystemRng};
 use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize};
 use tokio::sync::mpsc;
@@ -90,13 +141,118 @@ pub struct Snapshot {
     pub cursor: (usize, usize),
 }
 
-/// `PersistentPty.Handoff` — daemon handoff ticket (Phase 9).
+/// `PersistentPty.Handoff` — daemon handoff ticket (R-09; the wire
+/// shape `schema/persistent-pty.ts` `Handoff`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Handoff {
     pub directory: String,
     pub instance_id: String,
     pub ticket: String,
     pub expires_at: u64,
+}
+
+/// The registration written to `<runtime-dir>/service.json`
+/// (`daemon.ts:33-39` — `socket` is empty until the Phase-9 daemon
+/// boundary; `token` is its future wire auth).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Registration {
+    pub instance_id: String,
+    pub pid: u32,
+    pub protocol: u64,
+    pub socket: String,
+    pub token: String,
+}
+
+/// The handoff snapshot written to `<runtime-dir>/state.json` by
+/// [`PersistentPty::handoff`] and consumed by
+/// [`PersistentPty::adopt`] — the in-process stand-in for v2's live
+/// daemon: its presence is what distinguishes a clean restart chain
+/// from a crash/kill.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct HandoffState {
+    pub instance_id: String,
+    pub ticket: String,
+    pub expires_at: u64,
+    pub terminals: Vec<TerminalSnapshot>,
+}
+
+/// One terminal's handoff-snapshot entry: the info plus the replay
+/// window (buffer + absolute cursor) and the plain-text screen rows the
+/// in-process machine tracks.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TerminalSnapshot {
+    pub info: Info,
+    /// Base64 replay buffer.
+    pub buffer: String,
+    /// Absolute byte offset of `buffer[0]`.
+    pub buffer_cursor: usize,
+    /// Visible screen rows (`read`/`snapshot` restore).
+    pub rows: Vec<String>,
+    /// Screen cursor.
+    pub cursor: (usize, usize),
+    /// Controller generation at snapshot time.
+    pub generation: u64,
+}
+
+/// Why an inherited handoff was discarded
+/// (`daemon.ts:403-428` — every failure path lands on the same "start
+/// fresh" behavior).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct AdoptionError(pub &'static str);
+
+impl AdoptionError {
+    /// `daemon.ts:406-407` — the ticket expired.
+    #[must_use]
+    pub const fn expired() -> Self {
+        Self("PTY restart handoff expired")
+    }
+    /// `daemon.ts:203-205` — no readable registration where the
+    /// handoff points.
+    #[must_use]
+    pub const fn unreachable() -> Self {
+        Self("PTY restart owner unreachable")
+    }
+    /// `daemon.ts:209-216` — protocol mismatch.
+    #[must_use]
+    pub const fn protocol() -> Self {
+        Self("opencode-pty protocol mismatch")
+    }
+    /// `daemon.ts:411-412` — the registered instance changed.
+    #[must_use]
+    pub const fn changed() -> Self {
+        Self("PTY restart daemon changed")
+    }
+    /// `daemon.ts:415` — the previous owner still holds the lock; the
+    /// in-process machine has no socket to transfer ownership through
+    /// (the Phase-9 boundary).
+    #[must_use]
+    pub const fn owned() -> Self {
+        Self("PTY restart owner is still running")
+    }
+    /// The ticket does not match the handoff snapshot.
+    #[must_use]
+    pub const fn invalid_ticket() -> Self {
+        Self("PTY restart handoff ticket rejected")
+    }
+    /// The previous owner died without a clean handoff — v2's
+    /// daemon-died path (kill/refresh: `pty-handoff.ts:35-37`).
+    #[must_use]
+    pub const fn no_state() -> Self {
+        Self("PTY restart owner died without a handoff")
+    }
+}
+
+/// The outcome of [`PersistentPty::adopt`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Adoption {
+    /// Re-attached to the inherited directory; `restored` terminals
+    /// carry their pre-restart replay windows (children are gone —
+    /// marked exited, v2 daemon-died semantics).
+    Adopted { restored: usize, directory: String },
+    /// Discarded with the v2 warning; the machine keeps/creates a
+    /// fresh runtime identity.
+    Discarded { reason: AdoptionError },
 }
 
 /// `PersistentPty.ReadResult`.
@@ -217,6 +373,37 @@ struct Subscriber {
 
 const OUTPUT_LIMIT: usize = 1024 * 1024 * 8;
 
+/// The daemon-protocol generation this machine speaks
+/// (`daemon.ts:8` `ProtocolVersion`; bumped on wire-format changes).
+pub const PTY_PROTOCOL_VERSION: u64 = 1;
+
+/// Handoff ticket TTL (the sidecar default when a daemon hands back
+/// null, `pty-handoff.ts:61` — 30s).
+const HANDOFF_TTL_MS: u64 = 30_000;
+
+/// Directory/file names inside the runtime root (`daemon.ts`:
+/// `service.json`, `service.lock`, `433-444`).
+const SERVICE_JSON: &str = "service.json";
+const SERVICE_LOCK: &str = "service.lock";
+const STATE_JSON: &str = "state.json";
+
+/// A held runtime directory: `<root>/<id>` with an exclusively-locked
+/// `service.lock` and a written `service.json` registration. The lock
+/// releases when the owning process dies — the liveness signal of
+/// v2's daemon (which pings its socket instead, `daemon.ts:217-226`).
+struct RuntimeScope {
+    root: PathBuf,
+    id: String,
+    #[allow(dead_code)] // held for the lock; dropped only with the machine
+    lock: std::fs::File,
+}
+
+impl RuntimeScope {
+    fn directory(&self) -> PathBuf {
+        self.root.join(&self.id)
+    }
+}
+
 struct Inner {
     terminals: Mutex<HashMap<PtyId, Live>>,
     /// Controller activity selects a terminal per session.
@@ -226,6 +413,11 @@ struct Inner {
     #[allow(dead_code)] // instance-scoped id source reserved for the Phase 9 daemon handoff
     ids: Arc<dyn IdGen>,
     bus: Bus,
+    clock: Arc<dyn Clock>,
+    /// The runtime directory this machine owns (`None` until
+    /// [`PersistentPty::set_runtime_dir`] — tests/embedders may skip
+    /// the handover surface entirely).
+    runtime: Mutex<Option<RuntimeScope>>,
 }
 
 /// The persistent PTY state machine (`PersistentPty.Service`).
@@ -250,9 +442,71 @@ impl PersistentPty {
                 next_token: Mutex::new(0),
                 ids,
                 bus,
+                clock: Arc::new(SystemClock),
+                runtime: Mutex::new(None),
             }),
             default_program: Arc::new(|| None),
         }
+    }
+
+    /// Overrides the clock (handoff expiry determinism in tests).
+    #[must_use]
+    pub fn with_clock(self, clock: Arc<dyn Clock>) -> Self {
+        let ids: Arc<dyn IdGen> =
+            Arc::new(AscendingIdGen::new(Arc::new(SystemClock), Arc::new(SystemRng)));
+        Self {
+            inner: Arc::new(Inner {
+                terminals: Mutex::new(HashMap::new()),
+                current: Mutex::new(HashMap::new()),
+                next_number: Mutex::new(0),
+                next_token: Mutex::new(0),
+                ids,
+                bus: self.inner.bus.clone(),
+                clock,
+                runtime: Mutex::new(None),
+            }),
+            default_program: self.default_program.clone(),
+        }
+    }
+
+    /// Claims a runtime directory under `root` for this machine:
+    /// `<root>/<fresh-id>` with a locked `service.lock` and the
+    /// `service.json` registration (`daemon.ts:165-166`). A directory
+    /// whose lock a dead predecessor left is skipped by construction
+    /// (fresh id); a lock held by a LIVE peer is the
+    /// unreachable-daemon case — one retry in a fresh directory, then
+    /// an error (`daemon.ts:275-285` `start()`).
+    pub fn set_runtime_dir(&self, root: &Path) -> Result<(), String> {
+        let mut last: Option<String> = None;
+        for _ in 0..2 {
+            match claim_runtime_dir(root) {
+                Ok(scope) => {
+                    *self.inner.runtime.lock() = Some(scope);
+                    return Ok(());
+                }
+                Err(error) => last = Some(error),
+            }
+        }
+        Err(last.unwrap_or_else(|| "could not claim a PTY runtime directory".to_owned()))
+    }
+
+    /// The runtime directory this machine owns (diagnostics/tests).
+    #[must_use]
+    pub fn runtime_dir(&self) -> Option<String> {
+        self.inner
+            .runtime
+            .lock()
+            .as_ref()
+            .map(|scope| scope.directory().to_string_lossy().into_owned())
+    }
+
+    /// The process-boundary seam: releases the runtime lock — exactly
+    /// what process death does to `service.lock` (the fd closes; the
+    /// kernel drops the flock). Used by the cross-restart tests to
+    /// model a server that stopped; the in-process terminals left
+    /// behind are unreachable afterwards, like real orphans.
+    pub fn release_runtime(&self) {
+        *self.inner.runtime.lock() = None;
     }
 
     /// Overrides the default program seam.
@@ -583,7 +837,9 @@ impl PersistentPty {
         Ok(())
     }
 
-    /// `shutdown` (index.ts:302-307).
+    /// `shutdown` (index.ts:302-307) — plus the R-09 kill semantics:
+    /// any pending handoff state is invalidated (v2's daemon exits, so
+    /// a later claim against it fails — `pty-handoff.ts:35-37`).
     #[allow(clippy::unused_async_trait_impl)] // async surface parity with index.ts
     pub async fn shutdown(&self) -> PubResult<()> {
         let ids: Vec<PtyId> = self.inner.terminals.lock().keys().cloned().collect();
@@ -591,13 +847,77 @@ impl PersistentPty {
             self.inner.terminate(&id);
         }
         self.inner.current.lock().clear();
+        self.inner.invalidate_handoff_state();
         Ok(())
     }
 
-    /// `handoff` — daemon handoff ticket; `None` until the Phase 9
-    /// out-of-process daemon exists.
+    /// `handoff` — the `prepare_handoff` port (`daemon.ts:356-380`):
+    /// snapshots every terminal (info + replay window + screen) into
+    /// `<runtime-dir>/state.json` and mints a single-use ticket.
+    /// `None` when no runtime directory is configured (tests/embedders
+    /// without the handover surface — the daemon absent, like v2's
+    /// transport before it first connects).
     pub fn handoff(&self) -> PubResult<Option<Handoff>> {
-        Ok(None)
+        let scope = {
+            let runtime = self.inner.runtime.lock();
+            let Some(scope) = runtime.as_ref() else { return Ok(None) };
+            (scope.root.clone(), scope.id.clone())
+        };
+        let (root, id) = scope;
+        let directory = root.join(&id);
+        let ticket = new_random_token();
+        let expires_at = now_plus(self.inner.clock.as_ref(), HANDOFF_TTL_MS);
+        let terminals: Vec<TerminalSnapshot> = self
+            .inner
+            .terminals
+            .lock()
+            .values()
+            .map(|live| TerminalSnapshot {
+                info: live.info.clone(),
+                buffer: base64_encode(&live.buffer),
+                buffer_cursor: live.buffer_cursor,
+                rows: live.rows.clone(),
+                cursor: live.cursor,
+                generation: live.generation,
+            })
+            .collect();
+        let state = HandoffState {
+            instance_id: self.inner.registration_instance_id(),
+            ticket: ticket.clone(),
+            expires_at,
+            terminals,
+        };
+        write_json_atomic(&directory.join(STATE_JSON), &state)
+            .map_err(|error| UnavailableError { message: error.to_string() })?;
+        Ok(Some(Handoff {
+            directory: directory.to_string_lossy().into_owned(),
+            instance_id: state.instance_id,
+            ticket,
+            expires_at,
+        }))
+    }
+
+    /// Adopts an inherited handoff — the `daemon.ts:403-428` ladder on
+    /// the in-process machine. Every discard path warns exactly like
+    /// v2 and leaves the machine on a fresh identity; the success path
+    /// re-attaches to the inherited directory (migrating the lock +
+    /// registration inode-preservingly when the root moved,
+    /// `daemon.ts:435-444`) and restores the terminals with their
+    /// pre-restart replay windows, marked exited (the children died
+    /// with the old server — v2's daemon-died outcome).
+    #[must_use]
+    pub fn adopt(&self, inherited: &Handoff) -> Adoption {
+        match self.inner.try_adopt(inherited) {
+            Ok(adoption) => adoption,
+            Err(reason) => {
+                // daemon.ts:419-427 — terminals are best-effort; the
+                // restart itself always succeeds.
+                eprintln!(
+                    "Discarding PTY restart handoff; persistent terminals will start fresh ({reason})"
+                );
+                Adoption::Discarded { reason }
+            }
+        }
     }
 
     /// `attach` (index.ts:326-349): replay buffer semantics; controllers
@@ -674,6 +994,134 @@ impl NotFoundToUnavailable for NotFoundError {
 }
 
 impl Inner {
+    /// The registration's instance id (or a fresh one when no runtime
+    /// directory is claimed — handoff snapshots are then not written).
+    fn registration_instance_id(&self) -> String {
+        if let Some(scope) = self.runtime.lock().as_ref() {
+            if let Some(registration) = read_registration(&scope.directory()) {
+                return registration.instance_id;
+            }
+        }
+        new_random_token()
+    }
+
+    /// Removes the handoff state — the kill/refresh invalidation
+    /// (a stopped machine must not be adoptable).
+    fn invalidate_handoff_state(&self) {
+        if let Some(scope) = self.runtime.lock().as_ref() {
+            let _ = std::fs::remove_file(scope.directory().join(STATE_JSON));
+        }
+    }
+
+    /// The adoption ladder (`daemon.ts:403-428`); see the module docs.
+    fn try_adopt(&self, inherited: &Handoff) -> Result<Adoption, AdoptionError> {
+        // 1. Expiry (`daemon.ts:406-407`).
+        let now = u64::try_from(self.clock.unix_ms().max(0)).unwrap_or(0);
+        if inherited.expires_at <= now {
+            return Err(AdoptionError::expired());
+        }
+        // 2. Discover the registration (`daemon.ts:201-226`).
+        let directory = PathBuf::from(&inherited.directory);
+        let registration = read_registration(&directory).ok_or_else(AdoptionError::unreachable)?;
+        // 3. Protocol (`daemon.ts:209-216`).
+        if registration.protocol != PTY_PROTOCOL_VERSION {
+            return Err(AdoptionError::protocol());
+        }
+        // 4. Instance (`daemon.ts:411-412`).
+        if registration.instance_id != inherited.instance_id {
+            return Err(AdoptionError::changed());
+        }
+        // 5. The handoff snapshot — the in-process stand-in for the
+        //    live daemon's `prepare_handoff` ticket. Absent ⇒ the old
+        //    owner died without handing off (v2: daemon died —
+        //    kill/refresh); mismatched ticket ⇒ the claim is rejected.
+        let state_path = directory.join(STATE_JSON);
+        let state: HandoffState = read_json(&state_path).ok_or_else(AdoptionError::no_state)?;
+        if state.instance_id != inherited.instance_id || state.ticket != inherited.ticket {
+            return Err(AdoptionError::invalid_ticket());
+        }
+        // 6. Ownership: take the lock. Held ⇒ the previous owner is
+        //    still running (v2 claims through the daemon socket; the
+        //    in-process machine cannot — Phase 9).
+        let lock = take_lock(&directory.join(SERVICE_LOCK)).map_err(|()| AdoptionError::owned())?;
+
+        // Migrate into this machine's root when the handoff points
+        // elsewhere (`daemon.ts:413-414`, `435-444`): renames keep the
+        // lock's inode, so the lock just taken survives the move.
+        let id = directory.file_name().map_or_else(
+            || id_from_instance(&registration.instance_id),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let root = self.runtime.lock().as_ref().map_or_else(
+            || directory.parent().map_or_else(|| directory.clone(), Path::to_path_buf),
+            |scope| scope.root.clone(),
+        );
+        let target = root.join(&id);
+        if target != directory && migrate_runtime(&directory, &target).is_err() {
+            drop(lock);
+            return Err(AdoptionError::unreachable());
+        }
+
+        // Restore the terminals: replay windows intact, children gone
+        // (exited — v2's daemon-died outcome; `Live` without io
+        // handles rejects writes and serves replay reads).
+        let restored = {
+            let mut terminals = self.terminals.lock();
+            let mut next_number = self.next_number.lock();
+            for snapshot in &state.terminals {
+                let mut info = snapshot.info.clone();
+                if info.status == crate::pty::Status::Running {
+                    info.status = crate::pty::Status::Exited;
+                }
+                let buffer = base64_decode(&snapshot.buffer).unwrap_or_default();
+                info.output = (snapshot.buffer_cursor, snapshot.buffer_cursor + buffer.len());
+                if let Some(number) =
+                    info.id.0.rsplit('_').next().and_then(|n| n.parse::<u64>().ok())
+                {
+                    *next_number = (*next_number).max(number);
+                }
+                terminals.insert(
+                    info.id.clone(),
+                    Live {
+                        info,
+                        buffer,
+                        buffer_cursor: snapshot.buffer_cursor,
+                        writer: None,
+                        master: None,
+                        killer: None,
+                        rows: snapshot.rows.clone(),
+                        cursor: snapshot.cursor,
+                        generation: snapshot.generation,
+                        controller: None,
+                        subscribers: HashMap::new(),
+                        ended: HashMap::new(),
+                    },
+                );
+            }
+            state.terminals.len()
+        };
+
+        // The claim consumes the snapshot (single-use ticket; a second
+        // contender finds no state and starts fresh — the
+        // `pty-handoff.ts:32-34` concurrent-prepare tolerance).
+        let _ = std::fs::remove_file(target.join(STATE_JSON));
+        // Re-point the registration at the new owner (the pid now
+        // holding the terminals; the instance id stays — the identity
+        // chains across restarts like v2's surviving daemon).
+        let claimed = Registration {
+            instance_id: registration.instance_id,
+            pid: std::process::id(),
+            protocol: PTY_PROTOCOL_VERSION,
+            socket: String::new(),
+            token: registration.token,
+        };
+        let _ = write_json_atomic(&target.join(SERVICE_JSON), &claimed);
+        // The inherited directory is the live identity now; the fresh
+        // scope claimed at boot (if any) is released with its lock.
+        *self.runtime.lock() = Some(RuntimeScope { root, id, lock });
+        Ok(Adoption::Adopted { restored, directory: target.to_string_lossy().into_owned() })
+    }
+
     fn on_output(&self, id: &PtyId, chunk: &[u8]) {
         let mut terminals = self.terminals.lock();
         let Some(live) = terminals.get_mut(id) else { return };
@@ -850,6 +1298,138 @@ impl Subscriber {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Runtime-directory helpers (the `daemon.ts` filesystem contract)
+// ---------------------------------------------------------------------------
+
+/// Claims a fresh `<root>/<id>`: exclusive non-blocking `flock` on
+/// `service.lock` (released automatically when the process dies) plus
+/// the `service.json` registration (`daemon.ts:165-166`, `33-39`).
+fn claim_runtime_dir(root: &Path) -> Result<RuntimeScope, String> {
+    let id = new_random_token();
+    let directory = root.join(&id);
+    std::fs::create_dir_all(&directory)
+        .and_then(|()| set_private(&directory))
+        .map_err(|error| format!("creating PTY runtime directory: {error}"))?;
+    let lock = take_lock(&directory.join(SERVICE_LOCK))
+        .map_err(|()| format!("locking PTY runtime directory {}", directory.display()))?;
+    let registration = Registration {
+        instance_id: new_random_token(),
+        pid: std::process::id(),
+        protocol: PTY_PROTOCOL_VERSION,
+        socket: String::new(),
+        token: new_random_token(),
+    };
+    write_json_atomic(&directory.join(SERVICE_JSON), &registration)
+        .map_err(|error| format!("writing PTY registration: {error}"))?;
+    Ok(RuntimeScope { root: root.to_path_buf(), id, lock })
+}
+
+/// Opens `path` and takes `flock(LOCK_EX|LOCK_NB)`. The fd is returned
+/// (held = owner alive; dropped/released = dead) — the in-process
+/// liveness equivalent of v2's socket ping (`daemon.ts:217-226`).
+fn take_lock(path: &Path) -> Result<std::fs::File, ()> {
+    use std::os::unix::io::AsRawFd as _;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .read(true)
+        .open(path)
+        .map_err(|_| ())?;
+    // Contained flock(2) on the lock file this machine just opened.
+    #[allow(unsafe_code)] // contained flock(2) on the freshly-opened lock file
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result != 0 {
+        return Err(());
+    }
+    Ok(file)
+}
+
+/// Moves `service.lock` + `service.json` from `from` into `to`
+/// (`daemon.ts:435-444`): rename preserves the lock's inode, so a
+/// held lock survives the move.
+fn migrate_runtime(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    std::fs::rename(from.join(SERVICE_LOCK), to.join(SERVICE_LOCK))?;
+    std::fs::rename(from.join(SERVICE_JSON), to.join(SERVICE_JSON))?;
+    Ok(())
+}
+
+/// `0o700` on a directory, verifying it is one (`binary.bun.ts`
+/// `privateDirectory` semantics).
+fn set_private(directory: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let meta = std::fs::metadata(directory)?;
+    if !meta.is_dir() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a directory"));
+    }
+    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
+}
+
+/// Reads `<dir>/service.json`.
+fn read_registration(directory: &Path) -> Option<Registration> {
+    read_json(&directory.join(SERVICE_JSON))
+}
+
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok())
+}
+
+/// Atomic JSON write: temp file (`0o600`) + rename, the
+/// `pty-handoff.ts:54-66` publish discipline.
+fn write_json_atomic<T: serde::Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let payload = serde_json::to_string(value)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    let temp = path.with_extension(format!("{}.tmp", new_random_token()));
+    let mut file =
+        std::fs::OpenOptions::new().create_new(true).write(true).mode(0o600).open(&temp)?;
+    file.write_all(payload.as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+    match std::fs::rename(&temp, path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(&temp);
+            Err(error)
+        }
+    }
+}
+
+/// Random 32-hex token (`crypto.randomUUID` stand-in).
+fn new_random_token() -> String {
+    use rand::RngCore as _;
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes.iter().fold(String::with_capacity(32), |mut out, byte| {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
+}
+
+fn now_plus(clock: &dyn Clock, ttl_ms: u64) -> u64 {
+    u64::try_from(clock.unix_ms().max(0)).unwrap_or(u64::MAX).saturating_add(ttl_ms)
+}
+
+fn base64_encode(data: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+fn base64_decode(data: &str) -> Option<Vec<u8>> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.decode(data).ok()
+}
+
+/// A directory-name fallback when the handoff directory has no file
+/// name (degenerate input).
+fn id_from_instance(instance_id: &str) -> String {
+    instance_id.chars().filter(char::is_ascii_alphanumeric).take(32).collect()
+}
+
 /// Read-only projection the `read` path needs without holding the lock.
 struct LiveShadow {
     info: Info,
@@ -947,5 +1527,292 @@ mod tests {
         assert!(first.0.starts_with("pty_persistent_"));
         assert_eq!(first.0, "pty_persistent_1");
         assert_eq!(second.0, "pty_persistent_2");
+    }
+
+    // -- R-09: cross-restart handover (daemon.ts:403-428 ladder) ---------------
+
+    fn temp_root(tag: &str) -> std::path::PathBuf {
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("oc-pty-handover-{tag}-"))
+            .tempdir_in("/tmp/opencode")
+            .expect("temp dir");
+        dir.keep()
+    }
+
+    async fn bus_for_test() -> crate::bus::Bus {
+        let database = crate::database::Database::open_in_memory().await.expect("database");
+        crate::bus::Bus::new(database, crate::bus::BusOptions::deterministic())
+    }
+
+    /// `handoff()` without a runtime directory stays `None` (the
+    /// embedded/test surface — v2's transport with no daemon spawned).
+    #[tokio::test]
+    async fn handoff_without_runtime_dir_is_none() {
+        let service = PersistentPty::new(bus_for_test().await);
+        assert!(service.handoff().expect("handoff").is_none());
+    }
+
+    /// The flagship restart chain: server A creates a terminal,
+    /// produces output, hands off, "dies" (dropped); server B re-attaches
+    /// to the inherited directory and replays the pre-restart output
+    /// window at attach time.
+    #[tokio::test]
+    async fn restarted_server_reattaches_to_terminal_state() {
+        let root = temp_root("restore");
+        let session = SessionId::parse("ses_restart").expect("session");
+
+        // Server A: live terminal with real PTY output.
+        let a = PersistentPty::new(bus_for_test().await)
+            .with_default_program(Arc::new(|| Some("/bin/sh".to_string())));
+        a.set_runtime_dir(&root).expect("runtime dir");
+        let info = a
+            .create(
+                &session,
+                CreateInput {
+                    command: Some("/bin/sh".to_string()),
+                    args: vec!["-c".to_string(), "printf 'hello '; sleep 30".to_string()],
+                    cwd: Some("/tmp".to_string()),
+                    title: "workbench".to_string(),
+                    env: std::collections::BTreeMap::new(),
+                    size: Some((80, 10)),
+                },
+            )
+            .await
+            .expect("create");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while a.get(&info.id).expect("get").output.1 < 6 {
+            assert!(std::time::Instant::now() < deadline, "terminal produced no output");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        // Clean stop: prepare the handoff ticket + snapshot, then die
+        // (the lock release IS the death signal — same kernel
+        // semantics as process exit closing the fd).
+        let handoff = a.handoff().expect("handoff").expect("ticket");
+        let a_directory = a.runtime_dir().expect("a runtime dir");
+        a.release_runtime();
+        drop(a);
+
+        // Server B boots on the same root, adopts the inherited ticket.
+        let b = PersistentPty::new(bus_for_test().await);
+        b.set_runtime_dir(&root).expect("b runtime dir");
+        match b.adopt(&handoff) {
+            Adoption::Adopted { restored, directory } => {
+                assert_eq!(restored, 1);
+                assert_eq!(directory, a_directory, "re-attached to the inherited directory");
+            }
+            Adoption::Discarded { reason } => panic!("adoption discarded: {reason}"),
+        }
+
+        // The terminal survived the restart as state: list/get see it,
+        // marked exited (the child died with server A — v2's
+        // daemon-died outcome), and attach replays the pre-restart
+        // bytes.
+        let restored_info = b.get(&info.id).expect("restored terminal");
+        assert_eq!(restored_info.title, "workbench");
+        assert_eq!(restored_info.status, crate::pty::Status::Exited);
+        let attachment = b
+            .attach(
+                &info.id,
+                AttachInput {
+                    cursor: 0,
+                    attachment_id: "adopted-1",
+                    role: Role::Controller,
+                    takeover: false,
+                    on_event: Box::new(|_| {}),
+                    on_end: Box::new(|| {}),
+                },
+            )
+            .expect("attach after restart");
+        assert_eq!(attachment.replay.requested_offset, 0);
+        assert!(!attachment.replay.truncated);
+        assert_eq!(attachment.data, b"hello ", "the pre-restart replay window survived");
+
+        // Writes to a dead terminal are rejected by status (no io
+        // handles restored) — read-only history until removed.
+        b.write(&info.id, "ignored", None).await.expect("write on exited is a no-op, not an error");
+        // New terminals continue the id sequence past the restored one.
+        let next = b.next_terminal_id();
+        assert_eq!(next.0, "pty_persistent_2", "id counter continues past the restore");
+    }
+
+    /// `daemon.ts:406-407` — an expired ticket discards to a fresh start.
+    #[tokio::test]
+    async fn adopt_expired_ticket_discards() {
+        let root = temp_root("expired");
+        let service = PersistentPty::new(bus_for_test().await);
+        service.set_runtime_dir(&root).expect("runtime");
+        let stale = Handoff {
+            directory: root.join("nowhere").to_string_lossy().into_owned(),
+            instance_id: "any".to_owned(),
+            ticket: "any".to_owned(),
+            expires_at: 0,
+        };
+        match service.adopt(&stale) {
+            Adoption::Discarded { reason } => assert_eq!(reason, AdoptionError::expired()),
+            Adoption::Adopted { .. } => panic!("expired ticket adopted"),
+        }
+        assert!(service.list(None).expect("list").is_empty(), "fresh start");
+    }
+
+    /// `daemon.ts:411-412` — an instance mismatch discards.
+    #[tokio::test]
+    async fn adopt_instance_mismatch_discards() {
+        let root = temp_root("changed");
+        let a = PersistentPty::new(bus_for_test().await);
+        a.set_runtime_dir(&root).expect("runtime");
+        let mut handoff = a.handoff().expect("handoff").expect("ticket");
+        handoff.instance_id = format!("{}-tampered", handoff.instance_id);
+        drop(a);
+        let b = PersistentPty::new(bus_for_test().await);
+        b.set_runtime_dir(&root).expect("runtime");
+        match b.adopt(&handoff) {
+            Adoption::Discarded { reason } => assert_eq!(reason, AdoptionError::changed()),
+            Adoption::Adopted { .. } => panic!("mismatched instance adopted"),
+        }
+    }
+
+    /// `daemon.ts:415` — a still-running previous owner keeps its lock;
+    /// the claim fails (the in-process machine has no daemon socket to
+    /// transfer ownership through — the documented Phase-9 boundary).
+    #[tokio::test]
+    async fn adopt_while_owner_alive_discards() {
+        let root = temp_root("owned");
+        let a = PersistentPty::new(bus_for_test().await);
+        a.set_runtime_dir(&root).expect("runtime");
+        let handoff = a.handoff().expect("handoff").expect("ticket");
+        // A is still alive here (holds the lock on service.lock).
+        let b = PersistentPty::new(bus_for_test().await);
+        b.set_runtime_dir(&root).expect("runtime");
+        match b.adopt(&handoff) {
+            Adoption::Discarded { reason } => assert_eq!(reason, AdoptionError::owned()),
+            Adoption::Adopted { .. } => panic!("adopted out from under a live owner"),
+        }
+    }
+
+    /// The daemon-died path (kill/refresh): a registration exists but
+    /// no handoff snapshot was written (crash, or the explicit
+    /// shutdown) — the replacement starts fresh
+    /// (`pty-handoff.ts:35-37`).
+    #[tokio::test]
+    async fn adopt_after_unhanded_death_discards_fresh() {
+        let root = temp_root("died");
+        let a = PersistentPty::new(bus_for_test().await);
+        a.set_runtime_dir(&root).expect("runtime");
+        let directory = a.runtime_dir().expect("dir");
+        let instance_id = {
+            let text = std::fs::read_to_string(Path::new(&directory).join("service.json"))
+                .expect("registration");
+            let registration: Registration = serde_json::from_str(&text).expect("parse");
+            registration.instance_id
+        };
+        drop(a); // died without handoff()
+
+        let bogus = Handoff {
+            directory: directory.clone(),
+            instance_id,
+            ticket: "fabricated".to_owned(),
+            expires_at: u64::try_from(
+                oc_util::determinism::SystemClock.unix_ms().saturating_add(60_000),
+            )
+            .unwrap_or(u64::MAX),
+        };
+        let b = PersistentPty::new(bus_for_test().await);
+        b.set_runtime_dir(&root).expect("runtime");
+        match b.adopt(&bogus) {
+            Adoption::Discarded { reason } => assert_eq!(reason, AdoptionError::no_state()),
+            Adoption::Adopted { .. } => panic!("adopted a dead owner without a handoff"),
+        }
+        assert!(b.list(None).expect("list").is_empty());
+    }
+
+    /// `shutdown()` is the kill path: any pending handoff state is
+    /// invalidated (`pty-handoff.ts:35-37`).
+    #[tokio::test]
+    async fn shutdown_invalidates_the_handoff_state() {
+        let root = temp_root("killed");
+        let a = PersistentPty::new(bus_for_test().await);
+        a.set_runtime_dir(&root).expect("runtime");
+        let handoff = a.handoff().expect("handoff").expect("ticket");
+        a.shutdown().await.expect("shutdown");
+        drop(a);
+        let b = PersistentPty::new(bus_for_test().await);
+        b.set_runtime_dir(&root).expect("runtime");
+        match b.adopt(&handoff) {
+            Adoption::Discarded { reason } => assert_eq!(reason, AdoptionError::no_state()),
+            Adoption::Adopted { .. } => panic!("adopted a shutdown (killed) owner"),
+        }
+    }
+
+    /// The ticket is single-use: after one adoption consumes the
+    /// snapshot, a second contender finds no state and starts fresh
+    /// (`pty-handoff.ts:32-34`).
+    #[tokio::test]
+    async fn second_contender_after_adoption_starts_fresh() {
+        let root = temp_root("contender");
+        let session = SessionId::parse("ses_contender").expect("session");
+        let a = PersistentPty::new(bus_for_test().await)
+            .with_default_program(Arc::new(|| Some("/bin/sh".to_string())));
+        a.set_runtime_dir(&root).expect("runtime");
+        a.create(
+            &session,
+            CreateInput {
+                command: Some("/bin/sh".to_string()),
+                args: vec!["-c".to_string(), "sleep 30".to_string()],
+                cwd: Some("/tmp".to_string()),
+                title: String::new(),
+                env: std::collections::BTreeMap::new(),
+                size: Some((80, 10)),
+            },
+        )
+        .await
+        .expect("create");
+        let handoff = a.handoff().expect("handoff").expect("ticket");
+        a.release_runtime();
+        drop(a);
+
+        let b = PersistentPty::new(bus_for_test().await);
+        b.set_runtime_dir(&root).expect("runtime");
+        assert!(matches!(b.adopt(&handoff), Adoption::Adopted { .. }));
+
+        let c = PersistentPty::new(bus_for_test().await);
+        c.set_runtime_dir(&root).expect("runtime");
+        match c.adopt(&handoff) {
+            Adoption::Discarded { reason } => assert_eq!(reason, AdoptionError::no_state()),
+            Adoption::Adopted { .. } => panic!("second contender adopted the consumed ticket"),
+        }
+        assert!(c.list(None).expect("list").is_empty());
+    }
+
+    /// `daemon.ts:413-414`, `435-444` — when the inherited directory
+    /// sits outside this machine's root, the lock + registration move
+    /// (inode-preserving renames) into the root.
+    #[tokio::test]
+    async fn adopt_migrates_the_runtime_directory_into_the_root() {
+        let old_root = temp_root("migrate-old");
+        let new_root = temp_root("migrate-new");
+        let a = PersistentPty::new(bus_for_test().await);
+        a.set_runtime_dir(&old_root).expect("runtime");
+        let handoff = a.handoff().expect("handoff").expect("ticket");
+        let inherited = handoff.directory.clone();
+        drop(a);
+
+        let b = PersistentPty::new(bus_for_test().await);
+        b.set_runtime_dir(&new_root).expect("runtime");
+        let adopted_directory = match b.adopt(&handoff) {
+            Adoption::Adopted { directory, .. } => directory,
+            Adoption::Discarded { reason } => panic!("migration discarded: {reason}"),
+        };
+        assert!(adopted_directory.starts_with(new_root.to_str().expect("utf8")));
+        assert!(Path::new(&adopted_directory).join("service.json").exists());
+        assert!(!Path::new(&inherited).join("service.json").exists(), "old registration moved");
+        // The moved lock is the one B now holds: a competing claim on
+        // the MIGRATED path fails — the lock rode its inode through
+        // the rename (the daemon.ts:433-444 comment, verbatim
+        // mechanism).
+        assert!(
+            take_lock(&Path::new(&adopted_directory).join(SERVICE_LOCK)).is_err(),
+            "the migrated lock file still carries B's lock"
+        );
     }
 }

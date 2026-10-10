@@ -201,6 +201,15 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
         Arc::new(SystemClock),
     );
     app_state.cors_origins.extend(options.cors_origins.iter().cloned());
+    // R-09 — the persistent-PTY cross-restart handover
+    // (`server-process.ts:46-57` → `daemon.ts:403-428`): claim the
+    // runtime root, then adopt the inherited handoff injected through
+    // `OPENCODE_PTY_HANDOFF` by the replacement plumbing (the
+    // `pty-handoff.ts` sidecar → env chain in `lifecycle.rs`). The env
+    // var is consumed FIRST (children must not inherit it), invalid
+    // payloads warn and start fresh, and every adoption failure inside
+    // keeps the boot green — terminals are best-effort.
+    adopt_inherited_pty(&mut app_state, &options.data_root.join("pty"));
     // R-04: populate the web-UI asset store (runtime `OPENCODE_APP_ASSETS`
     // override over the build-time embedded archive; absent both → empty,
     // API-only). A broken override fails boot loudly.
@@ -233,6 +242,47 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
 pub fn parse_hostname(raw: &str) -> Option<IpAddr> {
     use std::str::FromStr as _;
     IpAddr::from_str(raw).ok()
+}
+
+/// R-09 boot wiring (`server-process.ts:46-57`): consume the inherited
+/// `OPENCODE_PTY_HANDOFF` env (deleted before anything else so child
+/// processes never see it), decode the handoff payload (invalid values
+/// warn "Ignoring invalid PTY restart handoff; persistent terminals
+/// will start fresh" and boot fresh — `lifecycle::decode_inherited_handoff`),
+/// claim the runtime root, and adopt (`daemon.ts:403-428`). Never fails
+/// the boot; the adoption outcome is logged.
+pub fn adopt_inherited_pty(state: &mut crate::state::AppState, pty_root: &std::path::Path) {
+    let inherited = std::env::var("OPENCODE_PTY_HANDOFF").ok();
+    std::env::remove_var("OPENCODE_PTY_HANDOFF");
+    let decoded = crate::lifecycle::decode_inherited_handoff(inherited.as_deref());
+    if let Err(error) = state.persistent_pty.set_runtime_dir(pty_root) {
+        eprintln!("Persistent terminals unavailable: {error}");
+        return;
+    }
+    let Some(value) = decoded else { return };
+    let Some(handoff) = handoff_from_wire(&value) else {
+        eprintln!("Ignoring invalid PTY restart handoff; persistent terminals will start fresh");
+        return;
+    };
+    match state.persistent_pty.adopt(&handoff) {
+        oc_core::persistent_pty::Adoption::Adopted { restored, directory } => {
+            eprintln!(
+                "Adopted persistent terminals from restart handoff: {restored} restored at {directory}"
+            );
+        }
+        oc_core::persistent_pty::Adoption::Discarded { .. } => {}
+    }
+}
+
+/// Maps the wire `Handoff` (`directory`/`instanceID`/`ticket`/
+/// `expiresAt`, `schema/persistent-pty.ts`) onto the core struct.
+fn handoff_from_wire(value: &serde_json::Value) -> Option<oc_core::persistent_pty::Handoff> {
+    Some(oc_core::persistent_pty::Handoff {
+        directory: value.get("directory")?.as_str()?.to_owned(),
+        instance_id: value.get("instanceID")?.as_str()?.to_owned(),
+        ticket: value.get("ticket")?.as_str()?.to_owned(),
+        expires_at: value.get("expiresAt")?.as_u64()?,
+    })
 }
 
 /// Loads a location's config the way the engine's assembly does (walk-up +
@@ -389,5 +439,106 @@ mod tests {
         assert!(handle.state.engine.locations.get(&location).is_some());
 
         handle.shutdown_and_join().await.expect("shutdown");
+    }
+
+    /// R-09 — the boot-side handover wiring
+    /// (`server-process.ts:46-57`): `OPENCODE_PTY_HANDOFF` is consumed
+    /// (removed from the environment even when it decodes), a staged
+    /// handoff from a "previous server" is adopted with its terminal
+    /// state restored, and garbage payloads boot fresh.
+    #[tokio::test]
+    async fn boot_adopts_inherited_pty_handoff() {
+        use oc_core::persistent_pty::PersistentPty;
+
+        struct HandoffEnv;
+        impl Drop for HandoffEnv {
+            fn drop(&mut self) {
+                std::env::remove_var("OPENCODE_PTY_HANDOFF");
+            }
+        }
+
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let pty_root = tmp.path().join("pty");
+        let engine =
+            Engine::boot(EngineOptions::new(tmp.path().to_owned(), tmp.path().to_owned())).await;
+
+        // The "previous server": a terminal with output, then a clean
+        // handoff ticket, then it dies (dropped — lock released).
+        let previous = PersistentPty::new(engine.bus.as_ref().clone());
+        previous.set_runtime_dir(&pty_root).expect("previous runtime dir");
+        let session = oc_schema::id::SessionId::parse("ses_boot_pty").expect("session");
+        let info = previous
+            .create(
+                &session,
+                oc_core::persistent_pty::CreateInput {
+                    command: Some("/bin/sh".to_owned()),
+                    args: vec!["-c".to_owned(), "printf 'boot '; sleep 30".to_owned()],
+                    cwd: Some("/tmp".to_owned()),
+                    title: "boot-terminal".to_owned(),
+                    env: std::collections::BTreeMap::new(),
+                    size: Some((80, 10)),
+                },
+            )
+            .await
+            .expect("previous terminal");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while previous.get(&info.id).expect("get").output.1 < 5 {
+            assert!(std::time::Instant::now() < deadline, "no terminal output");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let handoff = previous.handoff().expect("handoff").expect("ticket");
+        previous.release_runtime();
+        drop(previous);
+
+        // Boot the replacement with the inherited env payload.
+        let _env = HandoffEnv;
+        std::env::set_var(
+            "OPENCODE_PTY_HANDOFF",
+            serde_json::json!({
+                "directory": handoff.directory,
+                "instanceID": handoff.instance_id,
+                "ticket": handoff.ticket,
+                "expiresAt": handoff.expires_at,
+            })
+            .to_string(),
+        );
+        let mut state = AppState::new(
+            engine,
+            AuthConfig { password: None },
+            "test".to_owned(),
+            Arc::new(UuidV4IdGen),
+            Arc::new(SystemClock),
+        );
+        adopt_inherited_pty(&mut state, &pty_root);
+        assert!(
+            std::env::var("OPENCODE_PTY_HANDOFF").is_err(),
+            "the env var is consumed at boot (children never inherit it)"
+        );
+        let restored = state.persistent_pty.get(&info.id).expect("terminal restored");
+        assert_eq!(restored.title, "boot-terminal");
+        assert_eq!(restored.status, oc_core::pty::Status::Exited);
+        let listed = state.persistent_pty.list(None).expect("list");
+        assert_eq!(listed.len(), 1);
+
+        // Garbage payloads warn and boot fresh (list stays empty).
+        let tmp2 = tempfile::tempdir_in("/tmp/opencode").expect("sandbox 2");
+        let engine2 =
+            Engine::boot(EngineOptions::new(tmp2.path().to_owned(), tmp2.path().to_owned())).await;
+        std::env::set_var("OPENCODE_PTY_HANDOFF", "not-json");
+        let mut fresh = AppState::new(
+            engine2,
+            AuthConfig { password: None },
+            "test".to_owned(),
+            Arc::new(UuidV4IdGen),
+            Arc::new(SystemClock),
+        );
+        adopt_inherited_pty(&mut fresh, &tmp2.path().join("pty"));
+        assert_eq!(fresh.persistent_pty.list(None).expect("list").len(), 0);
+        assert!(
+            fresh.persistent_pty.runtime_dir().is_some_and(|dir| dir.starts_with(
+                tmp2.path().join("pty").to_str().expect("utf8")
+            )),
+            "a fresh runtime identity was claimed under the new root"
+        );
     }
 }
