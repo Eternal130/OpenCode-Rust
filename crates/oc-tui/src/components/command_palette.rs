@@ -301,7 +301,9 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
     match kind {
         DialogKind::CommandPalette => palette_props(store),
         DialogKind::ThemeList => theme_list_props(store),
-        DialogKind::Help | DialogKind::SessionRename { .. } => SelectProps::new("", Vec::new()),
+        DialogKind::Help | DialogKind::SessionRename { .. } | DialogKind::WorktreeName => {
+            SelectProps::new("", Vec::new())
+        }
         DialogKind::Plugin { id } => {
             // The delegation payload: plugin-supplied options at open
             // time. Rows-only content returns empty props (the dialog
@@ -330,6 +332,23 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         DialogKind::ServerList { command: "model.list", title } => {
             model_list_props(store, title).with_current(model_current_value(store))
         }
+        // The Worktrees dialog (R-05): the store's worktree state
+        // builds the rows; the move action rides a session route.
+        DialogKind::Worktrees => crate::components::dialog_worktrees::worktree_props(
+            &store.worktree_dialog(),
+            matches!(store.route(), crate::store::Route::Session { .. }),
+            &home_directory(),
+        ),
+        // The forced-delete confirm: v2's file-changes dialog in its
+        // yes/no role (`DialogWorkspaceFileChanges.show`).
+        DialogKind::WorktreeDeleteConfirm { .. } => SelectProps::new(
+            "Delete worktree?",
+            vec![
+                SelectOption::titled("This worktree has file changes.", "yes")
+                    .described("Do you want to delete it anyway? Yes deletes it."),
+                SelectOption::titled("Keep the worktree", "no").described("Cancels the delete."),
+            ],
+        ),
         DialogKind::ServerList { command: "agent.list", title } => agent_list_props(store, title),
         DialogKind::ServerList { command: "session.list", title } => {
             // The session list renders the known sessions — the open
@@ -356,6 +375,14 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
     }
 }
 
+/// The home directory for `abbreviateHome` (the v2 TUI reads it from
+/// the runtime paths at boot; the port resolves `$HOME` at props
+/// time — tests inject explicit homes through the worktree props
+/// builder).
+fn home_directory() -> String {
+    std::env::var("HOME").unwrap_or_default()
+}
+
 /// The model picker's props from the store's `model.list` state
 /// (`component/dialog-model.tsx`): non-deprecated rows, provider-name
 /// categories, the "Free" footer (`cost.length > 0 && every input
@@ -375,28 +402,78 @@ pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
     let options = match &lists.models {
         ListState::Loading => vec![status_option("Loading models…")],
         ListState::Failed(error) => vec![status_option(&format!("Models unavailable: {error}"))],
-        ListState::Loaded(models) => models
-            .iter()
-            .filter(|model| !model.deprecated)
-            .map(|model| {
-                let title =
-                    if model.name.is_empty() { model.id.clone() } else { model.name.clone() };
-                let value = format!("{}/{}", model.provider_id, model.id);
-                let mut option = SelectOption::titled(title, value)
-                    .categorized(provider_name(&model.provider_id))
-                    .with_search(format!("{} {}", model.provider_id, model.id));
-                if model.free {
-                    option = option.with_footer("Free");
-                }
-                option
-            })
-            .collect(),
+        ListState::Loaded(models) => {
+            let mut rows: Vec<&crate::store::ServerModel> =
+                models.iter().filter(|model| !model.deprecated).collect();
+            // The dialog's browse mode sorts its full option list with
+            // `sortModelOptions(…, connected())` — connected → grouped.
+            sort_model_options(&mut rows, true, &provider_name);
+            rows.iter()
+                .map(|model| {
+                    let title =
+                        if model.name.is_empty() { model.id.clone() } else { model.name.clone() };
+                    let value = format!("{}/{}", model.provider_id, model.id);
+                    let mut option = SelectOption::titled(title, value)
+                        .categorized(provider_name(&model.provider_id))
+                        .with_search(format!("{} {}", model.provider_id, model.id));
+                    if model.free {
+                        option = option.with_footer("Free");
+                    }
+                    option
+                })
+                .collect()
+        }
     };
-    // Provider grouping order: `opencode-go` first, `opencode` second
-    // (sortModelOptions), free rows ahead within a provider, then name.
     let mut props = SelectProps::new(title, options);
     props = props.flat(true);
     props
+}
+
+/// `localeCompare` approximation — the repo convention (ICU primary
+/// is case-insensitive; tertiary puts lowercase first on ties):
+/// case-folded compare, then lowercase-first tie-break. Identical to
+/// ICU for the ASCII corpus of provider/model names.
+fn locale_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| b.cmp(a))
+}
+
+/// v2 `sortModelOptions` (`dialog-model.tsx:185-211`), verbatim key
+/// order: grouped → `opencode-go` providers first, then `opencode`,
+/// then provider-name collation; then Free-first; then release date
+/// DESCENDING; then title collation. `grouped = false` (the dialog's
+/// search path) skips the two provider keys — Free/release/title
+/// ordering stays. Ties keep the incoming order (both sorts stable).
+pub fn sort_model_options(
+    rows: &mut [&crate::store::ServerModel],
+    grouped: bool,
+    provider_name: &dyn Fn(&str) -> String,
+) {
+    let title = |model: &crate::store::ServerModel| -> String {
+        if model.name.is_empty() {
+            model.id.clone()
+        } else {
+            model.name.clone()
+        }
+    };
+    rows.sort_by(|a, b| {
+        let provider = if grouped {
+            usize::from(b.provider_id == "opencode-go")
+                .cmp(&usize::from(a.provider_id == "opencode-go"))
+                .then_with(|| {
+                    usize::from(b.provider_id == "opencode")
+                        .cmp(&usize::from(a.provider_id == "opencode"))
+                })
+                .then_with(|| {
+                    locale_cmp(&provider_name(&a.provider_id), &provider_name(&b.provider_id))
+                })
+        } else {
+            std::cmp::Ordering::Equal
+        };
+        provider
+            .then_with(|| usize::from(b.free).cmp(&usize::from(a.free)))
+            .then_with(|| b.released.total_cmp(&a.released))
+            .then_with(|| locale_cmp(&title(a), &title(b)))
+    });
 }
 
 /// The agent picker's props from the store's `agent.list` state
@@ -614,6 +691,7 @@ pub trait CommandDispatcher {
 pub struct StoreDispatcher;
 
 impl CommandDispatcher for StoreDispatcher {
+    #[allow(clippy::too_many_lines)] // one arm per command, the palette dispatch table
     fn dispatch(&mut self, store: &Store, command: &str, args: Option<&str>) -> Dispatch {
         match command {
             "command.palette.show" => {
@@ -678,7 +756,15 @@ impl CommandDispatcher for StoreDispatcher {
                 Dispatch::Handled
             }
             "help.show" => {
-                store.replace_dialog(DialogKind::Help, DialogSize::Large);
+                // v2's DialogHelp takes the default (medium) size —
+                // no explicit setSize in dialog-help.tsx.
+                store.replace_dialog(DialogKind::Help, DialogSize::Medium);
+                Dispatch::Handled
+            }
+            // `/worktrees` + the palette's "Manage workspaces"
+            // (`session.move`): the Worktrees dialog (R-05).
+            "session.move" => {
+                store.open_worktrees_dialog();
                 Dispatch::Handled
             }
             "prompt.editor" => {
@@ -693,8 +779,8 @@ impl CommandDispatcher for StoreDispatcher {
             }
             "model.list" | "agent.list" | "mcp.list" | "variant.list" | "session.list"
             | "open.menu" | "provider.connect" | "opencode.settings" | "opencode.status"
-            | "session.share" | "session.fork" | "session.move" | "server.pair"
-            | "location.reload" | "opencode.debug" | "docs.open" => {
+            | "session.share" | "session.fork" | "server.pair" | "location.reload"
+            | "opencode.debug" | "docs.open" => {
                 // DialogSessions mounts titled "Sessions"; every other
                 // listing takes the palette entry's title.
                 let title: &'static str = if command == "session.list" {
@@ -820,6 +906,7 @@ mod tests {
             free,
             deprecated,
             variants: Vec::new(),
+            released: 0.0,
         }
     }
 
@@ -870,6 +957,115 @@ mod tests {
         let props = model_list_props(&store, "Switch model");
         assert!(props.options[0].title.contains("Models unavailable"));
         assert!(props.options[0].title.contains("503"));
+    }
+
+    /// D-05 — `sortModelOptions` ported verbatim from
+    /// `dialog-model.tsx:185-211`. Vectors from the reference's
+    /// model-options test (the SHIPPED comparator's behavior —
+    /// verified against the ref source in both bun and node).
+    #[test]
+    fn sort_model_options_orders_opencode_go_before_zen_and_others() {
+        let rows = [
+            row("openai", "OpenAI", "GPT 5", false, 3.0),
+            row("opencode", "OpenCode Zen", "Claude Sonnet 4", false, 1.0),
+            row("anthropic", "Anthropic", "Claude Opus 4", false, 2.0),
+            row("opencode-go", "OpenCode Go", "Kimi K3", false, 0.0),
+        ];
+        let titles = sorted_titles(&rows, true);
+        assert_eq!(titles, vec!["Kimi K3", "Claude Sonnet 4", "Claude Opus 4", "GPT 5"]);
+    }
+
+    #[test]
+    fn sort_model_options_grouped_puts_the_opencode_group_first() {
+        // The ref's test-1 input under `grouped = true` (browse): the
+        // opencode provider group wins before anthropic's rows — the
+        // shipped comparator's output (the ref test file's expectation
+        // here predates the provider-grouping keys).
+        let rows = [
+            row("opencode", "OpenCode Zen", "Claude Haiku 3", false, 1.0),
+            row("anthropic", "Anthropic", "Claude Haiku 4.5", false, 2.0),
+            row("anthropic", "Anthropic", "Claude Haiku Free", true, 0.0),
+        ];
+        let titles = sorted_titles(&rows, true);
+        assert_eq!(titles, vec!["Claude Haiku 3", "Claude Haiku Free", "Claude Haiku 4.5"]);
+        // Ungrouped (the search path): free-first, then release desc.
+        let titles = sorted_titles(&rows, false);
+        assert_eq!(titles, vec!["Claude Haiku Free", "Claude Haiku 4.5", "Claude Haiku 3"]);
+    }
+
+    #[test]
+    fn sort_model_options_ungrouped_free_first_regardless_of_provider() {
+        let rows = [
+            row("opencode-go", "OpenCode Go", "Go model", false, 3.0),
+            row("opencode", "OpenCode Zen", "Free Zen model", true, 1.0),
+            row("anthropic", "Anthropic", "Anthropic model", false, 4.0),
+        ];
+        let titles = sorted_titles(&rows, false);
+        assert_eq!(titles, vec!["Free Zen model", "Anthropic model", "Go model"]);
+    }
+
+    #[test]
+    fn sort_model_options_groups_by_provider_name_then_newest_release() {
+        let rows = [
+            row("google", "Google", "Gemini 2.5 Pro", false, 5.0),
+            row("anthropic", "Anthropic", "Claude Sonnet 4", false, 4.0),
+            row("anthropic", "Anthropic", "Claude Opus 4", false, 6.0),
+            row("openai", "OpenAI", "GPT 5", false, 7.0),
+        ];
+        let titles = sorted_titles(&rows, true);
+        assert_eq!(
+            titles,
+            vec!["Claude Opus 4", "Claude Sonnet 4", "Gemini 2.5 Pro", "GPT 5"],
+            "provider-name groups stay contiguous, newest first inside"
+        );
+    }
+
+    #[test]
+    fn sort_model_options_title_collation_breaks_release_ties() {
+        let rows = [
+            row("anthropic", "Anthropic", "Claude Sonnet 4", false, 5.0),
+            row("anthropic", "Anthropic", "Claude Opus 4", false, 5.0),
+        ];
+        let titles = sorted_titles(&rows, true);
+        assert_eq!(titles, vec!["Claude Opus 4", "Claude Sonnet 4"]);
+    }
+
+    /// Sort-input row helper: one `ServerModel` + its provider name.
+    fn row(
+        provider_id: &str,
+        provider_name: &str,
+        title: &str,
+        free: bool,
+        released: f64,
+    ) -> (crate::store::ServerModel, String) {
+        (
+            crate::store::ServerModel {
+                provider_id: provider_id.into(),
+                id: title.to_lowercase().replace(' ', "-"),
+                name: title.into(),
+                cost_input: if free { 0.0 } else { 1.0 },
+                free,
+                deprecated: false,
+                variants: Vec::new(),
+                released,
+            },
+            provider_name.into(),
+        )
+    }
+
+    fn sorted_titles(rows: &[(crate::store::ServerModel, String)], grouped: bool) -> Vec<String> {
+        let mut borrowed: Vec<&crate::store::ServerModel> =
+            rows.iter().map(|(model, _)| model).collect();
+        let names: Vec<(String, String)> =
+            rows.iter().map(|(model, name)| (model.provider_id.clone(), name.clone())).collect();
+        let resolve = move |id: &str| -> String {
+            names
+                .iter()
+                .find(|(provider, _)| provider == id)
+                .map_or_else(|| id.to_owned(), |(_, name)| name.clone())
+        };
+        sort_model_options(&mut borrowed, grouped, &resolve);
+        borrowed.iter().map(|model| model.name.clone()).collect()
     }
 
     /// The agent picker filters subagent/hidden rows, carries the

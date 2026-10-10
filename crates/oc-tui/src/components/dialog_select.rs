@@ -124,6 +124,10 @@ pub struct SelectProps {
     pub flat: bool,
     /// Normalized fuzzy threshold (the palette's `0.7`).
     pub filter_threshold: Option<f64>,
+    /// v2's `emptyView` copy override ("No worktrees available").
+    pub empty_text: Option<String>,
+    /// v2's `noMatchView` copy override ("No worktrees found").
+    pub no_match_text: Option<String>,
 }
 
 impl SelectProps {
@@ -137,6 +141,8 @@ impl SelectProps {
             actions: Vec::new(),
             flat: false,
             filter_threshold: None,
+            empty_text: None,
+            no_match_text: None,
         }
     }
 
@@ -161,6 +167,15 @@ impl SelectProps {
     #[must_use]
     pub fn threshold(mut self, threshold: f64) -> Self {
         self.filter_threshold = Some(threshold);
+        self
+    }
+
+    /// v2's `emptyView` / `noMatchView` copy (the Worktrees dialog's
+    /// "No worktrees available" / "No worktrees found").
+    #[must_use]
+    pub fn with_empty_texts(mut self, empty: &str, no_match: &str) -> Self {
+        self.empty_text = Some(empty.to_owned());
+        self.no_match_text = Some(no_match.to_owned());
         self
     }
 }
@@ -554,7 +569,11 @@ pub fn render_select(
     // Empty states (outside the scrollbox, paddingLeft 4).
     if indices.is_empty() {
         let mut row = Row::blank(width, default, surface_bg);
-        let message = if filtering { "No results found" } else { "No items available" };
+        let message = if filtering {
+            props.no_match_text.as_deref().unwrap_or("No results found")
+        } else {
+            props.empty_text.as_deref().unwrap_or("No items available")
+        };
         row.text(4, message, styles.muted, surface_bg, 0);
         window.push(row.cells);
     }

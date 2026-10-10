@@ -66,19 +66,23 @@ async fn model_list(
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     let catalog = &state.engine.catalog;
-    let mut data = Vec::new();
-    for snapshot in catalog.providers() {
-        for model in &snapshot.models {
-            data.push(model_json(snapshot, model));
-        }
-    }
-    // Config-defined custom providers ride the list too (v2's model table
-    // includes `provider.<id>` entries with a baseURL).
+    // v2's `Model.available()` serves the flattened list sorted by
+    // `time.released` DESCENDING (core model.ts:218-220) — catalog
+    // pairs through `flat_models_by_release`, config-defined custom
+    // providers (released = 0) ride the same stable sort so they land
+    // after every dated catalog model, ties keeping source order.
+    let mut data: Vec<(f64, Value)> = catalog
+        .flat_models_by_release()
+        .into_iter()
+        .map(|(snapshot, model)| (model.time.released.0, model_json(snapshot, model)))
+        .collect();
     for provider in crate::boot::location_custom_providers(&state.engine, &location) {
         for model in &provider.models {
-            data.push(custom_model_json(&provider, model));
+            data.push((0.0, custom_model_json(&provider, model)));
         }
     }
+    data.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let data: Vec<Value> = data.into_iter().map(|(_, value)| value).collect();
     Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
 }
 
