@@ -31,7 +31,7 @@
 |---|---|---|---|---|
 | R-01 | tree-sitter 语法高亮（diff/代码着色） | core 高亮管线 | P1 | beta.4；**方案已裁定（oracle）**：新叶 crate `oc-syntax`，原生精选 18 语言编译内置（bash/pwsh 已有；+rust/python/ts/js/go/c/cpp/c#/java/json/yaml/toml/html/css/diff），.scm 查询按 v2 的逐语言来源选择钉版 vendor（修复 v2 指向 nvim master 的不可复现性）；未覆盖语言回退纯文本（=现状）；禁运行时拉取（断网独立）；边界 API `highlight(block, filetype)`，markdown.rs/diff_viewer.rs/tool-row 三处接线；先行 spike（3 语言+体积/性能测量）后铺全量 |
 | R-02 | `opencode mini` 第二前端 | cli/handlers/mini.ts | P1 | beta.4 |
-| R-03 | `acp` 编辑器协议（Zed/Neovim 等） | cli/handlers/acp.ts | P1 | beta.4 |
+| R-03 | `acp` 编辑器协议（Zed/Neovim 等） | cli/handlers/acp.ts | P1 | beta.4；**已定栈（librarian）**：官方 `agent-client-protocol =3.3.0`（Apache-2.0，Zed 自家客户端同款）+ `stdio` feature + v1 builder API + `unstable_session_fork`（v2 参照含 fork，parity 必带）；钉精确版本、升级需回归（1.11.0 收紧了接收严格性）；能力宣告精确对齐 `acp/service.ts:106-130`；桥接层映射到现有 oc-client SSE/权限应答地基 |
 | R-04 | **Web UI**：`serve` 托管 `packages/app`（PWA）+ 前端功能等价 | packages/app + serve 静态托管 | P1（大体量） | beta.5 起、跨多批 |
 | R-05 | worktree UI | TUI/worktree | P2 | beta.6 |
 | R-06 | 声音 / OS 通知 | TUI C2 类 | P2 | beta.6 |
