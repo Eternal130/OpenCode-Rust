@@ -45,9 +45,9 @@
 | R-02 | `opencode mini` 第二前端 | cli/handlers/mini.ts | P1 | **done（beta.4）** |
 | R-03 | `acp` 编辑器协议（Zed/Neovim 等） | cli/handlers/acp.ts | P1 | beta.4；**已定栈（librarian）**：官方 `agent-client-protocol =3.3.0`（Apache-2.0，Zed 自家客户端同款）+ `stdio` feature + v1 builder API + `unstable_session_fork`（v2 参照含 fork，parity 必带）；钉精确版本、升级需回归（1.11.0 收紧了接收严格性）；能力宣告精确对齐 `acp/service.ts:106-130`；桥接层映射到现有 oc-client SSE/权限应答地基 |
 | R-04 | **Web UI**：`serve` 托管 `packages/app`（PWA）+ 前端功能等价 | packages/app + serve 静态托管 | P1（大体量） | beta.5 起、跨多批 |
-| R-05 | worktree UI | TUI/worktree | P2 | beta.6 |
-| R-06 | 声音 / OS 通知 | TUI C2 类 | P2 | beta.6 |
-| R-07 | 图像支持（粘贴/显示 kitty/sixel） | TUI/app | P2 | beta.6 |
+| R-05 | worktree UI | TUI/worktree | P2 | **done（beta.6）** |
+| R-06 | 声音 / OS 通知 | TUI C2 类 | P2 | **done（beta.6）**：v2 触发矩阵+OSC 9/99/777+5 资产 vendor；播放镜像为系统播放器（登记分歧：v2 为进程内 miniaudio） |
+| R-07 | 图像支持（粘贴/显示 kitty/sixel） | TUI/app | P2 | **done（beta.6）**：路径粘贴→附件 chip→data-URI→引擎（anthropic/openai 图像块已有 golden）；显示 kitty APC 分块/sixel 透传/占位回退，`session.image_preview` 默认关 |
 | R-08 | 半块字形、子像素 RGBA 渲染 | TUI C2 类 | P3 | beta.7+ |
 | R-09 | PTY 守护跨重启交接 | core pty | P3 | beta.7+ |
 | R-10 | rmcp 0.5 elicitation | 协议库升级 | blocked（上游） | 跟踪 |
@@ -61,7 +61,7 @@
 | D-02 | 非空草稿时 leader 和弦不触发 | 和弦挂起输入框后触发 | **done（beta.5）** |
 | D-03 | 插件 hook 可变对象 copy-in/copy-out | 引用可变（进程内） | **spike 评估**：bun 宿主内对象代间同步或等价语义；无法等价则永久登记并给出隔离性收益说明 |
 | D-04 | 请求 schema 校验仅 2 路由 | 全路由 400 形状 | **修**：按 openapi 契约生成全路由校验电池，beta.5 |
-| D-05 | /help clamp；模型 release-date 精细序简化；input_paste preventDefault 未移植 | 各自精确行为 | **修**：beta.6 |
+| D-05 | /help clamp；模型 release-date 精细序简化；input_paste preventDefault 未移植 | 各自精确行为 | **done（beta.6）** |
 | D-06 | TUI 本地状态 local→stable 目录不自动迁移 | 出厂 stable | **修**（一次性迁移逻辑，参照 v2 的 v1→v2 套路），beta.4 |
 | D-07 | G11-F1 首连快照/流竞态理论窗口 | v2 存在同类（行为对齐） | 已双侧加固；补一个时序证明或长期登记 |
 
