@@ -58,9 +58,10 @@ pub enum ComposerSlot<'a> {
     /// background, the `╹▀▀…` transition, the `{dir}:{branch}` status
     /// line with right-aligned keybind hints, the bottom pad row.
     Placeholder,
-    /// The real composer component's frame (swapped in 1:1 when the
-    /// sibling lane lands — the golden bytes are identical by
-    /// contract).
+    /// The real composer component's frame — mounted at the session
+    /// route's shape ([`session_composer_frame`]): the box spans the
+    /// column's content width (the route's paddingLeft/Right inset on
+    /// both sides), so the assembly pastes it at `x = inset`.
     Sibling(&'a Frame),
 }
 
@@ -111,8 +112,7 @@ impl<'a> SessionScreen<'a> {
 pub const FIXTURE_LOCATION: &str = "/tmp/opencode/packages/tui:main";
 
 /// **The composer chrome seam** (wave 1's labeled `composer_bottom_
-/// chrome` stub, now the assembly's placeholder composer): 7 rows —
-///
+/// chrome` stub, now the assembly's placeholder composer): 7 rows —///
 /// * blank spacing row,
 /// * 4 composer rows (`┃` left border in `border.base` over the
 ///   `decrease(background.raised)` prompt background),
@@ -220,6 +220,34 @@ pub fn composer_bottom_chrome(width: u16, theme: &ThemeState, location: &str) ->
         }
     }
     paint_placed_with_fills(&placed, &fills, (width, 7), fill_style(&styles))
+}
+
+/// The real composer mounted at the session route's shape
+/// ([`ComposerSlot::Sibling`]): the wave-2 composer component (empty
+/// draft — the session route passes NO placeholder list, so the
+/// textarea renders bare) at the column's content width × 7 rows (the
+/// box, the `╹▀` transition, the footer row, the container's bottom
+/// pad). The assembly pastes the frame at `x = inset`.
+#[must_use]
+pub fn session_composer_frame(
+    draft: &crate::components::composer::PromptDraft,
+    width: u16,
+    theme: &ThemeState,
+    location: &str,
+) -> Frame {
+    use crate::components::composer::render::{render_prompt_frame, FooterHints, PromptView};
+    let view = PromptView {
+        draft,
+        placeholder: String::new(),
+        autocomplete: None,
+        footer: FooterHints {
+            location: location.to_owned(),
+            agent_shortcut: "shift+tab".into(),
+            command_shortcut: "ctrl+p".into(),
+        },
+        top: 0,
+    };
+    render_prompt_frame(&view, usize::from(width), 7, theme)
 }
 
 /// The horizontal tabs bar row (height 1): the active tab's pill in
@@ -339,13 +367,19 @@ pub fn paint_session_screen(
         transcript.paint(screen.follow, &styles, (transcript_width, transcript_height), None);
     paste(&mut frame, &transcript_frame, 0, tabs_height);
 
-    let chrome = match composer {
+    match composer {
         ComposerSlot::Placeholder => {
-            composer_bottom_chrome(transcript_width, theme, screen.location)
+            let chrome = composer_bottom_chrome(transcript_width, theme, screen.location);
+            paste(&mut frame, &chrome, 0, tabs_height + transcript_height);
         }
-        ComposerSlot::Sibling(frame) => frame.clone(),
-    };
-    paste(&mut frame, &chrome, 0, tabs_height + transcript_height);
+        ComposerSlot::Sibling(chrome) => {
+            // The real composer's box spans the column's content width
+            // (paddingLeft/Right inset both sides) — paste it at the
+            // inset, not column 0.
+            let inset: u16 = if usize::from(transcript_width) < 44 { 1 } else { 2 };
+            paste(&mut frame, chrome, inset, tabs_height + transcript_height);
+        }
+    }
 
     if sidebar_visible {
         let sidebar =

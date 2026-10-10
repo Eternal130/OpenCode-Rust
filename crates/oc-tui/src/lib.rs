@@ -26,11 +26,15 @@
 //!   over the production modules (kept as the absorption proof).
 
 pub mod app;
+pub mod attention;
+pub mod clipboard;
 pub mod components;
 pub mod config;
 pub mod data;
 pub mod diff_viewer_golden_tests;
+pub mod editor;
 pub mod golden_tests;
+pub mod home_golden_tests;
 pub mod keymap;
 pub mod layout;
 pub mod message_golden_tests;
@@ -39,6 +43,7 @@ pub mod render;
 pub mod replay;
 pub mod screen_golden_tests;
 pub mod spike;
+pub mod storage;
 pub mod store;
 pub mod theme;
 pub mod wrap;

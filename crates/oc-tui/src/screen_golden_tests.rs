@@ -28,7 +28,7 @@ use crate::components::message::list::{
     TranscriptOptions,
 };
 use crate::components::session_screen::{
-    paint_session_screen, ComposerSlot, SessionScreen, FIXTURE_LOCATION,
+    paint_session_screen, session_composer_frame, ComposerSlot, SessionScreen, FIXTURE_LOCATION,
 };
 use crate::components::sidebar::SidebarMode;
 use crate::data::{BusEvent, Ingest};
@@ -143,6 +143,21 @@ impl OffsetForTest for FollowState {
     }
 }
 
+/// The real composer chrome ([`ComposerSlot::Sibling`]): the wave-2
+/// composer component mounted at the session route's shape — the
+/// goldens' bottom 7 rows flow through the production renderer, not
+/// the placeholder stub. `transcript_width` is the composer column's
+/// width (the sidebar already subtracted).
+fn sibling_composer(transcript_width: u16, theme: &ThemeState) -> Frame {
+    let inset = if usize::from(transcript_width) < 44 { 1 } else { 2 };
+    session_composer_frame(
+        &crate::components::composer::PromptDraft::default(),
+        transcript_width - inset * 2,
+        theme,
+        FIXTURE_LOCATION,
+    )
+}
+
 fn vscroll_frame(follow: FollowState, appended: bool) -> Frame {
     let theme = theme();
     let mut messages = vscroll_messages_fixture();
@@ -150,6 +165,7 @@ fn vscroll_frame(follow: FollowState, appended: bool) -> Frame {
         messages.push(vscroll_appended_turn());
     }
     let screen = vscroll_screen(follow);
+    let composer = sibling_composer(80, &theme);
     paint_session_screen(
         &messages,
         &TranscriptOptions::default(),
@@ -157,7 +173,7 @@ fn vscroll_frame(follow: FollowState, appended: bool) -> Frame {
         &theme,
         80,
         24,
-        ComposerSlot::Placeholder,
+        ComposerSlot::Sibling(&composer),
     )
 }
 
@@ -254,6 +270,7 @@ fn sidebar_expanded_matches_text_grid_and_ansi() {
         follow: FollowState::Sticky,
         location: FIXTURE_LOCATION,
     };
+    let composer = sibling_composer(118, &theme);
     let frame = paint_session_screen(
         &crate::components::message::list::message_groups_fixture(),
         &TranscriptOptions::default(),
@@ -261,7 +278,7 @@ fn sidebar_expanded_matches_text_grid_and_ansi() {
         &theme,
         160,
         30,
-        ComposerSlot::Placeholder,
+        ComposerSlot::Sibling(&composer),
     );
     assert_text_grid_match("sidebar-expanded", 160, &frame);
     assert_ansi_byte_match("sidebar-expanded", 160, &frame);
@@ -280,6 +297,7 @@ fn sidebar_collapsed_matches_text_grid_and_ansi() {
         follow: FollowState::Sticky,
         location: FIXTURE_LOCATION,
     };
+    let composer = sibling_composer(160, &theme);
     let frame = paint_session_screen(
         &crate::components::message::list::message_groups_fixture(),
         &TranscriptOptions::default(),
@@ -287,7 +305,7 @@ fn sidebar_collapsed_matches_text_grid_and_ansi() {
         &theme,
         160,
         30,
-        ComposerSlot::Placeholder,
+        ComposerSlot::Sibling(&composer),
     );
     assert_text_grid_match("sidebar-collapsed", 160, &frame);
     assert_ansi_byte_match("sidebar-collapsed", 160, &frame);
@@ -297,6 +315,7 @@ fn sidebar_collapsed_matches_text_grid_and_ansi() {
 fn session_screen_40_matches_text_grid_and_ansi() {
     let theme = theme();
     let screen = SessionScreen::narrow(FIXTURE_LOCATION);
+    let composer = sibling_composer(40, &theme);
     let frame = paint_session_screen(
         &crate::components::message::list::message_groups_fixture(),
         &TranscriptOptions::default(),
@@ -304,7 +323,7 @@ fn session_screen_40_matches_text_grid_and_ansi() {
         &theme,
         40,
         30,
-        ComposerSlot::Placeholder,
+        ComposerSlot::Sibling(&composer),
     );
     assert_text_grid_match("session-screen-40", 40, &frame);
     assert_ansi_byte_match("session-screen-40", 40, &frame);

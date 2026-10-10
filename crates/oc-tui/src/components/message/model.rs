@@ -104,6 +104,15 @@ pub enum Message {
         running: bool,
         created: u64,
     },
+    /// `synthetic` message: an instruction load (`metadata.instruction`)
+    /// — groups under one `◈ Instructions: N files` summary row
+    /// (`instructionPaths`).
+    Synthetic {
+        id: String,
+        /// `metadata.instruction.paths` — one load can carry several.
+        instruction_paths: Vec<String>,
+        created: u64,
+    },
 }
 
 impl Message {
@@ -113,7 +122,8 @@ impl Message {
             Self::User { id, .. }
             | Self::Assistant { id, .. }
             | Self::Idle { id, .. }
-            | Self::Compaction { id, .. } => id,
+            | Self::Compaction { id, .. }
+            | Self::Synthetic { id, .. } => id,
         }
     }
 
@@ -132,8 +142,19 @@ impl Message {
             Self::User { created, .. }
             | Self::Assistant { time: PartTime { created: Some(created), .. }, .. }
             | Self::Idle { created, .. }
-            | Self::Compaction { created, .. } => *created,
+            | Self::Compaction { created, .. }
+            | Self::Synthetic { created, .. } => *created,
             Self::Assistant { .. } => 0,
+        }
+    }
+
+    /// `instructionPaths` (`grouping/session.ts`): the files a
+    /// synthetic message loaded (empty for every other kind).
+    #[must_use]
+    pub fn instruction_paths(&self) -> &[String] {
+        match self {
+            Self::Synthetic { instruction_paths, .. } => instruction_paths,
+            _ => &[],
         }
     }
 }
@@ -184,6 +205,17 @@ impl Row {
             Self::Group { children, .. } => children.iter().flat_map(Self::part_refs).collect(),
         }
     }
+
+    /// The descendant message-entry ids (`descendants()` filtered to
+    /// `entry.type === "message"` — the instructions group's input).
+    #[must_use]
+    pub fn message_refs(&self) -> Vec<String> {
+        match self {
+            Self::Entry(Entry::Message { message_id }) => vec![message_id.clone()],
+            Self::Entry(_) => Vec::new(),
+            Self::Group { children, .. } => children.iter().flat_map(Self::message_refs).collect(),
+        }
+    }
 }
 
 /// A projection input: one entry plus its grouping path and
@@ -222,10 +254,16 @@ fn part_path(part: &PartKind) -> Vec<GroupKind> {
     }
 }
 
-/// `messagePath` for non-assistant messages: only instruction loads
-/// group (`synthetic` messages — out of the lean model), so `[]`.
-fn message_path() -> Vec<GroupKind> {
-    Vec::new()
+/// `messagePath` for non-assistant messages: instruction loads
+/// (synthetic messages) group; everything else stands alone
+/// (`grouping/session.ts:94-97`, medium verbosity — "low" would wrap
+/// them in an activity group too).
+fn message_path(message: &Message) -> Vec<GroupKind> {
+    if message.instruction_paths().is_empty() {
+        Vec::new()
+    } else {
+        vec![GroupKind::Instructions]
+    }
 }
 
 /// `reduceSessionRows` — messages → grouped rows. `inputs` are pending
@@ -301,11 +339,13 @@ pub fn reduce_rows<S: std::hash::BuildHasher>(
                     });
                 }
             }
-            Message::User { id, .. } | Message::Compaction { id, .. } => {
+            Message::User { id, .. }
+            | Message::Compaction { id, .. }
+            | Message::Synthetic { id, .. } => {
                 projections.push(Projection {
                     entry: Entry::Message { message_id: id.clone() },
                     part: None,
-                    path: message_path(),
+                    path: message_path(message),
                     closes_previous: Some(!is_pending),
                     reasoning_completed: false,
                 });
@@ -540,6 +580,14 @@ pub fn exploration_label(tools: &[&str], completed: bool) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("{}: {names}", if completed { "Explored" } else { "Exploring" })
+}
+
+/// The instructions group's summary label (`InstructionsGroup`):
+/// `Instructions: {files} {files === 1 ? "file" : "files"}` over the
+/// count of DISTINCT paths its descendant messages loaded.
+#[must_use]
+pub fn instructions_label(files: usize) -> String {
+    format!("Instructions: {files} {}", if files == 1 { "file" } else { "files" })
 }
 
 /// `canonicalToolName` (`util/tool-display`): strip provider prefixes.
@@ -789,5 +837,40 @@ mod tests {
     fn canonical_tool_names_strip_prefixes() {
         assert_eq!(canonical_tool_name("fs_read"), "read");
         assert_eq!(canonical_tool_name("read"), "read");
+    }
+
+    /// Consecutive synthetic instruction loads reduce into ONE
+    /// instructions group (`messagePath`), completed by a following
+    /// closing row.
+    #[test]
+    fn synthetic_instruction_loads_group() {
+        let messages = vec![
+            Message::Synthetic {
+                id: "a".into(),
+                instruction_paths: vec!["AGENTS.md".into()],
+                created: 1,
+            },
+            Message::Synthetic {
+                id: "b".into(),
+                instruction_paths: vec!["packages/tui/AGENTS.md".into()],
+                created: 2,
+            },
+            user("u", "?", 3),
+        ];
+        let rows = reduce_rows(&messages, &std::collections::HashSet::<String>::new());
+        assert_eq!(
+            row_shape(&rows[0]),
+            "group:instructions(completed, 2)",
+            "the two loads merged; the user row closes it"
+        );
+        assert_eq!(rows[0].message_refs().len(), 2, "both descendant messages reachable");
+        // The label counts DISTINCT files across the group.
+        assert_eq!(instructions_label(1), "Instructions: 1 file");
+        assert_eq!(instructions_label(2), "Instructions: 2 files");
+        // A synthetic message with no paths stands alone (no group).
+        let bare =
+            vec![Message::Synthetic { id: "s".into(), instruction_paths: vec![], created: 0 }];
+        let rows = reduce_rows(&bare, &std::collections::HashSet::<String>::new());
+        assert_eq!(row_shape(&rows[0]), "message:s");
     }
 }

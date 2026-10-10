@@ -313,10 +313,84 @@ pub fn parse_keybind_overrides(value: &serde_json::Value) -> Vec<KeybindOverride
     out
 }
 
-/// Config-load skip logging (the reference routes these to the toast
-/// system; the port logs to stderr and keeps running).
+/// Config-load skip logging — **F5**: the skip keeps its stderr line
+/// AND lands in the pending sink so the app pump can surface it as a
+/// toast (the reference routes theme failures through `ThemeErrorToast`
+/// and config errors through `toast.error`; the port must never brick
+/// the TUI on a bad user config, so the entry is dropped, the default
+/// stands, and the user is told why).
 pub(crate) fn log_skip(reason: &str) {
     eprintln!("opencode tui: {reason}");
+    record_config_error(reason);
+}
+
+/// The pending config errors (thread-safe; the pump drains them on its
+/// next tick — `app::run_with_size`'s drain seam:
+/// `for toast in keymap::drain_config_error_toasts() {
+///     store.toast_show(toast) }`).
+static CONFIG_ERRORS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// The sink's bound (a pathological config must not grow it unbounded).
+const CONFIG_ERRORS_MAX: usize = 32;
+
+fn record_config_error(reason: &str) {
+    let Ok(mut errors) = CONFIG_ERRORS.lock() else { return };
+    if errors.len() < CONFIG_ERRORS_MAX {
+        errors.push(reason.to_owned());
+    }
+}
+
+/// Drain the pending config errors (the app pump's toast drain).
+#[must_use]
+pub fn take_config_errors() -> Vec<String> {
+    let Ok(mut errors) = CONFIG_ERRORS.lock() else { return Vec::new() };
+    std::mem::take(&mut *errors)
+}
+
+/// Shape one pending config error as a toast (the F5 surface):
+///
+/// * `theme {name}: {reason} (skipped)` → the reference's
+///   `ThemeErrorToast` — variant `error`, title
+///   `Failed to load theme: {name}`, message the parser's reason;
+/// * every other skip (bad keybinds, unparsable config documents) → an
+///   `error` toast carrying the reason as the message.
+#[must_use]
+pub fn config_error_toast(reason: &str) -> Option<crate::components::toast::ToastOptions> {
+    let strip = |text: &str| {
+        text.trim()
+            .trim_end_matches(" (skipped)")
+            .trim_end_matches(" (defaults apply)")
+            .trim()
+            .to_owned()
+    };
+    if let Some(rest) = reason.strip_prefix("theme ") {
+        let (name, message) = rest.split_once(':')?;
+        return Some(crate::components::toast::ToastOptions {
+            title: Some(format!("Failed to load theme: {}", name.trim())),
+            message: strip(message),
+            variant: "error",
+            duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
+            action_label: None,
+        });
+    }
+    let message = strip(reason);
+    if message.is_empty() {
+        return None;
+    }
+    Some(crate::components::toast::ToastOptions {
+        title: None,
+        message,
+        variant: "error",
+        duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
+        action_label: None,
+    })
+}
+
+/// Drain every pending config error as toasts (the pump's one-call
+/// seam — `store.toast_show` accepts each in order).
+#[must_use]
+pub fn drain_config_error_toasts() -> Vec<crate::components::toast::ToastOptions> {
+    take_config_errors().iter().filter_map(|reason| config_error_toast(reason)).collect()
 }
 
 /// The FULL v2 default binding table (`config/v1/keybind.ts`,
@@ -1329,6 +1403,32 @@ mod override_tests {
             keymap.lookup(stroke("ctrl+q"), &clock),
             Outcome::Command { command: "app.exit".to_owned(), args: None }
         );
+    }
+
+    /// F5: bad keybinds surface as error toasts, not stderr only —
+    /// every skip lands in the sink and shapes into a toast.
+    #[test]
+    fn config_errors_surface_as_toasts() {
+        let _ = take_config_errors(); // isolate the sink
+        let _ = parse_keybind_overrides(&serde_json::json!({ "app.exit": 42 }));
+        let errors = take_config_errors();
+        assert!(
+            errors.iter().any(|reason| reason.starts_with("keybind \"app.exit\"")),
+            "the unparseable value recorded: {errors:?}"
+        );
+        assert!(take_config_errors().is_empty(), "the drain is total");
+        // Nothing pending after the drain above — record one of each
+        // kind and check the shaping.
+        record_config_error("theme neon: unknown color token (skipped)");
+        record_config_error("keybind \"app.exit\": unparseable value 42 (skipped)");
+        let toasts = drain_config_error_toasts();
+        assert_eq!(toasts.len(), 2);
+        let theme = &toasts[0];
+        assert_eq!(theme.title.as_deref(), Some("Failed to load theme: neon"));
+        assert_eq!(theme.message, "unknown color token");
+        assert_eq!(theme.variant, "error");
+        assert_eq!(toasts[1].title, None, "non-theme skips carry the message only");
+        assert_eq!(toasts[1].message, "keybind \"app.exit\": unparseable value 42");
     }
 
     /// The leader override rebinds every `<leader>` chord.

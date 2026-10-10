@@ -341,8 +341,54 @@ fn group_row(
                 width,
             )
         }
-        GroupKind::Instructions => RowRender::default(),
+        GroupKind::Instructions => {
+            // `InstructionsGroup` (group-view.tsx:235): the number of
+            // DISTINCT files the descendant synthetic messages loaded,
+            // summarized as one `◈` row — complete, muted, no spinner
+            // (`complete={true}`, `color={text.muted}`, `pending=""`).
+            let mut files = std::collections::HashSet::<String>::new();
+            for message_id in children.iter().flat_map(Row::message_refs) {
+                if let Some(message) =
+                    messages.iter().find(|message| message.id() == message_id.as_str())
+                {
+                    files.extend(message.instruction_paths().iter().cloned());
+                }
+            }
+            let label = super::model::instructions_label(files.len());
+            completed_tool_row('◈', &label, theme, width)
+        }
     }
+}
+
+/// The `group-view` golden mount (`SessionGroupView` alone): one
+/// rendered row painted at `top` over a blank frame — the reference
+/// harness shape (`<box paddingTop={N}><SessionGroupView …/></box>`).
+#[must_use]
+pub fn group_view_frame(
+    row: &Row,
+    messages: &[Message],
+    options: &TranscriptOptions,
+    theme: &ThemeStyles,
+    width: u16,
+    height: u16,
+    top: usize,
+) -> crate::render::Frame {
+    let markdown = MarkdownStyles::from_theme(theme);
+    let render = render_row(row, messages, options, theme, &markdown, usize::from(width));
+    let mut placed = render.placed;
+    for item in &mut placed {
+        item.y += top;
+    }
+    let mut fills = render.fills;
+    for fill in &mut fills {
+        fill.y += top as u16;
+    }
+    crate::render::paint_placed_with_fills(
+        &placed,
+        &fills,
+        (width, height),
+        crate::components::tool_rows::fill_style(theme),
+    )
 }
 
 /// `resolvePart` over the parts: tool parts by their id, text/reasoning

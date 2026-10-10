@@ -1324,6 +1324,44 @@
           }
         }
       ]
+    },
+    {
+      "id": "home",
+      "source": "packages/tui/src/routes/home.tsx full-app fixture (session_app.tsx pattern, no sessionID)",
+      "description": "Home route: OPENCODE wordmark, centered prompt composer (placeholder pinned to entry 0) and the home.footer plugin slot (app version)",
+      "componentClass": "home",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 30,
+          "rows": 30,
+          "cols": 80,
+          "txt": {
+            "bytes": 2758,
+            "sha256": "ae9ba79c914fed365fcf4ce127eb57fea9bc157c07071aacfabc7e8728c331cc"
+          },
+          "ansi": {
+            "bytes": 6029,
+            "sha256": "b4b87273bcbecbe407418b31c71726e87a9fc0073e3c8a5a56ddbf0ce273c16a"
+          }
+        },
+        {
+          "width": 160,
+          "height": 30,
+          "rows": 30,
+          "cols": 160,
+          "txt": {
+            "bytes": 5158,
+            "sha256": "33107db5bde607a4344dd057c724a754aff34a88564bee5a48be9327e62d8387"
+          },
+          "ansi": {
+            "bytes": 8429,
+            "sha256": "9a2d17d7df4b68216a2ccb1f03fa19c4e1debea26ea1493d1fb48dbf9c0cd70d"
+          }
+        }
+      ]
     }
   ],
   "replay": [
