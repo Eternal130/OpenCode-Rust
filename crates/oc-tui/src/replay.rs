@@ -302,9 +302,9 @@ mod tests {
 
     /// Leader chords work from the prompt (textarea-first only consumes
     /// keys the composer owns): ctrl+tab cycles, ctrl+1 switches with a
-    /// draft present, leader+1/2 quick-switch on an empty prompt (the
-    /// textarea layer eats printable leader continuations while text
-    /// exists — the reference's layer order), leader+w closes the tab.
+    /// draft present, leader+1/2 quick-switch fire on BOTH the empty and
+    /// the non-empty prompt (D-02 — v2's keymap suspends the textarea
+    /// for leader chords; the draft survives), leader+w closes the tab.
     #[test]
     fn leader_chords_and_tab_commands_dispatch_from_the_prompt() {
         let mut pump = App::new((100, 30));
@@ -326,13 +326,22 @@ mod tests {
             crate::store::Route::Session { session_id: "ses_a".to_owned() },
             "ctrl+1 quick slot with a draft present"
         );
-        // Printable leader continuations type while text exists…
+        // D-02: leader continuations DISPATCH while text exists — the
+        // chord suspends the textarea, and the draft survives intact.
         pump.press("ctrl+x");
-        pump.press("1");
-        assert_eq!(pump.store.prompt_draft("ses_a").text, "x1", "the 1 typed, not dispatched");
-        // …and dispatch once the draft is empty.
-        pump.press("backspace");
-        pump.press("backspace");
+        assert_eq!(pump.store.prompt_draft("ses_a").text, "x", "the leader never types");
+        pump.press("2");
+        assert_eq!(
+            pump.store.route(),
+            crate::store::Route::Session { session_id: "ses_b".to_owned() },
+            "leader+2 quick slot with a draft present"
+        );
+        assert_eq!(
+            pump.store.prompt_draft("ses_a").text,
+            "x",
+            "the executed chord leaves the draft intact"
+        );
+        // …and dispatch on the empty prompt too.
         pump.press("ctrl+x");
         pump.press("2");
         assert_eq!(
@@ -343,6 +352,64 @@ mod tests {
         pump.press("ctrl+x");
         pump.press("w");
         assert_eq!(pump.store.tabs().tabs.len(), 1, "leader+w closed the tab");
+    }
+
+    /// D-02 proper: the leader chord suspends a NON-empty composer —
+    /// v2's keymap handles keys above the focused textarea
+    /// (`terminal-pane.tsx:144` skips the leader/pending strokes for
+    /// the focused surface; `prompt/index.tsx:192` mutes while pending).
+    /// The chord executes, the draft is preserved, the textarea resumes;
+    /// `app.exit` stays empty-prompt-conditional (`<leader>q` types `q`),
+    /// and escape while pending clears the sequence without touching the
+    /// draft.
+    #[test]
+    fn leader_chord_suspends_a_non_empty_draft_and_preserves_it() {
+        let mut pump = App::new((100, 30));
+        pump.store.open_tab("ses_a", Some("A".to_owned()));
+        pump.store.open_tab("ses_b", Some("B".to_owned()));
+        pump.store.select_tab("ses_a");
+        for key in ["h", "i"] {
+            pump.press(key);
+        }
+        assert_eq!(pump.store.prompt_draft("ses_a").text, "hi");
+        // <leader> arms over the draft (consumed by the keymap, not typed).
+        pump.press("ctrl+x");
+        assert_eq!(pump.store.prompt_draft("ses_a").text, "hi");
+        // The continuation executes the chord (session.new → Home); the
+        // suspended draft survives on its session's composer.
+        pump.press("n");
+        assert_eq!(pump.store.route(), crate::store::Route::Home, "leader+n (session.new)");
+        assert_eq!(
+            pump.store.prompt_draft("ses_a").text,
+            "hi",
+            "the chord executed without touching the suspended draft"
+        );
+        // app.exit stays conditional: <leader>q over text resolves
+        // through the base layer to session.queued_prompts (the OTHER
+        // <leader>q binding — v2 dispatches it over text; our
+        // dispatcher stub is a no-op), so the q never types and the
+        // app never exits.
+        for key in ["d", "r", "a", "f", "t"] {
+            pump.press(key);
+        }
+        assert_eq!(pump.store.prompt_draft(crate::app::HOME_PROMPT_KEY).text, "draft");
+        pump.press("ctrl+x");
+        pump.press("q");
+        assert_eq!(
+            pump.store.prompt_draft(crate::app::HOME_PROMPT_KEY).text,
+            "draft",
+            "the chord consumed the q (dispatched, not typed)"
+        );
+        assert!(!pump.exit_requested, "app.exit requires the empty prompt");
+        // Escape while pending clears the sequence — the keymap consumes
+        // it before the composer's escape handling could.
+        pump.press("ctrl+x");
+        pump.press("escape");
+        assert_eq!(
+            pump.store.prompt_draft(crate::app::HOME_PROMPT_KEY).text,
+            "draft",
+            "escape cleared the sequence, the draft untouched"
+        );
     }
 
     /// The composer: printable typing, submit through the sink, and

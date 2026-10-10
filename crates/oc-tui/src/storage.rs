@@ -25,11 +25,14 @@
 //! process-wide channel (the runtime stand-in for v2's build constant;
 //! the DB/engine channel source reads the same variable).
 //!
-//! **Migration note (documented residual)**: earlier dev builds of the
-//! port wrote `<state>/local/tui/…`. That state is deliberately
-//! IGNORED — the channel change is a one-way rename (tabs/session-list
-//! prefs re-seed on first use); copy the `local` directory to `stable`
-//! by hand to carry it over.
+//! **Migration (D-06, mirroring v2's v1→v2 idiom)**: earlier dev
+//! builds of the port wrote `<state>/local/tui/…`. On state load the
+//! one-time [`migrate_legacy_channel`] copies each persisted key from
+//! the legacy `local` channel to the expected channel's directory when
+//! the target is absent — the SOURCE is never touched (the v1→v2 DB
+//! migration opens its source read-only the same way), the copy is
+//! stamped with a `"migrated-from-local"` marker field, and the copy's
+//! presence is the idempotence latch (a second boot is a no-op).
 //!
 //! Writes are atomic (temp file + rename, compact
 //! `JSON.stringify`-shaped JSON, no trailing newline) and keys are
@@ -141,6 +144,73 @@ impl Default for SessionListPrefs {
 pub const KEY_TABS: &str = "tabs";
 pub const KEY_SESSION_LIST: &str = "session-list";
 
+/// The legacy channel earlier dev builds of the port wrote before the
+/// factory default moved to `stable` (the migration SOURCE).
+pub const LEGACY_CHANNEL: &str = "local";
+
+/// Marker field stamped into every migrated document (inside the state
+/// JSON — decoders ignore unknown fields, so v2-shape documents keep
+/// round-tripping; a later typed write legitimately drops it, because
+/// the migrated file's PRESENCE is the idempotence latch, not the
+/// marker).
+pub const MIGRATED_FROM_FIELD: &str = "migrated-from-local";
+
+/// The keys [`ChannelStorage::open_default_migrated`] carries over from
+/// the legacy channel (everything the TUI persists).
+pub const MIGRATED_KEYS: &[&str] = &[KEY_TABS, KEY_SESSION_LIST];
+
+/// The one-time `local`→expected-channel migration (D-06), mirroring
+/// v2's v1→v2 idiom: source read-only, completion observable at the
+/// destination, idempotent. For each key: when the expected channel's
+/// file is ABSENT and the legacy channel has one, copy it over with
+/// the [`MIGRATED_FROM_FIELD`] marker. The source file is never
+/// modified, moved, or removed. Returns how many keys migrated (the
+/// boot logs it; tests assert it).
+fn migrate_legacy_channel(state_root: &Path, channel: &str, keys: &[&str]) -> usize {
+    if channel == LEGACY_CHANNEL {
+        // The operator pinned the legacy channel — nothing to migrate.
+        return 0;
+    }
+    let Ok(target_dir) = segment(channel) else { return 0 };
+    let mut migrated = 0usize;
+    for key in keys {
+        let Ok(key) = segment(key) else { continue };
+        let mut source = state_root.to_path_buf();
+        source.push(LEGACY_CHANNEL);
+        source.push("tui");
+        source.push(format!("{key}.json"));
+        let mut target = state_root.to_path_buf();
+        target.push(target_dir);
+        target.push("tui");
+        target.push(format!("{key}.json"));
+        if target.exists() || !source.exists() {
+            continue;
+        }
+        // Read-only on the source; unparseable legacy files stay
+        // ignored (the load falls back to `initial`, as v2's `load()`
+        // does on any read/parse error).
+        let Ok(bytes) = std::fs::read(&source) else { continue };
+        let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&bytes) else { continue };
+        let Some(object) = value.as_object_mut() else { continue };
+        object.insert(MIGRATED_FROM_FIELD.to_owned(), serde_json::Value::Bool(true));
+        if std::fs::create_dir_all(target.parent().expect("channel/tui parent")).is_err() {
+            continue;
+        }
+        let body = serde_json::to_vec(&value).unwrap_or_default();
+        let temporary =
+            target.with_extension(format!("{}.{}.tmp", std::process::id(), write_counter()));
+        if std::fs::write(&temporary, &body)
+            .and_then(|()| std::fs::rename(&temporary, &target))
+            .is_ok()
+        {
+            migrated += 1;
+        } else {
+            let _ = std::fs::remove_file(&temporary);
+        }
+    }
+    migrated
+}
+
 /// One channel's storage directory (`createStorage(root, channel)`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelStorage {
@@ -162,6 +232,25 @@ impl ChannelStorage {
     /// resolved channel.
     pub fn open_default() -> Result<Self, String> {
         Self::open(&oc_util::global_roots::resolve().state, &channel())
+    }
+
+    /// The production root WITH the one-time legacy-channel migration
+    /// (D-06): runs [`migrate_legacy_channel`] over [`MIGRATED_KEYS`]
+    /// before opening, so the first state load after the
+    /// `local`→`stable` factory-default change carries the old tabs /
+    /// session-list prefs over. Idempotent — the migrated file's
+    /// presence latches it.
+    pub fn open_default_migrated() -> Result<Self, String> {
+        let root = oc_util::global_roots::resolve().state;
+        let channel = channel();
+        let migrated = migrate_legacy_channel(&root, &channel, MIGRATED_KEYS);
+        if migrated > 0 {
+            eprintln!(
+                "opencode tui: migrated {migrated} state file(s) from the legacy \
+                 '{LEGACY_CHANNEL}' channel to '{channel}' (source kept)"
+            );
+        }
+        Self::open(&root, &channel)
     }
 
     /// `<directory>/<key>.json` (validated).
@@ -355,6 +444,105 @@ mod tests {
         storage.write_typed(KEY_TABS, &document).expect("write");
         let back: TabsDocument = storage.read_or_default(KEY_TABS);
         assert_eq!(back, document);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// D-06: staged OLD layout (`<state>/local/tui/…`) → migration →
+    /// the stable location is populated with a marker, and the source
+    /// is byte-for-byte untouched (copy, never move).
+    #[test]
+    fn legacy_local_state_migrates_into_the_stable_channel() {
+        let root = temp_root("migrate");
+        let legacy_tabs =
+            r#"{"global":{"tabs":[{"sessionID":"ses_old","title":"Kept"}],"unread":{}},"cwd":{}}"#;
+        let legacy_prefs = r#"{"all_projects":false}"#;
+        std::fs::create_dir_all(root.join("local").join("tui")).unwrap();
+        std::fs::write(root.join("local").join("tui").join("tabs.json"), legacy_tabs).unwrap();
+        std::fs::write(root.join("local").join("tui").join("session-list.json"), legacy_prefs)
+            .unwrap();
+
+        let migrated = migrate_legacy_channel(&root, "stable", &[KEY_TABS, KEY_SESSION_LIST]);
+        assert_eq!(migrated, 2, "both persisted keys carry over");
+
+        let stable_tabs = root.join("stable").join("tui").join("tabs.json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&stable_tabs).unwrap()).unwrap();
+        assert_eq!(value[MIGRATED_FROM_FIELD], json!(true), "the marker rides along");
+        assert_eq!(value["global"]["tabs"][0]["sessionID"], "ses_old");
+        let prefs: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(root.join("stable").join("tui").join("session-list.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(prefs[MIGRATED_FROM_FIELD], json!(true));
+        assert_eq!(prefs["all_projects"], json!(false), "the payload survives verbatim");
+
+        // The source is untouched — same bytes, still in place.
+        assert_eq!(
+            std::fs::read_to_string(root.join("local").join("tui").join("tabs.json")).unwrap(),
+            legacy_tabs
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("local").join("tui").join("session-list.json"))
+                .unwrap(),
+            legacy_prefs
+        );
+
+        // The migrated tabs decode through the typed reader (the marker
+        // is an unknown field — the v2 shape round-trips).
+        let storage = ChannelStorage::open(&root, "stable").expect("open");
+        let document: TabsDocument = storage.read_or_default(KEY_TABS);
+        assert_eq!(document.global.tabs[0].session_id, "ses_old");
+        assert_eq!(document.global.tabs[0].title.as_deref(), Some("Kept"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// D-06 idempotence: the second boot is a no-op (the stable file's
+    /// presence latches), a PRE-EXISTING stable file is never
+    /// overwritten, the legacy channel itself never self-migrates, and
+    /// corrupt legacy sources stay ignored.
+    #[test]
+    fn legacy_local_migration_is_idempotent_and_guarded() {
+        let root = temp_root("migrate-idem");
+        std::fs::create_dir_all(root.join("local").join("tui")).unwrap();
+        std::fs::write(
+            root.join("local").join("tui").join("tabs.json"),
+            r#"{"global":{"tabs":[{"sessionID":"ses_old"}],"unread":{}},"cwd":{}}"#,
+        )
+        .unwrap();
+        // Corrupt legacy prefs: skipped, not migrated.
+        std::fs::write(root.join("local").join("tui").join("session-list.json"), "not json")
+            .unwrap();
+
+        let first = migrate_legacy_channel(&root, "stable", MIGRATED_KEYS);
+        assert_eq!(first, 1, "only the parseable key carries over");
+        let stable_tabs = root.join("stable").join("tui").join("tabs.json");
+        let first_pass = std::fs::read_to_string(&stable_tabs).unwrap();
+        assert!(
+            !root.join("stable").join("tui").join("session-list.json").exists(),
+            "corrupt source not copied"
+        );
+
+        // Second boot: stable exists → nothing re-migrates, byte-stable.
+        assert_eq!(migrate_legacy_channel(&root, "stable", MIGRATED_KEYS), 0);
+        assert_eq!(std::fs::read_to_string(&stable_tabs).unwrap(), first_pass);
+
+        // A pre-existing stable file wins over the legacy source.
+        std::fs::write(&stable_tabs, r#"{"global":{"tabs":[{"sessionID":"ses_new"}]}}"#).unwrap();
+        assert_eq!(migrate_legacy_channel(&root, "stable", MIGRATED_KEYS), 0);
+        assert!(
+            std::fs::read_to_string(&stable_tabs).unwrap().contains("ses_new"),
+            "the live stable state is never clobbered"
+        );
+
+        // The legacy channel pinned via env is a self-no-op.
+        assert_eq!(migrate_legacy_channel(&root, "local", MIGRATED_KEYS), 0);
+
+        // The source survived everything above.
+        assert!(root.join("local").join("tui").join("tabs.json").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join("local").join("tui").join("tabs.json")).unwrap(),
+            r#"{"global":{"tabs":[{"sessionID":"ses_old"}],"unread":{}},"cwd":{}}"#
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

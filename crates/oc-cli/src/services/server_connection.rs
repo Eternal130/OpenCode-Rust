@@ -3,6 +3,11 @@
 //! version mismatch but continue), `--standalone`/service-disabled (private
 //! stdio-lease child), or the managed background service via
 //! `oc_server::lifecycle::ensure` with the TUI's mismatch-replace knob.
+//! B4-H3: the managed paths also compare the daemon's `x-opencode-build`
+//! marker — the parity pin keeps the version string identical across
+//! betas, so the build stamp is what detects a stale daemon after
+//! `opencode-rust upgrade` (replace: stop + respawn via the lifecycle
+//! stop path).
 
 use oc_client::Client as HttpClient;
 use oc_server::lifecycle::{self, EnsureOptions};
@@ -135,8 +140,10 @@ async fn ensure_with(mut options: EnsureOptions) -> Result<Endpoint, String> {
 
 /// `Service.discover({version})`: probe the registration — `Some(version)`
 /// requires the live server to report exactly that version (v2's
-/// `matchesVersion` with a string requirement); `None` accepts any
-/// version. `None` when nothing healthy is registered.
+/// `matchesVersion` with a string requirement) AND this binary's build
+/// stamp (B4-H3: the version pin is identical across betas, so the
+/// build marker is what distinguishes a stale daemon); `None` accepts
+/// any version. `None` when nothing healthy is registered.
 #[must_use]
 pub async fn discover_managed(version: Option<&str>) -> Option<Endpoint> {
     let file = service_config::registration_file();
@@ -150,6 +157,14 @@ pub async fn discover_managed(version: Option<&str>) -> Option<Endpoint> {
         return None;
     }
     if !service.compatible {
+        return None;
+    }
+    // B4-H3: a version-filtered discovery also demands this binary's
+    // build (a daemon with a different/missing marker is NOT the
+    // compatible incumbent it claims to be on version alone).
+    if version.is_some()
+        && !lifecycle::matches_build(service.build.as_deref(), Some(lifecycle::BUILD_STAMP))
+    {
         return None;
     }
     Some(Endpoint {
@@ -268,21 +283,25 @@ mod tests {
         dir
     }
 
-    /// Minimal `/api/info` responder reporting the given version + pid.
-    async fn fake_info_server(version: String, pid: u32) -> u16 {
+    /// Minimal `/api/info` responder reporting the given version + pid
+    /// and (B4-H3) the `x-opencode-build` marker header.
+    async fn fake_info_server(version: String, pid: u32, build: Option<String>) -> u16 {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let port = listener.local_addr().expect("addr").port();
         tokio::spawn(async move {
             loop {
                 let Ok((mut socket, _)) = listener.accept().await else { return };
                 let version = version.clone();
+                let build = build.clone();
                 tokio::spawn(async move {
                     use tokio::io::{AsyncReadExt, AsyncWriteExt};
                     let mut buffer = [0u8; 1024];
                     let _ = socket.read(&mut buffer).await;
                     let body = format!("{{\"version\":\"{version}\",\"pid\":{pid}}}");
+                    let marker = build
+                        .map_or(String::new(), |stamp| format!("x-opencode-build: {stamp}\r\n"));
                     let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        "HTTP/1.1 200 OK\r\n{marker}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                         body.len()
                     );
                     let _ = socket.write_all(response.as_bytes()).await;
@@ -313,7 +332,7 @@ mod tests {
     async fn mismatch_error_errors_on_version_mismatched_daemon() {
         let _sandbox = sandboxed();
         let pid = std::process::id();
-        let port = fake_info_server("0.0.0-old.1".to_owned(), pid).await;
+        let port = fake_info_server("0.0.0-old.1".to_owned(), pid, None).await;
         register_fake_daemon(&format!("http://127.0.0.1:{port}"), pid);
 
         let error = resolve(Args { server: None, standalone: false, mismatch: Mismatch::Error })
@@ -326,7 +345,12 @@ mod tests {
     async fn mismatch_error_reuses_compatible_daemon() {
         let _sandbox = sandboxed();
         let pid = std::process::id();
-        let port = fake_info_server(util::VERSION.to_owned(), pid).await;
+        let port = fake_info_server(
+            util::VERSION.to_owned(),
+            pid,
+            Some(oc_server::lifecycle::BUILD_STAMP.to_owned()),
+        )
+        .await;
         let url = format!("http://127.0.0.1:{port}");
         register_fake_daemon(&url, pid);
 
@@ -335,6 +359,52 @@ mod tests {
             .expect("compatible daemon is reused");
         assert_eq!(resolved.endpoint.url, url);
         assert!(resolved.managed, "the managed path resolves with managed=true");
+    }
+
+    /// B4-H3: the version pin ("2.0.24") is identical across betas, so
+    /// a daemon of the SAME version but an OLD build marker is NOT the
+    /// compatible incumbent — version-filtered discovery rejects it
+    /// (and the unfiltered probe still sees a live daemon, which is
+    /// what makes `Mismatch::Error` hard-error and `Mismatch::Replace`
+    /// stop-and-respawn instead of reconnecting).
+    #[tokio::test]
+    async fn same_version_stale_build_daemon_is_not_compatible() {
+        let _sandbox = sandboxed();
+        let pid = std::process::id();
+        // Old marker: same version, different stamp.
+        let port = fake_info_server(
+            util::VERSION.to_owned(),
+            pid,
+            Some("v2.0.24.beta.1@0000000".to_owned()),
+        )
+        .await;
+        register_fake_daemon(&format!("http://127.0.0.1:{port}"), pid);
+        assert!(
+            discover_managed(Some(util::VERSION)).await.is_none(),
+            "a stale build is rejected by version-filtered discovery"
+        );
+        assert!(
+            discover_managed(None).await.is_some(),
+            "the unfiltered probe still finds the live daemon (replace/error, not respawn-blind)"
+        );
+
+        // A daemon with NO marker (v2 daemons, pre-marker builds) is
+        // equally stale to a checking client.
+        let port = fake_info_server(util::VERSION.to_owned(), pid, None).await;
+        register_fake_daemon(&format!("http://127.0.0.1:{port}"), pid);
+        assert!(discover_managed(Some(util::VERSION)).await.is_none());
+
+        // The current marker connects.
+        let port = fake_info_server(
+            util::VERSION.to_owned(),
+            pid,
+            Some(oc_server::lifecycle::BUILD_STAMP.to_owned()),
+        )
+        .await;
+        let url = format!("http://127.0.0.1:{port}");
+        register_fake_daemon(&url, pid);
+        let found = discover_managed(Some(util::VERSION)).await.expect("current build connects");
+        assert_eq!(found.url, url);
     }
 
     #[tokio::test]

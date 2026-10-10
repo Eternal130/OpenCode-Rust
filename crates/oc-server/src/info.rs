@@ -4,11 +4,19 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use serde_json::json;
 
+use crate::lifecycle::{BUILD_HEADER, BUILD_STAMP};
 use crate::pairing::json_response;
 use crate::state::{AppState, Readiness};
 /// Renders the info payload with readiness-dependent status and headers
 /// (`infoResponse`): 200 ready / 500 failed / 503 starting|stopping, with
 /// `retry-after: 1` for the transient states.
+///
+/// B4-H3: every info response carries the build identity in the
+/// `x-opencode-build` HEADER (never the body — the body shape is v2's
+/// API surface: `reference_api_info.json` pins it and the served
+/// `/openapi.json` is sha-pinned in `goldens/p10`; headers are
+/// invisible to both). The connect probe compares it to replace a
+/// stale same-version daemon after an upgrade.
 #[must_use]
 pub fn info_response(state: &AppState) -> Response {
     let readiness = state.readiness();
@@ -25,6 +33,9 @@ pub fn info_response(state: &AppState) -> Response {
         "paths": { "tmp": state.tmp_dir.display().to_string() },
     });
     let mut response = json_response(status, &body);
+    if let Ok(value) = HeaderValue::from_str(BUILD_STAMP) {
+        response.headers_mut().insert(BUILD_HEADER, value);
+    }
     if matches!(readiness, Readiness::Starting | Readiness::Stopping) {
         response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
     }
