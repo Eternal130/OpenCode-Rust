@@ -21,17 +21,31 @@ async fn main() {
 
     let cli = Cli::parse();
     if cli.version_rust {
+        let tag = services::updater::RELEASE_TAG;
+        let release = if tag == "dev" { String::new() } else { format!(", release {tag}") };
         println!(
-            "opencode-rust v{} (rust port build {}, {} profile)",
+            "opencode-rust v{} (rust port build {}, {} profile{})",
             util::VERSION,
             option_env!("OC_BUILD_GIT_HASH").unwrap_or("unknown"),
             option_env!("OC_BUILD_PROFILE").unwrap_or("unknown"),
+            release,
         );
         std::process::exit(0);
     }
     // One-way v2→rust data migration (lane B): runs once, marker-latched.
     // Failures warn on stderr and never block boot.
     oc_core::v2_migration::ensure_migrated_logged();
+    // Release-channel update check (lane C): ONLY the long-running
+    // paths (default/TUI + serve) spawn the detached checker; the
+    // short-lived commands never do. `tui` selects the notify channel
+    // (stderr for serve, the state-dir notice file inside the TUI —
+    // printing over the TUI screen would corrupt it). Dev builds and
+    // disabled policies return without spawning; every network failure
+    // inside the thread is a silent no-op (see services/autoupdate.rs).
+    let tui = cli.command.is_none();
+    if tui || matches!(cli.command, Some(Commands::Serve { .. })) {
+        let _ = services::autoupdate::spawn_background_update_check(tui);
+    }
     let code = dispatch(cli).await;
     std::process::exit(code);
 }

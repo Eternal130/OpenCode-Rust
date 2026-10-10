@@ -9,8 +9,14 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=../../.git/HEAD");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=OC_RELEASE_TAG");
     println!("cargo:rustc-env=OC_BUILD_GIT_HASH={}", git_hash());
     println!("cargo:rustc-env=OC_BUILD_PROFILE={}", profile());
+    // Lane C: the release tag this binary was built from (the release
+    // workflow sets it to the git tag; everything else gets "dev" and
+    // the update channel stays off for that build).
+    let tag = std::env::var("OC_RELEASE_TAG").unwrap_or_else(|_| "dev".to_owned());
+    println!("cargo:rustc-env=OC_RELEASE_TAG={tag}");
 }
 
 /// Short git hash of the working tree (`unknown` outside a clone).

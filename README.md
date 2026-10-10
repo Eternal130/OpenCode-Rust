@@ -99,6 +99,8 @@ curl -fsSL https://raw.githubusercontent.com/Eternal130/OpenCode-Rust/main/insta
   --url https://github.com/Eternal130/OpenCode-Rust/releases/download/v2.0.24.beta.1/opencode-2.0.24.beta.1-linux-x64.tar.gz
 ```
 
+Installed binaries can update themselves: `opencode-rust upgrade` checks the [releases feed](https://github.com/Eternal130/OpenCode-Rust/releases), verifies the tarball against its sha256 sidecar, and atomically replaces the binary (source builds are skipped cleanly). The check also runs in the background for the TUI/serve entry points — control it with the `update` config field (`"disable"`, `"notify"` the default, `"auto"`) or `OPENCODE_DISABLE_AUTOUPDATE=1`; every network failure is a silent no-op that never affects operation (see [tools/RELEASE.md](./tools/RELEASE.md) § Update channel).
+
 ## License
 
 [MIT](./LICENSE). This project is a from-scratch Rust port of the MIT-licensed [opencode](https://github.com/anomalyco/opencode); it is an independent effort and is not affiliated with or endorsed by the upstream project.
