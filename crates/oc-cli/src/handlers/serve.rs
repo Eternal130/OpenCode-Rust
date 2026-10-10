@@ -72,7 +72,7 @@ pub async fn run(options: Options) -> i32 {
     let port = options
         .port
         .or(config.port)
-        .or_else(|| service.then(|| service_config::default_port(&util::channel())));
+        .or_else(|| service.then(|| service_config::rust_default_port(&util::channel())));
 
     // Incumbent check: an exact-URL compatible daemon means idempotent start.
     if service && port.is_some() {
