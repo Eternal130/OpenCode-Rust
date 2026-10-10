@@ -22,6 +22,55 @@ pub struct PartTime {
     pub completed: Option<u64>,
 }
 
+/// One user-message attachment file (`Session.Message.User.files` —
+/// the resolved form the server stores): the fields the transcript's
+/// image strip consumes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserFile {
+    pub mime: String,
+    /// Base64 payload (`data:<mime>;base64,<data>` reassembles for
+    /// display and the preview dialog).
+    pub data: String,
+    pub name: Option<String>,
+}
+
+impl UserFile {
+    #[must_use]
+    pub fn is_image(&self) -> bool {
+        self.mime.starts_with("image/")
+    }
+
+    /// The display data URI (`data:${mime};base64,${data}` — the v2
+    /// `<image source>` shape, session/index.tsx:2193).
+    #[must_use]
+    pub fn data_uri(&self) -> String {
+        format!("data:{};base64,{}", self.mime, self.data)
+    }
+}
+
+/// `deduplicateVisibleImages` (prompt/attachment.ts:65): drop repeated
+/// inline image attachments that share [mime, name, description,
+/// mention] metadata and payload — the echo-of-my-own-prompt case.
+#[must_use]
+pub fn deduplicate_visible_files(files: &[UserFile]) -> Vec<UserFile> {
+    let mut seen: Vec<(String, String)> = Vec::new();
+    files
+        .iter()
+        .filter(|file| {
+            if !file.is_image() {
+                return true;
+            }
+            let key = (format!("{}|{:?}", file.mime, file.name), file.data.clone());
+            if seen.contains(&key) {
+                return false;
+            }
+            seen.push(key);
+            true
+        })
+        .cloned()
+        .collect()
+}
+
 /// One assistant content part.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Part {
@@ -79,6 +128,9 @@ pub enum Message {
         id: String,
         text: String,
         created: u64,
+        /// Attachment files (R-07): the transcript's image strip
+        /// (`SessionImages`) renders the inline images among these.
+        files: Vec<UserFile>,
     },
     Assistant {
         id: String,
@@ -667,7 +719,7 @@ mod tests {
     use super::*;
 
     fn user(id: &str, text: &str, created: u64) -> Message {
-        Message::User { id: id.into(), text: text.into(), created }
+        Message::User { id: id.into(), text: text.into(), created, files: Vec::new() }
     }
 
     fn assistant(id: &str, created: u64, completed: u64, parts: Vec<Part>) -> Message {
