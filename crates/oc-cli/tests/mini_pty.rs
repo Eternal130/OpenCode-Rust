@@ -70,6 +70,28 @@ async fn start_stub(mode: PromptMode) -> Stub {
             });
         }
     });
+
+    // Warmup: prove the accept loop is actually serving before the child
+    // is spawned — under loaded CI runners the spawned task can lag, and
+    // the child's first transport failure would otherwise surface as an
+    // opaque `error sending request` flake.
+    let warm =
+        format!("GET /api/info HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    let mut ready = false;
+    for _ in 0..100 {
+        if let Ok(mut probe) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            if probe.write_all(warm.as_bytes()).await.is_ok() {
+                let mut buf = [0u8; 256];
+                if probe.read(&mut buf).await.map_or(0, |n| n) > 0 {
+                    ready = true;
+                    break;
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ready, "stub server never answered the warmup probe");
     server
 }
 
@@ -343,6 +365,14 @@ impl MiniPty {
             .env("XDG_STATE_HOME", sandbox.join(".local/state"))
             .env("HOME", &sandbox)
             .env_remove("OPENCODE_SERVER_PASSWORD")
+            .env_remove("HTTP_PROXY")
+            .env_remove("http_proxy")
+            .env_remove("HTTPS_PROXY")
+            .env_remove("https_proxy")
+            .env_remove("ALL_PROXY")
+            .env_remove("all_proxy")
+            .env_remove("NO_PROXY")
+            .env_remove("no_proxy")
             .stdin(slave.try_clone().expect("stdin"))
             .stdout(slave.try_clone().expect("stdout"))
             .stderr(slave);
@@ -512,7 +542,7 @@ async fn mini_pty_demo_slash_commands() {
     let mut mini = MiniPty::spawn(stub.port, &["--demo"]);
 
     assert!(
-        mini.wait_for("Demo slash commands enabled for interactive mode.", Duration::from_secs(10)),
+        mini.wait_for("Demo slash commands enabled for interactive mode.", Duration::from_secs(20)),
         "the demo intro: {}",
         mini.output()
     );
