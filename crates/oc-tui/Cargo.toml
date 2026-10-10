@@ -23,3 +23,4 @@ unicode-width = "0.2"
 [dev-dependencies]
 parity = { path = "../../tools/parity" }
 tokio = { workspace = true }
+oc-plugin-host = { workspace = true }

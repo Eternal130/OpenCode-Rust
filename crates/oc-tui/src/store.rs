@@ -466,6 +466,46 @@ pub struct PromptState {
     pub history: PromptHistory,
 }
 
+/// One plugin-registered palette command (the oc-plugin-host
+/// registration snapshot's TUI projection — registration-time only;
+/// execution routes through the [`PluginCommandSink`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginCommandEntry {
+    /// Dot command id (`hw.hello`) — the dispatch key.
+    pub command: String,
+    /// Palette title (the description the plugin registered).
+    pub title: String,
+    /// Owning plugin id (provenance display).
+    pub plugin_id: String,
+}
+
+/// Execution sink for plugin commands: the app layer wires this to the
+/// plugin host's `execute_command` (timeout-bounded there); the store
+/// itself never talks IPC.
+pub trait PluginCommandSink {
+    /// `true` when the command was known and dispatched.
+    fn execute(&self, command: &str, args: Option<&str>) -> bool;
+}
+
+/// The no-op sink (no plugin host attached).
+#[derive(Debug, Default)]
+pub struct NoPluginCommands;
+
+impl PluginCommandSink for NoPluginCommands {
+    fn execute(&self, _command: &str, _args: Option<&str>) -> bool {
+        false
+    }
+}
+
+/// The post-ingest event tap (the plugin-host broadcast seam,
+/// oracle-gate11 §4 wave 1): after every event the store REDUCED, the
+/// store publishes the same deduplicated, ordered stream to the tap —
+/// plugins observe exactly what the store observed. Implementations
+/// must be non-blocking (a slow plugin may never stall ingest).
+pub trait EventTap: Send + Sync {
+    fn publish(&self, event: &BusEvent);
+}
+
 pub struct Store {
     /// Reactive runtime owning the graph (pump via `run_effects`).
     pub runtime: Runtime,
@@ -506,6 +546,12 @@ pub struct Store {
     attention: Cell<AttentionState>,
     /// Replay-dedup window: the recent bus-event ids (F2 contract).
     seen_events: std::cell::RefCell<(VecDeque<String>, HashSet<String>)>,
+    /// Plugin-registered palette commands (registration-time only).
+    plugin_commands: Signal<Vec<PluginCommandEntry>>,
+    /// The post-ingest event tap (plugin-host broadcast seam).
+    event_tap: std::cell::RefCell<Option<std::sync::Arc<dyn EventTap>>>,
+    /// Plugin command execution (bridges the palette to the host).
+    plugin_sink: std::cell::RefCell<Rc<dyn PluginCommandSink>>,
     /// The injected clock (ms since boot) — the ONLY time source
     /// animations may read (`ManualClock` semantics: a frozen clock pins
     /// spinner frame 0; render happens on tick, only when it advances).
@@ -532,6 +578,7 @@ impl Store {
         let prompt = Signal::new(&runtime, PromptState::default());
         let server_lists = Signal::new(&runtime, ServerLists::default());
         let selection = Signal::new(&runtime, SelectionState::default());
+        let plugin_commands = Signal::new(&runtime, Vec::<PluginCommandEntry>::new());
         let prompt_sink: std::rc::Rc<dyn PromptSink> =
             std::rc::Rc::new(RecordingPromptSink::default());
         let clock = Signal::new(&runtime, 0u64);
@@ -551,6 +598,7 @@ impl Store {
         let watch_prompt = prompt.clone();
         let watch_server_lists = server_lists.clone();
         let watch_selection = selection.clone();
+        let watch_plugin_commands = plugin_commands.clone();
         let watch_clock = clock.clone();
         let redraw_effect = Effect::new(&runtime, move || {
             let _ = (
@@ -567,6 +615,7 @@ impl Store {
                 watch_prompt.get(),
                 watch_server_lists.get(),
                 watch_selection.get(),
+                watch_plugin_commands.get(),
                 watch_clock.get(),
             );
             bump.set(bump.get() + 1);
@@ -587,6 +636,9 @@ impl Store {
             server_lists,
             selection,
             prompt_sink,
+            plugin_commands,
+            event_tap: std::cell::RefCell::new(None),
+            plugin_sink: std::cell::RefCell::new(Rc::new(NoPluginCommands)),
             selection_sink: Rc::new(RecordingSelectionSink::default()),
             clipboard_sink: Rc::new(crate::clipboard::RecordingClipboardSink::default()),
             editor_requested: Cell::new(false),
@@ -1189,6 +1241,20 @@ impl Store {
         self.registry.set(registry);
     }
 
+    /// Merge plugin-registered theme documents into the registry
+    /// (registration-time only — the oc-plugin-host snapshot's themes
+    /// feed the same discovery path as `<config>/themes/*.json`
+    /// files; invalid documents skip with a log, never brick the TUI).
+    pub fn set_plugin_themes(&self, themes: &[(String, String)]) {
+        let mut registry = self.registry.get();
+        for (name, document) in themes {
+            if let Err(reason) = registry.insert_custom(name, document) {
+                crate::keymap::log_skip(&format!("theme {name}: {reason} (skipped)"));
+            }
+        }
+        self.registry.set(registry);
+    }
+
     /// Select a theme by registry name in the current mode (unknown
     /// names keep the current theme, like the reference's fallback to
     /// `opencode`).
@@ -1215,6 +1281,48 @@ impl Store {
     /// into the live keymap (user wins, unset removes).
     pub fn set_keybinds(&self, overrides: Vec<KeybindOverride>) {
         self.keybinds.set(overrides);
+    }
+
+    // -- plugin seams (registration-time only) ---------------------------------
+
+    /// Replace the plugin palette commands (the host's registration
+    /// snapshot, applied once after load / hot reload — never
+    /// per-frame).
+    pub fn set_plugin_commands(&self, entries: Vec<PluginCommandEntry>) {
+        self.plugin_commands.set(entries);
+    }
+
+    /// The plugin palette commands (palette data + dispatch lookup).
+    #[must_use]
+    pub fn plugin_commands(&self) -> Vec<PluginCommandEntry> {
+        self.plugin_commands.get()
+    }
+
+    /// One plugin command by id.
+    #[must_use]
+    pub fn plugin_command(&self, command: &str) -> Option<PluginCommandEntry> {
+        self.plugin_commands.get().into_iter().find(|entry| entry.command == command)
+    }
+
+    /// Attach the post-ingest event tap (plugin-host broadcast seam).
+    /// The tap must be `Send + Sync`: it crosses into the host's
+    /// dispatch thread while the store stays single-threaded.
+    pub fn set_event_tap(&self, tap: std::sync::Arc<dyn EventTap>) {
+        *self.event_tap.borrow_mut() = Some(tap);
+    }
+
+    /// Attach the plugin command execution sink (palette dispatch).
+    pub fn set_plugin_command_sink(&self, sink: Rc<dyn PluginCommandSink>) {
+        *self.plugin_sink.borrow_mut() = sink;
+    }
+
+    /// Dispatch one plugin command through the sink (the palette's
+    /// plugin arm). `true` when a plugin claimed it.
+    pub fn execute_plugin_command(&self, command: &str, args: Option<&str>) -> bool {
+        if self.plugin_command(command).is_none() {
+            return false;
+        }
+        self.plugin_sink.borrow().execute(command, args)
     }
 
     /// The open session IDs (tab order) — the resync's message.list
@@ -1303,6 +1411,14 @@ impl Store {
                     self.attention.set(attention);
                 }
                 self.reduce_event(&event);
+                // The broadcast tap: AFTER the reducer, in ingest
+                // order — plugins see the same deduplicated, ordered
+                // stream the store just reduced (never a replayed
+                // frame: those returned above). Non-blocking by
+                // contract.
+                if let Some(tap) = self.event_tap.borrow().as_ref() {
+                    tap.publish(&event);
+                }
             }
             Ingest::Resync { sessions, unread, messages } => {
                 // Reconcile AFTER the channel drained: refresh session
@@ -1489,6 +1605,16 @@ impl Store {
                 let ordinal = event.ordinal();
                 let delta = event.string("delta").unwrap_or_default();
                 self.update_messages(&session, |messages| {
+                    // G11-F1: a delta for a message a snapshot already
+                    // completed (the first-connect snapshot/stream
+                    // overlap window double-appends text) is dropped —
+                    // the snapshot's text is authoritative. A
+                    // legitimate new step reopens the message
+                    // (`session.step.started` clears completion)
+                    // before its deltas arrive.
+                    if message_already_complete(messages, &assistant) {
+                        return;
+                    }
                     with_part(messages, &assistant, "text", ordinal, |part| {
                         if let Part::Text { text, .. } = part {
                             text.push_str(&delta);
@@ -1518,6 +1644,10 @@ impl Store {
                 let ordinal = event.ordinal();
                 let delta = event.string("delta").unwrap_or_default();
                 self.update_messages(&session, |messages| {
+                    // G11-F1 (same window, same rule as text deltas).
+                    if message_already_complete(messages, &assistant) {
+                        return;
+                    }
                     with_part(messages, &assistant, "reasoning", ordinal, |part| {
                         if let Part::Reasoning { text, .. } = part {
                             text.push_str(&delta);
@@ -1665,6 +1795,15 @@ impl Store {
 /// `(sessionID, assistantMessageID)` off a part event.
 fn session_and_assistant(event: &BusEvent) -> Option<(String, String)> {
     Some((event.string("sessionID")?, event.string("assistantMessageID")?))
+}
+
+/// G11-F1: whether the assistant message exists and is already
+/// complete (a snapshot's fully-formed tree — `time.completed` set).
+fn message_already_complete(messages: &[Message], assistant: &str) -> bool {
+    messages.iter().any(|message| {
+        message.id() == assistant
+            && matches!(message, Message::Assistant { time, .. } if time.completed.is_some())
+    })
 }
 
 /// Find or create the `kind:ordinal` text/reasoning part on the
@@ -1833,6 +1972,7 @@ fn message_from_event(event: &BusEvent) -> Option<Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::command_palette::CommandDispatcher as _;
     use crate::data::SessionSnapshot;
 
     fn tab(id: &str, title: Option<&str>) -> SessionTab {
@@ -2591,5 +2731,158 @@ mod tests {
         );
         assert_eq!(sink.calls.borrow().len(), 2, "staging fires no sink call");
         assert_eq!(store.selection_for("home").model.as_ref().unwrap().model_id, "grok");
+    }
+
+    // -- plugin seams (wave 9.1) ------------------------------------------------
+
+    /// A recording tap: proves publish order, post-ingest timing, and
+    /// dedup parity with the store.
+    struct RecordingTap {
+        seen: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl crate::store::EventTap for RecordingTap {
+        fn publish(&self, event: &BusEvent) {
+            self.seen.lock().expect("tap").push(format!("{}:{}", event.id, event.type_));
+        }
+    }
+
+    #[test]
+    fn event_tap_sees_the_reduced_ordered_deduped_stream() {
+        let store = Store::new(Runtime::new());
+        let tap = std::sync::Arc::new(RecordingTap { seen: std::sync::Mutex::new(Vec::new()) });
+        store.set_event_tap(tap.clone());
+        let event = |id: &str, type_: &str| BusEvent {
+            id: id.to_owned(),
+            type_: type_.to_owned(),
+            data: serde_json::json!({}),
+            created: None,
+        };
+        // Two events + one REPLAY of the first: the tap sees exactly
+        // the two the store reduced, in order, and never the replay.
+        store.ingest_all([
+            Ingest::Event(event("evt_1", "session.updated")),
+            Ingest::Event(event("evt_2", "session.updated")),
+        ]);
+        store.ingest_all([Ingest::Event(event("evt_1", "session.updated"))]);
+        let seen = tap.seen.lock().expect("tap").clone();
+        assert_eq!(seen, vec!["evt_1:session.updated", "evt_2:session.updated"]);
+        // Post-ingest placement means the tap fires synchronously
+        // inside ingest_all — by the time it returns, every publish
+        // already happened (the probe above would interleave otherwise).
+        assert_eq!(tap.seen.lock().expect("tap").len(), 2);
+    }
+
+    #[test]
+    fn g11f1_deltas_for_snapshot_complete_messages_are_dropped() {
+        let store = store_with_tabs(&["ses_9"]);
+        // A snapshot-built COMPLETE message (message.list re-fetch).
+        store.set_messages(
+            "ses_9",
+            vec![Message::Assistant {
+                id: "msg_a".into(),
+                agent: "build".into(),
+                model: String::new(),
+                parts: vec![Part::Text {
+                    text: "final answer".into(),
+                    time: PartTime { created: Some(1), completed: Some(2) },
+                }],
+                finish: Some("stop".into()),
+                time: PartTime { created: Some(1), completed: Some(2) },
+            }],
+        );
+        // The G11-F1 window: a session.text.delta replayed after the
+        // snapshot must NOT append onto the complete message.
+        store.ingest_all([Ingest::Event(BusEvent {
+            id: "evt_d1".into(),
+            type_: "session.text.delta".into(),
+            data: serde_json::json!({
+                "sessionID": "ses_9", "assistantMessageID": "msg_a", "delta": "EXTRA"
+            }),
+            created: Some(3),
+        })]);
+        let messages = store.messages("ses_9");
+        let Message::Assistant { parts, .. } = &messages[0] else { panic!("assistant") };
+        let Part::Text { text, .. } = &parts[0] else { panic!("text part") };
+        assert_eq!(text, "final answer", "delta dropped for the completed message");
+
+        // A reopened message (session.step.started clears completion)
+        // accepts deltas again.
+        store.ingest_all([Ingest::Event(BusEvent {
+            id: "evt_s1".into(),
+            type_: "session.step.started".into(),
+            data: serde_json::json!({
+                "sessionID": "ses_9", "assistantMessageID": "msg_a"
+            }),
+            created: Some(4),
+        })]);
+        store.ingest_all([Ingest::Event(BusEvent {
+            id: "evt_d2".into(),
+            type_: "session.text.delta".into(),
+            data: serde_json::json!({
+                "sessionID": "ses_9", "assistantMessageID": "msg_a", "delta": "new turn"
+            }),
+            created: Some(5),
+        })]);
+        let messages = store.messages("ses_9");
+        let Message::Assistant { parts, .. } = &messages[0] else { panic!("assistant") };
+        let Part::Text { text, .. } = &parts[0] else { panic!("text part") };
+        assert_eq!(text, "final answernew turn", "reopened message accumulates");
+    }
+
+    #[test]
+    fn plugin_commands_and_themes_land() {
+        // Dispatch routes through the sink (unknown to it → falls
+        // through to Unknown).
+        #[derive(Default)]
+        struct Sink(std::cell::RefCell<Vec<String>>);
+        impl PluginCommandSink for Sink {
+            fn execute(&self, command: &str, _args: Option<&str>) -> bool {
+                self.0.borrow_mut().push(command.to_owned());
+                true
+            }
+        }
+        let store = Store::new(Runtime::new());
+        store.set_plugin_commands(vec![PluginCommandEntry {
+            command: "hw.hello".into(),
+            title: "Say hello".into(),
+            plugin_id: "helloworld".into(),
+        }]);
+        assert_eq!(store.plugin_commands().len(), 1);
+        assert_eq!(store.plugin_command("hw.hello").unwrap().plugin_id, "helloworld");
+
+        // Theme documents feed the registry discovery path (a real v1
+        // asset — valid by construction).
+        let names_before = store.registry().names().len();
+        store.set_plugin_themes(&[(
+            "helloworld-theme".to_owned(),
+            include_str!("../../oc-theme/assets/v1/aura.json").to_owned(),
+        )]);
+        let names_after = store.registry().names().len();
+        assert_eq!(names_after, names_before + 1, "plugin theme merged into the registry");
+        assert!(store.registry().get("helloworld-theme").is_some());
+
+        // The palette carries the plugin row (group "Plugin").
+        let props = crate::components::command_palette::palette_props(&store);
+        let plugin_row = props
+            .options
+            .iter()
+            .find(|option| option.value == "hw.hello")
+            .expect("plugin row in the palette");
+        assert_eq!(plugin_row.category.as_deref(), Some("Plugin"));
+
+        let sink = Rc::new(Sink::default());
+        store.set_plugin_command_sink(Rc::clone(&sink) as Rc<dyn PluginCommandSink>);
+        let mut dispatcher = crate::components::command_palette::StoreDispatcher;
+        assert_eq!(
+            dispatcher.dispatch(&store, "hw.hello", None),
+            crate::components::command_palette::Dispatch::Handled
+        );
+        assert_eq!(sink.0.borrow().clone(), vec!["hw.hello".to_owned()]);
+        // Unregistered commands still Unknown.
+        assert_eq!(
+            dispatcher.dispatch(&store, "nope.nope", None),
+            crate::components::command_palette::Dispatch::Unknown
+        );
     }
 }
