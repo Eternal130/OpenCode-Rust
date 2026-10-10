@@ -287,7 +287,7 @@ impl Shared {
                         "hook.register requires domain+name",
                     ));
                 }
-                self.registrations.write().expect("registrations poisoned").hooks.insert(hook);
+                self.registrations.write().expect("registrations poisoned").add_hook(hook);
                 Some(protocol::response(id, Value::Null))
             }
             // -- plugin-ID-scoped durable KV (file per plugin under the

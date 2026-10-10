@@ -1419,3 +1419,79 @@ async fn tool_pipeline_before_hook_rejection_short_circuits() {
     assert_eq!(error_message(&failure), "rejected by hook");
     assert!(!harness.dir.join("x.txt").exists());
 }
+
+// -- execute.after application fidelity (D-03: by-reference parity) --------
+
+/// v2 returns the (possibly plugin-rewritten) error from the error-leg
+/// after hook (`return yield* afterEvent.error`, tool.ts:140): a plugin
+/// rewriting the message shapes the model-visible failure.
+#[tokio::test]
+async fn tool_pipeline_after_hook_error_rewrite_shapes_failure() {
+    let tools = ToolRegistryState::new();
+    let harness = harness().await;
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    let _keep_after = hooks
+        .register_tool_execute_after(
+            crate::hooks::fn_hook(|event: &mut crate::hooks::ToolExecuteAfterEvent| {
+                if let crate::hooks::ToolOutcome::Error { error } = &mut event.outcome {
+                    error.message = "rewritten by plugin".into();
+                }
+                Ok(())
+            }),
+            crate::hooks::HookOptions::default(),
+        )
+        .await;
+    crate::tool::registry::register(
+        &tools,
+        &hooks,
+        &harness.services,
+        crate::tool::read::tool(&harness.services),
+    )
+    .expect("register");
+
+    let failure = call(&tools, "read", serde_json::json!({ "path": "nowhere-d03.txt" }))
+        .await
+        .expect_err("read of a missing file fails");
+    assert_eq!(
+        error_message(&failure),
+        "rewritten by plugin",
+        "the after hook's error rewrite must become the tool failure"
+    );
+}
+
+/// v2's normalizeContent applies an EMPTIED content array too (empty →
+/// the stringified output fallback, tool/runtime.ts:259): a plugin
+/// suppressing tool output must suppress it, not keep the original.
+#[tokio::test]
+async fn tool_pipeline_after_hook_can_suppress_content() {
+    let tools = ToolRegistryState::new();
+    let harness = harness().await;
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    let _keep_after = hooks
+        .register_tool_execute_after(
+            crate::hooks::fn_hook(|event: &mut crate::hooks::ToolExecuteAfterEvent| {
+                if let crate::hooks::ToolOutcome::Completed { result } = &mut event.outcome {
+                    result["content"] = serde_json::json!([]);
+                }
+                Ok(())
+            }),
+            crate::hooks::HookOptions::default(),
+        )
+        .await;
+    crate::tool::registry::register(
+        &tools,
+        &hooks,
+        &harness.services,
+        crate::tool::write::tool(&harness.services),
+    )
+    .expect("register");
+
+    let settled =
+        call(&tools, "write", serde_json::json!({ "path": "suppressed.txt", "content": "x" }))
+            .await
+            .expect("write");
+    assert!(
+        settled.content.is_empty(),
+        "an emptied content array must suppress the output (v2 normalizeContent)"
+    );
+}
