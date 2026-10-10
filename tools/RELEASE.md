@@ -281,3 +281,80 @@ https://github.com/Eternal130/OpenCode-Rust/releases/download/<tag>/opencode-<ve
 
 Feed it to the installer via `--url` (or `$RELEASE_URL`); there is still
 no default URL by design (the 2.0.24 pin must never adopt TS releases).
+
+## Web UI asset archive (R-04)
+
+The reference web app (anomalyco/opencode `packages/app`, Solid/Vite/PWA)
+publishes no standalone artifact at v2.0.24 — the dist is built from a
+**pinned ref** in CI and embedded into the binary (ROADMAP §R-04,
+decided 2026-10-11). There is deliberately **no local-ref build
+discipline exception**: CI is the executor; locally you only consume.
+
+### Pipeline (`.github/workflows/release.yml`)
+
+1. **`web-assets` job** (also runnable alone via `workflow_dispatch` for
+   iteration): fetch the pinned ref tarball
+   (`https://github.com/anomalyco/opencode/archive/<APP_REF>.tar.gz`,
+   curl with retries), `oven-sh/setup-bun`, `bun install` at the ref
+   root, `cd packages/app && VITE_OPENCODE_SERVER_MODE=origin bun run
+   build`, then `bun tools/web-assets/package.ts --dist
+   ref/packages/app/dist --ref <APP_REF> --out app-archive.json`
+   (node:zlib **brotli q6** + base64 per file, self-describing JSON with
+   provenance). Uploaded as the `app-archive` artifact; the bun install
+   cache is `actions/cache`-keyed on the ref.
+2. **`linux-x64` job** (`needs: [web-assets]`): downloads the artifact,
+   exports `OPENCODE_APP_ARCHIVE=<path>` so `oc-server/build.rs` stages
+   it into `OUT_DIR` for compile-time embedding, builds as before, and
+   appends a size line (`web-ui-summary.md`) to the release notes +
+   step summary.
+
+**Fail-loud guard**: if `web-assets` did not succeed, the build job
+dies before `cargo build` — a broken app build must never ship a
+silently UI-less binary. Emergency escape hatch (documented): the
+`skip_web` workflow_dispatch input, or the `WEB_ASSETS_SKIP=true`
+**repository variable** (tag pushes have no inputs context) — either
+skips `web-assets` AND suppresses the guard, producing an API-only
+binary. Revert the variable immediately after the emergency.
+
+### Bumping the pinned ref
+
+`APP_REF` lives once, in the workflow `env:` block. A bump is a
+deliberate change (it swaps the shipped UI): dispatch `web-assets`
+alone first, inspect the size line, run the local smoke below against
+the produced archive, then cut the tag.
+
+### Local browser smoke (orchestrator/manual — no CI needed)
+
+Runtime override accepts an **archive file OR an unpacked dist dir**,
+so neither the packager nor a release build is required:
+
+```sh
+# 1. Clone the reference app at the pinned ref and build it (network +
+#    bun; one-off, NOT part of any gate):
+git clone https://github.com/anomalyco/opencode /tmp/opencode/ref
+git -C /tmp/opencode/ref checkout e7a34f09bfd9134dfade5a8ddb843f7030bc9a69
+bun install --cwd /tmp/opencode/ref
+VITE_OPENCODE_SERVER_MODE=origin bun run --cwd /tmp/opencode/ref/packages/app build
+
+# 2a. Serve the unpacked dist directly (simplest):
+export OPENCODE_APP_ASSETS=/tmp/opencode/ref/packages/app/dist
+
+# 2b. Or package it first (production-shaped, brotli q6):
+bun tools/web-assets/package.ts \
+  --dist /tmp/opencode/ref/packages/app/dist \
+  --ref e7a34f09bfd9134dfade5a8ddb843f7030bc9a69 \
+  --out /tmp/opencode/app-archive.json
+export OPENCODE_APP_ASSETS=/tmp/opencode/app-archive.json
+
+# 3. Serve (dev-gate wrapper for the cargo build; the env var rides
+#    through):
+tools/dev-gate.sh 'cargo run -p oc-cli -- serve --port 49374'
+# stderr must show: opencode-rust: web ui: N files (ref e7a34f0...)
+
+# 4. Open http://127.0.0.1:49374 (set OPENCODE_PASSWORD first; login is
+#    opencode / <password>, or a pairing link per the auth flow).
+```
+
+A bad `OPENCODE_APP_ASSETS` path fails boot loudly (exit, stderr
+message). With neither override nor embedded archive the server is
+API-only — the historical default every test build pins.

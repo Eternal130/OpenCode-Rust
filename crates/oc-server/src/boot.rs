@@ -91,6 +91,10 @@ impl Default for BootOptions {
 
 /// Boots the engine + app shell + handler table and serves: the single
 /// production entry (`main.rs` calls this).
+// One linear composition (config → plugins → engine → assets → shell →
+// serve); the R-04 asset install pushed it one line over the pedantic
+// budget and splitting it would only hide the boot ordering.
+#[allow(clippy::too_many_lines)]
 pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     // One-way v2→rust data migration (lane B), BEFORE any database or
     // config resolution so the boot reads migrated state. Marker-latched:
@@ -197,6 +201,10 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
         Arc::new(SystemClock),
     );
     app_state.cors_origins.extend(options.cors_origins.iter().cloned());
+    // R-04: populate the web-UI asset store (runtime `OPENCODE_APP_ASSETS`
+    // override over the build-time embedded archive; absent both → empty,
+    // API-only). A broken override fails boot loudly.
+    crate::app_archive::install_at_boot(&mut app_state.assets)?;
     // The plugin session port fills with the engine handle now that it
     // exists (ctx.session.* → the boot location's session machinery).
     plugin_boot.session_slot.fill(Arc::new(crate::plugins::EngineSessionPort {

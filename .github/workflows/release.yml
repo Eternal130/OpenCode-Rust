@@ -4,22 +4,128 @@ on:
   push:
     tags:
       - "v*"
+  # Dispatch iterates the web-assets job ALONE (the build/release job
+  # below stays tag-only) — for pinning/ref-bump experimentation without
+  # cutting a tag. `skip_web` is the documented emergency escape hatch
+  # (see tools/RELEASE.md § web-ui).
+  workflow_dispatch:
+    inputs:
+      skip_web:
+        description: "Emergency only: skip web-assets (publishes an API-only binary)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 env:
   CARGO_TERM_COLOR: always
+  # R-04: the pinned reference app source (anomalyco/opencode) the web
+  # UI dist is built from. Bump deliberately, never casually — a bump
+  # changes the shipped UI and belongs in its own change with a smoke
+  # run (tools/RELEASE.md § web-ui).
+  APP_REF: e7a34f09bfd9134dfade5a8ddb843f7030bc9a69
 
 jobs:
+  # R-04: build the reference app from the pinned ref and package its
+  # dist into the app archive the binary embeds. Failures here fail the
+  # release (the build job guards below) — a broken app build must never
+  # ship a silently UI-less binary.
+  web-assets:
+    name: web assets (reference app @ pinned ref)
+    if: ${{ inputs.skip_web != true && vars.WEB_ASSETS_SKIP != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Our repo is needed only for the packager script
+      # (tools/web-assets/package.ts).
+      - uses: actions/checkout@v4
+
+      - name: Fetch the pinned reference app
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+            -o ref.tar.gz "https://github.com/anomalyco/opencode/archive/${APP_REF}.tar.gz"
+          mkdir ref
+          tar -xzf ref.tar.gz -C ref --strip-components=1
+          # Wrong-ref / truncated-tarball guard: the app package must be there.
+          test -d ref/packages/app
+
+      - name: Bun install cache (keyed on the pinned ref)
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-app-${{ env.APP_REF }}
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install + build the reference app
+        run: |
+          set -euo pipefail
+          cd ref
+          bun install
+          cd packages/app
+          VITE_OPENCODE_SERVER_MODE=origin bun run build
+          test -d dist
+
+      - name: Package dist into the app archive
+        run: |
+          set -euo pipefail
+          bun tools/web-assets/package.ts --dist ref/packages/app/dist --ref "${APP_REF}" --out app-archive.json
+          wc -c app-archive.json
+
+      - name: Upload app archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-archive
+          path: app-archive.json
+          if-no-files-found: error
+
   linux-x64:
     name: build & release (linux-x64)
+    needs: web-assets
+    # Tag pushes only (dispatches iterate web-assets alone); never build
+    # on top of a failed or cancelled web-assets run.
+    if: ${{ github.event_name == 'push' && !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - uses: Swatinem/rust-cache@v2
+
+      # The loud guard: web-assets must have SUCCEEDED, or an escape
+      # hatch must be explicitly set (the skip_web dispatch input, or
+      # the WEB_ASSETS_SKIP=true repository variable for tag pushes —
+      # both documented in tools/RELEASE.md § web-ui). A skipped job
+      # without either is a config mistake and fails the release.
+      - name: Require the web archive (no silent UI-less binaries)
+        if: ${{ needs.web-assets.result != 'success' && vars.WEB_ASSETS_SKIP != 'true' }}
+        run: |
+          echo "::error::web-assets result was '${{ needs.web-assets.result }}' — refusing to build a binary without the web UI (emergency hatch: tools/RELEASE.md § web-ui)"
+          exit 1
+
+      - name: Download app archive
+        if: ${{ needs.web-assets.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: app-archive
+          path: app-archive
+
+      - name: Wire the embedded archive + size report
+        if: ${{ needs.web-assets.result == 'success' }}
+        run: |
+          set -euo pipefail
+          ARCHIVE="$PWD/app-archive/app-archive.json"
+          test -s "$ARCHIVE"
+          echo "OPENCODE_APP_ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          BYTES=$(wc -c < "$ARCHIVE")
+          FILES=$(jq '.files | length' "$ARCHIVE")
+          {
+            echo "### Web UI"
+            echo ""
+            echo "Embedded web app archive: \`${BYTES} bytes\` (${FILES} files, ref \`${APP_REF}\`) — the binary serves it at \`/\` (\`opencode-rust serve\`)."
+          } | tee web-ui-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build release binary
         run: cargo build --release -p oc-cli --locked
@@ -28,6 +134,9 @@ jobs:
           # the built binary knows which tag it came from and can
           # compare itself against the releases feed.
           OC_RELEASE_TAG: ${{ github.ref_name }}
+          # Set by the archive step above when web-assets succeeded:
+          # oc-server's build.rs stages the archive for compile-time
+          # embedding (unset = API-only binary, the skip_web hatch).
 
       - name: Package tarball + sha256 sidecar
         run: |
@@ -82,6 +191,12 @@ jobs:
           opencode-rust --version-rust   # rust port build <git-short>, release profile
           \`\`\`
           EOF
+          # R-04: the web-UI embed line (present unless skip_web ran the
+          # release UI-less).
+          if [ -f web-ui-summary.md ]; then
+            printf '\n' >> release-notes.md
+            cat web-ui-summary.md >> release-notes.md
+          fi
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
