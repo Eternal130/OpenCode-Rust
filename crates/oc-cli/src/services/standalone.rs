@@ -23,6 +23,7 @@ pub struct StandaloneServer {
     pub password: String,
     stdin: Option<std::process::ChildStdin>,
     child: Option<std::process::Child>,
+    exited: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl StandaloneServer {
@@ -33,6 +34,20 @@ impl StandaloneServer {
             url: self.url.clone(),
             password: Some(self.password.clone()),
         }
+    }
+
+    /// `endpoint.exited` (commands/handlers/acp.ts:36): resolves when the
+    /// server process has gone away (the stdout reader thread observes
+    /// EOF, which the child's exit produces). Polled, not signalled —
+    /// the ACP handler races this against the connection closing.
+    pub async fn exited(&self) {
+        while !self.exited_flag() {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    }
+
+    fn exited_flag(&self) -> bool {
+        self.exited.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Ends the lease: stdin EOF (the OS-level signal), then SIGTERM with a
@@ -109,7 +124,9 @@ pub async fn start() -> Result<StandaloneServer, String> {
     let exited = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let exited_for_task = std::sync::Arc::clone(&exited);
     // Read lines off the child's stdout on a dedicated thread: the first
-    // line satisfies readiness, the rest are drained (EPIPE guard).
+    // line satisfies readiness, the rest are drained (EPIPE guard). The
+    // thread's end (EOF) marks the server as exited — the `exited` race
+    // of the ACP handler watches this flag.
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
@@ -145,6 +162,7 @@ pub async fn start() -> Result<StandaloneServer, String> {
         password,
         stdin,
         child: Some(child),
+        exited,
     })
 }
 

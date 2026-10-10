@@ -22,6 +22,14 @@ edition = "2021"
 license = "MIT"
 repository = "https://github.com/Eternal130/OpenCode-Rust"
 
+# Vendored ACP crates (R-03): identical to crates.io except
+# serde_json's `preserve_order` feature is dropped — upstream enables it
+# unconditionally and feature unification would flip the workspace's
+# serde_json map ordering (see third_party/*/Cargo.toml notes).
+[patch.crates-io]
+agent-client-protocol = { path = "third_party/agent-client-protocol" }
+agent-client-protocol-schema = { path = "third_party/agent-client-protocol-schema" }
+
 [workspace.dependencies]
 oc-util = { path = "crates/oc-util" }
 oc-schema = { path = "crates/oc-schema" }

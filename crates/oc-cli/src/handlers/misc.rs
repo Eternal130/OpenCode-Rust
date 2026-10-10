@@ -149,11 +149,10 @@ fn is_tty() -> bool {
     std::io::stdin().is_terminal()
 }
 
-/// `opencode acp` — REGISTERED interim (deferred until after the phase-7 TUI
-/// foundation; see MIGRATION.md phase 6/7 notes).
-pub fn acp() -> i32 {
-    eprintln!("Error: acp is not yet implemented (deferred; see MIGRATION.md)");
-    1
+/// `opencode acp` — REAL (R-03): the ACP agent over stdio (see
+/// `crate::acp`).
+pub async fn acp() -> i32 {
+    crate::acp::run().await
 }
 
 /// `opencode mini` — REGISTERED interim (phase 8).
