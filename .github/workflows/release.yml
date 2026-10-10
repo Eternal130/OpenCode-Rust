@@ -1,0 +1,88 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux-x64:
+    name: build & release (linux-x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release -p oc-cli --locked
+
+      - name: Package tarball + sha256 sidecar
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          TARGET="linux-x64"
+          ARTIFACT="opencode-${VERSION}-${TARGET}"
+          mkdir -p package
+          cp target/release/opencode package/opencode
+          tar -czf "${ARTIFACT}.tar.gz" package/opencode
+          sha256sum "${ARTIFACT}.tar.gz" > "${ARTIFACT}.tar.gz.sha256"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "ARTIFACT=${ARTIFACT}" >> "$GITHUB_ENV"
+
+      - name: Smoke the packaged binary
+        run: |
+          tar -xzf "${ARTIFACT}.tar.gz"
+          ./package/opencode --version
+
+      - name: Compose release notes
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          REPO="${GITHUB_REPOSITORY}"
+          cat > release-notes.md <<EOF
+          ## opencode-rust ${TAG}
+
+          Rust rewrite of [opencode](https://github.com/anomalyco/opencode) v2, ported from **v2.0.24**.
+          The binary self-reports \`2.0.24\` for parity; the beta marker lives in the tag/asset name only.
+
+          ### Assets
+
+          | File | Target |
+          |---|---|
+          | \`${ARTIFACT}.tar.gz\` | linux x86_64 (tarball, \`package/opencode\` member) |
+          | \`${ARTIFACT}.tar.gz.sha256\` | sha256 sidecar (\`sha256sum\` format) |
+
+          ### Install
+
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install/install.sh | bash -s -- \\
+            --version ${TAG} \\
+            --url https://github.com/${REPO}/releases/download/${TAG}/${ARTIFACT}.tar.gz
+          \`\`\`
+
+          Or download the tarball directly and extract \`package/opencode\`.
+
+          ### Verify
+
+          \`\`\`sh
+          opencode --version        # 2.0.24 (parity pin)
+          opencode --version-rust   # rust port build <git-short>, release profile
+          \`\`\`
+          EOF
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ contains(github.ref_name, 'beta') }}
+          body_path: release-notes.md
+          files: |
+            ${{ env.ARTIFACT }}.tar.gz
+            ${{ env.ARTIFACT }}.tar.gz.sha256
