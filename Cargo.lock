@@ -1689,6 +1689,7 @@ dependencies = [
  "oc-core",
  "oc-schema",
  "oc-server",
+ "oc-tui",
  "oc-util",
  "rand 0.8.8",
  "reqwest",

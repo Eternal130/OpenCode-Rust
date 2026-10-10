@@ -20,6 +20,7 @@
 
 use std::time::Duration;
 
+use oc_client::types::SessionMessageInfo;
 use oc_client::Client;
 use serde_json::Value;
 
@@ -125,8 +126,15 @@ pub enum Ingest {
     /// A live bus event, in arrival order.
     Event(BusEvent),
     /// A post-reconnect resync snapshot (applied only after the channel
-    /// drained — see [`crate::store::Store::ingest_all`]).
-    Resync { sessions: Vec<SessionSnapshot>, unread: Vec<String> },
+    /// drained — see [`crate::store::Store::ingest_all`]): refreshed
+    /// sessions, the idle>viewed unread derivation, and the re-fetched
+    /// message trees of every open session (`message.list`).
+    Resync {
+        sessions: Vec<SessionSnapshot>,
+        unread: Vec<String>,
+        /// `(sessionID, messages)` per OPEN session at resync time.
+        messages: Vec<(String, Vec<crate::components::message::model::Message>)>,
+    },
 }
 
 /// Reconnect/backoff configuration.
@@ -162,29 +170,52 @@ impl ConnectionConfig {
     }
 }
 
-/// How sessions are re-fetched during resync (swappable for tests;
-/// production uses [`HttpResync`]).
-pub trait SessionListSource {
-    fn fetch(
+/// How the reconnect resync re-fetches state (swappable for tests;
+/// production uses [`HttpResync`]): the session list plus the
+/// `message.list` of every open session.
+pub trait ResyncSource: Send {
+    fn fetch_sessions(
         &self,
     ) -> impl std::future::Future<Output = Result<Vec<SessionSnapshot>, String>> + Send;
+    /// The session IDs whose message trees should re-fetch (the UI's
+    /// open tabs — shared with the store side).
+    fn open_sessions(&self) -> Vec<String>;
+    fn fetch_messages(
+        &self,
+        session_id: &str,
+    ) -> impl std::future::Future<
+        Output = Result<Vec<crate::components::message::model::Message>, String>,
+    > + Send;
 }
 
-/// Production resync: `session.list` over the generated client.
+/// The open-session registry the store side keeps current (tab
+/// open/close); the resync reads it to know which message lists to
+/// re-fetch.
+pub type SharedOpenSessions = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+/// Production resync: `session.list` + per-open-session `message.list`
+/// over the generated client.
 #[derive(Clone)]
 pub struct HttpResync {
     client: Client,
+    open_sessions: SharedOpenSessions,
 }
 
 impl HttpResync {
     #[must_use]
     pub fn new(client: Client) -> Self {
-        Self { client }
+        Self { client, open_sessions: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())) }
+    }
+
+    /// The handle the store side updates as tabs open and close.
+    #[must_use]
+    pub fn open_sessions_handle(&self) -> SharedOpenSessions {
+        std::sync::Arc::clone(&self.open_sessions)
     }
 }
 
-impl SessionListSource for HttpResync {
-    async fn fetch(&self) -> Result<Vec<SessionSnapshot>, String> {
+impl ResyncSource for HttpResync {
+    async fn fetch_sessions(&self) -> Result<Vec<SessionSnapshot>, String> {
         let query = oc_client::types::SessionListQuery {
             cursor: None,
             directory: None,
@@ -206,6 +237,100 @@ impl SessionListSource for HttpResync {
                 viewed: session.time.viewed,
             })
             .collect())
+    }
+
+    fn open_sessions(&self) -> Vec<String> {
+        self.open_sessions.lock().map(|ids| ids.clone()).unwrap_or_default()
+    }
+
+    async fn fetch_messages(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<crate::components::message::model::Message>, String> {
+        let query = oc_client::types::SessionMessageListQuery {
+            cursor: None,
+            limit: None,
+            order: None,
+            type_: None,
+        };
+        let response =
+            self.client.message().list(session_id, &query).await.map_err(|e| e.to_string())?;
+        Ok(response.data.iter().filter_map(message_from_info).collect())
+    }
+}
+
+/// Convert one `message.list` wire entry into the transcript model
+/// (`SessionMessageInfo` subset the store reducers build — user /
+/// assistant-with-parts / idle; other kinds are skipped, matching the
+/// SSE reducers).
+#[must_use]
+pub fn message_from_info(
+    info: &SessionMessageInfo,
+) -> Option<crate::components::message::model::Message> {
+    use crate::components::message::model::{Message, Part, PartTime};
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    // epoch ms: bounded by real time
+    let epoch = |value: Option<f64>| value.map(|ms| ms.round() as u64);
+    match info {
+        SessionMessageInfo::User(user) => Some(Message::User {
+            id: user.id.clone(),
+            text: user.text.clone(),
+            created: epoch(Some(user.time.created)).unwrap_or(0),
+        }),
+        SessionMessageInfo::Assistant(assistant) => {
+            let mut parts = Vec::new();
+            for item in &assistant.content {
+                match item {
+                    oc_client::types::SessionMessageAssistantContentItem::Text(text) => {
+                        parts.push(Part::Text {
+                            text: text.text.clone(),
+                            time: PartTime { created: None, completed: None },
+                        });
+                    }
+                    oc_client::types::SessionMessageAssistantContentItem::Reasoning(reasoning) => {
+                        parts.push(Part::Reasoning {
+                            text: reasoning.text.clone(),
+                            time: PartTime {
+                                created: reasoning
+                                    .time
+                                    .as_ref()
+                                    .and_then(|time| epoch(Some(time.created))),
+                                completed: reasoning
+                                    .time
+                                    .as_ref()
+                                    .and_then(|time| epoch(time.completed)),
+                            },
+                        });
+                    }
+                    oc_client::types::SessionMessageAssistantContentItem::Tool(tool) => {
+                        parts.push(Part::Tool {
+                            id: tool.id.clone(),
+                            name: tool.name.clone(),
+                            time: PartTime {
+                                created: epoch(Some(tool.time.created)),
+                                completed: epoch(tool.time.completed),
+                            },
+                        });
+                    }
+                }
+            }
+            Some(Message::Assistant {
+                id: assistant.id.clone(),
+                agent: assistant.agent.clone(),
+                model: format!("{}/{}", assistant.model.provider_id, assistant.model.id),
+                parts,
+                finish: None,
+                time: PartTime {
+                    created: epoch(Some(assistant.time.created)),
+                    completed: epoch(assistant.time.completed),
+                },
+            })
+        }
+        SessionMessageInfo::Idle(idle) => Some(Message::Idle {
+            id: idle.id.clone(),
+            created: epoch(Some(idle.time.created)).unwrap_or(0),
+        }),
+        _ => None,
     }
 }
 
@@ -258,11 +383,7 @@ impl Connection {
     /// The reconnect loop. Pushes every observation into `tx` in order;
     /// the receiving side owns the store. Cancelling the task (or
     /// dropping `tx`) ends the loop.
-    pub async fn run(
-        mut self,
-        tx: tokio::sync::mpsc::Sender<Ingest>,
-        fetcher: impl SessionListSource,
-    ) {
+    pub async fn run(mut self, tx: tokio::sync::mpsc::Sender<Ingest>, fetcher: impl ResyncSource) {
         loop {
             self.attempts += 1;
             if let Some(max) = self.config.max_attempts {
@@ -295,12 +416,22 @@ impl Connection {
             };
             if self.attempts > 1 {
                 // Resync on reconnect BEFORE relaying further live
-                // events: the fetch result queues behind everything
+                // events: the fetch results queue behind everything
                 // already sent and ahead of the new stream's events.
-                // Unread marks derive from `idle > viewed`, known-only.
-                if let Ok(sessions) = fetcher.fetch().await {
+                // Unread marks derive from `idle > viewed`, known-only;
+                // the message trees of every OPEN session re-fetch
+                // through `message.list` (the deferred re-fetch the
+                // reference does on reconnect) and rebuild through the
+                // store reducers.
+                if let Ok(sessions) = fetcher.fetch_sessions().await {
                     let unread = resync_unread(&sessions);
-                    if tx.send(Ingest::Resync { sessions, unread }).await.is_err() {
+                    let mut messages = Vec::new();
+                    for session_id in fetcher.open_sessions() {
+                        if let Ok(list) = fetcher.fetch_messages(&session_id).await {
+                            messages.push((session_id, list));
+                        }
+                    }
+                    if tx.send(Ingest::Resync { sessions, unread, messages }).await.is_err() {
                         return;
                     }
                 }
@@ -502,7 +633,7 @@ mod tests {
             &observed[3],
             Ingest::Connection(ConnectionState::Reconnecting { attempt: 2 })
         ));
-        let Ingest::Resync { sessions, unread } = &observed[4] else {
+        let Ingest::Resync { sessions, unread, .. } = &observed[4] else {
             panic!("resync arrives after the reconnect transition: {observed:?}");
         };
         // The snapshot carries the fetched sessions (titles through the
@@ -539,5 +670,188 @@ mod tests {
         ]);
         assert_eq!(store.connection(), ConnectionState::Connected);
         assert_eq!(store.tabs().unread.get("s1"), Some(&Unread::Activity));
+    }
+
+    /// The FULL wave-3 message.list resync, scripted end-to-end through
+    /// the production [`HttpResync`] over a local server:
+    ///
+    /// live events → **disconnect** (events missed while offline: the
+    /// server's message list advances) → **reconnect** (the resync
+    /// re-fetches `session.list` + the OPEN session's `message.list`,
+    /// carrying the missed turn) → the store **reconciles** (the
+    /// message tree rebuilt through the resync batch, unread derived
+    /// from `idle > viewed`) → **live events continue ordered** on top
+    /// of the reconciled tree.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // scripted end-to-end listener
+    async fn reconnect_resync_rebuilds_message_trees_and_live_continues() {
+        use crate::reactive::Runtime;
+        use crate::store::{Route, Store};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        // The server-side message list — advances while the client is
+        // offline (the missed events).
+        let messages = r#"{"cursor":{},"data":[
+            {"type":"user","id":"msg_u1","text":"What does the parser do?","time":{"created":1}},
+            {"type":"assistant","id":"msg_a1","agent":"build",
+             "model":{"providerID":"fixture","id":"fixture"},"finish":"stop",
+             "time":{"created":2,"completed":3},
+             "content":[
+               {"type":"tool","id":"t1","name":"read","time":{"created":2,"completed":2},
+                "state":{"status":"completed","input":{},"content":[]}},
+               {"type":"text","text":"It reads the configuration."}
+             ]}
+        ]}"#;
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.expect("accept");
+                let (mut reader, _) = socket.split();
+                let mut request = vec![0u8; 8192];
+                let _ = reader.read(&mut request).await;
+                let head = String::from_utf8_lossy(&request);
+                let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
+                let respond = |body: String, kind: &'static str| {
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                };
+                if path.starts_with("/api/event") {
+                    // Both connections: one live event then EOF (the
+                    // second connection's event arrives AFTER the
+                    // resync — proving live continues on top).
+                    let resumed = head.to_lowercase().contains("last-event-id");
+                    let body = if resumed {
+                        sse_frame(
+                            "e3",
+                            "session.text.delta",
+                            r#"{"sessionID":"s1","assistantMessageID":"msg_a2","delta":"Live after resync."}"#,
+                        )
+                    } else {
+                        sse_frame("e1", "server.connected", "{}")
+                            + &sse_frame("e2", "message.updated", r#"{"sessionID":"s1"}"#)
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{body}"
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                } else if path == "/api/session" {
+                    // idle > viewed → unread derivation input.
+                    let body = concat!(
+                        r#"{"cursor":{},"data":[{"#,
+                        r#""id":"s1","title":"Resynced","#,
+                        r#""time":{"created":0,"updated":0,"idle":100,"viewed":50},"#,
+                        r#""location":{"directory":"/tmp"},"projectID":"p","cost":0,"#,
+                        r#""tokens":{"cache":{"read":0,"write":0},"input":0,"output":0,"read":0,"write":0,"reasoning":0}}]}"#,
+                    )
+                    .to_owned();
+                    let _ = socket.write_all(respond(body, "application/json").as_bytes()).await;
+                } else if path == "/api/session/s1/message" {
+                    let _ = socket
+                        .write_all(respond(messages.to_owned(), "application/json").as_bytes())
+                        .await;
+                } else {
+                    let _ = socket
+                        .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
+                        .await;
+                }
+            }
+        });
+
+        let client = Client::new(&format!("http://{addr}")).expect("client");
+        let resync = HttpResync::new(client.clone());
+        let open_sessions = resync.open_sessions_handle();
+        // The run loop keeps this current from boot (tab open/close) —
+        // seed it BEFORE the connection so the first reconnect's
+        // fetch already sees the open session.
+        if let Ok(mut ids) = open_sessions.lock() {
+            *ids = vec!["s1".to_owned()];
+        }
+        let connection = Connection::with_config(
+            client,
+            ConnectionConfig {
+                backoff_base: Duration::from_millis(10),
+                backoff_max: Duration::from_millis(10),
+                max_attempts: Some(2),
+            },
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let runner = tokio::spawn(connection.run(tx, resync));
+
+        // The store side: an OPEN session tab feeds the open-session
+        // registry (the run loop's sync).
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Session one".to_owned()));
+        store.navigate(Route::Home);
+
+        let mut observed = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while observed.len() < 6 {
+            let Some(message) =
+                tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
+            else {
+                break;
+            };
+            // The run loop keeps the registry current between drains.
+            if let Ok(mut ids) = open_sessions.lock() {
+                *ids = store.open_session_ids();
+            }
+            store.ingest_all([message.clone()]);
+            observed.push(message);
+        }
+        let _ = runner.await;
+        server.abort();
+
+        // ONE ordered stream: live (connected marker + the raw
+        // server.connected + the live event) → reconnect transition →
+        // resync (sessions + unread + messages) → live.
+        assert_eq!(observed.len(), 6, "observed: {observed:?}");
+        assert!(matches!(observed[0], Ingest::Connected));
+        assert!(matches!(&observed[1], Ingest::Event(event) if event.id == "e1"));
+        assert!(matches!(&observed[2], Ingest::Event(event) if event.id == "e2"));
+        assert!(matches!(
+            &observed[3],
+            Ingest::Connection(ConnectionState::Reconnecting { attempt: 2 })
+        ));
+        let Ingest::Resync { sessions, unread, messages } = &observed[4] else {
+            panic!("resync snapshot: {observed:?}");
+        };
+        assert_eq!(sessions[0].title.as_deref(), Some("Resynced"));
+        assert_eq!(unread, &vec!["s1".to_owned()], "idle 100 > viewed 50");
+        // The OPEN session's message.list re-fetch carried the missed
+        // turn through the wire types.
+        assert_eq!(messages.len(), 1, "one open session refetched");
+        let (session_id, list) = &messages[0];
+        assert_eq!(session_id, "s1");
+        assert_eq!(list.len(), 2, "user + assistant");
+        assert!(
+            matches!(&list[0], crate::components::message::model::Message::User { text, .. } if text == "What does the parser do?")
+        );
+        assert!(
+            matches!(&list[1], crate::components::message::model::Message::Assistant { parts, finish, .. }
+                if parts.len() == 2 && finish.is_none())
+        );
+        // The store reconciled and live continued ON TOP: the tree is
+        // the resync's rebuilt pair, then the post-resync delta
+        // appended in order (the ingest loop applied all six).
+        assert!(matches!(&observed[5], Ingest::Event(event) if event.id == "e3"), "{observed:?}");
+        let after = store.messages("s1");
+        assert_eq!(after.len(), 3, "rebuilt pair + live delta, in order");
+        assert!(matches!(&after[0], crate::components::message::model::Message::User { text, .. }
+                if text == "What does the parser do?"));
+        assert!(
+            matches!(&after[1], crate::components::message::model::Message::Assistant { parts, .. }
+                if parts.len() == 2 && parts[1].text() == "It reads the configuration.")
+        );
+        assert!(
+            matches!(&after[2], crate::components::message::model::Message::Assistant { parts, .. }
+                if parts[0].text() == "Live after resync.")
+        );
+        // Unread derived (offline event + idle>viewed) and the title
+        // refreshed in place.
+        assert_eq!(store.tabs().tabs[0].title.as_deref(), Some("Resynced"));
+        assert!(store.tabs().unread.contains_key("s1"));
     }
 }

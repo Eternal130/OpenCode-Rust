@@ -30,8 +30,9 @@ use crate::components::footer::{FooterMachine, PromptRoute};
 use crate::components::message::model::{Message, Part, PartTime};
 use crate::components::toast::{ToastOptions, ToastQueue};
 use crate::data::{BusEvent, ConnectionState, Ingest};
+use crate::keymap::KeybindOverride;
 use crate::reactive::{Effect, Runtime, Signal};
-use crate::theme::ThemeState;
+use crate::theme::{ThemeRegistry, ThemeState};
 
 /// Route (`context/route.tsx`): home or a session view.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -328,6 +329,13 @@ pub struct Store {
     route: Signal<Route>,
     dialogs: Signal<Vec<DialogEntry>>,
     theme: Signal<ThemeState>,
+    /// The theme registry (builtins + discovered customs): the theme
+    /// dialog's data source; theme selection resolves through it.
+    registry: Signal<ThemeRegistry>,
+    /// The user keybind overrides (`cli.json` → `keybinds`); a write
+    /// here is the config-reload event the run loop re-merges into the
+    /// keymap from.
+    keybinds: Signal<Vec<KeybindOverride>>,
     connection: Signal<ConnectionState>,
     /// The mini footer state machine (view / route / blocker queues).
     footer: Signal<FooterMachine>,
@@ -357,6 +365,8 @@ impl Store {
         let route = Signal::new(&runtime, Route::Home);
         let dialogs = Signal::new(&runtime, Vec::<DialogEntry>::new());
         let theme = Signal::new(&runtime, ThemeState::v2_dark());
+        let registry = Signal::new(&runtime, ThemeRegistry::builtins());
+        let keybinds = Signal::new(&runtime, Vec::<KeybindOverride>::new());
         let connection = Signal::new(&runtime, ConnectionState::Connecting);
         let footer = Signal::new(&runtime, FooterMachine::new());
         let toasts = Signal::new(&runtime, ToastQueue::new());
@@ -372,6 +382,8 @@ impl Store {
         let watch_route = route.clone();
         let watch_dialogs = dialogs.clone();
         let watch_theme = theme.clone();
+        let watch_registry = registry.clone();
+        let watch_keybinds = keybinds.clone();
         let watch_connection = connection.clone();
         let watch_footer = footer.clone();
         let watch_toasts = toasts.clone();
@@ -384,6 +396,8 @@ impl Store {
                 watch_route.get(),
                 watch_dialogs.get(),
                 watch_theme.get(),
+                watch_registry.get(),
+                watch_keybinds.get(),
                 watch_connection.get(),
                 watch_footer.get(),
                 watch_toasts.get(),
@@ -399,6 +413,8 @@ impl Store {
             route,
             dialogs,
             theme,
+            registry,
+            keybinds,
             connection,
             footer,
             toasts,
@@ -519,11 +535,9 @@ impl Store {
     #[must_use]
     pub fn composer(&self, session_id: &str) -> Composer {
         let state = self.prompt.get();
-        Composer {
-            draft: state.drafts.get(session_id).cloned().unwrap_or_default(),
-            history: state.history,
-            ..Composer::default()
-        }
+        let draft = state.drafts.get(session_id).cloned().unwrap_or_default();
+        let caret = draft.text.chars().count();
+        Composer { draft, caret, history: state.history, ..Composer::default() }
     }
 
     /// Store a composer edit (draft + history advance together).
@@ -553,6 +567,13 @@ impl Store {
         let prompt = SubmittedPrompt { text: draft.text, files: draft.files, agents: draft.agents };
         self.prompt_sink.send(session_id, &prompt);
         Some(prompt)
+    }
+
+    /// Forward an already-taken submission to the engine sink (the
+    /// composer path: `Composer::handle_key` took the prompt and
+    /// recorded history itself — only the sink call remains).
+    pub fn forward_submission(&self, session_id: &str, prompt: &SubmittedPrompt) {
+        self.prompt_sink.send(session_id, prompt);
     }
 
     /// Swap the engine prompt sink (tests inject recorders; wave 3
@@ -778,6 +799,7 @@ impl Store {
         let entry =
             DialogEntry { kind, size, select: SelectState::default(), value: String::new() };
         self.dialogs.update(|stack| stack.push(entry));
+        self.focus_dialog_current();
     }
 
     /// Replace the whole stack with one dialog (`dialog.replace`):
@@ -789,6 +811,22 @@ impl Store {
         self.dialogs.update(|stack| {
             stack.clear();
             stack.push(entry);
+        });
+        self.focus_dialog_current();
+    }
+
+    /// A freshly-opened select dialog focuses its `current` option
+    /// (`DialogSelect` mount: `focus(current)` + the edge-follow reveal
+    /// — the theme list opens scrolled to the active theme).
+    fn focus_dialog_current(&self) {
+        let Some(entry) = self.top_dialog() else { return };
+        if matches!(entry.kind, DialogKind::SessionRename { .. }) {
+            return;
+        }
+        let props = crate::components::command_palette::select_props_for(&entry.kind, self);
+        self.update_dialog(|top| {
+            top.select.focus_current(&props);
+            top.select.reveal(&props, 30);
         });
     }
 
@@ -825,6 +863,52 @@ impl Store {
         self.theme.set(theme);
     }
 
+    /// The theme registry (builtins + discovered customs).
+    #[must_use]
+    pub fn registry(&self) -> ThemeRegistry {
+        self.registry.get()
+    }
+
+    /// Replace the registry (custom-theme discovery / hot reload).
+    pub fn set_registry(&self, registry: ThemeRegistry) {
+        self.registry.set(registry);
+    }
+
+    /// Select a theme by registry name in the current mode (unknown
+    /// names keep the current theme, like the reference's fallback to
+    /// `opencode`).
+    #[allow(clippy::must_use_candidate)] // fire-and-forget at the dispatch site
+    pub fn set_theme_by_name(&self, name: &str) -> bool {
+        let mode = self.theme.get().mode;
+        match self.registry.get().resolve(name, mode) {
+            Some(state) => {
+                self.theme.set(state);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The user keybind overrides (the config-reload event payload).
+    #[must_use]
+    pub fn keybinds(&self) -> Vec<KeybindOverride> {
+        self.keybinds.get()
+    }
+
+    /// Set the user keybind overrides — a write here IS the config
+    /// reload event: the run loop observes the change and re-merges
+    /// into the live keymap (user wins, unset removes).
+    pub fn set_keybinds(&self, overrides: Vec<KeybindOverride>) {
+        self.keybinds.set(overrides);
+    }
+
+    /// The open session IDs (tab order) — the resync's message.list
+    /// re-fetch set.
+    #[must_use]
+    pub fn open_session_ids(&self) -> Vec<String> {
+        self.tabs.get().tabs.iter().map(|tab| tab.session_id.clone()).collect()
+    }
+
     pub fn switch_theme_mode(&self, mode: oc_theme::types::Mode) {
         let mut theme = self.theme.get();
         theme.switch_mode(mode);
@@ -833,6 +917,12 @@ impl Store {
 
     pub fn set_connection(&self, state: ConnectionState) {
         self.connection.set(state);
+    }
+
+    /// A permission reply resolved the ask (the pump's reply path and
+    /// the SSE `permission.replied` reducer share this).
+    pub fn permission_replied(&self, request_id: &str) {
+        self.footer.update(|footer| footer.permission_replied(request_id));
     }
 
     // -- event ingest ----------------------------------------------------------
@@ -853,14 +943,16 @@ impl Store {
             Ingest::Connected => self.set_connection(ConnectionState::Connected),
             Ingest::Connection(state) => self.set_connection(state),
             Ingest::Event(event) => self.reduce_event(&event),
-            Ingest::Resync { sessions, unread } => {
+            Ingest::Resync { sessions, unread, messages } => {
                 // Reconcile AFTER the channel drained: refresh session
                 // titles in place (tab order preserved), keep unread
-                // marks the offline events re-established, and add the
-                // ones the resync reports. `unread` is already filtered
-                // by the data layer (`time.idle > time.viewed`, known
-                // timestamps only — no false unread on reconnect; see
-                // `crate::data::resync_unread`).
+                // marks the offline events re-established, add the
+                // ones the resync reports, and rebuild every open
+                // session's message tree from its `message.list`
+                // re-fetch (replacing the streamed tree wholesale —
+                // live events drained ahead of the snapshot are
+                // already inside the fetch; events after it continue
+                // applying on top).
                 self.tabs.update(|state| {
                     for session in &sessions {
                         state.tabs = model::open_session_tab(
@@ -875,6 +967,9 @@ impl Store {
                         state.unread.entry(id).or_insert(Unread::Activity);
                     }
                 });
+                for (session_id, list) in messages {
+                    self.set_messages(&session_id, list);
+                }
             }
         }
     }
@@ -973,6 +1068,38 @@ impl Store {
                 // (deltas below patch it part-wise).
                 if let Some(message) = message_from_event(event) {
                     self.project_message(&id, message);
+                }
+            }
+            // The user message arrives as an inbox item (`data.ts`:
+            // session.inbox.enqueued with item.type "user" →
+            // admitLocal inserts `{id: inboxID, ...item}` into the
+            // message list).
+            "session.inbox.enqueued" => {
+                let Some(session) = event.string("sessionID") else { return };
+                let active = self.tabs.get().active(&self.route.get());
+                if active.as_deref() != Some(session.as_str()) {
+                    self.set_unread(&session, Some(Unread::Activity));
+                }
+                let Some(item) = event.data.get("item") else { return };
+                if item.get("type").and_then(Value::as_str) == Some("user") {
+                    let id = event.string("inboxID").unwrap_or_else(|| event.id.clone());
+                    let text = item
+                        .pointer("/payload/text")
+                        .or_else(|| item.get("text"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let created = event.created.unwrap_or(0);
+                    // `event.created` is epoch SECONDS on this event —
+                    // match the transcript's ms convention loosely (the
+                    // label renders relative time).
+                    self.project_message(
+                        &session,
+                        crate::components::message::model::Message::User {
+                            id,
+                            text: text.to_owned(),
+                            created,
+                        },
+                    );
                 }
             }
             // -- lane C: SSE message-part reducers (`rows.ts` subscriptions) --
@@ -1510,6 +1637,7 @@ mod tests {
                     viewed: None,
                 }],
                 unread: vec!["a".to_owned()],
+                messages: Vec::new(),
             },
         ]);
         let tabs = store.tabs();

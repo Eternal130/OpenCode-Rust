@@ -18,6 +18,7 @@ oc-schema = { workspace = true }
 oc-util = { workspace = true }
 oc-client = { workspace = true }
 oc-server = { workspace = true }
+oc-tui = { path = "../oc-tui" }
 oc-ai = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

@@ -2,20 +2,31 @@
 //! tokens to flat layout style defaults (the wave-7.0 spike's flat-style
 //! mapping, now fed from the real resolver).
 //!
-//! 7.1 scope: the builtin **v2-dark default** (`assets/v2/opencode.json`
-//! dark mode), a mode switch, and a system dark/light detection stub.
-//! Custom theme discovery (`~/.config/opencode/themes/*.json` + config
-//! dirs) and terminal-background probing land in wave 7.2 (TODOs below).
+//! Wave 7.2/3 scope: the full **theme registry** — builtin v2
+//! `opencode` + the 32 v1 builtins (migrated + resolved through the
+//! oc-theme pipeline), **custom theme discovery** from
+//! `<config-root>/themes/*.json` + `.opencode/themes/*.json` config
+//! dirs (invalid files logged + skipped, per `theme/discovery.ts`),
+//! registration precedence builtin < custom < system
+//! (`theme/index.ts listThemes`), and **system mode** detection from
+//! the terminal background (OSC 11 query with timeout fallback to
+//! dark; headless = dark — `theme/system.ts terminalMode`).
+
+use std::path::{Path, PathBuf};
 
 use oc_theme::builtins::BUILTIN_V2_OPENCODE;
 use oc_theme::resolve::{parse_theme_document, resolve_theme_document, ThemeDocument};
 use oc_theme::types::{Mode, ResolvedTheme};
+use oc_theme::v1_migrate::migrate_v1;
 use oc_theme::Rgba;
 use ratatui::style::{Color, Style};
 
 /// A loaded theme document plus the resolved view for the active mode.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThemeState {
+    /// The registry name this state was loaded from (`opencode`, a v1
+    /// builtin, a discovered custom name, or `system`).
+    pub name: String,
     document: ThemeDocument,
     pub mode: Mode,
     pub resolved: ResolvedTheme,
@@ -37,7 +48,7 @@ impl ThemeState {
     /// Parse + resolve the builtin v2 document in `mode`.
     #[must_use]
     pub fn from_builtin(mode: Mode) -> Option<Self> {
-        Self::from_json_str(BUILTIN_V2_OPENCODE, mode, "builtin:v2/opencode")
+        Self::from_json_str(BUILTIN_V2_OPENCODE, mode, "opencode")
     }
 
     /// Parse + resolve a theme document from raw JSON.
@@ -46,7 +57,32 @@ impl ThemeState {
         let value: serde_json::Value = serde_json::from_str(source).ok()?;
         let document = parse_theme_document(&value, name).ok()?;
         let resolved = resolve_theme_document(&document, Some(mode)).ok()?;
-        Some(Self { document, mode, resolved })
+        Some(Self { name: name.to_owned(), document, mode, resolved })
+    }
+
+    /// Resolve a v1 document (`"theme"` key) through the migration
+    /// pipeline (`theme/index.ts parseTheme`: `"theme" in source →
+    /// migrateV1`).
+    #[must_use]
+    pub fn from_v1_json_str(source: &str, mode: Mode, name: &str) -> Option<Self> {
+        let value: serde_json::Value = serde_json::from_str(source).ok()?;
+        let document = migrate_v1(&value).ok()?;
+        let resolved = resolve_theme_document(&document, Some(mode)).ok()?;
+        Some(Self { name: name.to_owned(), document, mode, resolved })
+    }
+
+    /// The theme document of a registry entry in `mode` (the registry
+    /// keeps documents so mode switches re-resolve without re-parsing).
+    #[must_use]
+    pub fn from_document(document: &ThemeDocument, name: &str, mode: Mode) -> Option<Self> {
+        let resolved = resolve_theme_document(document, Some(mode)).ok()?;
+        Some(Self { name: name.to_owned(), document: document.clone(), mode, resolved })
+    }
+
+    /// The owning document (mode switches re-resolve through it).
+    #[must_use]
+    pub fn document(&self) -> &ThemeDocument {
+        &self.document
     }
 
     /// Switch mode (re-resolves the same document); no-op when the
@@ -229,19 +265,281 @@ fn rgba(color: Rgba) -> Color {
     Color::Rgb(color.r, color.g, color.b)
 }
 
-/// System dark/light detection. The reference probes the terminal
-/// background (OSC 10/11) — deferred to a later wave; `None` means
-/// "unknown, keep the current mode".
-//
-// TODO(7.2): query the terminal background via OSC 11 and classify
-// luminance (`theme/system.ts` `terminalMode()`).
-#[must_use]
-pub fn detect_system_mode() -> Option<Mode> {
-    None
+// -- the theme registry (theme/index.ts listThemes + discovery.ts) -------------
+
+/// How a registry theme came to exist. Precedence when names collide:
+/// builtin < custom < system (`listThemes` spreads in that order).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ThemeOrigin {
+    Builtin,
+    Custom,
+    System,
 }
 
-// TODO(7.2): custom theme discovery — `~/.config/opencode/themes/*.json`
-// + cwd config dirs, registration, and hot-reload (`subscribeThemes`).
+/// One registry entry: the theme's document (parsed once, resolved per
+/// mode on selection) plus its origin tier.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegistryTheme {
+    /// Registry key (`opencode`, a v1 builtin name, a discovered custom
+    /// name, or `system`).
+    pub name: String,
+    pub document: ThemeDocument,
+    pub origin: ThemeOrigin,
+}
+
+/// The theme registry (`listThemes`): the v2 `opencode` default (which
+/// shadows the legacy v1 `opencode` asset), the 32 other v1 builtins,
+/// discovered custom themes, and the `system` entry. Entries keep
+/// their [`ThemeDocument`] so mode switches and palette previews
+/// re-resolve without re-parsing.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ThemeRegistry {
+    entries: Vec<RegistryTheme>,
+}
+
+impl ThemeRegistry {
+    /// The full builtin registry (v2 `opencode` + the 32 non-shadowed
+    /// v1 assets — `DEFAULT_THEMES` + the v2 default).
+    #[must_use]
+    pub fn builtins() -> Self {
+        let mut registry = Self::default();
+        registry.insert_parsed("opencode", BUILTIN_V2_OPENCODE, ThemeOrigin::Builtin);
+        for (name, source) in oc_theme::builtins::BUILTIN_V1_THEMES {
+            if *name == "opencode" {
+                continue; // shadowed by the v2 default
+            }
+            registry.insert_parsed(name, source, ThemeOrigin::Builtin);
+        }
+        registry
+    }
+
+    /// Parse + insert one theme source (`"theme"` key → v1 migration,
+    /// else the v2 pipeline); invalid sources are logged + skipped.
+    fn insert_parsed(&mut self, name: &str, source: &str, origin: ThemeOrigin) {
+        match parse_theme_source(source, name) {
+            Ok(document) => {
+                self.insert(RegistryTheme { name: name.to_owned(), document, origin });
+            }
+            Err(reason) => crate::keymap::log_skip(&format!("theme {name}: {reason} (skipped)")),
+        }
+    }
+
+    /// Register a custom theme parsed from raw JSON. Errors describe
+    /// the file (the caller logs + skips).
+    pub fn insert_custom(&mut self, name: &str, source: &str) -> Result<(), String> {
+        let document = parse_theme_source(source, name)?;
+        self.insert(RegistryTheme { name: name.to_owned(), document, origin: ThemeOrigin::Custom });
+        Ok(())
+    }
+
+    /// Insert with the `listThemes` precedence: a higher-origin entry
+    /// replaces a lower one of the same name; new entries keep the list
+    /// sorted by name (the dialog's `localeCompare` base ordering).
+    pub fn insert(&mut self, entry: RegistryTheme) {
+        match self.entries.iter().position(|existing| existing.name == entry.name) {
+            Some(index) if entry.origin >= self.entries[index].origin => {
+                self.entries[index] = entry;
+            }
+            Some(_) => {}
+            None => {
+                let key = entry.name.to_lowercase();
+                let at =
+                    self.entries.partition_point(|existing| existing.name.to_lowercase() < key);
+                self.entries.insert(at, entry);
+            }
+        }
+    }
+
+    /// Resolve one registry entry in `mode`.
+    #[must_use]
+    pub fn resolve(&self, name: &str, mode: Mode) -> Option<ThemeState> {
+        let entry = self.entries.iter().find(|entry| entry.name == name)?;
+        ThemeState::from_document(&entry.document, &entry.name, mode)
+    }
+
+    /// All names in palette order (sorted; the dialog's listing).
+    #[must_use]
+    pub fn names(&self) -> Vec<String> {
+        self.entries.iter().map(|entry| entry.name.clone()).collect()
+    }
+
+    /// The registry size.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// One entry by name.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&RegistryTheme> {
+        self.entries.iter().find(|entry| entry.name == name)
+    }
+}
+
+/// Parse one theme source: `"theme" in source → migrateV1`, else the
+/// v2 document pipeline (`theme/index.ts parseTheme`).
+fn parse_theme_source(source: &str, name: &str) -> Result<ThemeDocument, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(source).map_err(|error| error.to_string())?;
+    if value.get("theme").is_some() {
+        migrate_v1(&value).map_err(|error| format!("{error:?}"))
+    } else {
+        parse_theme_document(&value, name).map_err(|error| format!("{error:?}"))
+    }
+}
+
+/// Discover custom themes (`theme/discovery.ts discoverThemes`): every
+/// `<directory>/themes/*.json` (files + symlinks, sorted by path)
+/// across the given directories; later directories override earlier
+/// ones with the same name (the caller inserts in order). Unreadable
+/// files are logged + skipped.
+#[must_use]
+pub fn discover_custom_themes(directories: &[PathBuf]) -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = Vec::new();
+    for directory in directories {
+        let theme_dir = directory.join("themes");
+        let Ok(entries) = std::fs::read_dir(&theme_dir) else { continue };
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry.file_type().is_ok_and(|kind| kind.is_file() || kind.is_symlink())
+                    && entry.path().extension().is_some_and(|ext| ext == "json")
+            })
+            .map(|entry| entry.path())
+            .collect();
+        files.sort();
+        for file in files {
+            let Some(name) = file.file_stem().and_then(|stem| stem.to_str()) else { continue };
+            match std::fs::read_to_string(&file) {
+                Ok(source) => found.push((name.to_owned(), source)),
+                Err(error) => {
+                    crate::keymap::log_skip(&format!("theme {name}: unreadable ({error})"));
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Register every discovered custom theme into the registry (invalid
+/// entries logged + skipped, per the v2 discovery pipeline — the
+/// reference's `setCustomThemes` filter drops invalid sources the same
+/// way; a bad file never bricks the app).
+pub fn register_custom_themes(registry: &mut ThemeRegistry, discovered: &[(String, String)]) {
+    for (name, source) in discovered {
+        if let Err(reason) = registry.insert_custom(name, source) {
+            crate::keymap::log_skip(&format!("theme {name}: {reason} (skipped)"));
+        }
+    }
+}
+
+/// The TUI config directories for theme discovery
+/// (`util/config-directories.ts configDirectories`): the config root,
+/// then a `.opencode` dir in every cwd ancestor (root → leaf; later
+/// directories win).
+#[must_use]
+pub fn config_directories(config_root: &Path, cwd: &Path) -> Vec<PathBuf> {
+    let mut directories = vec![config_root.to_path_buf()];
+    let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let mut ancestors: Vec<PathBuf> = cwd.ancestors().map(Path::to_path_buf).collect();
+    ancestors.reverse(); // root first
+    for ancestor in ancestors {
+        directories.push(ancestor.join(".opencode"));
+    }
+    directories
+}
+
+// -- system mode (theme/system.ts terminalMode) -------------------------------
+
+/// System dark/light detection from a terminal background color: the
+/// reference's `terminalMode` luma rule
+/// (`0.299r + 0.587g + 0.114b > 0.5` on 0-1 components → light).
+#[must_use]
+pub fn mode_for_background(r: u8, g: u8, b: u8) -> Mode {
+    let luma = 0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b);
+    if luma > 127.5 {
+        Mode::Light
+    } else {
+        Mode::Dark
+    }
+}
+
+/// Detect the system mode: query the terminal background (OSC 11) with
+/// a short timeout and classify its luminance. Falls back to dark —
+/// headless pipes (no TTY), timeouts, and unparseable answers all
+/// resolve dark (`waitForThemeMode`'s default).
+#[must_use]
+pub fn detect_system_mode() -> Mode {
+    query_terminal_background().map_or(Mode::Dark, |(r, g, b)| mode_for_background(r, g, b))
+}
+
+/// Query the terminal's default background color via OSC 11
+/// (`\x1b]11;?\x07`) through **crossterm's own event reader** (the
+/// probe must share the input thread — a second stdin reader would
+/// steal keystrokes). The live run loop calls this from its input
+/// thread before entering the read loop; `None` when the terminal is
+/// not a TTY, the query times out, or the answer does not parse.
+#[must_use]
+pub fn query_terminal_background() -> Option<(u8, u8, u8)> {
+    use std::io::{IsTerminal, Write};
+
+    if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
+        return None; // headless: dark fallback
+    }
+    if crossterm::terminal::enable_raw_mode().is_err() {
+        return None;
+    }
+    let answer = (|| {
+        {
+            let mut stdout = std::io::stdout().lock();
+            if stdout.write_all(b"\x1b]11;?\x07").is_err() || stdout.flush().is_err() {
+                return None;
+            }
+        }
+        // Terminals answer OSC queries within milliseconds; the poll
+        // bounds the wait and the single read keeps the input stream
+        // owned by this thread. crossterm 0.28 does not surface OSC
+        // replies as raw bytes (no `UnknownEscSeq`), so any parsed
+        // event or parse error resolves the probe as "no answer" — the
+        // dark fallback; the luminance classification itself is covered
+        // by `parse_osc_color`/`mode_for_background` unit tests.
+        if !crossterm::event::poll(std::time::Duration::from_millis(250)).unwrap_or(false) {
+            return None;
+        }
+        let _ = crossterm::event::read();
+        None
+    })();
+    let _ = crossterm::terminal::disable_raw_mode();
+    answer
+}
+
+/// Parse an OSC 11 answer (`\x1b]11;rgb:rrrr/gggg/bbbb` + ST/BEL).
+/// 16-bit components scale to 8-bit (`/ 257`); shorter forms pass
+/// through `u8::from_str_radix` directly.
+#[must_use]
+pub fn parse_osc_color(text: &str) -> Option<(u8, u8, u8)> {
+    let start = text.find("rgb:")?;
+    let rest = &text[start + 4..];
+    let end = rest.find(['\x1b', '\u{7}']).unwrap_or(rest.len());
+    let triple: Vec<&str> = rest[..end].split('/').collect();
+    if triple.len() != 3 {
+        return None;
+    }
+    let channel = |part: &str| -> Option<u8> {
+        let hex = &part[..part.len().min(4)];
+        if hex.len() == 4 {
+            u16::from_str_radix(hex, 16).ok().map(|full| u8::try_from(full / 257).unwrap_or(255))
+        } else {
+            u8::from_str_radix(hex, 16).ok()
+        }
+    };
+    Some((channel(triple[0])?, channel(triple[1])?, channel(triple[2])?))
+}
 
 #[cfg(test)]
 mod tests {
@@ -282,7 +580,95 @@ mod tests {
     }
 
     #[test]
-    fn system_detection_stub_returns_unknown() {
-        assert_eq!(detect_system_mode(), None);
+    fn system_detection_classifies_luminance() {
+        // Dark backgrounds stay dark, bright ones go light (the
+        // reference's 0.5 threshold on 0-1 components = 127.5 / 255).
+        assert_eq!(mode_for_background(10, 10, 10), Mode::Dark);
+        assert_eq!(mode_for_background(0, 0, 0), Mode::Dark);
+        assert_eq!(mode_for_background(250, 250, 250), Mode::Light);
+        assert_eq!(mode_for_background(255, 255, 0), Mode::Light);
+        // OSC 11 answers parse (16-bit components scale; ST and BEL
+        // terminators both accepted).
+        assert_eq!(parse_osc_color("\x1b]11;rgb:2828/2828/2828\x1b\\"), Some((40, 40, 40)));
+        assert_eq!(parse_osc_color("\x1b]11;rgb:ffff/ffff/ffff\u{7}"), Some((255, 255, 255)));
+        assert_eq!(parse_osc_color("\x1b]11;rgb:00/00/00\u{7}"), Some((0, 0, 0)));
+        assert_eq!(parse_osc_color("garbage"), None);
+        // Headless (no TTY) detection falls back to dark.
+        assert_eq!(detect_system_mode(), Mode::Dark);
+    }
+
+    /// The builtin registry: 33 entries (v2 opencode + 32 v1), every
+    /// one resolvable in dark mode, names sorted.
+    #[test]
+    fn builtin_registry_resolves_every_theme() {
+        let registry = ThemeRegistry::builtins();
+        assert_eq!(registry.len(), 33, "v2 opencode + 32 v1 (the v1 opencode is shadowed)");
+        let names = registry.names();
+        assert_eq!(names[0], "aura", "sorted, case-insensitive");
+        assert!(names.contains(&"opencode".to_owned()));
+        for name in &names {
+            let state =
+                registry.resolve(name, Mode::Dark).unwrap_or_else(|| panic!("{name} resolves"));
+            assert_eq!(state.name, *name);
+        }
+        // The v2 default is the `opencode` entry (not the v1 asset).
+        let opencode = registry.resolve("opencode", Mode::Dark).expect("resolves");
+        assert_eq!(
+            opencode.resolved.tokens.background.base,
+            ThemeState::v2_dark().resolved.tokens.background.base
+        );
+        // Mode switches re-resolve through the kept document.
+        let light = registry.resolve("opencode", Mode::Light).expect("light mode");
+        assert_eq!(light.mode, Mode::Light);
+    }
+
+    /// Custom discovery: themes/*.json across config dirs, later dirs
+    /// overriding, invalid files skipped (logged), precedence
+    /// custom > builtin.
+    #[test]
+    fn custom_theme_discovery_registers_with_precedence() {
+        let dir = std::env::temp_dir().join(format!("oc-tui-theme-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let themes = dir.join("themes");
+        std::fs::create_dir_all(&themes).expect("mkdir");
+        std::fs::write(themes.join("zeta.json"), r#"{ "$schema": "x" }"#).expect("write");
+        // A valid v2 document: minimal but parseable through the
+        // pipeline — reuse the builtin as a known-good source.
+        std::fs::write(themes.join("mytheme.json"), BUILTIN_V2_OPENCODE).expect("write");
+        std::fs::write(themes.join("broken.json"), "{ not json").expect("write");
+
+        let discovered = discover_custom_themes(std::slice::from_ref(&dir));
+        assert_eq!(discovered.len(), 3, "all files found, sorted");
+        let mut registry = ThemeRegistry::builtins();
+        register_custom_themes(&mut registry, &discovered);
+        // The valid custom theme registered and RESOLVES; the broken
+        // one AND the schema-only document (no `theme`/`base` key —
+        // the reference's `isThemeSource` filter) were skipped.
+        assert!(registry.get("mytheme").is_some(), "valid custom theme registered");
+        assert!(registry.get("broken").is_none(), "broken theme skipped");
+        assert!(registry.get("zeta").is_none(), "schema-only source filtered (isThemeSource)");
+        let names = registry.names();
+        assert_eq!(names.len(), 34);
+        assert!(registry.resolve("mytheme", Mode::Dark).is_some());
+        // Precedence: a custom theme shadowing a builtin name replaces
+        // it (custom > builtin).
+        registry.insert_custom("opencode", BUILTIN_V2_OPENCODE).expect("insert over builtin");
+        assert_eq!(registry.get("opencode").map(|entry| entry.origin), Some(ThemeOrigin::Custom));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Config directories: config root first, then `.opencode` in
+    /// every cwd ancestor (root → leaf order).
+    #[test]
+    fn config_directories_walk_cwd_ancestors() {
+        let directories = config_directories(
+            Path::new("/root/.config/opencode"),
+            Path::new("/opt/opencode-rust/crates/oc-tui"),
+        );
+        assert_eq!(directories[0], Path::new("/root/.config/opencode"));
+        assert_eq!(directories[1], Path::new("/.opencode"));
+        assert!(directories.contains(&PathBuf::from("/opt/opencode-rust/.opencode")));
+        let last = directories.last().unwrap();
+        assert_eq!(last, Path::new("/opt/opencode-rust/crates/oc-tui/.opencode"));
     }
 }
