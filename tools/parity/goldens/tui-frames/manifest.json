@@ -1356,6 +1356,26 @@
       "file": "replay/permission-once-always-deny.json",
       "bytes": 1917,
       "sha256": "f4a6c274d3924454e90b81b15d25a2a4b85c1e3e6d11cf121c71186a878505fd"
+    },
+    {
+      "id": "session-list-leader-l",
+      "description": "Session list dialog: <leader>l opens the Sessions dialog (search + the project's sessions listed, delete/rename + all-projects footer); typing filters the search field; Escape closes back to the prompt",
+      "source": "recorded against the booted reference app (createAppFixture, sessions Alpha/Beta served by the fixture server) — src/app.tsx session.list via DialogSessions; keys ctrl+x then l per config/keybind.ts session.list = '<leader>l'",
+      "keys": "kitty",
+      "steps": 3,
+      "file": "replay/session-list-leader-l.json",
+      "bytes": 1181,
+      "sha256": "8e28b1b8a3323cc0417b43c01c2fb4e2c1de8082436089608303d1c000852d72"
+    },
+    {
+      "id": "theme-dialog-select",
+      "description": "Theme selection: the command palette filtered to 'theme' runs 'Switch theme' opening the Themes dialog (registry names sorted, the current theme marked); filtering to 'nord' narrows to the one row and Enter selects it, closing the dialog",
+      "source": "recorded against the booted reference app (createAppFixture) — src/app.tsx theme.switch via the palette; component/dialog-theme-list.tsx lists Object.keys(themes.all()).sort() with themes.set(opt.value) on select",
+      "keys": "kitty",
+      "steps": 5,
+      "file": "replay/theme-dialog-select.json",
+      "bytes": 1595,
+      "sha256": "d4377018f4bdb436bb89c7ff7db1f2f30048321522c97cf548297115cb7f4138"
     }
   ]
 }

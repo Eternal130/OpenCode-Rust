@@ -1,0 +1,50 @@
+{
+  "id": "session-list-leader-l",
+  "description": "Session list dialog: <leader>l opens the Sessions dialog (search + the project's sessions listed, delete/rename + all-projects footer); typing filters the search field; Escape closes back to the prompt",
+  "source": "recorded against the booted reference app (createAppFixture, sessions Alpha/Beta served by the fixture server) — src/app.tsx session.list via DialogSessions; keys ctrl+x then l per config/keybind.ts session.list = '<leader>l'",
+  "keys": "kitty",
+  "steps": [
+    {
+      "keys": [
+        "ctrl+x",
+        "l"
+      ],
+      "expect": {
+        "frameIncludes": [
+          "Sessions",
+          "Alpha",
+          "Beta"
+        ],
+        "dialogs": 1,
+        "focus": "dialog"
+      }
+    },
+    {
+      "keys": [
+        "B",
+        "e",
+        "t",
+        "a"
+      ],
+      "expect": {
+        "frameIncludes": [
+          "Beta"
+        ],
+        "dialogs": 1,
+        "focus": "dialog"
+      }
+    },
+    {
+      "keys": [
+        "escape"
+      ],
+      "expect": {
+        "frameExcludes": [
+          "Sessions"
+        ],
+        "dialogs": 0,
+        "focus": "prompt"
+      }
+    }
+  ]
+}

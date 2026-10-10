@@ -130,22 +130,36 @@ fn target_dir() -> PathBuf {
 /// The built server binary path, building it first when missing.
 fn server_binary() -> Result<PathBuf> {
     let binary = target_dir().join("debug").join("oc-server");
+    build_binary("oc-server", "oc-server", &binary)
+}
+
+/// The built `opencode` CLI binary path (the TUI smoke drives it),
+/// building it first when missing.
+///
+/// # Errors
+/// When cargo cannot build the binary.
+pub fn cli_binary() -> Result<PathBuf> {
+    let binary = target_dir().join("debug").join("opencode");
+    build_binary("oc-cli", "opencode", &binary)
+}
+
+fn build_binary(package: &str, bin: &str, binary: &std::path::Path) -> Result<PathBuf> {
     if binary.is_file() {
-        return Ok(binary);
+        return Ok(binary.to_path_buf());
     }
     let status = std::process::Command::new("cargo")
         .arg("build")
         .arg("-p")
-        .arg("oc-server")
+        .arg(package)
         .arg("--bin")
-        .arg("oc-server")
+        .arg(bin)
         .current_dir(workspace_root())
         .status()
-        .context("cargo build oc-server")?;
+        .with_context(|| format!("cargo build {package}"))?;
     if !status.success() || !binary.is_file() {
-        return Err(anyhow!("cargo build oc-server failed (status {status})"));
+        return Err(anyhow!("cargo build {package} failed (status {status})"));
     }
-    Ok(binary)
+    Ok(binary.to_path_buf())
 }
 
 /// Test helper: skip when the harness cannot build the Rust server (no

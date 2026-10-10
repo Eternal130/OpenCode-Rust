@@ -1,146 +1,15 @@
-//! Keypress replay harness — the seed of the wave-3 key-replay
-//! framework: a minimal pump that feeds key strings through the keymap
-//! into the store (route commands through the command dispatcher,
-//! dialog keys through the dialog framework's modal layer), pumps the
-//! reactive runtime, renders the app frame and evaluates replay-script
-//! expectations (`tools/parity/goldens/tui-frames/replay/*.json`).
+//! Keypress replay harness — the wave-3 app-level keypress pump
+//! ([`crate::app::App`]: store + keymap + dispatcher + composer +
+//! footer blockers + render) driven by replay scripts
+//! (`tools/parity/goldens/tui-frames/replay/*.json`).
 //!
-//! Pipeline per stroke: `keys → KeyStroke::parse → keymap (mode-synced)
-//! → store (dispatcher / dialog layer) → run_effects → render →
-//! expectations`.
+//! Pipeline per stroke: `keys → KeyStroke::parse → keymap (layer
+//! order: dialog → permission → gated exit → textarea → input/base) →
+//! store (dispatcher / composer / permission body) → run_effects →
+//! render → expectations`. Frame checks run against the LIVE render
+//! (route + blockers + dialog overlay).
 
-use crate::components::command_palette::{CommandDispatcher as _, Dispatch, StoreDispatcher};
-use crate::components::dialog::{
-    execute_submission, handle_dialog_key, render_app, DialogKeyOutcome,
-};
-use crate::keymap::{KeyStroke, Keymap, ManualClock, Outcome};
-use crate::render::Frame;
-use crate::store::{Focus, Store};
-use crate::theme::ThemeState;
-
-/// The headless app: store + keymap + dispatcher + render, with the
-/// keymap's `dialog` mode kept in sync with the dialog stack.
-pub struct AppPump {
-    pub store: Store,
-    keymap: Keymap,
-    clock: ManualClock,
-    dispatcher: StoreDispatcher,
-    dialog_mode: bool,
-    theme: ThemeState,
-    size: (u16, u16),
-    /// Whether the exit command fired (the run-loop teardown itself is
-    /// wave 3).
-    pub exit_requested: bool,
-}
-
-impl AppPump {
-    #[must_use]
-    pub fn new(size: (u16, u16)) -> Self {
-        Self {
-            store: Store::new(crate::reactive::Runtime::new()),
-            keymap: Keymap::new(),
-            clock: ManualClock::default(),
-            dispatcher: StoreDispatcher,
-            dialog_mode: false,
-            theme: ThemeState::v2_dark(),
-            size,
-            exit_requested: false,
-        }
-    }
-
-    /// Feed one key spec ("ctrl+p", "r", "enter", "leader" chords come
-    /// as separate strokes). Replay-script key tokens use the kitty
-    /// vocabulary; the reference keymap expands the aliases
-    /// (`enter → return`, `esc → escape`, `pgdown/pgup → page…`).
-    pub fn press(&mut self, spec: &str) {
-        self.sync_dialog_mode();
-        let expanded = match spec {
-            "enter" => "return",
-            "esc" => "escape",
-            "pgdown" => "pagedown",
-            "pgup" => "pageup",
-            other => other,
-        };
-        let Some(stroke) = KeyStroke::parse(expanded) else { return };
-        if self.store.focus() == Focus::Dialog {
-            self.stroke_in_dialog(stroke);
-        } else {
-            self.stroke_on_route(stroke);
-        }
-        self.sync_dialog_mode();
-        self.store.runtime.run_effects();
-    }
-
-    fn stroke_in_dialog(&mut self, stroke: KeyStroke) {
-        // The pump owns the keymap; the dialog layer borrows it for the
-        // dialog.* commands — split borrows via a temporary take.
-        let mut keymap = std::mem::take(&mut self.keymap);
-        let outcome = handle_dialog_key(&self.store, &mut keymap, &self.clock, stroke, self.size);
-        self.keymap = keymap;
-        match outcome {
-            DialogKeyOutcome::Submitted(value) => {
-                let dispatch = execute_submission(&self.store, &mut self.dispatcher, &value);
-                if let Dispatch::ServerPending(_) = dispatch {
-                    // Server-backed submissions close the palette and
-                    // surface nothing further in wave 1.
-                }
-            }
-            DialogKeyOutcome::PromptSubmitted(value) => self.submit_rename(&value),
-            _ => {}
-        }
-    }
-
-    fn stroke_on_route(&mut self, stroke: KeyStroke) {
-        if let Outcome::Command { command, args } = self.keymap.lookup(stroke, &self.clock) {
-            let dispatch = self.dispatcher.dispatch(&self.store, &command, args.as_deref());
-            if command == "app.exit" && dispatch != Dispatch::Unknown {
-                self.exit_requested = true;
-            }
-        }
-    }
-
-    /// Rename submit: update the tab title locally; the server call is
-    /// wave-3 oc-client wiring (TODO(7.3): `session.update`).
-    fn submit_rename(&mut self, value: &str) {
-        let dialogs = self.store.dialogs();
-        if let Some(entry) = dialogs.last() {
-            if let crate::store::DialogKind::SessionRename { session_id } = &entry.kind {
-                let session_id = session_id.clone();
-                if !value.is_empty() {
-                    self.store.open_tab(&session_id, Some(value.to_owned()));
-                }
-            }
-        }
-        self.store.clear_dialogs();
-    }
-
-    /// Keep the keymap's `dialog` mode aligned with the dialog stack
-    /// (the reference pushes keymap mode `modal` while dialogs are
-    /// open — our dialog.* commands live in the `dialog` layer).
-    fn sync_dialog_mode(&mut self) {
-        let want = !self.store.dialogs().is_empty();
-        if want != self.dialog_mode {
-            if want {
-                self.keymap.push_mode("dialog");
-            } else {
-                self.keymap.pop_mode();
-            }
-            self.dialog_mode = want;
-        }
-    }
-
-    /// Render the current app frame (route + overlay).
-    #[must_use]
-    pub fn frame(&self) -> Frame {
-        render_app(&self.store, &self.theme, self.size)
-    }
-
-    /// The frame as one text block (the `frameIncludes` surface).
-    #[must_use]
-    pub fn frame_text(&self) -> String {
-        self.frame().text_grid().join("\n")
-    }
-}
+use crate::app::App;
 
 // -- replay scripts ------------------------------------------------------------
 
@@ -152,6 +21,8 @@ pub struct ReplayStep {
     pub expect_excludes: Vec<String>,
     pub expect_dialogs: Option<usize>,
     pub expect_focus: Option<String>,
+    pub expect_route: Option<(String, Option<String>)>,
+    pub expect_exit: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -174,6 +45,11 @@ pub fn parse_script(json: &str) -> Option<ReplayScript> {
             .filter_map(|key| key.as_str().map(str::to_owned))
             .collect();
         let expect = step.get("expect").cloned().unwrap_or(serde_json::Value::Null);
+        let route = expect.get("route").and_then(|route| {
+            let kind = route.get("type")?.as_str()?.to_owned();
+            let session = route.get("sessionID").and_then(|id| id.as_str()).map(str::to_owned);
+            Some((kind, session))
+        });
         steps.push(ReplayStep {
             keys,
             expect_includes: string_array(expect.get("frameIncludes")),
@@ -186,6 +62,8 @@ pub fn parse_script(json: &str) -> Option<ReplayScript> {
                 .get("focus")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
+            expect_route: route,
+            expect_exit: expect.get("exit").and_then(serde_json::Value::as_bool),
         });
     }
     Some(ReplayScript { id, steps })
@@ -198,11 +76,27 @@ fn string_array(value: Option<&serde_json::Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The outcome of running one step's expectations against a pump.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StepCheck {
-    Pass,
-    Fail(String),
+/// The per-script scenario setup: the permission script's two asks are
+/// armed by its recorded server-side flow (ask 1 before step 0, ask 2
+/// once the once-reply resolves, after step 2) — the pump cannot
+/// fabricate SSE events itself.
+fn arm_scenario(script: &str, app: &mut App, before_step: usize) {
+    if script != "permission-once-always-deny" {
+        return;
+    }
+    let request = |id: &str| crate::components::footer::PermissionRequest {
+        id: id.to_owned(),
+        session_id: "ses_replay".to_owned(),
+        action: "read".to_owned(),
+        resources: vec!["src/index.ts".to_owned()],
+        save: vec!["src/**".to_owned()],
+        ..crate::components::footer::PermissionRequest::default()
+    };
+    match before_step {
+        0 => crate::app::ask_permission(&app.store, &request("per_1")),
+        3 => crate::app::ask_permission(&app.store, &request("per_2")),
+        _ => {}
+    }
 }
 
 /// Run every step of a script against a fresh pump; the first failure
@@ -210,9 +104,15 @@ pub enum StepCheck {
 /// app-lifecycle fixture (an active session — session-scoped commands
 /// like rename need one) at its default 100×30 terminal.
 pub fn run_script(script: &ReplayScript, size: (u16, u16)) -> Result<(), String> {
-    let mut pump = AppPump::new(size);
-    pump.store.open_tab("ses_test", Some("Test session".to_owned()));
+    let mut pump = App::new(size);
+    arm_scenario(&script.id, &mut pump, 0);
+    if script.id != "permission-once-always-deny" {
+        pump.store.open_tab("ses_test", Some("Test session".to_owned()));
+    }
     for (index, step) in script.steps.iter().enumerate() {
+        if index > 0 {
+            arm_scenario(&script.id, &mut pump, index);
+        }
         for key in &step.keys {
             pump.press(key);
         }
@@ -225,7 +125,7 @@ pub fn run_script(script: &ReplayScript, size: (u16, u16)) -> Result<(), String>
         }
         for needle in &step.expect_excludes {
             if frame.contains(needle.as_str()) {
-                return Err(format!("step {index}: frame must not include {needle:?}"));
+                return Err(format!("step {index}: frame must not include {needle:?}\n{frame}"));
             }
         }
         if let Some(want) = step.expect_dialogs {
@@ -235,35 +135,115 @@ pub fn run_script(script: &ReplayScript, size: (u16, u16)) -> Result<(), String>
             }
         }
         if let Some(want) = &step.expect_focus {
-            let got = match pump.store.focus() {
-                Focus::Dialog => "dialog",
-                Focus::Route => "route",
-            };
+            let got = pump.focus();
             if got != want {
                 return Err(format!("step {index}: focus {got} != {want}"));
+            }
+        }
+        if let Some((kind, session)) = &step.expect_route {
+            let got = match pump.store.route() {
+                crate::store::Route::Home => "home".to_owned(),
+                crate::store::Route::Session { session_id } => {
+                    if Some(&session_id) == session.as_ref() || session.is_none() {
+                        "session".to_owned()
+                    } else {
+                        format!("session({session_id})")
+                    }
+                }
+            };
+            if &got != kind && got != format!("session({kind})") && got != *kind {
+                return Err(format!("step {index}: route {got} != {kind}"));
+            }
+        }
+        if let Some(want) = step.expect_exit {
+            if pump.exit_requested != want {
+                return Err(format!("step {index}: exit {} != {want}", pump.exit_requested));
             }
         }
     }
     Ok(())
 }
 
+/// Load and run one script by id from the goldens directory.
+pub fn run_script_file(dir: &std::path::Path, id: &str, size: (u16, u16)) -> Result<(), String> {
+    let json = std::fs::read_to_string(dir.join(format!("replay/{id}.json")))
+        .map_err(|e| format!("replay script {id}: {e}"))?;
+    let script = parse_script(&json).ok_or_else(|| format!("script {id} does not parse"))?;
+    run_script(&script, size)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::Focus;
     use std::path::Path;
 
     fn goldens() -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/parity/goldens/tui-frames")
     }
 
-    /// The `palette-ctrl-p` replay: open → filter → execute.
+    /// All three wave-1/3 replay scripts pass on the unified pump.
+    #[test]
+    fn replay_exit_leader_q() {
+        run_script_file(&goldens(), "exit-leader-q", (100, 30)).expect("replay passes");
+    }
+
     #[test]
     fn replay_palette_ctrl_p() {
-        let json = std::fs::read_to_string(goldens().join("replay/palette-ctrl-p.json"))
-            .expect("replay script");
-        let script = parse_script(&json).expect("script parses");
-        assert_eq!(script.id, "palette-ctrl-p");
-        run_script(&script, (100, 30)).expect("replay passes"); // the reference app-fixture terminal (test/fixture/app.ts defaults)
+        run_script_file(&goldens(), "palette-ctrl-p", (100, 30)).expect("replay passes");
+    }
+
+    #[test]
+    fn replay_permission_once_always_deny() {
+        run_script_file(&goldens(), "permission-once-always-deny", (100, 30))
+            .expect("replay passes");
+    }
+
+    /// The two wave-3 recorded scripts: the Sessions dialog flow and
+    /// the theme-dialog select flow.
+    #[test]
+    fn replay_session_list_leader_l() {
+        // The recorded scenario ran with two known sessions (the
+        // fixture server's Alpha/Beta); our session list renders the
+        // store's tabs — open them before the run.
+        let script = load_script(&goldens(), "session-list-leader-l");
+        let mut pump = App::new((100, 30));
+        pump.store.open_tab("ses_alpha", Some("Alpha".to_owned()));
+        pump.store.open_tab("ses_beta", Some("Beta".to_owned()));
+        pump.store.navigate(crate::store::Route::Home);
+        run_steps(&mut pump, &script);
+    }
+
+    #[test]
+    fn replay_theme_dialog_select() {
+        run_script_file(&goldens(), "theme-dialog-select", (100, 30)).expect("replay passes");
+    }
+
+    fn load_script(dir: &std::path::Path, id: &str) -> ReplayScript {
+        let json = std::fs::read_to_string(dir.join(format!("replay/{id}.json"))).expect("script");
+        parse_script(&json).expect("parses")
+    }
+
+    fn run_steps(pump: &mut App, script: &ReplayScript) {
+        for step in &script.steps {
+            for key in &step.keys {
+                pump.press(key);
+            }
+            pump.store.runtime.run_effects();
+            let frame = pump.frame_text();
+            for needle in &step.expect_includes {
+                assert!(frame.contains(needle.as_str()), "missing {needle:?} in\n{frame}");
+            }
+            for needle in &step.expect_excludes {
+                assert!(!frame.contains(needle.as_str()), "must exclude {needle:?}");
+            }
+            if let Some(want) = step.expect_dialogs {
+                assert_eq!(pump.store.dialogs().len(), want);
+            }
+            if let Some(want) = &step.expect_focus {
+                assert_eq!(pump.focus(), want);
+            }
+        }
     }
 
     /// The same flow asserted step by step (the pump's state machine,
@@ -272,7 +252,7 @@ mod tests {
     /// session-scoped.
     #[test]
     fn palette_open_filter_execute_flow() {
-        let mut pump = AppPump::new((100, 30));
+        let mut pump = App::new((100, 30));
         pump.store.open_tab("ses_test", Some("Test session".to_owned()));
         pump.press("ctrl+p");
         assert_eq!(pump.store.dialogs().len(), 1);
@@ -303,38 +283,84 @@ mod tests {
         assert_eq!(pump.store.focus(), Focus::Route);
     }
 
-    /// Escape closes the top dialog; ctrl+c clears a typed filter
-    /// first (the modal layer's semantics).
+    /// The exit gate beyond the script: ctrl+c exits on an empty
+    /// prompt but CLEARS the draft when one exists (`input.clear`).
     #[test]
-    fn modal_escape_and_ctrl_c_semantics() {
-        let mut pump = AppPump::new((100, 30));
-        pump.press("ctrl+p");
-        for key in ["z", "z"] {
+    fn ctrl_c_clears_then_exits() {
+        let mut pump = App::new((100, 30));
+        pump.store.open_tab("s1", Some("S".to_owned()));
+        for key in ["a", "b"] {
             pump.press(key);
         }
-        assert_eq!(pump.store.top_dialog().unwrap().select.filter, "zz", "filter typed");
+        assert_eq!(pump.store.prompt_draft("s1").text, "ab");
         pump.press("ctrl+c");
-        assert_eq!(pump.store.top_dialog().unwrap().select.filter, "", "cleared, not closed");
-        assert_eq!(pump.store.dialogs().len(), 1);
+        assert!(pump.store.prompt_draft("s1").is_empty(), "cleared, not exited");
+        assert!(!pump.exit_requested);
         pump.press("ctrl+c");
-        assert!(pump.store.dialogs().is_empty(), "second ctrl+c closes");
-        pump.press("ctrl+p");
-        pump.press("escape");
-        assert!(pump.store.dialogs().is_empty(), "escape closes");
+        assert!(pump.exit_requested, "empty prompt: ctrl+c exits");
     }
 
-    /// Navigation moves the selection (down/ctrl+n wrap).
+    /// Leader chords work from the prompt (textarea-first only consumes
+    /// keys the composer owns): ctrl+tab cycles, ctrl+1 switches with a
+    /// draft present, leader+1/2 quick-switch on an empty prompt (the
+    /// textarea layer eats printable leader continuations while text
+    /// exists — the reference's layer order), leader+w closes the tab.
     #[test]
-    fn palette_navigation_moves_selection() {
-        let mut pump = AppPump::new((100, 30));
-        pump.press("ctrl+p");
-        let first = pump.store.top_dialog().unwrap().select.selected;
-        pump.press("down");
-        let second = pump.store.top_dialog().unwrap().select.selected;
-        assert_ne!(first, second);
-        pump.press("ctrl+n");
-        assert_ne!(pump.store.top_dialog().unwrap().select.selected, second);
+    fn leader_chords_and_tab_commands_dispatch_from_the_prompt() {
+        let mut pump = App::new((100, 30));
+        pump.store.open_tab("ses_a", Some("A".to_owned()));
+        pump.store.open_tab("ses_b", Some("B".to_owned()));
+        pump.store.select_tab("ses_a");
+        // Draft text must not disable ctrl-modified chords.
+        pump.press("x");
+        assert_eq!(pump.store.prompt_draft("ses_a").text, "x");
+        pump.press("ctrl+tab");
+        assert_eq!(
+            pump.store.route(),
+            crate::store::Route::Session { session_id: "ses_b".to_owned() },
+            "ctrl+tab cycles with a draft present"
+        );
+        pump.press("ctrl+1");
+        assert_eq!(
+            pump.store.route(),
+            crate::store::Route::Session { session_id: "ses_a".to_owned() },
+            "ctrl+1 quick slot with a draft present"
+        );
+        // Printable leader continuations type while text exists…
+        pump.press("ctrl+x");
+        pump.press("1");
+        assert_eq!(pump.store.prompt_draft("ses_a").text, "x1", "the 1 typed, not dispatched");
+        // …and dispatch once the draft is empty.
+        pump.press("backspace");
+        pump.press("backspace");
+        pump.press("ctrl+x");
+        pump.press("2");
+        assert_eq!(
+            pump.store.route(),
+            crate::store::Route::Session { session_id: "ses_b".to_owned() },
+            "leader+2 quick slot on the empty prompt"
+        );
+        pump.press("ctrl+x");
+        pump.press("w");
+        assert_eq!(pump.store.tabs().tabs.len(), 1, "leader+w closed the tab");
+    }
+
+    /// The composer: printable typing, submit through the sink, and
+    /// history at the edges.
+    #[test]
+    fn composer_types_submits_and_walks_history() {
+        let mut pump = App::new((100, 30));
+        pump.store.open_tab("s1", Some("S".to_owned()));
+        for key in ["h", "i"] {
+            pump.press(key);
+        }
+        assert_eq!(pump.store.prompt_draft("s1").text, "hi");
+        pump.press("enter");
+        assert!(pump.store.prompt_draft("s1").is_empty(), "submitted");
+        assert_eq!(pump.store.composer("s1").history.entries, vec!["hi".to_owned()]);
         pump.press("up");
-        assert_eq!(pump.store.top_dialog().unwrap().select.selected, second);
+        assert_eq!(pump.store.prompt_draft("s1").text, "hi", "history restored");
+        pump.press("down");
+        assert!(pump.store.prompt_draft("s1").is_empty(), "back to the live draft");
     }
 }
