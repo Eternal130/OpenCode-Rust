@@ -22,6 +22,7 @@ pub mod safekill;
 pub mod state;
 
 pub mod app;
+pub mod app_archive;
 pub mod assets;
 pub mod auth;
 pub mod errors;
