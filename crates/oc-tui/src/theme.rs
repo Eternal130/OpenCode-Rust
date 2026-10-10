@@ -106,7 +106,7 @@ impl ThemeState {
 
 /// Token → style mapping (the spike's flat-style mapping): every role a
 /// 7.x component paints, resolved from the theme's RGBA tokens.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ThemeStyles {
     pub text: Style,
     pub text_muted: Style,
@@ -146,6 +146,10 @@ pub struct ThemeStyles {
     /// Agent identity colors (`local.agent.color`: categorical hues at
     /// step 200, deduped, index-modulo).
     pub agent_colors: [Color; 5],
+    /// The flattened tree-sitter scope → style map
+    /// (`generate_syntax` → `convert_theme_to_styles`), consumed by the
+    /// fenced-code highlight path (R-01 spike).
+    pub syntax: oc_syntax::SyntaxStyles,
 }
 
 /// The `theme.diff.*` token palette — the diff viewer's gutter, sign
@@ -204,6 +208,10 @@ impl ThemeStyles {
         for (slot, scale) in tokens.categorical.iter().take(5).enumerate() {
             agent_colors[slot] = rgba(scale.s200);
         }
+        // The syntax scope map is built once per resolved theme (the
+        // message-build side of the R-01 spike: parsing happens per
+        // block, style flattening once per theme).
+        let syntax = oc_syntax::SyntaxStyles::from_rules(&oc_theme::generate_syntax(tokens));
         Self {
             text: Style::new().fg(fg).bg(bg),
             text_muted: Style::new().fg(rgba(tokens.text.muted)).bg(bg),
@@ -250,6 +258,7 @@ impl ThemeStyles {
                 line_number_removed: rgba(tokens.diff.line_number.background.removed),
             },
             agent_colors,
+            syntax,
         }
     }
 
