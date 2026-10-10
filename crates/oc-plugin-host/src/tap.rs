@@ -96,7 +96,11 @@ impl SeenRing {
 }
 
 impl BroadcastTap {
-    pub(crate) fn live(tx: tokio::sync::mpsc::Sender<TapEvent>) -> Self {
+    /// The live tap over a bounded dispatch channel (public for
+    /// embedders and the D-07 tap/store pair proof, which drives the
+    /// real ring).
+    #[must_use]
+    pub fn live(tx: tokio::sync::mpsc::Sender<TapEvent>) -> Self {
         Self {
             tx: Some(tx),
             warned: Arc::new(AtomicBool::new(false)),
