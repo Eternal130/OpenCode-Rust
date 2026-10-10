@@ -42,6 +42,11 @@ pub struct RowRender {
     pub placed: Vec<Placed>,
     pub fills: Vec<Fill>,
     pub height: usize,
+    /// In-TUI image placements (R-07): cell rects the frame reserves
+    /// for graphics overlays (the transcript's user-message image
+    /// strip). The cell grid stays authoritative for the placeholder
+    /// boxes; these ride alongside for the post-draw escape emission.
+    pub images: Vec<crate::image::ImagePlacement>,
 }
 
 fn text_at(x: usize, y: usize, text: impl Into<String>, style: Style) -> Placed {
@@ -84,7 +89,7 @@ pub fn running_tool_row(
         text_at(ROW_PADDING_LEFT, 0, glyph, muted),
         text_at(ROW_PADDING_LEFT + 2, 0, crate::wrap::take_width(label, label_width), muted),
     ];
-    RowRender { placed, fills: Vec::new(), height: 1 }
+    RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() }
 }
 
 /// The completed exploration header (`→ Explored: 1 read`): icon in a
@@ -97,7 +102,7 @@ pub fn completed_tool_row(icon: char, label: &str, theme: &ThemeStyles, width: u
     let label_x = ROW_PADDING_LEFT + ICON_WIDTH;
     let mut placed = vec![text_at(ROW_PADDING_LEFT, 0, icon, muted)];
     placed.extend(wrapped_label(label_x, 0, label, label_width, muted));
-    RowRender { placed, fills: Vec::new(), height: 1 }
+    RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() }
 }
 
 /// The reasoning-group header in hide mode: `+ Thought: <title> · <d>`
@@ -138,7 +143,7 @@ pub fn reasoning_header_row(
             text_at(ROW_PADDING_LEFT, 0, glyph, style),
             text_at(ROW_PADDING_LEFT + 2, 0, crate::wrap::take_width(&label, label_width), style),
         ];
-        RowRender { placed, fills: Vec::new(), height: 1 }
+        RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() }
     }
 }
 
@@ -183,21 +188,154 @@ impl RowRender {
         for fill in &mut self.fills {
             fill.y += offset as u16;
         }
+        for image in &mut self.images {
+            image.y += offset as u16;
+        }
         self.height += offset;
         self
     }
 }
 
+/// How the transcript's image strip renders (R-07): the resolved
+/// graphics protocol and whether `session.image_preview` enabled the
+/// strip at all (v2 hides it unless the config turns it on,
+/// config/index.tsx:164 + session/index.tsx:2459).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ImageStripOptions {
+    /// `session.image_preview` (default off — v2's falsy check).
+    pub enabled: bool,
+    /// The terminal's graphics protocol.
+    pub protocol: crate::image::GraphicsProtocol,
+    /// The terminal's row count (thumb height = `clamp(h/4, 4, 8)`).
+    pub terminal_rows: u16,
+}
+
+impl ImageStripOptions {
+    /// `SessionImages`'s thumb height: `max(4, min(8, floor(h / 4)))`
+    /// (session/index.tsx:2460).
+    #[must_use]
+    pub fn thumb_height(&self) -> u16 {
+        (self.terminal_rows / 4).clamp(4, 8)
+    }
+
+    /// Up to three thumbs show; the rest collapse into `+N more`.
+    pub const MAX_VISIBLE: usize = 3;
+}
+
+/// The user-message image strip (`SessionImages`,
+/// session/index.tsx:2456): a `paddingTop 1` row of thumb boxes
+/// (`width = height * 2`, `gap 1`, `paddingLeft 2`/`paddingRight 2`,
+/// `paddingBottom 1`) — at most [`ImageStripOptions::MAX_VISIBLE`]
+/// visible plus a `+N more` cell box. With a drawable protocol the
+/// thumb rects become image placements (the placeholder cells stay
+/// underneath); otherwise the boxes render as bordered placeholders
+/// with the `[Image N]`-style label centered (v2's "No preview"
+/// fallback shape). Empty when disabled or image-less.
+#[must_use]
+pub fn image_strip_row(
+    files: &[crate::components::message::model::UserFile],
+    label_of: &dyn Fn(usize) -> String,
+    options: &ImageStripOptions,
+    theme: &ThemeStyles,
+    width: usize,
+) -> RowRender {
+    let images: Vec<&crate::components::message::model::UserFile> =
+        files.iter().filter(|file| file.is_image()).collect();
+    if !options.enabled || images.is_empty() {
+        return RowRender::default();
+    }
+    let height = options.thumb_height() as usize;
+    let thumb_width = height * 2;
+    let visible = images.len().min(ImageStripOptions::MAX_VISIBLE);
+    let overflow = images.len() - visible;
+
+    let mut row = RowRender { height: height + 2, ..RowRender::default() };
+    // paddingTop 1: the strip's boxes start on row 1.
+    let mut x = 2usize; // paddingLeft 2
+    for (index, image) in images.iter().enumerate().take(visible) {
+        let bytes = decode_png_payload(image);
+        let data = crate::image::ImageData::Png(bytes);
+        if crate::image::drawable(options.protocol, &data) {
+            row.images.push(crate::image::ImagePlacement {
+                id: crate::image::image_id(&data),
+                data,
+                x: u16::try_from(x).unwrap_or(u16::MAX),
+                y: 1,
+                cols: thumb_width as u16,
+                rows: height as u16,
+            });
+        }
+        // The placeholder box (border + centered label) — the cells
+        // under the graphic and the no-protocol fallback.
+        paint_placeholder_box(&mut row, x, 1, thumb_width, height, &label_of(index), theme);
+        x += thumb_width + 1; // gap 1
+    }
+    if overflow > 0 {
+        let label = format!("+{overflow} more");
+        // v2's overflow cell is an 8-wide box with the truncated count
+        // label; size the bordered placeholder to fit the label.
+        let box_width =
+            (crate::wrap::display_width(&label) + 2).min(width.saturating_sub(x)).max(3);
+        paint_placeholder_box(&mut row, x, 1, box_width, height, &label, theme);
+    }
+    row
+}
+
+/// Base64-decode the attachment payload back into image bytes (the
+/// display data URI's payload half). Non-decodable payloads render as
+/// the placeholder only (v2's onError → "No preview").
+fn decode_png_payload(file: &crate::components::message::model::UserFile) -> Vec<u8> {
+    crate::clipboard::base64_decode(&file.data).unwrap_or_default()
+}
+
+/// One thumb box: a `┌─┐│└┘` border in the muted border color with
+/// the label centered on the middle row (the deterministic fallback —
+/// v2 centers "No preview" the same way).
+fn paint_placeholder_box(
+    row: &mut RowRender,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    label: &str,
+    theme: &ThemeStyles,
+) {
+    if width < 2 || height < 2 {
+        return;
+    }
+    let border = Style::new().fg(theme.border).bg(theme.background_raised);
+    let label_style = theme.text_muted.bg(theme.background_raised);
+    let top: String = format!("┌{}┐", "─".repeat(width - 2));
+    let bottom: String = format!("└{}┘", "─".repeat(width - 2));
+    row.placed.push(text_at(x, y, top, border));
+    row.placed.push(text_at(x, y + height - 1, bottom, border));
+    for row_index in 1..height - 1 {
+        row.placed.push(text_at(x, y + row_index, "│", border));
+        row.placed.push(text_at(x + width - 1, y + row_index, "│", border));
+    }
+    // Center the label (clamped to the inner width).
+    let inner = width - 2;
+    let label_width = crate::wrap::display_width(label).min(inner);
+    let trimmed = crate::wrap::take_width(label, inner);
+    let left = (inner.saturating_sub(label_width)) / 2;
+    let mid = y + height / 2;
+    row.placed.push(text_at(x + 1 + left, mid, trimmed, label_style));
+}
+
 /// The user-message block (`UserMessage`): a raised-background box with
 /// a `SplitBorder` `┃` left border in the session agent's color, one
 /// blank padding row above and below, and the text at
-/// `border(1) + paddingLeft(2)`.
+/// `border(1) + paddingLeft(2)`. The R-07 image strip
+/// (`SessionImages`) renders inside the box above the text when
+/// enabled and the message carries inline images.
 #[must_use]
 pub fn user_message_row(
     text: &str,
+    files: &[crate::components::message::model::UserFile],
     agent_color: Color,
     theme: &ThemeStyles,
     width: usize,
+    strip: &ImageStripOptions,
 ) -> RowRender {
     let raised = theme.background_raised;
     let fill_style = Style::new().fg(crate::components::tool_rows::DEFAULT_FOREGROUND).bg(raised);
@@ -205,23 +343,53 @@ pub fn user_message_row(
     let text_style = Style::new().fg(theme.text.fg.unwrap_or_default()).bg(raised);
     let inner_width = width.saturating_sub(3);
     let lines = wrap_atoms(&crate::wrap::flatten(text, text_style), inner_width);
-    let height = lines.len() + 2; // paddingTop 1 + text + paddingBottom 1
+    // The image strip (its own paddingTop/paddingBottom rows) stacks
+    // above the text block; labels reuse each file's mention text
+    // (falling back to `[Image N]` by position).
+    let strip_row = image_strip_row(
+        files,
+        &|index: usize| {
+            files
+                .iter()
+                .filter(|file| file.is_image())
+                .nth(index)
+                .and_then(|file| file.name.clone())
+                .unwrap_or_else(|| format!("[Image {}]", index + 1))
+        },
+        strip,
+        theme,
+        inner_width,
+    );
+    let strip_height = strip_row.height;
+    let height = lines.len() + 2 + strip_height;
     let mut placed = Vec::new();
     for row in 0..height {
         placed.push(text_at(0, row, "┃", border_style));
     }
+    for item in strip_row.placed {
+        let Placed { x, y, width, lines, tag } = item;
+        // The strip's own paddingLeft 2 is relative to the bordered
+        // box's content area (col 1): the border(1) + 2 = col 3 the
+        // text also uses.
+        placed.push(Placed { x: x + 1, y, width, lines, tag });
+    }
+    let mut images = strip_row.images;
+    for image in &mut images {
+        image.x += 1;
+    }
+    let text_top = 1 + strip_height;
     for (index, atoms) in lines.into_iter().enumerate() {
         placed.push(Placed {
             x: 3,
-            y: index + 1,
+            y: text_top + index,
             width: inner_width,
             lines: vec![PlacedLine { runs: crate::wrap::styled_runs(&atoms) }],
             tag: None,
         });
     }
-    let fills =
+    let box_fills =
         vec![Fill { x: 0, y: 0, width: width as u16, height: height as u16, style: fill_style }];
-    RowRender { placed, fills, height }
+    RowRender { placed, fills: box_fills, height, images }
 }
 
 /// The assistant footer (`AssistantFooter`): `Build · model · 2ms` —
@@ -272,7 +440,7 @@ pub fn assistant_footer_row(
             tag: None,
         })
         .collect();
-    let footer = RowRender { placed, fills: Vec::new(), height: 1 };
+    let footer = RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() };
     match error {
         None => footer,
         Some(message) => {
@@ -301,7 +469,7 @@ pub fn assistant_error_row(message: &str, theme: &ThemeStyles, width: usize) -> 
             tag: None,
         })
         .collect();
-    RowRender { placed, fills: Vec::new(), height: 1 }
+    RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() }
 }
 
 /// Stack two rows vertically (the upper row keeps its height; the
@@ -422,7 +590,14 @@ mod tests {
     fn user_message_box_pads_wraps_and_fills() {
         let theme = theme();
         let agent = theme.agent_color(0);
-        let row = user_message_row("What does the parser do?", agent, &theme, 38);
+        let row = user_message_row(
+            "What does the parser do?",
+            &[],
+            agent,
+            &theme,
+            38,
+            &ImageStripOptions::default(),
+        );
         assert_eq!(row.height, 3);
         let frame = crate::render::paint_placed_with_fills(
             &row.placed,
@@ -486,5 +661,152 @@ mod tests {
         // …and the agent label dropped to muted (not the categorical
         // blue the healthy footer carries).
         assert_eq!(frame.cell(2, 3).fg, crate::render::CellColor::Rgb(128, 128, 128));
+    }
+
+    // -- R-07: the user-message image strip ---------------------------------
+
+    use crate::components::message::model::UserFile;
+    use crate::image::{GraphicsProtocol, ImageData};
+
+    fn png_file(data: &str) -> UserFile {
+        UserFile { mime: "image/png".into(), data: data.into(), name: Some("shot.png".into()) }
+    }
+
+    fn strip_options(protocol: GraphicsProtocol) -> ImageStripOptions {
+        ImageStripOptions { enabled: true, protocol, terminal_rows: 24 }
+    }
+
+    #[test]
+    fn image_strip_sizes_thumbs_per_v2() {
+        // thumb height = clamp(h/4, 4..8); width = height * 2.
+        assert_eq!(strip_options(GraphicsProtocol::None).thumb_height(), 6);
+        assert_eq!(
+            ImageStripOptions { enabled: true, protocol: GraphicsProtocol::None, terminal_rows: 8 }
+                .thumb_height(),
+            4
+        );
+        assert_eq!(
+            ImageStripOptions {
+                enabled: true,
+                protocol: GraphicsProtocol::None,
+                terminal_rows: 200
+            }
+            .thumb_height(),
+            8
+        );
+    }
+
+    #[test]
+    fn image_strip_disabled_or_imageless_renders_nothing() {
+        let theme = theme();
+        let disabled = image_strip_row(
+            &[png_file("AAECAw==")],
+            &|index: usize| format!("[Image {}]", index + 1),
+            &ImageStripOptions::default(),
+            &theme,
+            60,
+        );
+        assert_eq!(disabled.height, 0);
+        assert!(disabled.placed.is_empty());
+        assert_eq!(disabled.images, Vec::new());
+
+        let imageless = image_strip_row(
+            &[],
+            &|index: usize| format!("[Image {}]", index + 1),
+            &strip_options(GraphicsProtocol::Kitty),
+            &theme,
+            60,
+        );
+        assert_eq!(imageless.height, 0);
+    }
+
+    #[test]
+    fn image_strip_kitty_collects_placements_and_placeholder_cells() {
+        let theme = theme();
+        let payload = crate::clipboard::base64_encode::encode(b"\x89PNG-tiny");
+        let row = image_strip_row(
+            &[png_file(&payload)],
+            &|index: usize| format!("[Image {}]", index + 1),
+            &strip_options(GraphicsProtocol::Kitty),
+            &theme,
+            60,
+        );
+        // paddingTop 1 + 6 thumb rows + paddingBottom 1.
+        assert_eq!(row.height, 8);
+        assert_eq!(row.images.len(), 1);
+        let image = &row.images[0];
+        assert_eq!((image.x, image.y, image.cols, image.rows), (2, 1, 12, 6));
+        assert_eq!(image.data, ImageData::Png(b"\x89PNG-tiny".to_vec()));
+        assert_eq!(image.id, crate::image::image_id(&image.data));
+        // The placeholder box still paints under the graphic (the
+        // bordered thumb with its centered label).
+        let frame = crate::render::paint_placed(
+            &row.placed,
+            (60, 8),
+            crate::components::tool_rows::fill_style(&theme),
+        );
+        let grid = frame.text_grid();
+        assert!(
+            grid[1].starts_with("  ┌──────────┐"),
+            "thumb border at paddingLeft 2: {}",
+            grid[1]
+        );
+        assert!(grid[4].contains("[Image 1]"), "centered label: {}", grid[4]);
+    }
+
+    #[test]
+    fn image_strip_fallback_renders_placeholders_without_placements() {
+        let theme = theme();
+        let payload = crate::clipboard::base64_encode::encode(b"\x89PNG-tiny");
+        let row = image_strip_row(
+            &[png_file(&payload), png_file(&payload), png_file("AAAA"), png_file("BBBB")],
+            &|index: usize| format!("[Image {}]", index + 1),
+            &strip_options(GraphicsProtocol::None),
+            &theme,
+            60,
+        );
+        // No protocol ⇒ no overlays; the placeholder boxes carry the
+        // strip; 4 images ⇒ 3 thumbs + "+1 more".
+        assert_eq!(row.images, Vec::new());
+        let frame = crate::render::paint_placed(
+            &row.placed,
+            (60, 8),
+            crate::components::tool_rows::fill_style(&theme),
+        );
+        let grid = frame.text_grid();
+        assert!(grid[4].contains("+1 more"), "overflow box: {}", grid[4]);
+        let thumb_count = grid[1].matches('┌').count();
+        assert_eq!(thumb_count, 4, "3 thumbs + the overflow box");
+    }
+
+    #[test]
+    fn user_message_row_stacks_the_strip_above_the_text() {
+        let theme = theme();
+        let agent = theme.agent_color(0);
+        let payload = crate::clipboard::base64_encode::encode(b"\x89PNG-tiny");
+        let row = user_message_row(
+            "describe this",
+            &[png_file(&payload)],
+            agent,
+            &theme,
+            38,
+            &strip_options(GraphicsProtocol::Kitty),
+        );
+        // strip (1 + 6 + 1) + the message box's own 1 + text + 1.
+        assert_eq!(row.height, 11);
+        // The border spans the whole block; the strip lands at the
+        // content column (3), the text below the strip.
+        let frame = crate::render::paint_placed_with_fills(
+            &row.placed,
+            &row.fills,
+            (38, 11),
+            crate::components::tool_rows::fill_style(&theme),
+        );
+        let grid = frame.text_grid();
+        assert!(grid[1].starts_with("┃  ┌"), "border + thumb box top: {}", grid[1]);
+        assert_eq!(grid[9].trim(), "┃  describe this");
+        assert_eq!(grid.len(), 11);
+        // The placement shifted with the strip (+1 past the border).
+        assert_eq!(row.images[0].x, 3);
     }
 }

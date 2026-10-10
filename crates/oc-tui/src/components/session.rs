@@ -126,11 +126,44 @@ pub fn render_session(
         &store.messages(session_id),
         &TranscriptOptions {
             group_rules: store.plugin_group_rules(),
+            image_strip: crate::components::message::rows::ImageStripOptions {
+                enabled: store.image_preview(),
+                protocol: store.graphics_protocol(),
+                terminal_rows: size.1,
+            },
             ..TranscriptOptions::default()
         },
         styles,
         width,
     );
+    // The transcript's image placements (R-07) shift under the title
+    // row with the rest of the rows, clipped to the viewport like the
+    // placed runs are; the store carries them for the post-draw
+    // graphics emission.
+    let frame_images = transcript
+        .images
+        .iter()
+        .filter_map(|image| {
+            // Transcripts stack rows from y=2 (below the title row);
+            // a placement survives while its top row is inside the
+            // viewport, its height clamped to the viewport bottom.
+            let top = usize::from(image.y);
+            if top >= transcript_height {
+                return None;
+            }
+            let clamped_rows =
+                image.rows.min(u16::try_from(transcript_height - top).unwrap_or(image.rows));
+            Some(crate::image::ImagePlacement {
+                x: image.x,
+                y: image.y + 2,
+                id: image.id,
+                data: image.data.clone(),
+                cols: image.cols,
+                rows: clamped_rows,
+            })
+        })
+        .collect::<Vec<_>>();
+    store.set_frame_images(frame_images);
     let mut placed = Vec::new();
     let mut fills = Vec::new();
     // Title row (muted, inset like the transcript), under the strip.
