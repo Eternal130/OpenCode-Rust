@@ -132,18 +132,21 @@ impl Bridge {
         Ok(result.get("event").cloned().unwrap_or(Value::Null))
     }
 
-    /// Plugins subscribed to one hook point (registration order).
+    /// Plugins subscribed to one hook point (registration order — v2
+    /// fires callbacks in registration order, so the bridge chain must
+    /// dispatch plugins in the order their subscriptions arrived; a
+    /// plugin registering the same point twice dispatches once).
     #[must_use]
     pub fn hook_subscribers(&self, domain: &str, name: &str) -> Vec<String> {
         let registrations = self.shared.registrations.read().expect("registrations poisoned");
-        let mut plugins: Vec<String> = registrations
+        let mut seen = std::collections::BTreeSet::new();
+        registrations
             .hooks
             .iter()
             .filter(|hook| hook.domain == domain && hook.name == name)
             .map(|hook| hook.plugin_id.clone())
-            .collect();
-        plugins.dedup();
-        plugins
+            .filter(|plugin_id| seen.insert(plugin_id.clone()))
+            .collect()
     }
 
     /// The current registration snapshot.
