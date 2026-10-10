@@ -845,7 +845,13 @@ mod tests {
         let end = start + "[Image 1]".len();
         let d = PromptDraft {
             text: "Compare [Image 1] with the current design".into(),
-            files: vec![FileMention { name: "screenshot.png".into(), start, end }],
+            files: vec![FileMention {
+                name: "screenshot.png".into(),
+                start,
+                end,
+                payload: None,
+                mention: Some("[Image 1]".into()),
+            }],
             ..PromptDraft::default()
         };
         let lines = layout_draft_lines(&d, 37);
