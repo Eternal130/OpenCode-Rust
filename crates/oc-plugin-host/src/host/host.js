@@ -1151,22 +1151,22 @@ async function handleCodemodeEvaluate({ code, tools, token }) {
 
 async function handleHookDispatch({ pluginId, domain, name, event }) {
   const list = hookHandlers[domain]?.get(name) ?? [];
-  const errors = [];
   const target = list.filter((entry) => !pluginId || entry.pluginId === pluginId);
-  if (target.length === 0) return { ok: true, event: event ?? null, errors };
+  if (target.length === 0) return { ok: true, event: event ?? null, errors: [] };
   notify("plugin.busy", { pluginId: target[0].pluginId });
   try {
     for (const entry of target) {
-      try {
-        await entry.handler(event);
-      } catch (error) {
-        errors.push(`${entry.pluginId}: ${errText(error)}`);
-      }
+      // v2 trigger semantics (hooks.ts:88-95): a handler failure FAILS
+      // the dispatch (`yield*` propagates; later handlers are skipped).
+      // Throw — the read loop turns it into a JSON-RPC error so the
+      // host bridge surfaces HostError::Guest instead of a swallowed
+      // mutation chain.
+      await entry.handler(event);
     }
   } finally {
     notify("plugin.idle", { pluginId: target[0].pluginId });
   }
-  return { ok: errors.length === 0, event: event ?? null, errors };
+  return { ok: true, event: event ?? null, errors: [] };
 }
 
 // ---------------------------------------------------------------------------

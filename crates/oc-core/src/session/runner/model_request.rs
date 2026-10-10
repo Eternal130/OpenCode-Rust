@@ -650,7 +650,17 @@ impl SessionModelRequest {
                     event.session_id = session_id;
                     event.agent = agent;
                     event.model = model;
-                    let _ = hooks.dispatch_session_retry(event.clone()).await;
+                    // v2's retry caller (retry.ts:80-87) discards the
+                    // trigger's return and reads its LOCAL event after
+                    // the hook — plugin mutations flow back BY
+                    // REFERENCE (the flagship's foreground-fallback
+                    // rewrites `event.decision`). Write the dispatched
+                    // event back through the `&mut` so the caller — and
+                    // any future guest-bridge adapter — observes the
+                    // same mutations.
+                    if let Ok(shaped) = hooks.dispatch_session_retry(event.clone()).await {
+                        *event = shaped;
+                    }
                 })
             });
 

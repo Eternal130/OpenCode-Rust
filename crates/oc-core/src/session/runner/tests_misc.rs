@@ -743,3 +743,79 @@ fn runner_mcp_guidance_renders_the_v2_body() {
     let empty = mcp_guidance_source(Arc::new(Vec::new));
     assert!(matches!((empty.read)(), ReadOutcome::Removed));
 }
+
+// -- session.retry mutation write-back (D-03: by-reference parity) ---------
+
+/// v2's retry caller (retry.ts:80-87) reads its LOCAL event after the
+/// hook — the trigger's return is discarded, so plugin mutations flow
+/// back BY REFERENCE (`event.decision = {retry, delay}`; the flagship's
+/// foreground-fallback rewrites exactly this). The prepared retry hook
+/// must write the dispatched event back through the `&mut`, or a
+/// plugin's retry override silently no-ops.
+#[tokio::test]
+async fn runner_retry_prepared_hook_writes_mutations_back() {
+    use crate::hooks::{fn_hook, HookOptions, RetryDecision, SessionRetryEvent};
+    use crate::session::runner::model_request::{RequestInput, SessionModelRequest};
+    use crate::session::runner::tests_harness::test_resolved_model;
+
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    // Hold the registration for the test body (dropping it disposes).
+    let _keep = hooks
+        .register_session_retry(
+            fn_hook(|event: &mut SessionRetryEvent| {
+                event.decision = RetryDecision::Retry { delay_ms: 31_000 };
+                Ok(())
+            }),
+            HookOptions::default(),
+        )
+        .await;
+    let tools = Arc::new(crate::location::ToolRegistryState::new());
+    let requests = SessionModelRequest::new(Arc::clone(&hooks), tools, AppMetadata::default());
+
+    let row = crate::database::schema::SessionRow::new(
+        "ses_retry_mut",
+        "proj_1",
+        "/tmp/opencode/retry-mut",
+        "retry-mut",
+        "2",
+    )
+    .expect("session row");
+    let prepared = requests
+        .prepare(
+            RequestKind::Primary,
+            RequestInput {
+                session: row,
+                agent: oc_schema::id::AgentId::parse("build"),
+                model: test_resolved_model(),
+                tools: None,
+                system: Vec::new(),
+                messages: Vec::new(),
+                tool_choice: None,
+                web_socket: false,
+                input_tokens: None,
+            },
+        )
+        .await
+        .expect("prepare");
+
+    // The schedule proposed NO retry; the hook's override must win.
+    let mut event = SessionRetryEvent {
+        session_id: oc_schema::id::SessionId::new(),
+        agent: oc_schema::id::AgentId::parse("build"),
+        model: oc_schema::model::Ref {
+            provider_id: oc_schema::id::ProviderId::parse("parityfake"),
+            id: oc_schema::id::ModelId::parse("fake-model"),
+            variant: None,
+        },
+        error: serde_json::json!({ "message": "boom" }),
+        attempt: 2,
+        decision: RetryDecision::NoRetry,
+    };
+    (prepared.retry)(&mut event).await;
+    match event.decision {
+        RetryDecision::Retry { delay_ms } => assert_eq!(delay_ms, 31_000),
+        RetryDecision::NoRetry => {
+            panic!("retry hook decision override was dropped (write-back missing)")
+        }
+    }
+}

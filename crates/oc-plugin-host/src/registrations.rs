@@ -8,7 +8,7 @@
 //! plain Rust data. The TUI consumes the snapshot at registration
 //! time; nothing crosses IPC per-frame afterwards.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde_json::Value;
@@ -240,8 +240,12 @@ pub struct Registrations {
     pub tools: BTreeMap<String, PluginTool>,
     /// MCP server name → config.
     pub mcps: BTreeMap<String, PluginMcp>,
-    /// Hook coverage (plugin, domain, name).
-    pub hooks: BTreeSet<PluginHook>,
+    /// Hook coverage (plugin, domain, name) in REGISTRATION order —
+    /// v2 fires callbacks in registration order (hooks.ts:89), so the
+    /// bridge's `hook_subscribers` chain must preserve it (a sorted
+    /// set would reorder plugins alphabetically and flip mutation
+    /// outcomes when two plugins touch the same field).
+    pub hooks: Vec<PluginHook>,
     pub themes: BTreeMap<String, PluginTheme>,
     /// Plugin group rules (registration order stable across snapshots).
     pub group_rules: Vec<PluginGroupRule>,
@@ -389,6 +393,14 @@ impl Registrations {
         }
     }
 
+    /// Record one hook subscription in REGISTRATION order (dedup —
+    /// re-registration from a hot reload doesn't duplicate the entry).
+    pub fn add_hook(&mut self, hook: PluginHook) {
+        if !self.hooks.contains(&hook) {
+            self.hooks.push(hook);
+        }
+    }
+
     /// Snapshot in stable order.
     #[must_use]
     pub fn snapshot(&self) -> RegistrationSnapshot {
@@ -398,7 +410,7 @@ impl Registrations {
             skills: self.skills.values().cloned().collect(),
             tools: self.tools.values().cloned().collect(),
             mcps: self.mcps.values().cloned().collect(),
-            hooks: self.hooks.iter().cloned().collect(),
+            hooks: self.hooks.clone(),
             themes: self.themes.values().cloned().collect(),
             group_rules: self.group_rules.clone(),
             home_actions: self.home_actions.clone(),
