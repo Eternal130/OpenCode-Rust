@@ -190,6 +190,83 @@ pub fn exit_splash_rows(
     mono: bool,
     width: usize,
 ) -> Vec<String> {
+    exit_splash_styled_rows(title, session_id, mono, width, &SplashColors::mono())
+        .into_iter()
+        .map(|spans| spans.into_iter().map(|span| span.text).collect())
+        .collect()
+}
+
+/// The splash color triple (`mini/theme.ts:173-175`): `left`
+/// paints the mark glyphs and labels, `right` the title and
+/// command, `shadow` the fill behind the mark (`background.raised`
+/// at index 175; the plain theme's `splash` triple at :240 maps
+/// shadow to the default background).
+#[derive(Debug, Clone, Copy)]
+pub struct SplashColors {
+    pub left: ratatui::style::Color,
+    pub right: ratatui::style::Color,
+    pub shadow: ratatui::style::Color,
+}
+
+impl SplashColors {
+    /// The mono theme (`theme.ts:204-240`): default foreground,
+    /// default background — no color codes.
+    #[must_use]
+    pub fn mono() -> Self {
+        Self {
+            left: ratatui::style::Color::Reset,
+            right: ratatui::style::Color::Reset,
+            shadow: ratatui::style::Color::Reset,
+        }
+    }
+
+    /// From the mini runtime's theme: left = `muted`
+    /// (`nearestIndexed(text.muted)`), right = `text`,
+    /// shadow = `shade` (`background.raised.base`).
+    #[must_use]
+    pub fn from_footer_theme(theme: &crate::components::footer::FooterTheme) -> Self {
+        Self {
+            left: cell_color(theme.muted),
+            right: cell_color(theme.text),
+            shadow: cell_color(theme.shade),
+        }
+    }
+}
+
+fn cell_color(color: crate::render::CellColor) -> ratatui::style::Color {
+    use crate::render::CellColor;
+    use ratatui::style::Color;
+    match color {
+        CellColor::Rgb(r, g, b) => Color::Rgb(r, g, b),
+        CellColor::Indexed(index) => Color::Indexed(index),
+        CellColor::Default => Color::Reset,
+    }
+}
+
+/// The styled exit banner (R-08): v2's `draw()`/`cells()`
+/// half-block mark rendering (`splash.ts:46-68, 142-170`). The
+/// `go` mark's cells map by glyph:
+///
+/// * `_` → a full shadow cell (space with bg=shadow, fg=left —
+///   the `mark: "full"` push at splash.ts:155-158);
+/// * `^` → `▀` with fg=left bg=shadow (the "mix" half-block:
+///   the top half carries the mark color over the shadow);
+/// * `~` → `▀` with fg=shadow only (the "top" push at :161-164);
+/// * anything else (█ ▀ text glyphs) → fg=left.
+///
+/// The body keeps v2's colors: `Session`/`Continue` labels in
+/// `left`, title and command in `right` + bold.
+#[must_use]
+pub fn exit_splash_styled_rows(
+    title: Option<&str>,
+    session_id: &str,
+    mono: bool,
+    width: usize,
+    colors: &SplashColors,
+) -> Vec<Vec<crate::layout::StyledSpan>> {
+    use crate::layout::StyledSpan;
+    use ratatui::style::{Modifier, Style};
+
     let session = "Session  ";
     let label = "Continue ";
     let command = format!("opencode mini -s {session_id}");
@@ -198,30 +275,70 @@ pub fn exit_splash_rows(
     let body_left = mark.first().map_or(0, |row| row.len()) + 2;
     let wide = body_left + display_width(&format!("{label}{command}")) <= width;
     let clean_title = splash_title(title, mono);
-    let mut rows = Vec::new();
+
+    let left_style = Style::new().fg(colors.left);
+    let right_bold = Style::new().fg(colors.right).add_modifier(Modifier::BOLD);
+
+    let mut rows: Vec<Vec<StyledSpan>> = Vec::new();
     // `top = 1` (`splash.ts:180`): one blank row above the banner.
-    rows.push(String::new());
+    rows.push(Vec::new());
     if wide {
-        // `height = top + Math.max(mark.length, 2)` (`splash.ts:205`):
-        // the session title at `top`, the continue row at `top + 1`
-        // — the body spans two rows even when the mark has one.
+        // `height = top + Math.max(mark.length, 2)` (`splash.ts:205`).
         let body_rows = mark.len().max(2);
         let indent = " ".repeat(body_left);
         for index in 0..body_rows {
-            let mark_row = mark.get(index).copied().unwrap_or("");
-            let body = match index {
-                0 => format!("{indent}{session}{clean_title}"),
-                1 => format!("{indent}{label}{command}"),
-                _ => String::new(),
-            };
-            rows.push(format!("{mark_row}{body}"));
+            let mut spans: Vec<StyledSpan> =
+                mark.get(index).map_or_else(Vec::new, |row| mark_cells(row, colors));
+            match index {
+                0 => {
+                    spans.push(StyledSpan { text: indent.clone(), style: left_style });
+                    spans.push(StyledSpan { text: session.to_owned(), style: left_style });
+                    spans.push(StyledSpan { text: clean_title.clone(), style: right_bold });
+                }
+                1 => {
+                    spans.push(StyledSpan { text: indent.clone(), style: left_style });
+                    spans.push(StyledSpan { text: label.to_owned(), style: left_style });
+                    spans.push(StyledSpan { text: command.clone(), style: right_bold });
+                }
+                _ => {}
+            }
+            rows.push(spans);
         }
     } else {
         // Narrow terminals: the command wraps at char width from
         // column 0 (`splash.ts:220-229`, `wrapMode: "char"`).
-        rows.extend(wrap_label(&command, width));
+        for line in wrap_label(&command, width) {
+            rows.push(vec![StyledSpan { text: line, style: right_bold }]);
+        }
     }
     rows
+}
+
+/// v2's `cells()` + `draw()` per-mark-glyph mapping
+/// (`splash.ts:46-68`, pushes at :153-168):
+/// * `_` → a full shadow cell (space, fg=left bg=shadow);
+/// * `^` → `▀` fg=left bg=shadow (the "mix" half-block);
+/// * `~` → `▀` fg=shadow, no bg (the "top" half-block);
+/// * anything else → the glyph itself in `left`.
+#[must_use]
+pub fn mark_cells(row: &str, colors: &SplashColors) -> Vec<crate::layout::StyledSpan> {
+    use crate::layout::StyledSpan;
+    use ratatui::style::Style;
+    row.chars()
+        .map(|char| {
+            let style = match char {
+                '_' | '^' => Style::new().fg(colors.left).bg(colors.shadow),
+                '~' => Style::new().fg(colors.shadow),
+                _ => Style::new().fg(colors.left),
+            };
+            let glyph = match char {
+                '_' => ' ',
+                '^' | '~' => '▀',
+                other => other,
+            };
+            StyledSpan { text: glyph.to_string(), style }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -324,5 +441,62 @@ mod tests {
         let text = rows.join("\n");
         assert!(text.contains("opencode"), "command present: {text}");
         assert!(!text.contains("Continue opencode"), "narrow drops the label+command row");
+    }
+
+    #[test]
+    fn mark_cells_map_the_half_block_rules() {
+        // v2 `cells()`/`draw()` (`splash.ts:46-68, 153-168`):
+        // `_` → a full shadow cell (space, fg=left bg=shadow);
+        // `^` → ▀ fg=left bg=shadow (mix); `~` → ▀ fg=shadow
+        // (top); text glyphs → fg=left.
+        let colors = SplashColors {
+            left: ratatui::style::Color::Indexed(245),
+            right: ratatui::style::Color::Indexed(231),
+            shadow: ratatui::style::Color::Indexed(235),
+        };
+        let cells = mark_cells("█_^~▀", &colors);
+        let text: String = cells.iter().map(|span| span.text.as_str()).collect();
+        assert_eq!(text, "█ ▀▀▀");
+        assert_eq!(cells[0].style.fg, Some(ratatui::style::Color::Indexed(245)));
+        assert_eq!(cells[0].style.bg, None, "text glyphs carry no shadow");
+        assert_eq!(cells[1].text, " ", "the `_` cell is a space");
+        assert_eq!(cells[1].style.fg, Some(ratatui::style::Color::Indexed(245)));
+        assert_eq!(cells[1].style.bg, Some(ratatui::style::Color::Indexed(235)));
+        assert_eq!(cells[2].text, "▀");
+        assert_eq!(cells[2].style.bg, Some(ratatui::style::Color::Indexed(235)), "^ mixes");
+        assert_eq!(cells[3].style.fg, Some(ratatui::style::Color::Indexed(235)), "~ is shadow-fg");
+        assert_eq!(cells[3].style.bg, None, "~ carries no bg");
+    }
+
+    #[test]
+    fn styled_exit_banner_paints_the_go_mark_with_shadow_cells() {
+        // The `go` mark rows (`logo.ts:8`): `█▀▀█` is plain text
+        // in `left`, `█__█` renders its `_` as full shadow cells,
+        // `▀▀▀▀` plain. The title carries `right` + bold.
+        let colors = SplashColors {
+            left: ratatui::style::Color::Indexed(245),
+            right: ratatui::style::Color::Indexed(231),
+            shadow: ratatui::style::Color::Indexed(235),
+        };
+        let rows = exit_splash_styled_rows(Some("fix parser"), "ses_123", false, 80, &colors);
+        assert_eq!(rows.len(), 4, "blank + three mark rows");
+        // Mark row 2 (`█__█`, logo.ts:8) carries the continue body
+        // (v2 pushes mark cells at x=0 and the body at body_left on
+        // the same row); its `_` cells render as full shadow cells.
+        let mark_row: String = rows[2].iter().map(|span| span.text.as_str()).collect();
+        assert!(mark_row.starts_with("█  █"), "`_` cells become spaces: {mark_row}");
+        assert!(mark_row.starts_with("█  █"), "`_` cells become spaces: {mark_row}");
+        assert!(rows[2]
+            .iter()
+            .skip(1)
+            .take(2)
+            .all(|span| span.style.bg == Some(ratatui::style::Color::Indexed(235))));
+        // The session row (mark `█▀▀█`): label in left, title in
+        // right + bold.
+        let session: String = rows[1].iter().map(|span| span.text.as_str()).collect();
+        assert!(session.contains("Session  fix parser"), "session row: {session}");
+        let title_span = &rows[1].last().expect("title span");
+        assert_eq!(title_span.style.fg, Some(ratatui::style::Color::Indexed(231)));
+        assert!(title_span.style.add_modifier.contains(ratatui::style::Modifier::BOLD));
     }
 }
