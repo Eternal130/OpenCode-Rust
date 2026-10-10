@@ -29,7 +29,7 @@
 
 | 编号 | 项 | v2 来源 | 优先级 | 目标批次 |
 |---|---|---|---|---|
-| R-01 | tree-sitter 语法高亮（diff/代码着色） | core 高亮管线 | P1 | beta.4 |
+| R-01 | tree-sitter 语法高亮（diff/代码着色） | core 高亮管线 | P1 | beta.4；**方案已裁定（oracle）**：新叶 crate `oc-syntax`，原生精选 18 语言编译内置（bash/pwsh 已有；+rust/python/ts/js/go/c/cpp/c#/java/json/yaml/toml/html/css/diff），.scm 查询按 v2 的逐语言来源选择钉版 vendor（修复 v2 指向 nvim master 的不可复现性）；未覆盖语言回退纯文本（=现状）；禁运行时拉取（断网独立）；边界 API `highlight(block, filetype)`，markdown.rs/diff_viewer.rs/tool-row 三处接线；先行 spike（3 语言+体积/性能测量）后铺全量 |
 | R-02 | `opencode mini` 第二前端 | cli/handlers/mini.ts | P1 | beta.4 |
 | R-03 | `acp` 编辑器协议（Zed/Neovim 等） | cli/handlers/acp.ts | P1 | beta.4 |
 | R-04 | **Web UI**：`serve` 托管 `packages/app`（PWA）+ 前端功能等价 | packages/app + serve 静态托管 | P1（大体量） | beta.5 起、跨多批 |
