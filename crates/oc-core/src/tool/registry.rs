@@ -289,6 +289,26 @@ pub fn register(
     Ok(())
 }
 
+/// The pipeline executor around an arbitrary leaf (the
+/// [`super::codemode`] surface: the synthesized `execute` tool skips
+/// [`registration_error`]'s reserved-name rule the way v2's snapshot
+/// synthesizes it outside the editor path).
+pub(crate) fn pipeline_executor(
+    name: &str,
+    schema: serde_json::Value,
+    leaf: Arc<dyn super::ToolExecuteWithContext>,
+    services: &Arc<ToolServices>,
+    hooks: &Arc<crate::hooks::HookRegistry>,
+) -> Arc<dyn ToolExecute> {
+    Arc::new(PipelineExecutor {
+        name: name.to_string(),
+        schema,
+        leaf,
+        services: Arc::clone(services),
+        hooks: Arc::clone(hooks),
+    })
+}
+
 /// Whether the leaf failure is a user decline (tunnels as an interrupt).
 fn is_declined(failure: &super::ToolFailure) -> bool {
     matches!(&failure.cause, Some(super::FailureCause::Declined { .. }))

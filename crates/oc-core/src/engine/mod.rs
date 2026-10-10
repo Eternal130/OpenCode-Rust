@@ -171,6 +171,15 @@ pub struct EngineOptions {
     pub default_model: Option<oc_schema::config::ModelSelection>,
     /// Whether to spawn the activity TTL sweeper (default true).
     pub activity_sweeper: bool,
+    /// The Code Mode interpreter seam. When present, every location
+    /// registers the synthesized `execute` tool and code-mode-eligible
+    /// tools (MCP, plugin tools) become invisible-direct behind it
+    /// (v2's default surface). Absent ⇒ today's flat tool list.
+    pub code_mode_runtime: Option<Arc<dyn crate::tool::codemode::CodeModeRuntime>>,
+    /// The hard wall-clock bound on one `execute` program (default
+    /// 120 s; v2 leaves program timeout unset by default — the port
+    /// keeps the wave-1 "every bridge call bounded" rule).
+    pub code_mode_timeout: std::time::Duration,
 }
 
 impl EngineOptions {
@@ -190,6 +199,8 @@ impl EngineOptions {
             custom_providers: Vec::new(),
             default_model: None,
             activity_sweeper: true,
+            code_mode_runtime: None,
+            code_mode_timeout: std::time::Duration::from_secs(120),
         }
     }
 }
@@ -316,6 +327,10 @@ pub struct Engine {
     assembly_locks: Arc<DashMap<LocationRef, Arc<tokio::sync::Mutex<()>>>>,
     generation: Arc<AtomicU64>,
     sweeper: Option<tokio::task::JoinHandle<()>>,
+    /// The Code Mode interpreter seam (drives the per-location `execute`
+    /// registration in `assemble`); `None` keeps the flat tool surface.
+    code_mode_runtime: Option<Arc<dyn crate::tool::codemode::CodeModeRuntime>>,
+    code_mode_timeout: std::time::Duration,
 }
 
 impl Engine {
@@ -404,6 +419,8 @@ impl Engine {
                     Arc::clone(&locations.globals().activity),
                 )
             }),
+            code_mode_runtime: options.code_mode_runtime.clone(),
+            code_mode_timeout: options.code_mode_timeout,
         };
         engine
     }
@@ -661,6 +678,21 @@ impl Engine {
         });
         self.inputs.insert(location.clone(), Arc::clone(&inputs));
         let graph = self.build_graph(location.clone(), &inputs).await?;
+
+        // The Code Mode surface (wave 4): with a runtime attached, the
+        // synthesized `execute` tool registers behind the standard
+        // pipeline (before/after hooks + decode wrap it and every
+        // nested call). The request shaping and the catalog instruction
+        // key off the executor's presence.
+        if let Some(runtime) = self.code_mode_runtime.clone() {
+            crate::tool::codemode::register_code_mode(
+                &graph.tools,
+                &graph.hooks,
+                &tool_services,
+                runtime,
+                self.code_mode_timeout,
+            );
+        }
 
         // Runner stack over the graph's registries.
         let store = SessionStore::new((*self.db).clone());

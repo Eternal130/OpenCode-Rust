@@ -1,0 +1,20 @@
+{
+  "data": [
+    {
+      "action": "external_directory",
+      "id": "per_8f2fa4bfa8e74dbb84f328afd73edc9f",
+      "resources": [
+        "/tmp/opencode/p10-tui-1761742/outside/*"
+      ],
+      "save": [
+        "/tmp/opencode/p10-tui-1761742/outside/*"
+      ],
+      "sessionID": "ses_edb8fcd40ffePrgrJuI4ot3KNu",
+      "source": {
+        "id": "call_p10_read_out",
+        "messageID": "msg_9ad3402c0dd84ab390a181bb056df679",
+        "type": "tool"
+      }
+    }
+  ]
+}

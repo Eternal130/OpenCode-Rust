@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                              ▄
+                                                             █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+                                                             █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
+                                                             ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+
+                                           ┃
+                                           ┃  Ask anything… "Fix a TODO in the codebase"
+                                           ┃
+                                           ┃
+                                           ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                           /tmp/opencode/ref/packages/cli            shift+tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                                                                         local
+
+ ✓ Server  ○ UI  Theme  Tools  Experiments

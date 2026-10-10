@@ -442,7 +442,13 @@ async fn runner_drain_reuses_instructions_between_steps() {
         .join("\n");
     assert!(system.contains("Today's date:"), "{system}");
     assert!(system.contains("<env>"), "{system}");
-    assert!(system.contains("# Code Mode"), "the codemode stub renders: {system}");
+    // Wave 4: the real Code Mode instruction. This harness boots
+    // without a code-mode runtime, so v2's empty-catalog text stands
+    // (`execute` is not callable and is never advertised).
+    assert!(
+        system.contains("No Code Mode tools are currently available"),
+        "the codemode empty text renders: {system}"
+    );
 }
 
 #[allow(dead_code)]

@@ -58,6 +58,17 @@ const LOGO_WIDTH: usize = 19 + 1 + 19;
 /// The prompt box's `maxWidth` (`routes/home.tsx`).
 const PROMPT_MAX_WIDTH: usize = 75;
 
+/// One plugin-contributed home quick action (wave 3's home slot): a
+/// label rendered on the home footer row that dispatches `command`
+/// (a plugin or builtin command id) through the palette dispatcher.
+/// Materialized at registration; never per-frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginQuickAction {
+    pub plugin_id: String,
+    pub label: String,
+    pub command: String,
+}
+
 /// The home render's inputs (the store-assembled form drives the
 /// prompt draft + footer; the golden harness injects the fixture
 /// location/version directly).
@@ -73,6 +84,12 @@ pub struct HomeView<'a> {
     pub status_agent: String,
     /// The staged model label for the composer hint row.
     pub status_model: String,
+    /// Plugin footer hint segments (wave 3).
+    pub plugin_hints: Vec<String>,
+    /// Plugin quick-action labels (wave 3's home slot; rendered on
+    /// the footer row's left, ` · `-joined, only when non-empty so
+    /// every golden stays byte-exact).
+    pub plugin_actions: Vec<String>,
 }
 
 /// Render the home route at `size` (the golden-pinned layout).
@@ -120,6 +137,7 @@ pub fn render_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u16)) -
             command_shortcut: "ctrl+p".into(),
             status_agent: view.status_agent.clone(),
             status_model: view.status_model.clone(),
+            plugin_hints: view.plugin_hints.clone(),
         },
         top: 1,
     };
@@ -137,6 +155,21 @@ pub fn render_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u16)) -
             for (index, ch) in view.version.chars().enumerate() {
                 if let Some(slot) =
                     frame.cells.get_mut(row).and_then(|line| line.get_mut(x + index))
+                {
+                    *slot = Cell { ch, attrs: 0, fg: muted, bg: base };
+                }
+            }
+        }
+        // Wave 3's home slot: plugin quick actions on the same row's
+        // left (muted, ` · `-joined) — empty by default, so the
+        // golden bytes never move.
+        if !view.plugin_actions.is_empty() {
+            let joined = view.plugin_actions.join(" · ");
+            let budget = width.saturating_sub(padding * 2 + version_width + 2);
+            let text = crate::wrap::take_width(&joined, budget);
+            for (index, ch) in text.chars().enumerate() {
+                if let Some(slot) =
+                    frame.cells.get_mut(row).and_then(|line| line.get_mut(padding + index))
                 {
                     *slot = Cell { ch, attrs: 0, fg: muted, bg: base };
                 }
@@ -264,12 +297,32 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         version: env!("CARGO_PKG_VERSION").to_owned(),
         status_agent,
         status_model,
+        plugin_hints: store.plugin_footer_hints(),
+        plugin_actions: store
+            .plugin_home_actions()
+            .into_iter()
+            .map(|action| action.label)
+            .collect(),
     };
     let _ = theme;
     render_home_view(&view, &state, size)
 }
 
 use crate::store::Store;
+
+/// Dispatch one plugin quick action's command through the palette
+/// dispatcher (plugin commands route through the
+/// [`crate::store::PluginCommandSink`]; builtin ids run natively).
+pub fn run_plugin_quick_action(
+    store: &Store,
+    dispatcher: &mut dyn crate::components::command_palette::CommandDispatcher,
+    index: usize,
+) -> crate::components::command_palette::Dispatch {
+    let Some(action) = store.plugin_home_actions().into_iter().nth(index) else {
+        return crate::components::command_palette::Dispatch::Unknown;
+    };
+    dispatcher.dispatch(store, &action.command, None)
+}
 
 #[cfg(test)]
 mod tests {
@@ -297,5 +350,37 @@ mod tests {
         let frame = render_home(&store, &theme.styles(), (80, 30));
         let grid = frame.text_grid().join("\n");
         assert!(grid.contains("hello"), "the draft typed into the home prompt: {grid}");
+    }
+
+    /// Wave 3: plugin quick actions paint on the footer row's left
+    /// (and stay absent — byte-exact — when none registered).
+    #[test]
+    fn plugin_quick_actions_paint_on_the_footer_row() {
+        let store = Store::new(Runtime::new());
+        store.set_plugin_home_actions(vec![
+            PluginQuickAction {
+                plugin_id: "omos".into(),
+                label: "/preset".into(),
+                command: "omo.preset".into(),
+            },
+            PluginQuickAction {
+                plugin_id: "omos".into(),
+                label: "/killall".into(),
+                command: "omo.killall".into(),
+            },
+        ]);
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame = render_home(&store, &theme.styles(), (80, 30));
+        let footer = &frame.text_grid()[28];
+        assert!(
+            footer.trim_start().starts_with("/preset · /killall"),
+            "quick actions on the footer row's left: {footer:?}"
+        );
+        assert!(footer.contains(env!("CARGO_PKG_VERSION")), "the version stays right-aligned");
+
+        // Empty actions: the footer row keeps the golden shape.
+        let bare = Store::new(Runtime::new());
+        let frame = render_home(&bare, &theme.styles(), (80, 30));
+        assert!(!frame.text_grid()[28].contains("/preset"));
     }
 }

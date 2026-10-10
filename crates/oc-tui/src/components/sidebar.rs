@@ -58,28 +58,56 @@ pub fn sidebar_visible(mode: SidebarMode, session_pane_width: usize) -> bool {
     matches!(mode, SidebarMode::Auto) && session_pane_width > SIDEBAR_AUTO_BREAKPOINT
 }
 
+/// One plugin-provided sidebar section (the `sidebar.content` slot's
+/// wave-3 fill): a bold title row plus muted rows, materialized at
+/// registration/refresh through the plugin host's UI-request queue —
+/// native rendering afterwards, no per-frame IPC.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarSection {
+    /// Owning plugin id (one section per plugin, latest wins).
+    pub plugin_id: String,
+    pub title: String,
+    pub rows: Vec<String>,
+}
+
+impl SidebarSection {
+    /// The section's rendered height: title + rows.
+    #[must_use]
+    pub fn height(&self) -> usize {
+        1 + self.rows.len()
+    }
+}
+
 /// The sidebar's plugin content slot (`sidebar.content`): the context
-/// and MCP widgets. The golden fixture has no widget data, so both
-/// render nothing — the sections are the seam wave 3 fills.
+/// and MCP widgets plus the wave-3 plugin sections. The golden fixture
+/// has no widget data, so empty sections render nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SidebarSections {
     /// The context widget's entries (directory/recent files).
     pub context: Vec<String>,
     /// The MCP widget's server entries.
     pub mcp: Vec<String>,
+    /// Plugin-provided sections (registration/refresh-time).
+    pub plugins: Vec<SidebarSection>,
 }
 
 impl SidebarSections {
     #[must_use]
     pub const fn empty() -> Self {
-        Self { context: Vec::new(), mcp: Vec::new() }
+        Self { context: Vec::new(), mcp: Vec::new(), plugins: Vec::new() }
     }
 
     /// The slot's content height (rows the scroll area consumes).
     /// Empty sections render nothing, like the golden fixture.
     #[must_use]
     pub fn content_height(&self) -> usize {
-        0
+        // Per non-empty section: title + rows + the 1-row gap that
+        // follows.
+        self.plugins
+            .iter()
+            .filter(|section| !section.title.is_empty() || !section.rows.is_empty())
+            .map(|section| section.height() + 1)
+            .sum()
     }
 }
 
@@ -182,6 +210,43 @@ pub fn render_sidebar(view: &SidebarView, theme: &ThemeStyles, height: usize) ->
         )],
         tag: Some("sidebar.title".into()),
     });
+
+    // The content slot (`sidebar.content`): one blank row after the
+    // title, then every plugin section — a bold header row plus
+    // muted rows, 2 columns in, 1-row gap between sections. Empty
+    // sections render nothing (the golden fixture's shape).
+    let mut y = 2;
+    for section in &view.sections.plugins {
+        if section.title.is_empty() && section.rows.is_empty() {
+            continue;
+        }
+        if !section.title.is_empty() {
+            let title = crate::wrap::take_width(&section.title, SESSION_SIDEBAR_WIDTH - 4);
+            paint.placed.push(Placed {
+                x: 2,
+                y,
+                width: crate::wrap::display_width(&title),
+                lines: vec![PlacedLine::plain(
+                    title,
+                    Style::new().fg(fg_base).bg(raised).add_modifier(Modifier::BOLD),
+                )],
+                tag: Some("sidebar.plugin-section".into()),
+            });
+            y += 1;
+        }
+        for row in &section.rows {
+            let text = crate::wrap::take_width(row, SESSION_SIDEBAR_WIDTH - 4);
+            paint.placed.push(Placed {
+                x: 2,
+                y,
+                width: crate::wrap::display_width(&text),
+                lines: vec![PlacedLine::plain(text, Style::new().fg(fg_muted).bg(raised))],
+                tag: None,
+            });
+            y += 1;
+        }
+        y += 1; // the inter-section gap
+    }
 
     // The footer slot stacks from the bottom: location row at
     // height−2 (the box's paddingBottom keeps the last row blank),
@@ -353,5 +418,51 @@ mod tests {
         let title =
             paint.placed.iter().find(|p| p.tag.as_deref() == Some("sidebar.title")).expect("title");
         assert_eq!((title.x, title.y), (2, 1));
+    }
+
+    /// The wave-3 plugin section renders under the title (the blank
+    /// seam filled): bold header at row 2, muted rows under it, a gap
+    /// between sections — and empty sections stay invisible (the
+    /// golden fixture's shape). Text-grid pinned locally (plugins are
+    /// not in the reference corpus).
+    #[test]
+    fn plugin_section_renders_under_the_title() {
+        let theme = theme();
+        let mut view = SidebarView::fixture("Sidebar fixture", "/tmp/opencode/x:main");
+        view.sections.plugins = vec![
+            SidebarSection {
+                plugin_id: "omos".into(),
+                title: "Preset".into(),
+                rows: vec!["zhipuai · own/glm-5.3".into(), "openai · gpt-5.6".into()],
+            },
+            SidebarSection { plugin_id: "empty".into(), title: String::new(), rows: vec![] },
+            SidebarSection {
+                plugin_id: "mcp".into(),
+                title: "MCP".into(),
+                rows: vec!["context7".into()],
+            },
+        ];
+        assert_eq!(view.sections.content_height(), 7, "(1+2)+gap + (1+1)+gap; empty skipped");
+        let paint = render_sidebar(&view, &theme, 30);
+        let texts: Vec<(usize, String)> = paint
+            .placed
+            .iter()
+            .filter(|p| p.y < 10)
+            .map(|p| (p.y, p.lines.iter().map(PlacedLine::text).collect::<String>()))
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                (1, "Sidebar fixture".to_owned()),
+                (2, "Preset".to_owned()),
+                (3, "zhipuai · own/glm-5.3".to_owned()),
+                (4, "openai · gpt-5.6".to_owned()),
+                (6, "MCP".to_owned()), // gap row 5, next section at 6
+                (7, "context7".to_owned()),
+            ],
+            "the plugin sections stack under the title"
+        );
+        // The empty section painted nothing at row 5.
+        assert!(paint.placed.iter().all(|p| p.y != 5), "the gap row stays blank");
     }
 }

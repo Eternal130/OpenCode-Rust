@@ -53,9 +53,11 @@ pub struct AutocompleteView<'a> {
 
 /// The footer row's inputs: the location label, the two hint prefixes
 /// ("" in the golden harness — unbound shortcuts render as nothing,
-/// leaving ` agents` / ` commands`), and the optional agent · model
+/// leaving ` agents` / ` commands`), the optional agent · model
 /// statusline (v2's `footerStatuslinePolicy` hint row — empty in every
-/// pinned composer golden, populated on the live routes).
+/// pinned composer golden, populated on the live routes), and the
+/// wave-3 plugin hint segments (rendered left of the shortcut hints,
+/// muted — empty by default so every golden stays byte-exact).
 #[derive(Debug, Clone, Default)]
 pub struct FooterHints {
     pub location: String,
@@ -65,6 +67,8 @@ pub struct FooterHints {
     pub status_agent: String,
     /// The staged model label ("" = none).
     pub status_model: String,
+    /// Plugin-contributed hint segments (wave 3; ` · `-joined).
+    pub plugin_hints: Vec<String>,
 }
 
 /// Everything [`render_prompt_frame`] paints.
@@ -447,6 +451,11 @@ fn paint_footer_row(
     let agent_hint = format!("{} agents", view.footer.agent_shortcut);
     let command_hint = format!("{} commands", view.footer.command_shortcut);
     let block_width = display_width(&agent_hint) + 2 + display_width(&command_hint);
+    // The wave-3 plugin hint segment (muted, left of the shortcut
+    // hints); empty ⇒ nothing renders and the row keeps its golden
+    // bytes.
+    let plugin_text = view.footer.plugin_hints.join(" · ");
+    let plugin_width = display_width(&plugin_text);
     // The statusline: `{agent} · {model}` (the prompt-idle hint row);
     // empty labels paint nothing.
     let status_text =
@@ -460,16 +469,22 @@ fn paint_footer_row(
         };
     let status_width = display_width(&status_text);
     let right_block = if hints_shown {
-        block_width + if status_width > 0 { status_width + 2 } else { 0 }
+        block_width
+            + if status_width > 0 { status_width + 2 } else { 0 }
+            + if plugin_width > 0 { plugin_width + 2 } else { 0 }
     } else {
-        status_width
+        status_width + plugin_width
     };
     let location_width =
         if right_block > 0 { width.saturating_sub(right_block + 2).max(1) } else { width };
     let location = truncate_width(&view.footer.location, location_width);
     paint_text(frame, 0, row_index, &location, colors.muted, colors.base, 0);
     if status_width > 0 {
-        let x = width.saturating_sub(right_block);
+        // The statusline sits left of the shortcut hints, shifted right
+        // by the plugin segment when one is present (empty ⇒ the
+        // golden geometry).
+        let x =
+            width.saturating_sub(right_block) + if plugin_width > 0 { plugin_width + 2 } else { 0 };
         let budget = width.saturating_sub(x).min(status_width);
         // Three segments (the statusline policy's tones): agent label
         // in text.base, the `·` separator muted, model in text.base.
@@ -506,6 +521,16 @@ fn paint_footer_row(
             x += display_width(key);
             paint_text(frame, x, row_index, label, colors.muted, colors.base, 0);
             x += display_width(label) + 2;
+        }
+    }
+    // The plugin hint segment sits left of the shortcut hints (or at
+    // the right edge when the hints are width-gated off).
+    if plugin_width > 0 {
+        let x = width.saturating_sub(right_block);
+        let budget = width.saturating_sub(x);
+        let segment = truncate_width(&plugin_text, budget);
+        if !segment.is_empty() {
+            paint_text(frame, x, row_index, &segment, colors.muted, colors.base, 0);
         }
     }
 }

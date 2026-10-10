@@ -311,6 +311,82 @@ fn sidebar_collapsed_matches_text_grid_and_ansi() {
     assert_ansi_byte_match("sidebar-collapsed", 160, &frame);
 }
 
+/// Wave 3 — the sidebar's plugin section renders IN the session
+/// screen's golden shape (the same 160-wide assembly as
+/// `sidebar-expanded`, plus one plugin section under the title).
+/// Pinned LOCALLY: plugins are not in the reference corpus, so the
+/// expected grid is asserted inline (text-grid compare against a
+/// locally-pinned expected, not the reference goldens).
+#[test]
+fn sidebar_plugin_section_renders_in_the_session_screen_shape() {
+    let theme = theme();
+    let mut sidebar_view =
+        crate::components::sidebar::SidebarView::fixture("Sidebar fixture", FIXTURE_LOCATION);
+    sidebar_view.sections.plugins = vec![crate::components::sidebar::SidebarSection {
+        plugin_id: "tuislots".into(),
+        title: "Fixture".into(),
+        rows: vec!["preset: zhipuai".into(), "sessions: 7".into()],
+    }];
+    let screen = SessionScreen {
+        tabs: None,
+        sidebar: SidebarMode::Auto,
+        sidebar_view,
+        follow: FollowState::Sticky,
+        location: FIXTURE_LOCATION,
+    };
+    let composer = sibling_composer(118, &theme);
+    let frame = paint_session_screen(
+        &crate::components::message::list::message_groups_fixture(),
+        &TranscriptOptions::default(),
+        &screen,
+        &theme,
+        160,
+        30,
+        ComposerSlot::Sibling(&composer),
+    );
+    let grid = frame.text_grid();
+    // The sidebar pane occupies columns 118..160; the section lands
+    // under the title (row 2 + rows 3-4), 2 columns into the pane.
+    let pane: Vec<String> =
+        grid.iter().map(|row| row.chars().skip(118 + 2).take(30).collect()).collect();
+    assert!(pane[1].starts_with("Sidebar fixture"), "the title: {:?}", pane[1]);
+    assert!(pane[2].starts_with("Fixture"), "the section title: {:?}", pane[2]);
+    assert!(pane[3].starts_with("preset: zhipuai"), "row 1: {:?}", pane[3]);
+    assert!(pane[4].starts_with("sessions: 7"), "row 2: {:?}", pane[4]);
+    assert!(pane[5].trim().is_empty(), "the gap row: {:?}", pane[5]);
+    // The reference corpus shape is UNCHANGED with no sections (the
+    // empty-seam golden above still passes byte-exact) — and the
+    // transcript column keeps its bytes here too (the section only
+    // paints inside the pane).
+    let left: String = grid[10].chars().take(118).collect();
+    assert_eq!(
+        left,
+        {
+            let bare_screen = SessionScreen {
+                tabs: None,
+                sidebar: SidebarMode::Auto,
+                sidebar_view: crate::components::sidebar::SidebarView::fixture(
+                    "Sidebar fixture",
+                    FIXTURE_LOCATION,
+                ),
+                follow: FollowState::Sticky,
+                location: FIXTURE_LOCATION,
+            };
+            let bare = paint_session_screen(
+                &crate::components::message::list::message_groups_fixture(),
+                &TranscriptOptions::default(),
+                &bare_screen,
+                &theme,
+                160,
+                30,
+                ComposerSlot::Sibling(&composer),
+            );
+            bare.text_grid()[10].chars().take(118).collect::<String>()
+        },
+        "the transcript column is untouched by the sidebar section"
+    );
+}
+
 #[test]
 fn session_screen_40_matches_text_grid_and_ansi() {
     let theme = theme();

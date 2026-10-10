@@ -1,0 +1,34 @@
+{
+  "data": {
+    "agent": "build",
+    "cost": 0.0,
+    "id": "ses_edb8fcd40ffePrgrJuI4ot3KNu",
+    "location": {
+      "directory": "/tmp/opencode/ref/packages/cli"
+    },
+    "model": {
+      "id": "fake-model",
+      "providerID": "parityfake"
+    },
+    "outcome": "succeeded",
+    "projectID": "98b1b6cf10e8f9f1ef18d4eefbd9b2a048c6f0d3fb68298f9ad8774c5cd1eb77",
+    "slug": "gentle-atlas",
+    "subpath": "",
+    "time": {
+      "created": 1791612695247,
+      "idle": 1791612695443,
+      "updated": 1791612700229,
+      "viewed": 1791612695443
+    },
+    "title": "p10 renamed from tui",
+    "tokens": {
+      "cache": {
+        "read": 0,
+        "write": 0
+      },
+      "input": 22,
+      "output": 14,
+      "reasoning": 0
+    }
+  }
+}

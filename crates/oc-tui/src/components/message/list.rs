@@ -36,8 +36,8 @@ use ratatui::style::Style;
 
 use crate::components::message::markdown::{render_markdown, MarkdownStyles};
 use crate::components::message::model::{
-    canonical_tool_name, exploration_label, reasoning_summary, reduce_rows, Entry, Message, Part,
-    Row,
+    canonical_tool_name, exploration_label, reasoning_summary, reduce_rows_with_rules, Entry,
+    Message, Part, Row,
 };
 use crate::components::message::rows::{
     assistant_footer_row, completed_tool_row, reasoning_header_row, running_tool_row,
@@ -69,6 +69,9 @@ pub struct TranscriptOptions {
     pub clock_ms: u64,
     /// Expanded group keys (disclosure state; collapsed by default).
     pub expanded_groups: Vec<String>,
+    /// Plugin-provided grouping rules (wave 3's open rules table);
+    /// empty = the native closed set only.
+    pub group_rules: crate::components::message::model::GroupRules,
 }
 
 impl Default for TranscriptOptions {
@@ -78,6 +81,7 @@ impl Default for TranscriptOptions {
             group_exploration: true,
             clock_ms: 0,
             expanded_groups: Vec::new(),
+            group_rules: crate::components::message::model::GroupRules::empty(),
         }
     }
 }
@@ -167,7 +171,11 @@ pub fn render_transcript(
 ) -> Transcript {
     let inset = if width < 44 { 1 } else { 2 };
     let content_width = width.saturating_sub(inset * 2);
-    let rows: Vec<Row> = reduce_rows(messages, &std::collections::HashSet::<String>::new());
+    let rows: Vec<Row> = reduce_rows_with_rules(
+        messages,
+        &std::collections::HashSet::<String>::new(),
+        &options.group_rules,
+    );
     let markdown = MarkdownStyles::from_theme(theme);
     let mut measured: Vec<MeasuredRow> = Vec::new();
     let mut y = 0usize;
@@ -244,7 +252,7 @@ fn render_row(
             assistant_footer_row(agent, model, duration, theme, width)
         }
         Row::Group { kind, children, completed, .. } => {
-            group_row(*kind, children, *completed, messages, options, theme, width)
+            group_row(kind.clone(), children, *completed, messages, options, theme, width)
         }
     }
 }
@@ -340,6 +348,18 @@ fn group_row(
                 theme,
                 width,
             )
+        }
+        GroupKind::Plugin(header) => {
+            // Wave 3's open rules table: a plugin-defined group header
+            // — one muted `◈` row with the rule's label and the child
+            // count (completed shape; the group closes like a tool
+            // run when the next row closes it).
+            let label = if children.len() > 1 {
+                format!("{header} ({})", children.len())
+            } else {
+                header.clone()
+            };
+            completed_tool_row('◈', &label, theme, width)
         }
         GroupKind::Instructions => {
             // `InstructionsGroup` (group-view.tsx:235): the number of

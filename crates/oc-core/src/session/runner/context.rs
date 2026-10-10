@@ -478,31 +478,35 @@ impl InstructionState {
 // Instruction sources: builtins + Wave C/D stubs (context.ts §3.1 order)
 // ---------------------------------------------------------------------------
 
+/// v2's empty-catalog render — the exact text
+/// [`crate::tool::codemode::render_instructions`] produces for an empty
+/// summary; pinned here for the disabled-runtime path's parity note.
+#[allow(dead_code)]
 const CODEMODE_EMPTY: &str = "No Code Mode tools are currently available. Later Code Mode catalog updates may add or remove tools. Do not call `execute` unless there is at least one available Code Mode tool.";
 
-const CODEMODE_CHANGED: &str =
-    "The Code Mode tool catalog has changed. This catalog supersedes the previous Code Mode tool catalog.";
-
-/// `# Code Mode` guidance stub — TODO(wave-C): the real catalog renders
-/// namespaces + entries and diffs per-namespace; Wave B pins the key and
-/// the empty-catalog text.
+/// The `# Code Mode` instruction (wave 4): the real catalog renders —
+/// namespaces + selected listings under the inline budget — whenever
+/// the CodeMode surface is live (an `execute` executor registered,
+/// i.e. the engine booted with a code-mode runtime). Without one, the
+/// v2 empty-catalog text stands: `execute` is not callable, so it is
+/// never advertised.
 fn codemode_source(tools: Arc<ToolRegistryState>) -> InstructionSource {
     InstructionSource {
         key: "core/codemode".into(),
         read: Box::new(move || {
-            let codemode = tools.snapshot(None).iter().filter(|tool| tool.codemode).count();
-            ReadOutcome::Value(serde_json::json!(codemode))
-        }),
-        initial: Box::new(|value| {
-            let count = value.as_u64().unwrap_or(0);
-            if count == 0 {
-                Some(CODEMODE_EMPTY.to_string())
-            } else {
-                // TODO(wave-C): render the full Code Mode catalog.
-                Some(format!("# Code Mode\n\n{count} tools are available through `execute`."))
+            let entries = crate::tool::codemode::code_mode_entries(&tools);
+            if tools.executor(crate::tool::codemode::EXECUTE_NAME).is_none() {
+                return ReadOutcome::Value(serde_json::json!({ "enabled": false }));
             }
+            ReadOutcome::Value(crate::tool::codemode::summary_value(
+                &crate::tool::codemode::catalog_summary(&entries),
+            ))
         }),
-        changed: Box::new(|_previous, _current| Some(CODEMODE_CHANGED.to_string())),
+        initial: Box::new(|value| Some(crate::tool::codemode::instructions_from_value(value))),
+        changed: Box::new(|_previous, current| {
+            let text = crate::tool::codemode::instructions_from_value(current);
+            Some(crate::tool::codemode::instructions_replacement(&text))
+        }),
         removed: None,
     }
 }
@@ -1461,7 +1465,12 @@ impl SessionContext {
         let session_rules: Option<Ruleset> =
             session.permission.as_ref().and_then(|raw| serde_json::from_str::<Ruleset>(raw).ok());
         let permissions = Self::merged_permissions(&agent, session_rules.as_ref());
-        let tools = self.tools.snapshot(Some(&permissions));
+        let code_mode = self.tools.executor(crate::tool::codemode::EXECUTE_NAME).is_some();
+        let tools = crate::tool::codemode::shape_request_tools(
+            self.tools.snapshot(Some(&permissions)),
+            Some(&permissions),
+            code_mode,
+        );
         let instructions = self.instruction_list(session_id).await;
         Ok(Selection { session, agent_id: selection.id, agent, instructions, tools, permissions })
     }

@@ -1,0 +1,40 @@
+   p10 renamed from tui          +
+
+     Switched variant to default                                                                                        p10 renamed from tui
+
+  ┃                                                                                                                     Context
+  ┃  Say hello.                                                                                                         18 tokens
+  ┃
+
+     Parity fake says hello.
+
+     Build · fake-model · 24ms · 0.0 tok/s
+
+     Switched variant to default
+
+  ┃
+  ┃  Now read the outside file please.
+  ┃
+
+     → Explored: 1 read
+
+     The outside file says p10-secret.
+
+     Build · fake-model · 4.0s · 0.0 tok/s
+
+
+                                                                                                                          ⬖ Getting started                ✕
+
+                                                                                                                            OpenCode includes free models so
+                                                                                                                            you can start immediately.
+
+                                                                                                                            Connect from 75+ providers to
+                                                                                                                            use other models, including
+  ┃                                                                                                                         Claude, GPT, Gemini etc
+  ┃
+  ┃                                                                                                                         Connect provider        /connect
+  ┃  Build · fake-model parityfake
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  /tmp/opencode/ref/packages/cli                                                                 18  ctrl+p commands    /tmp/opencode/ref/packages/cli
+
+ ✓ Server  ● UI  Theme  Tools  Experiments

@@ -72,6 +72,7 @@
     clippy::doc_lazy_continuation
 )]
 
+pub mod codemode;
 pub mod edit;
 pub mod file_diff;
 pub mod glob;

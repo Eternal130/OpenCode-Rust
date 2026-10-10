@@ -267,6 +267,34 @@ pub fn resolve_entry(package_root: &Path) -> Result<PathBuf, String> {
     Err(format!("no entrypoint found for {}", package_root.display()))
 }
 
+/// Resolve ONE named `exports` subpath (e.g. `./tui` — the TUI-plugin
+/// entry the v2 host resolves separately from the server entry).
+/// Falls back to `main`/`index.js` like the server probe.
+pub fn resolve_subpath_entry(package_root: &Path, subpath: &str) -> Result<PathBuf, String> {
+    let manifest: Value = {
+        let text = std::fs::read_to_string(package_root.join("package.json"))
+            .map_err(|error| format!("read {}: {error}", package_root.display()))?;
+        serde_json::from_str(&text).map_err(|error| format!("parse package.json: {error}"))?
+    };
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(entry) =
+        manifest.get("exports").and_then(Value::as_object).and_then(|exports| exports.get(subpath))
+    {
+        collect_export_paths(entry, &mut candidates);
+    }
+    if let Some(main) = manifest.get("main").and_then(Value::as_str) {
+        candidates.push(main.to_owned());
+    }
+    candidates.push("index.js".to_owned());
+    for candidate in candidates {
+        let path = package_root.join(candidate);
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    Err(format!("no {subpath} entrypoint found for {}", package_root.display()))
+}
+
 /// One `exports` clause → importable relative paths (strings and
 /// condition objects, `import`/`default` preferred).
 fn collect_export_paths(entry: &Value, out: &mut Vec<String>) {
@@ -350,6 +378,38 @@ mod tests {
             "./server": { "import": "./dist/server/index.js" },
         }));
         let entry = resolve_entry(&pkg).expect("entry resolves");
+        assert!(entry.ends_with("dist/server/index.js"), "{}", entry.display());
+    }
+
+    /// The TUI entry resolves independently (`exports["./tui"]` — the
+    /// flagship's `./tui` → `dist/tui2.js` shape).
+    #[test]
+    fn resolve_subpath_entry_probes_the_tui_export() {
+        let pkg = package_with_exports(&serde_json::json!({
+            ".": { "import": "./dist/index.js" },
+            "./server": { "import": "./dist/server/index.js" },
+            "./tui": { "import": "./dist/tui2.js", "types": "./dist/v2/tui.d.ts" },
+        }));
+        std::fs::write(pkg.join("dist/tui2.js"), "export default {}").unwrap();
+        let entry = resolve_subpath_entry(&pkg, "./tui").expect("tui entry resolves");
+        assert!(entry.ends_with("dist/tui2.js"), "{}", entry.display());
+        // An absent subpath falls back to main (a package without a
+        // TUI entry is not an error — probing is cheap).
+        let bare = package_with_exports(&serde_json::json!({
+            "./server": { "import": "./dist/server/index.js" },
+        }));
+        std::fs::write(
+            bare.join("package.json"),
+            serde_json::to_string(&serde_json::json!({
+                "name": "demo-plugin",
+                "version": "1.0.0",
+                "exports": { "./server": { "import": "./dist/server/index.js" } },
+                "main": "./dist/server/index.js",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let entry = resolve_subpath_entry(&bare, "./tui").expect("fallback resolves");
         assert!(entry.ends_with("dist/server/index.js"), "{}", entry.display());
     }
 

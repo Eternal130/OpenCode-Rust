@@ -1882,6 +1882,7 @@ version = "2.0.24"
 dependencies = [
  "anyhow",
  "libc",
+ "oc-client",
  "oc-util",
  "regex",
  "serde",
