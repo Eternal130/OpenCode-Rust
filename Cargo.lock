@@ -1687,6 +1687,7 @@ dependencies = [
  "oc-ai",
  "oc-client",
  "oc-core",
+ "oc-plugin-host",
  "oc-schema",
  "oc-server",
  "oc-tui",
@@ -1761,6 +1762,9 @@ dependencies = [
 name = "oc-plugin-host"
 version = "2.0.24"
 dependencies = [
+ "async-trait",
+ "oc-core",
+ "oc-schema",
  "serde",
  "serde_json",
  "tokio",

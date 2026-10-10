@@ -23,7 +23,7 @@
 //!    from the pending map; a late reply is discarded by id. A hung
 //!    plugin costs its own dispatch, never the host.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -34,12 +34,13 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::context::{Bridge, HostState, SessionPort, SESSION_METHODS};
 use crate::protocol::{self, Incoming};
 use crate::registrations::{PluginState, PluginStatus, Registrations};
 use crate::tap::TapEvent;
 
 /// Everything the supervisor needs at spawn time.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SupervisorConfig {
     /// Resolved bun executable.
     pub bun: PathBuf,
@@ -65,6 +66,11 @@ pub struct SupervisorConfig {
     pub max_restarts: u32,
     /// Extra environment for the guest (test fixtures).
     pub env: Vec<(String, String)>,
+    /// Host-owned transform-domain base state (seeded into the guest
+    /// at load; wave 2).
+    pub host_state: HostState,
+    /// `ctx.session.*` routing target (default: declining port).
+    pub session_port: Option<Arc<dyn SessionPort>>,
 }
 
 impl Default for SupervisorConfig {
@@ -81,6 +87,8 @@ impl Default for SupervisorConfig {
             max_plugin_crashes: 3,
             max_restarts: 8,
             env: Vec::new(),
+            host_state: HostState::default(),
+            session_port: None,
         }
     }
 }
@@ -140,6 +148,11 @@ pub struct Shared {
     /// Diagnostics counters (the dropped-dispatch observability).
     pub dispatched_events: AtomicU64,
     pub dropped_events: AtomicU64,
+    /// The runtime every supervisor task lives on — the async
+    /// guest-request path (`session.*`) spawns onto it (deadlock rule
+    /// 1: the reader never blocks on a port that calls back in).
+    /// `None` on the dead facade (constructed off-runtime).
+    pub(crate) runtime_handle: Option<tokio::runtime::Handle>,
 }
 
 impl Shared {
@@ -162,6 +175,7 @@ impl Shared {
             ready: Arc::new((Mutex::new(false), Condvar::new())),
             dispatched_events: AtomicU64::new(0),
             dropped_events: AtomicU64::new(0),
+            runtime_handle: None,
         }
     }
 
@@ -221,72 +235,100 @@ impl Shared {
     /// registration mutation + an enqueued reply. This is deadlock
     /// rule 1: the guest is blocked on this reply while its own
     /// `load`/`dispatch` reply is still owed to us.
-    fn answer_guest(&self, id: u64, method: &str, params: &Value) -> String {
+    ///
+    /// `None` = the reply is deferred (the `session.*` async path
+    /// spawns the port call; the reply is enqueued when it settles).
+    fn answer_guest(self: &Arc<Self>, id: u64, method: &str, params: &Value) -> Option<String> {
         match method {
-            "command.add" => {
-                let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
-                if name.is_empty() {
-                    return protocol::error_response(id, "command.add requires a name");
-                }
-                let command = crate::registrations::PluginCommand {
+            "command.add" | "theme.register" => Some(answer_wave1(self, id, method, params)),
+            // -- wave 2: transform-domain materialization (registration
+            //    time only — the only synchronous surface).
+            "agent.transform" | "mcp.transform" | "skill.transform" | "tool.transform" => {
+                Some(answer_transform(self, id, method, params))
+            }
+            "hook.register" => {
+                let hook = crate::registrations::PluginHook {
                     plugin_id: params
                         .get("pluginId")
                         .and_then(Value::as_str)
                         .unwrap_or("?")
                         .to_owned(),
-                    name: name.to_owned(),
-                    description: params
-                        .get("description")
+                    domain: params
+                        .get("domain")
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_owned(),
-                    keybinds: params
-                        .get("keybinds")
-                        .and_then(Value::as_array)
-                        .map(|specs| {
-                            specs.iter().filter_map(Value::as_str).map(str::to_owned).collect()
-                        })
-                        .unwrap_or_default(),
-                    palette: params.get("palette").and_then(Value::as_bool).unwrap_or(true),
+                    name: params.get("name").and_then(Value::as_str).unwrap_or_default().to_owned(),
                 };
-                self.registrations
-                    .write()
-                    .expect("registrations poisoned")
-                    .commands
-                    .insert(name.to_owned(), command);
-                protocol::response(id, Value::Null)
-            }
-            "theme.register" => {
-                let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
-                if name.is_empty() {
-                    return protocol::error_response(id, "theme.register requires a name");
+                if hook.domain.is_empty() || hook.name.is_empty() {
+                    return Some(protocol::error_response(
+                        id,
+                        "hook.register requires domain+name",
+                    ));
                 }
-                let Some(document) = params.get("document") else {
-                    return protocol::error_response(id, "theme.register requires a document");
-                };
-                let theme = crate::registrations::PluginTheme {
-                    plugin_id: params
-                        .get("pluginId")
-                        .and_then(Value::as_str)
-                        .unwrap_or("?")
-                        .to_owned(),
-                    name: name.to_owned(),
-                    document: document.to_string(),
-                };
-                self.registrations
-                    .write()
-                    .expect("registrations poisoned")
-                    .themes
-                    .insert(name.to_owned(), theme);
-                protocol::response(id, Value::Null)
+                self.registrations.write().expect("registrations poisoned").hooks.insert(hook);
+                Some(protocol::response(id, Value::Null))
             }
-            "event.subscribe" | "ping" => protocol::response(id, Value::Null),
+            // -- plugin-ID-scoped durable KV (file per plugin under the
+            //    sandbox; small synchronous IO on the reader task).
+            "storage.get" | "storage.set" | "storage.remove" | "storage.scan" => {
+                Some(answer_storage(self, id, method, params))
+            }
+            "permission.reply" => {
+                // Registration-time acknowledgment only; the permission
+                // prompt flow is the permission lane's seam (wave 4).
+                Some(protocol::response(id, Value::Null))
+            }
+            "event.subscribe" | "ping" => Some(protocol::response(id, Value::Null)),
             "log" => {
                 log_guest(params);
-                protocol::response(id, Value::Null)
+                Some(protocol::response(id, Value::Null))
             }
-            other => protocol::error_response(id, &format!("unknown host method {other:?}")),
+            other => {
+                if let Some(method) = other.strip_prefix("session.") {
+                    if !SESSION_METHODS.contains(&method) {
+                        return Some(protocol::error_response(
+                            id,
+                            &format!("unknown session method {method:?}"),
+                        ));
+                    }
+                    self.answer_session_async(id, method, params);
+                    return None;
+                }
+                Some(protocol::error_response(id, &format!("unknown host method {other:?}")))
+            }
         }
+    }
+
+    /// The async `session.*` path: spawn the port call onto the
+    /// supervisor runtime; the reply is enqueued when it settles. The
+    /// reader task returns immediately (deadlock rule 1 — a port that
+    /// dispatches hooks back into the guest must never block it).
+    fn answer_session_async(self: &Arc<Self>, id: u64, method: &str, params: &Value) {
+        let Some(handle) = self.runtime_handle.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(id, "plugin host runtime unavailable"));
+            return;
+        };
+        let Some(port) = self.config.session_port.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(
+                id,
+                &format!("session.{method}: no session engine attached to the plugin host"),
+            ));
+            return;
+        };
+        let bridge = Bridge { shared: Arc::clone(self) };
+        let args = params.get("args").cloned().unwrap_or(Value::Null);
+        let method = method.to_owned();
+        let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+        handle.spawn(async move {
+            let reply = match port.call(&bridge, &method, &args).await {
+                Ok(value) => protocol::response(id, json!({ "value": value })),
+                Err(message) => protocol::error_response(id, &message),
+            };
+            let _ = outbound.send(reply);
+        });
     }
 
     /// A guest notification (fire-and-forget).
@@ -371,12 +413,150 @@ impl Shared {
     }
 }
 
+/// The wave-1 registration arms (commands incl. owned keymap entries,
+/// theme documents) — extracted to keep [`Shared::answer_guest`]
+/// readable.
+fn answer_wave1(shared: &Shared, id: u64, method: &str, params: &Value) -> String {
+    let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
+    if name.is_empty() {
+        return protocol::error_response(id, &format!("{method} requires a name"));
+    }
+    let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
+    match method {
+        "command.add" => {
+            let command = crate::registrations::PluginCommand {
+                plugin_id,
+                name: name.to_owned(),
+                description: params
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                keybinds: params
+                    .get("keybinds")
+                    .and_then(Value::as_array)
+                    .map(|specs| {
+                        specs.iter().filter_map(Value::as_str).map(str::to_owned).collect()
+                    })
+                    .unwrap_or_default(),
+                palette: params.get("palette").and_then(Value::as_bool).unwrap_or(true),
+            };
+            shared
+                .registrations
+                .write()
+                .expect("registrations poisoned")
+                .commands
+                .insert(name.to_owned(), command);
+            protocol::response(id, Value::Null)
+        }
+        "theme.register" => {
+            let Some(document) = params.get("document") else {
+                return protocol::error_response(id, "theme.register requires a document");
+            };
+            let theme = crate::registrations::PluginTheme {
+                plugin_id,
+                name: name.to_owned(),
+                document: document.to_string(),
+            };
+            shared
+                .registrations
+                .write()
+                .expect("registrations poisoned")
+                .themes
+                .insert(name.to_owned(), theme);
+            protocol::response(id, Value::Null)
+        }
+        other => protocol::error_response(id, &format!("unknown wave-1 method {other:?}")),
+    }
+}
+
+/// The transform-domain materialization arms (`agent/mcp/skill/tool.transform`):
+/// the guest sends the whole derived table; the merge keeps
+/// provenance. Registration-time only.
+fn answer_transform(shared: &Shared, id: u64, method: &str, params: &Value) -> String {
+    let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or("?");
+    let mut registrations = shared.registrations.write().expect("registrations poisoned");
+    match method {
+        "agent.transform" => {
+            let agents =
+                params.get("agents").and_then(Value::as_array).cloned().unwrap_or_default();
+            let default = params.get("default").and_then(Value::as_str).filter(|s| !s.is_empty());
+            registrations.merge_agents(plugin_id, &agents, default);
+        }
+        "mcp.transform" => {
+            let servers: BTreeMap<String, Value> = params
+                .get("servers")
+                .and_then(Value::as_object)
+                .map(|map| {
+                    map.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<BTreeMap<_, _>>()
+                })
+                .unwrap_or_default();
+            registrations.merge_mcps(plugin_id, &servers);
+        }
+        "skill.transform" => {
+            let skills =
+                params.get("skills").and_then(Value::as_array).cloned().unwrap_or_default();
+            registrations.merge_skills(plugin_id, &skills);
+        }
+        "tool.transform" => {
+            let tools = params.get("tools").and_then(Value::as_array).cloned().unwrap_or_default();
+            registrations.merge_tools(plugin_id, &tools);
+        }
+        other => return protocol::error_response(id, &format!("unknown transform {other:?}")),
+    }
+    protocol::response(id, Value::Null)
+}
+
 fn log_guest(params: &Value) {
     let level = params.get("level").and_then(Value::as_str).unwrap_or("info");
     let message = params.get("message").and_then(Value::as_str).unwrap_or("");
     let plugin = params.get("pluginId").and_then(Value::as_str).unwrap_or("host");
     if level == "error" || level == "warn" {
         eprintln!("opencode plugin-host [{plugin}] {level}: {message}");
+    }
+}
+
+/// The `storage.*` guest-request arms (one helper — `answer_guest`'s
+/// match stays under the complexity ceiling). Synchronous file IO on
+/// the reader task; the KV is small by construction (value/key caps).
+fn answer_storage(shared: &Shared, id: u64, method: &str, params: &Value) -> String {
+    let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let store = StorageFile::for_plugin(&shared.config.cwd, &plugin_id);
+    match method {
+        "storage.get" => {
+            let Some((_, key)) = storage_key(params) else {
+                return protocol::error_response(id, "storage.get requires a key");
+            };
+            let value = store.get(&key);
+            protocol::response(id, json!({ "value": value }))
+        }
+        "storage.set" => {
+            let Some((_, key)) = storage_key(params) else {
+                return protocol::error_response(id, "storage.set requires a key");
+            };
+            let Some(value) = params.get("value") else {
+                return protocol::error_response(id, "storage.set requires a value");
+            };
+            match store.set(&key, value) {
+                Ok(()) => protocol::response(id, Value::Null),
+                Err(error) => protocol::error_response(id, &error),
+            }
+        }
+        "storage.remove" => {
+            let Some((_, key)) = storage_key(params) else {
+                return protocol::error_response(id, "storage.remove requires a key");
+            };
+            store.remove(&key);
+            protocol::response(id, Value::Null)
+        }
+        "storage.scan" => {
+            let prefix = params.get("prefix").and_then(Value::as_str).unwrap_or_default();
+            let after = params.get("after").and_then(Value::as_str);
+            let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(100).clamp(1, 500);
+            let result = store.scan(prefix, after, limit as usize);
+            protocol::response(id, result)
+        }
+        other => protocol::error_response(id, &format!("unknown storage method {other:?}")),
     }
 }
 
@@ -408,6 +588,7 @@ impl Supervisor {
             ready: Arc::new((Mutex::new(false), Condvar::new())),
             dispatched_events: AtomicU64::new(0),
             dropped_events: AtomicU64::new(0),
+            runtime_handle: Some(tokio::runtime::Handle::current()),
         });
         // Prime plugin statuses before any IO so crash attribution
         // always sees the entries.
@@ -481,7 +662,11 @@ async fn load_entry(shared: &Arc<Shared>, entry: &std::path::Path) {
     let outcome = shared
         .request(
             "load",
-            json!({ "entry": key, "generation": generation }),
+            json!({
+                "entry": key,
+                "generation": generation,
+                "seed": shared.config.host_state.to_seed_json(),
+            }),
             shared.config.registration_timeout,
         )
         .await;
@@ -581,7 +766,11 @@ impl Shared {
             let outcome = self
                 .request(
                     "load",
-                    json!({ "entry": key, "generation": generation }),
+                    json!({
+                        "entry": key,
+                        "generation": generation,
+                        "seed": self.config.host_state.to_seed_json(),
+                    }),
                     self.config.registration_timeout,
                 )
                 .await;
@@ -702,9 +891,11 @@ fn spawn_reader(shared: Arc<Shared>, stdout: tokio::process::ChildStdout, genera
                     // Unknown ids: a late reply after timeout — dropped.
                 }
                 Incoming::Request { id, method, params } => {
-                    let reply = shared.answer_guest(id, &method, &params);
-                    let outbound = shared.outbound.read().expect("outbound lock poisoned").clone();
-                    let _ = outbound.send(reply);
+                    if let Some(reply) = shared.answer_guest(id, &method, &params) {
+                        let outbound =
+                            shared.outbound.read().expect("outbound lock poisoned").clone();
+                        let _ = outbound.send(reply);
+                    }
                 }
                 Incoming::Notification { method, params } => shared.note(&method, &params),
             }
@@ -843,6 +1034,117 @@ async fn dispatch_pump(shared: Arc<Shared>, mut tap_rx: mpsc::Receiver<TapEvent>
     }
 }
 
+// =============================================================================
+// Plugin storage KV (file per plugin id under the sandbox)
+// =============================================================================
+
+/// Cap: a value larger than this is rejected (the KV is for flags,
+/// caches and small documents — not blobs).
+const STORAGE_VALUE_LIMIT: usize = 256 * 1024;
+/// Cap: the store file is an in-memory JSON map; refuse unbounded key
+/// growth instead of wedging the reader task.
+const STORAGE_MAX_KEYS: usize = 10_000;
+/// One file per plugin: keys sorted (`BTreeMap`), scanned in
+/// key order for deterministic paging.
+type StorageMap = BTreeMap<String, Value>;
+
+fn storage_key(params: &Value) -> Option<(String, String)> {
+    let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let key = params.get("key").and_then(Value::as_str).unwrap_or_default().to_owned();
+    Some((plugin_id, key)).filter(|(_, key)| !key.is_empty() && key.len() <= 256)
+}
+
+/// One plugin's durable KV: `<sandbox>/plugin-storage/<sanitized>.json`.
+struct StorageFile {
+    path: PathBuf,
+}
+
+impl StorageFile {
+    fn for_plugin(cwd: &std::path::Path, plugin_id: &str) -> Self {
+        let safe: String = plugin_id
+            .chars()
+            .map(
+                |c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' },
+            )
+            .collect();
+        let safe = safe.chars().take(80).collect::<String>();
+        let dir = cwd.join("plugin-storage");
+        let _ = std::fs::create_dir_all(&dir);
+        Self { path: dir.join(format!("{safe}.json")) }
+    }
+
+    fn load(&self) -> StorageMap {
+        std::fs::read_to_string(&self.path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    fn save(&self, map: &StorageMap) -> Result<(), String> {
+        if let Some(parent) = self.path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let text = serde_json::to_string(map).map_err(|error| error.to_string())?;
+        std::fs::write(&self.path, text).map_err(|error| format!("write storage: {error}"))
+    }
+
+    fn get(&self, key: &str) -> Option<Value> {
+        self.load().get(key).cloned()
+    }
+
+    fn set(&self, key: &str, value: &Value) -> Result<(), String> {
+        let encoded = serde_json::to_string(value).map_err(|error| error.to_string())?;
+        if encoded.len() > STORAGE_VALUE_LIMIT {
+            return Err(format!(
+                "storage value for {key:?} exceeds {STORAGE_VALUE_LIMIT} bytes ({} encoded)",
+                encoded.len()
+            ));
+        }
+        let mut map = self.load();
+        if map.len() >= STORAGE_MAX_KEYS {
+            return Err(format!("storage for this plugin holds {} keys; refusing more", map.len()));
+        }
+        map.insert(key.to_owned(), value.clone());
+        self.save(&map)
+    }
+
+    fn remove(&self, key: &str) {
+        let mut map = self.load();
+        map.remove(key);
+        let _ = self.save(&map);
+    }
+
+    /// v2 `storage.scan`: `{prefix, after?, limit?}` → `{entries,
+    /// next?}` in key order.
+    fn scan(&self, prefix: &str, after: Option<&str>, limit: usize) -> Value {
+        let map = self.load();
+        let mut entries = Vec::new();
+        let mut next = Value::Null;
+        let mut count = 0usize;
+        for (key, value) in map.range(prefix.to_owned()..) {
+            if !key.starts_with(prefix) {
+                break;
+            }
+            if let Some(after) = after {
+                if key.as_str() <= after {
+                    continue;
+                }
+            }
+            if count >= limit {
+                next = Value::String(key.clone());
+                break;
+            }
+            entries.push(json!({ "key": key, "value": value }));
+            count += 1;
+        }
+        let mut result = json!({ "entries": entries });
+        if !next.is_null() {
+            result["next"] = next;
+        }
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -855,5 +1157,37 @@ mod tests {
         assert_eq!(backoff(base, max, 2), Duration::from_millis(200));
         assert_eq!(backoff(base, max, 3), Duration::from_millis(400));
         assert_eq!(backoff(base, max, 100), Duration::from_secs(4));
+    }
+
+    #[test]
+    fn storage_kv_round_trips_and_scans_in_key_order() {
+        let dir = std::env::temp_dir().join(format!("ocph-storage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = StorageFile::for_plugin(&dir, "p@1/odd id");
+        assert!(store.path.ends_with("p_1_odd_id.json"), "{}", store.path.display());
+        store.set("b/2", &json!(2)).expect("set b/2");
+        store.set("a/1", &json!({ "x": 1 })).expect("set a/1");
+        store.set("b/1", &json!("v")).expect("set b/1");
+        assert_eq!(store.get("a/1"), Some(json!({ "x": 1 })));
+        let page = store.scan("b/", None, 10);
+        assert_eq!(
+            page["entries"],
+            json!([{ "key": "b/1", "value": "v" }, { "key": "b/2", "value": 2 }])
+        );
+        let paged = store.scan("b/", Some("b/1"), 10);
+        assert_eq!(paged["entries"], json!([{ "key": "b/2", "value": 2 }]));
+        store.remove("b/1");
+        assert_eq!(store.get("b/1"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn storage_rejects_oversized_values() {
+        let dir = std::env::temp_dir().join(format!("ocph-storage-big-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = StorageFile::for_plugin(&dir, "p");
+        let big = "x".repeat(STORAGE_VALUE_LIMIT + 1);
+        assert!(store.set("big", &json!(big)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

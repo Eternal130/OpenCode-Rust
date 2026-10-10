@@ -4,8 +4,8 @@
 //!
 //! * host → guest **request**: `{"jsonrpc":"2.0","id":1,"method":"load","params":{…}}`
 //! * guest → host **request**: same shape, ids from a disjoint space
-//!   (the guest numbers from `1 << 40` so the two spaces can never
-//!   collide even though they are matched independently)
+//!   (the guest numbers from `1 << 40` — see `host.js`, where the
+//!   literal is written out because JS `<<` is 32-bit)
 //! * **response**: `{"jsonrpc":"2.0","id":1,"result":{…}}` or
 //!   `{"jsonrpc":"2.0","id":1,"error":{"message":"…"}}`
 //! * **notification** (no id, both directions): fire-and-forget

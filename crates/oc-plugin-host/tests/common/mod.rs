@@ -48,3 +48,59 @@ pub fn wait_for(timeout: Duration, mut probe: impl FnMut() -> bool) -> bool {
 pub fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }
+
+// ---------------------------------------------------------------------------
+// The recording session port (wave 2): the text-level session-engine seam
+// ---------------------------------------------------------------------------
+
+use async_trait::async_trait;
+use oc_plugin_host::{Bridge, SessionPort};
+use serde_json::{json, Value};
+
+/// A [`SessionPort`] that records `session.prompt` calls and — the
+/// text-level engine seam — runs the prompt through the plugin
+/// session-context hook chain (`Bridge::dispatch_hook`), capturing the
+/// rewritten context event. This is exactly the loop the real engine
+/// will drive: command → marker prompt → context hooks → model.
+#[derive(Default)]
+pub struct RecordingSessionPort {
+    /// (sessionID, text) per admitted prompt.
+    pub prompts: std::sync::Mutex<Vec<(String, String)>>,
+    /// The post-hook context events (one per prompt).
+    pub contexts: std::sync::Mutex<Vec<Value>>,
+}
+
+#[async_trait]
+impl SessionPort for RecordingSessionPort {
+    async fn call(&self, bridge: &Bridge, method: &str, args: &Value) -> Result<Value, String> {
+        match method {
+            "prompt" => {
+                let session_id =
+                    args.get("sessionID").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let text = args.get("text").and_then(Value::as_str).unwrap_or_default().to_owned();
+                self.prompts.lock().unwrap().push((session_id.clone(), text.clone()));
+                let mut event = json!({
+                    "sessionID": session_id,
+                    "system": [{ "type": "text", "text": "" }],
+                    "messages": [{
+                        "id": "msg_user",
+                        "role": "user",
+                        "content": [{ "type": "text", "text": text }],
+                    }],
+                });
+                for plugin in bridge.hook_subscribers("session", "context") {
+                    event = bridge
+                        .dispatch_hook(&plugin, "session", "context", event)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                self.contexts.lock().unwrap().push(event);
+                Ok(Value::Null)
+            }
+            "list" | "context" => Ok(json!([])),
+            "messages" => Ok(json!({ "data": [] })),
+            "get" => Err("no such session in the recording port".into()),
+            other => Err(format!("session.{other}: not wired in the recording port")),
+        }
+    }
+}

@@ -1,0 +1,188 @@
+//! The JS-facing Context's Rust backing — wave 2 (flagship bring-up).
+//!
+//! `host.js` implements the minimal `ctx` surface the flagship plugin
+//! (oh-my-opencode-slim v3.0.3) actually touches; this module holds the
+//! Rust side of the domains that need more than a registration insert:
+//!
+//! * [`HostState`] — the host-owned base state seeded INTO the guest at
+//!   load (the agent/MCP tables the flagship's transform editors
+//!   snapshot and mutate; registration-time pre-resolution, the
+//!   oracle-gate11 §4 sync-callback rule, flows host→guest here).
+//! * [`SessionPort`] — `ctx.session.*` call routing. Guest session
+//!   requests are answered **asynchronously** (spawned off the IO
+//!   reader — deadlock rule 1 stays intact), because a real port (the
+//!   oc-core engine seam) may need to dispatch session hooks BACK into
+//!   the guest through [`Bridge::dispatch_hook`] — a nested RPC that
+//!   must never block the reader.
+//! * [`Bridge`] — the port's view of the host: hook dispatch + the
+//!   registration snapshot.
+//! * [`install`] — the pinned, frozen npm/bun install path
+//!   (`opencode plugin add` → real installation).
+
+pub mod install;
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde_json::Value;
+
+use crate::registrations::RegistrationSnapshot;
+use crate::supervisor::Shared;
+use crate::HostError;
+
+/// Host-owned base state for the guest's transform domains (seeded at
+/// load; the guest replays plugin editors over it, `reload()`-style).
+#[derive(Debug, Clone, Default)]
+pub struct HostState {
+    /// Reported via `ctx.app.version` (logged by plugins).
+    pub app_version: String,
+    /// `ctx.location.project.id`.
+    pub project_id: String,
+    /// `ctx.directory` / `ctx.location.directory` — the project the
+    /// host was started for.
+    pub directory: String,
+    /// The native agent table (v2 `Agent.Info` JSON array; the oc-core
+    /// `AgentRegistry` contents — build/general/…).
+    pub agents: Vec<Value>,
+    /// The native MCP server configs (name → v2 `Mcp.ServerConfig`).
+    pub mcps: BTreeMap<String, Value>,
+}
+
+impl HostState {
+    /// The serialized seed sent in the `load` params.
+    #[must_use]
+    pub fn to_seed_json(&self) -> Value {
+        serde_json::json!({
+            "appVersion": self.app_version,
+            "project": { "id": self.project_id },
+            "directory": self.directory,
+            "agents": self.agents,
+            "mcps": self.mcps,
+        })
+    }
+}
+
+/// `ctx.session.*` routing target. Implementations own the real session
+/// engine loop (the oc-core engine seam); the default port declines
+/// every call and the plugin shims degrade (logged guest-side).
+///
+/// Calls arrive spawned off the IO reader; a port may freely call back
+/// into the guest through `bridge` (nested RPC is the port's to manage
+/// — the reader is never blocked on it).
+#[async_trait]
+pub trait SessionPort: Send + Sync {
+    /// One `ctx.session.<method>` call; `args` is the guest's argument
+    /// object verbatim. `Ok(value)` answers the guest (accessible as
+    /// the resolved `value`); `Err(message)` rejects it.
+    async fn call(&self, bridge: &Bridge, method: &str, args: &Value) -> Result<Value, String>;
+}
+
+/// The declining default: every method errors with a clear message.
+pub struct NoSessionEngine;
+
+#[async_trait]
+impl SessionPort for NoSessionEngine {
+    async fn call(&self, _bridge: &Bridge, method: &str, _args: &Value) -> Result<Value, String> {
+        Err(format!("session.{method}: no session engine attached to the plugin host"))
+    }
+}
+
+/// The port's view of the running host.
+pub struct Bridge {
+    pub(crate) shared: Arc<Shared>,
+}
+
+impl Bridge {
+    /// Dispatch one runtime hook event into the guest for `plugin_id`
+    /// (sequential handlers, same object mutated). Returns the possibly
+    /// mutated event. Timeout-bounded by the dispatch timeout.
+    ///
+    /// # Errors
+    /// [`HostError`] on timeout/guest failure.
+    pub async fn dispatch_hook(
+        &self,
+        plugin_id: &str,
+        domain: &str,
+        name: &str,
+        event: Value,
+    ) -> Result<Value, HostError> {
+        let result = self
+            .shared
+            .request(
+                "hook.dispatch",
+                serde_json::json!({
+                    "pluginId": plugin_id,
+                    "domain": domain,
+                    "name": name,
+                    "event": event,
+                }),
+                self.shared.config.dispatch_timeout,
+            )
+            .await?;
+        Ok(result.get("event").cloned().unwrap_or(Value::Null))
+    }
+
+    /// Plugins subscribed to one hook point (registration order).
+    #[must_use]
+    pub fn hook_subscribers(&self, domain: &str, name: &str) -> Vec<String> {
+        let registrations = self.shared.registrations.read().expect("registrations poisoned");
+        let mut plugins: Vec<String> = registrations
+            .hooks
+            .iter()
+            .filter(|hook| hook.domain == domain && hook.name == name)
+            .map(|hook| hook.plugin_id.clone())
+            .collect();
+        plugins.dedup();
+        plugins
+    }
+
+    /// The current registration snapshot.
+    #[must_use]
+    pub fn registrations(&self) -> RegistrationSnapshot {
+        self.shared.registrations.read().expect("registrations poisoned").snapshot()
+    }
+}
+
+/// The guest-facing session method allowlist (`ctx.session.*`).
+pub const SESSION_METHODS: &[&str] = &[
+    "get",
+    "interrupt",
+    "context",
+    "messages",
+    "list",
+    "prompt",
+    "synthetic",
+    "update",
+    "remove",
+    "wait",
+    "switchModel",
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seed_json_carries_the_domain_bases() {
+        let state = HostState {
+            app_version: "2.0.24".into(),
+            project_id: "proj_1".into(),
+            directory: "/work".into(),
+            agents: vec![serde_json::json!({ "id": "build" })],
+            mcps: BTreeMap::from([("demo".to_owned(), serde_json::json!({ "type": "local" }))]),
+        };
+        let seed = state.to_seed_json();
+        assert_eq!(seed["directory"], "/work");
+        assert_eq!(seed["project"]["id"], "proj_1");
+        assert_eq!(seed["agents"][0]["id"], "build");
+        assert_eq!(seed["mcps"]["demo"]["type"], "local");
+    }
+
+    #[test]
+    fn session_methods_cover_the_flagship_surface() {
+        for method in ["prompt", "context", "get", "list", "messages", "switchModel", "wait"] {
+            assert!(SESSION_METHODS.contains(&method), "missing {method}");
+        }
+    }
+}
