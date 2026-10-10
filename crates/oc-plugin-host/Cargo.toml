@@ -17,3 +17,6 @@ tokio = { workspace = true }
 [dev-dependencies]
 oc-core = { workspace = true }
 oc-schema = { workspace = true }
+oc-util = { workspace = true }
+tempfile = "3"
+futures = "0.3"

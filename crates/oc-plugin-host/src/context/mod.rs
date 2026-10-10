@@ -54,13 +54,13 @@ impl HostState {
     /// The serialized seed sent in the `load` params. The MCP table
     /// passes through the v2 `opencode.mcp.codemode.defaults`
     /// transform first (executor.sh / `executor mcp` ⇒ our Code Mode
-    /// off; PostHog ⇒ the `tools` header) — the guest's editors
+    /// off; `PostHog` ⇒ the `tools` header) — the guest's editors
     /// snapshot the defaulted base.
     #[must_use]
     pub fn to_seed_json(&self) -> Value {
         let mut mcps = self.mcps.clone();
-        if let Some(table) = mcps.as_object_mut() {
-            codemode_defaults::apply_to_servers(table);
+        for config in mcps.values_mut() {
+            codemode_defaults::apply_to_server(config);
         }
         serde_json::json!({
             "appVersion": self.app_version,

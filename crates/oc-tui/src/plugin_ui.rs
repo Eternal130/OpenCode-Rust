@@ -69,11 +69,12 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
             ))]);
         }
         PluginUiEvent::SidebarSection { title, rows } => {
-            store.set_plugin_sidebar_section(crate::components::sidebar::SidebarSection {
+            let section = crate::components::sidebar::SidebarSection {
                 plugin_id: plugin_id.to_owned(),
                 title: title.clone(),
                 rows: rows.clone(),
-            });
+            };
+            store.set_plugin_sidebar_section(&section);
         }
         PluginUiEvent::FooterHint { text } => store.set_plugin_footer_hint(plugin_id, text),
         PluginUiEvent::DialogOpen { content } => {
@@ -155,9 +156,8 @@ mod tests {
         );
         apply_plugin_ui(&store, "omos", &PluginUiEvent::FooterHint { text: String::new() });
         assert_eq!(store.plugin_sidebar_sections().len(), 1, "the omos section removed");
-        assert!(store.plugin_footer_hints().is_empty());
+        assert_eq!(store.plugin_footer_hints(), Vec::<String>::new());
     }
-
     #[test]
     fn dialog_open_materializes_and_opens() {
         let store = Store::new(Runtime::new());

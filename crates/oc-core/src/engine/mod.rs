@@ -1709,6 +1709,10 @@ fn mcp_servers_from_config(
             }
         }
     }
+    // The v2 `opencode.mcp.codemode.defaults` transform over the
+    // config-sourced table (executor.sh / `executor mcp` ⇒ our Code
+    // Mode off; PostHog ⇒ the `tools` header).
+    crate::mcp::registry::apply_codemode_defaults(&mut servers);
     servers
 }
 

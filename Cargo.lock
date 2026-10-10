@@ -1763,10 +1763,13 @@ name = "oc-plugin-host"
 version = "2.0.24"
 dependencies = [
  "async-trait",
+ "futures",
  "oc-core",
  "oc-schema",
+ "oc-util",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

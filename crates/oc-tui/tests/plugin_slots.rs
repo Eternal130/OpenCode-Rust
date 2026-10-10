@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use oc_plugin_host::{BroadcastTap, PluginDialogSpec, TapEvent, UiRequest};
-use oc_tui::components::command_palette::{CommandDispatcher as _, Dispatch, StoreDispatcher};
+use oc_tui::components::command_palette::{Dispatch, StoreDispatcher};
 use oc_tui::components::message::list::{render_transcript, TranscriptOptions};
 use oc_tui::components::message::model::{Message, Part, PartTime};
 use oc_tui::data::{BusEvent, Ingest};
@@ -284,7 +284,7 @@ fn tui_slots_end_to_end() {
     let rows = frame.text_grid();
     assert!(rows[7].contains("Poked"), "the dialog title: {:?}", rows[7]);
     assert!(rows[9].contains("row one"), "dialog row 1: {:?}", rows[9]);
-    assert!(store.dialogs().len() == 1);
+    assert_eq!(store.dialogs().len(), 1);
     store.clear_dialogs();
 
     // -- materialize-at-open through the delegation source ------------------
