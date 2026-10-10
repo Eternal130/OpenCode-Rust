@@ -73,6 +73,19 @@ pub fn default_port(channel: &str) -> u16 {
     }
 }
 
+/// The rust port's OWN default service port. Registered divergence
+/// (`PORT_REPORT` §3): v2's channel scheme pins `latest` to 0xc0de=49374;
+/// a faithful port would collide with any concurrently running v2 on the
+/// same machine — the coexistence scenario this port exists for. We
+/// therefore derive our default from `"opencode-rust:{channel}"` through
+/// the same sha1 scheme (deterministic, disjoint from v2's fixed ports).
+/// Explicit configuration (`service set port`, config, `--port`) still
+/// wins over this default everywhere.
+#[must_use]
+pub fn rust_default_port(channel: &str) -> u16 {
+    default_port(&format!("opencode-rust:{channel}"))
+}
+
 /// `ServiceConfig.legacyFilename(channel)`.
 #[must_use]
 pub fn legacy_filename(channel: &str) -> Option<String> {
@@ -434,6 +447,22 @@ mod tests {
         let port = default_port("custom");
         assert!((10_000..60_000).contains(&port), "{port}");
         assert_eq!(port, default_port("custom"), "deterministic");
+    }
+
+    #[test]
+    fn rust_default_port_is_disjoint_from_v2_ports() {
+        // Deterministic per channel, never v2's fixed ports, and stable
+        // across releases (golden values from the sha1 derivation).
+        assert_eq!(rust_default_port("latest"), 52568);
+        assert_eq!(rust_default_port("local"), 53131);
+        for channel in ["latest", "dev", "beta", "next", "local"] {
+            let port = rust_default_port(channel);
+            assert_ne!(
+                port, 0xc0de,
+                "channel {channel} must not collide with v2 latest/dev/beta/next"
+            );
+            assert_ne!(port, 0xc0df, "channel {channel} must not collide with v2 local");
+        }
     }
 
     #[test]
