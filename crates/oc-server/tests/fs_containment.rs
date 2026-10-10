@@ -82,7 +82,9 @@ async fn fs_read_containment_and_list_shape() {
     let secret_two = format!("secret2-{}.txt", std::process::id());
     std::fs::write(parent.join(&secret_name), "parent secret").expect("parent secret");
     std::fs::write(grandparent.join(&secret_two), "grandparent secret").expect("grandparent");
-    let outside = parent.join("outside-target.md");
+    // PID-unique name (cross-user scratch at /tmp/opencode is written by
+    // both root and non-root test runs; fixed names collide on ownership).
+    let outside = parent.join(format!("outside-target-{}.md", std::process::id()));
     std::fs::write(&outside, "outside secret").expect("outside target");
     std::os::unix::fs::symlink(&outside, workspace.join("escape.md")).expect("escape symlink");
     std::os::unix::fs::symlink("inside.txt", workspace.join("alias.txt")).expect("inside symlink");
