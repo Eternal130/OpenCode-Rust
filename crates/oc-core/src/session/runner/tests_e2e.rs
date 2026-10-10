@@ -339,9 +339,11 @@ async fn collect_emitted_frames(
 }
 
 fn load_prompt_fake_llm_golden() -> Value {
-    let path = "/opt/opencode-rust/tools/parity/goldens/scenarios/prompt_fake_llm.json";
-    let raw =
-        std::fs::read_to_string(path).unwrap_or_else(|error| panic!("golden read failed: {error}"));
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("tools/parity/goldens/scenarios/prompt_fake_llm.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("golden read failed at {}: {error}", path.display()));
     serde_json::from_str(&raw).expect("golden json")
 }
 
