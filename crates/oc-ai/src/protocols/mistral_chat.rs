@@ -559,22 +559,22 @@ fn body_from(request: &LLMRequest) -> Result<Value, AiError> {
     }
     body.insert("stream".into(), json!(true));
     if let Some(max_tokens) = generation.max_tokens {
-        body.insert("max_tokens".into(), json!(max_tokens));
+        body.insert("max_tokens".into(), shared::number(max_tokens));
     }
     if let Some(seed) = generation.seed {
-        body.insert("random_seed".into(), json!(seed));
+        body.insert("random_seed".into(), shared::number(seed));
     }
     if let Some(temperature) = generation.temperature {
-        body.insert("temperature".into(), json!(temperature));
+        body.insert("temperature".into(), shared::number(temperature));
     }
     if let Some(top_p) = generation.top_p {
-        body.insert("top_p".into(), json!(top_p));
+        body.insert("top_p".into(), shared::number(top_p));
     }
     if let Some(frequency_penalty) = generation.frequency_penalty {
-        body.insert("frequency_penalty".into(), json!(frequency_penalty));
+        body.insert("frequency_penalty".into(), shared::number(frequency_penalty));
     }
     if let Some(presence_penalty) = generation.presence_penalty {
-        body.insert("presence_penalty".into(), json!(presence_penalty));
+        body.insert("presence_penalty".into(), shared::number(presence_penalty));
     }
     if let Some(stop) = &generation.stop {
         body.insert("stop".into(), json!(stop));
@@ -590,10 +590,10 @@ fn body_from(request: &LLMRequest) -> Result<Value, AiError> {
         body.insert("safe_prompt".into(), json!(safe_prompt));
     }
     if let Some(limit) = options.document_image_limit {
-        body.insert("document_image_limit".into(), json!(limit));
+        body.insert("document_image_limit".into(), shared::number(limit));
     }
     if let Some(limit) = options.document_page_limit {
-        body.insert("document_page_limit".into(), json!(limit));
+        body.insert("document_page_limit".into(), shared::number(limit));
     }
     let parallel_tool_calls = options.parallel_tool_calls.or_else(|| {
         matches!(

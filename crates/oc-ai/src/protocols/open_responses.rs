@@ -329,13 +329,9 @@ impl ProviderAdapter for BaseAdapter {
 // =============================================================================
 
 /// Serialize integral floats as JSON integers so wire bytes match the TS
-/// encoder (`20` stays `20`, not `20.0`).
+/// encoder (`20` stays `20`, not `20.0`) — [`crate::protocols::shared::number`].
 fn number(value: f64) -> Value {
-    if value.is_finite() && value.fract() == 0.0 && value.abs() < 9.007_199_254_740_992e15 {
-        Value::from(value as i64)
-    } else {
-        json!(value)
-    }
+    crate::protocols::shared::number(value)
 }
 
 /// Lower one tool definition (port of `lowerTool`): the baseline rejects
