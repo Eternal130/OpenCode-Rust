@@ -1,0 +1,21 @@
+# Vendored grammar crate (R-01b) — see README.md for provenance.
+# The grammar was never published to crates.io with Rust bindings
+# (only a 2022-era 0.20.0 of a different lineage exists), so this path
+# crate carries the v2-catalog grammar with standard
+# tree-sitter-language 0.1 bindings.
+[package]
+name = "tree-sitter-toml"
+description = "toml grammar for tree-sitter (vendored at tag v0.7.0)"
+version = "0.7.0"
+edition = "2021"
+license = "MIT"
+links = "tree_sitter_toml"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+cc = "1.1"
