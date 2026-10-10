@@ -130,3 +130,42 @@ Current status: ALL GREEN against `target/release/opencode`
 (green for this lane's crates: oc-util, oc-plugin-host, oc-cli — note
 the workspace-wide fmt/clippy currently also touches the parallel
 oc-server lane's in-flight files), `tools/release-smoke.sh` green.
+
+---
+
+## GitHub Actions release pipeline (added for the beta program)
+
+The repo ships two workflows:
+
+- **`.github/workflows/ci.yml`** — push/PR gate: `cargo fmt --check`,
+  `cargo clippy --workspace --all-targets -D warnings --locked`, and the
+  full `cargo nextest run --workspace` suite (2191 tests) on
+  `ubuntu-latest`. One CI-only environment step: `mkdir -p /tmp/opencode`
+  (the scratch root tests stage their PID-unique sandboxes under; the dev
+  box pre-creates it, runners do not). Toolchain pinned via
+  `rust-toolchain.toml` (1.99.0 = the version every gate ran on).
+- **`.github/workflows/release.yml`** — tag-triggered (`v*`): builds
+  `cargo build --release -p oc-cli --locked` on `ubuntu-latest`, packages
+  `opencode-<version>-linux-x64.tar.gz` (a `package/opencode` member — the
+  layout the installer and `opencode upgrade` accept) plus the
+  `sha256sum`-format sidecar, smoke-tests the packaged binary
+  (`--version` from inside the tarball), then publishes the GitHub
+  Release. Tags containing `beta` publish as **prerelease**.
+
+### Version scheme during acceptance
+
+Tags: `v2.0.24.beta.1`, `v2.0.24.beta.2`, … until acceptance; the final
+release is plain `v2.0.24`. The tag version (leading `v` stripped) names
+the assets. **The binary itself keeps reporting `2.0.24`** — the
+upstream-parity pin is a registered decision (client/server handshake,
+plugin host `app_version`, golden `--version`); beta numbering lives in
+git/Release metadata only.
+
+### Consumer URL shape
+
+```
+https://github.com/Eternal130/OpenCode-Rust/releases/download/<tag>/opencode-<version-without-v>-linux-x64.tar.gz
+```
+
+Feed it to the installer via `--url` (or `$RELEASE_URL`); there is still
+no default URL by design (the 2.0.24 pin must never adopt TS releases).

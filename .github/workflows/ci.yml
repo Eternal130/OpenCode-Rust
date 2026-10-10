@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -D warnings --locked
+
+  test:
+    name: nextest
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Tests stage scratch sandboxes under /tmp/opencode (PIDs-unique
+      # names). The dev box pre-creates it; runners do not.
+      - name: Prepare scratch dir
+        run: mkdir -p /tmp/opencode
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Run test suite
+        run: cargo nextest run --workspace --locked

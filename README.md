@@ -1,5 +1,7 @@
 # opencode-rust
 
+[![ci](https://github.com/Eternal130/OpenCode-Rust/actions/workflows/ci.yml/badge.svg)](https://github.com/Eternal130/OpenCode-Rust/actions/workflows/ci.yml)
+
 **A full Rust rewrite of [opencode](https://github.com/anomalyco/opencode) v2** — the AI coding agent's CLI, HTTP server, TUI, and plugin system, ported from upstream **[v2.0.24](https://github.com/anomalyco/opencode/commit/e7a34f09bfd9134dfade5a8ddb843f7030bc9a69)** with parity that is verified, not assumed: byte-equal OpenAPI contract, byte-equal TUI golden frames, and a database that reads and writes the upstream format in both directions.
 
 Single native binary. No Node/Bun runtime for the app itself — Bun is only spawned as a plugin subprocess, and only when plugins or MCP servers are configured.
@@ -84,6 +86,18 @@ OC_TUI_SMOKE=1 cargo nextest run            # TUI smoke vs reference
 Point the harness at your checkout/build with `PARITY_REF_ROOT` / `PARITY_BUN` if it isn't in the default location.
 
 Packaging and release: see [tools/RELEASE.md](./tools/RELEASE.md) and [install/install.sh](./install/install.sh).
+
+## Releases
+
+Pre-release builds are published from `v2.0.24.beta.N` tags until acceptance is complete, then the final `v2.0.24` release replaces them. The binary always self-reports `2.0.24` (the parity pin) — the beta marker exists only in the tag and asset names.
+
+Assets per release: `opencode-<version>-linux-x64.tar.gz` (+ `.sha256` sidecar), verified by the release workflow before publishing. Install the latest beta:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Eternal130/OpenCode-Rust/main/install/install.sh | bash -s -- \
+  --version v2.0.24.beta.1 \
+  --url https://github.com/Eternal130/OpenCode-Rust/releases/download/v2.0.24.beta.1/opencode-2.0.24.beta.1-linux-x64.tar.gz
+```
 
 ## License
 
