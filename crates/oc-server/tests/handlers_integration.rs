@@ -187,6 +187,68 @@ async fn handlers_prompt_resume_false_and_inbox() {
     assert_api(&error, 404, "SessionNotFoundError");
 }
 
+/// R-07: an image prompt's `files` (`PromptInput` URI shape) round-trip
+/// through the handler as resolved attachments (data + mime + source)
+/// — the inbox stores what the runner's media lowering consumes.
+#[tokio::test]
+async fn handlers_prompt_image_files_materialize_into_the_inbox() {
+    use base64::Engine as _;
+
+    let server = boot().await;
+    let client = &server.client;
+    let session_id = create_session(client, "prompt-image").await.id;
+
+    let png = include_bytes!("fixtures/r07-tiny-4x2.png");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+    let inbox_user = client
+        .session()
+        .prompt(
+            &session_id,
+            &SessionPromptBody {
+                text: "describe this".to_owned(),
+                resume: Some(false),
+                files: Some(vec![PromptInputFileAttachment {
+                    uri: format!("data:image/png;base64,{encoded}"),
+                    name: Some("clipboard.png".to_owned()),
+                    description: None,
+                    mention: None,
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("prompt with image");
+
+    let files = inbox_user.payload.files.expect("files stored resolved");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].mime, "image/png");
+    assert_eq!(files[0].data, encoded, "base64 payload round-trips verbatim");
+    assert!(matches!(files[0].source, oc_client::types::PromptFileSource::Inline(_)));
+    assert_eq!(files[0].name.as_deref(), Some("clipboard.png"));
+
+    // A non-data/file scheme is rejected with the v2 message, not
+    // silently dropped.
+    let error = client
+        .session()
+        .prompt(
+            &session_id,
+            &SessionPromptBody {
+                text: "bad".to_owned(),
+                resume: Some(false),
+                files: Some(vec![PromptInputFileAttachment {
+                    uri: "https://example.test/a.png".to_owned(),
+                    name: None,
+                    description: None,
+                    mention: None,
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("unsupported scheme");
+    assert!(error.to_string().contains("Unsupported attachment URI"));
+}
+
 #[tokio::test]
 async fn handlers_messages_invalid_cursor_xor_order() {
     let server = boot().await;

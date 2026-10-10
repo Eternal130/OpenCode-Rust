@@ -743,6 +743,17 @@ pub struct Store {
     /// the render loop compares between ticks — never redraw inline).
     redraw_requests: Rc<Cell<u64>>,
     _redraw_effect: crate::reactive::EffectHandle,
+    /// `session.image_preview` (R-07): the transcript image strip's
+    /// gate — off unless the config turns it on (v2's falsy default,
+    /// config/index.tsx:164 + session/index.tsx:2459).
+    image_preview: Cell<bool>,
+    /// The terminal's graphics protocol (R-07): detected once at boot
+    /// from the environment (see `crate::image`).
+    graphics_protocol: Cell<crate::image::GraphicsProtocol>,
+    /// The last frame's image placements (R-07): `render_session`
+    /// writes them; the run loop emits them after the cell grid draw
+    /// and takes them for delta tracking.
+    frame_images: std::cell::RefCell<Vec<crate::image::ImagePlacement>>,
 }
 
 /// The store's root signals (one struct so [`Store::build`] stays
@@ -884,6 +895,9 @@ impl Store {
             clock,
             redraw_requests,
             _redraw_effect: redraw_effect,
+            image_preview: Cell::new(false),
+            graphics_protocol: Cell::new(crate::image::GraphicsProtocol::None),
+            frame_images: std::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -1044,6 +1058,40 @@ impl Store {
     #[must_use]
     pub fn prompt_draft(&self, session_id: &str) -> PromptDraft {
         self.prompt.get().drafts.get(session_id).cloned().unwrap_or_default()
+    }
+
+    /// `session.image_preview` (R-07): set from the loaded config
+    /// (`App::apply_config`); default off (v2's falsy check).
+    pub fn set_image_preview(&self, enabled: bool) {
+        self.image_preview.set(enabled);
+    }
+
+    #[must_use]
+    pub fn image_preview(&self) -> bool {
+        self.image_preview.get()
+    }
+
+    /// The terminal's graphics protocol (R-07): detected once at boot
+    /// (the run loop owns the env probe; tests inject).
+    pub fn set_graphics_protocol(&self, protocol: crate::image::GraphicsProtocol) {
+        self.graphics_protocol.set(protocol);
+    }
+
+    #[must_use]
+    pub fn graphics_protocol(&self) -> crate::image::GraphicsProtocol {
+        self.graphics_protocol.get()
+    }
+
+    /// The last frame's image placements (R-07): `render_session`
+    /// writes the transcript's overlay set; the run loop reads it
+    /// after drawing the cell grid (and replaces it next frame).
+    pub fn set_frame_images(&self, images: Vec<crate::image::ImagePlacement>) {
+        *self.frame_images.borrow_mut() = images;
+    }
+
+    #[must_use]
+    pub fn frame_images(&self) -> Vec<crate::image::ImagePlacement> {
+        self.frame_images.borrow().clone()
     }
 
     /// The composer editing state for a session (draft + history),
@@ -2250,6 +2298,7 @@ impl Store {
                             id,
                             text: text.to_owned(),
                             created,
+                            files: Vec::new(),
                         },
                     );
                 }
@@ -2557,6 +2606,25 @@ fn with_tool_part(
     mutate(&mut parts[target]);
 }
 
+/// The resolved `files` array off a `message.updated` user payload →
+/// the model's `UserFile` set (deduped inline images only).
+fn files_from_event(data: &Value) -> Vec<crate::components::message::model::UserFile> {
+    let Some(files) = data.get("files").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mapped: Vec<crate::components::message::model::UserFile> = files
+        .iter()
+        .filter_map(|file| {
+            Some(crate::components::message::model::UserFile {
+                mime: file.get("mime")?.as_str()?.to_owned(),
+                data: file.get("data")?.as_str()?.to_owned(),
+                name: file.get("name").and_then(Value::as_str).map(str::to_owned),
+            })
+        })
+        .collect();
+    crate::components::message::model::deduplicate_visible_files(&mapped)
+}
+
 /// Parse a full message payload off `message.updated` (`SessionMessageInfo`
 /// subset).
 fn message_from_event(event: &BusEvent) -> Option<Message> {
@@ -2570,6 +2638,9 @@ fn message_from_event(event: &BusEvent) -> Option<Message> {
             id,
             text: event.string("text").unwrap_or_default(),
             created: time.created.unwrap_or(0),
+            // `message.updated` carries the resolved `files` array
+            // (SSE echo of the stored user message).
+            files: files_from_event(&event.data),
         }),
         Some("assistant") => {
             let mut parts = Vec::new();
@@ -3692,5 +3763,47 @@ mod tests {
             dispatcher.dispatch(&store, "nope.nope", None),
             crate::components::command_palette::Dispatch::Unknown
         );
+    }
+
+    #[test]
+    fn message_updated_user_files_project_into_the_model() {
+        // R-07: the SSE echo of a stored user message carries the
+        // resolved `files` array — inline images land on the model
+        // (deduped: the identical payload twice shows once).
+        let event = crate::data::BusEvent::new(
+            "message.updated",
+            serde_json::json!({
+                "id": "msg_1",
+                "type": "user",
+                "text": "describe this",
+                "time": {"created": 5},
+                "files": [
+                    {"mime": "image/png", "data": "AAECAw==", "name": "a.png"},
+                    {"mime": "image/png", "data": "AAECAw==", "name": "a.png"},
+                    {"mime": "application/pdf", "data": "JVBERi0=", "name": "r.pdf"}
+                ]
+            }),
+        );
+        let Some(crate::components::message::model::Message::User { files, .. }) =
+            message_from_event(&event)
+        else {
+            panic!("user message");
+        };
+        assert_eq!(files.len(), 2, "duplicate inline image deduped, pdf kept");
+        assert!(files[0].is_image());
+        assert_eq!(files[0].data_uri(), "data:image/png;base64,AAECAw==");
+        assert!(!files[1].is_image());
+
+        // Absent files stay empty (pre-R-07 messages).
+        let bare = crate::data::BusEvent::new(
+            "message.updated",
+            serde_json::json!({"id": "msg_2", "type": "user", "text": "hi"}),
+        );
+        let Some(crate::components::message::model::Message::User { files, .. }) =
+            message_from_event(&bare)
+        else {
+            panic!("user message");
+        };
+        assert_eq!(files, Vec::new());
     }
 }

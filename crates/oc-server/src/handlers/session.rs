@@ -551,9 +551,18 @@ async fn prompt(
         Some("queue") => Delivery::Queue,
         _ => Delivery::Steer,
     };
+    // `files` arrives in the PromptInput shape (URIs); materialize to
+    // the resolved FileAttachment form before the inbox stores it
+    // (core/session/prompt.ts `materializeAttachment`). A bad
+    // attachment rejects the prompt (v2's AttachmentError), never a
+    // silent drop.
+    let input_files: Option<Vec<oc_schema::prompt::InputFileAttachment>> =
+        typed_value(&body, "files");
+    let files = super::attachment::materialize_files(input_files.as_deref())
+        .map_err(|error| ApiError::invalid_request(error.to_string()))?;
     let payload = oc_schema::session_inbox::UserPayload {
         text: body["text"].as_str().unwrap_or_default().to_owned(),
-        files: typed_value(&body, "files"),
+        files,
         agents: typed_value(&body, "agents"),
         skills: typed_value(&body, "skills"),
         metadata: record_value(&body, "metadata"),

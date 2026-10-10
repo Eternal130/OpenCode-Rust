@@ -38,9 +38,46 @@ pub fn osc52_sequence(text: &str) -> Vec<u8> {
     out
 }
 
-/// Minimal base64 (standard alphabet, padded) — no new dependency for
-/// one encoder.
-mod base64_encode {
+/// Decode standard-alphabet base64 (padded or unpadded); `None` on
+/// any non-alphabet byte — the display path's data-URI payload
+/// decoder (bad payloads render the placeholder only).
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    /// Alphabet value of one base64 byte.
+    fn value(byte: u8) -> Option<u32> {
+        match byte {
+            b'A'..=b'Z' => Some(u32::from(byte - b'A')),
+            b'a'..=b'z' => Some(u32::from(byte - b'a') + 26),
+            b'0'..=b'9' => Some(u32::from(byte - b'0') + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let stripped: Vec<u8> = text.bytes().filter(|byte| !byte.is_ascii_whitespace()).collect();
+    if stripped.len() % 4 == 1 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(stripped.len() / 4 * 3);
+    for chunk in stripped.chunks(4) {
+        let mut triple = 0u32;
+        for (index, byte) in chunk.iter().enumerate() {
+            triple |= value(*byte)? << (18 - 6 * index);
+        }
+        match chunk.len() {
+            4 => out.extend_from_slice(&[(triple >> 16) as u8, (triple >> 8) as u8, triple as u8]),
+            3 => out.extend_from_slice(&[(triple >> 16) as u8, (triple >> 8) as u8]),
+            2 => out.push((triple >> 16) as u8),
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// Minimal base64 (standard alphabet, padded) — shared by the OSC 52
+/// writer and the composer's data-URI attachments (no new dependency
+/// for one encoder).
+pub(crate) mod base64_encode {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     pub fn encode(bytes: &[u8]) -> String {

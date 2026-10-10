@@ -72,6 +72,9 @@ pub struct TranscriptOptions {
     /// Plugin-provided grouping rules (wave 3's open rules table);
     /// empty = the native closed set only.
     pub group_rules: crate::components::message::model::GroupRules,
+    /// The user-message image strip (R-07): disabled by default — the
+    /// goldens predate it; `render_session` enables it per config.
+    pub image_strip: crate::components::message::rows::ImageStripOptions,
 }
 
 impl Default for TranscriptOptions {
@@ -82,6 +85,7 @@ impl Default for TranscriptOptions {
             clock_ms: 0,
             expanded_groups: Vec::new(),
             group_rules: crate::components::message::model::GroupRules::empty(),
+            image_strip: crate::components::message::rows::ImageStripOptions::default(),
         }
     }
 }
@@ -106,6 +110,9 @@ pub struct Transcript {
     /// The container's horizontal inset (paddingLeft) — the width the
     /// rows were rendered at is `width - inset*2`.
     pub inset: usize,
+    /// The transcript's image placements at absolute (transcript)
+    /// coordinates (R-07) — the graphics-protocol overlay set.
+    pub images: Vec<crate::image::ImagePlacement>,
 }
 
 /// The follow/jump state machine sketch (wave 2; documented contract).
@@ -178,6 +185,7 @@ pub fn render_transcript(
     );
     let markdown = MarkdownStyles::from_theme(theme);
     let mut measured: Vec<MeasuredRow> = Vec::new();
+    let mut images: Vec<crate::image::ImagePlacement> = Vec::new();
     let mut y = 0usize;
     for row in &rows {
         let render = render_row(row, messages, options, theme, &markdown, content_width);
@@ -195,10 +203,15 @@ pub fn render_transcript(
             fill.y += row_y as u16;
             fill.x += inset as u16;
         }
+        for mut image in render.images {
+            image.y += row_y as u16;
+            image.x += inset as u16;
+            images.push(image);
+        }
         y = row_y + render.height;
         measured.push(MeasuredRow { y: row_y, height: render.height, placed, fills, key });
     }
-    Transcript { rows: measured, content_height: y, inset }
+    Transcript { rows: measured, content_height: y, inset, images }
 }
 
 /// Render one reduced row.
@@ -216,9 +229,14 @@ fn render_row(
                 return RowRender::default();
             };
             match message {
-                Message::User { text, .. } => {
-                    user_message_row(text, theme.agent_color(0), theme, width)
-                }
+                Message::User { text, files, .. } => user_message_row(
+                    text,
+                    files,
+                    theme.agent_color(0),
+                    theme,
+                    width,
+                    &options.image_strip,
+                ),
                 // Idle markers render nothing; compaction rows are wave 3
                 // (message.list resync).
                 _ => RowRender::default(),
@@ -273,7 +291,7 @@ fn text_part_row(text: &str, markdown: &MarkdownStyles, width: usize) -> RowRend
             tag: None,
         })
         .collect();
-    RowRender { placed, fills: Vec::new(), height: lines.len() }
+    RowRender { placed, fills: Vec::new(), height: lines.len(), images: Vec::new() }
 }
 
 /// A group row: the collapsed header (exploration/reasoning) or, when
@@ -569,6 +587,7 @@ pub fn message_groups_fixture() -> Vec<Message> {
             id: "grp-user-0".into(),
             text: "What does the parser do?".into(),
             created: 0,
+            files: Vec::new(),
         },
         Message::Assistant {
             id: "grp-answer-0".into(),
@@ -593,6 +612,7 @@ pub fn message_groups_fixture() -> Vec<Message> {
             id: "grp-user-1".into(),
             text: "Now summarize the failure modes".into(),
             created: 10,
+            files: Vec::new(),
         },
         Message::Assistant {
             id: "grp-answer-1".into(),
@@ -627,6 +647,7 @@ pub fn vscroll_messages_fixture() -> Vec<Message> {
             id: format!("vs-user-{index}"),
             text: format!("Turn {index} asks about section {index} of the document"),
             created: index * 10,
+            files: Vec::new(),
         });
         messages.push(Message::Assistant {
             id: format!("vs-answer-{index}"),

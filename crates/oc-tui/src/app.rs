@@ -192,6 +192,8 @@ impl App {
         let overrides = crate::keymap::parse_keybind_overrides(&config.keybinds);
         self.store.set_keybinds(overrides);
         self.remerge_keybinds();
+        // R-07: the transcript image strip's gate (`session.image_preview`).
+        self.store.set_image_preview(config.session_image_preview);
     }
 
     fn config_directories() -> Vec<std::path::PathBuf> {
@@ -239,6 +241,24 @@ impl App {
     /// keymap expands the aliases (`enter → return`, `esc → escape`,
     /// `pgdown/pgup → page…`; `KeyCodes` names like BACKSPACE lowercase —
     /// single characters keep their case for the shift form).
+    /// A terminal paste (bracketed paste — R-07): the focused
+    /// composer's `pasteInputText` — pasted text that names local
+    /// image/PDF file(s) stages `[Image N]` attachment chips (the
+    /// resolution is bounded filesystem work, ≤20 MiB per file; v2
+    /// enqueues it async — the sync pump here trades that for the
+    /// single-read latency, pastes being user-rare).
+    pub fn paste_terminal_text(&mut self, text: &str) {
+        let key = self.prompt_key();
+        let mut composer = self.store.composer(&key);
+        composer.paste_resolved(
+            text,
+            "unix",
+            &crate::components::composer::attachment::FsLocalFiles,
+        );
+        self.store.set_composer(&key, &composer);
+        self.keymap.clear_pending();
+    }
+
     pub fn press(&mut self, spec: &str) {
         self.maybe_remerge_keybinds();
         let lowered = spec.to_ascii_lowercase();
@@ -1221,6 +1241,25 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
         let events = self.events.clone();
         let directory = self.directory.clone();
         let text = prompt.text.clone();
+        // R-07: staged attachment chips ride as `PromptInput.FileAttachment`
+        // data URIs (`files`), the wire shape the server materializes.
+        let files: Vec<oc_client::types::PromptInputFileAttachment> = prompt
+            .files
+            .iter()
+            .filter_map(|file| {
+                let payload = file.payload.as_ref()?;
+                Some(oc_client::types::PromptInputFileAttachment {
+                    uri: payload.to_data_uri(),
+                    name: Some(file.name.clone()),
+                    description: None,
+                    mention: Some(oc_client::types::PromptMention {
+                        start: u32::try_from(file.start).map_or(f64::MAX, f64::from),
+                        end: u32::try_from(file.end).map_or(f64::MAX, f64::from),
+                        text: file.mention_text(),
+                    }),
+                })
+            })
+            .collect();
         let session_key = session_id.to_owned();
         tokio::spawn(async move {
             let target = if session_key == HOME_PROMPT_KEY {
@@ -1252,7 +1291,11 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
             } else {
                 session_key.clone()
             };
-            let body = oc_client::types::SessionPromptBody { text, ..Default::default() };
+            let body = oc_client::types::SessionPromptBody {
+                text,
+                files: (!files.is_empty()).then_some(files),
+                ..oc_client::types::SessionPromptBody::default()
+            };
             if let Err(error) = client.session().prompt(&target, &body).await {
                 // v2's `fail("Failed to send prompt", error)`: the
                 // error toast + `restoreEntry()`.
@@ -1354,7 +1397,11 @@ pub async fn run_with_size(
     let _ = crossterm::execute!(
         std::io::stdout(),
         EnterAlternateScreen,
-        crossterm::event::EnableFocusChange
+        crossterm::event::EnableFocusChange,
+        // Bracketed paste (R-07): pasted text (an image file's path,
+        // typically) arrives as `Event::Paste` instead of raw keys —
+        // the seam `pasteInputText`'s attachment resolution hangs off.
+        crossterm::event::EnableBracketedPaste
     );
     // The alternate screen owns the display from here: route EVERY
     // stderr write to `<state>/tui.log` until teardown (subsystem
@@ -1370,6 +1417,9 @@ pub async fn run_with_size(
     // App + config boot.
     let store = Store::new(crate::reactive::Runtime::new());
     let mut app = App::with_store(store, size);
+    // R-07: the terminal's graphics protocol (env probe — see
+    // `crate::image` for why not a DA1 round-trip).
+    app.store.set_graphics_protocol(crate::image::detect_protocol());
     let config = crate::config::TuiConfig::load(&oc_util::global_roots::resolve().config);
 
     // R-06 — the attention channels (v2's sounds + OS notifications):
@@ -1460,6 +1510,9 @@ pub async fn run_with_size(
         .and_then(|meta| meta.modified().ok());
     let mut last_tick = std::time::Instant::now();
     let mut redraw_at = 0u64;
+    // The previous frame's image placements (R-07) — the emission
+    // delta (vanished ids delete; changed rects retransmit).
+    let mut last_frame_images: Vec<crate::image::ImagePlacement> = Vec::new();
 
     // Input thread: crossterm's blocking read (keys + resize) bridged
     // into the async loop (the detached thread exits with the process;
@@ -1765,6 +1818,25 @@ pub async fn run_with_size(
             if draw.is_err() {
                 break Err("terminal draw failed".to_owned());
             }
+            // R-07: the frame's image overlays — emit AFTER the cell
+            // grid flushed (the placements sit over their placeholder
+            // rects); ids that left the frame delete first.
+            let frame_images = app.store.frame_images();
+            if frame_images != last_frame_images {
+                let vanished: Vec<u32> = last_frame_images
+                    .iter()
+                    .filter(|old| !frame_images.iter().any(|new| new.id == old.id))
+                    .map(|old| old.id)
+                    .collect();
+                let mut out = std::io::stdout().lock();
+                let _ = crate::image::emit_image_deletes(&mut out, &vanished);
+                let _ = crate::image::emit_frame_images(
+                    &mut out,
+                    app.store.graphics_protocol(),
+                    &frame_images,
+                );
+                last_frame_images = frame_images;
+            }
         }
         // Input / tick wait.
         let event = tokio::select! {
@@ -1794,6 +1866,9 @@ pub async fn run_with_size(
             // the attention engine (OS notifications become eligible).
             Some(CrosstermEvent::FocusGained) => app.store.set_focused(),
             Some(CrosstermEvent::FocusLost) => app.store.set_blurred(),
+            // Bracketed paste (R-07): resolve attachment file paths →
+            // chips, else insert the text (`pasteInputText`).
+            Some(CrosstermEvent::Paste(text)) => app.paste_terminal_text(&text),
             _ => {}
         }
         if app.exit_requested {
@@ -1816,7 +1891,11 @@ pub async fn run_with_size(
     let _ = crossterm::execute!(
         std::io::stdout(),
         LeaveAlternateScreen,
-        crossterm::event::DisableFocusChange
+        crossterm::event::DisableFocusChange,
+        crossterm::event::DisableBracketedPaste,
+        // Clear any lingering graphics placements (R-07): the
+        // alternate screen would discard them anyway, but an explicit
+        // `a=d,d=a` keeps a same-screen exit clean.
     );
     result
 }
