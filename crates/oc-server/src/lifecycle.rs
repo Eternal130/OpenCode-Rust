@@ -20,6 +20,24 @@ use tokio::sync::watch;
 
 use crate::state::AppState;
 
+/// The build identity this binary reports on `/api/info` (the
+/// `x-opencode-build` response header) and requires of a managed
+/// daemon (B4-H3): `<OC_RELEASE_TAG>@<git-hash>` stamped at compile
+/// time. The parity pin keeps `version` at "2.0.24" across betas, so
+/// the VERSION comparison alone cannot tell an upgraded client from
+/// the stale daemon it spawned earlier — this stamp can. The header
+/// (not a body field) keeps the info payload byte-shaped like v2's:
+/// the served `/openapi.json` is sha-pinned in `goldens/p10` and
+/// `reference_api_info.json` pins the reference body — headers are
+/// invisible to both.
+pub const BUILD_STAMP: &str = match option_env!("OC_BUILD_STAMP") {
+    Some(stamp) => stamp,
+    None => "dev@unknown",
+};
+
+/// The response header carrying [`BUILD_STAMP`].
+pub const BUILD_HEADER: &str = "x-opencode-build";
+
 // ===========================================================================
 // Registration (service-registration.ts)
 // ===========================================================================
@@ -263,6 +281,10 @@ pub struct ProbedService {
     pub endpoint: Endpoint,
     /// Version the server reported.
     pub version: Option<String>,
+    /// Build identity the server reported (`x-opencode-build`;
+    /// `None` when the server predates the marker — v2 daemons and
+    /// pre-B4-H3 builds of the port).
+    pub build: Option<String>,
     /// Health classification.
     pub state: ProbeState,
     /// Protocol compatibility (404 on /api/info = ready but incompatible).
@@ -315,6 +337,7 @@ pub async fn probe(info: &Registration, timeout: Duration) -> ProbeResult {
                 info: info.clone(),
                 endpoint,
                 version: info.version.clone(),
+                build: None,
                 state: ProbeState::Ready,
                 compatible: false,
             }),
@@ -345,6 +368,7 @@ pub async fn probe(info: &Registration, timeout: Duration) -> ProbeResult {
             info: info.clone(),
             endpoint,
             version: Some(server.version),
+            build: response.build,
             state,
             compatible: true,
         }),
@@ -425,6 +449,8 @@ async fn http_request(
 struct MiniResponse {
     status: u16,
     body: Vec<u8>,
+    /// The `x-opencode-build` header value, when present (B4-H3).
+    build: Option<String>,
 }
 
 fn parse_url(url: &str) -> Result<(String, u16, String), String> {
@@ -469,6 +495,7 @@ fn parse_response(raw: &[u8]) -> Result<MiniResponse, String> {
         .ok_or_else(|| "malformed status".to_owned())?;
     let mut content_length = None;
     let mut chunked = false;
+    let mut build = None;
     for line in lines {
         if let Some((name, value)) = line.split_once(':') {
             let name = name.trim().to_ascii_lowercase();
@@ -478,6 +505,8 @@ fn parse_response(raw: &[u8]) -> Result<MiniResponse, String> {
             } else if name == "transfer-encoding" && value.to_ascii_lowercase().contains("chunked")
             {
                 chunked = true;
+            } else if name == BUILD_HEADER {
+                build = Some(value.to_owned());
             }
         }
     }
@@ -489,7 +518,7 @@ fn parse_response(raw: &[u8]) -> Result<MiniResponse, String> {
     } else {
         rest.to_vec()
     };
-    Ok(MiniResponse { status, body })
+    Ok(MiniResponse { status, body, build })
 }
 
 fn decode_chunked(mut input: &[u8]) -> Vec<u8> {
@@ -563,11 +592,26 @@ pub fn matches_version(version: Option<&str>, required: Option<&str>) -> bool {
     }
 }
 
+/// Whether a reported build satisfies the requirement (B4-H3): `None`
+/// required accepts anything (the `checkVersion: false` paths keep
+/// their reconnect-regardless semantics); a REQUIRED build demands an
+/// exact match — a daemon that reports none (v2 daemons, pre-marker
+/// builds of the port) counts as stale, which is what makes the
+/// upgrade flow replace the pre-marker daemon it is looking at.
+#[must_use]
+pub fn matches_build(build: Option<&str>, required: Option<&str>) -> bool {
+    match required {
+        None => true,
+        Some(_) => build == required,
+    }
+}
+
 /// `incumbent()`: probes the exact URL the daemon would bind.
 pub async fn incumbent(
     file: Option<&Path>,
     url: &str,
     required_version: Option<&str>,
+    required_build: Option<&str>,
     timeout: Duration,
 ) -> Option<ProbedService> {
     let mut info = read_registration(file)?;
@@ -577,6 +621,9 @@ pub async fn incumbent(
         return None;
     }
     if !matches_version(found.version.as_deref(), required_version) {
+        return None;
+    }
+    if !matches_build(found.build.as_deref(), required_build) {
         return None;
     }
     Some(found)
@@ -799,6 +846,10 @@ pub struct EnsureOptions {
     pub file: Option<PathBuf>,
     /// Required exact version.
     pub version: Option<String>,
+    /// Required build identity (B4-H3): the daemon's `x-opencode-build`
+    /// must match exactly; `None` skips the check. A daemon reporting
+    /// no marker counts as a mismatch (pre-marker builds get replaced).
+    pub build: Option<String>,
     /// Service command (default `opencode serve --service`).
     pub command: Option<Vec<String>>,
     /// Extra environment for the service process.
@@ -864,7 +915,8 @@ pub async fn ensure(options: &EnsureOptions) -> Result<Endpoint, EnsureError> {
             pool.service_answered(timing);
             let version_matches =
                 matches_version(service.version.as_deref(), options.version.as_deref());
-            let compatible = service.compatible && version_matches;
+            let build_matches = matches_build(service.build.as_deref(), options.build.as_deref());
+            let compatible = service.compatible && version_matches && build_matches;
             if !service.compatible && version_matches {
                 break Err(EnsureError::Incompatible);
             }
@@ -877,12 +929,14 @@ pub async fn ensure(options: &EnsureOptions) -> Result<Endpoint, EnsureError> {
                 break Err(EnsureError::Failed);
             }
             if !compatible {
-                announce_start(
-                    options,
-                    &mut announced,
-                    "version-mismatch",
-                    service.version.as_deref(),
-                );
+                // B4-H3: an identical version string with a DIFFERENT
+                // (or missing) build marker is the stale-daemon case —
+                // the parity pin keeps "2.0.24" across betas, so the
+                // stamp is the only signal. The existing stop path
+                // terminates the old daemon (PTY handoff included) and
+                // the loop spawns a fresh contender below.
+                let reason = if version_matches { "build-mismatch" } else { "version-mismatch" };
+                announce_start(options, &mut announced, reason, service.version.as_deref());
                 if service.state != ProbeState::Ready {
                     eprintln!("Background service is not ready; replacement cannot preserve persistent terminals");
                 }
@@ -1378,10 +1432,14 @@ pub enum BindOutcome {
 
 /// The CLI bind path (`server-process.ts`): on EADDRINUSE, poll the
 /// incumbent every 100ms up to 15s, retrying the bind between probes.
+/// A freshly spawned daemon stands down ONLY for an incumbent of the
+/// required version AND build (B4-H3) — standing down for a stale
+/// incumbent of the same pinned version would wedge the replacement.
 pub async fn bind_or_incumbent(
     options: &ServeOptions,
     file: Option<&Path>,
     required_version: Option<&str>,
+    required_build: Option<&str>,
 ) -> Result<BindOutcome, io::Error> {
     let url = format!("http://{}", SocketAddr::new(options.hostname, options.port.unwrap_or(0)));
     let initial = bind(options);
@@ -1392,7 +1450,9 @@ pub async fn bind_or_incumbent(
     };
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     while std::time::Instant::now() < deadline {
-        if let Some(found) = incumbent(file, &url, required_version, Duration::from_secs(2)).await {
+        if let Some(found) =
+            incumbent(file, &url, required_version, required_build, Duration::from_secs(2)).await
+        {
             return Ok(BindOutcome::IncumbentServing(found));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1587,12 +1647,25 @@ mod tests {
             parse_response(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}").expect("parse");
         assert_eq!(response.status, 200);
         assert_eq!(response.body, b"{}");
+        assert_eq!(response.build, None, "no marker header present");
         let response = parse_response(
             b"HTTP/1.1 500\r\ntransfer-encoding: chunked\r\n\r\n2\r\nok\r\n0\r\n\r\n",
         )
         .expect("parse");
         assert_eq!(response.status, 500);
         assert_eq!(response.body, b"ok");
+        // B4-H3: the build marker rides the x-opencode-build header
+        // (case-insensitive), whatever the status.
+        let response = parse_response(
+            b"HTTP/1.1 200 OK\r\nX-OpenCode-Build: v2.0.24.beta.4@a1b2c3d\r\ncontent-length: 2\r\n\r\n{}",
+        )
+        .expect("parse");
+        assert_eq!(response.build.as_deref(), Some("v2.0.24.beta.4@a1b2c3d"));
+        let response = parse_response(
+            b"HTTP/1.1 503 Service Unavailable\r\nx-opencode-build: dev@deadbee\r\ncontent-length: 2\r\n\r\n{}",
+        )
+        .expect("parse");
+        assert_eq!(response.build.as_deref(), Some("dev@deadbee"));
     }
 
     #[test]
@@ -1602,6 +1675,211 @@ mod tests {
         assert!(matches_version(Some("1"), Some("1")));
         assert!(!matches_version(None, Some("1")));
         assert!(!matches_version(Some("2"), Some("1")));
+    }
+
+    /// B4-H3: the build marker comparison — a required stamp demands an
+    /// exact match; a MISSING marker (v2 daemons, pre-marker builds of
+    /// the port) counts as stale so the upgrade flow replaces the very
+    /// daemon that predates the marker.
+    #[test]
+    fn server_lifecycle_matches_build() {
+        assert!(matches_build(Some("a@1"), None), "no requirement accepts anything");
+        assert!(matches_build(None, None));
+        assert!(matches_build(Some("a@1"), Some("a@1")));
+        assert!(!matches_build(Some("b@2"), Some("a@1")), "different build is stale");
+        assert!(!matches_build(None, Some("a@1")), "missing marker is stale");
+        assert!(BUILD_STAMP.contains('@'), "the stamp is <tag>@<hash>: {BUILD_STAMP}");
+    }
+
+    /// A minimal `/api/info` responder for the ensure tests: reports the
+    /// given version + pid, carries the build marker in the response
+    /// header (B4-H3), and 404s everything else.
+    async fn stub_info_server(version: String, pid: u32, build: Option<String>) -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { return };
+                let version = version.clone();
+                let build = build.clone();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buffer = [0u8; 2048];
+                    let _ = socket.read(&mut buffer).await;
+                    let head = String::from_utf8_lossy(&buffer);
+                    let (status, body) = if head.starts_with("GET /api/info") {
+                        ("200 OK", format!("{{\"version\":\"{version}\",\"pid\":{pid}}}"))
+                    } else {
+                        ("404 Not Found", "{}".to_owned())
+                    };
+                    let marker = build
+                        .map_or(String::new(), |stamp| format!("x-opencode-build: {stamp}\r\n"));
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\n{marker}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        port
+    }
+
+    /// A sacrificial stand-in process for the daemon pid (reaped so it
+    /// never zombifies), plus its pid.
+    fn sleeper_pid() -> u32 {
+        let mut sleeper = Command::new("sleep").arg("300").spawn().expect("sleep");
+        let pid = sleeper.id();
+        std::thread::spawn(move || {
+            let _ = sleeper.wait();
+        });
+        pid
+    }
+
+    /// Timing that makes the ensure loop test-fast.
+    fn fast_timing() -> EnsureTiming {
+        EnsureTiming {
+            poll_interval: Duration::from_millis(10),
+            request_timeout: Duration::from_secs(2),
+            spawn_delay: Duration::from_millis(50),
+            max_spawn_delay: Duration::from_millis(200),
+            promise_timeout: Duration::from_secs(30),
+            stop_poll_interval: Duration::from_millis(10),
+            stop_poll_attempts: 200,
+        }
+    }
+
+    /// B4-H3 integration: a registered daemon of the SAME pinned version
+    /// but an OLD build marker is REPLACED — ensure stops it through the
+    /// regular lifecycle stop path (SIGTERM via the boot sidecar) and
+    /// respawns through the injected service command, whose stand-in
+    /// installs a fresh same-build registration.
+    #[tokio::test]
+    async fn server_lifecycle_ensure_replaces_stale_build_daemon() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("service.json");
+
+        // The stale daemon: right version, old marker, alive.
+        let stale_pid = sleeper_pid();
+        let stale_port = stub_info_server(
+            env!("CARGO_PKG_VERSION").to_owned(),
+            stale_pid,
+            Some("old@0000000".to_owned()),
+        )
+        .await;
+        let stale = Registration {
+            id: Some("srv_stale".to_owned()),
+            version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+            url: format!("http://127.0.0.1:{stale_port}"),
+            pid: stale_pid,
+            password: None,
+        };
+        write_registration(&file, &stale).expect("register stale");
+
+        // The replacement the spawned "daemon" installs: same version,
+        // the CURRENT build stamp.
+        let fresh_pid = sleeper_pid();
+        let fresh_port = stub_info_server(
+            env!("CARGO_PKG_VERSION").to_owned(),
+            fresh_pid,
+            Some(BUILD_STAMP.to_owned()),
+        )
+        .await;
+        let fresh_json = serde_json::json!({
+            "id": "srv_fresh",
+            "version": env!("CARGO_PKG_VERSION"),
+            "url": format!("http://127.0.0.1:{fresh_port}"),
+            "pid": fresh_pid,
+        })
+        .to_string();
+        let spawn_marker = tmp.path().join("spawned");
+        let script = format!(
+            "printf spawned > {} && sleep 0.2 && printf '%s' '{}' > {}",
+            spawn_marker.display(),
+            fresh_json.replace('\'', "'\\''"),
+            file.display(),
+        );
+
+        let reasons = std::sync::Arc::new(std::sync::Mutex::new(Vec::new())).clone();
+        let seen = std::sync::Arc::clone(&reasons);
+        let options = EnsureOptions {
+            file: Some(file.clone()),
+            version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+            build: Some(BUILD_STAMP.to_owned()),
+            command: Some(vec!["bash".to_owned(), "-c".to_owned(), script]),
+            env: Vec::new(),
+            on_start: Some(Box::new(move |reason, previous| {
+                seen.lock().unwrap().push((reason.to_owned(), previous.map(str::to_owned)));
+            })),
+            timing: fast_timing(),
+        };
+
+        let endpoint = tokio::time::timeout(Duration::from_secs(20), ensure(&options))
+            .await
+            .expect("ensure resolves")
+            .expect("fresh daemon serves");
+        assert_eq!(endpoint.url, format!("http://127.0.0.1:{fresh_port}"));
+        assert_eq!(
+            reasons.lock().unwrap().as_slice(),
+            [("build-mismatch".to_owned(), Some(env!("CARGO_PKG_VERSION").to_owned()))],
+            "the replacement announces the build mismatch"
+        );
+        assert!(!process_alive(stale_pid, None), "the stale daemon was stopped");
+        assert!(spawn_marker.exists(), "the replacement spawned through the command");
+    }
+
+    /// B4-H3: a daemon reporting the CURRENT build marker is reused —
+    /// no stop, no respawn, the `on_start` callback never fires.
+    #[tokio::test]
+    async fn server_lifecycle_ensure_reuses_same_build_daemon() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("service.json");
+
+        let pid = sleeper_pid();
+        let port = stub_info_server(
+            env!("CARGO_PKG_VERSION").to_owned(),
+            pid,
+            Some(BUILD_STAMP.to_owned()),
+        )
+        .await;
+        write_registration(
+            &file,
+            &Registration {
+                id: Some("srv_same".to_owned()),
+                version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+                url: format!("http://127.0.0.1:{port}"),
+                pid,
+                password: None,
+            },
+        )
+        .expect("register");
+
+        let spawn_marker = tmp.path().join("spawned");
+        let script = format!("printf spawned > {}", spawn_marker.display());
+        let fired = std::sync::Arc::new(std::sync::Mutex::new(false)).clone();
+        let seen = std::sync::Arc::clone(&fired);
+        let options = EnsureOptions {
+            file: Some(file.clone()),
+            version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+            build: Some(BUILD_STAMP.to_owned()),
+            command: Some(vec!["bash".to_owned(), "-c".to_owned(), script]),
+            env: Vec::new(),
+            on_start: Some(Box::new(move |_, _| {
+                *seen.lock().unwrap() = true;
+            })),
+            timing: fast_timing(),
+        };
+
+        let endpoint = tokio::time::timeout(Duration::from_secs(10), ensure(&options))
+            .await
+            .expect("ensure resolves")
+            .expect("same-build daemon reused");
+        assert_eq!(endpoint.url, format!("http://127.0.0.1:{port}"));
+        assert!(!*fired.lock().unwrap(), "no replacement announced");
+        assert!(!spawn_marker.exists(), "nothing spawned");
+        assert!(process_alive(pid, None), "the daemon was left running");
+        let _ = Command::new("kill").arg(pid.to_string()).output();
     }
 
     #[test]

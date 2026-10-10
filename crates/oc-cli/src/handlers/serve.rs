@@ -74,7 +74,10 @@ pub async fn run(options: Options) -> i32 {
         .or(config.port)
         .or_else(|| service.then(|| service_config::rust_default_port(&util::channel())));
 
-    // Incumbent check: an exact-URL compatible daemon means idempotent start.
+    // Incumbent check: an exact-URL compatible daemon means idempotent
+    // start. B4-H3: "compatible" includes the BUILD marker — a fresh
+    // spawn stands down only for a daemon of its own build, never for a
+    // stale same-version incumbent (that would wedge the replacement).
     if service && port.is_some() {
         let url = service_url(&hostname, port.unwrap_or(0));
         let registration_file = service_config::registration_file();
@@ -82,6 +85,7 @@ pub async fn run(options: Options) -> i32 {
             Some(std::path::Path::new(&registration_file)),
             &url,
             None,
+            Some(lifecycle::BUILD_STAMP),
             Duration::from_secs(2),
         )
         .await

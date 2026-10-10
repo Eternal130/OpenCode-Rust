@@ -1,7 +1,7 @@
 {
   "id": "exit-leader-q",
-  "description": "Leader-q exit sequence: with text in the prompt the app.exit binding is disabled (leader+q merely types q); once the draft is cleared, <leader> (ctrl+x) followed by q dispatches app.exit and tears the renderer down",
-  "source": "test/app-lifecycle.test.tsx (exit ordering) + src/config/keybind.ts (app.exit = 'ctrl+c,ctrl+d,<leader>q', leader default ctrl+x) + src/app.tsx app.exit layer enabled only while the prompt is empty",
+  "description": "Leader-q exit sequence: with text in the prompt the app.exit binding is disabled and the chord suspends the textarea (D-02, v2 keymap semantics: <leader>q resolves through the base layer to session.queued_prompts — the q is dispatched, not typed, and the draft survives); once the draft is cleared, <leader> (ctrl+x) followed by q dispatches app.exit and tears the renderer down",
+  "source": "test/app-lifecycle.test.tsx (exit ordering) + src/config/keybind.ts (app.exit = 'ctrl+c,ctrl+d,<leader>q', session.queued_prompts = '<leader>q', leader default ctrl+x) + src/app.tsx app.exit layer enabled only while the prompt is empty + terminal-pane.tsx:144 (focused surfaces skip leader strokes — the chord fires over a non-empty draft)",
   "keys": "kitty",
   "steps": [
     {
@@ -28,6 +28,9 @@
       ],
       "expect": {
         "frameIncludes": [
+          "draft"
+        ],
+        "frameExcludes": [
           "draftq"
         ],
         "dialogs": 0,

@@ -188,6 +188,23 @@ async fn server_process_info_starting_then_ready() {
     server.shutdown().await;
 }
 
+/// B4-H3: the info response carries the build identity in the
+/// `x-opencode-build` HEADER (never the body — the body shape is
+/// golden-pinned; see info.rs) so the connect probe can tell
+/// same-version builds apart.
+#[tokio::test]
+async fn server_process_info_carries_build_marker_header() {
+    let server = Server::boot("secret", Duration::from_secs(15)).await;
+    let response = server.get("/api/info", &auth_headers("secret")).await;
+    assert_eq!(response.status, 200);
+    assert_eq!(response.header("x-opencode-build"), Some(oc_server::lifecycle::BUILD_STAMP));
+    // The body keeps the exact v2 shape — no build field leaks in.
+    let body = response.json();
+    let keys: Vec<&str> = body.as_object().expect("object").keys().map(String::as_str).collect();
+    assert!(!keys.contains(&"build"), "the marker must stay out of the body: {keys:?}");
+    server.shutdown().await;
+}
+
 #[tokio::test]
 async fn server_process_unavailable_envelopes_per_readiness() {
     // stopping: everything except info → 503 code envelope + retry-after.

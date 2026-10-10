@@ -401,7 +401,10 @@ pub async fn unset(key: &str, name: Option<&str>) -> Result<(), String> {
 
 /// `ServiceConfig.options({checkVersion})`: the `EnsureOptions` binding —
 /// registration file, exact version pin when checking, config env, and the
-/// self-spawn command `serve --service`.
+/// self-spawn command `serve --service`. When checking, the BUILD stamp
+/// rides along (B4-H3): the version string is pinned to "2.0.24" across
+/// betas, so the build marker is what lets `ensure` replace a daemon
+/// spawned by a previous build after `opencode-rust upgrade`.
 #[must_use]
 pub fn options(check_version: bool) -> EnsureOptions {
     let (_, file) = ensure_migrated();
@@ -410,6 +413,7 @@ pub fn options(check_version: bool) -> EnsureOptions {
     EnsureOptions {
         file: Some(file),
         version: check_version.then(|| util::VERSION.to_owned()),
+        build: check_version.then(|| lifecycle::BUILD_STAMP.to_owned()),
         command: Some(command),
         env: read().env.unwrap_or_default().into_iter().collect(),
         on_start: None,
