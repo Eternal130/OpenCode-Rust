@@ -1709,12 +1709,15 @@ fn session_execution_terminal_classification() {
     use oc_schema::common::SessionError;
 
     assert_eq!(terminal(&Ok(()), None), Terminal::Succeeded);
-    let failure = RunError::Failed(SessionError {
-        error_type: "provider.transport".into(),
-        message: "Disconnected".into(),
-        status: None,
-        response: None,
-    });
+    let failure = RunError::Failed {
+        error: SessionError {
+            error_type: "provider.transport".into(),
+            message: "Disconnected".into(),
+            status: None,
+            response: None,
+        },
+        surfaced: false,
+    };
     assert_eq!(
         terminal(&Err(failure), None),
         Terminal::Failed {
@@ -1723,7 +1726,8 @@ fn session_execution_terminal_classification() {
                 message: "Disconnected".into(),
                 status: None,
                 response: None,
-            }
+            },
+            surfaced: false,
         }
     );
     assert_eq!(
@@ -2316,12 +2320,15 @@ async fn session_coordinator_cleans_active_after_failure_and_defect() {
         drain_fn(|key, _, _| {
             async move {
                 if key == "failure" {
-                    Err(RunError::Failed(oc_schema::common::SessionError {
-                        error_type: "test".into(),
-                        message: "failed".into(),
-                        status: None,
-                        response: None,
-                    }))
+                    Err(RunError::Failed {
+                        error: oc_schema::common::SessionError {
+                            error_type: "test".into(),
+                            message: "failed".into(),
+                            status: None,
+                            response: None,
+                        },
+                        surfaced: false,
+                    })
                 } else {
                     Err(RunError::Defect("defect".into()))
                 }
@@ -2802,12 +2809,15 @@ async fn session_coordinator_one_follow_up_when_wake_races_failure() {
                 let run = runs.fetch_add(1, Ordering::SeqCst) + 1;
                 if run == 1 {
                     gate.wait().await;
-                    return Err(RunError::Failed(oc_schema::common::SessionError {
-                        error_type: "test".into(),
-                        message: "failed".into(),
-                        status: None,
-                        response: None,
-                    }));
+                    return Err(RunError::Failed {
+                        error: oc_schema::common::SessionError {
+                            error_type: "test".into(),
+                            message: "failed".into(),
+                            status: None,
+                            response: None,
+                        },
+                        surfaced: false,
+                    });
                 }
                 second_started.fire();
                 Ok(())
@@ -2824,7 +2834,7 @@ async fn session_coordinator_one_follow_up_when_wake_races_failure() {
     coordinator.wake("session", Promotable::Input);
     gate.fire();
     let exit = resumed.await.unwrap();
-    assert!(matches!(exit, Err(RunError::Failed(_))));
+    assert!(matches!(exit, Err(RunError::Failed { .. })));
     second_started.wait().await;
     assert_eq!(runs.load(Ordering::SeqCst), 2);
 }

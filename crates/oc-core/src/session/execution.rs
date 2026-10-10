@@ -70,10 +70,15 @@ pub enum DrainOutcome {
 
 /// Drain failures (`SessionRunner.RunError` classification): typed failure,
 /// interruption, or a settlement/publication defect (`Effect.die`).
+///
+/// `Failed.surfaced` — whether the failure already reached the message
+/// stream on an assistant message (`session.step.failed` from the step
+/// publisher). Pre-step failures (model resolution, context select) never
+/// do; `settled` synthesizes the error part for those.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum RunError {
-    #[error("drain failed: {}", .0.error_type)]
-    Failed(SessionError),
+    #[error("drain failed: {}", error.error_type)]
+    Failed { error: SessionError, surfaced: bool },
     #[error("drain interrupted")]
     Interrupted,
     #[error("defect: {0}")]
@@ -85,7 +90,7 @@ impl RunError {
     #[must_use]
     pub fn to_session_error(&self) -> SessionError {
         match self {
-            RunError::Failed(error) => error.clone(),
+            RunError::Failed { error, .. } => error.clone(),
             RunError::Interrupted => SessionError {
                 error_type: "aborted".into(),
                 message: "Interrupted".into(),
@@ -506,6 +511,22 @@ async fn run_execution(
 // SessionExecution
 // ---------------------------------------------------------------------------
 
+/// Production id/clock sources for [`SessionExecution::new`] (the engine
+/// passes its own seams through [`SessionExecution::with_clock`]).
+fn ids_and_clock() -> (Arc<dyn oc_util::determinism::IdGen>, Arc<dyn oc_util::determinism::Clock>) {
+    struct MonotonicIds(std::sync::atomic::AtomicU64);
+    impl oc_util::determinism::IdGen for MonotonicIds {
+        fn new_id(&self, prefix: &str) -> String {
+            let next = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            format!("{prefix}_{next:016x}")
+        }
+    }
+    (
+        Arc::new(MonotonicIds(std::sync::atomic::AtomicU64::new(0))),
+        Arc::new(oc_util::determinism::SystemClock),
+    )
+}
+
 /// Wave D job-model hook: cancels a session's background jobs.
 #[async_trait::async_trait]
 pub trait CancelJobs: Send + Sync {
@@ -528,7 +549,10 @@ pub fn terminal(exit: &Exit, reason: Option<InterruptReason>) -> Terminal {
         Err(RunError::Interrupted) => {
             Terminal::Interrupted { reason: reason.unwrap_or(InterruptReason::Shutdown) }
         }
-        Err(error) => Terminal::Failed { error: error.to_session_error() },
+        Err(error) => Terminal::Failed {
+            error: error.to_session_error(),
+            surfaced: matches!(error, RunError::Failed { surfaced: true, .. }),
+        },
     }
 }
 
@@ -536,8 +560,16 @@ pub fn terminal(exit: &Exit, reason: Option<InterruptReason>) -> Terminal {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Terminal {
     Succeeded,
-    Interrupted { reason: InterruptReason },
-    Failed { error: SessionError },
+    Interrupted {
+        reason: InterruptReason,
+    },
+    /// `surfaced`: the error already projects onto an assistant message
+    /// (`session.step.failed`); when false, `settled` synthesizes the
+    /// user-visible error part before the terminal event.
+    Failed {
+        error: SessionError,
+        surfaced: bool,
+    },
 }
 
 /// Process-local execution: drains run in this process through the
@@ -558,7 +590,28 @@ impl SessionExecution {
         jobs: Option<Arc<dyn CancelJobs>>,
         drain: DrainFn,
     ) -> Self {
-        let service = Arc::new(ExecutionHooks { bus: bus.clone(), jobs: jobs.clone() });
+        Self::with_clock(store, bus, inbox, jobs, drain, ids_and_clock())
+    }
+
+    /// [`Self::new`] with explicit id/clock sources (the engine's own
+    /// deterministic seams); the synthetic failed-turn error part needs a
+    /// fresh message id and a timestamp.
+    #[must_use]
+    pub fn with_clock(
+        store: SessionStore,
+        bus: Bus,
+        inbox: SessionInbox,
+        jobs: Option<Arc<dyn CancelJobs>>,
+        drain: DrainFn,
+        (ids, clock): (Arc<dyn oc_util::determinism::IdGen>, Arc<dyn oc_util::determinism::Clock>),
+    ) -> Self {
+        let service = Arc::new(ExecutionHooks {
+            bus: bus.clone(),
+            jobs: jobs.clone(),
+            store: store.clone(),
+            ids,
+            clock,
+        });
         let coordinator = SessionRunCoordinator::new(CoordinatorOptions {
             drain: Some(wrap_drain(store.clone(), drain)),
             started: Some(Arc::new({
@@ -695,6 +748,36 @@ fn wrap_drain(store: SessionStore, drain: DrainFn) -> DrainFn {
 struct ExecutionHooks {
     bus: Bus,
     jobs: Option<Arc<dyn CancelJobs>>,
+    store: SessionStore,
+    ids: Arc<dyn oc_util::determinism::IdGen>,
+    clock: Arc<dyn oc_util::determinism::Clock>,
+}
+
+/// One stderr line per failed turn (the engine-level failure site's log —
+/// server stderr routes to the daemon log). Public so the regression test
+/// asserts the exact shape without capturing fd 2.
+#[must_use]
+pub fn turn_failure_log_line(session_id: &str, model: &str, error: &SessionError) -> String {
+    format!(
+        "[session] turn failed: session={session_id} model={model} error={}: {}",
+        error.error_type, error.message
+    )
+}
+
+/// The label used in the failure log for a model reference.
+#[must_use]
+fn model_log_label(model: &oc_schema::model::Ref) -> String {
+    format!("{}/{}", model.provider_id.0, model.id.0)
+}
+
+/// The fallback model ref for a synthetic failed-turn step when the
+/// session pins none (the resolution itself failed — nothing resolved).
+fn unset_model_ref() -> oc_schema::model::Ref {
+    oc_schema::model::Ref {
+        provider_id: oc_schema::id::ProviderId::parse("unset"),
+        id: oc_schema::id::ModelId::parse("unset"),
+        variant: None,
+    }
 }
 
 impl ExecutionHooks {
@@ -757,7 +840,43 @@ impl ExecutionHooks {
                 )
                 .await
             }
-            Terminal::Failed { error } => {
+            Terminal::Failed { error, surfaced } => {
+                // (b) One stderr line with the failure cause, ALWAYS — the
+                // live beta.3.1 defect: the error existed only in the SSE
+                // payload, nothing reached the server log. The model label:
+                // the session's pinned ref, else the newest assistant
+                // message's (the resolved model the turn ran with).
+                let row = self.store.get(session_id).await.ok().flatten();
+                let mut model = row
+                    .as_ref()
+                    .and_then(|row| row.model.as_deref())
+                    .and_then(|raw| serde_json::from_str::<oc_schema::model::Ref>(raw).ok());
+                let agent = row
+                    .as_ref()
+                    .and_then(|row| row.agent.clone())
+                    .unwrap_or_else(|| "build".to_owned());
+                if model.is_none() {
+                    model = self.newest_assistant_model(session_id).await;
+                }
+                let model = model.unwrap_or_else(unset_model_ref);
+                eprintln!(
+                    "{}",
+                    turn_failure_log_line(session_id, &model_log_label(&model), &error)
+                );
+                // (a) The user-visible error part: a pre-step failure (the
+                // model never resolved — no assistant message exists) gets
+                // the v2 failed-turn shape so the transcript and
+                // /api/session/:id/message surface the error. v2 projects
+                // the error onto the assistant message via
+                // `session.step.failed` (message-updater.ts:273-287:
+                // `draft.error = event.data.error; draft.finish ??= "error"`);
+                // the step publisher does that for in-step failures, this
+                // synthesizes it for the rest. Published BEFORE the
+                // terminal event so the error part precedes the idle
+                // marker in the message stream.
+                if !surfaced {
+                    self.publish_failed_turn_error(session_id, agent, model, &error).await?;
+                }
                 let data = serde_json::json!({
                     "sessionID": session_id,
                     "error": serde_json::to_value(&error).unwrap_or_default(),
@@ -765,6 +884,90 @@ impl ExecutionHooks {
                 self.publish_event(session_id, "session.execution.failed", data, true).await
             }
         }
+    }
+
+    /// The synthetic failed-turn error part: `session.step.started` +
+    /// `session.step.failed` over a fresh assistant message id (the exact
+    /// v2 event/part shape — the message updater projects an assistant
+    /// row carrying `error` + `finish: "error"`, and the SSE feed carries
+    /// both frames to clients).
+    async fn publish_failed_turn_error(
+        &self,
+        session_id: &str,
+        agent: String,
+        model: oc_schema::model::Ref,
+        error: &SessionError,
+    ) -> Result<(), RunError> {
+        let session_id = oc_schema::id::SessionId::parse(session_id.to_string())
+            .unwrap_or_else(|err| oc_schema::id::SessionId(err.value));
+        let assistant_message_id = oc_schema::id::MessageId::parse(self.ids.new_id("msg"))
+            .unwrap_or_else(|err| oc_schema::id::MessageId(err.value));
+        let started = oc_schema::session_event::StepStarted {
+            session_id: session_id.clone(),
+            assistant_message_id: assistant_message_id.clone(),
+            agent: oc_schema::id::AgentId::parse(agent),
+            model,
+            snapshot: None,
+            started: u64::try_from(self.clock.unix_ms().max(0)).unwrap_or_default(),
+        };
+        self.publish_step_event(
+            "session.step.started",
+            serde_json::to_value(&started).unwrap_or_default(),
+        )
+        .await?;
+        let failed = oc_schema::session_event::StepFailed {
+            session_id,
+            assistant_message_id,
+            error: error.clone(),
+            finish: None,
+            raw_finish: None,
+            provider_state: None,
+            cost: None,
+            tokens: None,
+            snapshot: None,
+            files: None,
+        };
+        self.publish_step_event(
+            "session.step.failed",
+            serde_json::to_value(&failed).unwrap_or_default(),
+        )
+        .await
+    }
+
+    async fn publish_step_event(
+        &self,
+        type_: &str,
+        data: serde_json::Value,
+    ) -> Result<(), RunError> {
+        let def = crate::bus::registry::by_type_latest(type_)
+            .unwrap_or_else(|| panic!("no {type_} definition"));
+        self.bus
+            .publish(def, data, PublishOptions::default())
+            .await
+            .map(|_| ())
+            .map_err(|err| RunError::Defect(format!("failed to publish {type_}: {err}")))
+    }
+
+    /// The newest assistant message's model reference (the resolved model
+    /// the failing turn ran with — the session row only carries a PINNED
+    /// ref, config-default sessions have none).
+    async fn newest_assistant_model(&self, session_id: &str) -> Option<oc_schema::model::Ref> {
+        let rows = self
+            .store
+            .messages(crate::session::store::MessagesInput {
+                session_id: session_id.to_owned(),
+                order: Some(crate::session::store::ListOrder::Desc),
+                limit: Some(10),
+                ..Default::default()
+            })
+            .await
+            .ok()?;
+        rows.iter()
+            .find(|row| row.type_ == "assistant")
+            .and_then(|row| serde_json::from_str::<serde_json::Value>(&row.data).ok())
+            .and_then(|data| {
+                serde_json::from_value::<oc_schema::model::Ref>(data["model"].clone()).ok()
+            })
     }
 
     async fn publish_terminal(

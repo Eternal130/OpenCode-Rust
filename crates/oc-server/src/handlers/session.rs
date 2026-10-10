@@ -145,7 +145,7 @@ pub(crate) fn inbox_error(error: &InboxError, fallback_id: &str) -> ApiError {
 pub(crate) fn run_error(error: RunError) -> Result<(), ApiError> {
     match error {
         RunError::Defect(message) => Err(super::common::prompt_error(&message)),
-        RunError::Failed(_) | RunError::Interrupted => Ok(()),
+        RunError::Failed { .. } | RunError::Interrupted => Ok(()),
     }
 }
 

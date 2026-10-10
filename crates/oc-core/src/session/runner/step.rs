@@ -211,16 +211,26 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
     let mut stream_interrupted = false;
 
     // The single-writer loop: mark synchronously before every publish.
-    let mut stream =
-        deps.llm.stream(input.prepared.request.clone()).await.map_err(AttemptFailure::Stream)?;
+    // A connect-phase `stream()` failure enters the SAME settlement as a
+    // first-poll stream error (v2 step.ts:138-197 — the failure surfaces
+    // inside stream consumption, so failAssistant + publishStepFailure
+    // still run and the message stream carries the error part).
     let mut stream_error: Option<AiError> = None;
+    let mut stream: Option<crate::session::runner::LlmEventStream> =
+        match deps.llm.stream(input.prepared.request.clone()).await {
+            Ok(stream) => Some(stream),
+            Err(error) => {
+                stream_error = Some(error);
+                None
+            }
+        };
     let mut shutdown = deps.shutdown.clone();
-    loop {
+    while let Some(polled) = stream.as_mut() {
         let next = tokio::select! {
             biased;
             _ = shutdown.changed() => LoopItem::Shutdown,
             outcome = outcome_rx.recv() => LoopItem::Outcome(outcome),
-            event = stream.next() => LoopItem::Event(event),
+            event = polled.next() => LoopItem::Event(event),
         };
         if matches!(next, LoopItem::Shutdown) {
             // The coordinator interrupted the execution: latch and leave

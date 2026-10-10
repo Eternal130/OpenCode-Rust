@@ -847,12 +847,13 @@ impl Engine {
             .with_tool_output(Arc::clone(&self.tool_output)),
         );
         let jobs_for_cancel = Arc::clone(&jobs);
-        let execution = SessionExecution::new(
+        let execution = SessionExecution::with_clock(
             store.clone(),
             (*self.bus).clone(),
             inbox.clone(),
             Some(Arc::new(JobsCancel { jobs: jobs_for_cancel })),
             runner.drain_fn(),
+            (Arc::clone(&self.ids), Arc::clone(&self.clock)),
         );
 
         // MCP server reconcile (async connections) + tool bridge attach.
