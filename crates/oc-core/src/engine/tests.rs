@@ -1112,6 +1112,274 @@ async fn per_location_overlay_daemon_booted_at_a_serves_b() {
         .is_ok());
 }
 
+// ===========================================================================
+// beta.3.1 regression: case-mismatched provider key resolution
+// (`providers: { own: { name: "Own", ... } }` + `model: "Own/glm-5.3"` →
+// `provider.no-route "Model unavailable: Own/"`). Matching is exact-first,
+// then case-insensitive; the canonical config keys are recorded.
+// ===========================================================================
+
+/// The user's exact config shape: lowercase provider key `own` carrying
+/// the display name "Own", model reference cased after the NAME.
+const CASE_MIXED_CONFIG: &str = r#"{
+    "model": "Own/glm-5.3",
+    "providers": {
+        "own": {
+            "name": "Own",
+            "settings": { "baseURL": "https://own.test/v1", "apiKey": "k" },
+            "models": { "glm-5.3": { "name": "GLM 5.3" } }
+        }
+    }
+}"#;
+
+#[tokio::test]
+async fn per_location_overlay_resolves_case_mismatched_provider_reference() {
+    let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+    let project = overlay_project(root.path(), "casing", Some(CASE_MIXED_CONFIG));
+    let engine = overlay_engine(root.path(), Vec::new(), None).await;
+    let services = engine.location(project).await.expect("assembles");
+
+    // The configured default (`Own/glm-5.3`) resolves against the
+    // provider keyed `own` — no `provider.no-route`.
+    let resolved =
+        services.resolver.resolve(&overlay_row(None)).expect("case-mismatched default resolves");
+    assert_eq!(resolved.reference.provider_id.0, "own", "the canonical config key");
+    assert_eq!(resolved.reference.id.0, "glm-5.3");
+    assert_eq!(
+        resolved.model.route.endpoint.base_url.as_deref(),
+        Some("https://own.test/v1"),
+        "binds the configured provider's baseURL"
+    );
+
+    // An explicit mixed-case reference takes the same path.
+    let resolved = services
+        .resolver
+        .resolve_selected(&overlay_row(None), &model_ref("Own", "glm-5.3"))
+        .expect("explicit mixed-case reference resolves");
+    assert_eq!(resolved.reference.provider_id.0, "own");
+    assert_eq!(resolved.reference.id.0, "glm-5.3");
+
+    // Fully upper-cased (`OWN/GLM-5.3`): both segments fall back to the
+    // case-insensitive match and canonicalize onto the config keys.
+    let resolved = services
+        .resolver
+        .resolve_selected(&overlay_row(None), &model_ref("OWN", "GLM-5.3"))
+        .expect("upper-cased reference resolves");
+    assert_eq!(resolved.reference.provider_id.0, "own");
+    assert_eq!(resolved.reference.id.0, "glm-5.3");
+    assert_eq!(resolved.model.id.as_str(), "glm-5.3", "the route model id is canonical");
+
+    // An exact-case reference still resolves unchanged.
+    assert!(services
+        .resolver
+        .resolve_selected(&overlay_row(None), &model_ref("own", "glm-5.3"))
+        .is_ok());
+}
+
+#[tokio::test]
+async fn per_location_overlay_unknown_reference_keeps_both_segments() {
+    let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+    let project = overlay_project(root.path(), "unknown", Some(CASE_MIXED_CONFIG));
+    let engine = overlay_engine(root.path(), Vec::new(), None).await;
+    let services = engine.location(project).await.expect("assembles");
+
+    // Unknown provider: the error carries BOTH segments — the live defect
+    // showed `Model unavailable: Own/` (the model id dropped).
+    let error = services
+        .resolver
+        .resolve_selected(&overlay_row(None), &model_ref("nope", "some-model"))
+        .expect_err("unknown provider");
+    assert_eq!(error.to_string(), "Model unavailable: nope/some-model");
+
+    // Known provider, unknown model: same both-segments shape.
+    let error = services
+        .resolver
+        .resolve_selected(&overlay_row(None), &model_ref("own", "missing-model"))
+        .expect_err("unknown model");
+    assert_eq!(error.to_string(), "Model unavailable: own/missing-model");
+}
+
+// ===========================================================================
+// beta.3.1 regression: failed-turn error surfacing. A turn that fails
+// BEFORE any step (model resolution) must still produce the user-visible
+// error part (v2 shape: assistant message error via session.step.failed,
+// message-updater.ts:273-287) plus the terminal execution.failed, in that
+// order, and one stderr line at the failure site.
+// ===========================================================================
+
+/// A resolver that always fails — the live defect's engine-level shape
+/// (`Model unavailable: own/glm-5.3` on every turn).
+struct FailingResolver;
+
+impl crate::session::runner::ModelResolver for FailingResolver {
+    fn resolve(
+        &self,
+        _session: &crate::database::schema::SessionRow,
+    ) -> Result<crate::session::runner::ResolvedModel, crate::session::runner::ModelError> {
+        Err(crate::session::runner::ModelError::Unavailable("own".into(), "glm-5.3".into()))
+    }
+
+    fn resolve_selected(
+        &self,
+        _session: &crate::database::schema::SessionRow,
+        _reference: &ModelRef,
+    ) -> Result<crate::session::runner::ResolvedModel, crate::session::runner::ModelError> {
+        Err(crate::session::runner::ModelError::Unavailable("own".into(), "glm-5.3".into()))
+    }
+}
+
+async fn failing_resolution_engine() -> (Arc<Engine>, tempfile::TempDir, LocationRef) {
+    engine_with_resolver(Arc::new(FailingResolver), oc_ai::testing::TestLlm::new()).await
+}
+
+/// Boots an engine over a sandboxed project with an explicit model
+/// resolver and LLM (the failing-turn fixtures).
+async fn engine_with_resolver(
+    resolver: Arc<dyn crate::session::runner::ModelResolver>,
+    llm: oc_ai::testing::TestLlm,
+) -> (Arc<Engine>, tempfile::TempDir, LocationRef) {
+    let dir = tempfile::Builder::new()
+        .prefix("oc-core-engine-")
+        .tempdir_in("/tmp/opencode")
+        .expect("sandbox under /tmp/opencode");
+    std::fs::create_dir_all(dir.path().join(".git")).expect("git marker");
+    std::fs::create_dir_all(dir.path().join("home")).expect("home");
+    let engine = Engine::boot(EngineOptions {
+        llm: Some(Arc::new(TestLlmClient(llm))),
+        model_resolver: Some(resolver),
+        clock: fixed_clock(),
+        activity_sweeper: false,
+        ..EngineOptions::new(dir.path().join("data"), dir.path().join("home"))
+    })
+    .await;
+    let location = LocationRef::new(dir.path().to_path_buf(), None);
+    (Arc::new(engine), dir, location)
+}
+
+#[tokio::test]
+async fn failed_turn_resolution_error_surfaces_error_part_before_idle_failed() {
+    let (engine, _dir, location) = failing_resolution_engine().await;
+    let session_id = create_titled_session(&engine, &location, "ses_resolve_fail").await;
+
+    let result = engine.prompt(&location, &session_id, "msg_user_1", "hello").await;
+    assert!(result.is_err(), "the turn fails");
+
+    let events = wait_for_events(&engine, &session_id, |events| {
+        events.iter().any(|(type_, _, _)| type_ == "session.execution.failed")
+    })
+    .await;
+
+    // BOTH the error part events AND the idle failed event, in order:
+    // the synthetic step pair precedes the terminal (the message updater
+    // projects the assistant error message before the idle marker).
+    let types: Vec<&str> = events.iter().map(|(type_, _, _)| type_.as_str()).collect();
+    let step_started = types
+        .iter()
+        .position(|type_| *type_ == "session.step.started")
+        .expect("synthetic step.started creates the error carrier");
+    let step_failed = types
+        .iter()
+        .position(|type_| *type_ == "session.step.failed")
+        .expect("synthetic step.failed carries the error");
+    let execution_failed = types
+        .iter()
+        .position(|type_| *type_ == "session.execution.failed")
+        .expect("terminal idle failed");
+    assert!(step_started < step_failed, "{types:?}");
+    assert!(step_failed < execution_failed, "{types:?}");
+    assert_eq!(
+        types.iter().filter(|type_| **type_ == "session.step.failed").count(),
+        1,
+        "exactly one error part"
+    );
+
+    // The error part carries the resolution failure verbatim.
+    let step_failure = &events[step_failed].2;
+    assert_eq!(
+        step_failure["error"]["type"],
+        serde_json::json!("provider.no-route"),
+        "the provider.no-route error type"
+    );
+    assert_eq!(
+        step_failure["error"]["message"],
+        serde_json::json!("Model unavailable: own/glm-5.3"),
+        "the full reference — both segments"
+    );
+
+    // The assistant message in the message stream carries the error
+    // (the /api/session/:id/message surface).
+    let messages = engine
+        .messages(
+            &location,
+            crate::session::store::MessagesInput {
+                session_id: session_id.to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("messages");
+    let errored = messages.iter().filter(|row| row.type_ == "assistant").find_map(|row| {
+        let data: serde_json::Value = serde_json::from_str(&row.data).unwrap_or_default();
+        (data["error"]["message"] == serde_json::json!("Model unavailable: own/glm-5.3"))
+            .then_some(data)
+    });
+    let data = errored.expect("an assistant message carries the error");
+    assert_eq!(data["finish"], serde_json::json!("error"), "v2 failed-turn finish marker");
+
+    // The engine-level failure log line (the stderr seam): one line with
+    // the session id, the model reference, and the error cause.
+    let line = crate::session::execution::turn_failure_log_line(
+        session_id.as_str(),
+        "parityfake/fake-model",
+        &oc_schema::common::SessionError {
+            error_type: "provider.no-route".into(),
+            message: "Model unavailable: own/glm-5.3".into(),
+            status: None,
+            response: None,
+        },
+    );
+    assert!(line.contains(session_id.as_str()), "session id in the log line: {line}");
+    assert!(line.contains("parityfake/fake-model"), "model id in the log line: {line}");
+    assert!(line.contains("provider.no-route"), "error type in the log line: {line}");
+    assert!(line.contains("Model unavailable: own/glm-5.3"), "cause in the log line: {line}");
+}
+
+/// An in-step failure (the model call itself fails) keeps the
+/// publisher's own error part — exactly one — followed by the terminal.
+#[tokio::test]
+async fn failed_turn_stream_error_keeps_single_error_part_before_idle_failed() {
+    let llm = oc_ai::testing::TestLlm::new();
+    llm.push([oc_ai::testing::TestResponse::error(oc_ai::schema::AiError::authentication(
+        "bad key",
+    ))]);
+    let (engine, _dir, location) =
+        engine_with_resolver(Arc::new(FixedResolver { resolved: test_resolved_model() }), llm)
+            .await;
+    let session_id = create_titled_session(&engine, &location, "ses_stream_fail").await;
+
+    let result = engine.prompt(&location, &session_id, "msg_user_1", "hello").await;
+    assert!(result.is_err(), "the model call fails");
+
+    let events = wait_for_events(&engine, &session_id, |events| {
+        events.iter().any(|(type_, _, _)| type_ == "session.execution.failed")
+    })
+    .await;
+    let types: Vec<&str> = events.iter().map(|(type_, _, _)| type_.as_str()).collect();
+    assert_eq!(
+        types.iter().filter(|type_| **type_ == "session.step.failed").count(),
+        1,
+        "the publisher's error part — no synthetic duplicate: {types:?}"
+    );
+    let step_failed = types
+        .iter()
+        .position(|type_| *type_ == "session.step.failed")
+        .expect("publisher step.failed");
+    let execution_failed =
+        types.iter().position(|type_| *type_ == "session.execution.failed").expect("terminal");
+    assert!(step_failed < execution_failed, "{types:?}");
+    assert_eq!(events[step_failed].2["error"]["type"], serde_json::json!("provider.auth"));
+}
+
 // ---------------------------------------------------------------------------
 // P10-DB1: the engine's database path goes through the channel scheme
 // ---------------------------------------------------------------------------

@@ -88,32 +88,107 @@ impl CatalogModelResolver {
         Self { context, catalog, connections, custom, default }
     }
 
+    /// The catalog's canonical provider id for a requested prefix: the
+    /// exact key first, then a case-insensitive match (the config-key
+    /// `own` behind a `Own/model` reference — the live beta.3.1 defect).
+    /// v2 itself matches catalog ids exactly (`Model.Service.get` walks
+    /// exact Maps, model.ts:255-257); the case-insensitive fallback is
+    /// our tolerance so a mixed-case reference resolves to the
+    /// configured provider instead of `provider.no-route`.
+    fn canonical_catalog_provider(&self, requested: &str) -> Option<String> {
+        if self.catalog.provider(requested).is_some() {
+            return Some(requested.to_owned());
+        }
+        self.catalog
+            .providers()
+            .iter()
+            .find(|snapshot| snapshot.info.id.0.eq_ignore_ascii_case(requested))
+            .map(|snapshot| snapshot.info.id.0.clone())
+    }
+
+    /// The connections entry for a provider prefix: the exact key first,
+    /// then case-insensitive (mirrors [`Self::canonical_catalog_provider`]).
+    fn connection_for(&self, provider_id: &str) -> ModelConnection {
+        self.connections
+            .get(provider_id)
+            .cloned()
+            .or_else(|| {
+                self.connections
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(provider_id))
+                    .map(|(_, value)| value.clone())
+            })
+            .unwrap_or_default()
+    }
+
+    /// Binds one reference, returning the bound model, its catalog info,
+    /// and the CANONICAL reference (the configured provider/model keys —
+    /// v2 records the selected catalog identity on assistant messages,
+    /// model-resolver.ts:386-392).
     fn bind(
         &self,
         reference: &oc_schema::model::Ref,
-    ) -> Result<(oc_ai::LanguageModel, oc_schema::model::Info), ModelError> {
-        if let Some(custom) = self.custom.iter().find(|custom| custom.id == reference.provider_id.0)
+    ) -> Result<(oc_ai::LanguageModel, oc_schema::model::Info, oc_schema::model::Ref), ModelError>
+    {
+        // Custom (config) providers: exact key first, then
+        // case-insensitive — the provider map key IS the provider id
+        // (v2 config/plugin/provider.ts:56-57,166-169), and user configs
+        // legitimately mix `providers: { own: { name: "Own" ... } }` with
+        // `model: "Own/glm-5.3"` (the name-cased reference). Same
+        // exact-then-case-insensitive rule for the model key: the
+        // provider's own spelling wins.
+        if let Some(custom) =
+            self.custom.iter().find(|custom| custom.id == reference.provider_id.0).or_else(|| {
+                self.custom
+                    .iter()
+                    .find(|custom| custom.id.eq_ignore_ascii_case(&reference.provider_id.0))
+            })
         {
-            let model = custom_language_model(&self.context, custom, &reference.id.0)
-                .map_err(map_custom)?;
+            let canonical_model = custom
+                .models
+                .iter()
+                .find(|id| id.eq_ignore_ascii_case(&reference.id.0))
+                .cloned()
+                .unwrap_or_else(|| reference.id.0.clone());
+            let model = custom_language_model(&self.context, custom, &canonical_model)
+                .map_err(|error| map_custom(error, &custom.id, &canonical_model))?;
             let info = custom_model_info(custom);
-            return Ok((model, info));
+            let canonical = oc_schema::model::Ref {
+                provider_id: oc_schema::id::ProviderId::parse(custom.id.clone()),
+                id: oc_schema::id::ModelId::parse(canonical_model),
+                variant: reference.variant.clone(),
+            };
+            return Ok((model, info, canonical));
         }
-        let connection =
-            self.connections.get(&reference.provider_id.0).cloned().unwrap_or_default();
+        // Catalog providers: canonicalize the prefix, keep the model id
+        // exact (catalog ids are authoritative — v2's runner compares
+        // `model.id === session.model.id` exactly, session/runner/model.ts:82-84).
+        let provider_id =
+            self.canonical_catalog_provider(&reference.provider_id.0).ok_or_else(|| {
+                // Both segments in the error — v2 never drops the model id
+                // (ModelUnavailableError carries providerID + modelID,
+                // session/runner/model.ts:20-31,86-89).
+                ModelError::Unavailable(reference.provider_id.0.clone(), reference.id.0.clone())
+            })?;
+        let connection = self.connection_for(&reference.provider_id.0);
         let model = language_model(
             &self.context,
             &self.catalog,
-            &reference.provider_id.0,
+            &provider_id,
             &reference.id.0,
             &connection,
         )
-        .map_err(map_provider)?;
+        .map_err(|error| map_provider(error, &provider_id, &reference.id.0))?;
         let info =
-            self.catalog.model(&reference.provider_id.0, &reference.id.0).cloned().ok_or_else(
-                || ModelError::Unavailable(reference.provider_id.0.clone(), reference.id.0.clone()),
-            )?;
-        Ok((model, info))
+            self.catalog.model(&provider_id, &reference.id.0).cloned().ok_or_else(|| {
+                ModelError::Unavailable(provider_id.clone(), reference.id.0.clone())
+            })?;
+        let canonical = oc_schema::model::Ref {
+            provider_id: oc_schema::id::ProviderId::parse(provider_id),
+            id: reference.id.clone(),
+            variant: reference.variant.clone(),
+        };
+        Ok((model, info, canonical))
     }
 }
 
@@ -139,8 +214,8 @@ impl ModelResolver for CatalogModelResolver {
         _session: &SessionRow,
         reference: &oc_schema::model::Ref,
     ) -> Result<ResolvedModel, ModelError> {
-        let (model, info) = self.bind(reference)?;
-        Ok(resolved_from(model, info, reference))
+        let (model, info, canonical) = self.bind(reference)?;
+        Ok(resolved_from(model, info, &canonical))
     }
 }
 
@@ -241,10 +316,16 @@ fn resolved_from(
     }
 }
 
-fn map_provider(error: crate::provider_catalog::facade::ProviderError) -> ModelError {
+fn map_provider(
+    error: crate::provider_catalog::facade::ProviderError,
+    provider: &str,
+    model: &str,
+) -> ModelError {
     match error {
-        crate::provider_catalog::facade::ProviderError::UnknownProvider(provider) => {
-            ModelError::Unavailable(provider, String::new())
+        crate::provider_catalog::facade::ProviderError::UnknownProvider(_) => {
+            // Keep the requested model segment: "Model unavailable: Own/"
+            // (empty model id) hid the actual reference from the user.
+            ModelError::Unavailable(provider.to_string(), model.to_string())
         }
         crate::provider_catalog::facade::ProviderError::UnknownModel(provider, model) => {
             ModelError::Unavailable(provider, model)
@@ -253,8 +334,12 @@ fn map_provider(error: crate::provider_catalog::facade::ProviderError) -> ModelE
     }
 }
 
-fn map_custom(error: crate::provider_catalog::facade::ProviderError) -> ModelError {
-    map_provider(error)
+fn map_custom(
+    error: crate::provider_catalog::facade::ProviderError,
+    provider: &str,
+    model: &str,
+) -> ModelError {
+    map_provider(error, provider, model)
 }
 
 /// A minimal model info for custom providers (cost-less; limits unknown).
