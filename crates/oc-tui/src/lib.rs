@@ -35,6 +35,11 @@ pub mod diff_viewer_golden_tests;
 pub mod editor;
 pub mod golden_tests;
 pub mod home_golden_tests;
+pub mod image;
+/// R-07: the fake-terminal image display tests (captured-output
+/// chain — no PTY needed).
+#[cfg(test)]
+mod image_display_tests;
 pub mod keymap;
 pub mod layout;
 pub mod message_golden_tests;
