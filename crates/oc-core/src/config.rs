@@ -12,6 +12,7 @@
 pub mod agent_md;
 pub mod discovery;
 pub mod instruction;
+pub mod jsonc_edit;
 pub mod markdown;
 pub mod normalize;
 pub mod variable;
@@ -676,7 +677,9 @@ impl WatchedConfig {
 }
 
 /// `Config.update`: writes only the `shell` patch into the global
-/// `opencode.json(c)` while preserving unrelated JSONC content.
+/// `opencode.json(c)` while preserving unrelated JSONC content (v2
+/// config.ts:329-349 — jsonc modify over the original text, plus the
+/// trailing-newline normalization of `writeWithDirs`).
 pub fn update_shell(globals: &GlobalDirs, shell: Option<&str>) -> std::io::Result<()> {
     let candidates: Vec<PathBuf> = NAMES.iter().map(|name| globals.config.join(name)).collect();
     let filepath = candidates
@@ -686,156 +689,31 @@ pub fn update_shell(globals: &GlobalDirs, shell: Option<&str>) -> std::io::Resul
         .cloned()
         .unwrap_or_else(|| globals.config.join("opencode.jsonc"));
     let text = std::fs::read_to_string(&filepath).unwrap_or_else(|_| "{}\n".to_string());
-    let updated = patch_shell(&text, shell);
+    let mut updated = patch_shell(&text, shell);
+    if !updated.ends_with('\n') {
+        updated.push('\n');
+    }
     if let Some(parent) = filepath.parent() {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&filepath, updated)
 }
 
-/// Replaces or inserts the top-level `shell` property, preserving surrounding
-/// JSONC text (comments, formatting, unrelated keys). A `None` shell writes
-/// `null`, matching `modify(text, ["shell"], undefined)` treating the patch
-/// value as JSON null.
+/// Replaces, inserts, or removes the top-level `shell` property with v2's
+/// `Config.update` semantics (`modify(text, ["shell"], patch.shell ??
+/// undefined)`): surgical splice over the original text — comments,
+/// formatting, and unrelated keys survive byte-for-byte. A `None` shell
+/// REMOVES the key (v2 passes `undefined`, which jsonc modify treats as
+/// deletion). Editor errors (no object root at all) leave the text
+/// unchanged — `update_shell` still writes it back like v2's
+/// `writeWithDirs`.
 #[must_use]
 pub fn patch_shell(text: &str, shell: Option<&str>) -> String {
-    let value = shell.map_or_else(
-        || "null".to_string(),
-        |shell| serde_json::to_string(shell).unwrap_or_else(|_| "\"\"".to_string()),
-    );
-    let Some((value_start, value_end)) = locate_top_level_property(text, "shell") else {
-        return insert_top_level_property(text, "shell", &value);
-    };
-    format!("{}{}{}", &text[..value_start], value, &text[value_end..])
-}
-
-/// Finds the value region (byte offsets, exclusive of a trailing comma) of a
-/// top-level property, skipping strings and comments.
-fn locate_top_level_property(text: &str, key: &str) -> Option<(usize, usize)> {
-    let bytes: Vec<char> = text.chars().collect();
-    let mut index = 0usize;
-    // Byte offset helpers over the char vector.
-    let byte = |chars: &[char], i: usize| chars.get(i).copied();
-    let mut depth = 0usize;
-    let needle: Vec<char> = format!("\"{key}\"").chars().collect();
-    while index < bytes.len() {
-        let c = bytes[index];
-        match c {
-            '/' if byte(&bytes, index + 1) == Some('/') => {
-                while index < bytes.len() && bytes[index] != '\n' {
-                    index += 1;
-                }
-            }
-            '/' if byte(&bytes, index + 1) == Some('*') => {
-                index += 2;
-                while index + 1 < bytes.len() && !(bytes[index] == '*' && bytes[index + 1] == '/') {
-                    index += 1;
-                }
-                index = (index + 2).min(bytes.len());
-            }
-            '"' => {
-                let start = index;
-                index += 1;
-                while index < bytes.len() && bytes[index] != '"' {
-                    if bytes[index] == '\\' {
-                        index += 1;
-                    }
-                    index += 1;
-                }
-                index += 1;
-                // A key at depth <= 1 followed by ':' is a property name.
-                let mut scan = index;
-                while scan < bytes.len() && bytes[scan].is_whitespace() {
-                    scan += 1;
-                }
-                if depth <= 1
-                    && scan < bytes.len()
-                    && bytes[scan] == ':'
-                    && bytes[start..index] == needle
-                {
-                    let mut value_start = scan + 1;
-                    while value_start < bytes.len() && bytes[value_start].is_whitespace() {
-                        value_start += 1;
-                    }
-                    let value_end = scan_value_end(&bytes, value_start);
-                    return Some((
-                        char_index_to_byte(&bytes, value_start),
-                        char_index_to_byte(&bytes, value_end),
-                    ));
-                }
-            }
-            '{' | '[' => depth += 1,
-            '}' | ']' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-        index += 1;
+    let value = shell.map(|shell| serde_json::json!(shell));
+    match jsonc_edit::set_path(text, &["shell"], value.as_ref()) {
+        Ok(Some(updated)) => updated,
+        Ok(None) | Err(_) => text.to_owned(),
     }
-    None
-}
-
-/// Index (exclusive) just past the JSON value starting at `start`.
-fn scan_value_end(chars: &[char], start: usize) -> usize {
-    let mut index = start;
-    let mut depth = 0usize;
-    while index < chars.len() {
-        let c = chars[index];
-        match c {
-            '/' if chars.get(index + 1) == Some(&'/') => {
-                while index < chars.len() && chars[index] != '\n' {
-                    index += 1;
-                }
-            }
-            '/' if chars.get(index + 1) == Some(&'*') => {
-                index += 2;
-                while index + 1 < chars.len() && !(chars[index] == '*' && chars[index + 1] == '/') {
-                    index += 1;
-                }
-                index = (index + 2).min(chars.len());
-            }
-            '"' => {
-                index += 1;
-                while index < chars.len() && chars[index] != '"' {
-                    if chars[index] == '\\' {
-                        index += 1;
-                    }
-                    index += 1;
-                }
-                index += 1;
-                if depth == 0 {
-                    return index;
-                }
-            }
-            '{' | '[' => depth += 1,
-            '}' | ']' | ',' if depth == 0 => return index,
-            '}' | ']' => depth -= 1,
-            _ => {}
-        }
-        index += 1;
-    }
-    chars.len()
-}
-
-fn char_index_to_byte(chars: &[char], index: usize) -> usize {
-    chars[..index.min(chars.len())].iter().map(|item| item.len_utf8()).sum()
-}
-
-fn insert_top_level_property(text: &str, key: &str, value: &str) -> String {
-    let entry = format!("\"{key}\": {value}");
-    let trimmed = text.trim_end();
-    if let (Some(open), Some(close)) = (trimmed.find('{'), trimmed.rfind('}')) {
-        if open < close {
-            let mut head = trimmed[..close].to_string();
-            let inner = trimmed[open + 1..close].trim();
-            if !inner.is_empty() {
-                head.push(',');
-            }
-            head.push('\n');
-            head.push_str(&entry);
-            head.push('\n');
-            return format!("{head}}}\n");
-        }
-    }
-    format!("{{\n  {entry}\n}}\n")
 }
 
 #[cfg(test)]
@@ -1259,8 +1137,11 @@ mod tests {
             ),
             "{\n  // keep\n  \"shell\": \"/bin/new\",\n  \"username\": \"u\"\n}"
         );
-        assert_eq!(patch_shell("{}\n", Some("/bin/zsh")), "{\n\"shell\": \"/bin/zsh\"\n}\n");
-        assert_eq!(patch_shell("{\n  \"shell\": \"/bin/old\"\n}", None), "{\n  \"shell\": null\n}");
+        // v2 `Config.update` (jsonc modify, tabSize 2): the inserted
+        // property lands on its own line with the object's indent.
+        assert_eq!(patch_shell("{}\n", Some("/bin/zsh")), "{\n  \"shell\": \"/bin/zsh\"\n}\n");
+        // `modify(text, ["shell"], undefined)` removes the property.
+        assert_eq!(patch_shell("{\n  \"shell\": \"/bin/old\"\n}", None), "{\n}");
     }
 
     struct CountingUpdates {

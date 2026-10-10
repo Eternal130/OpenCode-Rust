@@ -1,0 +1,345 @@
+{
+  "replace-existing": {
+    "input": "{\n  \"shell\": \"/bin/old\",\n  \"username\": \"u\"\n}\n",
+    "path": [
+      "shell"
+    ],
+    "value": "\"/bin/new\"",
+    "output": "{\n  \"shell\": \"/bin/new\",\n  \"username\": \"u\"\n}\n",
+    "error": null
+  },
+  "replace-existing-comment-keep": {
+    "input": "{\n  // keep\n  \"shell\": \"/bin/old\",\n  \"username\": \"u\"\n}",
+    "path": [
+      "shell"
+    ],
+    "value": "\"/bin/new\"",
+    "output": "{\n  // keep\n  \"shell\": \"/bin/new\",\n  \"username\": \"u\"\n}",
+    "error": null
+  },
+  "replace-object-value": {
+    "input": "{\n  \"mcp\": {}\n}\n",
+    "path": [
+      "mcp"
+    ],
+    "value": "{\"servers\":{}}",
+    "output": "{\n  \"mcp\": {\n    \"servers\": {}\n  }\n}\n",
+    "error": null
+  },
+  "replace-nested": {
+    "input": "{\n  \"mcp\": {\n    // servers\n    \"servers\": {\n      \"old\": { \"type\": \"remote\", \"url\": \"x\" }\n    }\n  }\n}\n",
+    "path": [
+      "mcp",
+      "servers",
+      "old"
+    ],
+    "value": "{\"type\":\"remote\",\"url\":\"y\",\"headers\":{\"X-A\":\"b\"}}",
+    "output": "{\n  \"mcp\": {\n    // servers\n    \"servers\": {\n      \"old\": {\n        \"headers\": {\n          \"X-A\": \"b\"\n        },\n        \"type\": \"remote\",\n        \"url\": \"y\"\n      }\n    }\n  }\n}\n",
+    "error": null
+  },
+  "insert-top-after-commented": {
+    "input": "{\n  // my carefully annotated config\n  \"mcp\": {}\n}\n",
+    "path": [
+      "shell"
+    ],
+    "value": "\"/bin/fish\"",
+    "output": "{\n  // my carefully annotated config\n  \"mcp\": {},\n  \"shell\": \"/bin/fish\"\n}\n",
+    "error": null
+  },
+  "insert-top-mixed-comments": {
+    "input": "{\n  // top comment\n  \"username\": \"u\", // trailing\n  /* block */ \"theme\": \"dark\"\n}\n",
+    "path": [
+      "shell"
+    ],
+    "value": "\"/bin/fish\"",
+    "output": "{\n  // top comment\n  \"username\": \"u\", // trailing\n  /* block */ \"theme\": \"dark\",\n  \"shell\": \"/bin/fish\"\n}\n",
+    "error": null
+  },
+  "insert-nested-mcp-add": {
+    "input": "{\n  // annotated\n  \"username\": \"u\"\n}\n",
+    "path": [
+      "mcp",
+      "servers",
+      "github"
+    ],
+    "value": "{\"type\":\"remote\",\"url\":\"https://mcp.example.com/sse\"}",
+    "output": "{\n  // annotated\n  \"username\": \"u\",\n  \"mcp\": {\n    \"servers\": {\n      \"github\": {\n        \"type\": \"remote\",\n        \"url\": \"https://mcp.example.com/sse\"\n      }\n    }\n  }\n}\n",
+    "error": null
+  },
+  "insert-nested-partial": {
+    "input": "{\n  \"mcp\": {\n    // note\n    \"other\": 1\n  }\n}\n",
+    "path": [
+      "mcp",
+      "servers",
+      "x"
+    ],
+    "value": "{\"url\":\"u\"}",
+    "output": "{\n  \"mcp\": {\n    // note\n    \"other\": 1,\n    \"servers\": {\n      \"x\": {\n        \"url\": \"u\"\n      }\n    }\n  }\n}\n",
+    "error": null
+  },
+  "insert-plugins-empty-missing": {
+    "input": "{\n  // plugins live here\n  \"theme\": \"dark\"\n}\n",
+    "path": [
+      "plugins"
+    ],
+    "value": "[\"a\",\"b\"]",
+    "output": "{\n  // plugins live here\n  \"theme\": \"dark\",\n  \"plugins\": [\n    \"a\",\n    \"b\"\n  ]\n}\n",
+    "error": null
+  },
+  "set-plugins-filtered": {
+    "input": "{\n  // plugins live here\n  \"plugins\": [\n    \"a\",\n    // b is next\n    \"b\",\n  ],\n  \"theme\": \"dark\"\n}\n",
+    "path": [
+      "plugins"
+    ],
+    "value": "[\"a\"]",
+    "output": "{\n  // plugins live here\n  \"plugins\": [\n    \"a\"\n  ],\n  \"theme\": \"dark\"\n}\n",
+    "error": null
+  },
+  "insert-into-empty-object": {
+    "input": "{}\n",
+    "path": [
+      "shell"
+    ],
+    "value": "\"/bin/zsh\"",
+    "output": "{\n  \"shell\": \"/bin/zsh\"\n}\n",
+    "error": null
+  },
+  "insert-into-missing-file-text": {
+    "input": "{}",
+    "path": [
+      "mcp",
+      "servers",
+      "x"
+    ],
+    "value": "{\"type\":\"remote\",\"url\":\"u\"}",
+    "output": "{\n  \"mcp\": {\n    \"servers\": {\n      \"x\": {\n        \"type\": \"remote\",\n        \"url\": \"u\"\n      }\n    }\n  }\n}",
+    "error": null
+  },
+  "insert-into-comment-only-properties": {
+    "input": "{\n  // only comments\n}\n",
+    "path": [
+      "a"
+    ],
+    "value": "1",
+    "output": "{\n  \"a\": 1\n  // only comments\n}\n",
+    "error": null
+  },
+  "trailing-comma-append": {
+    "input": "{\n  \"a\": 1,\n}\n",
+    "path": [
+      "b"
+    ],
+    "value": "2",
+    "output": "{\n  \"a\": 1,\n  \"b\": 2,\n}\n",
+    "error": null
+  },
+  "crlf-file": {
+    "input": "{\r\n  // c\r\n  \"a\": 1\r\n}\r\n",
+    "path": [
+      "b"
+    ],
+    "value": "2",
+    "output": "{\r\n  // c\r\n  \"a\": 1,\r\n  \"b\": 2\r\n}\r\n",
+    "error": null
+  },
+  "one-line-object": {
+    "input": "{ \"a\": 1 }",
+    "path": [
+      "b"
+    ],
+    "value": "2",
+    "output": "{\n  \"a\": 1,\n  \"b\": 2\n}",
+    "error": null
+  },
+  "one-line-object-multi": {
+    "input": "{ \"a\": 1, \"b\": 2 }",
+    "path": [
+      "c"
+    ],
+    "value": "3",
+    "output": "{\n  \"a\": 1,\n  \"b\": 2,\n  \"c\": 3\n}",
+    "error": null
+  },
+  "tab-indent-touched-line": {
+    "input": "{\n\t\"a\": 1,\n\t\"b\": 2\n}\n",
+    "path": [
+      "c"
+    ],
+    "value": "3",
+    "output": "{\n\t\"a\": 1,\n  \"b\": 2,\n  \"c\": 3\n}\n",
+    "error": null
+  },
+  "remove-middle": {
+    "input": "{\n  \"a\": 1,\n  \"b\": 2,\n  \"c\": 3\n}\n",
+    "path": [
+      "b"
+    ],
+    "value": null,
+    "output": "{\n  \"a\": 1,\n  \"c\": 3\n}\n",
+    "error": null
+  },
+  "remove-first-eats-inline-comment": {
+    "input": "{\n  \"shell\": \"/bin/old\",\n  // keep\n  \"username\": \"u\"\n}\n",
+    "path": [
+      "shell"
+    ],
+    "value": null,
+    "output": "{\n  \"username\": \"u\"\n}\n",
+    "error": null
+  },
+  "remove-last": {
+    "input": "{\n  \"a\": 1,\n  \"b\": 2\n}\n",
+    "path": [
+      "b"
+    ],
+    "value": null,
+    "output": "{\n  \"a\": 1\n}\n",
+    "error": null
+  },
+  "remove-only": {
+    "input": "{\n  \"a\": 1\n}\n",
+    "path": [
+      "a"
+    ],
+    "value": null,
+    "output": "{\n}\n",
+    "error": null
+  },
+  "remove-absent": {
+    "input": "{\n  \"a\": 1\n}\n",
+    "path": [
+      "zz"
+    ],
+    "value": null,
+    "output": "{\n  \"a\": 1\n}\n",
+    "error": null
+  },
+  "remove-first-of-two": {
+    "input": "{\n  \"a\": 1,\n  \"b\": 2\n}\n",
+    "path": [
+      "a"
+    ],
+    "value": null,
+    "output": "{\n  \"b\": 2\n}\n",
+    "error": null
+  },
+  "set-null": {
+    "input": "{\n  \"n\": 1,\n  \"flag\": true\n}\n",
+    "path": [
+      "x"
+    ],
+    "value": "null",
+    "output": "{\n  \"n\": 1,\n  \"flag\": true,\n  \"x\": null\n}\n",
+    "error": null
+  },
+  "set-bool-num": {
+    "input": "{\n  \"n\": 1\n}\n",
+    "path": [
+      "flag"
+    ],
+    "value": "true",
+    "output": "{\n  \"n\": 1,\n  \"flag\": true\n}\n",
+    "error": null
+  },
+  "string-with-escapes-value": {
+    "input": "{\n  \"a\": 1\n}\n",
+    "path": [
+      "s"
+    ],
+    "value": "\"line\\nbreak \\\"q\\\" done\"",
+    "output": "{\n  \"a\": 1,\n  \"s\": \"line\\nbreak \\\"q\\\" done\"\n}\n",
+    "error": null
+  },
+  "key-unicode": {
+    "input": "{\n  \"a\": 1\n}\n",
+    "path": [
+      "café"
+    ],
+    "value": "1",
+    "output": "{\n  \"a\": 1,\n  \"café\": 1\n}\n",
+    "error": null
+  },
+  "same-value-rewrite": {
+    "input": "{\n  \"a\": \"x\"\n}\n",
+    "path": [
+      "a"
+    ],
+    "value": "\"x\"",
+    "output": "{\n  \"a\": \"x\"\n}\n",
+    "error": null
+  },
+  "insert-empty-object": {
+    "input": "{\n  \"a\": 1\n}\n",
+    "path": [
+      "e"
+    ],
+    "value": "{}",
+    "output": "{\n  \"a\": 1,\n  \"e\": {}\n}\n",
+    "error": null
+  },
+  "insert-empty-array": {
+    "input": "{\n  \"a\": 1\n}\n",
+    "path": [
+      "e"
+    ],
+    "value": "[]",
+    "output": "{\n  \"a\": 1,\n  \"e\": []\n}\n",
+    "error": null
+  },
+  "replace-array-value": {
+    "input": "{\n  \"plugins\": [\"a\"]\n}\n",
+    "path": [
+      "plugins"
+    ],
+    "value": "[\"a\",\"b\"]",
+    "output": "{\n  \"plugins\": [\n    \"a\",\n    \"b\"\n  ]\n}\n",
+    "error": null
+  },
+  "replace-string-multiline-context": {
+    "input": "{\n  \"mcp\": {\n    \"servers\": {\n      \"s\": \"old\"\n    }\n  }\n}\n",
+    "path": [
+      "mcp",
+      "servers",
+      "s"
+    ],
+    "value": "\"new\"",
+    "output": "{\n  \"mcp\": {\n    \"servers\": {\n      \"s\": \"new\"\n    }\n  }\n}\n",
+    "error": null
+  },
+  "insert-after-block-comment-line": {
+    "input": "{\n  \"a\": 1\n  /* standalone */\n  \"b\": 2\n}\n",
+    "path": [
+      "c"
+    ],
+    "value": "3",
+    "output": "{\n  \"a\": 1\n  /* standalone */\n  \"b\": 2,\n  \"c\": 3\n}\n",
+    "error": null
+  },
+  "no-trailing-newline": {
+    "input": "{\n  \"a\": 1\n}",
+    "path": [
+      "b"
+    ],
+    "value": "2",
+    "output": "{\n  \"a\": 1,\n  \"b\": 2\n}",
+    "error": null
+  },
+  "crlf-insert-mid": {
+    "input": "{\r\n  \"a\": 1,\r\n  \"b\": 2\r\n}\r\n",
+    "path": [
+      "c"
+    ],
+    "value": "3",
+    "output": "{\r\n  \"a\": 1,\r\n  \"b\": 2,\r\n  \"c\": 3\r\n}\r\n",
+    "error": null
+  },
+  "blank-lines-between": {
+    "input": "{\n  \"a\": 1,\n\n\n  \"b\": 2\n}\n",
+    "path": [
+      "c"
+    ],
+    "value": "3",
+    "output": "{\n  \"a\": 1,\n\n\n  \"b\": 2,\n  \"c\": 3\n}\n",
+    "error": null
+  }
+}

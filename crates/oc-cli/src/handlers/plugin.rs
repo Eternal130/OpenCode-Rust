@@ -99,8 +99,19 @@ fn read_global_config() -> Result<Value, String> {
     crate::handlers::mcp::read_config_json_pub(&global_config_path())
 }
 
-fn write_global_config(config: &Value, force: bool) -> Result<(), String> {
-    crate::handlers::mcp::write_config_json_pub(&global_config_path(), config, force)
+/// D-01: v2 `writePluginConfig`/`removePluginConfig` — set `["plugins"]`
+/// surgically over the original text (comments preserved), with the
+/// trailing-newline normalization; `force` is the rust-extra strip
+/// rewrite (v2 has no --force).
+fn write_global_plugins(plugins: &Value, full_config: &Value, force: bool) -> Result<(), String> {
+    crate::handlers::mcp::write_config_set_pub(
+        &global_config_path(),
+        &["plugins"],
+        plugins,
+        full_config,
+        force,
+        true,
+    )
 }
 
 fn matches_entry(entry: &Value, spec: &str) -> bool {
@@ -136,7 +147,8 @@ fn add(package: &str, force: bool) -> i32 {
         let root = config.as_object_mut().expect("config object");
         let entry = root.entry("plugins".to_owned()).or_insert_with(|| json!([]));
         entry.as_array_mut().expect("plugins array").push(json!(package));
-        if let Err(message) = write_global_config(&config, force) {
+        let plugins = entry.clone();
+        if let Err(message) = write_global_plugins(&plugins, &config, force) {
             eprintln!("Error: {message}");
             return 1;
         }
@@ -185,7 +197,8 @@ fn remove(package: &str, force: bool) -> i32 {
     {
         entries.retain(|entry| !matches_entry(entry, package));
     }
-    if let Err(message) = write_global_config(&config, force) {
+    let filtered = config.get("plugins").cloned().unwrap_or_else(|| json!([]));
+    if let Err(message) = write_global_plugins(&filtered, &config, force) {
         eprintln!("Error: {message}");
         return 1;
     }
