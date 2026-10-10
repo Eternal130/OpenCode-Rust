@@ -181,7 +181,11 @@ pub(crate) async fn publish_session_event(
         )
         .await
         .map(|_| ())
-        .map_err(|_| ApiError::unknown_ref())
+        .map_err(|error| {
+            // v2 logs the cause server-side before the 500 hides it.
+            eprintln!("[session] publish {type_} failed: {error}");
+            ApiError::unknown_ref()
+        })
 }
 
 // ---------------------------------------------------------------------------

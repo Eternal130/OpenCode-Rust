@@ -69,6 +69,10 @@ pub struct HomeView<'a> {
     pub location: String,
     /// The app version (`home.footer`'s right-aligned label).
     pub version: String,
+    /// The staged agent label for the composer hint row.
+    pub status_agent: String,
+    /// The staged model label for the composer hint row.
+    pub status_model: String,
 }
 
 /// Render the home route at `size` (the golden-pinned layout).
@@ -114,6 +118,8 @@ pub fn render_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u16)) -
             location: view.location.clone(),
             agent_shortcut: "shift+tab".into(),
             command_shortcut: "ctrl+p".into(),
+            status_agent: view.status_agent.clone(),
+            status_model: view.status_model.clone(),
         },
         top: 1,
     };
@@ -247,11 +253,17 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
     } else {
         composer.placeholder_text()
     };
+    // The staged next-session selection (agent · model) rides the
+    // composer's hint row (the prompt-idle statusline).
+    let (status_agent, status_model) =
+        crate::components::session::composer_statusline(store, crate::app::HOME_PROMPT_KEY);
     let view = HomeView {
         draft: &composer.draft,
         placeholder,
         location: String::new(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
+        status_agent,
+        status_model,
     };
     let _ = theme;
     render_home_view(&view, &state, size)

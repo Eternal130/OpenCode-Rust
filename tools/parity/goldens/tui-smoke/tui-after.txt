@@ -1,3 +1,4 @@
+   Untitled session              +
   Untitled session
 
   ┃
@@ -25,10 +26,9 @@
 
 
 
-
 ┃
-┃  Ask anything… ""
+┃
 ┃
 ┃
 ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-                                                                                                       agents   commands
+                                                                                       shift+tab agents  ctrl+p commands

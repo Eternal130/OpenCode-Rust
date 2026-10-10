@@ -1,14 +1,4 @@
 
-  opencode
-
-  Ask anything… "Fix broken tests"
-
-  New session ctrl+x n
-  Switch model ctrl+x m
-  Switch session ctrl+x l
-  Commands ctrl+p
-
-  ctrl+p commands · ctrl+x leader · ctrl+c exit
 
 
 
@@ -19,6 +9,18 @@
 
 
 
+                                                                          ▄
+                                         █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+                                         █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
+                                         ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+
+                       ┃
+                       ┃  Ask anything… "Fix a TODO in the codebase"
+                       ┃
+                       ┃
+                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                 shift+tab agents  ctrl+p commands
 
 
 
@@ -28,7 +30,5 @@
 
 
 
-
-
-
+                                                                                                                2.0.24
 

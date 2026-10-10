@@ -856,7 +856,10 @@ impl TxAdapter<'_, '_> {
 
 impl Adapter for TxAdapter<'_, '_> {
     fn get_agent(&mut self) -> Result<Option<AgentId>> {
-        let agent: Option<String> = self
+        // The `agent` column is NULL for sessions created without one —
+        // read it as nullable or the whole durable commit rolls back
+        // (the M2 D3 defect: every switch 500'd on a fresh session).
+        let agent: Option<Option<String>> = self
             .tx
             .conn()
             .query_row(
@@ -865,11 +868,12 @@ impl Adapter for TxAdapter<'_, '_> {
                 |row| row.get(0),
             )
             .optional()?;
-        Ok(agent.map(|agent| AgentId::parse(agent)))
+        Ok(agent.flatten().map(|agent| AgentId::parse(agent)))
     }
 
     fn get_model(&mut self) -> Result<Option<oc_schema::model::Ref>> {
-        let model: Option<String> = self
+        // Same NULL handling as `get_agent` (the `model` column).
+        let model: Option<Option<String>> = self
             .tx
             .conn()
             .query_row(
@@ -878,7 +882,7 @@ impl Adapter for TxAdapter<'_, '_> {
                 |row| row.get(0),
             )
             .optional()?;
-        match model {
+        match model.flatten() {
             Some(model) => Ok(Some(serde_json::from_str(&model)?)),
             None => Ok(None),
         }

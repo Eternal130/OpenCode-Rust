@@ -222,6 +222,128 @@ async fn handlers_messages_invalid_cursor_xor_order() {
 // Permissions
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Session model/agent switch (the M2 D3 defect: both endpoints 500'd for
+// every fresh session — the projector's previous-model lookup read the
+// NULL `session_v2.model`/`agent` columns as non-nullable and the durable
+// commit rolled back).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn handlers_session_switch_model_persists() {
+    let server = boot().await;
+    let client = &server.client;
+    let session_id = create_session(client, "switch-model").await.id;
+
+    // A fresh session carries no model — the switch must still commit.
+    client
+        .session()
+        .switch_model(
+            &session_id,
+            &SessionSwitchModelBody {
+                model: ModelRef {
+                    id: "fake-model-a".to_owned(),
+                    provider_id: "parityfake".to_owned(),
+                    variant: None,
+                },
+            },
+        )
+        .await
+        .expect("switch model");
+
+    // Persistence read-back: the session row's model column updated.
+    let fetched = client.session().get(&session_id).await.expect("get");
+    let model = fetched.model.expect("model on the session row");
+    assert_eq!(model.id, "fake-model-a");
+    assert_eq!(model.provider_id, "parityfake");
+
+    // The durable event committed: the model-switched context message is
+    // part of the transcript (message.list read-back).
+    let messages = client
+        .message()
+        .list(&session_id, &SessionMessageListQuery::default())
+        .await
+        .expect("messages");
+    assert!(
+        messages.data.iter().any(|message| matches!(message, SessionMessageInfo::ModelSelected(_))),
+        "a model-switched row projected: {:?}",
+        messages.data
+    );
+
+    // Switching again over a NON-null column (the previous-model path)
+    // commits too, and the row follows.
+    client
+        .session()
+        .switch_model(
+            &session_id,
+            &SessionSwitchModelBody {
+                model: ModelRef {
+                    id: "fake-model".to_owned(),
+                    provider_id: "parityfake".to_owned(),
+                    variant: None,
+                },
+            },
+        )
+        .await
+        .expect("second switch");
+    let fetched = client.session().get(&session_id).await.expect("get again");
+    assert_eq!(fetched.model.expect("model").id, "fake-model");
+}
+
+#[tokio::test]
+async fn handlers_session_switch_agent_persists() {
+    let server = boot().await;
+    let client = &server.client;
+    let session_id = create_session(client, "switch-agent").await.id;
+
+    let agents = client.agent().list(&AgentListQuery::default()).await.expect("agents");
+    let agent = agents
+        .data
+        .iter()
+        .find(|agent| !agent.hidden)
+        .map(|agent| agent.id.clone())
+        .expect("a visible built-in agent");
+
+    client
+        .session()
+        .switch_agent(&session_id, &SessionSwitchAgentBody { agent: agent.clone() })
+        .await
+        .expect("switch agent");
+
+    // Persistence read-back: the session row's agent column updated and
+    // the agent-switched context message projected.
+    let fetched = client.session().get(&session_id).await.expect("get");
+    assert_eq!(fetched.agent.as_deref(), Some(agent.as_str()));
+    let messages = client
+        .message()
+        .list(&session_id, &SessionMessageListQuery::default())
+        .await
+        .expect("messages");
+    assert!(
+        messages.data.iter().any(|message| matches!(message, SessionMessageInfo::AgentSelected(_))),
+        "an agent-switched row projected: {:?}",
+        messages.data
+    );
+
+    // An unknown agent id is a 404, not a 500.
+    let error = client
+        .session()
+        .switch_agent(&session_id, &SessionSwitchAgentBody { agent: "nope".to_owned() })
+        .await
+        .expect_err("unknown agent");
+    assert_eq!(
+        match &error {
+            ClientError::Api { status, .. } => *status,
+            other => panic!("expected Api error, got {other:?}"),
+        },
+        404
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Permissions
+// ---------------------------------------------------------------------------
+
 #[tokio::test]
 async fn handlers_permission_ask_reply_round_trip() {
     let server = boot().await;

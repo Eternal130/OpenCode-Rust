@@ -449,26 +449,26 @@ impl Connection {
             let Ok(mut stream) = stream else {
                 continue;
             };
-            if self.attempts > 1 {
-                // Resync on reconnect BEFORE relaying further live
-                // events: the fetch results queue behind everything
-                // already sent and ahead of the new stream's events.
-                // Unread marks derive from `idle > viewed`, known-only;
-                // the message trees of every OPEN session re-fetch
-                // through `message.list` (the deferred re-fetch the
-                // reference does on reconnect) and rebuild through the
-                // store reducers.
-                if let Ok(sessions) = fetcher.fetch_sessions().await {
-                    let unread = resync_unread(&sessions);
-                    let mut messages = Vec::new();
-                    for session_id in fetcher.open_sessions() {
-                        if let Ok(list) = fetcher.fetch_messages(&session_id).await {
-                            messages.push((session_id, list));
-                        }
+            // Resync after EVERY successful subscribe — reconnects (the
+            // consistency net for events missed while offline) AND the
+            // FIRST connect (boot hydration: a TUI that restores tabs
+            // from tabs.json never reconnects, so without this arm the
+            // restored transcripts would stay empty forever — the M2 D4
+            // defect). The fetch results queue behind everything already
+            // sent and ahead of the new stream's events. Unread marks
+            // derive from `idle > viewed`, known-only; the message trees
+            // of every OPEN session re-fetch through `message.list` and
+            // rebuild through the store reducers.
+            if let Ok(sessions) = fetcher.fetch_sessions().await {
+                let unread = resync_unread(&sessions);
+                let mut messages = Vec::new();
+                for session_id in fetcher.open_sessions() {
+                    if let Ok(list) = fetcher.fetch_messages(&session_id).await {
+                        messages.push((session_id, list));
                     }
-                    if tx.send(Ingest::Resync { sessions, unread, messages }).await.is_err() {
-                        return;
-                    }
+                }
+                if tx.send(Ingest::Resync { sessions, unread, messages }).await.is_err() {
+                    return;
                 }
             }
             while let Ok(Some(value)) = stream.next_json().await {
@@ -644,7 +644,7 @@ mod tests {
 
         let mut observed = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while observed.len() < 6 {
+        while observed.len() < 7 {
             let Some(message) =
                 tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
             else {
@@ -654,22 +654,26 @@ mod tests {
         }
         let _ = runner.await;
         server.abort();
-        // ONE ordered stream: connected marker + the raw server.connected
-        // event + live events from connection 1, the reconnect
-        // transition, the resync snapshot, then live events from
-        // connection 2.
-        assert_eq!(observed.len(), 6, "observed: {observed:?}");
-        assert_eq!(observed[0], Ingest::Connected);
+        // ONE ordered stream: the FIRST-connect boot resync (session
+        // hydration — the M2 D4 fix), the connected marker + the raw
+        // server.connected event + live events from connection 1, the
+        // reconnect transition, the second resync snapshot, then live
+        // events from connection 2.
+        assert_eq!(observed.len(), 7, "observed: {observed:?}");
+        let Ingest::Resync { .. } = &observed[0] else {
+            panic!("boot resync leads the first connect: {observed:?}");
+        };
+        assert_eq!(observed[1], Ingest::Connected);
         assert!(
-            matches!(&observed[1], Ingest::Event(event) if event.id == "e1" && event.type_ == "server.connected")
+            matches!(&observed[2], Ingest::Event(event) if event.id == "e1" && event.type_ == "server.connected")
         );
-        assert!(matches!(&observed[2], Ingest::Event(event) if event.id == "e2"));
+        assert!(matches!(&observed[3], Ingest::Event(event) if event.id == "e2"));
         assert!(matches!(
-            &observed[3],
+            &observed[4],
             Ingest::Connection(ConnectionState::Reconnecting { attempt: 2 })
         ));
-        let Ingest::Resync { sessions, unread, .. } = &observed[4] else {
-            panic!("resync arrives after the reconnect transition: {observed:?}");
+        let Ingest::Resync { sessions, unread, .. } = &observed[5] else {
+            panic!("reconnect resync arrives after the transition: {observed:?}");
         };
         // The snapshot carries the fetched sessions (titles through the
         // wire types) and marks ONLY the idle>viewed session unread.
@@ -678,7 +682,7 @@ mod tests {
         assert_eq!(sessions[0].viewed, Some(50.0));
         assert_eq!(sessions[2].time_idle, None, "s3 omits idle");
         assert_eq!(unread, &vec!["s1".to_owned()], "no false unread for s2/s3");
-        assert!(matches!(&observed[5], Ingest::Event(event) if event.id == "e3"));
+        assert!(matches!(&observed[6], Ingest::Event(event) if event.id == "e3"));
         // The reconnect carried the tracked cursor (e2) as Last-Event-ID.
         let cursors = seen_cursors.lock().expect("cursor log").clone();
         assert_eq!(cursors.len(), 2, "two /api/event connections");
@@ -823,7 +827,7 @@ mod tests {
 
         let mut observed = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while observed.len() < 6 {
+        while observed.len() < 7 {
             let Some(message) =
                 tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
             else {
@@ -839,18 +843,27 @@ mod tests {
         let _ = runner.await;
         server.abort();
 
-        // ONE ordered stream: live (connected marker + the raw
-        // server.connected + the live event) → reconnect transition →
-        // resync (sessions + unread + messages) → live.
-        assert_eq!(observed.len(), 6, "observed: {observed:?}");
-        assert!(matches!(observed[0], Ingest::Connected));
-        assert!(matches!(&observed[1], Ingest::Event(event) if event.id == "e1"));
-        assert!(matches!(&observed[2], Ingest::Event(event) if event.id == "e2"));
+        // ONE ordered stream: the boot resync (the missed turn fetched
+        // on the FIRST connect — session hydration) → live (connected
+        // marker + the raw server.connected + the live event) →
+        // reconnect transition → resync (sessions + unread + messages)
+        // → live.
+        assert_eq!(observed.len(), 7, "observed: {observed:?}");
+        assert!(
+            matches!(&observed[0], Ingest::Resync { messages, .. } if matches!(
+                messages.as_slice(),
+                [(_, list)] if list.len() == 2
+            )),
+            "the first-connect resync already hydrated the open session: {observed:?}"
+        );
+        assert!(matches!(observed[1], Ingest::Connected));
+        assert!(matches!(&observed[2], Ingest::Event(event) if event.id == "e1"));
+        assert!(matches!(&observed[3], Ingest::Event(event) if event.id == "e2"));
         assert!(matches!(
-            &observed[3],
+            &observed[4],
             Ingest::Connection(ConnectionState::Reconnecting { attempt: 2 })
         ));
-        let Ingest::Resync { sessions, unread, messages } = &observed[4] else {
+        let Ingest::Resync { sessions, unread, messages } = &observed[5] else {
             panic!("resync snapshot: {observed:?}");
         };
         assert_eq!(sessions[0].title.as_deref(), Some("Resynced"));
@@ -870,8 +883,8 @@ mod tests {
         );
         // The store reconciled and live continued ON TOP: the tree is
         // the resync's rebuilt pair, then the post-resync delta
-        // appended in order (the ingest loop applied all six).
-        assert!(matches!(&observed[5], Ingest::Event(event) if event.id == "e3"), "{observed:?}");
+        // appended in order (the ingest loop applied all seven).
+        assert!(matches!(&observed[6], Ingest::Event(event) if event.id == "e3"), "{observed:?}");
         let after = store.messages("s1");
         assert_eq!(after.len(), 3, "rebuilt pair + live delta, in order");
         assert!(matches!(&after[0], crate::components::message::model::Message::User { text, .. }
@@ -1003,7 +1016,7 @@ mod tests {
 
         let mut observed = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while observed.len() < 7 {
+        while observed.len() < 8 {
             let Some(message) =
                 tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
             else {
@@ -1018,23 +1031,38 @@ mod tests {
         let _ = runner.await;
         server.abort();
 
-        // connected + live delta → reconnect → resync → replayed e2
-        // (delivered, but dropped by the store's dedup window) + e3.
-        assert_eq!(observed.len(), 7, "observed: {observed:?}");
-        assert!(matches!(&observed[1], Ingest::Event(event) if event.id == "e1"));
-        assert!(matches!(&observed[2], Ingest::Event(event) if event.id == "e2"));
+        // boot resync ("Hello") + connected + live delta → reconnect →
+        // resync → replayed e2 (delivered, but dropped by the dedup window) + e3.
+        assert_eq!(observed.len(), 8, "observed: {observed:?}");
+        assert!(
+            matches!(&observed[0], Ingest::Resync { messages, .. } if matches!(
+                messages.as_slice(),
+                [(_, list)] if list.len() == 1
+            )),
+            "the first-connect boot resync fetched the open session: {observed:?}"
+        );
+        assert!(matches!(observed[1], Ingest::Connected));
+        assert!(matches!(&observed[2], Ingest::Event(event) if event.id == "e1"));
+        assert!(matches!(&observed[3], Ingest::Event(event) if event.id == "e2"));
+        assert!(
+            matches!(
+                &observed[4],
+                Ingest::Connection(ConnectionState::Reconnecting { attempt: 2 })
+            ),
+            "{observed:?}"
+        );
         assert!(matches!(
-            &observed[4],
+            &observed[5],
             Ingest::Resync { messages, .. } if matches!(
                 messages.as_slice(),
                 [(_, list)] if list.len() == 1
             )
         ));
         assert!(
-            matches!(&observed[5], Ingest::Event(event) if event.id == "e2"),
+            matches!(&observed[6], Ingest::Event(event) if event.id == "e2"),
             "the replayed frame DID arrive (same id)"
         );
-        assert!(matches!(&observed[6], Ingest::Event(event) if event.id == "e3"));
+        assert!(matches!(&observed[7], Ingest::Event(event) if event.id == "e3"));
         // THE CONTRACT: the replayed e2 did not double-append onto the
         // resync-rebuilt tree ("HelloHello World" without dedup).
         let messages = store.messages("s1");

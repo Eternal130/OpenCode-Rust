@@ -1,0 +1,40 @@
+   Untitled session              • Untitled session              +
+  Untitled session
+
+  ┃
+  ┃  What files are here?
+  ┃
+
+     → Explored: 1 read
+
+     The notes file is present.
+
+     Build · parityfake/fake-model · 34ms             Switch model                                     esc
+
+  ┃                                                   Search
+  ┃  Now read the outside file please.
+  ┃                                                   302.AI
+                                                      MiniMax-M1
+     → Explored: 1 read                               MiniMax-M2
+                                                      MiniMax-M2.1
+     The outside file says m2-secret.                 MiniMax-M2.5
+                                                      MiniMax-M2.7
+     Build · parityfake/fake-model · 3.0s             MiniMax-M3
+                                                      Claude Fable 5
+                                                      Claude Fable 5.1
+                                                      claude-haiku-4-5
+                                                      claude-haiku-4-5-20251001
+                                                      claude-opus-4-1-20250805
+                                                      claude-opus-4-1-20250805-thinking
+                                                      claude-opus-4-5-20251101
+
+
+
+
+
+┃
+┃
+┃
+┃
+╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                                                               shift+tab agents  ctrl+p commands

@@ -1,0 +1,40 @@
+   Alpha notes                     Beta second                   +
+  Alpha notes
+
+     The outside file says m2-secret.
+
+     → Explored: 1 read
+
+  ┃
+  ┃  Now read the outside file please.
+  ┃
+
+     The notes file is present.
+
+     → Explored: 1 read
+
+  ┃
+  ┃  What files are here?
+  ┃
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+┃
+┃
+┃
+┃
+╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                                                               shift+tab agents  ctrl+p commands
