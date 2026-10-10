@@ -1,0 +1,859 @@
+//! The plugin-host supervisor: spawn + supervise `bun host.js`, the
+//! NDJSON JSON-RPC bridge (both directions), the request-id state
+//! machine, crash restart with backoff + plugin-level disable, and the
+//! timeout-bounded event dispatch pump.
+//!
+//! # Deadlock protocol (binding — crate docs §1)
+//!
+//! The rules the spike discovered the hard way, enforced structurally
+//! here:
+//!
+//! 1. **The IO reader thread never blocks on anything but the pipe.**
+//!    Guest→host requests (`command.add`, `theme.register`, `ping`,
+//!    `event.subscribe`) are answered *on the reader task*: the result
+//!    is computed synchronously (a registration insert / a log line)
+//!    and the reply is *enqueued* — the writer task owns stdin, so no
+//!    lock on the write path is ever held across a wait.
+//! 2. **Callers never hold the write channel while awaiting replies.**
+//!    [`Shared::request`] sends the frame (move into the writer's
+//!    channel), *then* awaits a oneshot. A hundred concurrent
+//!    `request`s never serialize behind each other's replies.
+//! 3. **Every bridge call is timeout-bounded** (registration 2 s,
+//!    event dispatch 5 s by default). A timed-out entry is removed
+//!    from the pending map; a late reply is discarded by id. A hung
+//!    plugin costs its own dispatch, never the host.
+
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::time::Duration;
+
+use serde_json::{json, Value};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::{mpsc, oneshot};
+
+use crate::protocol::{self, Incoming};
+use crate::registrations::{PluginState, PluginStatus, Registrations};
+use crate::tap::TapEvent;
+
+/// Everything the supervisor needs at spawn time.
+#[derive(Debug, Clone)]
+pub struct SupervisorConfig {
+    /// Resolved bun executable.
+    pub bun: PathBuf,
+    /// Materialized host script (`host.js` on disk).
+    pub host_js: PathBuf,
+    /// Working directory for the guest (the sandbox).
+    pub cwd: PathBuf,
+    /// Plugin entrypoints to load at start (and after each restart).
+    pub entries: Vec<PathBuf>,
+    /// Hard timeout for `initialize`/`load` (registration-time).
+    pub registration_timeout: Duration,
+    /// Hard timeout for event dispatch + command execution.
+    pub dispatch_timeout: Duration,
+    /// Crash-restart backoff base (doubles per consecutive crash).
+    pub restart_backoff_base: Duration,
+    /// Backoff ceiling.
+    pub restart_backoff_max: Duration,
+    /// A plugin whose crashes are attributed this often is disabled.
+    pub max_plugin_crashes: u32,
+    /// Consecutive restart attempts before the host gives up
+    /// (attribution should disable the culprit first; this is the
+    /// unattributable-crash guard).
+    pub max_restarts: u32,
+    /// Extra environment for the guest (test fixtures).
+    pub env: Vec<(String, String)>,
+}
+
+impl Default for SupervisorConfig {
+    fn default() -> Self {
+        Self {
+            bun: PathBuf::new(),
+            host_js: PathBuf::new(),
+            cwd: std::env::temp_dir(),
+            entries: Vec::new(),
+            registration_timeout: Duration::from_secs(2),
+            dispatch_timeout: Duration::from_secs(5),
+            restart_backoff_base: Duration::from_millis(100),
+            restart_backoff_max: Duration::from_secs(4),
+            max_plugin_crashes: 3,
+            max_restarts: 8,
+            env: Vec::new(),
+        }
+    }
+}
+
+/// A bridge call failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostError {
+    /// The guest did not answer within the hard timeout.
+    Timeout(String),
+    /// The guest process exited (or the channel broke) mid-call.
+    Exited(String),
+    /// The guest answered with an error.
+    Guest(String),
+}
+
+impl std::fmt::Display for HostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Timeout(what) => write!(f, "timed out waiting for {what}"),
+            Self::Exited(why) => write!(f, "plugin host process unavailable: {why}"),
+            Self::Guest(why) => write!(f, "plugin host error: {why}"),
+        }
+    }
+}
+
+impl std::error::Error for HostError {}
+
+/// State shared by every task (reader/writer/pump/supervise) and the
+/// synchronous [`crate::PluginHost`] facade.
+pub struct Shared {
+    pub config: SupervisorConfig,
+    /// The CURRENT generation's outbound writer channel. Swapped on
+    /// restart; sending a frame never blocks (unbounded).
+    outbound: RwLock<mpsc::UnboundedSender<String>>,
+    /// Host→guest pending requests (id → completion).
+    pending: Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>,
+    next_id: AtomicU64,
+    /// Process generation — bumped per (re)spawn; late replies from a
+    /// dead generation are dropped by the reader's failure sweep.
+    generation: AtomicU64,
+    /// Set during shutdown: the reader's EOF sweep must not blame
+    /// plugins for a deliberate kill.
+    shutting_down: AtomicBool,
+    /// The native registration store (written by the reader task on
+    /// guest requests, read by the facade).
+    pub registrations: RwLock<Registrations>,
+    /// entry path → attributed consecutive crashes.
+    crash_counts: Mutex<HashMap<String, u32>>,
+    /// Plugin ids currently mid-dispatch (guest `plugin.busy`
+    /// notifications) — crash attribution.
+    busy_plugins: Mutex<HashSet<String>>,
+    /// entry path → last known import-graph digests (hot reload).
+    digests: Mutex<HashMap<String, HashMap<String, String>>>,
+    /// Set once the first initialize+load pass finished (any plugin
+    /// outcome) — [`crate::PluginHost::wait_ready`]'s condition.
+    pub ready: Arc<(Mutex<bool>, Condvar)>,
+    /// Diagnostics counters (the dropped-dispatch observability).
+    pub dispatched_events: AtomicU64,
+    pub dropped_events: AtomicU64,
+}
+
+impl Shared {
+    /// A dead shared (spawn-failure facade): every request fails fast
+    /// through the already-closed outbound channel, `ready` stays
+    /// false forever.
+    pub(crate) fn dead(outbound: mpsc::UnboundedSender<String>) -> Self {
+        let config = SupervisorConfig::default();
+        Self {
+            config,
+            outbound: RwLock::new(outbound),
+            pending: Mutex::new(HashMap::new()),
+            next_id: AtomicU64::new(0),
+            generation: AtomicU64::new(0),
+            shutting_down: AtomicBool::new(true),
+            registrations: RwLock::new(Registrations::default()),
+            crash_counts: Mutex::new(HashMap::new()),
+            busy_plugins: Mutex::new(HashSet::new()),
+            digests: Mutex::new(HashMap::new()),
+            ready: Arc::new((Mutex::new(false), Condvar::new())),
+            dispatched_events: AtomicU64::new(0),
+            dropped_events: AtomicU64::new(0),
+        }
+    }
+
+    /// One bridge call: send, then await with a hard timeout. See the
+    /// deadlock protocol — the send is a channel move, no lock held.
+    pub async fn request(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, HostError> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().expect("pending map poisoned").insert(id, tx);
+        let frame = protocol::request(id, method, params);
+        {
+            let outbound = self.outbound.read().expect("outbound lock poisoned");
+            if outbound.send(frame).is_err() {
+                self.pending.lock().expect("pending map poisoned").remove(&id);
+                return Err(HostError::Exited("writer task gone".into()));
+            }
+        }
+        let outcome = tokio::time::timeout(timeout, rx).await;
+        match outcome {
+            Ok(Ok(result)) => result.map_err(HostError::Guest),
+            Ok(Err(_dropped)) => {
+                // The reader swept our entry (process died).
+                Err(HostError::Exited("process exited mid-call".into()))
+            }
+            Err(_elapsed) => {
+                self.pending.lock().expect("pending map poisoned").remove(&id);
+                Err(HostError::Timeout(method.to_owned()))
+            }
+        }
+    }
+
+    /// Swap in a fresh writer channel for a new process generation;
+    /// the stale sender is dropped so the old writer task exits, and
+    /// everything still outstanding (sent on the dead generation's
+    /// channel, registered after the reader's EOF sweep) fails NOW —
+    /// callers retry/skip instead of waiting out their timeouts.
+    fn rotate_outbound(&self, sender: mpsc::UnboundedSender<String>) {
+        *self.outbound.write().expect("outbound lock poisoned") = sender;
+        self.fail_pending("plugin host restarting");
+    }
+
+    /// Fail every pending host→guest call (reader EOF — the process is
+    /// gone). Called by the reader task of the dying generation only.
+    fn fail_pending(&self, why: &str) {
+        let mut pending = self.pending.lock().expect("pending map poisoned");
+        for (_, sender) in pending.drain() {
+            let _ = sender.send(Err(why.to_owned()));
+        }
+    }
+
+    /// Answer a guest→host request ON THE READER TASK — synchronous
+    /// registration mutation + an enqueued reply. This is deadlock
+    /// rule 1: the guest is blocked on this reply while its own
+    /// `load`/`dispatch` reply is still owed to us.
+    fn answer_guest(&self, id: u64, method: &str, params: &Value) -> String {
+        match method {
+            "command.add" => {
+                let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
+                if name.is_empty() {
+                    return protocol::error_response(id, "command.add requires a name");
+                }
+                let command = crate::registrations::PluginCommand {
+                    plugin_id: params
+                        .get("pluginId")
+                        .and_then(Value::as_str)
+                        .unwrap_or("?")
+                        .to_owned(),
+                    name: name.to_owned(),
+                    description: params
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    keybinds: params
+                        .get("keybinds")
+                        .and_then(Value::as_array)
+                        .map(|specs| {
+                            specs.iter().filter_map(Value::as_str).map(str::to_owned).collect()
+                        })
+                        .unwrap_or_default(),
+                    palette: params.get("palette").and_then(Value::as_bool).unwrap_or(true),
+                };
+                self.registrations
+                    .write()
+                    .expect("registrations poisoned")
+                    .commands
+                    .insert(name.to_owned(), command);
+                protocol::response(id, Value::Null)
+            }
+            "theme.register" => {
+                let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
+                if name.is_empty() {
+                    return protocol::error_response(id, "theme.register requires a name");
+                }
+                let Some(document) = params.get("document") else {
+                    return protocol::error_response(id, "theme.register requires a document");
+                };
+                let theme = crate::registrations::PluginTheme {
+                    plugin_id: params
+                        .get("pluginId")
+                        .and_then(Value::as_str)
+                        .unwrap_or("?")
+                        .to_owned(),
+                    name: name.to_owned(),
+                    document: document.to_string(),
+                };
+                self.registrations
+                    .write()
+                    .expect("registrations poisoned")
+                    .themes
+                    .insert(name.to_owned(), theme);
+                protocol::response(id, Value::Null)
+            }
+            "event.subscribe" | "ping" => protocol::response(id, Value::Null),
+            "log" => {
+                log_guest(params);
+                protocol::response(id, Value::Null)
+            }
+            other => protocol::error_response(id, &format!("unknown host method {other:?}")),
+        }
+    }
+
+    /// A guest notification (fire-and-forget).
+    fn note(&self, method: &str, params: &Value) {
+        match method {
+            "plugin.busy" => {
+                if let Some(id) = params.get("pluginId").and_then(Value::as_str) {
+                    self.busy_plugins.lock().expect("busy set poisoned").insert(id.to_owned());
+                }
+            }
+            "plugin.idle" => {
+                if let Some(id) = params.get("pluginId").and_then(Value::as_str) {
+                    self.busy_plugins.lock().expect("busy set poisoned").remove(id);
+                }
+            }
+            "log" => log_guest(params),
+            _ => {}
+        }
+    }
+
+    /// Attribute a crash: plugins that were mid-load or mid-dispatch
+    /// get a strike; at [`SupervisorConfig::max_plugin_crashes`] they
+    /// are disabled (the wave-1 supervision policy).
+    fn attribute_crash(&self) {
+        let loading: Vec<String> = self
+            .registrations
+            .read()
+            .expect("registrations poisoned")
+            .plugins
+            .values()
+            .filter(|status| status.state == PluginState::Loading)
+            .map(|status| status.entry.to_string_lossy().into_owned())
+            .collect();
+        let busy: Vec<String> = {
+            let busy = self.busy_plugins.lock().expect("busy set poisoned");
+            let registrations = self.registrations.read().expect("registrations poisoned");
+            busy.iter()
+                .filter_map(|plugin_id| {
+                    registrations
+                        .plugins
+                        .values()
+                        .find(|status| &status.plugin_id == plugin_id)
+                        .map(|status| status.entry.to_string_lossy().into_owned())
+                })
+                .collect()
+        };
+        // Busy dispatchers take priority: a Loading plugin crashed at
+        // import time, a busy one crashed inside its handler.
+        let mut blamed: HashSet<String> = HashSet::new();
+        if busy.is_empty() {
+            blamed.extend(loading);
+        } else {
+            blamed.extend(busy);
+        }
+        self.busy_plugins.lock().expect("busy set poisoned").clear();
+        let max = self.config.max_plugin_crashes;
+        let mut registrations = self.registrations.write().expect("registrations poisoned");
+        for entry in blamed {
+            let count = *self
+                .crash_counts
+                .lock()
+                .expect("crash counts poisoned")
+                .entry(entry.clone())
+                .and_modify(|count| *count += 1)
+                .or_insert(1);
+            if let Some(status) = registrations.plugins.get_mut(&entry) {
+                let plugin_id = status.plugin_id.clone();
+                let disabled = count >= max;
+                status.state = if disabled {
+                    PluginState::Disabled { crashes: count }
+                } else {
+                    PluginState::Failed(format!("host crash #{count} attributed"))
+                };
+                if disabled {
+                    // Disabled: its registrations die with it (no
+                    // reload will ever refresh them).
+                    registrations.clear_plugin(&plugin_id);
+                }
+            }
+            eprintln!("opencode plugin-host: crash attributed to {entry} ({count}/{max})");
+        }
+    }
+}
+
+fn log_guest(params: &Value) {
+    let level = params.get("level").and_then(Value::as_str).unwrap_or("info");
+    let message = params.get("message").and_then(Value::as_str).unwrap_or("");
+    let plugin = params.get("pluginId").and_then(Value::as_str).unwrap_or("host");
+    if level == "error" || level == "warn" {
+        eprintln!("opencode plugin-host [{plugin}] {level}: {message}");
+    }
+}
+
+/// A running supervisor handle (cloneable, kept alive by the facade).
+pub struct Supervisor {
+    pub shared: Arc<Shared>,
+    /// Set true → the supervise loop kills the child and exits.
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
+    pub tap_tx: mpsc::Sender<TapEvent>,
+}
+
+impl Supervisor {
+    /// Spawn the host, run the initial load pass, and start every
+    /// background task. Must be called inside a tokio runtime.
+    pub async fn start(config: SupervisorConfig) -> Result<Arc<Self>, String> {
+        let (tap_tx, tap_rx) = mpsc::channel::<TapEvent>(1024);
+        let (outbound_tx, outbound_rx) = mpsc::unbounded_channel::<String>();
+        let shared = Arc::new(Shared {
+            config: config.clone(),
+            outbound: RwLock::new(outbound_tx),
+            pending: Mutex::new(HashMap::new()),
+            next_id: AtomicU64::new(0),
+            generation: AtomicU64::new(1),
+            shutting_down: AtomicBool::new(false),
+            registrations: RwLock::new(Registrations::default()),
+            crash_counts: Mutex::new(HashMap::new()),
+            busy_plugins: Mutex::new(HashSet::new()),
+            digests: Mutex::new(HashMap::new()),
+            ready: Arc::new((Mutex::new(false), Condvar::new())),
+            dispatched_events: AtomicU64::new(0),
+            dropped_events: AtomicU64::new(0),
+        });
+        // Prime plugin statuses before any IO so crash attribution
+        // always sees the entries.
+        {
+            let mut registrations = shared.registrations.write().expect("registrations poisoned");
+            for entry in &config.entries {
+                registrations.plugins.insert(
+                    entry.to_string_lossy().into_owned(),
+                    PluginStatus {
+                        entry: entry.clone(),
+                        plugin_id: String::new(),
+                        state: PluginState::Loading,
+                    },
+                );
+            }
+        }
+
+        let (child, stdin, stdout) = spawn_process(&config).map_err(|error| {
+            eprintln!("opencode plugin-host: spawn failed ({error}); plugin subsystem disabled");
+            error
+        })?;
+        spawn_writer(outbound_rx, stdin);
+        spawn_reader(Arc::clone(&shared), stdout, 1);
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let supervisor = Arc::new(Self { shared: Arc::clone(&shared), shutdown_tx, tap_tx });
+
+        // The supervision loop owns the child from here.
+        tokio::spawn(supervise_loop(Arc::clone(&shared), child, shutdown_rx));
+        // The event dispatch pump (post-ingest tap consumer).
+        tokio::spawn(dispatch_pump(Arc::clone(&shared), tap_rx));
+
+        // Initial handshake + load pass.
+        shared
+            .request("initialize", json!({}), config.registration_timeout)
+            .await
+            .map_err(|error| format!("initialize: {error}"))?;
+        for entry in &config.entries {
+            load_entry(&shared, entry).await;
+        }
+        shared.scan_all().await;
+        mark_ready(&shared);
+        Ok(supervisor)
+    }
+
+    /// Signal shutdown; the supervise loop kills the child.
+    pub fn shutdown(&self) {
+        self.shared.shutting_down.store(true, Ordering::Relaxed);
+        let _ = self.shutdown_tx.send(true);
+    }
+}
+
+async fn load_entry(shared: &Arc<Shared>, entry: &std::path::Path) {
+    let key = entry.to_string_lossy().into_owned();
+    {
+        let mut registrations = shared.registrations.write().expect("registrations poisoned");
+        if let Some(status) = registrations.plugins.get_mut(&key) {
+            status.state = PluginState::Loading;
+        } else {
+            registrations.plugins.insert(
+                key.clone(),
+                PluginStatus {
+                    entry: entry.to_owned(),
+                    plugin_id: String::new(),
+                    state: PluginState::Loading,
+                },
+            );
+        }
+    }
+    let generation = shared.generation.load(Ordering::Relaxed);
+    let outcome = shared
+        .request(
+            "load",
+            json!({ "entry": key, "generation": generation }),
+            shared.config.registration_timeout,
+        )
+        .await;
+    let mut registrations = shared.registrations.write().expect("registrations poisoned");
+    match outcome {
+        Ok(result) => {
+            let plugin_id =
+                result.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
+            if let Some(status) = registrations.plugins.get_mut(&key) {
+                status.plugin_id = plugin_id;
+                status.state = PluginState::Active;
+            }
+        }
+        Err(error) => {
+            // A load that merely failed/timed out is contained (no
+            // crash strike — that is process-death attribution).
+            if let Some(status) = registrations.plugins.get_mut(&key) {
+                status.state = PluginState::Failed(error.to_string());
+            }
+            eprintln!("opencode plugin-host: load {key} failed: {error}");
+        }
+    }
+}
+
+fn mark_ready(shared: &Arc<Shared>) {
+    let (lock, condvar) = &*shared.ready;
+    let mut ready = lock.lock().expect("ready lock poisoned");
+    *ready = true;
+    condvar.notify_all();
+}
+
+impl Shared {
+    /// Refresh digests for every non-disabled entry (used at start
+    /// and by [`Shared::reload_changed`]).
+    async fn scan_all(&self) {
+        let entries: Vec<PathBuf> = self.loadable_entries();
+        for entry in entries {
+            let key = entry.to_string_lossy().into_owned();
+            if let Ok(result) =
+                self.request("scan", json!({ "entry": key }), self.config.dispatch_timeout).await
+            {
+                if let Some(digests) = decode_digests(&result) {
+                    self.digests.lock().expect("digests poisoned").insert(key, digests);
+                }
+            }
+        }
+    }
+
+    fn loadable_entries(&self) -> Vec<PathBuf> {
+        self.registrations
+            .read()
+            .expect("registrations poisoned")
+            .plugins
+            .values()
+            .filter(|status| !matches!(status.state, PluginState::Disabled { .. }))
+            .map(|status| status.entry.clone())
+            .collect()
+    }
+
+    /// Compare current digests against the stored ones; reload every
+    /// plugin whose graph changed. Returns the reloaded count.
+    pub async fn reload_changed(&self) -> Result<usize, HostError> {
+        let entries = self.loadable_entries();
+        let mut reloaded = 0usize;
+        for entry in entries {
+            let key = entry.to_string_lossy().into_owned();
+            let Ok(result) =
+                self.request("scan", json!({ "entry": key }), self.config.dispatch_timeout).await
+            else {
+                continue; // entry vanished — next poll / restart handles it
+            };
+            let Some(fresh) = decode_digests(&result) else { continue };
+            let changed = {
+                let digests = self.digests.lock().expect("digests poisoned");
+                digests.get(&key).is_none_or(|stored| *stored != fresh)
+            };
+            if !changed {
+                continue;
+            }
+            // Unload the OLD plugin id (registrations cleared), bump
+            // the generation, re-load, store the new digests.
+            let old_id = {
+                let registrations = self.registrations.read().expect("registrations poisoned");
+                registrations.plugins.get(&key).map(|status| status.plugin_id.clone())
+            };
+            if let Some(old_id) = old_id.filter(|id| !id.is_empty()) {
+                self.registrations.write().expect("registrations poisoned").clear_plugin(&old_id);
+                let _ = self
+                    .request(
+                        "unload",
+                        json!({ "pluginId": old_id }),
+                        self.config.registration_timeout,
+                    )
+                    .await;
+            }
+            let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+            let outcome = self
+                .request(
+                    "load",
+                    json!({ "entry": key, "generation": generation }),
+                    self.config.registration_timeout,
+                )
+                .await;
+            self.digests.lock().expect("digests poisoned").insert(key.clone(), fresh);
+            match outcome {
+                Ok(result) => {
+                    let plugin_id =
+                        result.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
+                    let mut registrations =
+                        self.registrations.write().expect("registrations poisoned");
+                    if let Some(status) = registrations.plugins.get_mut(&key) {
+                        status.plugin_id = plugin_id;
+                        status.state = PluginState::Active;
+                    }
+                    reloaded += 1;
+                    eprintln!("opencode plugin-host: hot reload {key}");
+                }
+                Err(error) => {
+                    eprintln!("opencode plugin-host: hot reload {key} failed: {error}");
+                }
+            }
+        }
+        Ok(reloaded)
+    }
+
+    /// Look up the owning plugin of a command name.
+    pub fn plugin_for_command(&self, name: &str) -> Option<String> {
+        self.registrations
+            .read()
+            .expect("registrations poisoned")
+            .commands
+            .get(name)
+            .map(|command| command.plugin_id.clone())
+    }
+}
+
+fn decode_digests(result: &Value) -> Option<HashMap<String, String>> {
+    let digests = result.get("digests")?.as_object()?;
+    Some(
+        digests
+            .iter()
+            .filter_map(|(path, hash)| Some((path.clone(), hash.as_str()?.to_owned())))
+            .collect(),
+    )
+}
+
+fn spawn_process(
+    config: &SupervisorConfig,
+) -> Result<(Child, tokio::process::ChildStdin, tokio::process::ChildStdout), String> {
+    let mut command = Command::new(&config.bun);
+    command
+        .arg(&config.host_js)
+        .current_dir(&config.cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    for (key, value) in &config.env {
+        command.env(key, value);
+    }
+    let mut child =
+        command.spawn().map_err(|error| format!("{}: {error}", config.bun.display()))?;
+    let stdin = child.stdin.take().ok_or_else(|| "no stdin".to_owned())?;
+    let stdout = child.stdout.take().ok_or_else(|| "no stdout".to_owned())?;
+    if let Some(stderr) = child.stderr.take() {
+        tokio::spawn(log_stderr(stderr));
+    }
+    Ok((child, stdin, stdout))
+}
+
+async fn log_stderr(stderr: tokio::process::ChildStderr) {
+    let mut lines = BufReader::new(stderr).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        eprintln!("opencode plugin-host [guest-stderr] {line}");
+    }
+}
+
+/// The writer task: sole owner of stdin. Everyone else sends frames
+/// through the unbounded channel — nobody blocks holding the write
+/// path (deadlock rule 2).
+fn spawn_writer(
+    mut inbound: mpsc::UnboundedReceiver<String>,
+    mut stdin: tokio::process::ChildStdin,
+) {
+    tokio::spawn(async move {
+        while let Some(frame) = inbound.recv().await {
+            if stdin.write_all(frame.as_bytes()).await.is_err() || stdin.flush().await.is_err() {
+                // Pipe broke (process died): drain silently and exit.
+                while inbound.try_recv().is_ok() {}
+                break;
+            }
+        }
+        let _ = stdin.shutdown().await;
+    });
+}
+
+/// The reader task (one per process generation): reads lines,
+/// completes pending requests, answers guest requests INLINE (deadlock
+/// rule 1), and fails all pending calls on EOF.
+fn spawn_reader(shared: Arc<Shared>, stdout: tokio::process::ChildStdout, generation: u64) {
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stdout).lines();
+        loop {
+            let Ok(Some(line)) = lines.next_line().await else { break };
+            let Some(incoming) = protocol::parse_line(&line) else {
+                if !line.trim().is_empty() {
+                    eprintln!("opencode plugin-host: unparseable frame: {line:.200}");
+                }
+                continue;
+            };
+            match incoming {
+                Incoming::Response { id, result } => {
+                    if let Some(sender) =
+                        shared.pending.lock().expect("pending map poisoned").remove(&id)
+                    {
+                        let _ = sender.send(result);
+                    }
+                    // Unknown ids: a late reply after timeout — dropped.
+                }
+                Incoming::Request { id, method, params } => {
+                    let reply = shared.answer_guest(id, &method, &params);
+                    let outbound = shared.outbound.read().expect("outbound lock poisoned").clone();
+                    let _ = outbound.send(reply);
+                }
+                Incoming::Notification { method, params } => shared.note(&method, &params),
+            }
+        }
+        // Always sweep: a request raced onto a dying generation's
+        // channel must fail fast, not wait out its timeout.
+        shared.fail_pending("plugin host process exited");
+        if !shared.shutting_down.load(Ordering::Relaxed)
+            && generation == shared.generation.load(Ordering::Relaxed)
+        {
+            shared.attribute_crash();
+        }
+    });
+}
+
+/// The supervise loop: owns the child; on unexpected exit, restart
+/// with backoff and reload every non-disabled plugin.
+async fn supervise_loop(
+    shared: Arc<Shared>,
+    mut child: Child,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    let mut consecutive = 0u32;
+    loop {
+        tokio::select! {
+            _ = shutdown.changed() => {
+                if *shutdown.borrow() {
+                    let _ = child.kill().await;
+                    return;
+                }
+            }
+            status = child.wait() => {
+                if *shutdown.borrow() {
+                    let _ = child.kill().await;
+                    return;
+                }
+                let how = match status {
+                    Ok(code) => format!("exit {code:?}"),
+                    Err(error) => error.to_string(),
+                };
+                consecutive += 1;
+                if consecutive > shared.config.max_restarts {
+                    eprintln!(
+                        "opencode plugin-host: {how}; giving up after {consecutive} restarts (plugin subsystem disabled)"
+                    );
+                    shared.fail_pending("plugin host gave up");
+                    return;
+                }
+                let backoff = backoff(shared.config.restart_backoff_base, shared.config.restart_backoff_max, consecutive);
+                eprintln!(
+                    "opencode plugin-host: guest died ({how}); restart #{consecutive} in {backoff:?}"
+                );
+                tokio::time::sleep(backoff).await;
+                match spawn_process(&shared.config) {
+                    Ok((new_child, stdin, stdout)) => {
+                        let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
+                        shared.rotate_outbound(outbound_tx);
+                        let generation = shared.generation.fetch_add(1, Ordering::Relaxed) + 1;
+                        spawn_writer(outbound_rx, stdin);
+                        spawn_reader(Arc::clone(&shared), stdout, generation);
+                        child = new_child;
+                        if shared
+                            .request("initialize", json!({}), shared.config.registration_timeout)
+                            .await
+                            .is_err()
+                        {
+                            continue; // died again immediately — loop re-enters wait()
+                        }
+                        // Reload every enabled entry.
+                        for entry in shared.loadable_entries() {
+                            load_entry(&shared, &entry).await;
+                        }
+                        let () = shared.scan_all().await;
+                        mark_ready(&shared);
+                        consecutive = 0;
+                    }
+                    Err(error) => {
+                        eprintln!("opencode plugin-host: respawn failed: {error}; giving up");
+                        shared.fail_pending("plugin host respawn failed");
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// base · 2^(attempt-1), capped.
+fn backoff(base: Duration, max: Duration, attempt: u32) -> Duration {
+    let factor = 2u64.saturating_pow(attempt.saturating_sub(1).min(10));
+    let millis = u64::try_from(base.as_millis()).unwrap_or(u64::MAX / 2).saturating_mul(factor);
+    let cap = u64::try_from(max.as_millis()).unwrap_or(u64::MAX);
+    Duration::from_millis(millis.min(cap))
+}
+
+/// The dispatch pump: the post-ingest tap consumer. Sequential — tap
+/// order is plugin order. A dispatch that raced a crash/restart
+/// (send onto the dying generation's channel) is retried briefly so
+/// restarts stay transparent; a timeout drops THAT event (logged) and
+/// never blocks the stream.
+async fn dispatch_pump(shared: Arc<Shared>, mut tap_rx: mpsc::Receiver<TapEvent>) {
+    while let Some(event) = tap_rx.recv().await {
+        let payload = json!({
+            "event": {
+                "id": event.id,
+                "type": event.typ,
+                "data": event.data,
+                "created": event.created,
+            }
+        });
+        let mut outcome =
+            shared.request("dispatch", payload.clone(), shared.config.dispatch_timeout).await;
+        for _ in 0..2 {
+            match outcome {
+                Err(HostError::Exited(_)) => {
+                    // The guest is between generations (crash +
+                    // backoff + respawn): a short retry window covers
+                    // the transition without stalling the stream.
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    outcome = shared
+                        .request("dispatch", payload.clone(), shared.config.dispatch_timeout)
+                        .await;
+                }
+                _ => break,
+            }
+        }
+        match outcome {
+            Ok(_) => {
+                shared.dispatched_events.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(error) => {
+                shared.dropped_events.fetch_add(1, Ordering::Relaxed);
+                eprintln!("opencode plugin-host: dispatch of {} dropped ({error})", event.typ);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_doubles_and_caps() {
+        let base = Duration::from_millis(100);
+        let max = Duration::from_secs(4);
+        assert_eq!(backoff(base, max, 1), Duration::from_millis(100));
+        assert_eq!(backoff(base, max, 2), Duration::from_millis(200));
+        assert_eq!(backoff(base, max, 3), Duration::from_millis(400));
+        assert_eq!(backoff(base, max, 100), Duration::from_secs(4));
+    }
+}

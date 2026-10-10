@@ -261,8 +261,9 @@ pub fn palette_options(commands: &[PaletteCommand]) -> Vec<SelectOption> {
 /// The full palette props for the current store state: the suggested
 /// section first (a duplicate set under "Suggested") when no filter is
 /// active, then every registry command — `list()` in
-/// `command-palette.tsx`. The palette mounts flat with a `0.7`
-/// threshold.
+/// `command-palette.tsx` — then the plugin-registered commands (the
+/// oc-plugin-host registration snapshot's palette entries, group
+/// "Plugin"). The palette mounts flat with a `0.7` threshold.
 #[must_use]
 pub fn palette_props(store: &Store) -> SelectProps {
     let mut options = Vec::new();
@@ -279,6 +280,17 @@ pub fn palette_props(store: &Store) -> SelectProps {
         .collect();
     options.extend(suggested);
     options.extend(palette_options(PALETTE_COMMANDS));
+    // The plugin layer (registration-time snapshot): id search text,
+    // the plugin id beside the group, no bindings display.
+    for entry in store.plugin_commands() {
+        options.push(
+            SelectOption::titled(entry.title.clone(), entry.command.clone())
+                .categorized("Plugin")
+                .with_search(format!("{} {}", entry.command, entry.plugin_id))
+                .with_footer(format!("plugin:{}", entry.plugin_id))
+                .with_search_footer(format!("Plugin · {}", entry.plugin_id)),
+        );
+    }
     SelectProps::new("Commands", options).flat(true).threshold(0.7)
 }
 
@@ -577,7 +589,7 @@ pub trait CommandDispatcher {
 pub struct StoreDispatcher;
 
 impl CommandDispatcher for StoreDispatcher {
-    fn dispatch(&mut self, store: &Store, command: &str, _args: Option<&str>) -> Dispatch {
+    fn dispatch(&mut self, store: &Store, command: &str, args: Option<&str>) -> Dispatch {
         match command {
             "command.palette.show" => {
                 store.replace_dialog(DialogKind::CommandPalette, DialogSize::Medium);
@@ -679,6 +691,10 @@ impl CommandDispatcher for StoreDispatcher {
                 // corpus's exit path is binding-gated there.
                 Dispatch::ServerPending("app.exit run-loop teardown")
             }
+            // The plugin layer: anything the plugin host registered
+            // dispatches through the store's sink (timeout-bounded on
+            // the host side); unmatched falls through.
+            other if store.execute_plugin_command(other, args) => Dispatch::Handled,
             _ => Dispatch::Unknown,
         }
     }
