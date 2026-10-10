@@ -1,9 +1,22 @@
 //! The grammar registry: the static filetype → (grammar, queries) table,
 //! vendored `.scm` query sources, and `OnceLock`-cached `Query`/`Parser`
 //! construction. Mirrors `packages/tui/src/parsers-config.ts` (the catalog
-//! shape and the v2 alias convention — `diff`/`udiff`/`patch`,
-//! `make`/`makefile`), minus the runtime wasm fetching: everything is
-//! compiled in and resolved offline.
+//! shape and the v2 alias convention — `diff`/`udiff`/`patch`), minus the
+//! runtime wasm fetching: everything is compiled in and resolved offline.
+//!
+//! ## The full catalog (R-01b)
+//!
+//! 19 filetypes over the v2 catalog's core set (the oracle-curated list —
+//! v2's tail languages beyond it stay unregistered). Routing follows
+//! v2's notes: python/php/html highlights from the parser repo (the nvim
+//! queries are marked broken at parsers-config.ts:12-16, 129-131,
+//! 149-151), swift from the parser repo (`#lua-match?` predicates,
+//! :267-269), kotlin from fwcd's repo (:106-110) — everything else is
+//! vendored from the parser repo's own query **at the exact crate tag**
+//! (guaranteed grammar/query ABI coherence; nvim master is a moving
+//! target). kotlin and toml ship as vendored path crates under
+//! `third_party/` (their lineages have no tree-sitter-language release
+//! on crates.io); their queries sit at the same tags as the C sources.
 
 use std::sync::{Arc, OnceLock};
 
@@ -32,6 +45,57 @@ mod scm {
 
     /// `tree-sitter-typescript` v0.23.2 `queries/locals.scm`.
     pub const TYPESCRIPT_LOCALS: &str = include_str!("../queries/typescript-locals.scm");
+    /// `tree-sitter-go` v0.25.0 `queries/highlights.scm`.
+    pub const GO_HIGHLIGHTS: &str = include_str!("../queries/go-highlights.scm");
+    /// `tree-sitter-c` v0.24.2 `queries/highlights.scm`.
+    pub const C_HIGHLIGHTS: &str = include_str!("../queries/c-highlights.scm");
+    /// `tree-sitter-cpp` v0.23.4 `queries/highlights.scm` (self-contained
+    /// — the parser repo inlines the C base patterns; only nvim's
+    /// variant `; inherits: c`).
+    pub const CPP_HIGHLIGHTS: &str = include_str!("../queries/cpp-highlights.scm");
+    /// `tree-sitter-c-sharp` v0.23.5 `queries/highlights.scm`.
+    pub const CSHARP_HIGHLIGHTS: &str = include_str!("../queries/csharp-highlights.scm");
+    /// `tree-sitter-java` v0.23.5 `queries/highlights.scm`.
+    pub const JAVA_HIGHLIGHTS: &str = include_str!("../queries/java-highlights.scm");
+    /// `tree-sitter-json` v0.24.8 `queries/highlights.scm`.
+    pub const JSON_HIGHLIGHTS: &str = include_str!("../queries/json-highlights.scm");
+    /// `tree-sitter-yaml` (tree-sitter-grammars) v0.7.2
+    /// `queries/highlights.scm`.
+    pub const YAML_HIGHLIGHTS: &str = include_str!("../queries/yaml-highlights.scm");
+    /// `tree-sitter-toml` (tree-sitter-grammars) v0.7.0
+    /// `queries/highlights.scm` (grammar vendored at the same tag under
+    /// `third_party/tree-sitter-toml`).
+    pub const TOML_HIGHLIGHTS: &str = include_str!("../queries/toml-highlights.scm");
+    /// `tree-sitter-html` v0.23.2 `queries/highlights.scm` (v2 routes
+    /// html highlights from the parser repo — parsers-config.ts:149-151).
+    pub const HTML_HIGHLIGHTS: &str = include_str!("../queries/html-highlights.scm");
+    /// `tree-sitter-css` v0.25.0 `queries/highlights.scm`.
+    pub const CSS_HIGHLIGHTS: &str = include_str!("../queries/css-highlights.scm");
+    /// `tree-sitter-diff` (tree-sitter-grammars) v0.1.0
+    /// `queries/highlights.scm` — the tag IS the exact commit v2 pins
+    /// (2520c3f…, parsers-config.ts:300-308).
+    pub const DIFF_HIGHLIGHTS: &str = include_str!("../queries/diff-highlights.scm");
+    /// `tree-sitter-javascript` v0.23.1 `queries/highlights.scm` — the
+    /// same file composed into the typescript query above, standing on
+    /// its own for the `javascript` filetype (crate pinned at the
+    /// matching v0.23.1).
+    pub const JAVASCRIPT_HIGHLIGHTS: &str = include_str!("../queries/javascript-highlights.scm");
+    /// fwcd `tree-sitter-kotlin` 0.3.8 `queries/highlights.scm` (v2
+    /// routes kotlin highlights from fwcd, not nvim —
+    /// parsers-config.ts:106-110; grammar vendored at the same tag under
+    /// `third_party/tree-sitter-kotlin`).
+    pub const KOTLIN_HIGHLIGHTS: &str = include_str!("../queries/kotlin-highlights.scm");
+    /// `tree-sitter-ruby` v0.23.1 `queries/highlights.scm`.
+    pub const RUBY_HIGHLIGHTS: &str = include_str!("../queries/ruby-highlights.scm");
+    /// `tree-sitter-ruby` v0.23.1 `queries/locals.scm`.
+    pub const RUBY_LOCALS: &str = include_str!("../queries/ruby-locals.scm");
+    /// `tree-sitter-php` v0.25.1 `queries/highlights.scm` (v2 routes php
+    /// highlights from the parser repo — parsers-config.ts:129-131).
+    pub const PHP_HIGHLIGHTS: &str = include_str!("../queries/php-highlights.scm");
+    /// alex-pinkus `tree-sitter-swift` 0.7.4 `queries/highlights.scm` (v2
+    /// routes swift highlights from the parser repo — nvim's query uses
+    /// `#lua-match?` predicates, parsers-config.ts:267-269).
+    pub const SWIFT_HIGHLIGHTS: &str = include_str!("../queries/swift-highlights.scm");
 }
 
 /// One registry entry: a filetype, its v2-style aliases, the native grammar
@@ -52,9 +116,13 @@ pub struct GrammarEntry {
     pub locals_query: Option<&'static str>,
 }
 
-/// The static registry — the spike's 3 languages. The full v2 set (18
-/// grammars + aliases) extends this table; the abort threshold for that is
-/// +20 MiB on the release binary (see the spike report).
+/// The static registry — the R-01 spike's 3 languages plus the R-01b
+/// catalog extension (15 more grammars + the javascript filetype over the
+/// already-vendored query). The abort threshold for this table was
+/// +20 MiB on the release binary (see the spike report); the R-01b
+/// measurement accompanies the rollout report.
+#[rustfmt::skip] // one flat table: filetype, aliases, grammar, queries — scannable
+#[allow(clippy::too_many_lines)] // a 19-entry data table, not logic
 pub fn registry() -> &'static [GrammarEntry] {
     &[
         GrammarEntry {
@@ -77,6 +145,118 @@ pub fn registry() -> &'static [GrammarEntry] {
             language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT,
             highlight_query: scm::TYPESCRIPT_COMPOSED,
             locals_query: Some(scm::TYPESCRIPT_LOCALS),
+        },
+        GrammarEntry {
+            filetype: "go",
+            aliases: &["golang"],
+            language: tree_sitter_go::LANGUAGE,
+            highlight_query: scm::GO_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "c",
+            aliases: &["h"],
+            language: tree_sitter_c::LANGUAGE,
+            highlight_query: scm::C_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "cpp",
+            aliases: &["c++", "cxx", "cc", "hpp", "hxx"],
+            language: tree_sitter_cpp::LANGUAGE,
+            highlight_query: scm::CPP_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "csharp",
+            aliases: &["c-sharp", "c#", "cs"],
+            language: tree_sitter_c_sharp::LANGUAGE,
+            highlight_query: scm::CSHARP_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "java",
+            aliases: &[],
+            language: tree_sitter_java::LANGUAGE,
+            highlight_query: scm::JAVA_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "json",
+            aliases: &[],
+            language: tree_sitter_json::LANGUAGE,
+            highlight_query: scm::JSON_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "yaml",
+            aliases: &["yml"],
+            language: tree_sitter_yaml::LANGUAGE,
+            highlight_query: scm::YAML_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "toml",
+            aliases: &[],
+            language: tree_sitter_toml::LANGUAGE,
+            highlight_query: scm::TOML_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "html",
+            aliases: &["htm"],
+            language: tree_sitter_html::LANGUAGE,
+            highlight_query: scm::HTML_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "css",
+            aliases: &[],
+            language: tree_sitter_css::LANGUAGE,
+            highlight_query: scm::CSS_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "diff",
+            aliases: &["udiff", "patch"], // the v2 alias convention
+            language: tree_sitter_diff::LANGUAGE,
+            highlight_query: scm::DIFF_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "javascript",
+            aliases: &["js", "mjs", "cjs"],
+            language: tree_sitter_javascript::LANGUAGE,
+            highlight_query: scm::JAVASCRIPT_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "kotlin",
+            aliases: &["kt", "kts"],
+            language: tree_sitter_kotlin::LANGUAGE,
+            highlight_query: scm::KOTLIN_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "ruby",
+            aliases: &["rb"],
+            language: tree_sitter_ruby::LANGUAGE,
+            highlight_query: scm::RUBY_HIGHLIGHTS,
+            locals_query: Some(scm::RUBY_LOCALS),
+        },
+        GrammarEntry {
+            filetype: "php",
+            aliases: &[],
+            language: tree_sitter_php::LANGUAGE_PHP,
+            highlight_query: scm::PHP_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "swift",
+            aliases: &[],
+            language: tree_sitter_swift::LANGUAGE,
+            highlight_query: scm::SWIFT_HIGHLIGHTS,
+            locals_query: None,
         },
     ]
 }
@@ -163,8 +343,10 @@ mod tests {
     /// Every highlight (and locals) query in the registry must compile
     /// against its grammar — the grammar/query ABI drift tripwire. Any
     /// grammar bump that renames node types or drops tokens fails here.
+    /// R-01b: auto-covers every catalog addition.
     #[test]
     fn every_registry_query_constructs() {
+        assert_eq!(registry().len(), 19, "3 spike + 16 R-01b filetypes");
         for entry in registry() {
             let language = tree_sitter::Language::new(entry.language);
             let highlight = Query::new(&language, entry.highlight_query)
@@ -193,8 +375,36 @@ mod tests {
         assert!(lookup("ocaml").is_none());
         assert!(lookup("").is_none());
         assert!(lookup("   ").is_none());
-        // The v2 alias convention exists in the table shape (udiff/patch,
-        // makefile live on their entries when those grammars join).
-        assert!(registry().iter().all(|entry| !entry.aliases.is_empty()));
+        // The v2 catalog convention: every canonical filetype and alias
+        // resolves (to its OWN entry — no cross-entry shadowing), and the
+        // v2 alias pairs hold: diff/udiff/patch. makefile→make is NOT in
+        // the oracle list (make stays unregistered).
+        for entry in registry() {
+            assert_eq!(
+                lookup(entry.filetype).map(|found| found.filetype),
+                Some(entry.filetype),
+                "{} resolves",
+                entry.filetype
+            );
+            for alias in entry.aliases {
+                assert_eq!(
+                    lookup(alias).map(|found| found.filetype),
+                    Some(entry.filetype),
+                    "alias {alias} routes to {}",
+                    entry.filetype
+                );
+            }
+        }
+        assert_eq!(lookup("udiff").map(|entry| entry.filetype), Some("diff"));
+        assert_eq!(lookup("patch").map(|entry| entry.filetype), Some("diff"));
+        assert_eq!(lookup("yml").map(|entry| entry.filetype), Some("yaml"));
+        assert_eq!(lookup("c#").map(|entry| entry.filetype), Some("csharp"));
+        assert_eq!(lookup("c-sharp").map(|entry| entry.filetype), Some("csharp"));
+        assert_eq!(lookup("cs").map(|entry| entry.filetype), Some("csharp"));
+        assert_eq!(lookup("js").map(|entry| entry.filetype), Some("javascript"));
+        assert_eq!(lookup("kt").map(|entry| entry.filetype), Some("kotlin"));
+        assert_eq!(lookup("rb").map(|entry| entry.filetype), Some("ruby"));
+        assert!(lookup("make").is_none(), "make is not in the oracle list");
+        assert!(lookup("makefile").is_none());
     }
 }
