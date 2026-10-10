@@ -14,6 +14,15 @@ pub fn sandbox(name: &str) -> PathBuf {
     dir
 }
 
+/// Copy one committed fixture under a new name (per-instance fixtures
+/// from one template — e.g. hookmut-a/hookmut-b).
+pub fn copy_fixture_as(sandbox: &Path, name: &str, dest: &str) -> PathBuf {
+    let source = oc_plugin_host::fixture_dir().join(name);
+    let destination = sandbox.join(dest);
+    std::fs::copy(&source, &destination).unwrap_or_else(|error| panic!("copy {name}: {error}"));
+    destination
+}
+
 /// Copy one committed fixture into the sandbox (tests mutate their
 /// copies — hot reload edits must never touch the repo).
 pub fn copy_fixture(sandbox: &Path, name: &str) -> PathBuf {
@@ -62,12 +71,17 @@ use serde_json::{json, Value};
 /// session-context hook chain (`Bridge::dispatch_hook`), capturing the
 /// rewritten context event. This is exactly the loop the real engine
 /// will drive: command → marker prompt → context hooks → model.
+///
+/// The wave-4 `generate.text` arm answers with a canned summary (the
+/// engine seam owns one-off generation — `GenerateApi`).
 #[derive(Default)]
 pub struct RecordingSessionPort {
     /// (sessionID, text) per admitted prompt.
     pub prompts: std::sync::Mutex<Vec<(String, String)>>,
     /// The post-hook context events (one per prompt).
     pub contexts: std::sync::Mutex<Vec<Value>>,
+    /// (prompt, model) per one-off generation.
+    pub generates: std::sync::Mutex<Vec<(String, Value)>>,
 }
 
 #[async_trait]
@@ -99,6 +113,13 @@ impl SessionPort for RecordingSessionPort {
             }
             "list" | "context" => Ok(json!([])),
             "messages" => Ok(json!({ "data": [] })),
+            "generate.text" => {
+                let prompt =
+                    args.get("prompt").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let model = args.get("model").cloned().unwrap_or(Value::Null);
+                self.generates.lock().unwrap().push((prompt.clone(), model));
+                Ok(json!(format!("summary of: {prompt}")))
+            }
             "get" => Err("no such session in the recording port".into()),
             other => Err(format!("session.{other}: not wired in the recording port")),
         }

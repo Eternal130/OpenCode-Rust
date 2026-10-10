@@ -1445,3 +1445,235 @@ impl McpToolBridge {
         flush.changed().await.expect("flush sender lives for the bridge lifetime");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Code Mode defaults (plugin/mcp-codemode-defaults.ts) — the typed side
+// ---------------------------------------------------------------------------
+
+/// The `opencode.mcp.codemode.defaults` table over the typed config
+/// (the engine's config source applies it; the oc-plugin-host seed
+/// path carries the JSON twin): servers that ARE `CodeMode` themselves
+/// (executor.sh URLs, local `executor mcp`) get `OpenCode`'s Code Mode
+/// turned `OFF`; `PostHog` gets the `tools` header unless configured. A
+/// server with `codemode` set is left exactly as configured.
+pub fn apply_codemode_defaults(
+    servers: &mut std::collections::BTreeMap<String, oc_schema::mcp::ServerConfig>,
+) -> usize {
+    let mut touched = 0;
+    for config in servers.values_mut() {
+        match config {
+            oc_schema::mcp::ServerConfig::Local(local) => {
+                if local.codemode.is_some() {
+                    continue;
+                }
+                if local.command.first().map(String::as_str) == Some("executor")
+                    && local.command.get(1).map(String::as_str) == Some("mcp")
+                {
+                    local.codemode = Some(false);
+                    touched += 1;
+                }
+            }
+            oc_schema::mcp::ServerConfig::Remote(remote) => {
+                if remote.codemode.is_some() {
+                    continue;
+                }
+                let endpoint = url_endpoint(&remote.url);
+                if endpoint.as_deref().is_some_and(is_executor_endpoint) {
+                    remote.codemode = Some(false);
+                    touched += 1;
+                    continue;
+                }
+                // PostHog: the header unless `?mode=` or any casing of it
+                // is already present.
+                let Some((hostname, has_mode_param)) = url_parts(&remote.url) else {
+                    continue;
+                };
+                let has_header = remote.headers.as_ref().is_some_and(|headers| {
+                    headers.keys().any(|key| key.eq_ignore_ascii_case("x-posthog-mcp-mode"))
+                });
+                if is_posthog_host(&hostname) && !has_mode_param && !has_header {
+                    remote
+                        .headers
+                        .get_or_insert_with(BTreeMap::new)
+                        .insert("x-posthog-mcp-mode".to_owned(), "tools".to_owned());
+                    touched += 1;
+                }
+            }
+        }
+    }
+    touched
+}
+
+/// `${origin}${pathname without trailing slashes}` when the URL parses.
+fn url_endpoint(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..end];
+    let after = &rest[end..];
+    let path_end = after.find(['?', '#']).unwrap_or(after.len());
+    let pathname = &after[..path_end];
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    let default_port = if scheme == "https" { ":443" } else { ":80" };
+    let host = host.strip_suffix(default_port).unwrap_or(host);
+    Some(format!("{scheme}://{host}{}", pathname.trim_end_matches('/')))
+}
+
+/// `/^https:\/\/executor\.sh\/[^/]+\/mcp$/`.
+fn is_executor_endpoint(endpoint: &str) -> bool {
+    let Some(rest) = endpoint.strip_prefix("https://executor.sh/") else {
+        return false;
+    };
+    let Some(segment) = rest.strip_suffix("/mcp") else {
+        return false;
+    };
+    !segment.is_empty() && !segment.contains('/')
+}
+
+/// `(hostname, has ?mode= param)`.
+fn url_parts(url: &str) -> Option<(String, bool)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let host = rest[..end].rsplit('@').next().unwrap_or(&rest[..end]).to_string();
+    let query = rest.find('?').map(|at| {
+        let tail = &rest[at + 1..];
+        tail.split('#').next().unwrap_or(tail)
+    });
+    let has_mode = query
+        .is_some_and(|query| query.split('&').any(|pair| pair.split('=').next() == Some("mode")));
+    let default_port = if scheme == "https" { ":443" } else { ":80" };
+    let host = host.strip_suffix(default_port).unwrap_or(&host).to_string();
+    Some((host, has_mode))
+}
+
+/// `/^mcp(?:-eu|\.us|\.eu)?\.posthog\.com$/`.
+fn is_posthog_host(hostname: &str) -> bool {
+    let Some(prefix) = hostname.strip_suffix(".posthog.com") else {
+        return false;
+    };
+    matches!(prefix, "mcp" | "mcp-eu" | "mcp.us" | "mcp.eu")
+}
+
+#[cfg(test)]
+mod codemode_defaults_tests {
+    use super::*;
+    use oc_schema::mcp::{LocalConfig, RemoteConfig, ServerConfig};
+
+    fn remote(url: &str) -> ServerConfig {
+        ServerConfig::Remote(Box::new(RemoteConfig {
+            url: url.to_owned(),
+            headers: None,
+            oauth: None,
+            disabled: None,
+            codemode: None,
+            timeout: None,
+            protocol: None,
+        }))
+    }
+
+    fn remote_codemode(config: &ServerConfig) -> Option<bool> {
+        match config {
+            ServerConfig::Remote(remote) => remote.codemode,
+            ServerConfig::Local(_) => panic!("remote"),
+        }
+    }
+
+    fn remote_headers(config: &ServerConfig) -> Option<&BTreeMap<String, String>> {
+        match config {
+            ServerConfig::Remote(remote) => remote.headers.as_ref(),
+            ServerConfig::Local(_) => panic!("remote"),
+        }
+    }
+
+    #[test]
+    fn executor_and_posthog_defaults_apply() {
+        let mut servers = BTreeMap::from([
+            (
+                "executor_remote".to_owned(),
+                remote("https://executor.sh/example/mcp?source=opencode"),
+            ),
+            (
+                "executor_local".to_owned(),
+                ServerConfig::Local(Box::new(LocalConfig {
+                    command: vec!["executor".into(), "mcp".into()],
+                    cwd: None,
+                    environment: None,
+                    disabled: None,
+                    codemode: None,
+                    timeout: None,
+                    protocol: None,
+                })),
+            ),
+            ("cloudflare".to_owned(), remote("https://mcp.cloudflare.com/mcp/")),
+            ("posthog".to_owned(), remote("https://mcp-eu.posthog.com/mcp")),
+            (
+                "explicit".to_owned(),
+                ServerConfig::Remote(Box::new(RemoteConfig {
+                    url: "https://executor.sh/example/mcp".to_owned(),
+                    headers: None,
+                    oauth: None,
+                    disabled: None,
+                    codemode: Some(true),
+                    timeout: None,
+                    protocol: None,
+                })),
+            ),
+        ]);
+        assert_eq!(apply_codemode_defaults(&mut servers), 3);
+        assert_eq!(
+            remote_codemode(&servers["executor_remote"]),
+            Some(false),
+            "executor.sh remote: our Code Mode off"
+        );
+        assert!(
+            matches!(&servers["executor_local"], ServerConfig::Local(local) if local.codemode == Some(false)),
+            "executor mcp local: our Code Mode off"
+        );
+        assert_eq!(remote_codemode(&servers["cloudflare"]), None, "unrelated stays unset");
+        assert_eq!(
+            remote_codemode(&servers["posthog"]),
+            None,
+            "PostHog keeps OpenCode Code Mode ON"
+        );
+        assert_eq!(
+            remote_headers(&servers["posthog"])
+                .and_then(|headers| headers.get("x-posthog-mcp-mode"))
+                .map(String::as_str),
+            Some("tools"),
+            "PostHog's own Code Mode is turned off via the header"
+        );
+        assert_eq!(remote_codemode(&servers["explicit"]), Some(true), "configured values stay");
+    }
+
+    #[test]
+    fn posthog_mode_param_and_header_win() {
+        let mut with_mode =
+            BTreeMap::from([("ph".to_owned(), remote("https://mcp.posthog.com/mcp?mode=cli"))]);
+        assert_eq!(apply_codemode_defaults(&mut with_mode), 0);
+        assert!(remote_headers(&with_mode["ph"]).is_none(), "?mode= is respected");
+
+        let mut with_header = BTreeMap::from([(
+            "ph".to_owned(),
+            ServerConfig::Remote(Box::new(RemoteConfig {
+                url: "https://mcp.posthog.com/mcp".to_owned(),
+                headers: Some(BTreeMap::from([(
+                    "X-PostHog-MCP-Mode".to_owned(),
+                    "cli".to_owned(),
+                )])),
+                oauth: None,
+                disabled: None,
+                codemode: None,
+                timeout: None,
+                protocol: None,
+            })),
+        )]);
+        assert_eq!(apply_codemode_defaults(&mut with_header), 0);
+        assert_eq!(
+            remote_headers(&with_header["ph"]).map(BTreeMap::len),
+            Some(1),
+            "the existing header is untouched"
+        );
+    }
+}

@@ -755,9 +755,9 @@ mod tests {
         assert!(store.top_dialog().unwrap().select.filter.is_empty(), "no filter state on help");
     }
 
-    /// Wave 3 — `DialogKind::Plugin` with rows-only content: the title
-    /// + `esc` hint header, the rows verbatim, printables passing
-    /// through (static, like help), escape closing.
+    /// Wave 3 — `DialogKind::Plugin` with rows-only content: the
+    /// title + `esc` hint header, the rows verbatim, printables
+    /// passing through (static, like help), escape closing.
     #[test]
     fn plugin_dialog_renders_rows_and_closes_on_escape() {
         let theme = crate::theme::ThemeState::v2_dark();

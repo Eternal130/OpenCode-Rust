@@ -25,7 +25,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 
@@ -35,8 +35,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::context::{
-    Bridge, HostState, SessionPort, ToolPort, CODEMODE_METHODS, GENERATE_METHODS,
-    SESSION_METHODS,
+    Bridge, HostState, SessionPort, ToolPort, CODEMODE_METHODS, GENERATE_METHODS, SESSION_METHODS,
 };
 use crate::protocol::{self, Incoming};
 use crate::registrations::{PluginState, PluginStatus, Registrations};
@@ -161,6 +160,9 @@ pub struct Shared {
     /// Diagnostics counters (the dropped-dispatch observability).
     pub dispatched_events: AtomicU64,
     pub dropped_events: AtomicU64,
+    /// The CURRENT guest process id (diagnostics + the adversarial
+    /// fuzz's kill target); -1 before the first spawn.
+    pub child_pid: AtomicI64,
     /// Plugin → TUI UI requests (the wave-3 slot bridge): pushed on
     /// the IO reader (deadlock rule 1 — inline answer, enqueued
     /// reply), drained between frames by the embedder.
@@ -192,6 +194,7 @@ impl Shared {
             ready: Arc::new((Mutex::new(false), Condvar::new())),
             dispatched_events: AtomicU64::new(0),
             dropped_events: AtomicU64::new(0),
+            child_pid: AtomicI64::new(-1),
             ui_requests: Mutex::new(VecDeque::new()),
             runtime_handle: None,
         }
@@ -300,14 +303,14 @@ impl Shared {
             // -- wave 4: Code Mode nested tool calls (`tools.<path>`
             //    inside an `execute` program) — same async-off-the-reader
             //    routing as session.*, deadlock rule 1.
-            "codemode.tool" => {
-                self.answer_tool_async(id, method, params);
+            other if CODEMODE_METHODS.contains(&other) => {
+                self.answer_tool_async(id, other, params);
                 None
             }
             // -- wave 4: `ctx.generate.text` rides the session port (the
             //    engine owns one-off generation, GenerateApi).
-            "generate.text" => {
-                self.answer_session_async(id, method, params);
+            other if GENERATE_METHODS.contains(&other) => {
+                self.answer_session_async(id, other, params);
                 None
             }
             "event.subscribe" | "ping" => Some(protocol::response(id, Value::Null)),
@@ -774,6 +777,7 @@ impl Supervisor {
             ready: Arc::new((Mutex::new(false), Condvar::new())),
             dispatched_events: AtomicU64::new(0),
             dropped_events: AtomicU64::new(0),
+            child_pid: AtomicI64::new(-1),
             ui_requests: Mutex::new(VecDeque::new()),
             runtime_handle: Some(tokio::runtime::Handle::current()),
         });
@@ -797,6 +801,9 @@ impl Supervisor {
             eprintln!("opencode plugin-host: spawn failed ({error}); plugin subsystem disabled");
             error
         })?;
+        if let Some(pid) = child.id() {
+            shared.child_pid.store(i64::from(pid), Ordering::Relaxed);
+        }
         spawn_writer(outbound_rx, stdin);
         spawn_reader(Arc::clone(&shared), stdout, 1);
 
@@ -952,7 +959,8 @@ impl Shared {
                     .await;
             }
             let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
-            let reload_options = self.config.entry_options.get(&key).cloned().unwrap_or(Value::Null);
+            let reload_options =
+                self.config.entry_options.get(&key).cloned().unwrap_or(Value::Null);
             let outcome = self
                 .request(
                     "load",
@@ -1171,6 +1179,9 @@ async fn supervise_loop(
                         let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
                         shared.rotate_outbound(outbound_tx);
                         let generation = shared.generation.fetch_add(1, Ordering::Relaxed) + 1;
+                        if let Some(pid) = new_child.id() {
+                            shared.child_pid.store(i64::from(pid), Ordering::Relaxed);
+                        }
                         spawn_writer(outbound_rx, stdin);
                         spawn_reader(Arc::clone(&shared), stdout, generation);
                         child = new_child;
@@ -1211,8 +1222,9 @@ fn backoff(base: Duration, max: Duration, attempt: u32) -> Duration {
 /// The dispatch pump: the post-ingest tap consumer. Sequential — tap
 /// order is plugin order. A dispatch that raced a crash/restart
 /// (send onto the dying generation's channel) is retried briefly so
-/// restarts stay transparent; a timeout drops THAT event (logged) and
-/// never blocks the stream.
+/// restarts stay transparent — the window (4 × 500 ms) covers the
+/// backoff + respawn + reload even under load; a timeout drops THAT
+/// event (logged) and never blocks the stream.
 async fn dispatch_pump(shared: Arc<Shared>, mut tap_rx: mpsc::Receiver<TapEvent>) {
     while let Some(event) = tap_rx.recv().await {
         let payload = json!({
@@ -1225,13 +1237,13 @@ async fn dispatch_pump(shared: Arc<Shared>, mut tap_rx: mpsc::Receiver<TapEvent>
         });
         let mut outcome =
             shared.request("dispatch", payload.clone(), shared.config.dispatch_timeout).await;
-        for _ in 0..2 {
+        for _ in 0..4 {
             match outcome {
                 Err(HostError::Exited(_)) => {
                     // The guest is between generations (crash +
-                    // backoff + respawn): a short retry window covers
-                    // the transition without stalling the stream.
-                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    // backoff + respawn): the retry window covers the
+                    // transition without stalling the stream.
+                    tokio::time::sleep(Duration::from_millis(500)).await;
                     outcome = shared
                         .request("dispatch", payload.clone(), shared.config.dispatch_timeout)
                         .await;
