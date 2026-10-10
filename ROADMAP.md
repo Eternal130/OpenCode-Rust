@@ -49,7 +49,7 @@
 | R-06 | 声音 / OS 通知 | TUI C2 类 | P2 | **done（beta.6）**：v2 触发矩阵+OSC 9/99/777+5 资产 vendor；播放镜像为系统播放器（登记分歧：v2 为进程内 miniaudio） |
 | R-07 | 图像支持（粘贴/显示 kitty/sixel） | TUI/app | P2 | **done（beta.6）**：路径粘贴→附件 chip→data-URI→引擎（anthropic/openai 图像块已有 golden）；显示 kitty APC 分块/sixel 透传/占位回退，`session.image_preview` 默认关 |
 | R-08 | 半块字形、子像素 RGBA 渲染 | TUI C2 类 | P3 | beta.7+ |
-| R-09 | PTY 守护跨重启交接 | core pty | P3 | beta.7+ |
+| R-09 | PTY 守护跨重启交接 | core pty | P3 | **done（beta.7）**：`oc-core/persistent_pty.rs` 移植 v2 交接生命周期（`daemon.ts:403-428` 阶梯：过期→注册发现→协议→实例→锁存活→票据/状态），`handoff()` 真票据+`state.json` 终端快照，`adopt()` 重挂到继承目录（inode 保锁迁移 `daemon.ts:435-444`）并恢复重放窗口（子进程随旧服务器死亡= v2 守护死亡语义，标记 exited）；`oc-server/boot.rs` 消费 `OPENCODE_PTY_HANDOFF`（`server-process.ts:46-57`）；守护进程边界本体（socket/子进程保活）仍属 Phase 9 |
 | R-10 | rmcp 0.5 elicitation | 协议库升级 | blocked（上游） | 跟踪 |
 | R-11 | 平台矩阵扩展（aarch64/musl/macOS/Windows） | 非功能差距，单独决策 | P3（待用户定时间） | — |
 
@@ -63,7 +63,7 @@
 | D-04 | 请求 schema 校验仅 2 路由 | 全路由 400 形状 | **修**：按 openapi 契约生成全路由校验电池，beta.5 |
 | D-05 | /help clamp；模型 release-date 精细序简化；input_paste preventDefault 未移植 | 各自精确行为 | **done（beta.6）** |
 | D-06 | TUI 本地状态 local→stable 目录不自动迁移 | 出厂 stable | **修**（一次性迁移逻辑，参照 v2 的 v1→v2 套路），beta.4 |
-| D-07 | G11-F1 首连快照/流竞态理论窗口 | v2 存在同类（行为对齐） | 已双侧加固；补一个时序证明或长期登记 |
+| D-07 | G11-F1 首连快照/流竞态理论窗口 | v2 存在同类（行为对齐） | **closed by proof（beta.7）**：确定性仿真套件 `oc-tui/tests/g11f1_proof.rs`（真实 Store+BroadcastTap 对）跑遍对抗序：`first_connect_snapshot_then_stream_overlap_is_exact` / `reconnect_resync_resets_display_and_ended_heals` / `complete_message_snapshot_never_appends` / `last_event_id_resume_mid_snapshot_is_idempotent` / `dedup_ring_boundary_exact_coverage` / `snapshot_queued_mid_stream_serializes_in_channel_order`。安全性由构造保证：delta 为 ephemeral（`registry.rs SESSION_EPHEMERAL`，`message_updater.rs` 文本仅在 `text.ended` 物化）⇒ 任何 fetch 不含在途增量文本，快照/流文本重叠不存在；+ store 完成守卫/4096 id 环/tap 独立环三重兜底。"重放先于快照"序经可达性论证排除（单通道 resync-先于流 + 游标=最后应用 id） |
 
 ## 四、验证体系补强（本轮盲区的制度化）
 
