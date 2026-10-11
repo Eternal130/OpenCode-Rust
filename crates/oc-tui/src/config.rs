@@ -69,6 +69,63 @@ fn attention_from_json(value: Option<&Value>) -> AttentionConfig {
     }
 }
 
+/// `tabs.scope` — where the tab list persists
+/// (`config/index.tsx:328`: `input.tabs?.scope ?? "cwd"`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TabsScope {
+    #[default]
+    Cwd,
+    Global,
+}
+
+/// The resolved `tabs` config (v2 `config/index.tsx:285-329`):
+/// `mode` ("on"/"off"/"auto", the legacy `enabled` boolean mapping
+/// on/off), `scope` (cwd/global), and the `HERDR_ENV` auto-gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabsConfig {
+    pub enabled: bool,
+    pub scope: TabsScope,
+}
+
+impl Default for TabsConfig {
+    fn default() -> Self {
+        Self { enabled: true, scope: TabsScope::default() }
+    }
+}
+
+impl TabsConfig {
+    /// Resolve from the raw `tabs` object (v2 `tabsMode` chain:
+    /// `mode ?? (enabled === undefined ? "auto" : enabled ? "on" : "off")`,
+    /// then `enabled = mode === "on" || (mode === "auto" && HERDR_ENV !== "1")`).
+    #[must_use]
+    pub fn resolve(tabs: Option<&Value>) -> Self {
+        let tabs = tabs.and_then(Value::as_object);
+        let mode = tabs
+            .and_then(|object| object.get("mode"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                tabs.and_then(|object| object.get("enabled")).and_then(Value::as_bool).map(
+                    |enabled| {
+                        if enabled {
+                            "on".to_owned()
+                        } else {
+                            "off".to_owned()
+                        }
+                    },
+                )
+            })
+            .unwrap_or_else(|| "auto".to_owned());
+        let herdr = std::env::var("HERDR_ENV").is_ok_and(|value| value == "1");
+        let enabled = mode == "on" || (mode == "auto" && !herdr);
+        let scope = match tabs.and_then(|object| object.get("scope")).and_then(Value::as_str) {
+            Some("global") => TabsScope::Global,
+            _ => TabsScope::Cwd,
+        };
+        Self { enabled, scope }
+    }
+}
+
 /// The TUI-relevant slice of `cli.json`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TuiConfig {
@@ -81,6 +138,9 @@ pub struct TuiConfig {
     /// tool-result images in the transcript (default off — v2's falsy
     /// check at session/index.tsx:2459).
     pub session_image_preview: bool,
+    /// The `tabs` section (open-tabs model): enabled defaults ON
+    /// (mode "auto", `HERDR_ENV=1` turns it off), scope defaults cwd.
+    pub tabs: TabsConfig,
     /// The file this was loaded from (`None` when no config file
     /// exists — all defaults).
     pub path: Option<PathBuf>,
@@ -115,12 +175,14 @@ impl TuiConfig {
         let attention = attention_from_json(value.get("attention"));
         let session_image_preview =
             value.pointer("/session/image_preview").and_then(Value::as_bool).unwrap_or(false);
+        let tabs = TabsConfig::resolve(value.get("tabs"));
         Self {
             keybinds: value.get("keybinds").cloned().unwrap_or(Value::Null),
             theme,
             leader_timeout_ms,
             attention,
             session_image_preview,
+            tabs,
             path,
         }
     }
@@ -224,5 +286,50 @@ mod tests {
             config,
             TuiConfig { path: Some(PathBuf::from("/tmp/x.json")), ..TuiConfig::default() }
         );
+    }
+
+    /// The `tabs` section resolves exactly like v2's `tabsMode` chain
+    /// (`config/index.tsx:285-329`): absent → auto (enabled unless
+    /// `HERDR_ENV=1`) + cwd scope; the legacy `enabled` boolean maps
+    /// on/off; explicit `mode` wins; `scope` only accepts
+    /// cwd/global.
+    #[test]
+    fn tabs_section_resolves_the_v2_mode_chain() {
+        // Serialize HERDR_ENV reads (the auto gate).
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let saved = std::env::var_os("HERDR_ENV");
+        let restore = move || match saved {
+            Some(value) => std::env::set_var("HERDR_ENV", value),
+            None => std::env::remove_var("HERDR_ENV"),
+        };
+
+        let tabs = TuiConfig::parse("{}", None).tabs;
+        assert!(tabs.enabled, "auto mode defaults on");
+        assert_eq!(tabs.scope, TabsScope::Cwd);
+
+        std::env::set_var("HERDR_ENV", "1");
+        assert!(!TabsConfig::resolve(None).enabled, "auto mode off under HERDR_ENV=1");
+        assert!(
+            TabsConfig::resolve(serde_json::from_str::<Value>(r#"{"mode":"on"}"#).ok().as_ref())
+                .enabled,
+            "explicit on wins over HERDR_ENV"
+        );
+        restore();
+
+        let config = TuiConfig::parse(r#"{ "tabs": { "mode": "off" } }"#, None);
+        assert!(!config.tabs.enabled);
+
+        // The legacy boolean maps on/off (v2: enabled ? "on" : "off").
+        let config = TuiConfig::parse(r#"{ "tabs": { "enabled": false } }"#, None);
+        assert!(!config.tabs.enabled);
+        let config =
+            TuiConfig::parse(r#"{ "tabs": { "enabled": true, "scope": "global" } }"#, None);
+        assert!(config.tabs.enabled);
+        assert_eq!(config.tabs.scope, TabsScope::Global);
+
+        // An unknown scope falls back to cwd (v2's schema enum).
+        let config = TuiConfig::parse(r#"{ "tabs": { "scope": "everywhere" } }"#, None);
+        assert_eq!(config.tabs.scope, TabsScope::Cwd);
     }
 }

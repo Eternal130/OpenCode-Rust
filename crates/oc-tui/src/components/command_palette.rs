@@ -351,17 +351,17 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         ),
         DialogKind::ServerList { command: "agent.list", title } => agent_list_props(store, title),
         DialogKind::ServerList { command: "session.list", title } => {
-            // The session list renders the known sessions — the open
-            // tabs (a server-backed session-list fetch would mirror
-            // the resync's; tabs are today's source of truth).
-            let tabs = store.tabs();
-            let options: Vec<SelectOption> = tabs
-                .tabs
+            // The session list dialog renders the HISTORY (v2's
+            // `data.session.list()` — every session the resync
+            // reported, newest first), NOT the open tabs; selecting a
+            // row navigates and the route effect opens its tab.
+            let history = store.session_history();
+            let options: Vec<SelectOption> = history
                 .iter()
-                .map(|tab| {
+                .map(|session| {
                     SelectOption::titled(
-                        tab.title.clone().unwrap_or_else(|| tab.session_id.clone()),
-                        tab.session_id.clone(),
+                        session.title.clone().unwrap_or_else(|| session.id.clone()),
+                        session.id.clone(),
                     )
                     .categorized("Sessions")
                 })
@@ -918,6 +918,44 @@ mod tests {
             mode: mode.into(),
             hidden,
         }
+    }
+
+    /// The session-list dialog lists the HISTORY (the resync's
+    /// session.list), not the open tabs — and selecting a row
+    /// navigates (the route effect opens the tab).
+    #[test]
+    fn session_list_dialog_rows_come_from_history_not_tabs() {
+        use crate::data::{Ingest, SessionSnapshot};
+        let store = Store::new(Runtime::new());
+        store.open_tab("s_open", Some("Open tab".to_owned()));
+        store.ingest_all([Ingest::Resync {
+            sessions: vec![
+                SessionSnapshot {
+                    id: "s_hist".into(),
+                    title: Some("History row".into()),
+                    time_idle: None,
+                    viewed: None,
+                },
+                SessionSnapshot {
+                    id: "s_open".into(),
+                    title: Some("Open tab".into()),
+                    time_idle: None,
+                    viewed: None,
+                },
+            ],
+            unread: Vec::new(),
+            messages: Vec::new(),
+        }]);
+        let props = select_props_for(
+            &DialogKind::ServerList { command: "session.list", title: "Sessions" },
+            &store,
+        );
+        let titles: Vec<&str> = props.options.iter().map(|option| option.title.as_str()).collect();
+        assert_eq!(titles, vec!["History row", "Open tab"], "history rows, newest first");
+        // Accepting a history row opens its tab through navigation.
+        execute_server_list_selection(&store, "session.list", "s_hist");
+        assert_eq!(store.route(), crate::store::Route::Session { session_id: "s_hist".to_owned() });
+        assert!(store.tabs().tabs.iter().any(|tab| tab.session_id == "s_hist"));
     }
 
     /// The model picker renders loaded rows (provider categories, Free

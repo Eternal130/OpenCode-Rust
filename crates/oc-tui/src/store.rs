@@ -667,6 +667,15 @@ pub struct Store {
     /// Reactive runtime owning the graph (pump via `run_effects`).
     pub runtime: Runtime,
     tabs: Signal<TabsState>,
+    /// `config.tabs.enabled` — the open-tabs model's master gate
+    /// (v2's `enabled()` in `context/session-tabs.tsx:68`): tab
+    /// mutations become no-ops (navigation still works) and the
+    /// strip hides. Defaults ON (mode "auto").
+    tabs_enabled: Signal<bool>,
+    /// The session HISTORY from the resync's `session.list` — the
+    /// session-list dialog's data source (v2 lists history there,
+    /// never the tab strip).
+    session_history: Signal<Vec<crate::data::SessionSnapshot>>,
     route: Signal<Route>,
     dialogs: Signal<Vec<DialogEntry>>,
     theme: Signal<ThemeState>,
@@ -761,6 +770,8 @@ pub struct Store {
 #[derive(Clone)]
 struct StoreSignals {
     tabs: Signal<TabsState>,
+    tabs_enabled: Signal<bool>,
+    session_history: Signal<Vec<crate::data::SessionSnapshot>>,
     route: Signal<Route>,
     dialogs: Signal<Vec<DialogEntry>>,
     theme: Signal<ThemeState>,
@@ -833,6 +844,8 @@ impl Store {
         let (clock, redraw_requests, redraw_effect) = Self::mount_redraw_effect(&runtime, &signals);
         let StoreSignals {
             tabs,
+            tabs_enabled,
+            session_history,
             route,
             dialogs,
             theme,
@@ -856,6 +869,8 @@ impl Store {
         Self {
             runtime,
             tabs,
+            tabs_enabled,
+            session_history,
             route,
             dialogs,
             theme,
@@ -904,6 +919,8 @@ impl Store {
     #[must_use]
     pub fn new(runtime: Runtime) -> Self {
         let tabs = Signal::new(&runtime, TabsState::default());
+        let tabs_enabled = Signal::new(&runtime, true);
+        let session_history = Signal::new(&runtime, Vec::new());
         let route = Signal::new(&runtime, Route::Home);
         let dialogs = Signal::new(&runtime, Vec::<DialogEntry>::new());
         let theme = Signal::new(&runtime, ThemeState::v2_dark());
@@ -934,6 +951,8 @@ impl Store {
             runtime,
             StoreSignals {
                 tabs,
+                tabs_enabled,
+                session_history,
                 route,
                 dialogs,
                 theme,
@@ -962,6 +981,25 @@ impl Store {
     #[must_use]
     pub fn tabs(&self) -> TabsState {
         self.tabs.get()
+    }
+
+    /// `config.tabs.enabled` (the open-tabs master gate; defaults ON).
+    #[must_use]
+    pub fn tabs_enabled(&self) -> bool {
+        self.tabs_enabled.get()
+    }
+
+    /// Apply the resolved `tabs.enabled` config (boot / reload).
+    pub fn set_tabs_enabled(&self, enabled: bool) {
+        self.tabs_enabled.set(enabled);
+    }
+
+    /// The session history from the last resync — the session-list
+    /// dialog's rows (v2's `data.session.list()`; the tab strip never
+    /// reads this).
+    #[must_use]
+    pub fn session_history(&self) -> Vec<crate::data::SessionSnapshot> {
+        self.session_history.get()
     }
 
     #[must_use]
@@ -1578,37 +1616,46 @@ impl Store {
 
     // -- tabs ---------------------------------------------------------------
 
-    /// Open (or update) a tab and navigate to it.
+    /// Open (or update) a tab and navigate to it
+    /// (`context/session-tabs.tsx` `open()` + the route effect).
+    /// With tabs disabled the navigation still runs (v2's `open()` is
+    /// a no-op but callers navigate separately; sessions stay
+    /// reachable with no strip).
     pub fn open_tab(&self, session_id: &str, title: Option<String>) {
-        self.tabs.update(|state| {
-            state.tabs = model::open_session_tab(
-                std::mem::take(&mut state.tabs),
-                SessionTab { session_id: session_id.to_owned(), title },
-            );
-            state.history = model::record_tab_history(&state.history, session_id);
-        });
+        if self.tabs_enabled.get() {
+            self.tabs.update(|state| {
+                state.tabs = model::open_session_tab(
+                    std::mem::take(&mut state.tabs),
+                    SessionTab { session_id: session_id.to_owned(), title },
+                );
+                state.history = model::record_tab_history(&state.history, session_id);
+            });
+        }
         self.navigate(Route::Session { session_id: session_id.to_owned() });
     }
 
     /// Restore the persisted tab list on boot (v2's
     /// `useStorage().store("tabs")` hydration): tabs land wholesale
-    /// (order + titles preserved), the first tab becomes the route
-    /// (v2 has no persisted active marker), an empty list stays home.
+    /// (order + titles preserved). The ROUTE does not move — v2 boots
+    /// to the home route regardless of the persisted strip (the
+    /// initial route is `args.continue ? session(dummy) : undefined`,
+    /// never a restored tab; `app.tsx:364-371`).
     pub fn restore_tabs(&self, tabs: Vec<SessionTab>) {
         if tabs.is_empty() {
             return;
         }
-        let first = tabs[0].session_id.clone();
         self.tabs.update(|state| {
             state.tabs = tabs;
-            state.history = model::record_tab_history(&state.history, &first);
         });
-        self.navigate(Route::Session { session_id: first });
     }
 
     /// Close a tab (`session_id = None` closes the new-session pseudo
-    /// tab — a no-op in 7.1, which has no new-tab state yet).
+    /// tab — a no-op in 7.1, which has no new-tab state yet). A no-op
+    /// while tabs are disabled (v2 gates `close()` on `enabled()`).
     pub fn close_tab(&self, session_id: Option<&str>) {
+        if !self.tabs_enabled.get() {
+            return;
+        }
         let Some(session_id) = session_id else { return };
         let tabs = self.tabs.get();
         let Some(index) = tabs.tabs.iter().position(|tab| tab.session_id == session_id) else {
@@ -1649,14 +1696,11 @@ impl Store {
         selected
     }
 
-    /// Select a tab (navigates to its session).
+    /// Select a session (navigates; the route effect opens its tab if
+    /// it is not open — v2's `select()` is a bare
+    /// `route.navigate({type:"session"})`, `session-tabs.tsx:393-396`).
     pub fn select_tab(&self, session_id: &str) {
-        if self.tabs.get().tabs.iter().any(|tab| tab.session_id == session_id) {
-            self.tabs.update(|state| {
-                state.history = model::record_tab_history(&state.history, session_id);
-            });
-            self.navigate(Route::Session { session_id: session_id.to_owned() });
-        }
+        self.navigate(Route::Session { session_id: session_id.to_owned() });
     }
 
     /// Quick slot 1-9 (and 10 via 0): select the tab at that position.
@@ -1721,6 +1765,30 @@ impl Store {
                 // Viewing clears unread.
                 state.unread.remove(session_id);
             });
+            // The route effect (`session-tabs.tsx:180-203`): routing to
+            // a session ADDS its tab when it is not open — this is the
+            // only way a session enters the strip (a home submission,
+            // the session-list dialog, `--continue`/`--session`, a
+            // tab click — every path navigates first). The title
+            // resolves at open time from the known session data (v2:
+            // `data.session.get(id)?.title ?? persisted ?? fallback`);
+            // `session.updated` refreshes open tabs in place later.
+            if self.tabs_enabled.get() {
+                let title = self
+                    .session_history
+                    .get()
+                    .iter()
+                    .find(|session| &session.id == session_id)
+                    .and_then(|session| session.title.clone());
+                self.tabs.update(|state| {
+                    if !state.tabs.iter().any(|tab| &tab.session_id == session_id) {
+                        state.tabs = model::open_session_tab(
+                            std::mem::take(&mut state.tabs),
+                            SessionTab { session_id: session_id.clone(), title },
+                        );
+                    }
+                });
+            }
         }
         self.route.set(route);
     }
@@ -2127,17 +2195,21 @@ impl Store {
                 }
             }
             Ingest::Resync { sessions, unread, messages } => {
-                // Reconcile AFTER the channel drained: refresh session
-                // titles in place (tab order preserved), keep unread
-                // marks the offline events re-established, add the
-                // ones the resync reports, and rebuild every open
-                // session's message tree from its `message.list`
-                // re-fetch (replacing the streamed tree wholesale —
-                // live events drained ahead of the snapshot are
-                // already inside the fetch; events after it continue
-                // applying on top).
+                // Reconcile AFTER the channel drained (v2's
+                // `normalize()` effect, `session-tabs.tsx:241-250`):
+                // the resync NEVER admits new tabs — only OPEN tabs
+                // refresh in place (title updates from the wire);
+                // routing is the only way a session enters the strip.
+                // The full snapshot becomes the session HISTORY (the
+                // session-list dialog's source, like v2's
+                // `data.session.list()`).
+                self.session_history.set(sessions.clone());
                 self.tabs.update(|state| {
-                    for session in &sessions {
+                    let open: Vec<&crate::data::SessionSnapshot> = sessions
+                        .iter()
+                        .filter(|session| state.tabs.iter().any(|tab| tab.session_id == session.id))
+                        .collect();
+                    for session in open {
                         state.tabs = model::open_session_tab(
                             std::mem::take(&mut state.tabs),
                             SessionTab {
@@ -2887,17 +2959,26 @@ mod tests {
                 serde_json::json!({ "sessionID": "a", "messageID": "m" }),
             )),
             Ingest::Resync {
-                sessions: vec![SessionSnapshot {
-                    id: "a".to_owned(),
-                    title: Some("Fresh title".to_owned()),
-                    time_idle: None,
-                    viewed: None,
-                }],
+                sessions: vec![
+                    SessionSnapshot {
+                        id: "a".to_owned(),
+                        title: Some("Fresh title".to_owned()),
+                        time_idle: None,
+                        viewed: None,
+                    },
+                    SessionSnapshot {
+                        id: "not-open".to_owned(),
+                        title: Some("History only".to_owned()),
+                        time_idle: None,
+                        viewed: None,
+                    },
+                ],
                 unread: vec!["a".to_owned()],
                 messages: Vec::new(),
             },
         ]);
         let tabs = store.tabs();
+        assert_eq!(tabs.tabs.len(), 1, "the resync never admits new tabs");
         assert_eq!(tabs.tabs[0].title.as_deref(), Some("Fresh title"));
         assert_eq!(
             tabs.unread.get("a"),
@@ -2905,6 +2986,52 @@ mod tests {
             "unread from the offline event survives the snapshot"
         );
         assert_eq!(store.connection(), ConnectionState::Connected);
+        // The full snapshot becomes the session history (the dialog's
+        // source) — including sessions that are not open tabs.
+        let history = store.session_history();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[1].id, "not-open");
+        assert_eq!(history[1].title.as_deref(), Some("History only"));
+    }
+
+    /// The open-tabs model: the strip only ever holds OPEN tabs.
+    /// Restore hydrates the strip WITHOUT moving the route (v2 boots
+    /// home — `app.tsx:364-371`); routing to a session is what adds
+    /// its tab (the route effect, `session-tabs.tsx:180-203`); with
+    /// tabs disabled nothing opens but navigation still works.
+    #[test]
+    fn tabs_open_only_through_routing_and_restore_keeps_home() {
+        let store = Store::new(Runtime::new());
+        assert_eq!(store.route(), Route::Home, "boots home");
+
+        // Restore hydrates the strip; the route stays home.
+        store.restore_tabs(vec![
+            SessionTab { session_id: "ses_1".into(), title: Some("One".into()) },
+            SessionTab { session_id: "ses_2".into(), title: None },
+        ]);
+        assert_eq!(store.tabs().tabs.len(), 2);
+        assert_eq!(store.route(), Route::Home, "restore never moves the route");
+
+        // Routing to an open tab: no duplicate.
+        store.select_tab("ses_1");
+        assert_eq!(store.tabs().tabs.len(), 2);
+
+        // Routing to a NOT-open session (the session-list dialog):
+        // the route effect admits exactly one new tab.
+        store.select_tab("ses_3");
+        assert_eq!(store.tabs().tabs.len(), 3);
+        assert!(store.tabs().tabs.iter().any(|tab| tab.session_id == "ses_3"));
+
+        // Disabled (`tabs.enabled = false` / mode "off"): navigation
+        // works, the strip stays as-is.
+        store.set_tabs_enabled(false);
+        store.select_tab("ses_4");
+        assert_eq!(store.route(), Route::Session { session_id: "ses_4".to_owned() });
+        assert_eq!(store.tabs().tabs.len(), 3, "no new tab while disabled");
+        // Closing while disabled: the strip is inert (v2's close() is
+        // gated on enabled()).
+        store.close_tab(Some("ses_4"));
+        assert_eq!(store.tabs().tabs.len(), 3);
     }
 
     #[test]
@@ -3541,8 +3668,10 @@ mod tests {
         assert_eq!(store.messages("s")[0].parts()[0].text(), "Hello World!!");
     }
 
-    /// Restored tabs land wholesale (order + titles), the first tab
-    /// becomes the route; an empty document stays home.
+    /// Restored tabs land wholesale (order + titles); the ROUTE stays
+    /// home — the boot route is home unless `--continue`/`--session`
+    /// says otherwise (v2 app.tsx:364-371, never a restored tab); an
+    /// empty document stays home too.
     #[test]
     fn restore_tabs_hydrates_in_order() {
         let store = Store::new(Runtime::new());
@@ -3555,11 +3684,7 @@ mod tests {
         let tabs = store.tabs();
         assert_eq!(tabs.tabs.len(), 2);
         assert_eq!(tabs.tabs[0].title.as_deref(), Some("First"));
-        assert_eq!(
-            store.route(),
-            Route::Session { session_id: "ses_1".to_owned() },
-            "the first restored tab is the route"
-        );
+        assert_eq!(store.route(), Route::Home, "restore never moves the route");
     }
 
     /// The selection state and the sink contract: select_* updates the

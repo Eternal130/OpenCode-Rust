@@ -204,13 +204,29 @@ mod tests {
     #[test]
     fn replay_session_list_leader_l() {
         // The recorded scenario ran with two known sessions (the
-        // fixture server's Alpha/Beta); our session list renders the
-        // store's tabs — open them before the run.
+        // fixture server's Alpha/Beta); the session-list dialog reads
+        // the store's session HISTORY (the resync's session.list) —
+        // stage the fixture's sessions through a resync batch.
         let script = load_script(&goldens(), "session-list-leader-l");
         let mut pump = App::new((100, 30));
-        pump.store.open_tab("ses_alpha", Some("Alpha".to_owned()));
-        pump.store.open_tab("ses_beta", Some("Beta".to_owned()));
-        pump.store.navigate(crate::store::Route::Home);
+        pump.store.ingest_all([crate::data::Ingest::Resync {
+            sessions: vec![
+                crate::data::SessionSnapshot {
+                    id: "ses_alpha".into(),
+                    title: Some("Alpha".to_owned()),
+                    time_idle: None,
+                    viewed: None,
+                },
+                crate::data::SessionSnapshot {
+                    id: "ses_beta".into(),
+                    title: Some("Beta".to_owned()),
+                    time_idle: None,
+                    viewed: None,
+                },
+            ],
+            unread: Vec::new(),
+            messages: Vec::new(),
+        }]);
         run_steps(&mut pump, &script);
     }
 

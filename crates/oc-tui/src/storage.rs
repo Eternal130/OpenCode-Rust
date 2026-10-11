@@ -96,13 +96,31 @@ fn segment(value: &str) -> Result<&str, String> {
 /// `context/session-tabs.tsx`): `global` + per-cwd scopes, each
 /// `{ tabs: SessionTab[], unread: {} }` (the `unread` field is kept
 /// empty for rollback compatibility with older readers — v2 comment).
+///
+/// ## Versioning (the open-tabs model fix)
+///
+/// The port's earlier builds treated the resync's `session.list` as a
+/// tab source, persisting EVERY session in history into
+/// `global.tabs` — the "30+ crammed tabs" artifact. The open-tabs
+/// model writes a **versioned** document ([`TABS_VERSION`]); on load
+/// a file without the current version is the legacy all-history shape
+/// and is reset (one-line log + the empty document written back),
+/// never crashed on. (v2's own shape carries no version field; the
+/// stamped `version` is an additive field v2 readers ignore.)
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TabsDocument {
+    #[serde(default)]
+    pub version: u32,
     #[serde(default)]
     pub global: TabsScope,
     #[serde(default)]
     pub cwd: std::collections::BTreeMap<String, TabsScope>,
 }
+
+/// The document version the open-tabs model writes. Anything else on
+/// disk (including the field's absence) is the legacy all-history
+/// shape and resets on load.
+pub const TABS_VERSION: u32 = 2;
 
 /// One scope's persisted tabs (`TabsState`).
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -297,6 +315,35 @@ impl ChannelStorage {
         let encoded = serde_json::to_value(value).map_err(|error| error.to_string())?;
         self.write(key, &encoded)
     }
+
+    /// Read the `tabs` document under the open-tabs model: a file
+    /// stamped with the current [`TABS_VERSION`] decodes normally;
+    /// anything else (the field's absence, an older version) is the
+    /// legacy all-history shape — it is IGNORED (the empty document
+    /// loads) and RESET on disk, with a one-line log. Never panics on
+    /// any on-disk content (parse failures also fall back to default).
+    pub fn read_tabs(&self) -> TabsDocument {
+        let Some(value) = self.read(KEY_TABS) else { return TabsDocument::default() };
+        if value.get("version").and_then(serde_json::Value::as_u64) == Some(u64::from(TABS_VERSION))
+        {
+            return serde_json::from_value(value).unwrap_or_default();
+        }
+        eprintln!(
+            "opencode tui: ignoring legacy session-tabs state (pre open-tabs model); resetting"
+        );
+        let document = TabsDocument { version: TABS_VERSION, ..TabsDocument::default() };
+        if let Err(error) = self.write_typed(KEY_TABS, &document) {
+            eprintln!("opencode tui: failed to reset session tabs: {error}");
+        }
+        document
+    }
+
+    /// Write the `tabs` document stamped with the current
+    /// [`TABS_VERSION`].
+    pub fn write_tabs(&self, document: &TabsDocument) -> Result<(), String> {
+        let stamped = TabsDocument { version: TABS_VERSION, ..document.clone() };
+        self.write_typed(KEY_TABS, &stamped)
+    }
 }
 
 /// Per-process write counter so concurrent atomic writes to one key
@@ -355,10 +402,12 @@ mod tests {
 
     /// The exact v2 tabs document shape round-trips: `global.tabs[]`
     /// with `sessionID`/`title` keys, the empty `unread` map present,
-    /// and the `cwd` scope object present.
+    /// and the `cwd` scope object present (the `version` stamp rides
+    /// along — v2 readers ignore the additive field).
     #[test]
     fn tabs_document_round_trips_the_reference_shape() {
         let document: TabsDocument = serde_json::from_value(json!({
+            "version": 2,
             "global": {
                 "tabs": [
                     { "sessionID": "ses_1", "title": "Bug hunt" },
@@ -378,6 +427,7 @@ mod tests {
         assert_eq!(
             encoded,
             json!({
+                "version": 2,
                 "global": {
                     "tabs": [
                         { "sessionID": "ses_1", "title": "Bug hunt" },
@@ -432,6 +482,7 @@ mod tests {
         let root = temp_root("roundtrip");
         let storage = ChannelStorage::open(&root, "local").expect("open");
         let document = TabsDocument {
+            version: TABS_VERSION,
             global: TabsScope {
                 tabs: vec![
                     TabEntry { session_id: "ses_a".into(), title: Some("A".into()) },
@@ -441,9 +492,62 @@ mod tests {
             },
             cwd: std::collections::BTreeMap::new(),
         };
-        storage.write_typed(KEY_TABS, &document).expect("write");
+        storage.write_tabs(&document).expect("write");
         let back: TabsDocument = storage.read_or_default(KEY_TABS);
         assert_eq!(back, document);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The open-tabs model's version gate: a versioned file loads
+    /// through [`ChannelStorage::read_tabs`]; the legacy all-history
+    /// shape (no `version` field — every session in `global.tabs`)
+    /// is ignored, logged, and RESET on disk; corrupt files still
+    /// fall back without crashing.
+    #[test]
+    fn read_tabs_resets_the_legacy_all_history_shape() {
+        let root = temp_root("legacy-reset");
+        let storage = ChannelStorage::open(&root, "stable").expect("open");
+        // The legacy artifact: 30+ sessions in global.tabs, no version.
+        let legacy_tabs: Vec<String> =
+            (0..30).map(|i| format!(r#"{{"sessionID":"ses_{i}"}}"#)).collect();
+        let legacy = format!(
+            r#"{{"cwd":{{}},"global":{{"tabs":[{}],"unread":{{}}}}}}"#,
+            legacy_tabs.join(",")
+        );
+        std::fs::write(storage.path_for(KEY_TABS), &legacy).unwrap();
+
+        // Load: ignored → empty, and the file on disk is the reset
+        // (version-stamped, empty) document.
+        let document = storage.read_tabs();
+        assert!(document.global.tabs.is_empty(), "legacy tabs ignored");
+        assert!(document.cwd.is_empty());
+        let reset: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(storage.path_for(KEY_TABS)).unwrap()).unwrap();
+        assert_eq!(reset["version"], json!(2), "the reset is stamped");
+        assert_eq!(reset["global"]["tabs"], json!([]));
+
+        // A current-version document round-trips untouched.
+        let current = TabsDocument {
+            version: TABS_VERSION,
+            global: TabsScope {
+                tabs: vec![TabEntry { session_id: "ses_kept".into(), title: Some("Kept".into()) }],
+                unread: std::collections::BTreeMap::new(),
+            },
+            cwd: std::collections::BTreeMap::new(),
+        };
+        storage.write_tabs(&current).expect("write");
+        assert_eq!(storage.read_tabs(), current);
+
+        // Corrupt content still falls back to default (no crash), and
+        // an unknown future version is treated as legacy (reset).
+        std::fs::write(storage.path_for(KEY_TABS), "not json").unwrap();
+        assert_eq!(storage.read_tabs().global.tabs, Vec::<TabEntry>::new());
+        std::fs::write(
+            storage.path_for(KEY_TABS),
+            r#"{"version":99,"global":{"tabs":[{"sessionID":"x"}]}}"#,
+        )
+        .unwrap();
+        assert!(storage.read_tabs().global.tabs.is_empty(), "future version resets");
         let _ = std::fs::remove_dir_all(&root);
     }
 
