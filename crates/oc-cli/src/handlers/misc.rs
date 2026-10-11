@@ -9,8 +9,15 @@ use crate::util;
 
 /// Root `opencode [directory]` — chdir, ensure the server (mismatch:
 /// replace), then launch the TUI against the resolved endpoint
-/// (the Phase-7.2 port; errors clearly without a TTY).
-pub async fn root(directory: Option<&str>, server: &crate::cli::ServerParams) -> i32 {
+/// (the Phase-7.2 port; errors clearly without a TTY). The boot
+/// flags follow v2's route rules (`app.tsx:364-371`): default = home,
+/// `--continue`/`--session` route a session.
+pub async fn root(
+    directory: Option<&str>,
+    continue_last: bool,
+    session: Option<String>,
+    server: &crate::cli::ServerParams,
+) -> i32 {
     if let Some(directory) = directory {
         if let Err(error) = std::env::set_current_dir(directory) {
             eprintln!("Error: Failed to change directory to {directory}: {error}");
@@ -33,7 +40,8 @@ pub async fn root(directory: Option<&str>, server: &crate::cli::ServerParams) ->
     // The TUI owns the terminal from here; the ensured server stays
     // alive for the duration (the guard drops after).
     let client = resolved.endpoint.client();
-    match oc_tui::app::run(client).await {
+    let boot = oc_tui::app::BootArgs { continue_last, session };
+    match oc_tui::app::run(client, boot).await {
         Ok(()) => 0,
         Err(message) => {
             eprintln!("Error: {message}");

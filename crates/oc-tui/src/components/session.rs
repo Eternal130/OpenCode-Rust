@@ -111,16 +111,24 @@ pub fn render_session(
     let fill =
         Style::new().fg(crate::components::tool_rows::DEFAULT_FOREGROUND).bg(styles.background);
 
-    // The tabs strip (height 1) leads the column; the title row and
-    // the transcript shift down under it.
-    let strip = paint_live_tabs_bar(store, session_id, width, styles);
+    // The tabs strip (height 1) leads the column when the tabs config
+    // is enabled (v2's session-frame renders the strip behind the
+    // same `enabled()` gate); the title row and the transcript shift
+    // down under it. With tabs off the frame starts at the title row.
+    let show_strip = store.tabs_enabled();
+    let strip = show_strip.then(|| paint_live_tabs_bar(store, session_id, width, styles));
 
     // The composer's docked mount (popup rows above it when the
     // slash palette is open) + the transcript's height budget.
     let (mount, prompt_height, mount_height) =
         composer_mount_frame(store, session_id, &theme, width, height);
     let spacing = usize::from(mount_height + 1 < height);
-    let transcript_height = height.saturating_sub(mount_height + spacing + 2);
+    // Without the strip the chrome is one row shorter (title only).
+    let chrome = usize::from(show_strip) + 1;
+    let transcript_height = height.saturating_sub(mount_height + spacing + chrome);
+    // The transcript's rows start under the title row; the strip (when
+    // shown) pushes both down one more row.
+    let content_top = chrome;
 
     let transcript = render_transcript(
         &store.messages(session_id),
@@ -155,7 +163,7 @@ pub fn render_session(
                 image.rows.min(u16::try_from(transcript_height - top).unwrap_or(image.rows));
             Some(crate::image::ImagePlacement {
                 x: image.x,
-                y: image.y + 2,
+                y: image.y + u16::try_from(content_top).unwrap_or(u16::MAX),
                 id: image.id,
                 data: image.data.clone(),
                 cols: image.cols,
@@ -171,7 +179,7 @@ pub fn render_session(
     let title_width = crate::wrap::display_width(&title).min(width.saturating_sub(inset * 2));
     placed.push(crate::layout::Placed {
         x: inset,
-        y: 1,
+        y: content_top - 1,
         width: title_width,
         lines: vec![crate::layout::PlacedLine::plain(
             crate::wrap::take_width(&title, width.saturating_sub(inset * 2)),
@@ -180,25 +188,27 @@ pub fn render_session(
         tag: None,
     });
     for row in &transcript.rows {
-        let y = 2 + row.y;
+        let y = content_top + row.y;
         if y >= transcript_height {
             break;
         }
         for line in &row.placed {
             let mut shifted = line.clone();
-            shifted.y += 2;
+            shifted.y += content_top;
             placed.push(shifted);
         }
         fills.extend(row.fills.iter().map(|fill| crate::render::Fill {
             x: fill.x,
-            y: fill.y + 2,
+            y: fill.y + u16::try_from(content_top).unwrap_or(u16::MAX),
             width: fill.width,
             height: fill.height,
             style: fill.style,
         }));
     }
     let mut frame = paint_placed_with_fills(&placed, &fills, size, fill);
-    paste(&mut frame, &strip, 0, 0);
+    if let Some(strip) = strip {
+        paste(&mut frame, &strip, 0, 0);
+    }
     paste(&mut frame, &mount, 0, height - prompt_height);
     frame
 }
@@ -341,6 +351,20 @@ mod tests {
         // The active tab's transcript still renders under the strip.
         let joined = grid.join("\n");
         assert!(joined.contains("Alpha notes"), "title row present: {joined}");
+    }
+
+    /// `tabs.enabled = false`: the strip is absent, the session frame
+    /// starts at the title row, and routing still works.
+    #[test]
+    fn session_frame_hides_the_strip_when_tabs_disabled() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Alpha notes".to_owned()));
+        store.set_tabs_enabled(false);
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
+        let grid = frame.text_grid();
+        assert!(!grid[0].contains(" + "), "no add affordance: {}", grid[0]);
+        assert!(grid[0].contains("Alpha notes"), "the title row moves to the top: {}", grid[0]);
     }
 
     /// V2: the composer's footer row carries the persistent
