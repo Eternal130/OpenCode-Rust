@@ -104,6 +104,9 @@ impl App {
 
     #[must_use]
     pub fn with_store(store: Store, size: (u16, u16)) -> Self {
+        // The sidebar toggle's visibility input (session-frame.tsx's
+        // `rightPane()` reads the live dimensions).
+        store.set_terminal_size(size);
         Self {
             store,
             keymap: Keymap::new(),
@@ -242,6 +245,7 @@ impl App {
     /// new size.
     pub fn resize(&mut self, size: (u16, u16)) {
         self.size = size;
+        self.store.set_terminal_size(size);
         self.store.request_redraw();
     }
 
@@ -1940,7 +1944,19 @@ pub async fn run_with_size(
     // (v2 app.tsx:364-371). The boot load runs the one-time
     // local→stable migration first (D-06).
     app.store.set_tabs_enabled(config.tabs.enabled);
+    // `session.sidebar` (config/index.tsx:151-152): cli.json first,
+    // then the persisted last toggle overrides (v2's toggle writes the
+    // config doc; our ChannelStorage "sidebar" key stands in — the TUI
+    // never rewrites the user's cli.json).
+    app.store.set_sidebar_mode(config.session_sidebar);
     let tabs_storage = crate::storage::ChannelStorage::open_default_migrated().ok();
+    if let Some(storage) = &tabs_storage {
+        let doc: crate::storage::SidebarDoc = storage.read_or_default(crate::storage::KEY_SIDEBAR);
+        if doc.mode == crate::components::sidebar::SidebarMode::Hide {
+            app.store.set_sidebar_mode(doc.mode);
+        }
+    }
+    let mut persisted_sidebar = app.store.sidebar_mode();
     let tabs_scope_cwd = directory.clone();
     if let Some(storage) = &tabs_storage {
         if config.tabs.enabled {
@@ -2292,6 +2308,21 @@ pub async fn run_with_size(
                         // would hide tabs resetting every launch (v2 logs).
                         eprintln!("opencode tui: failed to persist session tabs: {error}");
                     }
+                }
+            }
+        }
+        // Sidebar persistence (v2's toggle writes `session.sidebar`
+        // through config.update; ours lands in the channel's
+        // "sidebar" key — same last-toggle-wins contract).
+        let sidebar_now = app.store.sidebar_mode();
+        if sidebar_now != persisted_sidebar {
+            persisted_sidebar = sidebar_now;
+            if let Some(storage) = &tabs_storage {
+                if let Err(error) = storage.write_typed(
+                    crate::storage::KEY_SIDEBAR,
+                    &crate::storage::SidebarDoc { mode: sidebar_now },
+                ) {
+                    eprintln!("opencode tui: failed to persist sidebar mode: {error}");
                 }
             }
         }

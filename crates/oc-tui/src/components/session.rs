@@ -17,7 +17,10 @@ use crate::components::composer::render::{
 };
 use crate::components::message::list::{render_transcript, TranscriptOptions};
 use crate::components::session_tabs::{self, Attention, TabStatus, TabView};
-use crate::render::{paint_placed_with_fills, Frame};
+use crate::components::sidebar::{
+    render_sidebar, SidebarSections, SidebarView, SIDEBAR_AUTO_BREAKPOINT,
+};
+use crate::render::{paint_placed_with_fills, Fill, Frame};
 use crate::store::Store;
 use ratatui::style::Style;
 
@@ -131,10 +134,25 @@ pub fn render_session(
     let show_strip = store.tabs_enabled();
     let strip = show_strip.then(|| paint_live_tabs_bar(store, Some(session_id), width, styles));
 
+    // The session sidebar (session-frame.tsx:106-117): v2's right
+    // pane — `auto` shows it above 120 cols, the manual toggle forces
+    // it on (at narrow widths as a scrim overlay, 385-397), subagent
+    // sessions never. Docked (wide), the pane takes 42 columns and
+    // the transcript column reflows to `width − 42`
+    // (SESSION_SIDEBAR_WIDTH, ui/layout.ts:1).
+    let sidebar_shown = store.sidebar_shown(session_id, width);
+    let sidebar_docked = sidebar_shown && width > SIDEBAR_AUTO_BREAKPOINT;
+    let sidebar_overlay = sidebar_shown && !sidebar_docked;
+    let column = if sidebar_docked {
+        width - crate::components::session_tabs::SESSION_SIDEBAR_WIDTH
+    } else {
+        width
+    };
+
     // The composer's docked mount (popup rows above it when the
     // slash palette is open) + the transcript's height budget.
     let (mount, prompt_height, mount_height) =
-        composer_mount_frame(store, session_id, &theme, width, height);
+        composer_mount_frame(store, session_id, &theme, column, height);
     // The queued-prompt dock (v2's `QueuedPromptDock`,
     // index.tsx:2312-2342): one row above the composer —
     // `┃ {n} queued · {next}` — while prompts wait in the serial
@@ -170,7 +188,7 @@ pub fn render_session(
             ..TranscriptOptions::default()
         },
         styles,
-        width,
+        column,
     );
     // Wave A: the scroll driver — record this frame's metrics (the
     // scroll commands' viewport/content inputs) and apply the live
@@ -274,11 +292,88 @@ pub fn render_session(
     if let Some(strip) = strip {
         paste(&mut frame, &strip, 0, 0);
     }
-    if let Some(dock) = (!queued.is_empty()).then(|| paint_queued_dock(&queued, width, styles)) {
+    if let Some(dock) = (!queued.is_empty()).then(|| paint_queued_dock(&queued, column, styles)) {
         paste(&mut frame, &dock, 0, height - prompt_height - dock_height);
     }
     paste(&mut frame, &mount, 0, height - prompt_height);
+    // The sidebar pane mounts under the strip across the frame's full
+    // remaining height (session-frame.tsx:325-331 — `flexShrink 0`,
+    // width 42): docked at the right edge beside the reflowed
+    // transcript column, or — when the manual toggle forced it on at
+    // a narrow width — over a scrim covering the frame
+    // (session-frame.tsx:385-397, the rgba(0,0,0,70) backdrop our
+    // opaque text grid renders as black).
+    if sidebar_shown {
+        let pane_height = height - content_top;
+        let view = live_sidebar_view(store, session_id, height);
+        let paint = render_sidebar(&view, styles, pane_height);
+        let pane = paint_placed_with_fills(
+            &paint.placed,
+            &paint.fills,
+            (
+                u16::try_from(crate::components::session_tabs::SESSION_SIDEBAR_WIDTH)
+                    .unwrap_or(u16::MAX),
+                u16::try_from(pane_height).unwrap_or(u16::MAX),
+            ),
+            Style::new()
+                .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
+                .bg(styles.background_raised),
+        );
+        if sidebar_docked {
+            paste(&mut frame, &pane, column, content_top);
+        } else if sidebar_overlay {
+            let scrim = scrim_frame(width, pane_height);
+            paste(&mut frame, &scrim, 0, content_top);
+            paste(
+                &mut frame,
+                &pane,
+                width.saturating_sub(crate::components::session_tabs::SESSION_SIDEBAR_WIDTH),
+                content_top,
+            );
+        }
+    }
     frame
+}
+
+/// The manual-open scrim (session-frame.tsx:385-397): the whole frame
+/// area under the strip dims under the floating sidebar — v2 blends
+/// rgba(0,0,0,70) over the content; the text grid has no alpha, so
+/// the scrim paints opaque black (the dominant visual: a dark
+/// backdrop with the pane floating right).
+fn scrim_frame(width: usize, height: usize) -> Frame {
+    let black = ratatui::style::Color::Rgb(0, 0, 0);
+    let style = Style::new().fg(crate::components::tool_rows::DEFAULT_FOREGROUND).bg(black);
+    let (w, h) =
+        (u16::try_from(width).unwrap_or(u16::MAX), u16::try_from(height).unwrap_or(u16::MAX));
+    paint_placed_with_fills(&[], &[Fill { x: 0, y: 0, width: w, height: h, style }], (w, h), style)
+}
+
+/// The live sidebar's content (`routes/session/sidebar.tsx`): the
+/// session's title (the tab list's title — the strip's "Untitled
+/// session" fallback), the plugin sections (`sidebar.content` — one
+/// per plugin through the slot bridge), the getting-started card
+/// (height ≥ 22 and not dismissed, footer.tsx:18-23) and the footer
+/// location line (absent until the live route carries a
+/// `{dir}:{branch}` source — the composer's status seam is empty
+/// too).
+fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarView {
+    let title = store
+        .tabs()
+        .tabs
+        .iter()
+        .find(|tab| tab.session_id == session_id)
+        .and_then(|tab| tab.title.clone())
+        .unwrap_or_else(|| "Untitled session".to_owned());
+    SidebarView {
+        title,
+        sections: SidebarSections {
+            context: Vec::new(),
+            mcp: Vec::new(),
+            plugins: store.plugin_sidebar_sections(),
+        },
+        onboarding: height >= 22 && !store.sidebar_onboarding_dismissed(),
+        location: None,
+    }
 }
 
 /// The queued-prompt dock row (`QueuedPromptDock`,
@@ -425,7 +520,7 @@ mod tests {
         store.open_tab("s1", Some("Bug hunt".to_owned()));
         let theme = crate::theme::ThemeState::v2_dark();
         let frame = render_session(&store, "s1", &theme.styles(), (40, 12));
-        let grid = frame.text_grid().join("\n");
+        let grid = frame.text_grid().join("");
         assert!(grid.contains("Bug hunt"), "title present: {grid}");
         // The docked composer's chrome: left rail + bottom transition
         // on the LAST rows (docked, not floating).
@@ -513,7 +608,7 @@ mod tests {
         store.select_agent("s1", "build");
         let theme = crate::theme::ThemeState::v2_dark();
         let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
-        let joined = frame.text_grid().join("\n");
+        let joined = frame.text_grid().join("");
         assert!(joined.contains("Build · fake-model-a"), "the hint row: {joined}");
     }
 
@@ -604,6 +699,116 @@ mod tests {
         assert!(
             !back.text_grid()[1..].iter().any(|row| row.contains("Short")),
             "the other tab's title stays on the strip row only"
+        );
+    }
+
+    // -- the live sidebar mount (session-frame.tsx) -----------------------
+
+    /// Auto at 160: the pane docks at the right edge (42 cols), the
+    /// transcript + composer reflow to 118, the strip keeps the full
+    /// width, and the title + onboarding card render.
+    #[test]
+    fn wide_session_docks_the_sidebar_and_shrinks_the_transcript() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Bug hunt".to_owned()));
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame = render_session(&store, "s1", &theme.styles(), (160, 30));
+        let grid = frame.text_grid();
+        // The pane starts at column 118, row 1 (under the strip): the
+        // title 2 cols in on its row-1 (paddingTop 1 + paddingLeft 2).
+        let pane = |row: usize| grid[row].chars().skip(118).collect::<String>();
+        assert!(pane(2).starts_with("  Bug hunt"), "the title at pane (2, 1): {:?}", pane(2));
+        assert!(pane(2).chars().take(2).all(|c| c == ' '), "cols 118-119 blank (paddingLeft 2)");
+        // The onboarding card shows at height 30 (>= 22).
+        assert!(grid.iter().any(|row| row.contains("Getting started")), "the onboarding card");
+        // The composer's left border stays inside the reflowed column
+        // (the box's `┃` rows); the sidebar region keeps its own
+        // background — no composer bytes leak into the pane.
+        assert!(
+            grid.iter().any(|row| row.starts_with("┃") || row.starts_with(" ┃")),
+            "the composer mounts at the reflowed column"
+        );
+        let card_row = grid
+            .iter()
+            .position(|row| row.contains("Getting started"))
+            .expect("the onboarding card");
+        assert!(
+            grid[card_row].chars().nth(118).is_some_and(|c| c == ' '),
+            "no composer bytes in the pane"
+        );
+    }
+
+    /// Auto at 80 (below the breakpoint): NO pane — the transcript and
+    /// composer span the full width (the pre-sidebar shape, byte-for-
+    /// byte the left column of the wide frame).
+    #[test]
+    fn narrow_session_renders_without_the_sidebar() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Bug hunt".to_owned()));
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
+        let grid = frame.text_grid();
+        assert!(
+            !grid.iter().any(|row| row.contains("Getting started")),
+            "no sidebar content at 80 cols"
+        );
+    }
+
+    /// The manual toggle at a narrow width floats the pane over a
+    /// black scrim (session-frame.tsx:385-397) — the pane still
+    /// renders its title at the right edge, the transcript underneath
+    /// is covered.
+    #[test]
+    fn manual_toggle_at_narrow_width_overlays_the_pane() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Bug hunt".to_owned()));
+        store.set_terminal_size((80, 24));
+        store.toggle_sidebar();
+        assert!(store.sidebar_shown("s1", 80));
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
+        let grid = frame.text_grid();
+        let title: String = grid[2].chars().skip(40).collect();
+        assert!(title.contains("Bug hunt"), "the pane floats at the right edge: {title}");
+        // The scrim covers the transcript column under the strip.
+        assert!(grid[1].chars().take(38).all(|c| c == ' '), "the scrim covers the frame");
+    }
+
+    /// The plugin slot bridge's sections render in the LIVE pane (the
+    /// `sidebar.content` seam): the store's plugin sections paint
+    /// under the title.
+    #[test]
+    fn plugin_sidebar_sections_render_in_the_live_pane() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Bug hunt".to_owned()));
+        store.set_plugin_sidebar_section(&crate::components::sidebar::SidebarSection {
+            plugin_id: "tuislots".into(),
+            title: "Fixture".into(),
+            rows: vec!["preset: zhipuai".into(), "sessions: 7".into()],
+        });
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame = render_session(&store, "s1", &theme.styles(), (160, 30));
+        let grid = frame.text_grid();
+        let pane: Vec<String> = grid.iter().map(|row| row.chars().skip(118).collect()).collect();
+        assert!(pane[3].starts_with("  Fixture"), "the section title: {:?}", pane[3]);
+        assert!(pane[4].starts_with("  preset: zhipuai"), "row 1: {:?}", pane[4]);
+        assert!(pane[5].starts_with("  sessions: 7"), "row 2: {:?}", pane[5]);
+    }
+
+    /// A subagent session never mounts the pane (session-frame.tsx:108).
+    #[test]
+    fn subagent_session_never_shows_the_sidebar() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("sub", None);
+        store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "session.created",
+            serde_json::json!({ "sessionID": "sub", "parentID": "parent" }),
+        ))]);
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame = render_session(&store, "sub", &theme.styles(), (160, 30));
+        assert!(
+            !frame.text_grid().iter().any(|row| row.contains("Getting started")),
+            "no pane for subagent sessions"
         );
     }
 }

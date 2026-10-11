@@ -492,3 +492,51 @@ fn session_slash_palette_matches_text_grid_and_ansi() {
     assert_text_grid_match("session-slash-palette", 80, &frame);
     assert_ansi_byte_match("session-slash-palette", 80, &frame);
 }
+
+/// `session-sidebar-live` (w160 + w80): the LIVE route's sidebar
+/// mount (`render_session` through the store — the session-frame
+/// port). At 160 `session.sidebar = auto` docks the pane at the right
+/// edge (42 cols, `ui/layout.ts:1`): the bold session title, the
+/// getting-started card (height ≥ 22), and the transcript + composer
+/// reflow to 118. At 80 the pane is absent (auto shows only >120 —
+/// `session-frame.tsx:106-111`) and the route renders the
+/// pre-sidebar full-width shape.
+#[test]
+fn session_sidebar_live_matches_text_grid_and_ansi() {
+    for (width, height) in [(160u16, 30u16), (80, 24)] {
+        let store = Store::new(Runtime::new());
+        store.set_theme(theme());
+        store.open_tab("ses_side", Some("Sidebar session".to_owned()));
+        store.set_messages(
+            "ses_side",
+            vec![
+                Message::User {
+                    id: "u1".into(),
+                    text: "what does the parser do?".into(),
+                    created: 0,
+                    files: Vec::new(),
+                },
+                Message::Assistant {
+                    id: "a1".into(),
+                    agent: "build".into(),
+                    model: "fixture/fixture".into(),
+                    parts: Vec::new(),
+                    finish: Some("stop".into()),
+                    error: None,
+                    time: PartTime { created: Some(1), completed: Some(2) },
+                },
+            ],
+        );
+        let app = crate::app::App::with_store(store, (width, height));
+        let frame = app.frame();
+        let grid = frame.text_grid().join("\n");
+        if usize::from(width) > crate::components::sidebar::SIDEBAR_AUTO_BREAKPOINT {
+            assert!(grid.contains("Sidebar session"), "the pane's title at {width}");
+            assert!(grid.contains("Getting started"), "the onboarding card at {width}");
+        } else {
+            assert!(!grid.contains("Getting started"), "no pane at {width}");
+        }
+        assert_text_grid_match("session-sidebar-live", usize::from(width), &frame);
+        assert_ansi_byte_match("session-sidebar-live", usize::from(width), &frame);
+    }
+}

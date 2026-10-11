@@ -73,7 +73,7 @@ pub struct SessionScreen<'a> {
     /// `session.sidebar` (auto/hide).
     pub sidebar: SidebarMode,
     /// The sidebar pane's content (title, onboarding card, location).
-    pub sidebar_view: SidebarView<'a>,
+    pub sidebar_view: SidebarView,
     /// The transcript's follow state (sticky/free offset).
     pub follow: FollowState,
     /// The status line's `{directory}:{branch}` label.

@@ -1,0 +1,30 @@
+   Sidebar session               +                                                                                                                              
+                                                                                                                                                                
+  ┃                                                                                                                     Sidebar session                         
+  ┃  what does the parser do?                                                                                                                                   
+  ┃                                                                                                                                                             
+                                                                                                                                                                
+     Build · fixture/fixture · 2ms                                                                                                                              
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                          ⬖ Getting started                ✕    
+                                                                                                                                                                
+                                                                                                                            OpenCode includes free models so    
+                                                                                                                            you can start immediately.          
+                                                                                                                                                                
+                                                                                                                            Connect from 75+ providers to       
+                                                                                                                            use other models, including         
+                                                                                                                            Claude, GPT, Gemini etc             
+┃                                                                                                                                                               
+┃                                                                                                                           Connect provider        /connect    
+┃                                                                                                                                                               
+┃                                                                                                                                                               
+╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                          
+                                                                                     shift+tab agents  ctrl+p commands                                          

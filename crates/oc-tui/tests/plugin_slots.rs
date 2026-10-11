@@ -202,6 +202,7 @@ fn project(keymap: &mut Keymap, store: &Store, snapshot: &oc_plugin_host::Regist
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // the slot-bridge walkthrough: one phase per seam
 fn tui_slots_end_to_end() {
     let Some((host, store, sandbox)) = boot() else { return };
 
@@ -275,6 +276,25 @@ fn tui_slots_end_to_end() {
     assert_eq!(sections[0].title, "Fixture");
     assert_eq!(sections[0].rows, ["preset: zhipuai".to_owned(), "sessions: 7".to_owned()]);
     assert_eq!(store.plugin_footer_hints(), ["slots on".to_owned()]);
+
+    // The LIVE route renders the plugin's section in the docked
+    // sidebar pane (the `sidebar.content` slot bridge end-to-end):
+    // at 160 the pane docks at col 118 with the section under the
+    // title, the transcript column reflowed to 118.
+    store.open_tab("ses_slots", Some("Slots session".to_owned()));
+    store.navigate(oc_tui::store::Route::Session { session_id: "ses_slots".into() });
+    let frame = oc_tui::components::session::render_session(
+        &store,
+        "ses_slots",
+        &theme.styles(),
+        (160, 30),
+    );
+    let grid = frame.text_grid();
+    let pane: Vec<String> = grid.iter().map(|row| row.chars().skip(118).collect()).collect();
+    assert!(pane[2].starts_with("  Slots session"), "the live title: {:?}", pane[2]);
+    assert!(pane[3].starts_with("  Fixture"), "the plugin section title: {:?}", pane[3]);
+    assert!(pane[4].starts_with("  preset: zhipuai"), "the plugin row 1: {:?}", pane[4]);
+    assert!(pane[5].starts_with("  sessions: 7"), "the plugin row 2: {:?}", pane[5]);
 
     // The fully-built dialog opened and renders its rows natively.
     let top = store.top_dialog().expect("the poked dialog opened");
