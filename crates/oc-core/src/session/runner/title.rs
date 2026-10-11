@@ -247,45 +247,72 @@ impl SessionTitle {
         let Some(title) = title else { return };
 
         // Optimistic concurrency: the renamed publish lands only at the
-        // expected next sequence.
-        let expected_sequence =
-            self.bus.latest_sequence(session_id).await.map(|seq| seq + 1).unwrap_or(1);
-        let Some(current) = self
-            .db
-            .transaction({
-                let id = session_id.to_string();
-                move |tx| crate::database::schema::SessionRow::get(tx, id)
-            })
-            .await
-            .ok()
-            .flatten()
-        else {
-            return;
-        };
-        if current.title != session.title
-            || current.title.as_deref() == Some(truncate(&title).as_str())
-        {
-            return;
-        }
-        let mut options = PublishOptions::default();
-        let session_id_owned = session_id.to_string();
-        options.commit = Some(Box::new(move |_tx: &mut crate::database::Tx<'_>, seq: i64| {
-            if seq == expected_sequence {
-                Ok(())
-            } else {
-                Err(crate::database::error::DbError::Pragma(format!(
-                    "\u{0}title-changed\u{1}{session_id_owned}"
-                )))
+        // expected next sequence (title.ts:135-147). The forked title task
+        // races the chat step's own session events — any of them
+        // allocating a sequence between the expectation read and the
+        // publish loses the rename — so a mismatch retries (fresh
+        // expectation, fresh current-row guard, small backoff for the
+        // concurrent stream's event burst). A concurrent RENAME still
+        // wins: the current-row re-check below returns when the title
+        // moved (the same guard v2's pre-publish check applies).
+        for attempt in 0..20 {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
-        }));
-        let data = serde_json::json!({
-            "sessionID": session_id,
-            "title": truncate(&title),
-        });
-        let def = crate::bus::registry::by_type_latest("session.renamed")
-            .unwrap_or_else(|| panic!("no session.renamed definition"));
-        // A lost race is swallowed (the defect only signals the mismatch).
-        let _ = self.bus.publish(def, data, options).await;
+            let expected_sequence =
+                self.bus.latest_sequence(session_id).await.map(|seq| seq + 1).unwrap_or(1);
+            let Some(current) = self
+                .db
+                .transaction({
+                    let id = session_id.to_string();
+                    move |tx| crate::database::schema::SessionRow::get(tx, id)
+                })
+                .await
+                .ok()
+                .flatten()
+            else {
+                return;
+            };
+            if current.title != session.title
+                || current.title.as_deref() == Some(truncate(&title).as_str())
+            {
+                return;
+            }
+            let mut options = PublishOptions::default();
+            let session_id_owned = session_id.to_string();
+            options.commit = Some(Box::new(move |_tx: &mut crate::database::Tx<'_>, seq: i64| {
+                if seq == expected_sequence {
+                    Ok(())
+                } else {
+                    Err(crate::database::error::DbError::Pragma(format!(
+                        "\u{0}title-changed\u{1}{session_id_owned}"
+                    )))
+                }
+            }));
+            let data = serde_json::json!({
+                "sessionID": session_id,
+                "title": truncate(&title),
+            });
+            let def = crate::bus::registry::by_type_latest("session.renamed")
+                .unwrap_or_else(|| panic!("no session.renamed definition"));
+            match self.bus.publish(def, data, options).await {
+                Ok(_) => return,
+                // A lost race is swallowed (the defect only signals the
+                // mismatch) and retried with a fresh expectation.
+                Err(error) if Self::is_title_changed(&error) => continue,
+                Err(_) => return,
+            }
+        }
+    }
+
+    /// Whether a rename-publish failure is the optimistic-concurrency
+    /// defect (a sequence mismatch) rather than a hard bus error.
+    fn is_title_changed(error: &crate::bus::BusError) -> bool {
+        matches!(
+            error,
+            crate::bus::BusError::Db(crate::database::error::DbError::Pragma(message))
+                if message.starts_with("\u{0}title-changed")
+        )
     }
 
     /// `selectTitle` (context.ts:95-119) — aux title capabilities without
