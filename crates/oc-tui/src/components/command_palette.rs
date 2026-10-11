@@ -24,6 +24,7 @@
 
 use crate::components::dialog_select::{SelectOption, SelectProps, SelectState};
 use crate::store::{DialogKind, DialogSize, ListState, ModelSelection, Route, ServerAgent, Store};
+use oc_tui_core::scroll::ScrollCommand;
 
 /// One palette-visible command (`KeymapCommand` from the app tables).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -328,6 +329,28 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 }
                 _ => SelectProps::new("", Vec::new()),
             }
+        }
+        // The queued-prompts manager (v2 index.tsx:627-635): one row
+        // per queued prompt, the `N of M` footer, enter steers.
+        DialogKind::QueuedPrompts => {
+            let session = match store.route() {
+                Route::Session { session_id } => session_id,
+                Route::Home => {
+                    return SelectProps::new("Queued prompts", Vec::new());
+                }
+            };
+            let queued = store.queued_prompts(&session);
+            let total = queued.len();
+            let options = queued
+                .iter()
+                .enumerate()
+                .map(|(index, prompt)| {
+                    SelectOption::titled(prompt.text.clone(), prompt.id.clone())
+                        .categorized("Queued")
+                        .with_footer(format!("{} of {}", index + 1, total))
+                })
+                .collect();
+            SelectProps::new("Queued prompts", options)
         }
         DialogKind::ServerList { command: "model.list", title } => {
             model_list_props(store, title).with_current(model_current_value(store))
@@ -801,6 +824,125 @@ impl CommandDispatcher for StoreDispatcher {
                 // The app shell exits the run loop (wave 3); the replay
                 // corpus's exit path is binding-gated there.
                 Dispatch::ServerPending("app.exit run-loop teardown")
+            }
+            // -- Wave A: the scroll driver (routes/session/index.tsx:763-887)
+            "session.page.up"
+            | "session.page.down"
+            | "session.line.up"
+            | "session.line.down"
+            | "session.half.page.up"
+            | "session.half.page.down"
+            | "session.first"
+            | "session.last" => {
+                let Some(command) = ScrollCommand::parse(command) else {
+                    return Dispatch::Unknown;
+                };
+                match store.route() {
+                    Route::Session { session_id } => {
+                        store.scroll_command(&session_id, command);
+                        Dispatch::Handled
+                    }
+                    Route::Home => Dispatch::Handled,
+                }
+            }
+            // Wave A: the 2-press escape interrupt
+            // (prompt/index.tsx:500-529) — the sink POSTs
+            // `session.interrupt { resume: true }`.
+            "session.interrupt" => {
+                let Route::Session { session_id } = store.route() else {
+                    return Dispatch::Handled;
+                };
+                match store.interrupt_pressed(&session_id, store.clock()) {
+                    crate::store::InterruptStep::Ignored => Dispatch::Unknown,
+                    crate::store::InterruptStep::Armed | crate::store::InterruptStep::Fired => {
+                        Dispatch::Handled
+                    }
+                }
+            }
+            // Wave A: the cycles (app.tsx:848-944 + local.tsx's
+            // move/cycle implementations).
+            "agent.cycle" | "agent.cycle.reverse" => {
+                let direction = if command == "agent.cycle" { 1 } else { -1 };
+                if let Some(agent) = store.agent_cycle(direction) {
+                    match store.route() {
+                        Route::Session { session_id } => store.select_agent(&session_id, &agent),
+                        Route::Home => store.stage_agent(crate::app::HOME_PROMPT_KEY, &agent),
+                    }
+                }
+                Dispatch::Handled
+            }
+            "model.cycle_recent" | "model.cycle_recent_reverse" => {
+                let direction = if command == "model.cycle_recent" { 1 } else { -1 };
+                if let Some(model) = store.model_cycle_recent(direction) {
+                    match store.route() {
+                        Route::Session { session_id } => store.select_model(&session_id, &model),
+                        Route::Home => store.stage_model(crate::app::HOME_PROMPT_KEY, model),
+                    }
+                }
+                Dispatch::Handled
+            }
+            "model.cycle_favorite" | "model.cycle_favorite_reverse" => {
+                let direction = if command == "model.cycle_favorite" { 1 } else { -1 };
+                match store.model_cycle_favorite(direction) {
+                    Some(model) => match store.route() {
+                        Route::Session { session_id } => store.select_model(&session_id, &model),
+                        Route::Home => store.stage_model(crate::app::HOME_PROMPT_KEY, model),
+                    },
+                    // local.tsx:427-431: no favorites configured.
+                    None => {
+                        store.toast_show(crate::components::toast::ToastOptions {
+                            variant: "info",
+                            message: "Add a favorite model to use this shortcut".to_owned(),
+                            duration_ms: 3000,
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    }
+                }
+                Dispatch::Handled
+            }
+            "variant.cycle" => {
+                // local.tsx:494-498: cycle through the named variants
+                // (none → default).
+                match store.variant_cycle() {
+                    Some(next) => {
+                        if let Route::Session { session_id } = store.route() {
+                            let mut selection =
+                                store.selection_for(&session_id).model.unwrap_or_default();
+                            selection.variant = next;
+                            store.select_model(&session_id, &selection);
+                        } else {
+                            let mut selection = store
+                                .selection_for(crate::app::HOME_PROMPT_KEY)
+                                .model
+                                .unwrap_or_default();
+                            selection.variant = next;
+                            store.stage_model(crate::app::HOME_PROMPT_KEY, selection);
+                        }
+                    }
+                    // app.tsx:926-931: "No variants available".
+                    None => {
+                        store.toast_show(crate::components::toast::ToastOptions {
+                            title: Some("No variants available".to_owned()),
+                            message: "The current model does not support any variants.".to_owned(),
+                            variant: "info",
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    }
+                }
+                Dispatch::Handled
+            }
+            // Wave A: the queued-prompts manager (`<leader>q`, v2
+            // session route index.tsx:627-675 — `enabled: queuedPrompts()
+            // .length > 0`, so an empty queue is a no-op).
+            "session.queued_prompts" => {
+                let Route::Session { session_id } = store.route() else {
+                    return Dispatch::Handled;
+                };
+                if store.queued_prompts(&session_id).is_empty() {
+                    return Dispatch::Handled;
+                }
+                store.replace_dialog(DialogKind::QueuedPrompts, DialogSize::Medium);
+                Dispatch::Handled
             }
             // The plugin layer: anything the plugin host registered
             // dispatches through the store's sink (timeout-bounded on

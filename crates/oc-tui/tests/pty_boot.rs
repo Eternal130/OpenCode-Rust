@@ -187,10 +187,12 @@ fn run_session(reply: &'static [u8], tag: &str) -> (Boot, std::path::PathBuf) {
             std::thread::sleep(std::time::Duration::from_millis(400));
             let _ = boot.master_writer.write_all(b"hi");
             std::thread::sleep(std::time::Duration::from_millis(600));
-            // ctrl+c (clear the draft) then <leader>q (exit).
+            // ctrl+c (clear the draft), then ctrl+c again (exit —
+            // <leader>q is the queue manager's chord since the Wave A
+            // decollision, never app.exit's).
             let _ = boot.master_writer.write_all(b"\x03");
             std::thread::sleep(std::time::Duration::from_millis(200));
-            let _ = boot.master_writer.write_all(b"\x18q");
+            let _ = boot.master_writer.write_all(b"\x03");
         });
     }
 

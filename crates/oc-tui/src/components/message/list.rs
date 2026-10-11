@@ -115,57 +115,10 @@ pub struct Transcript {
     pub images: Vec<crate::image::ImagePlacement>,
 }
 
-/// The follow/jump state machine sketch (wave 2; documented contract).
-///
-/// Transitions (driven by scroll events + appends):
-/// * `Sticky` — viewport pinned at the maximum scrollTop; an append
-///   moves the viewport to keep the tail visible (vscroll-stick-bottom).
-/// * `Free(offset)` — the user scrolled away; appending content does
-///   NOT move the viewport; the "Jump to latest ↓" indicator shows
-///   (`session-jump-to-latest`).
-/// * Returning the offset to the maximum ⇒ `Sticky` again (indicator
-///   cleared, sticky re-armed — the vscroll-bottom golden).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FollowState {
-    Sticky,
-    Free { offset: usize, maximum: usize },
-}
-
-impl FollowState {
-    /// The indicator's visibility rule (`awayFromBottom`).
-    #[must_use]
-    pub fn jump_to_latest_visible(&self) -> bool {
-        matches!(self, Self::Free { offset, maximum } if offset < maximum)
-    }
-
-    /// A scroll event's transition (returns the next state).
-    #[must_use]
-    pub fn scrolled_to(self, offset: usize, maximum: usize) -> Self {
-        if offset >= maximum {
-            Self::Sticky
-        } else {
-            Self::Free { offset, maximum }
-        }
-    }
-
-    /// An append's transition: sticky follows, free stays.
-    #[must_use]
-    pub fn appended(self, new_maximum: usize) -> Self {
-        match self {
-            Self::Sticky => Self::Sticky,
-            free @ Self::Free { .. } => {
-                Self::Free { offset: free.offset_value(), maximum: new_maximum }
-            }
-        }
-    }
-
-    fn offset_value(self) -> usize {
-        match self {
-            Self::Sticky => 0,
-            Self::Free { offset, .. } => offset,
-        }
-    }
-}
+/// The follow/sticky state machine — MOVED to oc-tui-core's
+/// [`oc_tui_core::scroll`] module in the Wave A lane (the scroll
+/// driver's state); re-exported so the goldens' imports stay put.
+pub use oc_tui_core::scroll::FollowState;
 
 /// Render the session transcript (rows from [`reduce_rows`]) at
 /// `width` terminal columns into measured rows.

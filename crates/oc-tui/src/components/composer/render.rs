@@ -69,6 +69,11 @@ pub struct FooterHints {
     pub status_model: String,
     /// Plugin-contributed hint segments (wave 3; ` · `-joined).
     pub plugin_hints: Vec<String>,
+    /// Wave A: the interrupt hint (`PromptInterruptStatus`,
+    /// prompt/index.tsx:137-144) — `esc interrupt` while a turn runs,
+    /// `esc again to interrupt` once armed; EMPTY renders nothing
+    /// (every golden stays byte-exact while no turn is running).
+    pub interrupt: String,
 }
 
 /// Everything [`render_prompt_frame`] paints.
@@ -593,8 +598,26 @@ fn paint_footer_row(
     };
     let location_width =
         if right_block > 0 { width.saturating_sub(right_block + 2).max(1) } else { width };
-    let location = truncate_width(&view.footer.location, location_width);
+    // Wave A: the interrupt hint (`PromptInterruptStatus`,
+    // prompt/index.tsx:137-144) sits at the row's left — `esc` in
+    // text.base with the label muted — while a turn runs; the
+    // location label follows it (empty hint ⇒ the golden geometry).
+    let interrupt_width = display_width(&view.footer.interrupt);
+    let location_budget =
+        location_width.saturating_sub(if interrupt_width > 0 { interrupt_width + 2 } else { 0 });
+    let location = truncate_width(&view.footer.location, location_budget);
     paint_text(frame, 0, row_index, &location, colors.muted, colors.base, 0);
+    if interrupt_width > 0 {
+        let mut x = display_width(&location);
+        if !location.is_empty() {
+            x += 2;
+        }
+        // v2's shape: `esc ` in text.base, the label muted
+        // (prompt/index.tsx:138-143).
+        let label = view.footer.interrupt.strip_prefix("esc ").unwrap_or("");
+        paint_text(frame, x, row_index, "esc ", colors.text_base, colors.base, 0);
+        paint_text(frame, x + 4, row_index, label, colors.muted, colors.base, 0);
+    }
     if status_width > 0 {
         // The statusline sits left of the shortcut hints, shifted right
         // by the plugin segment when one is present (empty ⇒ the
