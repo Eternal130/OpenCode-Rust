@@ -41,7 +41,7 @@
 use std::collections::HashMap;
 
 use crate::components::command_palette::{CommandDispatcher as _, Dispatch, StoreDispatcher};
-use crate::components::composer::{ComposerKey, KeyOutcome};
+use crate::components::composer::{ComposerEditCommand, ComposerKey, KeyOutcome};
 use crate::components::dialog::{execute_submission, handle_dialog_key, render_app};
 use crate::components::footer::permission::{
     create_permission_body_state, permission_key, PermissionBodyState, PermissionKey,
@@ -494,6 +494,10 @@ impl App {
                     self.request_exit();
                     return;
                 }
+                Outcome::Command { command, .. } if had_pending && command == "prompt.queue" => {
+                    self.queue_prompt_command(&key);
+                    return;
+                }
                 Outcome::Command { command, args } if had_pending => {
                     let dispatch = self.dispatcher.dispatch(&self.store, &command, args.as_deref());
                     if let Dispatch::ServerPending(reason) = dispatch {
@@ -522,6 +526,10 @@ impl App {
             match self.keymap.lookup_base(stroke.clone(), &self.clock) {
                 Outcome::Command { command, .. } if command == "app.exit" => {
                     self.request_exit();
+                    return;
+                }
+                Outcome::Command { command, .. } if had_pending && command == "prompt.queue" => {
+                    self.queue_prompt_command(&key);
                     return;
                 }
                 Outcome::Command { command, args } if had_pending => {
@@ -559,7 +567,12 @@ impl App {
         {
             if command == "app.exit" {
                 self.request_exit();
-            } else if composer_command(&command).is_some() || command.starts_with("input.") {
+            } else if command == "prompt.queue" {
+                self.queue_prompt_command(&key);
+            } else if composer_command(&command).is_some()
+                || composer_special(&command).is_some()
+                || command == "input.submit"
+            {
                 self.run_composer_command(&key, &command);
             } else {
                 let dispatch = self.dispatcher.dispatch(&self.store, &command, args.as_deref());
@@ -576,6 +589,69 @@ impl App {
                 self.handle_composer_outcome(&key, outcome);
             }
         }
+    }
+
+    /// `prompt.queue` (`<leader>return`, v2 prompt/index.tsx:444-457 +
+    /// submitInner's queue arm): an EMPTY draft does nothing; an
+    /// unqueueable draft (an exit word / a slash command) warns
+    /// ("This prompt cannot be queued", index.tsx:1134-1136); an
+    /// ACTIVE turn admits the draft to the local serial queue
+    /// (mini/queue.rs's Admit — the dock row appears); an idle session
+    /// sends it like a normal submit.
+    fn queue_prompt_command(&mut self, key: &str) {
+        let draft = self.store.prompt_draft(key);
+        if draft.is_empty() {
+            return;
+        }
+        let trimmed = draft.text.trim();
+        let exit_word = matches!(trimmed, "exit" | "quit" | ":q");
+        let slash = trimmed.starts_with('/');
+        let Route::Session { session_id } = self.store.route() else {
+            // Home has no live turn to queue behind — send instead.
+            let _ = self.store.submit_prompt(key);
+            return;
+        };
+        if exit_word || slash {
+            self.store.toast_show(crate::components::toast::ToastOptions {
+                message: "This prompt cannot be queued".to_owned(),
+                variant: "warning",
+                ..crate::components::toast::ToastOptions::info("")
+            });
+            return;
+        }
+        if self.store.session_running(&session_id) {
+            // The Admit path (mini/queue.rs): the queued copy IS the
+            // record; the draft clears (submit semantics) but the
+            // sink send waits for the drain.
+            let text = draft.text.clone();
+            self.store.queue_prompt(&session_id, &text);
+            let mut composer = self.store.composer(key);
+            if let Some(prompt) = composer.take_submit() {
+                composer.history = composer.history.clone().push(&prompt.text);
+                self.store.set_composer(key, &composer);
+            }
+            return;
+        }
+        // Idle: an ordinary submit (`submit_prompt` records history
+        // AND sends — no second forward).
+        let _ = self.store.submit_prompt(key);
+    }
+
+    /// The empty-enter steering (v2 `submitInner`, prompt/index.tsx:
+    /// 1120-1121 + the session route's `onEmptySubmit`,
+    /// index.tsx:1504-1508): an empty submit with queued prompts
+    /// promotes the head — `mutatePending("steer")` locally.
+    fn steer_queued_head(&mut self) -> bool {
+        let Route::Session { session_id } = self.store.route() else { return false };
+        let head = self.store.queued_prompts(&session_id).first().cloned();
+        let Some(head) = head else { return false };
+        self.store.delete_queued_prompt(&session_id, &head.id);
+        let prompt = crate::components::composer::SubmittedPrompt {
+            text: head.text,
+            ..crate::components::composer::SubmittedPrompt::default()
+        };
+        self.store.forward_submission(&session_id, &prompt);
+        true
     }
 
     /// Post-`handle_key` routing of a consumed composer outcome: a
@@ -602,12 +678,28 @@ impl App {
     }
 
     fn run_composer_command(&mut self, key: &str, command: &str) {
-        let mut composer = self.store.composer(key);
-        if let Some(key_event) = composer_command(command) {
+        // The composer-level specials (submit/clear/paste).
+        if let Some(key_event) = composer_special(command) {
+            let mut composer = self.store.composer(key);
             let outcome = composer.handle_key(&key_event);
             if outcome != KeyOutcome::Ignored {
                 self.store.set_composer(key, &composer);
                 self.handle_composer_outcome(key, outcome);
+                return;
+            }
+            // An empty submit steers the queued head (v2
+            // `onEmptySubmit`).
+            if command == "input.submit" && self.steer_queued_head() {
+                return;
+            }
+            return;
+        }
+        // Every `input.*` binding: the text-edit core's arm
+        // (selection, word motions, delete ops, undo/redo).
+        if let Some(edit) = composer_command(command) {
+            let mut composer = self.store.composer(key);
+            if composer.apply_edit(edit) {
+                self.store.set_composer(key, &composer);
             }
         }
     }
@@ -898,9 +990,13 @@ fn composer_key(stroke: &KeyStroke) -> Option<ComposerKey> {
     match key {
         "return" if shift => Some(ComposerKey::ShiftEnter),
         "return" => Some(ComposerKey::Enter),
+        "up" if shift => Some(ComposerKey::ShiftUp),
         "up" => Some(ComposerKey::Up),
+        "down" if shift => Some(ComposerKey::ShiftDown),
         "down" => Some(ComposerKey::Down),
+        "left" if shift => Some(ComposerKey::ShiftLeft),
         "left" => Some(ComposerKey::Left),
+        "right" if shift => Some(ComposerKey::ShiftRight),
         "right" => Some(ComposerKey::Right),
         "home" => Some(ComposerKey::Home),
         "end" => Some(ComposerKey::End),
@@ -912,22 +1008,19 @@ fn composer_key(stroke: &KeyStroke) -> Option<ComposerKey> {
     }
 }
 
-/// Map an `input.*` / `prompt.*` command onto the composer vocabulary
-/// (the v2 table's input layer).
-fn composer_command(command: &str) -> Option<ComposerKey> {
+/// Map an `input.*` command onto the text-edit core's vocabulary
+/// (the v2 table's input layer — keybind.ts:206-243; every `input.*`
+/// binding has a real arm through [`ComposerEditCommand::parse`]).
+fn composer_command(command: &str) -> Option<ComposerEditCommand> {
+    ComposerEditCommand::parse(command)
+}
+
+/// The composer commands handled OUTSIDE the text-edit core (their
+/// effects are composer-level: submit/clear/paste — see
+/// [`run_composer_command`]).
+fn composer_special(command: &str) -> Option<ComposerKey> {
     match command {
         "input.submit" | "prompt.submit" => Some(ComposerKey::Enter),
-        "input.newline" | "prompt.queue" => Some(ComposerKey::ShiftEnter),
-        "input.move.left" => Some(ComposerKey::Left),
-        "input.move.right" => Some(ComposerKey::Right),
-        "input.move.up" | "prompt.history.previous" => Some(ComposerKey::Up),
-        "input.move.down" | "prompt.history.next" => Some(ComposerKey::Down),
-        "input.line.home" => Some(ComposerKey::CtrlA),
-        "input.line.end" => Some(ComposerKey::CtrlE),
-        "input.delete.to.line.end" => Some(ComposerKey::CtrlK),
-        "input.delete.to.line.start" => Some(ComposerKey::CtrlU),
-        "input.backspace" => Some(ComposerKey::Backspace),
-        "input.delete" => Some(ComposerKey::Delete),
         "prompt.clear" => Some(ComposerKey::CtrlC),
         "prompt.paste" => Some(ComposerKey::CtrlV),
         _ => None,
@@ -1443,6 +1536,46 @@ pub fn apply_send_failure(store: &Store, event: PromptSinkEvent) {
     }
 }
 
+/// The production interrupt sink: the 2-press machine's fire path
+/// POSTs `session.interrupt` with `resume: true` (prompt/index.tsx:
+/// 522-525).
+pub struct HttpInterruptSink {
+    client: oc_client::Client,
+}
+
+impl HttpInterruptSink {
+    #[must_use]
+    pub fn new(client: oc_client::Client) -> Self {
+        Self { client }
+    }
+}
+
+impl crate::store::InterruptSink for HttpInterruptSink {
+    fn interrupt(&self, session_id: &str) {
+        let client = self.client.clone();
+        let session_id = session_id.to_owned();
+        tokio::spawn(async move {
+            let query = oc_client::types::SessionInterruptQuery {
+                resume: Some(oc_client::types::SessionInterruptQueryResume::True),
+            };
+            if let Err(error) = client.session().interrupt(&session_id, &query).await {
+                // v2 surfaces the failure as an error toast.
+                eprintln!("opencode tui: interrupt failed: {error}");
+            }
+        });
+    }
+}
+
+/// The model-preference repository path (`<state>/tui/model.json` —
+/// the mini host's `preferences` seam, mini-host.ts:18-30; the main
+/// TUI shares the document).
+#[must_use]
+pub fn model_preference_repository() -> Option<crate::mini::model_pref::ModelPreferenceRepository> {
+    let roots = oc_util::global_roots::resolve();
+    let state = roots.data.join("tui");
+    Some(crate::mini::model_pref::host_preferences(&state))
+}
+
 /// Spawn the SSE connection against a resolved server (the run loop's
 /// data side). Returns the ingest receiver + the open-sessions handle
 /// the render loop keeps current.
@@ -1619,6 +1752,15 @@ pub async fn run_with_size(
         directory.clone(),
         sink_tx,
     )));
+    // Wave A: the interrupt sink (the 2-press escape machine's fire
+    // path) + the model-preference ring boot (`<state>/tui/model.json`
+    // — shared with the mini host's document).
+    app.store.set_interrupt_sink(std::rc::Rc::new(HttpInterruptSink::new(client.clone())));
+    if let Some(repository) = model_preference_repository() {
+        let document = repository.read();
+        app.store.set_model_ring(crate::store::ModelRing { document });
+    }
+    let model_preference_path = model_preference_repository();
 
     // Production sinks: clipboard writes OSC 52; model/agent picks POST
     // session.switchModel / session.switchAgent.
@@ -1835,6 +1977,9 @@ pub async fn run_with_size(
                     app.store.set_agents(crate::store::ListState::Loaded(agents));
                 }
                 ServerListEvent::Agents(Err(error)) => {
+                    if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                        eprintln!("[tui] agent list failed: {error}");
+                    }
                     app.store.set_agents(crate::store::ListState::Failed(error));
                 }
             }
@@ -1901,6 +2046,16 @@ pub async fn run_with_size(
         // frame (the stderr guard carries the log copy).
         for toast in crate::keymap::drain_config_error_toasts() {
             app.store.toast_show(toast);
+        }
+        // Wave A: the queued-prompt serial drain (a session that went
+        // idle with queued prompts admits the next head — the idle
+        // event hook also fires this; the tick covers restored tabs)
+        // + the model-ring persistence.
+        app.store.drain_queued_prompts();
+        if let (Some(repository), Some(ring)) =
+            (&model_preference_path, app.store.take_model_ring_dirty())
+        {
+            repository.write(&ring.document);
         }
         // The external editor (<leader>e / /editor): suspend → $EDITOR
         // over the focused draft → resume → replace on success (a
@@ -2148,8 +2303,10 @@ fn crossterm_key_to_spec(key: &crossterm::event::KeyEvent) -> Option<String> {
     if key.modifiers.contains(KeyModifiers::SHIFT) {
         return match key.code {
             KeyCode::Char(ch) => Some(ch.to_ascii_uppercase().to_string()),
-            KeyCode::Tab => Some("shift+tab".to_owned()),
-            KeyCode::BackTab => Some("ctrl+shift+tab".to_owned()),
+            // Tab and crossterm's BackTab (the legacy `ESC [ Z`
+            // sequence; it arrives with the SHIFT modifier set) are
+            // both shift+tab — v2's `agent.cycle` chord.
+            KeyCode::Tab | KeyCode::BackTab => Some("shift+tab".to_owned()),
             KeyCode::F(f) => Some(format!("shift+f{f}")),
             _ => None,
         };
@@ -2161,7 +2318,7 @@ fn crossterm_key_to_spec(key: &crossterm::event::KeyEvent) -> Option<String> {
         KeyCode::Backspace => Some("backspace".to_owned()),
         KeyCode::Delete => Some("delete".to_owned()),
         KeyCode::Tab => Some("tab".to_owned()),
-        KeyCode::BackTab => Some("ctrl+shift+tab".to_owned()),
+        KeyCode::BackTab => Some("shift+tab".to_owned()),
         KeyCode::Up => Some("up".to_owned()),
         KeyCode::Down => Some("down".to_owned()),
         KeyCode::Left => Some("left".to_owned()),
@@ -2866,4 +3023,422 @@ fn mouse_release_toggles_the_thought_disclosure() {
     let collapsed_again = app.frame_text();
     assert!(collapsed_again.contains("+ Thought"), "back to the collapsed header");
     assert!(!collapsed_again.contains("parser's edges"), "the body hides again");
+}
+
+// -- Wave A lane: the interaction-contract wiring ---------------------------
+
+#[cfg(test)]
+mod core_interaction_tests {
+    use super::*;
+    use crate::components::composer::{ComposerEditCommand, PromptDraft};
+    use crate::components::message::model::{Message, PartTime};
+    use crate::store::{InterruptStep, RecordingInterruptSink};
+
+    /// A streaming assistant message (no finish, no idle marker) —
+    /// the `session_running` derivation's running case.
+    fn streaming_session(store: &crate::store::Store, session_id: &str) {
+        store.set_messages(
+            session_id,
+            vec![
+                Message::User {
+                    id: "u1".into(),
+                    text: "please answer".into(),
+                    created: 0,
+                    files: Vec::new(),
+                },
+                Message::Assistant {
+                    id: "a1".into(),
+                    agent: "build".into(),
+                    model: "fixture/fixture".into(),
+                    parts: vec![crate::components::message::model::Part::Text {
+                        text: "par".into(),
+                        time: PartTime::default(),
+                    }],
+                    finish: None,
+                    error: None,
+                    time: PartTime::default(),
+                },
+            ],
+        );
+    }
+
+    /// The 2-press escape interrupt (prompt/index.tsx:500-529): idle
+    /// ignores; the first escape on a RUNNING turn arms (the footer
+    /// hint flips to "again"); the second within the window FIRES the
+    /// sink; after 5 s the arm expires and the cycle restarts.
+    #[test]
+    fn escape_interrupts_a_running_turn_after_two_presses() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        let sink = std::rc::Rc::new(RecordingInterruptSink::default());
+        app.store.set_interrupt_sink(sink.clone());
+
+        // Idle: the binding rejects (v2's `enabled: status() ===
+        // "running"` gate) and the escape falls through untouched.
+        assert_eq!(app.store.interrupt_pressed("s1", 0), InterruptStep::Ignored);
+        app.press("escape");
+        assert!(sink.calls.borrow().is_empty(), "idle never interrupts");
+
+        // Running: arm → hint → fire.
+        streaming_session(&app.store, "s1");
+        assert!(app.store.session_running("s1"));
+        assert_eq!(app.store.interrupt_pressed("s1", 100), InterruptStep::Armed);
+        assert_eq!(
+            app.store.interrupt_hint_armed("s1", 100),
+            Some(true),
+            "the footer hint shows the armed state"
+        );
+        assert_eq!(app.store.interrupt_pressed("s1", 200), InterruptStep::Fired);
+        assert_eq!(*sink.calls.borrow(), vec!["s1".to_owned()], "the sink fired once");
+
+        // The window expires: a late second press re-arms instead.
+        assert_eq!(app.store.interrupt_pressed("s1", 300), InterruptStep::Armed);
+        assert_eq!(
+            app.store.interrupt_pressed("s1", 300 + crate::store::INTERRUPT_ARM_WINDOW_MS),
+            InterruptStep::Armed,
+            "the expired arm restarts the cycle"
+        );
+    }
+
+    /// The interrupt hint renders in the composer's footer row while
+    /// a turn runs (`PromptInterruptStatus`, prompt/index.tsx:137-144).
+    #[test]
+    fn running_turn_shows_the_interrupt_hint_in_the_footer() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        let idle = app.frame_text();
+        assert!(!idle.contains("esc interrupt"), "idle hides the hint: {idle}");
+        streaming_session(&app.store, "s1");
+        app.press("escape"); // arm
+        let armed = app.frame_text();
+        assert!(armed.contains("esc again to interrupt"), "armed hint: {armed}");
+    }
+
+    /// The scroll commands move the transcript (v2's six + first/last,
+    /// routes/session/index.tsx:763-887): sticky starts at the bottom;
+    /// page-up frees (older rows surface); page-down re-sticks.
+    #[test]
+    fn scroll_keys_move_the_transcript_and_restick_at_bottom() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("Long".to_owned()));
+        // A transcript much taller than the viewport: 20 turns.
+        let mut messages = Vec::new();
+        for index in 0..20 {
+            messages.push(Message::User {
+                id: format!("u{index}"),
+                text: format!("turn {index} of the long transcript"),
+                created: index,
+                files: Vec::new(),
+            });
+            messages.push(Message::Assistant {
+                id: format!("a{index}"),
+                agent: "build".into(),
+                model: "fixture/fixture".into(),
+                parts: vec![crate::components::message::model::Part::Text {
+                    text: format!("answer {index}"),
+                    time: PartTime::default(),
+                }],
+                finish: Some("stop".into()),
+                error: None,
+                time: PartTime::default(),
+            });
+        }
+        app.store.set_messages("s1", messages);
+        // Sticky: the frame records the metrics; the tail shows.
+        let tail = app.frame_text();
+        assert!(tail.contains("answer 19"), "sticky at the bottom: {tail}");
+        assert!(!tail.contains("turn 0 of"), "the head is out of view: {tail}");
+        // pageup frees the follow — the tail leaves the view (a page
+        // is HALF the viewport, index.tsx:769: `-scroll.height / 2`).
+        app.press("pageup");
+        let up = app.frame_text();
+        assert!(!up.contains("answer 19"), "the tail left the view: {up}");
+        // Enough page-ups reach the head (clamped at offset 0).
+        for _ in 0..40 {
+            app.press("pageup");
+        }
+        let head = app.frame_text();
+        assert!(head.contains("turn 0 of"), "repeated page-ups reveal the head: {head}");
+        // end (session.last) re-sticks: the tail returns.
+        app.press("end");
+        let stuck = app.frame_text();
+        assert!(stuck.contains("answer 19"), "end re-sticks to the tail: {stuck}");
+        // home (session.first) jumps to the top.
+        app.press("home");
+        let top = app.frame_text();
+        assert!(top.contains("turn 0 of"), "home jumps to the top: {top}");
+        // pagedown returns one page (still free, off the very bottom).
+        app.press("pagedown");
+        let middle = app.frame_text();
+        assert!(!middle.contains("turn 0 of"), "a page down leaves the head: {middle}");
+    }
+
+    /// The queued prompts (mini/queue.rs lifted): `<leader>return`
+    /// over an ACTIVE turn queues behind it (the dock row appears);
+    /// the turn going idle delivers the head; empty-enter steers.
+    #[test]
+    fn leader_return_queues_and_the_queue_drains_serially() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        let sink = std::rc::Rc::new(crate::components::composer::RecordingPromptSink::default());
+        app.store.set_prompt_sink(sink.clone());
+
+        // An idle session: <leader>return sends immediately.
+        for key in ["h", "i"] {
+            app.press(key);
+        }
+        app.press("ctrl+x");
+        app.press("return");
+        assert_eq!(sink.submissions.borrow().len(), 1, "idle sends");
+        assert_eq!(app.store.queued_prompts("s1"), Vec::<crate::store::QueuedPrompt>::new());
+        assert_eq!(app.store.prompt_draft("s1").text, "", "the draft cleared");
+
+        // A running turn: the same chord queues (the Admit path).
+        streaming_session(&app.store, "s1");
+        for key in ["n", "e", "x", "t"] {
+            app.press(key);
+        }
+        let before = app.frame_text();
+        assert!(!before.contains("queued"), "no dock yet: {before}");
+        app.press("ctrl+x");
+        app.press("return");
+        assert_eq!(sink.submissions.borrow().len(), 1, "nothing sent while running");
+        assert_eq!(app.store.queued_prompts("s1").len(), 1);
+        assert_eq!(app.store.prompt_draft("s1").text, "", "the draft cleared into the queue");
+        let dock = app.frame_text();
+        assert!(dock.contains("1 queued · next"), "the dock row: {dock}");
+
+        // The turn goes idle: the drain delivers the head.
+        let mut event =
+            crate::data::BusEvent::new("session.idle", serde_json::json!({ "sessionID": "s1" }));
+        event.id = "evt_idle1".into();
+        event.created = Some(10);
+        app.store.ingest_all([crate::data::Ingest::Event(event)]);
+        assert!(app.store.queued_prompts("s1").is_empty(), "the idle drained the queue");
+        assert_eq!(sink.submissions.borrow().len(), 2, "the head delivered");
+        assert_eq!(sink.submissions.borrow()[1].1.text, "next");
+    }
+
+    /// Empty-enter steering (v2 `onEmptySubmit` → steer): an empty
+    /// submit with queued prompts promotes the head immediately.
+    #[test]
+    fn empty_enter_steers_the_queued_head() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        let sink = std::rc::Rc::new(crate::components::composer::RecordingPromptSink::default());
+        app.store.set_prompt_sink(sink.clone());
+        streaming_session(&app.store, "s1");
+        for key in ["q", "u", "e", "u", "e"] {
+            app.press(key);
+        }
+        app.press("ctrl+x");
+        app.press("return");
+        assert_eq!(app.store.queued_prompts("s1").len(), 1);
+        // Empty enter steers.
+        app.press("enter");
+        assert!(app.store.queued_prompts("s1").is_empty(), "steered");
+        assert_eq!(sink.submissions.borrow().len(), 1);
+        assert_eq!(sink.submissions.borrow()[0].1.text, "queue");
+    }
+
+    /// The queued-prompts manager (`<leader>q`, v2 index.tsx:627-675):
+    /// rows with the `N of M` footer, ctrl+d deletes (the last
+    /// removal closes), enter steers; an EMPTY queue never opens.
+    #[test]
+    fn leader_q_opens_the_queue_manager_and_ctrl_d_deletes() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.queue_prompt("s1", "first queued");
+        app.store.queue_prompt("s1", "second queued");
+        app.press("ctrl+x");
+        app.press("q");
+        let dialog = app.frame_text();
+        assert!(dialog.contains("Queued prompts"), "the manager title: {dialog}");
+        assert!(dialog.contains("2 of 2"), "the index footer: {dialog}");
+        // ctrl+d deletes the selected row (the first).
+        app.press("ctrl+d");
+        assert_eq!(app.store.queued_prompts("s1").len(), 1);
+        assert!(app.store.dialogs().len() == 1, "still open with rows left");
+        // enter steers the remaining row.
+        app.press("enter");
+        assert_eq!(app.store.queued_prompts("s1"), Vec::<crate::store::QueuedPrompt>::new());
+        assert!(app.store.dialogs().is_empty(), "the last action closed the manager");
+        // An empty queue is a no-op (v2's enabled gate).
+        app.press("ctrl+x");
+        app.press("q");
+        assert!(app.store.dialogs().is_empty(), "empty queue never opens");
+    }
+
+    /// The unqueueable drafts warn (v2 index.tsx:1134-1136).
+    #[test]
+    fn unqueueable_drafts_warn() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        streaming_session(&app.store, "s1");
+        for key in ["/", "h", "e", "l", "p"] {
+            app.press(key);
+        }
+        app.press("ctrl+x");
+        app.press("return");
+        let frame = app.frame_text();
+        assert!(frame.contains("This prompt cannot be queued"), "the warning toast: {frame}");
+        assert_eq!(app.store.queued_prompts("s1"), Vec::<crate::store::QueuedPrompt>::new());
+    }
+
+    /// shift+tab cycles the visible agents (v2 local.tsx:114-124) and
+    /// the footer hint flips (the composer statusline's agent label).
+    #[test]
+    fn shift_tab_cycles_agents_visibly() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.set_agents(crate::store::ListState::Loaded(vec![
+            crate::store::ServerAgent {
+                id: "build".into(),
+                name: "Build".into(),
+                description: None,
+                mode: "all".into(),
+                hidden: false,
+            },
+            crate::store::ServerAgent {
+                id: "plan".into(),
+                name: "Plan".into(),
+                description: None,
+                mode: "all".into(),
+                hidden: false,
+            },
+            crate::store::ServerAgent {
+                id: "secret".into(),
+                name: "Secret".into(),
+                description: None,
+                mode: "subagent".into(),
+                hidden: false,
+            },
+        ]));
+        app.store.select_agent("s1", "build");
+        let before = app.frame_text();
+        assert!(before.contains("Build"), "the initial hint: {before}");
+        app.press("shift+tab");
+        let after = app.frame_text();
+        assert!(after.contains("Plan"), "cycled to Plan: {after}");
+        assert!(!after.contains("Build ·"), "Build left the hint: {after}");
+        assert!(!after.contains("Secret"), "subagents never cycle: {after}");
+        // Wraps: build → plan → build.
+        app.press("shift+tab");
+        let wrapped = app.frame_text();
+        assert!(wrapped.contains("Build"), "wrapped back to Build: {wrapped}");
+        assert!(!wrapped.contains("Plan"), "Plan left the hint: {wrapped}");
+    }
+
+    /// f2 cycles the recent model ring (v2 local.tsx:412-423) and the
+    /// footer hint flips; the pick lands on the session's selection.
+    #[test]
+    fn f2_cycles_recent_models_visibly() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.set_models(
+            crate::store::ListState::Loaded(vec![
+                crate::store::ServerModel {
+                    provider_id: "anthropic".into(),
+                    id: "claude".into(),
+                    name: "Claude".into(),
+                    cost_input: 0.0,
+                    free: false,
+                    deprecated: false,
+                    variants: Vec::new(),
+                    released: 0.0,
+                },
+                crate::store::ServerModel {
+                    provider_id: "openai".into(),
+                    id: "gpt".into(),
+                    name: "GPT".into(),
+                    cost_input: 0.0,
+                    free: false,
+                    deprecated: false,
+                    variants: Vec::new(),
+                    released: 0.0,
+                },
+            ]),
+            Vec::new(),
+        );
+        app.store.select_model(
+            "s1",
+            &crate::store::ModelSelection {
+                provider_id: "anthropic".into(),
+                model_id: "claude".into(),
+                variant: None,
+            },
+        );
+        app.store.model_add_recent("anthropic", "claude");
+        app.store.model_add_recent("openai", "gpt");
+        let before = app.frame_text();
+        assert!(before.contains("claude"), "the initial model hint: {before}");
+        app.press("f2");
+        let after = app.frame_text();
+        assert!(after.contains("gpt"), "f2 stepped to gpt: {after}");
+        assert!(!after.contains("claude"), "claude left the hint: {after}");
+        // shift+f2 steps back (model.cycle_recent_reverse).
+        app.press("shift+f2");
+        assert!(app.frame_text().contains("claude"), "shift+f2 stepped back");
+    }
+
+    /// The text-edit core's full command surface through the pump:
+    /// selection, word motions, delete ops, undo/redo — every
+    /// `input.*` binding in keybind.ts:206-243 has a real arm.
+    #[test]
+    fn input_commands_edit_the_draft_with_selection_and_undo() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        for key in ["h", "e", "l", "l", "o", " ", "w", "o", "r", "l", "d"] {
+            app.press(key);
+        }
+        assert_eq!(app.store.prompt_draft("s1").text, "hello world");
+        // alt+b (word back) + alt+d (delete word forward).
+        app.press("alt+b");
+        app.press("alt+d");
+        assert_eq!(app.store.prompt_draft("s1").text, "hello ");
+        // ctrl+w (delete word backward) removes "hello ".
+        app.press("ctrl+w");
+        assert_eq!(app.store.prompt_draft("s1").text, "");
+        // ctrl+- (input.undo) restores twice.
+        app.press("ctrl+-");
+        assert_eq!(app.store.prompt_draft("s1").text, "hello ");
+        app.press("ctrl+-");
+        assert_eq!(app.store.prompt_draft("s1").text, "hello world");
+        // ctrl+. (input.redo) re-deletes.
+        app.press("ctrl+.");
+        assert_eq!(app.store.prompt_draft("s1").text, "hello ");
+        // Selection: shift+left selects; typing replaces the selection.
+        app.press("shift+left");
+        app.press("shift+left");
+        let composer = app.store.composer("s1");
+        assert_eq!(composer.selection(), Some(4..6), "the trailing space+o selected");
+        drop(composer);
+        app.press("!");
+        assert_eq!(app.store.prompt_draft("s1").text, "hell!", "the selection replaced");
+    }
+
+    /// The composer applies every [`ComposerEditCommand`] arm (the
+    /// parity check: `apply_edit` accepts the whole v2 `input.*`
+    /// surface).
+    #[test]
+    fn composer_applies_the_full_edit_command_surface() {
+        let mut composer = crate::components::composer::Composer::default();
+        composer.set(PromptDraft { text: "one two".into(), ..PromptDraft::default() });
+        for command in [
+            ComposerEditCommand::MoveLeft,
+            ComposerEditCommand::LineHome,
+            ComposerEditCommand::SelectRight,
+            ComposerEditCommand::DeleteToLineEnd,
+            ComposerEditCommand::SelectAll,
+            ComposerEditCommand::BufferHome,
+            ComposerEditCommand::BufferEnd,
+        ] {
+            assert!(composer.apply_edit(command), "{command:?} applies");
+        }
+        // "one two" → SelectRight (0..1) → DeleteToLineEnd from 1
+        // leaves the first char.
+        assert_eq!(composer.draft.text, "o");
+        assert!(composer.undo(), "undo restores");
+        assert_eq!(composer.draft.text, "one two");
+    }
 }

@@ -344,10 +344,11 @@ impl<T: PartialEq + Clone> Signal<T> {
 
     /// Mutate in place through a closure; always notifies (in-place
     /// mutation cannot be compared, unlike [`Signal::set`]).
-    pub fn update(&self, f: impl FnOnce(&mut T)) {
+    pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
         let inner = &self.inner;
-        f(&mut inner.value.borrow_mut());
+        let result = f(&mut inner.value.borrow_mut());
         inner.rt.notify_source(inner.id);
+        result
     }
 }
 

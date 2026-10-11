@@ -27,7 +27,13 @@ pub use attachment::{
     parse_pasted_filepaths, prompt_attachment_label, resolve_pasted_attachments, PastedAttachment,
 };
 pub use autocomplete::{AutocompleteState, SlashEntry, SlashRegistry};
+pub use oc_tui_core::text_edit::EditCommand as ComposerEditCommand;
+pub use oc_tui_core::text_edit::{EditOutcome, SnapshotKind};
 pub use render::{render_prompt_frame, AutocompleteView, FooterHints, PromptView};
+
+use std::rc::Rc;
+
+use oc_tui_core::text_edit::{ClusterBounds, EditCommand, TextArea};
 
 /// An inline attachment payload staged in the composer (the resolved
 /// half of a `PromptInput.FileAttachment`: the data URI decoded into
@@ -189,16 +195,64 @@ impl PromptHistory {
     }
 }
 
+/// The composer's grapheme-cluster model (the editing state's motion
+/// granularity): the same `wrap::flatten` seam the renderer uses, so
+/// caret moves land on rendered cluster boundaries exactly like the
+/// pre-Wave-A composer.
+#[derive(Debug, Clone, Copy, Default)]
+struct WrapClusters;
+
+impl ClusterBounds for WrapClusters {
+    fn cluster_starts(&self, text: &str) -> Vec<usize> {
+        cluster_starts(text)
+    }
+}
+
 /// The composer's full editing state for one session.
-#[derive(Debug, Clone, Default, PartialEq)]
+///
+/// Wave A: the editing core is oc-tui-core's [`TextArea`] (v2's
+/// `EditBufferRenderable` operation set — selection, word motions,
+/// delete ops, undo/redo); the composer keeps the file/agent mention
+/// bookkeeping and the prompt history beside it. `draft.text` is the
+/// store-facing text source; the area's text mirrors it across each
+/// edit (see [`Composer::run_edit`]).
+#[derive(Debug, Clone, PartialEq)]
 pub struct Composer {
     pub draft: PromptDraft,
-    /// Caret offset in chars (C2: not rendered).
-    pub caret: usize,
+    /// The editing state (caret + selection anchor + undo/redo).
+    pub edit: TextArea,
+    /// The mention snapshots parallel to the area's undo stack
+    /// (an undo restores chips with their text).
+    pub(crate) files_undo: Vec<Vec<FileMention>>,
+    pub(crate) files_redo: Vec<Vec<FileMention>>,
     pub history: PromptHistory,
     pub placeholders: Vec<String>,
     pub placeholder_index: usize,
     pub autocomplete: AutocompleteState,
+}
+
+impl Default for Composer {
+    fn default() -> Self {
+        Self {
+            draft: PromptDraft::default(),
+            edit: Self::fresh_edit(),
+            files_undo: Vec::new(),
+            files_redo: Vec::new(),
+            history: PromptHistory::default(),
+            placeholders: Vec::new(),
+            placeholder_index: 0,
+            autocomplete: AutocompleteState::default(),
+        }
+    }
+}
+
+impl Composer {
+    /// A fresh editing state with the composer's cluster model (the
+    /// store round-trip's default entry).
+    #[must_use]
+    pub fn fresh_edit() -> TextArea {
+        TextArea::with_clusters(Rc::new(WrapClusters))
+    }
 }
 
 /// A key event in the pump's vocabulary (the subset the composer
@@ -215,6 +269,12 @@ pub enum ComposerKey {
     Down,
     Left,
     Right,
+    /// Wave A: the selection moves (v2's `{ select: true }` family,
+    /// keybind.ts:212-215 — shift+arrows).
+    ShiftLeft,
+    ShiftRight,
+    ShiftUp,
+    ShiftDown,
     Home,
     End,
     Backspace,
@@ -276,17 +336,55 @@ impl Composer {
         AutocompleteState::with_registry(SlashRegistry::v2())
     }
 
+    /// Caret offset in chars (the editing state's caret).
+    #[must_use]
+    pub fn caret(&self) -> usize {
+        self.edit.caret
+    }
+
+    /// Place the caret (tests + the history/paste paths that anchor
+    /// it at an edge).
+    pub fn set_caret(&mut self, caret: usize) {
+        self.edit.caret = caret.min(self.edit.text.chars().count());
+        self.edit.anchor = None;
+    }
+
+    /// The caret/selection accessor core (tests + the render seam).
+    #[must_use]
+    pub fn selection(&self) -> Option<std::ops::Range<usize>> {
+        self.edit.selection()
+    }
+
+    /// Run one selection command (`{ select: true }` motions).
+    fn select_command(&mut self, command: EditCommand) -> KeyOutcome {
+        if self.apply_edit(command) {
+            KeyOutcome::Edited
+        } else {
+            KeyOutcome::Ignored
+        }
+    }
+
+    /// The selected text, if any.
+    #[must_use]
+    pub fn selected_text(&self) -> Option<String> {
+        self.edit.selected_text()
+    }
+
     /// `PromptRef.set` — the draft-restore path (stash/undo).
     pub fn set(&mut self, draft: PromptDraft) {
         self.draft = draft;
-        self.caret = self.draft.text.chars().count();
+        self.edit.set_text(&self.draft.text);
+        self.files_undo.clear();
+        self.files_redo.clear();
         self.autocomplete.close();
     }
 
     /// `PromptRef.reset`.
     pub fn reset(&mut self) {
         self.draft = PromptDraft::default();
-        self.caret = 0;
+        self.edit.set_text("");
+        self.files_undo.clear();
+        self.files_redo.clear();
         self.autocomplete.close();
     }
 
@@ -294,18 +392,129 @@ impl Composer {
         self.draft.text.chars().count()
     }
 
-    /// Insert text at the caret, keeping file mentions' ranges valid.
-    pub fn insert_text(&mut self, text: &str) {
-        let insert_len = text.chars().count();
-        let byte = char_to_byte(&self.draft.text, self.caret);
+    /// Shift the mention ranges over one text delta (the deleted char
+    /// range and the inserted length): mentions INSIDE the replaced
+    /// range drop, mentions after it shift.
+    fn apply_files_delta(&mut self, replaced: std::ops::Range<usize>, inserted: usize) {
+        let removed = replaced.len();
+        self.draft.files.retain(|file| file.end <= replaced.start || file.start >= replaced.end);
         for file in &mut self.draft.files {
-            if file.start >= self.caret {
-                file.start += insert_len;
-                file.end += insert_len;
+            if file.start >= replaced.end {
+                file.start = file.start - removed + inserted;
+                file.end = file.end - removed + inserted;
             }
         }
-        self.draft.text.insert_str(byte, text);
-        self.caret += insert_len;
+    }
+
+    /// Mirror the mention stacks onto the text area's history event
+    /// (`files_undo`/`files_redo` track the area's snapshot stack
+    /// one-for-one).
+    fn mirror_files_history(&mut self, files_before: Vec<FileMention>, snapshot: SnapshotKind) {
+        match snapshot {
+            SnapshotKind::Pushed => {
+                self.files_undo.push(files_before);
+                self.files_redo.clear();
+            }
+            SnapshotKind::Undone => {
+                self.files_redo.push(self.draft.files.clone());
+                if let Some(files) = self.files_undo.pop() {
+                    self.draft.files = files;
+                }
+            }
+            SnapshotKind::Redone => {
+                self.files_undo.push(self.draft.files.clone());
+                if let Some(files) = self.files_redo.pop() {
+                    self.draft.files = files;
+                }
+            }
+            SnapshotKind::None => {}
+        }
+    }
+
+    /// The edit bridge: run one tracked text-area operation with the
+    /// draft's text mirrored in/out, the mention ranges adjusted over
+    /// the delta, the mention history mirrored, and the autocomplete
+    /// refreshed on content changes (v2's `onContentChange`).
+    fn run_tracked(
+        &mut self,
+        run: impl FnOnce(&mut TextArea) -> EditOutcome,
+        refresh_autocomplete: bool,
+    ) -> EditOutcome {
+        self.edit.text = std::mem::take(&mut self.draft.text);
+        let files_before = self.draft.files.clone();
+        let outcome = run(&mut self.edit);
+        self.draft.text = std::mem::take(&mut self.edit.text);
+        let text_changed = match &outcome {
+            EditOutcome::Rejected => false,
+            EditOutcome::Applied { replaced, inserted, snapshot } => {
+                if !matches!(snapshot, SnapshotKind::Undone | SnapshotKind::Redone) {
+                    self.apply_files_delta(replaced.clone(), *inserted);
+                }
+                self.mirror_files_history(files_before, *snapshot);
+                replaced.start != replaced.end || *inserted > 0
+            }
+        };
+        if refresh_autocomplete && text_changed {
+            self.autocomplete.on_input(&self.draft.text, self.edit.caret);
+        }
+        outcome
+    }
+
+    /// Apply one v2 `input.*` edit command (the keymap's composer
+    /// slice — every binding in keybind.ts:206-243). The
+    /// mention-aware pre-empts (an atomic chip backspace/delete) run
+    /// first; `false` = the command rejected (the stroke falls
+    /// through).
+    pub fn apply_edit(&mut self, command: EditCommand) -> bool {
+        // A chip deletes as one unit (the extmark's atomic range).
+        match command {
+            EditCommand::Backspace => {
+                if let Some(range) = self.chip_before_caret() {
+                    self.delete_range(range);
+                    return true;
+                }
+            }
+            EditCommand::Delete => {
+                if let Some(range) = self.chip_after_caret() {
+                    self.delete_range(range);
+                    return true;
+                }
+            }
+            EditCommand::MoveUp => return matches!(self.move_up(), KeyOutcome::Edited),
+            EditCommand::MoveDown => return matches!(self.move_down(), KeyOutcome::Edited),
+            _ => {}
+        }
+        !matches!(self.run_tracked(|area| area.apply_tracked(command), true), EditOutcome::Rejected)
+    }
+
+    /// The mention chip the caret sits at the END of (backspace
+    /// deletes it atomically).
+    fn chip_before_caret(&self) -> Option<std::ops::Range<usize>> {
+        let caret = self.edit.caret;
+        self.draft
+            .files
+            .iter()
+            .find(|file| caret <= file.end && caret > file.start)
+            .map(|file| file.start..file.end)
+    }
+
+    /// The mention chip the caret sits at the START of (delete
+    /// forward).
+    fn chip_after_caret(&self) -> Option<std::ops::Range<usize>> {
+        let caret = self.edit.caret;
+        self.draft
+            .files
+            .iter()
+            .find(|file| caret >= file.start && caret < file.end)
+            .map(|file| file.start..file.end)
+    }
+
+    /// Insert text at the caret, keeping file mentions' ranges valid.
+    pub fn insert_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let _ = self.run_tracked(|area| area.insert_tracked(text), false);
     }
 
     /// `input.newline` (shift/ctrl/alt+return, ctrl+j).
@@ -316,103 +525,60 @@ impl Composer {
     /// `input.backspace` — deletes the cluster before the caret and
     /// any mention it sits inside.
     pub fn backspace(&mut self) {
-        if self.caret == 0 {
-            return;
-        }
-        // A chip deletes as one unit (the extmark's atomic range).
-        if let Some(index) = self
-            .draft
-            .files
-            .iter()
-            .position(|file| self.caret <= file.end && self.caret > file.start)
-        {
-            let file = self.draft.files.remove(index);
-            self.delete_range(file.start, file.end);
-            return;
-        }
-        let start = self.caret - prev_cluster_len(&self.draft.text, self.caret);
-        self.delete_range(start, self.caret);
+        self.apply_edit(EditCommand::Backspace);
     }
 
     /// `input.delete` — the cluster after the caret.
     pub fn delete_forward(&mut self) {
-        if self.caret >= self.char_len() {
-            return;
-        }
-        if let Some(index) = self
-            .draft
-            .files
-            .iter()
-            .position(|file| self.caret >= file.start && self.caret < file.end)
-        {
-            let file = self.draft.files.remove(index);
-            self.delete_range(file.start, file.end);
-            return;
-        }
-        let end = self.caret + next_cluster_len(&self.draft.text, self.caret);
-        self.delete_range(self.caret, end);
+        self.apply_edit(EditCommand::Delete);
     }
 
-    fn delete_range(&mut self, start: usize, end: usize) {
-        let start_b = char_to_byte(&self.draft.text, start);
-        let end_b = char_to_byte(&self.draft.text, end);
-        self.draft.text.replace_range(start_b..end_b, "");
-        let removed = end - start;
-        self.draft.files.retain(|file| file.end <= start || file.start >= end);
-        for file in &mut self.draft.files {
-            if file.start >= end {
-                file.start -= removed;
-                file.end -= removed;
-            }
-        }
-        self.caret = self.caret.min(start).max(start);
+    /// Delete a char range directly (the chip paths).
+    pub fn delete_range(&mut self, range: std::ops::Range<usize>) {
+        let _ = self.run_tracked(|area| area.delete_range_tracked(range), false);
     }
 
     /// `input.line.home` / `input.line.end`.
     pub fn line_home(&mut self) {
-        self.caret = self.line_start_offset();
+        self.apply_edit(EditCommand::LineHome);
     }
 
     pub fn line_end(&mut self) {
-        let text = &self.draft.text;
-        let start_b = char_to_byte(text, self.line_start_offset());
-        let rest = &text[start_b..];
-        let nl = rest.find('\n').unwrap_or(rest.len());
-        self.caret = text[..start_b + nl].chars().count();
+        self.apply_edit(EditCommand::LineEnd);
     }
 
     fn line_start_offset(&self) -> usize {
         let text = &self.draft.text;
-        let byte = char_to_byte(text, self.caret.min(text.chars().count()));
+        let byte = char_to_byte(text, self.edit.caret.min(text.chars().count()));
         let start = text[..byte].rfind('\n').map_or(0, |pos| pos + 1);
         text[..start].chars().count()
     }
 
     /// `input.delete.to.line.end` (ctrl+k).
     pub fn delete_to_line_end(&mut self) {
-        let start = self.caret;
-        let before = self.caret;
-        self.line_end();
-        let end = self.caret;
-        self.caret = before;
-        if end > start {
-            self.delete_range(start, end);
-        }
+        self.apply_edit(EditCommand::DeleteToLineEnd);
     }
 
     /// `input.delete.to.line.start` (ctrl+u).
     pub fn delete_to_line_start(&mut self) {
-        let end = self.caret;
-        let start = self.line_start_offset();
-        if end > start {
-            self.delete_range(start, end);
-        }
+        self.apply_edit(EditCommand::DeleteToLineStart);
+    }
+
+    /// `input.undo` / `input.redo` (the editing core's stacks).
+    pub fn undo(&mut self) -> bool {
+        self.apply_edit(EditCommand::Undo)
+    }
+
+    pub fn redo(&mut self) -> bool {
+        self.apply_edit(EditCommand::Redo)
     }
 
     /// `prompt.clear` (ctrl+c in the composer) — clears the draft.
     pub fn clear(&mut self) {
         self.draft = PromptDraft::default();
-        self.caret = 0;
+        self.edit.set_text("");
+        self.files_undo.clear();
+        self.files_redo.clear();
         self.autocomplete.close();
     }
 
@@ -448,7 +614,7 @@ impl Composer {
     pub fn paste_attachment(&mut self, filename: Option<&str>, uri: &str) {
         let payload = AttachmentPayload::from_data_uri(uri);
         let label = attachment::prompt_attachment_label(&self.draft.files, &payload, filename);
-        let start = self.caret;
+        let start = self.edit.caret;
         self.insert_text(&format!("{label} "));
         let end = start + label.chars().count();
         self.draft.files.push(FileMention {
@@ -490,17 +656,13 @@ impl Composer {
         false
     }
 
-    /// Left/right by one cluster.
+    /// Left/right by one cluster (the editing core's cluster moves).
     pub fn move_left(&mut self) {
-        if self.caret > 0 {
-            self.caret -= prev_cluster_len(&self.draft.text, self.caret);
-        }
+        self.apply_edit(EditCommand::MoveLeft);
     }
 
     pub fn move_right(&mut self) {
-        if self.caret < self.char_len() {
-            self.caret += next_cluster_len(&self.draft.text, self.caret);
-        }
+        self.apply_edit(EditCommand::MoveRight);
     }
 
     /// Up/down per v2: the autocomplete layer first (while open), then
@@ -515,9 +677,10 @@ impl Composer {
             return self.history_previous();
         }
         // Row move: to the previous line's end (logical rows; the
-        // visual-row move is C2 caret internals).
-        self.caret = self.line_start_offset().saturating_sub(1);
-        self.line_end();
+        // visual-row move is C2 caret internals). Direct to the area —
+        // `apply_edit(MoveUp)` routes HERE (the composer owns the
+        // history/autocomplete interplay).
+        let _ = self.run_tracked(|area| area.apply_tracked(EditCommand::MoveUp), false);
         KeyOutcome::Edited
     }
 
@@ -526,13 +689,12 @@ impl Composer {
             self.autocomplete.move_selection(1);
             return KeyOutcome::Edited;
         }
-        let text = &self.draft.text;
-        let byte = char_to_byte(text, self.caret);
+        let text = self.draft.text.clone();
+        let byte = char_to_byte(&text, self.edit.caret);
         if text[byte..].find('\n').is_none() {
             return self.history_next();
         }
-        self.caret = text[..=byte].chars().count();
-        self.line_end();
+        let _ = self.run_tracked(|area| area.apply_tracked(EditCommand::MoveDown), false);
         KeyOutcome::Edited
     }
 
@@ -542,7 +704,7 @@ impl Composer {
         if let Some(entry) = entry {
             self.history = history;
             self.draft.text = entry;
-            self.caret = self.char_len();
+            self.set_caret(self.char_len());
             return KeyOutcome::Edited;
         }
         KeyOutcome::Ignored
@@ -553,7 +715,7 @@ impl Composer {
         let (history, entry) = self.history.clone().next(&self.draft.text);
         self.history = history;
         self.draft.text = entry;
-        self.caret = self.char_len();
+        self.set_caret(self.char_len());
         KeyOutcome::Edited
     }
 
@@ -569,7 +731,9 @@ impl Composer {
             files: std::mem::take(&mut self.draft.files),
             agents: std::mem::take(&mut self.draft.agents),
         };
-        self.caret = 0;
+        self.edit.set_text("");
+        self.files_undo.clear();
+        self.files_redo.clear();
         self.autocomplete.close();
         Some(prompt)
     }
@@ -620,7 +784,7 @@ impl Composer {
         match key {
             ComposerKey::Char(ch) => {
                 self.insert_text(&ch.to_string());
-                self.autocomplete.on_input(&self.draft.text, self.caret);
+                self.autocomplete.on_input(&self.draft.text, self.edit.caret);
                 KeyOutcome::Edited
             }
             ComposerKey::Enter => match self.take_submit() {
@@ -647,6 +811,12 @@ impl Composer {
                 self.move_right();
                 KeyOutcome::Edited
             }
+            // Wave A: shift+arrows extend the selection
+            // (`moveCursor*({ select: true })`).
+            ComposerKey::ShiftLeft => self.select_command(EditCommand::SelectLeft),
+            ComposerKey::ShiftRight => self.select_command(EditCommand::SelectRight),
+            ComposerKey::ShiftUp => self.select_command(EditCommand::SelectUp),
+            ComposerKey::ShiftDown => self.select_command(EditCommand::SelectDown),
             ComposerKey::Home | ComposerKey::CtrlA => {
                 self.line_home();
                 KeyOutcome::Edited
@@ -657,12 +827,12 @@ impl Composer {
             }
             ComposerKey::Backspace => {
                 self.backspace();
-                self.autocomplete.on_input(&self.draft.text, self.caret);
+                self.autocomplete.on_input(&self.draft.text, self.edit.caret);
                 KeyOutcome::Edited
             }
             ComposerKey::Delete => {
                 self.delete_forward();
-                self.autocomplete.on_input(&self.draft.text, self.caret);
+                self.autocomplete.on_input(&self.draft.text, self.edit.caret);
                 KeyOutcome::Edited
             }
             ComposerKey::CtrlK => {
@@ -707,19 +877,9 @@ impl Composer {
                 // `hide(true)`: the trigger token is removed first.
                 let index = self.autocomplete.trigger_index;
                 self.autocomplete.close();
-                let end = self.caret;
+                let end = self.edit.caret;
                 if index <= end {
-                    let byte_start = char_to_byte(&self.draft.text, index);
-                    let byte_end = char_to_byte(&self.draft.text, end);
-                    self.draft.text.replace_range(byte_start..byte_end, "");
-                    self.caret = index;
-                    let removed = end - index;
-                    for file in &mut self.draft.files {
-                        if file.start >= end {
-                            file.start -= removed;
-                            file.end -= removed;
-                        }
-                    }
+                    self.delete_range(index..end);
                 }
                 // `onSelect: command.run` — the built-in executes
                 // locally; nothing is submitted to the model.
@@ -759,28 +919,6 @@ fn cluster_starts(text: &str) -> Vec<usize> {
     }
     starts.push(offset);
     starts
-}
-
-/// The cluster length (in chars) ending at `caret`.
-fn prev_cluster_len(text: &str, caret: usize) -> usize {
-    let starts = cluster_starts(text);
-    let mut prev = 0;
-    for start in starts {
-        if start >= caret {
-            break;
-        }
-        prev = start;
-    }
-    caret - prev
-}
-
-/// The cluster length (in chars) starting at `caret`.
-fn next_cluster_len(text: &str, caret: usize) -> usize {
-    let starts = cluster_starts(text);
-    match starts.iter().find(|start| **start > caret) {
-        Some(next) => next - caret,
-        None => 1,
-    }
 }
 
 /// The engine prompt API stub: what `store::Store::submit_prompt`
@@ -853,7 +991,7 @@ mod tests {
         let mut multi = composer("one\ntwo");
         multi.handle_key(&ComposerKey::Up);
         assert_eq!(multi.draft.text, "one\ntwo", "text untouched");
-        assert!(multi.caret <= 3, "caret moved to the first row");
+        assert!(multi.caret() <= 3, "caret moved to the first row");
     }
 
     #[test]
@@ -893,7 +1031,7 @@ mod tests {
         let mut state = Composer::default();
         state.paste_attachment(Some("shot.png"), "data:image/png;base64,AAECAw==");
         assert_eq!(state.draft.text, "[Image 1] ");
-        assert_eq!(state.caret, 10);
+        assert_eq!(state.caret(), 10);
         assert_eq!(state.draft.files.len(), 1);
         let file = &state.draft.files[0];
         assert_eq!(file.mention_text(), "[Image 1]");
@@ -951,7 +1089,7 @@ mod tests {
             ..PromptDraft::default()
         });
         // Caret just after the chip.
-        state.caret = state.draft.files[0].end;
+        state.set_caret(state.draft.files[0].end);
         state.handle_key(&ComposerKey::Backspace);
         assert_eq!(state.draft.text, "Compare  now");
         assert!(state.draft.files.is_empty(), "chip removed with the mention");
@@ -960,7 +1098,7 @@ mod tests {
     #[test]
     fn clear_and_line_ops_follow_the_table() {
         let mut state = composer("hello world");
-        state.caret = 5;
+        state.set_caret(5);
         state.handle_key(&ComposerKey::CtrlK);
         assert_eq!(state.draft.text, "hello");
         state.handle_key(&ComposerKey::CtrlU);

@@ -237,10 +237,11 @@ fn pty_boot_home_then_one_tab_open_then_close() {
             // (d) <leader>w: close the tab — back home, strip empty.
             let _ = writer.write_all(b"\x18w");
             std::thread::sleep(Duration::from_millis(700));
-            // Exit: ctrl+c (clear) then <leader>q.
+            // Exit: ctrl+c (clear), ctrl+c again (exit — <leader>q
+            // is the queue manager's chord since Wave A).
             let _ = writer.write_all(b"\x03");
             std::thread::sleep(Duration::from_millis(200));
-            let _ = writer.write_all(b"\x18q");
+            let _ = writer.write_all(b"\x03");
         });
     }
 

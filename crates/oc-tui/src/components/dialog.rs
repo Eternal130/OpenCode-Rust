@@ -22,7 +22,7 @@ use crate::components::command_palette::{select_props_for, CommandDispatcher, St
 use crate::components::dialog_select::{render_select, DialogStyles, SelectView};
 use crate::keymap::{Clock, KeyStroke, Keymap, Outcome};
 use crate::render::Frame;
-use crate::store::{DialogEntry, DialogKind, DialogSize, Focus, Store};
+use crate::store::{DialogEntry, DialogKind, DialogSize, Focus, Route, Store};
 use ratatui::style::Color;
 
 /// The backdrop's alpha (RGBA.fromInts(0, 0, 0, 150)).
@@ -63,12 +63,15 @@ pub fn handle_dialog_key(
         // The rename + worktree-name dialogs are the prompt-style
         // inputs (not selects).
         DialogKind::SessionRename { .. } | DialogKind::WorktreeName => false,
-        // A rows-only plugin dialog is static (like help): printables
-        // pass through; only the close bindings act.
+        // A rows-only plugin dialog is static (like help: printables
+        // pass through, only the close bindings act); the rest — the
+        // palette, theme list, server lists, worktrees, the
+        // queued-prompts manager (v2's DialogSelect) — are selects.
         DialogKind::Plugin { id } => {
-            store.plugin_dialog_content(id).is_none_or(|content| content.is_select())
+            store.plugin_dialog_content(id).is_some_and(|content| content.is_select())
         }
         DialogKind::CommandPalette
+        | DialogKind::QueuedPrompts
         | DialogKind::ThemeList
         | DialogKind::Help
         | DialogKind::Worktrees
@@ -141,6 +144,35 @@ pub fn handle_dialog_key(
     // v2 wires these as DialogSelect `actions` through the keymap
     // (`dialog.move_session.*`, config/keybind.ts:268-271); the name
     // dialog's tab is `dialog.worktree.generate` (:267).
+    if let DialogKind::QueuedPrompts = entry.kind {
+        // The queued-prompts manager's action layer (v2
+        // index.tsx:641-672): `queued_prompt.delete` (ctrl+d) removes
+        // the row — the LAST removal closes the dialog
+        // (`if (cancelled && last) dialog.clear()`).
+        let selected = entry.select.submit(&props).map(|option| option.value.clone());
+        if keymap.stroke_triggers(&stroke, "queued_prompt.delete") {
+            if let (Route::Session { session_id }, Some(id)) = (store.route(), selected.as_deref())
+            {
+                store.delete_queued_prompt(&session_id, id);
+                if store.queued_prompts(&session_id).is_empty() {
+                    // The last removal closes the manager
+                    // (`if (cancelled && last) dialog.clear()`).
+                    store.clear_dialogs();
+                } else {
+                    // Clamp the selection into the shrunken list
+                    // (`reconcileSelection`).
+                    let count = store.queued_prompts(&session_id).len();
+                    store.update_dialog(|top| {
+                        top.select.selected = crate::components::dialog_select::reconcile_selection(
+                            top.select.selected,
+                            count,
+                        );
+                    });
+                }
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+    }
     if let DialogKind::Worktrees = entry.kind {
         let selected = entry.select.submit(&props).map(|option| option.value.clone());
         // The DialogSelect action layer: these resolve by their OWN
@@ -629,6 +661,26 @@ pub fn execute_submission(
             if forced {
                 let project = store.worktree_dialog().project_id;
                 store.worktree_sink_remove(&project, &directory, true);
+            }
+            store.clear_dialogs();
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // The queued-prompts manager's steer (v2 index.tsx:636-640:
+        // `onSelect` → `mutatePending("steer", …)`): the selected
+        // prompt delivers NOW (the local serial queue's head-jump).
+        Some(DialogKind::QueuedPrompts) => {
+            if let Route::Session { session_id } = store.route() {
+                let queued = store.queued_prompts(&session_id);
+                if let Some(prompt) = queued.iter().find(|item| item.id == value) {
+                    let payload = crate::components::composer::SubmittedPrompt {
+                        text: prompt.text.clone(),
+                        ..crate::components::composer::SubmittedPrompt::default()
+                    };
+                    store.delete_queued_prompt(&session_id, value);
+                    store.clear_dialogs();
+                    store.forward_submission(&session_id, &payload);
+                    return crate::components::command_palette::Dispatch::Handled;
+                }
             }
             store.clear_dialogs();
             return crate::components::command_palette::Dispatch::Handled;
