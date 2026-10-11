@@ -39,8 +39,14 @@ pub fn signal_group_filtered(leader: u32, signal: i32, allowlist: &[&str]) -> us
         let Ok(cmdline) = std::fs::read(format!("/proc/{member}/cmdline")) else {
             continue;
         };
+        // Zombies (and kernel threads that slipped the pgrp filter)
+        // report an EMPTY cmdline; `windows(0)` would panic below.
+        if cmdline.is_empty() {
+            continue;
+        }
         if !allowlist.iter().any(|needle| {
-            cmdline.windows(needle.len().min(cmdline.len())).any(|w| w == needle.as_bytes())
+            needle.is_empty()
+                || cmdline.windows(needle.len().min(cmdline.len())).any(|w| w == needle.as_bytes())
         }) {
             continue;
         }
