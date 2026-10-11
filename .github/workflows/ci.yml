@@ -48,3 +48,8 @@ jobs:
 
       - name: Run test suite
         run: cargo nextest run --workspace --locked --no-fail-fast
+
+      # Frame-budget guard runs in RELEASE (the product profile);
+      # debug numbers are informational only (see the test's notes).
+      - name: Frame budget guard (release)
+        run: cargo nextest run --release -p oc-tui --locked -E 'test(frame_budget)' 
