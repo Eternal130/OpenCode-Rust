@@ -41,7 +41,7 @@ pub const SIDEBAR_AUTO_BREAKPOINT: usize = 120;
 const CARD_TEXT_WIDTH: usize = 32;
 
 /// `session.sidebar` config values.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SidebarMode {
     /// `auto` — show above [`SIDEBAR_AUTO_BREAKPOINT`].
     #[default]
@@ -121,30 +121,32 @@ pub const GETTING_STARTED_PARAGRAPH_2: &str =
 pub const GETTING_STARTED_ACTION: &str = "Connect provider";
 pub const GETTING_STARTED_ACTION_HINT: &str = "/connect";
 
-/// One sidebar view: what the pane renders.
+/// One sidebar view: what the pane renders. The strings are OWNED —
+/// the live route builds the title from store state per frame (the
+/// golden fixtures keep their `&str` constructors).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SidebarView<'a> {
+pub struct SidebarView {
     /// The session title (bold, row 1).
-    pub title: &'a str,
+    pub title: String,
     /// The content-slot sections (blank in the golden fixture).
     pub sections: SidebarSections,
     /// Show the getting-started card (hidden when dismissed or a
     /// provider is connected; `dimensions().height >= 22`).
     pub onboarding: bool,
     /// The footer location line `{directory}:{branch}` (row height−2).
-    pub location: Option<&'a str>,
+    pub location: Option<String>,
 }
 
-impl<'a> SidebarView<'a> {
+impl SidebarView {
     /// The golden fixture's view: title "Sidebar fixture", no widget
     /// content, the onboarding card, the fixture location.
     #[must_use]
-    pub fn fixture(title: &'a str, location: &'a str) -> Self {
+    pub fn fixture(title: &str, location: &str) -> Self {
         Self {
-            title,
+            title: title.to_owned(),
             sections: SidebarSections::empty(),
             onboarding: true,
-            location: Some(location),
+            location: Some(location.to_owned()),
         }
     }
 }
@@ -203,9 +205,9 @@ pub fn render_sidebar(view: &SidebarView, theme: &ThemeStyles, height: usize) ->
     paint.placed.push(Placed {
         x: 2,
         y: 1,
-        width: crate::wrap::display_width(view.title),
+        width: crate::wrap::display_width(&view.title),
         lines: vec![PlacedLine::plain(
-            view.title,
+            view.title.as_str(),
             Style::new().fg(fg_base).bg(raised).add_modifier(Modifier::BOLD),
         )],
         tag: Some("sidebar.title".into()),
@@ -252,12 +254,12 @@ pub fn render_sidebar(view: &SidebarView, theme: &ThemeStyles, height: usize) ->
     // height−2 (the box's paddingBottom keeps the last row blank),
     // gap 1, then the onboarding card above it with its own 1-row
     // top pad (the footer box's paddingTop).
-    if let Some(location) = view.location {
+    if let Some(location) = &view.location {
         paint.placed.push(Placed {
             x: 2,
             y: height.saturating_sub(2),
             width: crate::wrap::display_width(location),
-            lines: vec![PlacedLine::plain(location, Style::new().fg(fg_muted).bg(raised))],
+            lines: vec![PlacedLine::plain(location.as_str(), Style::new().fg(fg_muted).bg(raised))],
             tag: Some("sidebar.footer.location".into()),
         });
     }

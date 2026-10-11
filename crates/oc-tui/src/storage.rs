@@ -161,6 +161,17 @@ impl Default for SessionListPrefs {
 /// The storage keys the TUI persists (v2 names).
 pub const KEY_TABS: &str = "tabs";
 pub const KEY_SESSION_LIST: &str = "session-list";
+/// The session sidebar's visibility mode (`session.sidebar` — v2
+/// persists the toggle through the config doc; the channel key is the
+/// TUI-side stand-in, last toggle wins).
+pub const KEY_SIDEBAR: &str = "sidebar";
+
+/// The persisted sidebar document (`{"mode": "auto"|"hide"}`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SidebarDoc {
+    /// The `session.sidebar` value the last toggle wrote.
+    pub mode: crate::components::sidebar::SidebarMode,
+}
 
 /// The legacy channel earlier dev builds of the port wrote before the
 /// factory default moved to `stable` (the migration SOURCE).

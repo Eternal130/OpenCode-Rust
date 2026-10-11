@@ -783,6 +783,18 @@ pub struct Store {
     plugin_dialog_source: std::cell::RefCell<Rc<dyn PluginDialogSource>>,
     /// Plugin sidebar sections (one per plugin, latest wins).
     plugin_sections: Signal<Vec<crate::components::sidebar::SidebarSection>>,
+    /// `session.sidebar` — the config mode (auto/hide) after the
+    /// boot merge (cli.json, then the last toggle's persisted value).
+    sidebar_mode: Signal<crate::components::sidebar::SidebarMode>,
+    /// The manual open flag (v2's `sidebarOpen` signal,
+    /// session-frame.tsx:68 — ephemeral per mount, never persisted).
+    sidebar_open: Signal<bool>,
+    /// The terminal size (the toggle's visibility input — v2's
+    /// `rightPane()` reads the live dimensions; the render path takes
+    /// its own `size` argument).
+    terminal_size: Signal<(u16, u16)>,
+    /// The onboarding card's dismissal (storage `getting-started`).
+    sidebar_onboarding: Signal<bool>,
     /// Plugin footer hint segments (one per plugin, latest wins).
     plugin_hints: Signal<Vec<(String, String)>>,
     /// Plugin home quick actions (registration-time).
@@ -979,6 +991,16 @@ struct StoreSignals {
     plugin_commands: Signal<Vec<PluginCommandEntry>>,
     plugin_dialogs: Signal<HashMap<String, PluginDialogContent>>,
     plugin_sections: Signal<Vec<crate::components::sidebar::SidebarSection>>,
+    /// `session.sidebar` — the config mode (auto/hide) after the
+    /// boot merge (cli.json, then the last toggle's persisted value).
+    sidebar_mode: Signal<crate::components::sidebar::SidebarMode>,
+    /// The manual open flag (v2's `sidebarOpen` signal,
+    /// session-frame.tsx:68 — ephemeral per mount, never persisted).
+    sidebar_open: Signal<bool>,
+    /// The terminal size (the toggle's visibility input).
+    terminal_size: Signal<(u16, u16)>,
+    /// The onboarding card's dismissal (storage `getting-started`).
+    sidebar_onboarding: Signal<bool>,
     plugin_hints: Signal<Vec<(String, String)>>,
     plugin_home_actions: Signal<Vec<crate::components::home::PluginQuickAction>>,
     plugin_group_rules: Signal<crate::components::message::model::GroupRules>,
@@ -1059,6 +1081,10 @@ impl Store {
             plugin_commands,
             plugin_dialogs,
             plugin_sections,
+            sidebar_mode,
+            sidebar_open,
+            terminal_size,
+            sidebar_onboarding,
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
@@ -1090,6 +1116,10 @@ impl Store {
             plugin_dialogs,
             plugin_dialog_source: std::cell::RefCell::new(Rc::new(NoPluginDialogs)),
             plugin_sections,
+            sidebar_mode,
+            sidebar_open,
+            terminal_size,
+            sidebar_onboarding,
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
@@ -1153,6 +1183,11 @@ impl Store {
             Signal::new(&runtime, std::collections::HashMap::<String, PluginDialogContent>::new());
         let plugin_sections =
             Signal::new(&runtime, Vec::<crate::components::sidebar::SidebarSection>::new());
+        let sidebar_mode =
+            Signal::new(&runtime, crate::components::sidebar::SidebarMode::default());
+        let sidebar_open = Signal::new(&runtime, false);
+        let terminal_size = Signal::new(&runtime, (0u16, 0u16));
+        let sidebar_onboarding = Signal::new(&runtime, false);
         let plugin_hints = Signal::new(&runtime, Vec::<(String, String)>::new());
         let plugin_home_actions =
             Signal::new(&runtime, Vec::<crate::components::home::PluginQuickAction>::new());
@@ -1183,6 +1218,10 @@ impl Store {
                 plugin_commands,
                 plugin_dialogs,
                 plugin_sections,
+                sidebar_mode,
+                sidebar_open,
+                terminal_size,
+                sidebar_onboarding,
                 plugin_hints,
                 plugin_home_actions,
                 plugin_group_rules,
@@ -2844,6 +2883,81 @@ impl Store {
         self.plugin_sections.get()
     }
 
+    // ---------------------------------------------------------------------
+    // The session sidebar's visibility state (`session-frame.tsx`)
+    // ---------------------------------------------------------------------
+
+    /// The terminal size (the toggle's visibility input; the render
+    /// path passes its own `size`).
+    pub fn set_terminal_size(&self, size: (u16, u16)) {
+        self.terminal_size.set(size);
+    }
+
+    /// The last size the app reported (0×0 before the first frame).
+    #[must_use]
+    pub fn terminal_size(&self) -> (u16, u16) {
+        self.terminal_size.get()
+    }
+
+    /// Apply the resolved `session.sidebar` config (boot / reload;
+    /// cli.json first, then the persisted last toggle overrides).
+    pub fn set_sidebar_mode(&self, mode: crate::components::sidebar::SidebarMode) {
+        self.sidebar_mode.set(mode);
+    }
+
+    /// The current `session.sidebar` mode.
+    #[must_use]
+    pub fn sidebar_mode(&self) -> crate::components::sidebar::SidebarMode {
+        self.sidebar_mode.get()
+    }
+
+    /// v2's `sidebarVisible()` (session-frame.tsx:107-111): a
+    /// subagent session (`parentID`) never shows it; the manual open
+    /// flag forces it on; otherwise `auto` shows above the wide
+    /// breakpoint (width > 120).
+    #[must_use]
+    pub fn sidebar_shown(&self, session_id: &str, width: usize) -> bool {
+        if self.session_index.borrow().is_subagent(session_id) {
+            return false;
+        }
+        if self.sidebar_open.get() {
+            return true;
+        }
+        crate::components::sidebar::sidebar_visible(self.sidebar_mode.get(), width)
+    }
+
+    /// `session.sidebar.toggle` (session-frame.tsx:118-130): when the
+    /// sidebar is showing, `hide` persists and the manual flag clears;
+    /// when hidden, `auto` persists and the manual flag forces it on
+    /// (v2 writes `draft.session.sidebar` through `config.update` and
+    /// flips the `sidebarOpen` signal in one batch). No-op off the
+    /// session route (the command lives in the session frame's layer).
+    pub fn toggle_sidebar(&self) {
+        if !matches!(self.route.get(), Route::Session { .. }) {
+            return;
+        }
+        let visible = matches!(self.route.get(), Route::Session { session_id } if self.sidebar_shown(&session_id, usize::from(self.terminal_size.get().0)));
+        self.sidebar_mode.set(if visible {
+            crate::components::sidebar::SidebarMode::Hide
+        } else {
+            crate::components::sidebar::SidebarMode::Auto
+        });
+        self.sidebar_open.set(!visible);
+    }
+
+    /// The onboarding card's dismissal (v2 storage
+    /// `getting-started.dismissed`, footer.tsx:11-23) — the card's
+    /// only writer until mouse selection lands.
+    pub fn dismiss_sidebar_onboarding(&self) {
+        self.sidebar_onboarding.set(true);
+    }
+
+    /// Whether the getting-started card was dismissed.
+    #[must_use]
+    pub fn sidebar_onboarding_dismissed(&self) -> bool {
+        self.sidebar_onboarding.get()
+    }
+
     /// Upsert one plugin's footer hint segment (empty text removes).
     pub fn set_plugin_footer_hint(&self, plugin_id: &str, text: &str) {
         self.plugin_hints.update(|hints| {
@@ -4117,7 +4231,7 @@ mod tests {
             "session.reasoning.ended",
             serde_json::json!({
                 "sessionID": "s", "assistantMessageID": "a",
-                "text": "**Title**\n\nBody"
+                "text": "**Title**Body"
             }),
         );
         event.created = Some(13);
@@ -4981,5 +5095,72 @@ mod tests {
             &[("s1".to_owned(), Some("fake-model".to_owned()))],
             "the submit committed the catalog-head model"
         );
+    }
+
+    // -- the session sidebar (session-frame.tsx) --------------------------
+
+    /// v2's `sidebarVisible()` (session-frame.tsx:107-111): auto shows
+    /// only above 120; the manual open forces it on at ANY width; hide
+    /// never shows; a subagent session (parentID) never does.
+    #[test]
+    fn sidebar_visibility_matches_the_reference() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", None);
+        assert!(!store.sidebar_shown("s1", 80), "auto below the breakpoint");
+        assert!(!store.sidebar_shown("s1", 120), "strictly greater than 120");
+        assert!(store.sidebar_shown("s1", 121), "auto above the breakpoint");
+        store.set_sidebar_mode(crate::components::sidebar::SidebarMode::Hide);
+        assert!(!store.sidebar_shown("s1", 160), "hide never shows");
+        store.set_sidebar_mode(crate::components::sidebar::SidebarMode::Auto);
+        // The manual toggle flips mode + open together; force open via
+        // the toggle at a narrow width.
+        store.set_terminal_size((80, 24));
+        store.toggle_sidebar();
+        assert!(store.sidebar_shown("s1", 80), "the manual open forces it on");
+        // A subagent session never shows it (session-frame.tsx:108).
+        store.ingest_all([crate::data::Ingest::Event(BusEvent::new(
+            "session.created",
+            serde_json::json!({ "sessionID": "sub", "parentID": "s1" }),
+        ))]);
+        assert!(!store.sidebar_shown("sub", 160), "subagent sessions suppress it");
+        assert!(store.sidebar_shown("s1", 160), "the parent keeps it");
+    }
+
+    /// The toggle's write pair (session-frame.tsx:118-130): showing →
+    /// mode `hide` + open false; hidden → mode `auto` + open true —
+    /// and the mode is what persists (sidebarOpen is per-mount).
+    #[test]
+    fn toggle_writes_the_mode_and_manual_flag() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", None);
+        store.set_terminal_size((160, 24));
+        // Showing (auto + wide) → hide.
+        store.toggle_sidebar();
+        assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Hide);
+        assert!(!store.sidebar_shown("s1", 160));
+        // Hidden → auto + the manual open (shows even narrow).
+        store.toggle_sidebar();
+        assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Auto);
+        assert!(store.sidebar_shown("s1", 80));
+        // Off the session route the command is a no-op (the layer
+        // lives in the session frame).
+        store.navigate(Route::Home);
+        store.toggle_sidebar();
+        assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Auto);
+    }
+
+    /// The `<leader>b` chord dispatches through the palette arm.
+    #[test]
+    fn dispatcher_toggle_sidebar_arm_runs_the_store_toggle() {
+        use crate::components::command_palette::CommandDispatcher as _;
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", None);
+        store.set_terminal_size((160, 24));
+        let mut dispatcher = crate::components::command_palette::StoreDispatcher;
+        assert_eq!(
+            dispatcher.dispatch(&store, "session.sidebar.toggle", None),
+            crate::components::command_palette::Dispatch::Handled
+        );
+        assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Hide);
     }
 }
