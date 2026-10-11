@@ -105,22 +105,29 @@ pub fn completed_tool_row(icon: char, label: &str, theme: &ThemeStyles, width: u
     RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() }
 }
 
-/// The reasoning-group header in hide mode: `+ Thought: <title> · <d>`
-/// (open) or `Thinking: <title>` while running. Completed headers tint
+/// The reasoning-group header in hide mode: collapsed `+ Thought` /
+/// expanded `- Thought` (beta.8 bug 4 — the disclosure toggle flips
+/// the icon and lifts the 0.6-alpha tint to the full
+/// `text.feedback.warning`, `group-view.tsx:164-186`); `Thinking`
+/// while running. Completed headers tint
 /// `text.feedback.warning` at 0.6 alpha (premultiplied like
-/// `RGBA.fromValues(r, g, b, 0.6)`); running ones use `text.base`.
+/// `RGBA.fromValues(r, g, b, 0.6)`) unless EXPANDED (the full
+/// warning color, `hover() || expanded()`); running ones use
+/// `text.base`.
 #[must_use]
 pub fn reasoning_header_row(
     title: Option<&str>,
     duration_ms: Option<u64>,
     completed: bool,
+    expanded: bool,
     clock_ms: u64,
     theme: &ThemeStyles,
     width: usize,
 ) -> RowRender {
     if completed {
         let warning = theme.warning;
-        let tint = tint_0_6_over(warning, theme.background);
+        let tint = if expanded { warning } else { tint_0_6_over(warning, theme.background) };
+        let glyph = if expanded { '-' } else { '+' };
         let mut label = String::from("Thought");
         if let Some(title) = title {
             label.push_str(": ");
@@ -130,7 +137,7 @@ pub fn reasoning_header_row(
             label.push_str(" · ");
             label.push_str(&locale_duration(duration));
         }
-        completed_tool_row('+', &label, theme, width).recolor(tint)
+        completed_tool_row(glyph, &label, theme, width).recolor(tint)
     } else {
         let label = match title {
             Some(title) => format!("Thinking: {title}"),
@@ -145,6 +152,32 @@ pub fn reasoning_header_row(
         ];
         RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() }
     }
+}
+
+/// One expanded reasoning child (`ThoughtEntry`,
+/// `group-view.tsx:351-399`): a blank `marginTop 1` row, then the
+/// thought's markdown body inside a left `┃` border (`SplitBorder`
+/// vertical, `ui/border.ts:26`), `paddingLeft 1`, in `text.muted`.
+#[must_use]
+pub fn thought_entry_row(text: &str, theme: &ThemeStyles, width: usize) -> RowRender {
+    let muted = theme.text_muted;
+    // The group's expanded children sit inside `paddingLeft 3`
+    // (`group-view.tsx:190-192`); the border takes column 3 and the
+    // body starts one cell right of it.
+    let border_x = 3;
+    let body_x = border_x + 2;
+    let body_width = width.saturating_sub(body_x).max(1);
+    let lines: Vec<String> = if text.trim().is_empty() {
+        Vec::new()
+    } else {
+        crate::wrap::wrap_label(text.trim(), body_width)
+    };
+    let mut placed = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        placed.push(text_at(border_x, index + 1, "┃", muted));
+        placed.push(text_at(body_x, index + 1, line.clone(), muted));
+    }
+    RowRender { placed, fills: Vec::new(), height: lines.len() + 1, images: Vec::new() }
 }
 
 /// A 0.6-alpha tint **composited over the background** (opentui blends
@@ -643,7 +676,7 @@ mod tests {
     #[test]
     fn reasoning_header_tints_warning_at_sixty_percent() {
         let theme = theme();
-        let row = reasoning_header_row(Some("Failure modes"), Some(1), true, 0, &theme, 76);
+        let row = reasoning_header_row(Some("Failure modes"), Some(1), true, false, 0, &theme, 76);
         let frame = crate::render::paint_placed(
             &row.placed,
             (76, 1),
@@ -653,6 +686,46 @@ mod tests {
         assert!(line.starts_with("   + Thought: Failure modes · 1ms"), "{line}");
         // (151,104,44) = warning (245? no — 252-class orange) × 0.6.
         assert_eq!(frame.cell(0, 3).fg, crate::render::CellColor::Rgb(151, 104, 44));
+    }
+
+    /// beta.8 bug 4: the EXPANDED header flips the icon to `-` and
+    /// lifts the tint to the full warning color
+    /// (`hover() || expanded()`, group-view.tsx:167-176).
+    #[test]
+    fn reasoning_header_expanded_flips_the_icon_and_lifts_the_tint() {
+        let theme = theme();
+        let row = reasoning_header_row(Some("Failure modes"), Some(1), true, true, 0, &theme, 76);
+        let frame = crate::render::paint_placed(
+            &row.placed,
+            (76, 1),
+            crate::components::tool_rows::fill_style(&theme),
+        );
+        let line = &frame.text_grid()[0];
+        assert!(line.starts_with("   - Thought: Failure modes · 1ms"), "{line}");
+        let expected = match theme.warning {
+            ratatui::style::Color::Rgb(r, g, b) => crate::render::CellColor::Rgb(r, g, b),
+            other => panic!("warning token must be RGB, got {other:?}"),
+        };
+        assert_eq!(frame.cell(0, 3).fg, expected, "expanded header uses the full warning color");
+    }
+
+    /// The expanded thought body: a `┃` left border, `text.muted`,
+    /// body, and the leading blank margin row ([`ThoughtEntry`]'s
+    /// marginTop 1).
+    #[test]
+    fn thought_entry_row_borders_and_mutes_the_body() {
+        let theme = theme();
+        let row = thought_entry_row("Inspecting the parser edges", &theme, 40);
+        assert_eq!(row.height, 2, "margin row + one body line");
+        let frame = crate::render::paint_placed(
+            &row.placed,
+            (40, 2),
+            crate::components::tool_rows::fill_style(&theme),
+        );
+        let grid = frame.text_grid();
+        assert!(grid[0].trim().is_empty(), "margin row blank: {}", grid[0]);
+        assert!(grid[1].starts_with("   ┃ Inspecting the parser edges"), "{grid:?}");
+        assert_eq!(frame.cell(1, 3).fg, crate::render::CellColor::Rgb(128, 128, 128));
     }
 
     #[test]

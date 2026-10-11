@@ -77,7 +77,15 @@ fn paint_live_tabs_bar(
             detail: None,
         })
         .collect();
-    let render = session_tabs::render_bar(&views, Some(session_id), true, width, styles);
+    let render = session_tabs::render_bar(
+        &views,
+        Some(session_id),
+        true,
+        width,
+        styles,
+        tabs.hover.as_deref(),
+        tabs.add_hovered,
+    );
     paint_placed_with_fills(
         &render.placed,
         &render.fills,
@@ -86,10 +94,18 @@ fn paint_live_tabs_bar(
     )
 }
 
-/// Render the session route: the tabs strip, the title row, the
-/// transcript (lane C's renderer over the store's messages), and the
-/// composer docked at the bottom with one blank spacing row above it
-/// (the session column's gap).
+/// Render the session route: the tabs strip, the transcript (lane C's
+/// renderer over the store's messages), and the composer docked at the
+/// bottom with one blank spacing row above it (the session column's
+/// gap).
+///
+/// v2's frame has NO session title row: the strip (`SessionTabs`,
+/// app.tsx:1353-1355) is the ONLY surface that shows the active tab's
+/// title (`session-frame.tsx` mounts the `Session` scrollbox directly
+/// under it — `routes/session/index.tsx:1366-1371` has no title node),
+/// so the strip is exactly ONE row and the transcript starts beneath
+/// it. (beta.8 bug 2: our port rendered the title twice — the strip
+/// pill AND a muted title row.)
 #[must_use]
 pub fn render_session(
     store: &Store,
@@ -101,20 +117,13 @@ pub fn render_session(
     // (decrease/action surfaces); the store carries the live theme.
     let theme = store.theme();
     let (width, height) = (usize::from(size.0), usize::from(size.1));
-    let tabs = store.tabs();
-    let title = tabs
-        .tabs
-        .iter()
-        .find(|tab| tab.session_id == session_id)
-        .and_then(|tab| tab.title.clone())
-        .unwrap_or_else(|| "Untitled session".to_owned());
     let fill =
         Style::new().fg(crate::components::tool_rows::DEFAULT_FOREGROUND).bg(styles.background);
 
     // The tabs strip (height 1) leads the column when the tabs config
     // is enabled (v2's session-frame renders the strip behind the
-    // same `enabled()` gate); the title row and the transcript shift
-    // down under it. With tabs off the frame starts at the title row.
+    // same `enabled()` gate); the transcript starts directly under
+    // it. With tabs off the frame starts at the transcript.
     let show_strip = store.tabs_enabled();
     let strip = show_strip.then(|| paint_live_tabs_bar(store, session_id, width, styles));
 
@@ -123,17 +132,22 @@ pub fn render_session(
     let (mount, prompt_height, mount_height) =
         composer_mount_frame(store, session_id, &theme, width, height);
     let spacing = usize::from(mount_height + 1 < height);
-    // Without the strip the chrome is one row shorter (title only).
-    let chrome = usize::from(show_strip) + 1;
+    // Without the strip the chrome is one row shorter (no title row
+    // exists in v2 either way).
+    let chrome = usize::from(show_strip);
     let transcript_height = height.saturating_sub(mount_height + spacing + chrome);
-    // The transcript's rows start under the title row; the strip (when
-    // shown) pushes both down one more row.
+    // The transcript's rows start under the strip (row 0) — no title
+    // row shifts them.
     let content_top = chrome;
 
     let transcript = render_transcript(
         &store.messages(session_id),
         &TranscriptOptions {
             group_rules: store.plugin_group_rules(),
+            expanded_groups: store
+                .expanded_group_keys(session_id)
+                .into_iter()
+                .collect::<Vec<String>>(),
             image_strip: crate::components::message::rows::ImageStripOptions {
                 enabled: store.image_preview(),
                 protocol: store.graphics_protocol(),
@@ -143,6 +157,22 @@ pub fn render_session(
         },
         styles,
         width,
+    );
+    // The clickable reasoning headers (beta.8 bug 4): record each
+    // group row's ABSOLUTE rect for the mouse layer — the same
+    // content_top shift the rows below paint under.
+    store.set_transcript_hit_rows(
+        transcript
+            .rows
+            .iter()
+            .filter(|row| row.key.starts_with("group:Reasoning:"))
+            .map(|row| crate::store::TranscriptHitRow {
+                session_id: session_id.to_owned(),
+                key: row.key.clone(),
+                y: content_top + row.y,
+                height: row.height,
+            })
+            .collect(),
     );
     // The transcript's image placements (R-07) shift under the title
     // row with the rest of the rows, clipped to the viewport like the
@@ -174,19 +204,6 @@ pub fn render_session(
     store.set_frame_images(frame_images);
     let mut placed = Vec::new();
     let mut fills = Vec::new();
-    // Title row (muted, inset like the transcript), under the strip.
-    let inset = if width < 44 { 1 } else { 2 };
-    let title_width = crate::wrap::display_width(&title).min(width.saturating_sub(inset * 2));
-    placed.push(crate::layout::Placed {
-        x: inset,
-        y: content_top - 1,
-        width: title_width,
-        lines: vec![crate::layout::PlacedLine::plain(
-            crate::wrap::take_width(&title, width.saturating_sub(inset * 2)),
-            styles.text_muted,
-        )],
-        tag: None,
-    });
     for row in &transcript.rows {
         let y = content_top + row.y;
         if y >= transcript_height {
@@ -328,7 +345,8 @@ mod tests {
     /// D2: the live session route mounts the tabs strip — both tabs'
     /// titles visible in ONE capture, the active tab selected, the
     /// ` + ` affordance present, and an unread inactive tab carries
-    /// the `•` marker.
+    /// the `•` marker. beta.8 bug 2 pin: the title renders on exactly
+    /// ONE row (v2 has no separate title row under the strip).
     #[test]
     fn session_frame_mounts_the_live_tabs_strip() {
         let store = Store::new(Runtime::new());
@@ -348,13 +366,17 @@ mod tests {
             strip.contains(crate::components::session_tabs::UNREAD_MARKER),
             "the unread dot on the inactive tab: {strip}"
         );
-        // The active tab's transcript still renders under the strip.
-        let joined = grid.join("\n");
-        assert!(joined.contains("Alpha notes"), "title row present: {joined}");
+        // The strip is ONE row: the active tab's title appears on
+        // exactly one screen row (the strip), never duplicated below.
+        let rows_with_title =
+            grid.iter().filter(|row| row.contains("Alpha notes")).collect::<Vec<_>>();
+        assert_eq!(rows_with_title.len(), 1, "title on one row only: {grid:?}");
+        assert!(!grid[1].contains("Alpha notes"), "no title row under the strip: {}", grid[1]);
     }
 
-    /// `tabs.enabled = false`: the strip is absent, the session frame
-    /// starts at the title row, and routing still works.
+    /// `tabs.enabled = false`: the strip is absent AND no title row
+    /// takes its place (v2 renders neither — the title lives only in
+    /// the strip), and routing still works.
     #[test]
     fn session_frame_hides_the_strip_when_tabs_disabled() {
         let store = Store::new(Runtime::new());
@@ -364,7 +386,10 @@ mod tests {
         let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
         let grid = frame.text_grid();
         assert!(!grid[0].contains(" + "), "no add affordance: {}", grid[0]);
-        assert!(grid[0].contains("Alpha notes"), "the title row moves to the top: {}", grid[0]);
+        assert!(
+            !grid.iter().any(|row| row.contains("Alpha notes")),
+            "no title anywhere with tabs off: {grid:?}"
+        );
     }
 
     /// V2: the composer's footer row carries the persistent
