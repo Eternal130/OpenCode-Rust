@@ -300,13 +300,165 @@ impl StubScript {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The attribution-keyed subagent flow (corpus3)
+// ---------------------------------------------------------------------------
+
+/// Body-substring markers the subagent flow keys on. Attribution is
+/// NEVER request order — corpus2 #27 showed cadence drift (an extra
+/// title-path request on our side) misaligns any ordering scheme; the
+/// markers below identify each flow stage from the request body
+/// itself, valid for both stacks:
+///
+/// * the subagent child's first user message is
+///   `"<FIRST_PROMPT_PREFIX>\n<prompt>"` on BOTH stacks (v2
+///   `packages/core/src/tool/plugin/subagent.ts:209-212`; our port
+///   `oc-core/src/subagent/subagent.rs` `FIRST_PROMPT_PREFIX`);
+/// * primary (tool-bearing) requests carry `max_completion_tokens`,
+///   title-generation requests do not (corpus2 #27 pinned this split
+///   on both stacks);
+/// * the main continuation carries the subagent's fixed reply text as
+///   the `subagent` tool result.
+pub mod flow_markers {
+    /// Child-session first-prompt prefix (both stacks, byte-exact).
+    pub const FIRST_PROMPT_PREFIX: &str = "You are a subagent spawned by another session.";
+    /// The subagent's fixed final reply (also the continuation marker).
+    pub const SUBAGENT_TEXT: &str = "Subagent fixture done.";
+    /// The main session's final reply.
+    pub const FINAL_TEXT: &str = "Main flow final reply.";
+    /// The fixed title served to title-path requests.
+    pub const TITLE_TEXT: &str = "Parity Subagent Flow";
+    /// The `subagent` tool-call arguments served on the main request.
+    /// `general` is the built-in subagent-mode agent present on BOTH
+    /// stacks (ref `packages/core/src/plugin/agent.ts:88-95`, ours in
+    /// the default agent table) — config-defined agents cannot be used
+    /// here because ours does not apply the config `agents` map to the
+    /// agent registry yet (corpus3 finding; see the REPORT addendum).
+    pub const TOOL_AGENT: &str = "general";
+    pub const TOOL_DESCRIPTION: &str = "Check the fixture";
+    pub const TOOL_PROMPT: &str = "PARITY-SUBAGENT-TASK inspect the seeded fixture and report.";
+}
+
+/// Wrap SSE `data:` events with the `[DONE]` terminator (byte-identical
+/// framing to [`StubScript::sse`]).
+fn sse_wrap(events: &[String]) -> String {
+    let mut out = events.join("");
+    out.push_str("data: [DONE]\n\n");
+    out
+}
+
+fn sse_role() -> String {
+    format!("data: {}\n\n", serde_json::json!({"choices":[{"delta":{"role":"assistant"}}]}))
+}
+
+fn sse_reasoning(text: &str) -> String {
+    format!("data: {}\n\n", serde_json::json!({"choices":[{"delta":{"reasoning": text}}]}))
+}
+
+fn sse_content(text: &str) -> String {
+    format!("data: {}\n\n", serde_json::json!({"choices":[{"delta":{"content": text}}]}))
+}
+
+fn sse_finish(reason: &str) -> String {
+    format!(
+        "data: {}\n\n",
+        serde_json::json!({
+            "choices":[{"delta":{},"finish_reason": reason}],
+            "usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}
+        })
+    )
+}
+
+/// One `delta.tool_calls` entry (index-keyed accumulation, the shape
+/// both openai-chat parsers consume — ref `packages/ai/src/protocols/
+/// openai-chat.ts:1072+`, our `oc-ai/src/protocols/openai_chat.rs`).
+fn sse_tool_call(id: &str, name: &str, arguments: &str) -> String {
+    format!(
+        "data: {}\n\n",
+        serde_json::json!({"choices":[{"delta":{"tool_calls":[
+            {"index":0,"id": id,"function":{"name": name,"arguments": arguments}}
+        ]}}]})
+    )
+}
+
+/// The four SSE payloads of the subagent flow (corpus3). The main
+/// payload answers with a `subagent` TOOL CALL (v2 tool name:
+/// `packages/core/src/tool/plugin/subagent.ts:10`
+/// `export const name = "subagent"`); the engine then spawns the child
+/// session, whose own request (attribution: [`flow_markers::
+/// FIRST_PROMPT_PREFIX`]) gets reasoning + a short reply; the main
+/// continuation (tool result present) gets the final text; title-path
+/// requests get a fixed short title so tab titles compare.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlowScripts {
+    pub main: String,
+    pub subagent: String,
+    pub continuation: String,
+    pub title: String,
+}
+
+/// Build the deterministic subagent-flow payloads.
+#[must_use]
+pub fn subagent_flow_scripts() -> FlowScripts {
+    let arguments = serde_json::json!({
+        "agent": flow_markers::TOOL_AGENT,
+        "description": flow_markers::TOOL_DESCRIPTION,
+        "prompt": flow_markers::TOOL_PROMPT,
+    })
+    .to_string();
+    let main = sse_wrap(&[
+        sse_role(),
+        sse_tool_call("call_sub_parity_1", "subagent", &arguments),
+        sse_finish("tool_calls"),
+    ]);
+    let subagent = sse_wrap(&[
+        sse_role(),
+        sse_reasoning("Subagent thinking about the fixture."),
+        sse_content(flow_markers::SUBAGENT_TEXT),
+        sse_finish("stop"),
+    ]);
+    let continuation =
+        sse_wrap(&[sse_role(), sse_content(flow_markers::FINAL_TEXT), sse_finish("stop")]);
+    let title = sse_wrap(&[sse_role(), sse_content(flow_markers::TITLE_TEXT), sse_finish("stop")]);
+    FlowScripts { main, subagent, continuation, title }
+}
+
+/// Classify one main-request body against the flow (see [`SharedStub`]).
+/// Returns the SSE payload and the attribution kind for the recording.
+///
+/// Single-turn by design: the continuation marker (`SUBAGENT_TEXT`)
+/// lives in the conversation history from the second exchange on, so
+/// any later primary request would classify as a continuation. Every
+/// corpus3 script submits exactly once into a fresh session (fresh
+/// servers per run), and a misclassification's failure mode is benign
+/// (the terminal final-text reply), so the constraint is documented
+/// rather than enforced.
+fn classify_flow_request(body: &[u8], flow: &FlowScripts) -> (String, &'static str) {
+    let contains = |needle: &str| body.windows(needle.len()).any(|w| w == needle.as_bytes());
+    if contains(flow_markers::FIRST_PROMPT_PREFIX) {
+        (flow.subagent.clone(), "subagent")
+    } else if contains("max_completion_tokens") {
+        if contains(flow_markers::SUBAGENT_TEXT) {
+            (flow.continuation.clone(), "continuation")
+        } else {
+            (flow.main.clone(), "main")
+        }
+    } else {
+        (flow.title.clone(), "title")
+    }
+}
+
 /// ONE OpenAI-compatible SSE stub serving BOTH stacks. The active
 /// script is swapped between rig runs; every main request (body
 /// carrying `"messages"`) gets the active script verbatim, so replies
-/// are byte-identical on both sides and across runs.
+/// are byte-identical on both sides and across runs. When a
+/// [`FlowScripts`] is armed instead (corpus3), each main request is
+/// answered by ATTRIBUTION (body-substring matching, never request
+/// order — see [`flow_markers`]).
 pub struct SharedStub {
     pub url: String,
     active: Arc<Mutex<String>>,
+    flow: Arc<Mutex<Option<FlowScripts>>>,
     main_requests: Arc<AtomicUsize>,
     shutdown: Arc<AtomicUsize>,
     /// Request-path parity: recorded shapes of main requests (the
@@ -317,21 +469,25 @@ pub struct SharedStub {
 
 /// The transport/options shape of one main request: the sorted
 /// top-level body keys minus `messages`/`tools`, the option values
-/// (temperature and friends), the model id, and the user-agent (the
+/// (temperature and friends), the model id, the user-agent (the
 /// only attribution hint the shared stub gets — both stacks hit it
-/// from the same config).
+/// from the same config), and — for flow runs — the stub's
+/// body-substring attribution (`main`/`subagent`/`continuation`/
+/// `title`), which makes request-count drift per flow stage visible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedRequest {
     pub keys: Vec<String>,
     pub options: Vec<(String, String)>,
     pub model: String,
     pub user_agent: String,
+    pub kind: String,
 }
 
 impl RecordedRequest {
     fn shape(&self) -> String {
         format!(
-            "model={} keys=[{}] options={{{}}} ua={}",
+            "kind={} model={} keys=[{}] options={{{}}} ua={}",
+            self.kind,
             self.model,
             self.keys.join(","),
             self.options.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(","),
@@ -352,10 +508,12 @@ impl SharedStub {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").context("bind stub")?;
         let addr = listener.local_addr().context("stub addr")?;
         let active = Arc::new(Mutex::new(StubScript::Text.sse()));
+        let flow = Arc::new(Mutex::new(None));
         let main_requests = Arc::new(AtomicUsize::new(0));
         let shutdown = Arc::new(AtomicUsize::new(0));
         let recorded = Arc::new(Mutex::new(Vec::new()));
         let thread_active = Arc::clone(&active);
+        let thread_flow = Arc::clone(&flow);
         let thread_requests = Arc::clone(&main_requests);
         let thread_shutdown = Arc::clone(&shutdown);
         let thread_recorded = Arc::clone(&recorded);
@@ -365,10 +523,11 @@ impl SharedStub {
                 match listener.accept() {
                     Ok((socket, _)) => {
                         let active = Arc::clone(&thread_active);
+                        let flow = Arc::clone(&thread_flow);
                         let requests = Arc::clone(&thread_requests);
                         let recorded = Arc::clone(&thread_recorded);
                         std::thread::spawn(move || {
-                            stub_handle(socket, &active, &requests, &recorded)
+                            stub_handle(socket, &active, &flow, &requests, &recorded)
                         });
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -378,11 +537,19 @@ impl SharedStub {
                 }
             }
         });
-        Ok(Self { url: format!("http://{addr}"), active, main_requests, shutdown, recorded })
+        Ok(Self { url: format!("http://{addr}"), active, flow, main_requests, shutdown, recorded })
     }
 
     pub fn arm(&self, script: StubScript) {
+        *self.flow.lock().expect("stub flow") = None;
         *self.active.lock().expect("stub script") = script.sse();
+    }
+
+    /// Arm the attribution-keyed subagent flow (corpus3); clears the
+    /// single-script arm and vice versa.
+    pub fn arm_flow(&self, flow: FlowScripts) {
+        *self.active.lock().expect("stub script") = String::new();
+        *self.flow.lock().expect("stub flow") = Some(flow);
     }
 
     #[must_use]
@@ -405,6 +572,7 @@ impl SharedStub {
 fn stub_handle(
     mut socket: std::net::TcpStream,
     active: &Arc<Mutex<String>>,
+    flow: &Arc<Mutex<Option<FlowScripts>>>,
     main_requests: &Arc<AtomicUsize>,
     recorded: &Arc<Mutex<Vec<RecordedRequest>>>,
 ) {
@@ -451,6 +619,14 @@ fn stub_handle(
             .find(|line| line.len() > 11 && line[..11].eq_ignore_ascii_case("user-agent:"))
             .map_or_else(|| "(none)".to_owned(), |line| line[11..].trim().to_owned());
         let body = &buffer[header_end + 4..header_end + 4 + length];
+        // Flow attribution decides the SSE payload (corpus3); the
+        // single-script arm is the fallback. The kind lands in the
+        // recording so per-stage request-count drift is visible.
+        let armed_flow = flow.lock().expect("stub flow").clone();
+        let (script, kind) = match &armed_flow {
+            Some(flow) => classify_flow_request(body, flow),
+            None => (active.lock().expect("stub script").clone(), "main"),
+        };
         let shape = serde_json::from_slice::<serde_json::Value>(body).ok().and_then(|json| {
             let object = json.as_object()?;
             let mut keys: Vec<String> = object
@@ -466,12 +642,11 @@ fn stub_handle(
                 })
                 .collect::<Vec<_>>();
             let model = object.get("model").and_then(serde_json::Value::as_str)?.to_owned();
-            Some(RecordedRequest { keys, options, model, user_agent })
+            Some(RecordedRequest { keys, options, model, user_agent, kind: kind.to_owned() })
         });
         if let Some(shape) = shape {
             recorded.lock().expect("stub recorded").push(shape);
         }
-        let script = active.lock().expect("stub script").clone();
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n{script}"
         );
@@ -909,7 +1084,8 @@ pub struct Script {
     #[serde(default)]
     pub description: String,
     /// Which stub reply script to arm (`text` | `reasoning` |
-    /// `reasoning-long`).
+    /// `reasoning-long` | `subagent-flow` — the attribution-keyed
+    /// multi-request flow, corpus3).
     #[serde(default = "default_stub")]
     pub stub: String,
     /// Primary comparison mode for the report (`exact` | `struct`).
@@ -1423,7 +1599,9 @@ pub fn load_scripts(dir: &Path, filter: &Option<String>) -> Result<Vec<Script>> 
     for path in paths {
         if let Some(filter) = filter {
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
-            if stem != filter && path.to_string_lossy() != *filter {
+            // Exact stem, exact path, or stem PREFIX (corpus3: the
+            // three `subagent-*` scripts run under `--filter subagent`).
+            if stem != filter && !stem.starts_with(filter) && path.to_string_lossy() != *filter {
                 continue;
             }
         }
@@ -1439,7 +1617,11 @@ pub fn load_scripts(dir: &Path, filter: &Option<String>) -> Result<Vec<Script>> 
 }
 
 /// Seed the shared sandbox project: identical files + a git repo, so
-/// project names, titles and file trees match on both sides.
+/// project names, titles and file trees match on both sides. The
+/// corpus3 subagent flow targets the BUILT-IN `general` subagent agent
+/// (present on both stacks), so no agent config is seeded — ours does
+/// not apply the config `agents` map to the agent registry yet (the
+/// corpus3 REPORT addendum registers that gap from a live probe).
 fn seed_project(project: &Path, stub_url: &str) -> Result<()> {
     std::fs::create_dir_all(project.join("src"))?;
     std::fs::write(project.join("README.md"), "parity diff project\n\nSeeded fixture.\n")?;
@@ -1602,11 +1784,12 @@ pub async fn run_script_once(
         outcome.error = Some(format!("seed project: {error}"));
         return outcome;
     }
-    stub.arm(match script.stub.as_str() {
-        "reasoning" => StubScript::Reasoning,
-        "reasoning-long" => StubScript::ReasoningLong,
-        _ => StubScript::Text,
-    });
+    match script.stub.as_str() {
+        "reasoning" => stub.arm(StubScript::Reasoning),
+        "reasoning-long" => stub.arm(StubScript::ReasoningLong),
+        "subagent-flow" => stub.arm_flow(subagent_flow_scripts()),
+        _ => stub.arm(StubScript::Text),
+    }
 
     // Servers: fresh per run so restored tabs/sessions never leak
     // across scripts (determinism requirement).
@@ -1994,11 +2177,13 @@ impl CorpusReport {
         }
         // Request-path parity (stub-recorded main requests).
         out.push_str("\n## Request-path parity (stub-recorded main requests)\n\n");
-        out.push_str("Transport/options shape per request: top-level body keys minus\n");
-        out.push_str("`messages`/`tools` (system-prompt text legitimately differs), option\n");
-        out.push_str("values, model id, user-agent. Both stacks read ONE config whose model\n");
-        out.push_str("carries `options: { temperature: 0 }` — a missing option in a shape\n");
-        out.push_str("means that stack dropped it.\n\n");
+        out.push_str("Transport/options shape per request: attribution kind (flow runs:\n");
+        out.push_str("`main`/`subagent`/`continuation`/`title`, body-substring keyed),\n");
+        out.push_str("top-level body keys minus `messages`/`tools` (system-prompt text\n");
+        out.push_str("legitimately differs), option values, model id, user-agent. Both\n");
+        out.push_str("stacks read ONE config whose model carries a `body` overlay with\n");
+        out.push_str("`temperature: 0` — a missing option in a shape means that stack\n");
+        out.push_str("dropped it.\n\n");
         let mut any_requests = false;
         for run in &self.runs {
             if run.requests.is_empty() {
@@ -2204,4 +2389,103 @@ pub async fn run_corpus(cfg: &RigConfig) -> Result<CorpusReport> {
     }
     stub.stop();
     Ok(report)
+}
+
+// ---------------------------------------------------------------------------
+// Tests (flow stub: attribution + payload shapes)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A synthetic main-request body with the given text inside
+    /// `messages` (only the raw bytes matter for attribution).
+    fn body_with(text: &str, primary: bool) -> Vec<u8> {
+        let max = if primary { "\"max_completion_tokens\":1024," } else { "" };
+        format!(
+            r#"{{"model":"fake-model",{max}"messages":[{{"role":"user","content":"{text}"}}]}}"#
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn flow_classifies_by_body_attribution_not_order() {
+        let flow = subagent_flow_scripts();
+        // The subagent child's request: first-prompt prefix wins even
+        // though it is also a primary (tools-bearing) request.
+        let child = body_with(
+            &format!("{}\n{}", flow_markers::FIRST_PROMPT_PREFIX, flow_markers::TOOL_PROMPT),
+            true,
+        );
+        let (payload, kind) = classify_flow_request(&child, &flow);
+        assert_eq!(kind, "subagent");
+        assert!(payload.contains(flow_markers::SUBAGENT_TEXT));
+
+        // Main request: primary family, no tool result yet.
+        let (payload, kind) =
+            classify_flow_request(&body_with("PARITY-SUBAGENT-FLOW go", true), &flow);
+        assert_eq!(kind, "main");
+        assert!(payload.contains("\"subagent\""));
+
+        // Continuation: primary family carrying the subagent's reply
+        // as the tool result.
+        let (payload, kind) =
+            classify_flow_request(&body_with(flow_markers::SUBAGENT_TEXT, true), &flow);
+        assert_eq!(kind, "continuation");
+        assert!(payload.contains(flow_markers::FINAL_TEXT));
+
+        // Title-path request: no `max_completion_tokens` (corpus2 #27
+        // pinned this split on both stacks).
+        let (payload, kind) =
+            classify_flow_request(&body_with("PARITY-SUBAGENT-FLOW go", false), &flow);
+        assert_eq!(kind, "title");
+        assert!(payload.contains(flow_markers::TITLE_TEXT));
+    }
+
+    #[test]
+    fn flow_main_payload_is_a_subagent_tool_call() {
+        let flow = subagent_flow_scripts();
+        // One index-keyed tool_calls delta with the v2 tool name
+        // (subagent.ts:10 `export const name = "subagent"`), the
+        // configured researcher agent, and JSON arguments.
+        assert!(flow.main.contains("\"tool_calls\":[{"));
+        assert!(flow.main.contains("\"name\":\"subagent\""));
+        assert!(flow.main.contains(flow_markers::TOOL_AGENT));
+        assert!(flow.main.contains(flow_markers::TOOL_DESCRIPTION));
+        assert!(flow.main.contains(flow_markers::TOOL_PROMPT));
+        assert!(flow.main.contains("\"finish_reason\":\"tool_calls\""));
+        assert!(flow.main.ends_with("data: [DONE]\n\n"));
+    }
+
+    #[test]
+    fn flow_subagent_payload_carries_reasoning_and_text() {
+        let flow = subagent_flow_scripts();
+        assert!(flow.subagent.contains("\"reasoning\""));
+        assert!(flow.subagent.contains(flow_markers::SUBAGENT_TEXT));
+        assert!(flow.subagent.contains("\"finish_reason\":\"stop\""));
+    }
+
+    #[test]
+    fn arm_and_arm_flow_are_mutually_exclusive() {
+        let stub = SharedStub::start().expect("stub");
+        stub.arm_flow(subagent_flow_scripts());
+        assert!(stub.flow.lock().expect("flow").is_some());
+        stub.arm(StubScript::Text);
+        assert!(stub.flow.lock().expect("flow").is_none());
+        stub.stop();
+    }
+
+    #[test]
+    fn flow_targets_the_builtin_general_subagent() {
+        // Both stacks ship `general` with mode=subagent (ref
+        // plugin/agent.ts:88-95; our default agent table) — the tool
+        // call must not name a config-defined agent (ours does not
+        // apply the config `agents` map to the registry yet). The
+        // arguments arrive JSON-escaped inside the delta payload.
+        let flow = subagent_flow_scripts();
+        let escaped_agent = format!("\\\"{}\\\"", flow_markers::TOOL_AGENT);
+        assert!(flow.main.contains(&escaped_agent));
+        assert!(!flow.main.contains("researcher"));
+    }
 }
