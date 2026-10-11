@@ -34,6 +34,7 @@ use oc_ai::route::auth::{self, Secret};
 use oc_ai::route::client::{Route, RouteDefaults, RoutePatch};
 use oc_ai::route::endpoint::EndpointPatch;
 use oc_ai::route::{AuthDefinition, SharedTransport};
+use oc_ai::schema::options::{merge_json_records, merge_string_records, HttpOptions};
 use oc_ai::LanguageModel;
 use oc_schema::model::Info as ModelInfo;
 use oc_schema::provider::Settings as ProviderSettings;
@@ -97,6 +98,17 @@ impl ModelConnection {
     }
 }
 
+/// One config-defined model entry (`providers.<id>.models.<model>`),
+/// keeping the per-model overlays v2 merges onto the effective model
+/// (core/src/model.ts:204-209 — provider overlays first, model overlays
+/// win per key).
+#[derive(Debug, Clone)]
+pub struct CustomModel {
+    pub id: String,
+    pub headers: Option<BTreeMap<String, String>>,
+    pub body: Option<BTreeMap<String, Value>>,
+}
+
 /// A user-defined custom provider (v2 `provider` config custom entries):
 /// always bound through the openai-compatible facade.
 #[derive(Debug, Clone)]
@@ -105,7 +117,11 @@ pub struct CustomProvider {
     pub name: String,
     pub base_url: String,
     pub api_key: Option<String>,
-    pub models: Vec<String>,
+    /// Provider-level overlays (`providers.<id>.headers|body`) — merged
+    /// under every model's own overlays.
+    pub headers: Option<BTreeMap<String, String>>,
+    pub body: Option<BTreeMap<String, Value>>,
+    pub models: Vec<CustomModel>,
 }
 
 /// The ported protocol families a catalog package can bind to.
@@ -338,21 +354,28 @@ fn package_has_baked_base(package: &str) -> bool {
     )
 }
 
-/// Fold `Model.Info` overlays (settings.rest + body + headers — e.g.
-/// experimental mode models) into the route defaults.
+/// Fold `Model.Info` overlays into the route defaults. `settings.rest`
+/// lands in provider options; `body` lands in the HTTP body overlay and
+/// `headers` in the transport headers — v2 resolves the same overlay
+/// through the provider package (`settings.body` → `http: { body }`,
+/// openai-compatible.ts:48-59 / anthropic.ts:55-68) and merges it into
+/// every request body at send time (route/transport/http.ts:41-49).
 fn apply_model_overlays(route: &Route, model: &ModelInfo) -> Route {
     let mut provider_options = serde_json::Map::new();
     if let Some(settings) = &model.settings {
         provider_options.extend(settings.rest.clone());
     }
-    if let Some(body) = &model.body {
-        provider_options.extend(body.clone());
-    }
-    let headers = model.headers.clone();
+    let http = HttpOptions {
+        body: model.body.as_ref().map(|body| {
+            serde_json::Map::from_iter(body.iter().map(|(k, v)| (k.clone(), v.clone())))
+        }),
+        ..Default::default()
+    };
     route.with(RoutePatch {
         defaults: RouteDefaults {
-            headers,
+            headers: model.headers.clone(),
             provider_options: (!provider_options.is_empty()).then_some(provider_options),
+            http: (http != HttpOptions::default()).then_some(http),
             ..Default::default()
         },
         ..Default::default()
@@ -361,15 +384,31 @@ fn apply_model_overlays(route: &Route, model: &ModelInfo) -> Route {
 
 /// Bind a user-defined custom provider (config `provider.<id>` with
 /// `baseURL`/`apiKey`/npm-less models) through the openai-compatible
-/// facade.
+/// facade. The provider- and model-level `headers`/`body` overlays ride
+/// the route defaults (transport headers + HTTP body overlay), the seam
+/// v2's own packages use for config overlays.
 pub fn custom_language_model(
     context: &FacadeContext,
     custom: &CustomProvider,
     model_id: &str,
 ) -> Result<LanguageModel, ProviderError> {
-    if !custom.models.iter().any(|id| id == model_id) {
+    let Some(model) = custom.models.iter().find(|model| model.id == model_id) else {
         return Err(ProviderError::UnknownModel(custom.id.clone(), model_id.to_string()));
-    }
+    };
+    // Effective overlays: provider-level under model-level, the model
+    // winning per key (v2 core/src/model.ts:204-209 + provider.ts
+    // mergeOverlay/mergeHeaders:172-205).
+    let provider_body = custom
+        .body
+        .as_ref()
+        .map(|body| serde_json::Map::from_iter(body.iter().map(|(k, v)| (k.clone(), v.clone()))));
+    let model_body = model
+        .body
+        .as_ref()
+        .map(|body| serde_json::Map::from_iter(body.iter().map(|(k, v)| (k.clone(), v.clone()))));
+    let body = merge_json_records(&[provider_body.as_ref(), model_body.as_ref()]);
+    let headers = merge_string_records(&[custom.headers.as_ref(), model.headers.as_ref()]);
+    let http = HttpOptions { body, ..Default::default() };
     let route = openai_compatible_chat_configured(
         Arc::clone(&context.transport),
         &custom.id,
@@ -383,9 +422,14 @@ pub fn custom_language_model(
             // is configured (local/loopback providers rely on it).
             None => auth::Definition::none(),
         }),
+        defaults: RouteDefaults {
+            headers: headers.clone(),
+            http: (http != HttpOptions::default()).then_some(http),
+            ..Default::default()
+        },
         ..Default::default()
     });
-    route.model(model_id, None).map_err(|error| ProviderError::Configuration {
+    route.model(&model.id, None).map_err(|error| ProviderError::Configuration {
         provider: custom.id.clone(),
         message: error.to_string(),
     })
@@ -564,7 +608,9 @@ mod tests {
             name: "Acme".into(),
             base_url: "https://api.acme.test/v1".into(),
             api_key: Some("secret".into()),
-            models: vec!["acme-large".into()],
+            headers: None,
+            body: None,
+            models: vec![CustomModel { id: "acme-large".into(), headers: None, body: None }],
         };
         let model =
             custom_language_model(&context, &custom, "acme-large").expect("custom provider binds");
@@ -572,9 +618,89 @@ mod tests {
         assert_eq!(model.provider.as_str(), "acme");
         assert_eq!(model.route.id, "openai-compatible-chat");
         assert_eq!(model.route.endpoint.base_url.as_deref(), Some("https://api.acme.test/v1"));
-        assert_eq!(
-            custom_language_model(&context, &custom, "acme-small").unwrap_err(),
-            ProviderError::UnknownModel("acme".into(), "acme-small".into())
+        assert!(
+            custom_language_model(&context, &custom, "acme-small").is_err(),
+            "unknown model fails to bind"
         );
+    }
+
+    /// Request-path parity #26: the config model `body` overlay must
+    /// reach the WIRE body of every main request — v2 folds it into the
+    /// route's HTTP body defaults (openai-compatible.ts:48-59
+    /// `settings.body` → `http: { body }`), and the transport merges it
+    /// over the protocol body at send time (route/transport/http.ts:41-49).
+    #[test]
+    fn provider_facade_custom_model_body_overlay_reaches_the_wire() {
+        let context = context();
+        let custom = CustomProvider {
+            id: "acme".into(),
+            name: "Acme".into(),
+            base_url: "https://api.acme.test/v1".into(),
+            api_key: Some("secret".into()),
+            // Provider-level overlay under the model-level one (v2
+            // core/src/model.ts:204-209): both land, model wins per key.
+            headers: None,
+            body: Some(BTreeMap::from([("top_k".to_string(), serde_json::json!(7))])),
+            models: vec![CustomModel {
+                id: "acme-large".into(),
+                headers: None,
+                body: Some(BTreeMap::from([("temperature".to_string(), serde_json::json!(0))])),
+            }],
+        };
+        let model =
+            custom_language_model(&context, &custom, "acme-large").expect("custom provider binds");
+        let route = Arc::clone(&model.route);
+        assert_eq!(
+            route.defaults.http.as_ref().and_then(|http| http.body.as_ref()),
+            Some(&serde_json::Map::from_iter([
+                ("top_k".to_string(), serde_json::json!(7)),
+                ("temperature".to_string(), serde_json::json!(0)),
+            ])),
+            "route defaults carry the merged body overlay"
+        );
+
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let prepared = route.prepare_request(&request);
+        let built = route.build_body(&prepared).expect("protocol body");
+        let (_transport, body_text) = route.prepare_transport(&prepared, &built).expect("wire");
+        let wire: serde_json::Value = serde_json::from_str(&body_text).expect("json wire body");
+        assert_eq!(wire.get("temperature"), Some(&serde_json::json!(0)), "model body overlay");
+        assert_eq!(wire.get("top_k"), Some(&serde_json::json!(7)), "provider body overlay");
+        assert_eq!(wire.get("model"), Some(&serde_json::json!("acme-large")));
+    }
+
+    /// Same seam on the anthropic-compatible (catalog) path: the model
+    /// `body` overlay rides `defaults.http.body` for EVERY protocol
+    /// family (anthropic.ts:55-68 folds `settings.body` the same way)
+    /// and overlays the anthropic messages body at send time.
+    #[test]
+    fn provider_facade_catalog_body_overlay_reaches_anthropic_wire() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let mut info =
+            catalog.model("anthropic", "claude-opus-4-5").expect("anthropic model info").clone();
+        info.body = Some(BTreeMap::from([("temperature".to_string(), serde_json::json!(0))]));
+        let bound = language_model(
+            &context,
+            catalog,
+            "anthropic",
+            "claude-opus-4-5",
+            &ModelConnection {
+                base_url: Some("https://api.anthropic.test".into()),
+                api_key: Some("test-key".into()),
+                headers: BTreeMap::new(),
+            },
+        )
+        .expect("anthropic binds");
+        let route = Arc::new(apply_model_overlays(&bound.route, &info));
+        let model = route.model("claude-opus-4-5", None).expect("model binds");
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let prepared = route.prepare_request(&request);
+        let built = route.build_body(&prepared).expect("protocol body");
+        let (_transport, body_text) = route.prepare_transport(&prepared, &built).expect("wire");
+        let wire: serde_json::Value = serde_json::from_str(&body_text).expect("json wire body");
+        assert_eq!(wire.get("temperature"), Some(&serde_json::json!(0)));
     }
 }

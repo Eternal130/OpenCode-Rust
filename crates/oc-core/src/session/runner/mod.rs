@@ -87,6 +87,8 @@ mod tests_misc;
 #[cfg(test)]
 mod tests_recorded;
 #[cfg(test)]
+mod tests_request_path;
+#[cfg(test)]
 mod tests_retry;
 #[cfg(test)]
 mod tests_step;

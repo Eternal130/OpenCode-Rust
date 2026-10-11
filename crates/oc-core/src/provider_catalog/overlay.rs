@@ -15,7 +15,7 @@
 use oc_schema::config::ModelSelection;
 
 use crate::config::Loaded;
-use crate::provider_catalog::facade::CustomProvider;
+use crate::provider_catalog::facade::{CustomModel, CustomProvider};
 
 /// The config-derived provider bindings for one loaded document set
 /// (boot seeding and the per-location overlay share this shape).
@@ -66,13 +66,32 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
                 let models = provider
                     .models
                     .as_ref()
-                    .map(|models| models.keys().cloned().collect())
+                    .map(|models| {
+                        models
+                            .iter()
+                            .map(|(id, model)| CustomModel {
+                                id: id.clone(),
+                                // Per-model overlays (`providers.<id>.models.<mid>
+                                // .headers|body`) — v2 merges them onto the
+                                // effective model (core/src/model.ts:204-209);
+                                // the request-path pipeline forwards them to
+                                // the wire (ModelOverlays.body → provider
+                                // request body).
+                                headers: model.headers.clone(),
+                                body: model.body.clone(),
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default();
                 out.custom.push(CustomProvider {
                     id: id.clone(),
                     name: provider.name.clone().unwrap_or_else(|| id.clone()),
                     base_url,
                     api_key,
+                    // Provider-level overlays (`providers.<id>.headers|body`)
+                    // — merged under every model's own overlays.
+                    headers: provider.headers.clone(),
+                    body: provider.body.clone(),
                     models,
                 });
             }
@@ -149,6 +168,58 @@ mod tests {
     }
 
     #[test]
+    fn overlay_keeps_model_and_provider_overlays() {
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        let project = root.path().join("proj");
+        let home = root.path().join("home");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        // The request-path rig shape: a model-level `body` overlay forcing
+        // a wire field (v2 ModelOverlays.body — the sanctioned way to pin
+        // e.g. `temperature`), plus provider- and model-level headers.
+        std::fs::write(
+            project.join("opencode.json"),
+            r#"{
+                "model": { "providerID": "acme", "model": "acme-large" },
+                "providers": {
+                    "acme": {
+                        "settings": { "baseURL": "https://acme.test/v1" },
+                        "headers": { "X-Org": "org" },
+                        "body": { "top_k": 7 },
+                        "models": {
+                            "acme-large": {
+                                "body": { "temperature": 0 },
+                                "headers": { "X-Tier": "gold" }
+                            },
+                            "acme-small": {}
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let providers = providers_from_config(&loader(&project, &home).load());
+        assert_eq!(providers.custom.len(), 1);
+        let acme = &providers.custom[0];
+        assert_eq!(
+            acme.body.as_ref().and_then(|b| b.get("top_k")),
+            Some(&serde_json::json!(7)),
+            "provider-level body overlay is captured"
+        );
+        assert_eq!(acme.headers.as_ref().and_then(|h| h.get("X-Org")), Some(&"org".to_string()));
+        let large = acme.models.iter().find(|m| m.id == "acme-large").expect("large present");
+        assert_eq!(
+            large.body.as_ref().and_then(|b| b.get("temperature")),
+            Some(&serde_json::json!(0)),
+            "model-level body overlay is captured"
+        );
+        assert_eq!(large.headers.as_ref().and_then(|h| h.get("X-Tier")), Some(&"gold".to_string()));
+        let small = acme.models.iter().find(|m| m.id == "acme-small").expect("small present");
+        assert!(small.body.is_none() && small.headers.is_none());
+    }
+
+    #[test]
     fn overlay_nearest_document_overrides_same_provider_id() {
         let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
         let project = root.path().join("proj");
@@ -183,7 +254,10 @@ mod tests {
         assert_eq!(providers.custom.len(), 2);
         let acme = providers.custom.iter().find(|p| p.id == "acme").unwrap();
         assert_eq!(acme.base_url, "https://project.test/v1");
-        assert_eq!(acme.models, vec!["project-model".to_string()]);
+        assert_eq!(
+            acme.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            vec!["project-model"]
+        );
         assert!(providers.custom.iter().any(|p| p.id == "other"));
         assert!(is_empty(&ConfigProviders::default()));
         assert!(!is_empty(&providers));

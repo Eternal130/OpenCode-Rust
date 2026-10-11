@@ -832,7 +832,7 @@ async fn engine_invalidate_stops_the_bundle_background_tasks() {
 // ===========================================================================
 
 use crate::database::schema::SessionRow;
-use crate::provider_catalog::facade::CustomProvider;
+use crate::provider_catalog::facade::{CustomModel, CustomProvider};
 use oc_schema::config::ModelSelection;
 use oc_schema::id::{ModelId, ProviderId};
 use oc_schema::model::Ref as ModelRef;
@@ -873,7 +873,9 @@ fn custom(provider: &str, model: &str) -> CustomProvider {
         name: provider.to_owned(),
         base_url: format!("https://{provider}.test/v1"),
         api_key: Some("probe-key".into()),
-        models: vec![model.to_owned()],
+        headers: None,
+        body: None,
+        models: vec![CustomModel { id: model.to_owned(), headers: None, body: None }],
     }
 }
 
