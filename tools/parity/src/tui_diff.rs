@@ -1552,6 +1552,35 @@ pub async fn run_script_once(
     if let Some(side) = our_side.as_ref() {
         let _ = side.wait_for_after(ALT_SCREEN_LEAVE, side.raw_len(), Duration::from_secs(5));
     }
+    if std::env::var_os("PARITY_DUMP_RAW").is_some() {
+        if let Some(side) = ref_side.as_ref() {
+            let _ = std::fs::write(root.join("ref.raw.ansi"), side.raw_mirror());
+        }
+        if let Some(side) = our_side.as_ref() {
+            let _ = std::fs::write(root.join("our.raw.ansi"), side.raw_mirror());
+        }
+    }
+    if std::env::var_os("PARITY_DUMP_STYLES").is_some() {
+        // Per-cell style digests (row-major, space-separated) for the
+        // final grids — S0 emission analysis.
+        let dump = |name: &str, side: Option<&PtyChild>| {
+            if let Some(side) = side {
+                let grid = side.grid_now();
+                let text = (0..grid.rows)
+                    .map(|y| {
+                        (0..grid.cols)
+                            .map(|x| format!("{:x}", grid.cells[y * grid.cols + x].style))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let _ = std::fs::write(root.join(format!("{name}.styles.txt")), text + "\n");
+            }
+        };
+        dump("ref", ref_side.as_ref());
+        dump("our", our_side.as_ref());
+    }
     if let Some(side) = ref_side.as_mut() {
         side.kill();
     }

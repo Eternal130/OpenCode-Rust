@@ -103,12 +103,16 @@ pub struct ManifestTheme {
 /// ([`ComparisonDepth::TruecolorCanonical`]). Tier-B scenarios tolerate exact
 /// hue drift by degrading **both** sides to the xterm-256 palette before the
 /// byte/style comparison ([`ComparisonDepth::Degraded256`]) — this
-/// degradation is **our approximation** of the reference's native
-/// TERM=xterm-256color rendering, not a capture of it: the goldens never
-/// passed through a 256-color terminal, so the nearest-palette mapping (see
-/// [`nearest_ansi256`], documented tie-breaking) stands in for whatever the
-/// reference would emit natively. Good enough to assert "same perceived
-/// color class"; not a byte-parity claim.
+/// degradation is **our replication of the reference raster's native
+/// TERM=xterm-256color mapping** (see [`nearest_ansi256`]): since the S0
+/// lane it is verified against the ref itself — a 144-color sweep (gray
+/// ramp, every default-theme constant, cube corners, seeded randoms)
+/// rendered through the v2 raster under TERM=xterm-256color matched
+/// `nearest_ansi256` 144/144, tie-breaking included (lowest index wins,
+/// e.g. `#ffffff` → 15, not the equal-distance cube corner 231). The
+/// production TUI now emits the same degradation
+/// (`crates/oc-tui/src/render/color_mode.rs`), so Tier-B and live
+/// emission agree by construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ComparisonDepth {
@@ -1038,11 +1042,11 @@ pub fn compare_ansi_frames(expected: &AnsiFrame, actual: &AnsiFrame) -> FrameFid
 /// `TruecolorCanonical` compares the frames as exported (headless,
 /// TERM-free truecolor). `Degraded256` first degrades **both** sides to the
 /// xterm-256 palette ([`degrade_frame`]) so exact hue drift is tolerated
-/// while color-class drift is not. Important: the degradation is *our*
-/// nearest-palette approximation of what the reference would render under
-/// `TERM=xterm-256color` — the goldens never passed through such a
-/// terminal — so a Degraded256 match asserts perceived-color agreement,
-/// not byte parity with reference 256-color output. Glyphs and attributes
+/// while color-class drift is not. The degradation replicates the reference
+/// raster's native TERM=xterm-256color mapping (verified 144/144 by the
+/// S0 color sweep — see [`ComparisonDepth`]'s doc) and is the SAME mapping
+/// the production TUI emits under a 256-color terminal
+/// (`crates/oc-tui/src/render/color_mode.rs`). Glyphs and attributes
 /// are compared identically at both depths.
 #[must_use]
 pub fn compare_ansi_frames_at(
@@ -1063,9 +1067,9 @@ pub fn compare_ansi_frames_at(
 /// truecolor-canonical), re-rendered, and then byte-compared — so the
 /// reported first-divergent offset refers to the degraded streams.
 ///
-/// The same caveat as [`compare_ansi_frames_at`] applies: the degradation
-/// approximates the reference's native TERM behavior; it does not capture
-/// it.
+/// The degradation is the reference raster's own TERM=xterm-256color
+/// mapping, sweep-verified by the S0 lane (see
+/// [`compare_ansi_frames_at`]).
 pub fn compare_ansi_bytes_at(
     expected: &str,
     actual: &str,
@@ -1255,6 +1259,33 @@ pub fn degrade_frame(frame: &AnsiFrame, depth: ColorDepth) -> AnsiFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nearest_ansi256_matches_the_ref_raster_sweep() {
+        // Observed SGR indices from the v2 raster (opentui core 0.5.14)
+        // under TERM=xterm-256color: a 144-color sweep matched this
+        // function 144/144 (S0 lane; see the ComparisonDepth doc). The
+        // pairs below pin the tie-breaking and the theme constants the
+        // live emission relies on.
+        let observed: &[((u8, u8, u8), u8)] = &[
+            ((255, 255, 255), 15),  // tie 15/231 → lowest wins (default fg)
+            ((238, 238, 238), 255), // text.base → exact gray-ramp member
+            ((10, 10, 10), 232),    // background.base → idx232 (S0 finding 1)
+            ((13, 13, 13), 232),    // exact tie 232/233 → lowest wins
+            ((20, 20, 20), 233),    // background.raised.base / gray.700
+            ((30, 30, 30), 234),    // background.raised.high / gray.600
+            ((3, 3, 3), 0),         // nearer black than the gray ramp
+            ((96, 96, 96), 59),     // scrollbar → cube corner beats the ramp
+            ((72, 72, 72), 238),    // border.base
+            ((92, 156, 245), 75),   // blue.200 (interactive.200 in light mode)
+            ((157, 124, 216), 140), // purple.200 / accent.200 (dark)
+            ((250, 178, 131), 216), // orange.200 / interactive.200 (dark)
+            ((245, 167, 66), 215),  // feedback.warning / syntax.number
+        ];
+        for ((r, g, b), expected) in observed {
+            assert_eq!(nearest_ansi256(*r, *g, *b), *expected, "rgb({r},{g},{b})");
+        }
+    }
 
     #[test]
     fn text_grid_parses_and_pads() {

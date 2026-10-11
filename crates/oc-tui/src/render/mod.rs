@@ -3,6 +3,7 @@
 //! seam with `tools/parity::tui_frame`).
 
 pub mod ansi;
+pub mod color_mode;
 pub mod frame;
 pub mod paint;
 

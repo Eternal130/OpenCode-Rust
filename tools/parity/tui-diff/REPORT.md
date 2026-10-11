@@ -91,14 +91,24 @@ match at 2.0.24).
 
 ### S0 — global style emission (touches every cell of every frame)
 
-1. **(a) SGR color encoding**: under `TERM=xterm-256color` v2 emits
-   256-INDEX SGR for the default theme (blank cells
-   `fg=idx15 bg=idx232`); we emit TRUECOLOR RGB
-   (`fg=#FFFFFF bg=#0A0A0A`) regardless of TERM. We do not degrade
-   to the terminal's declared color capability.
-2. **(a) theme value drift**: canonicalized, ref bg = idx232 →
-   `#080808`, ours `#0A0A0A` (2/255/channel); fg white matches
-   exactly. Same theme, different constants.
+1. **(a) SGR color encoding — FIXED (lane/s0-color)**: v2's raster
+   (`@opentui/core-linux-x64@0.5.14` `libopentui.so`) degrades RGB
+   to 256-INDEX SGR at emission time when the terminal's capability
+   probe says 256-color; we emitted TRUECOLOR regardless of TERM.
+   Replicated in `crates/oc-tui/src/render/color_mode.rs` (decision
+   matrix + nearest-palette quantization, sweep-verified 144/144
+   against the ref raster) and wired at the ratatui draw seam in
+   `app.rs` (`App::frame()` and the goldens stay truecolor — v2's
+   own split). See the S0 notes at the bottom of this report.
+2. **(a) theme value drift — PHANTOM, closed as part of 1**: the
+   theme assets are byte-identical
+   (`crates/oc-theme/assets/v2/opencode.json` ≡
+   `packages/tui/src/theme/assets/v2/opencode.json` in the ref) and
+   the resolved tokens are golden-pinned to the `@opencode/theme`
+   TS pipeline (`crates/oc-theme/tests/goldens/opencode.{dark,
+   light}.json`): bg resolves to `#0a0a0a` on BOTH sides. The
+   reported `#080808` was v2's EMITTED `48;5;232` canonicalized
+   back through the xterm-256 palette — a pure shadow of finding 1.
 
 ### S1 — boot/home chrome (boot-home, every script's step 0)
 
@@ -211,9 +221,11 @@ long-reply-scroll, rename-dialog, mouse-hover)
    #13/#14); never position/extent/punctuation.
 2. **STRUCT color canonicalization** — indexed colors resolve via
    the xterm-256 palette to RGB, then ±8/channel perceptual
-   tolerance. Without it the emitter-encoding difference (#1, every
-   cell) makes the text/geometry classification unreachable. EXACT
-   mode keeps colors byte-strict.
+   tolerance. Introduced to see past the emitter-encoding difference
+   (#1, every cell) before it was fixed; after lane/s0-color both
+   stacks emit the SAME encoding under the rig's TERM, so this now
+   only guards against future encoding regressions. EXACT mode
+   keeps colors byte-strict.
 3. **Cursor position** is never compared (grids carry cell contents
    only). Nothing else is normalized; in particular NO path/date/
    timing masking was needed (paths are identical by construction —
@@ -241,3 +253,127 @@ catalog-vs-config list source), S3 #12/#13 (titles/stats), then the
 per-dialog row-height family (#17/#22/#23), then scroll (#15).
 #18/#21 and the transcript/thought geometry are already at parity —
 protect them with regression expectations once S0 lands.
+
+---
+
+## S0 fix-wave results (lane/s0-color, 2026-10-11)
+
+### Where v2's emitter decides color encoding (citations)
+
+* **Capability decision — native raster, not JS.** The v2 TUI passes
+  no color options (`packages/tui/src/app.tsx:236-253`
+  `CliRendererConfig`); the decision lives in the compiled zig raster
+  `@opentui/core-linux-x64@0.5.14` (`libopentui.so`), whose JS-facing
+  surface is `TerminalCapabilities { rgb, ansi256 }`
+  (`@opentui/core/dist/types.d.ts:63-86`). Disassembly of the
+  capability probe: `COLORTERM` == `truecolor`/`24bit` → rgb+ansi256
+  (strings at .rodata 0x4db71/0x4cde8, compare block at text
+  0x32b9e7); `WT_SESSION` → same (0x32ba5b); `TERM` containing
+  `256color` → ansi256 only (0x32aede). Empirically completed (PTY
+  probes against the ref): `SSH_CONNECTION`/`SSH_CLIENT`/`SSH_TTY`
+  (any one) ALSO force truecolor; plain `xterm`/`screen`/`dumb` and
+  unset TERM stay TRUECOLOR — the raster has no 16-color mode.
+* **RGB→index mapping.** Palette = the JS-exposed tables
+  (`@opentui/core` `src/lib/RGBA.ts`, compiled at
+  `dist/chunk-bun-sjw2d9bq.js:1030-1105`: `ANSI16_RGB`,
+  `ANSI_256_CUBE_LEVELS = [0,95,135,175,215,255]`, gray ramp
+  `8+10n`, `ansi256IndexToRgb`). The forward mapping is raster-
+  internal (no ref source available): a 144-color sweep (gray ramp,
+  every default-theme constant, cube corners, seeded randoms)
+  rendered through the ref raster under `TERM=xterm-256color`
+  (clean-env PTY) shows it is NEAREST PALETTE MEMBER BY SUM OF
+  SQUARED CHANNEL DIFFERENCES, LOWEST INDEX WINNING TIES
+  (`#ffffff`→15 not the equidistant cube corner 231; the exact-tie
+  gray 13,13,13 → 232 over 233) — 144/144 match. NB: the ref's mini
+  scrollback uses a DIFFERENT quantizer (oklab-weighted
+  `nearestIndexed`, `packages/tui/src/mini/theme.ts:95-110`) — that
+  is the `opencode run` path, not this TUI.
+
+### Our implementation
+
+* `crates/oc-tui/src/render/color_mode.rs` (new): `ColorMode`,
+  `detect`/`detect_from_env` (the matrix above), `palette_rgb`,
+  `quantize`, `ColorCache`, `degrade_frame` — plus unit tests: the
+  capability matrix, the sweep-observed theme table, tie-breaking,
+  palette round-trip, cache behavior.
+* `crates/oc-tui/src/app.rs`: one-shot `detect_from_env()` at boot;
+  `degrade_frame` applied to the frame right before the ratatui draw
+  — the terminal-draw seam, mirroring v2's split (framebuffer RGB,
+  emission indexed). `App::frame()` and every golden stay truecolor.
+* `tools/parity/src/tui_frame.rs`: `nearest_ansi256` was already
+  algorithmically identical to the raster; its "approximation" docs
+  are upgraded to sweep-verified and a sweep-pinning test was added.
+* `tools/parity/src/tui_diff.rs`: opt-in diagnostics
+  `PARITY_DUMP_RAW=1` (raw PTY mirrors) and `PARITY_DUMP_STYLES=1`
+  (final-grid style digests) — the instruments this investigation
+  used.
+
+### Theme audit (finding 2) — no drift exists
+
+`crates/oc-theme/assets/v2/opencode.json` is byte-identical to the
+ref's `packages/tui/src/theme/assets/v2/opencode.json`; the resolved
+tokens are golden-pinned to the `@opencode/theme` TS pipeline
+(`crates/oc-theme/tests/goldens/opencode.{dark,light}.json`: bg
+resolves to `#0a0a0a` on both stacks). The report's `#080808` was
+v2's emitted `48;5;232` canonicalized back through the xterm-256
+palette — a shadow of finding 1. Closed with it.
+
+### Corpus after (single run, same scripts/sizes/pacing)
+
+| metric | before (per run) | after (per run) |
+|---|---|---|
+| steps | 298 | 298 |
+| identical | 4 | 4 |
+| style-differing cells (EXACT) | every mismatched cell, whole-screen (100%) | 132,327 — confined to the component regions below |
+| DISTINCT differing style pairs | unbounded (encoding differed on every cell) | **11** |
+
+Every remaining style divergence is one of 11 (rgb,style) pairs, each
+mapping to a finding:
+
+| style pair (ref→our) | cells | finding |
+|---|---|---|
+| idx75/234 → idx15/234 | 45 | S1#5 composer model row (ref `Build · Fake Model` in blue) |
+| idx8/234 → idx234/255 (+23/4/3 variants, nord incl.) | 67 | **NEW-S1a** composer input/placeholder row: ref muted-on-raised, ours formfield gray.600-on-gray.200 — pre-existing (present in the truecolor dumps), exposed by S0 |
+| idx15/232 → default/default | 3 | S4 resize: fresh vt-grid cells after shrink (teardown detail of #19/#21) |
+| bg idx0 (ref dialogs) → our theme bg | 35 | **NEW-S2a** dialog backdrop: ref fills with terminal-default black, we paint theme bg — pre-existing, exposed by S0 |
+| idx238/idx0, idx15/233 details | 5 | S2 dialog geometry/row family (#7-#11) |
+| idx15/232 → idx8/232 | 1 | S1#4 footer slot family |
+
+and the largest single class — transcript body fg idx15 vs our idx255
+(482 cells in long-reply-scroll@80x24 alone) — is **NEW-S3a**: v2
+renders assistant/user body text with the DEFAULT foreground
+(#ffffff→idx15), we use `text.base` #eeeeee. Pre-existing (present in
+the truecolor dumps; ±8 canonicalization could not absorb 17/255),
+exposed by S0. Remaining char divergences are the known text findings
+(#3 boot model, #6 placeholder pool, #12 auto-title, #13/#14 stats).
+**Nord theme values now verify equal** (#24's follow-up gate): after
+`/themes` + nord, global bg/fg and raised surfaces match cell-exact;
+the only nord diffs are the NEW-S1a formfield row.
+
+### Goldens
+
+No regen needed — by design: goldens serialize frames (truecolor,
+TERM-free), never the degraded emission; v2's own golden exports are
+truecolor for the same reason. Verified: full oc-tui + oc-theme
+suites pass byte-identical (611/611), and a `PARITY_UPDATE=1` run
+rewrites zero bytes (double-regen byte-stable). Documented in
+`golden_tests.rs` ("TERM independence").
+
+### Gates
+
+`cargo fmt --all -- --check` clean; `cargo clippy -p oc-tui -p
+oc-tui-core -p parity --all-targets` adds zero warnings (the two
+pre-existing `parity` bin warnings predate the lane);
+`cargo nextest run -p oc-tui -p oc-tui-core -p parity` = 721 passed
+/ 11 skipped; gated entry `OC_TUI_DIFF=1 … -E 'test(tui_diff)'`
+PASS (35 s). Corpus rerun: `PARITY_BUN=/tmp/opencode/bun/bin/bun
+tools/dev-gate.sh 'cargo run -p parity --bin tui-diff -- --runs 1'`.
+
+### Follow-ups handed to the next waves
+
+* NEW-S1a composer formfield row style (67 cells corpus-wide).
+* NEW-S2a dialog backdrop terminal-default black.
+* NEW-S3a transcript body default-white vs text.base.
+* Mini (`opencode run`) scrollback quantization uses v2's OKLAB
+  `nearestIndexed` (mini/theme.ts:95) — different algorithm from the
+  raster's; replicate if/when the mini host is diffed.
