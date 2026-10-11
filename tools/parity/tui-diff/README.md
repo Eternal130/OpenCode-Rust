@@ -87,14 +87,27 @@ Phase-2 additions (see the addendum in `REPORT.md`):
   class clicked (move+press+release, per-click settle, per-side
   reaction matrix); destructive classes run LAST. Class maps live
   in the REPORT addendum.
+* `subagent-basic` / `subagent-browser` / `subagent-sidebar`
+  (corpus3) — the attribution-keyed SUBAGENT FLOW: the stub answers
+  the main request with a `subagent` TOOL CALL, the child session's
+  own request (first-prompt-prefix marker) with reasoning + a fixed
+  reply, the continuation (tool result) with the final text, and
+  title-path requests with a fixed title. Surfaces: the transcript
+  tool card, the ref's composer subagent picker (`down` opens it,
+  `ctrl+a` shows inactive runs, `enter` navigates into the child),
+  sidebar suppression on the child session at 160x36, exit states.
+  Findings + probe evidence: the corpus3 addendum in `REPORT.md`.
 
 Script schema: `id`, `description`, `stub` (`text`|`reasoning`|
-`reasoning-long`), `mode` (`exact`|`struct`, headline only — both
-modes are always computed), optional `size` (`WxH`, replaces the
-corpus sizes for this script), `steps`. A step sets exactly one of
-`keys` / `text` / `mouse` / `resize` / `sweep` (or nothing, for a
-bare settle+capture) plus `wait_ms`. `sweep` is `{action: motion|
-click, cells: [[x,y]…] (click), gap_ms (motion), settle_ms (click)}`.
+`reasoning-long`|`subagent-flow`), `mode` (`exact`|`struct`, headline
+only — both modes are always computed), optional `size` (`WxH`,
+replaces the corpus sizes for this script), `steps`. A step sets
+exactly one of `keys` / `text` / `mouse` / `resize` / `sweep` (or
+nothing, for a bare settle+capture) plus `wait_ms`. `sweep` is
+`{action: motion|click, cells: [[x,y]…] (click), gap_ms (motion),
+settle_ms (click)}`. `--filter` matches a script by exact stem OR
+stem prefix (`--filter subagent` runs all three `subagent-*`
+scripts).
 
 ## Request-path parity
 
@@ -107,6 +120,14 @@ renders a **Request-path parity** section per run; attribution is by
 user-agent (`opencode/stable/2.0.24/cli` = ref). Baseline findings
 (#26/#27 in the REPORT addendum): ours drops the overlay and issues
 an extra title-path request.
+
+Corpus3 adds the **attribution-keyed flow stub** (`stub:
+"subagent-flow"`): requests are classified by BODY SUBSTRING (the
+child's first-prompt prefix, `max_completion_tokens` presence, the
+subagent reply text in the tool result) — never request order — and
+each kind gets its own SSE payload; the recorded `kind` column makes
+per-flow-stage request-count drift visible. See the corpus3 addendum
+in `REPORT.md` for the design and the #38-#47 findings.
 
 ## Running
 
