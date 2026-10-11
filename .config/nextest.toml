@@ -37,6 +37,17 @@ retries = 2
 filter = 'test(pty_fuzz)'
 retries = 2
 slow-timeout = "15m"
+# vt-stream lane: the cell-grid suites (hover band sweeps + temporal)
+# are the same spawn-contention class; each test must also stay under
+# 60 s (libtest's slow-test warning prints into the PTY and would
+# poison the composer draft — see tests/vt_hover_sweep.rs header).
+[[profile.default.overrides]]
+filter = 'test(vt_hover)'
+retries = 2
+
+[[profile.default.overrides]]
+filter = 'test(vt_temporal)'
+retries = 2
 
 # Same spawn/contention class as the PTY suites: the server integration
 # pair (shell round-trip / vcs init) reads child output under 4-way
