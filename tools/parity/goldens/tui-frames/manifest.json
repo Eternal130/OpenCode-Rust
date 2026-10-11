@@ -1410,6 +1410,44 @@
           }
         }
       ]
+    },
+    {
+      "id": "session-sidebar-live",
+      "source": "crates/oc-tui/src/components/session.rs (live route; the session-frame sidebar port)",
+      "description": "The live session route's sidebar (session-frame.tsx): at 160 session.sidebar=auto docks the 42-col pane at the right edge (bold session title, getting-started card at height >= 22) and the transcript + composer reflow to 118; at 80 the pane is absent (auto shows only above 120)",
+      "componentClass": "session",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 160,
+          "height": 30,
+          "rows": 30,
+          "cols": 160,
+          "txt": {
+            "bytes": 5086,
+            "sha256": "302bd99bb0408dc57193e81591a6a6d56288e02f6219299bb1e700c4be3a2f38"
+          },
+          "ansi": {
+            "bytes": 9915,
+            "sha256": "76bfe881a5994a3445783b11600d31635b3bbb621265324bc72b1b6ba0b522f0"
+          }
+        },
+        {
+          "width": 80,
+          "height": 24,
+          "rows": 24,
+          "cols": 80,
+          "txt": {
+            "bytes": 2120,
+            "sha256": "6be8e4dea2cfbb3e909d9732e73ba153275e735984f5bee95dde50ffa6eb6647"
+          },
+          "ansi": {
+            "bytes": 4086,
+            "sha256": "9c292fa96e0141e7425dd72a5d20a15f1975e9770f6d8c652cad865cfd0f8779"
+          }
+        }
+      ]
     }
   ],
   "replay": [
