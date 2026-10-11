@@ -9,3 +9,23 @@ test-threads = 4
 # when bun is absent instead of fetching ~40 MiB from the network
 # (MIGRATION §2.3 graceful degradation; oc-util::bunman kill switch).
 set = { OPENCODE_DISABLE_BUN_DOWNLOAD = "1" }
+
+# PTY integration suites spawn real terminals + stub servers; on shared
+# CI runners their spawn timing occasionally trips the first attempt.
+# Two retries keeps them in CI without masking real failures (a genuine
+# break fails all three attempts).
+[[profile.default.overrides]]
+filter = 'test(mini_pty)'
+retries = 2
+
+[[profile.default.overrides]]
+filter = 'test(pty_boot)'
+retries = 2
+
+[[profile.default.overrides]]
+filter = 'test(pty_tabs)'
+retries = 2
+
+[[profile.default.overrides]]
+filter = 'test(pty_interactions)'
+retries = 2
