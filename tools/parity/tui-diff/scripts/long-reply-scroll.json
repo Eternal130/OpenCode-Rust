@@ -1,0 +1,109 @@
+{
+  "id": "long-reply-scroll",
+  "description": "Pin the fake model, submit a prompt; the stub streams reasoning + a 32-line reply, then scroll keys (pageup/pagedown/home/end) traverse the transcript. Single-turn transcript (no cross-DB seeding).",
+  "stub": "reasoning-long",
+  "mode": "struct",
+  "steps": [
+    {
+      "label": "boot",
+      "wait_ms": 12000
+    },
+    {
+      "label": "dismiss",
+      "keys": [
+        "esc"
+      ],
+      "wait_ms": 1000
+    },
+    {
+      "label": "models-cmd",
+      "text": "/models",
+      "wait_ms": 800
+    },
+    {
+      "label": "models-open",
+      "keys": [
+        "enter"
+      ],
+      "wait_ms": 1800
+    },
+    {
+      "label": "models-filter",
+      "text": "fake",
+      "wait_ms": 800
+    },
+    {
+      "label": "models-select",
+      "keys": [
+        "enter"
+      ],
+      "wait_ms": 2000
+    },
+    {
+      "label": "variant-dismiss",
+      "keys": [
+        "esc"
+      ],
+      "wait_ms": 900
+    },
+    {
+      "label": "type",
+      "text": "Give me the long fixture",
+      "wait_ms": 500
+    },
+    {
+      "label": "submit",
+      "keys": [
+        "enter"
+      ],
+      "wait_ms": 9000
+    },
+    {
+      "label": "settled",
+      "wait_ms": 3000
+    },
+    {
+      "label": "pageup",
+      "keys": [
+        "pageup"
+      ],
+      "wait_ms": 1200
+    },
+    {
+      "label": "pageup-again",
+      "keys": [
+        "pageup"
+      ],
+      "wait_ms": 1200
+    },
+    {
+      "label": "pagedown",
+      "keys": [
+        "pagedown"
+      ],
+      "wait_ms": 1200
+    },
+    {
+      "label": "home",
+      "keys": [
+        "home"
+      ],
+      "wait_ms": 1200
+    },
+    {
+      "label": "end",
+      "keys": [
+        "end"
+      ],
+      "wait_ms": 1200
+    },
+    {
+      "label": "exit",
+      "keys": [
+        "leader",
+        "q"
+      ],
+      "wait_ms": 2500
+    }
+  ]
+}

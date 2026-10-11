@@ -1,0 +1,11 @@
+{
+  "id": "boot-home",
+  "description": "Boot both TUIs to the home screen, dismiss any first-run modal, exit.",
+  "stub": "text",
+  "mode": "exact",
+  "steps": [
+    { "label": "boot", "wait_ms": 12000 },
+    { "label": "dismiss-first-run", "keys": ["esc"], "wait_ms": 1200 },
+    { "label": "exit", "keys": ["leader", "q"], "wait_ms": 2500 }
+  ]
+}

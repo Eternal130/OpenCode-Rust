@@ -1,0 +1,16 @@
+{
+  "id": "tabs-keyboard",
+  "description": "Open two session tabs via keyboard (leader+n), switch (alt+down/alt+up), close one (leader+w).",
+  "stub": "text",
+  "mode": "exact",
+  "steps": [
+    { "label": "boot", "wait_ms": 12000 },
+    { "label": "dismiss", "keys": ["esc"], "wait_ms": 1000 },
+    { "label": "tab-new-1", "keys": ["leader", "n"], "wait_ms": 2500 },
+    { "label": "tab-new-2", "keys": ["leader", "n"], "wait_ms": 2500 },
+    { "label": "tab-next", "keys": ["alt+down"], "wait_ms": 1200 },
+    { "label": "tab-prev", "keys": ["alt+up"], "wait_ms": 1200 },
+    { "label": "tab-close", "keys": ["leader", "w"], "wait_ms": 2000 },
+    { "label": "exit", "keys": ["leader", "q"], "wait_ms": 2500 }
+  ]
+}

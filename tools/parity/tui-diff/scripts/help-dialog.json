@@ -1,0 +1,16 @@
+{
+  "id": "help-dialog",
+  "description": "Open the /help dialog via the composer slash command and close it.",
+  "stub": "text",
+  "mode": "exact",
+  "steps": [
+    { "label": "boot", "wait_ms": 12000 },
+    { "label": "dismiss", "keys": ["esc"], "wait_ms": 1000 },
+    { "label": "slash", "text": "/help", "wait_ms": 900 },
+    { "label": "submit", "keys": ["enter"], "wait_ms": 2000 },
+    { "label": "help-open", "wait_ms": 1500 },
+    { "label": "help-close", "keys": ["esc"], "wait_ms": 1200 },
+    { "label": "clear-prompt", "keys": ["ctrl+c"], "wait_ms": 800 },
+    { "label": "exit", "keys": ["leader", "q"], "wait_ms": 2500 }
+  ]
+}

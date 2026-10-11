@@ -1,0 +1,97 @@
+{
+  "id": "rename-dialog",
+  "description": "Pin the fake model, submit a prompt (creates a session), then ctrl+r rename dialog: type a title, submit, capture the tab title.",
+  "stub": "text",
+  "mode": "struct",
+  "steps": [
+    {
+      "label": "boot",
+      "wait_ms": 12000
+    },
+    {
+      "label": "dismiss",
+      "keys": [
+        "esc"
+      ],
+      "wait_ms": 1000
+    },
+    {
+      "label": "models-cmd",
+      "text": "/models",
+      "wait_ms": 800
+    },
+    {
+      "label": "models-open",
+      "keys": [
+        "enter"
+      ],
+      "wait_ms": 1800
+    },
+    {
+      "label": "models-filter",
+      "text": "fake",
+      "wait_ms": 800
+    },
+    {
+      "label": "models-select",
+      "keys": [
+        "enter"
+      ],
+      "wait_ms": 2000
+    },
+    {
+      "label": "variant-dismiss",
+      "keys": [
+        "esc"
+      ],
+      "wait_ms": 900
+    },
+    {
+      "label": "type",
+      "text": "Rename me",
+      "wait_ms": 500
+    },
+    {
+      "label": "submit",
+      "keys": [
+        "enter"
+      ],
+      "wait_ms": 6000
+    },
+    {
+      "label": "reply-settled",
+      "wait_ms": 2000
+    },
+    {
+      "label": "rename-open",
+      "keys": [
+        "ctrl+r"
+      ],
+      "wait_ms": 1500
+    },
+    {
+      "label": "rename-type",
+      "text": "renamed tab",
+      "wait_ms": 600
+    },
+    {
+      "label": "rename-submit",
+      "keys": [
+        "enter"
+      ],
+      "wait_ms": 2000
+    },
+    {
+      "label": "renamed",
+      "wait_ms": 1500
+    },
+    {
+      "label": "exit",
+      "keys": [
+        "leader",
+        "q"
+      ],
+      "wait_ms": 2500
+    }
+  ]
+}
