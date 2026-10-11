@@ -133,14 +133,14 @@ fn server_binary() -> Result<PathBuf> {
     build_binary("oc-server", "oc-server", &binary)
 }
 
-/// The built `opencode` CLI binary path (the TUI smoke drives it),
+/// The built `opencode-rust` CLI binary path (the TUI drivers use it),
 /// building it first when missing.
 ///
 /// # Errors
 /// When cargo cannot build the binary.
 pub fn cli_binary() -> Result<PathBuf> {
-    let binary = target_dir().join("debug").join("opencode");
-    build_binary("oc-cli", "opencode", &binary)
+    let binary = target_dir().join("debug").join("opencode-rust");
+    build_binary("oc-cli", "opencode-rust", &binary)
 }
 
 fn build_binary(package: &str, bin: &str, binary: &std::path::Path) -> Result<PathBuf> {
