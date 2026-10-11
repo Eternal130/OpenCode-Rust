@@ -1,0 +1,33 @@
+{
+  "id": "multi-session",
+  "description": "Corpus phase-2: two live sessions in two tabs — submit, click the strip's + affordance (v2 has no keyboard tab-creation binding), submit in the new tab — then the leader+l session browser (browse + open), then ctrl+r rename of one session; the tab strip and both titles are captured after every stage.",
+  "stub": "text",
+  "mode": "struct",
+  "steps": [
+    { "label": "boot", "wait_ms": 12000 },
+    { "label": "dismiss", "keys": ["esc"], "wait_ms": 1000 },
+    { "label": "models-cmd", "text": "/models", "wait_ms": 800 },
+    { "label": "models-open", "keys": ["enter"], "wait_ms": 1800 },
+    { "label": "models-filter", "text": "fake", "wait_ms": 800 },
+    { "label": "models-select", "keys": ["enter"], "wait_ms": 2000 },
+    { "label": "variant-dismiss", "keys": ["esc"], "wait_ms": 900 },
+    { "label": "type-1", "text": "Session one", "wait_ms": 500 },
+    { "label": "submit-1", "keys": ["enter"], "wait_ms": 6000 },
+    { "label": "reply-1-settled", "wait_ms": 2000 },
+    { "label": "tab-add-press", "mouse": { "action": "press", "x": 33, "y": 0 }, "wait_ms": 700 },
+    { "label": "tab-add-release", "mouse": { "action": "release", "x": 33, "y": 0 }, "wait_ms": 1500 },
+    { "label": "type-2", "text": "Session two", "wait_ms": 500 },
+    { "label": "submit-2", "keys": ["enter"], "wait_ms": 6000 },
+    { "label": "reply-2-settled", "wait_ms": 2000 },
+    { "label": "two-tabs-settled", "wait_ms": 1000 },
+    { "label": "list-open", "keys": ["leader", "l"], "wait_ms": 2000 },
+    { "label": "browse", "keys": ["down"], "wait_ms": 900 },
+    { "label": "choose", "keys": ["enter"], "wait_ms": 2000 },
+    { "label": "list-close-guard", "keys": ["esc"], "wait_ms": 900 },
+    { "label": "rename-open", "keys": ["ctrl+r"], "wait_ms": 1500 },
+    { "label": "rename-type", "text": "renamed two", "wait_ms": 600 },
+    { "label": "rename-submit", "keys": ["enter"], "wait_ms": 2000 },
+    { "label": "renamed-settled", "wait_ms": 1500 },
+    { "label": "exit", "keys": ["leader", "q"], "wait_ms": 2500 }
+  ]
+}

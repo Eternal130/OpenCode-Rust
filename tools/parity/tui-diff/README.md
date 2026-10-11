@@ -66,6 +66,48 @@ tools/parity/tui-diff/REPORT.md   the latest full-corpus mismatch report
 `thought-render`, `thought-expand`, `long-reply-scroll`, `rename-dialog`,
 `composer-clear`, `resize` — each run at 80x24 and 120x30.
 
+Phase-2 additions (see the addendum in `REPORT.md`):
+
+* `tabs-live-session` — REPORT #25: tab ops with live sessions
+  (creation via the strip `+` affordance — v2 has NO keyboard
+  binding for tab creation — plus the alt+down/up/leader chords).
+* `multi-session` — two live sessions in two tabs, leader+l browser,
+  ctrl+r rename.
+* `sidebar-wide` — `"size": "160x36"` per-script override; the
+  sidebar auto breakpoint is unreachable at the default sizes.
+* `thought-expand-structural` — expand AND collapse with captures
+  (also fixes the legacy click row: the header is row 6, not 8).
+* `hover-sweep` — SGR motion across EVERY cell in three states
+  (home / session with transcript / open dialog), batch settle,
+  skipped cells reported.
+* `multi-turn` — three submit→reply rounds with editing between
+  turns; transcript growth compared per round.
+* `click-coverage-home` / `click-coverage-session` /
+  `click-coverage-dialog` — every cell of each documented effect
+  class clicked (move+press+release, per-click settle, per-side
+  reaction matrix); destructive classes run LAST. Class maps live
+  in the REPORT addendum.
+
+Script schema: `id`, `description`, `stub` (`text`|`reasoning`|
+`reasoning-long`), `mode` (`exact`|`struct`, headline only — both
+modes are always computed), optional `size` (`WxH`, replaces the
+corpus sizes for this script), `steps`. A step sets exactly one of
+`keys` / `text` / `mouse` / `resize` / `sweep` (or nothing, for a
+bare settle+capture) plus `wait_ms`. `sweep` is `{action: motion|
+click, cells: [[x,y]…] (click), gap_ms (motion), settle_ms (click)}`.
+
+## Request-path parity
+
+The shared `opencode.json`'s model carries a `body` overlay
+(`temperature: 0` — v2's sanctioned wire-field forcing; the `options`
+key is v1-only and dropped by v2's current schema). The stub records
+every main request's transport shape (top-level keys minus
+`messages`/`tools`, option values, model, user-agent) and the report
+renders a **Request-path parity** section per run; attribution is by
+user-agent (`opencode/stable/2.0.24/cli` = ref). Baseline findings
+(#26/#27 in the REPORT addendum): ours drops the overlay and issues
+an extra title-path request.
+
 ## Running
 
 The gate user cannot read bun under `/root` (0700), and
