@@ -45,7 +45,7 @@ jobs:
           tool: cargo-nextest
 
       - name: Run PTY integration suites (serialized + retries)
-        run: cargo nextest run --workspace --locked --profile pty -E 'test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions)'
+        run: cargo nextest run --workspace --locked --profile pty -E 'test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz)'
 
   test:
     name: nextest
@@ -66,7 +66,7 @@ jobs:
           tool: cargo-nextest
 
       - name: Run test suite
-        run: cargo nextest run --workspace --locked --no-fail-fast -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions))' 
+        run: cargo nextest run --workspace --locked --no-fail-fast -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz))' 
 
       # Frame-budget guard runs in RELEASE (the product profile);
       # debug numbers are informational only (see the test's notes).
