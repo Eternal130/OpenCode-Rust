@@ -20,8 +20,7 @@ use crate::theme::ThemeState;
 /// and in CI's release-profile run of this test). Debug builds only
 /// REPORT the number — they are 10-50× slower and would make the guard
 /// flaky, while the release number is the one users feel.
-#[cfg(not(debug_assertions))]
-const FRAME_BUDGET_MS: u128 = 25; // TEMP at 19ms-measured (800 msgs, O(all-rows) layout); Wave B windowing targets 5ms
+const FRAME_BUDGET_MS: u128 = 25; // TEMP at 19ms-measured (800 msgs, O(all-rows) layout); Wave B windowing targets 5ms (asserted in release only)
 
 const WIDTH: usize = 200;
 const HEIGHT: usize = 50;
