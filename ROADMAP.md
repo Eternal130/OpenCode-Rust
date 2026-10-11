@@ -74,8 +74,8 @@
 
 ### 实测发现台账（dogfood 波1，beta.9，22 项）
 
-- **波 A 在途覆盖**：F1-F5 编辑键簇、F18 escape 中断、F21 滚动、F20 队列
-- **dogfood1 泳道在途**：F19 恢复会话转录冻结、F12 /sessions 打开空白、F6/F7 多行渲染+跨会话串染、F8/F10/F22 模型回退/继承链、F16 leader>e 死链、F11 模态漏键、F9/F13/F14/F15 快赢
+- **波 A 已合并覆盖**：F1-F5 编辑键簇、F18 escape 中断、F21 滚动、F20 队列（oc-tui-core）
+- **dogfood1 泳道已修**（lane/dogfood1，PTY `pty_restore.rs` 五场景 + 单测钉死）：F19 恢复会话转录冻结（根因：`fetch_messages` 吃服务端 desc 序未反转——v2 data.ts:1633-1637 `order:"desc"`+`toReversed()`；修复后时间序+Wave A 粘底生效）、F12 /sessions 打开空白（run-loop loop-fetcher 按开页取 `message.list`，store `MessagesSnapshot` 合并保住在途行）、F6 多行用户消息（`wrap_lines` 硬换行）、F7 跨会话串染（渲染纯函数等价测试钉死）、F8/F10/F22 模型链（显式→durable(session.model)→config.model→recent→models[0]，submit 前 commitModel 先行，session.new/clear 继承）、F16 leader>e（Wave A 已激活，PTY 钉死）、F11 错误面板漏键（带标题 error toast 模态直至关闭；无标题跳过类不拦截）、F9 home 标签条（app.tsx:576-579）、F13 /sessions 打开重取、F14 palette 按 value 去重；F15（窄宽换行）登记未修——需选项行高模型重构，非快赢
 - **方法论教训**：审计将 F16 标记为 done 但实测死亡——「实现存在」≠「链路接通」。此后所有交互面修复必须带 PTY/实测级验证，审计状态仅供参考起点。
 
 ### 验证方法论盲区登记（持续追加）

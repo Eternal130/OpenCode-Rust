@@ -16,6 +16,19 @@ use crate::render::Fill;
 use crate::theme::ThemeStyles;
 use crate::wrap::wrap_atoms;
 
+/// Wrap text WITH hard line breaks (F6): each `\n`-separated line
+/// wraps independently (`\r\n` normalized); the concatenated streams
+/// are the text block's rows. Empty lines wrap to one empty row —
+/// opentui `<text>` renders them as blank lines.
+fn wrap_lines(text: &str, style: Style, width: usize) -> Vec<Vec<crate::wrap::Atom>> {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut lines = Vec::new();
+    for line in normalized.split('\n') {
+        lines.extend(wrap_atoms(&crate::wrap::flatten(line, style), width));
+    }
+    lines
+}
+
 /// `SPINNER_FRAMES` (`component/spinner-frames.ts`) — braille dots at
 /// 80 ms/frame.
 pub const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -444,7 +457,12 @@ pub fn user_message_row(
     let border_style = Style::new().fg(agent_color).bg(raised);
     let text_style = Style::new().fg(theme.text.fg.unwrap_or_default()).bg(raised);
     let inner_width = width.saturating_sub(3);
-    let lines = wrap_atoms(&crate::wrap::flatten(text, text_style), inner_width);
+    // F6 — hard line breaks: the user text block renders every `\n`
+    // line (v2's `<text>{message.text}</text>` — opentui text treats
+    // newlines as breaks). The wrap stream is per-LINE; the old
+    // single-stream wrap ran `\n` through as a zero-width cluster,
+    // collapsing "a\nb\nc" onto one row.
+    let lines = wrap_lines(text, text_style, inner_width);
     // The image strip (its own paddingTop/paddingBottom rows) stacks
     // above the text block; labels reuse each file's mention text
     // (falling back to `[Image N]` by position).
@@ -950,5 +968,44 @@ mod tests {
         assert_eq!(grid.len(), 11);
         // The placement shifted with the strip (+1 past the border).
         assert_eq!(row.images[0].x, 3);
+    }
+
+    /// F6 — multi-line user messages render EVERY line: `\n` is a hard
+    /// break (v2's `<text>{message.text}</text>`); the old single-wrap
+    /// stream collapsed "a\nb\nc" onto row one.
+    #[test]
+    fn user_message_row_renders_every_line() {
+        let theme = theme();
+        let row = user_message_row(
+            "alpha\nbeta\nc",
+            &[],
+            theme.agent_color(0),
+            &theme,
+            40,
+            &ImageStripOptions::default(),
+        );
+        // 3 text lines + the box's padding rows.
+        assert_eq!(row.height, 5, "one row per line + 2 box rows");
+        let frame = crate::render::paint_placed_with_fills(
+            &row.placed,
+            &row.fills,
+            (40, 5),
+            crate::components::tool_rows::fill_style(&theme),
+        );
+        let grid = frame.text_grid();
+        assert_eq!(grid[1].trim_end(), "┃  alpha", "line 1: {}", grid[1]);
+        assert_eq!(grid[2].trim_end(), "┃  beta", "line 2: {}", grid[2]);
+        assert_eq!(grid[3].trim_end(), "┃  c", "line 3: {}", grid[3]);
+        // A long line still WRAPS inside its own hard-break segment.
+        let long = "word ".repeat(20);
+        let wrapped = user_message_row(
+            &format!("{long}\nsecond"),
+            &[],
+            theme.agent_color(0),
+            &theme,
+            40,
+            &ImageStripOptions::default(),
+        );
+        assert!(wrapped.height > 4, "the long segment wraps ({} rows)", wrapped.height);
     }
 }
