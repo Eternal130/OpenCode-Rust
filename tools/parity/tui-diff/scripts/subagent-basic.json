@@ -1,0 +1,22 @@
+{
+  "id": "subagent-basic",
+  "description": "Corpus3 subagent flow: pin the fake model, submit a prompt; the stub answers the main request with a `subagent` TOOL CALL (attribution: max_completion_tokens, no tool result yet), the engine spawns the child session whose own request (first-prompt prefix marker) gets reasoning + a fixed reply, and the main continuation (tool result present) gets the final text. Captures at: tool-call card appears, subagent completes, final reply renders. Transcript compared EXACT (stub text fixed) + STRUCT.",
+  "stub": "subagent-flow",
+  "mode": "struct",
+  "steps": [
+    { "label": "boot", "wait_ms": 12000 },
+    { "label": "dismiss", "keys": ["esc"], "wait_ms": 1000 },
+    { "label": "models-cmd", "text": "/models", "wait_ms": 800 },
+    { "label": "models-open", "keys": ["enter"], "wait_ms": 1800 },
+    { "label": "models-filter", "text": "fake", "wait_ms": 800 },
+    { "label": "models-select", "keys": ["enter"], "wait_ms": 2000 },
+    { "label": "variant-dismiss", "keys": ["esc"], "wait_ms": 900 },
+    { "label": "type", "text": "PARITY-SUBAGENT-FLOW delegate to the researcher now", "wait_ms": 600 },
+    { "label": "submit", "keys": ["enter"], "wait_ms": 8000 },
+    { "label": "tool-card", "wait_ms": 5000 },
+    { "label": "subagent-done", "wait_ms": 7000 },
+    { "label": "final-reply", "wait_ms": 8000 },
+    { "label": "settled", "wait_ms": 2000 },
+    { "label": "exit", "keys": ["ctrl+c"], "wait_ms": 2500 }
+  ]
+}
