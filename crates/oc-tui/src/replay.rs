@@ -212,12 +212,14 @@ mod tests {
         pump.store.ingest_all([crate::data::Ingest::Resync {
             sessions: vec![
                 crate::data::SessionSnapshot {
+                    model: None,
                     id: "ses_alpha".into(),
                     title: Some("Alpha".to_owned()),
                     time_idle: None,
                     viewed: None,
                 },
                 crate::data::SessionSnapshot {
+                    model: None,
                     id: "ses_beta".into(),
                     title: Some("Beta".to_owned()),
                     time_idle: None,

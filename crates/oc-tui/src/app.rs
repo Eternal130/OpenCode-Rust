@@ -192,6 +192,15 @@ impl App {
         let overrides = crate::keymap::parse_keybind_overrides(&config.keybinds);
         self.store.set_keybinds(overrides);
         self.remerge_keybinds();
+        // The configured default model (the selection chain's step 3,
+        // `configuredModel` — local.tsx:172-184).
+        self.store.set_config_model(config.model.as_ref().map(|model| {
+            crate::store::ModelSelection {
+                provider_id: model.provider_id.clone(),
+                model_id: model.model_id.clone(),
+                variant: model.variant.clone(),
+            }
+        }));
         // R-07: the transcript image strip's gate (`session.image_preview`).
         self.store.set_image_preview(config.session_image_preview);
     }
@@ -369,6 +378,20 @@ impl App {
             self.stroke_in_dialog(stroke);
         } else if self.permission_live() {
             self.stroke_in_permission(expanded);
+        } else if self.error_toast_live() {
+            // F11 — the error panel consumes input until closed: while
+            // an ERROR-variant toast is up (the "Session failed"
+            // surface), keystrokes must not fall through into the
+            // composer (a typed key or Enter re-submitting into the
+            // failed turn is the trap the dogfood hit). escape /
+            // ctrl+c dismiss the panel; every other stroke is
+            // consumed. Info/success/warning toasts stay transparent
+            // (v2's toast never blocks typing — only the error variant
+            // rides this modal gate).
+            let plain = !stroke.ctrl && !stroke.alt;
+            if (plain && stroke.key == "escape") || (stroke.ctrl && plain && stroke.key == "c") {
+                self.store.toast_dismiss();
+            }
         } else {
             self.stroke_on_route(&stroke);
         }
@@ -385,6 +408,18 @@ impl App {
     /// A permission ask is the live footer view.
     fn permission_live(&self) -> bool {
         matches!(self.store.footer().view, FooterView::Permission { .. })
+    }
+
+    /// F11: whether an ERROR panel currently holds the screen — a
+    /// TITLED error toast (the "Session failed" / "Failed to send
+    /// prompt" panel class). Untitled error notices (the log-skip
+    /// surface: transient transport skips like a failed switch POST)
+    /// stay transparent, like every non-error toast.
+    fn error_toast_live(&self) -> bool {
+        self.store
+            .toasts()
+            .current()
+            .is_some_and(|toast| toast.variant == "error" && toast.title.is_some())
     }
 
     fn stroke_in_permission(&mut self, key: &str) {
@@ -832,20 +867,21 @@ fn footer_panel_frame(
     use crate::components::footer::panels as footer_panels;
     use crate::components::footer::PromptRoute;
 
-    // The selection the panel marks `current`: the active session's,
-    // or the home route's staged next-session selection.
+    // The selection the panel marks `current`: the active session's
+    // RESOLVED selection (the chain's fallbacks included), or the
+    // home route's staged next-session selection.
     let active = match store.route() {
         crate::store::Route::Session { session_id } => session_id,
         crate::store::Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
     };
-    let session_selection = store.selection_for(&active);
+    let session_selection = store.effective_model(&active);
+    let session_agent = store.selection_for(&active).agent;
 
     match route {
         PromptRoute::Composer => None,
         PromptRoute::Model => Some(model_panel_frame(
             &store.server_lists(),
             session_selection
-                .model
                 .as_ref()
                 .map(|model| (model.provider_id.as_str(), model.model_id.as_str())),
             width,
@@ -869,7 +905,7 @@ fn footer_panel_frame(
                         .collect()
                 })
                 .unwrap_or_default();
-            let current = session_selection.agent;
+            let current = session_agent;
             Some(footer_panels::render_agent_select(
                 &agents,
                 current.as_deref(),
@@ -885,7 +921,7 @@ fn footer_panel_frame(
                 .models
                 .rows()
                 .and_then(|models| {
-                    session_selection.model.as_ref().and_then(|selection| {
+                    session_selection.as_ref().and_then(|selection| {
                         models
                             .iter()
                             .find(|model| {
@@ -896,7 +932,7 @@ fn footer_panel_frame(
                     })
                 })
                 .unwrap_or_default();
-            let current = session_selection.model.as_ref().and_then(|m| m.variant.clone());
+            let current = session_selection.as_ref().and_then(|m| m.variant.clone());
             Some(footer_panels::render_variant_select(
                 &variants,
                 current.as_deref(),
@@ -1435,10 +1471,27 @@ impl HttpPromptSink {
 
 impl crate::components::composer::PromptSink for HttpPromptSink {
     fn send(&self, session_id: &str, prompt: &crate::components::composer::SubmittedPrompt) {
+        self.send_with_model(session_id, prompt, None);
+    }
+
+    /// The v2 submit order (`commitSelection` → prompt,
+    /// prompt/index.tsx:1290-1294): the resolved model — when one
+    /// exists — commits through `session.switchModel` BEFORE the
+    /// prompt POST, inside the same task, so the turn runs on the
+    /// committed model (the F8/F10/F22 dead-end fix: a session with no
+    /// stored model gets the chain's resolution committed instead of
+    /// failing with "No model is available").
+    fn send_with_model(
+        &self,
+        session_id: &str,
+        prompt: &crate::components::composer::SubmittedPrompt,
+        model: Option<&crate::store::ModelSelection>,
+    ) {
         let client = self.client.clone();
         let events = self.events.clone();
         let directory = self.directory.clone();
         let text = prompt.text.clone();
+        let model = model.cloned();
         // R-07: staged attachment chips ride as `PromptInput.FileAttachment`
         // data URIs (`files`), the wire shape the server materializes.
         let files: Vec<oc_client::types::PromptInputFileAttachment> = prompt
@@ -1489,6 +1542,30 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
             } else {
                 session_key.clone()
             };
+            // `commitModel` (prompt/index.tsx:1283-1294): the resolved
+            // selection commits before the prompt fires; a failed
+            // switch surfaces as the send failure (v2's
+            // "Failed to switch model" wrap keeps going — the prompt
+            // still attempts, matching the reference's catch-less path
+            // only when no model resolved).
+            if let Some(model) = model {
+                let body = oc_client::types::SessionSwitchModelBody {
+                    model: oc_client::types::ModelRef {
+                        id: model.model_id.clone(),
+                        provider_id: model.provider_id.clone(),
+                        variant: model.variant.clone(),
+                    },
+                };
+                if let Err(error) = client.session().switch_model(&target, &body).await {
+                    let _ = events.send(PromptSinkEvent::SendFailed {
+                        session_key,
+                        title: "Failed to switch model".to_owned(),
+                        message: client_error_message(&error),
+                        draft: text,
+                    });
+                    return;
+                }
+            }
             let body = oc_client::types::SessionPromptBody {
                 text,
                 files: (!files.is_empty()).then_some(files),
@@ -1574,6 +1651,81 @@ pub fn model_preference_repository() -> Option<crate::mini::model_pref::ModelPre
     let roots = oc_util::global_roots::resolve();
     let state = roots.data.join("tui");
     Some(crate::mini::model_pref::host_preferences(&state))
+}
+
+/// The run loop's on-demand fetch requests (the dogfood wave-1 data
+/// side): transcript hydration for newly opened sessions (F12) and the
+/// session-list refresh the /sessions dialog fires on open (F13).
+#[derive(Debug)]
+pub enum LoopRequest {
+    /// `message.list` for one session (chronological — see
+    /// [`crate::data::fetch_session_messages`]).
+    Transcript(String),
+    /// `session.list` (the dialog-open refetch).
+    SessionList,
+}
+
+/// One resolved [`LoopRequest`].
+#[derive(Debug)]
+pub enum LoopFetch {
+    Transcript {
+        session_id: String,
+        result: Result<Vec<crate::components::message::model::Message>, String>,
+    },
+    SessionList(Result<Vec<crate::data::SessionSnapshot>, String>),
+}
+
+/// The fetch worker: requests spawn per-fetch tasks (no head-of-line
+/// blocking); results arrive on one ordered channel the run loop
+/// drains into [`Store::ingest_all`].
+#[must_use]
+pub fn spawn_loop_fetcher(
+    client: oc_client::Client,
+) -> (
+    tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+    tokio::sync::mpsc::UnboundedReceiver<LoopFetch>,
+) {
+    let (req_tx, mut req_rx) = tokio::sync::mpsc::unbounded_channel::<LoopRequest>();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<LoopFetch>();
+    tokio::spawn(async move {
+        while let Some(request) = req_rx.recv().await {
+            match request {
+                LoopRequest::Transcript(session_id) => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result =
+                            crate::data::fetch_session_messages(&client, &session_id).await;
+                        let _ = tx.send(LoopFetch::Transcript { session_id, result });
+                    });
+                }
+                LoopRequest::SessionList => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let fetcher = HttpResync::new(client);
+                        let result = crate::data::ResyncSource::fetch_sessions(&fetcher).await;
+                        let _ = tx.send(LoopFetch::SessionList(result));
+                    });
+                }
+            }
+        }
+    });
+    (req_tx, rx)
+}
+
+/// The F13 production seam: the session-list dialog's open fires a
+/// `session.list` refetch through the loop fetcher (v2's
+/// `DialogSessionList` syncs on mount — the boot resync snapshot alone
+/// goes stale as sessions are created).
+struct HttpSessionListSink {
+    tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+}
+
+impl crate::store::SessionListSink for HttpSessionListSink {
+    fn refresh(&self) {
+        let _ = self.tx.send(LoopRequest::SessionList);
+    }
 }
 
 /// Spawn the SSE connection against a resolved server (the run loop's
@@ -1839,6 +1991,15 @@ pub async fn run_with_size(
     if let Ok(mut ids) = open_sessions.lock() {
         *ids = app.store.open_session_ids();
     }
+    // F12/F13 — the loop fetcher: transcript hydration for tabs opened
+    // AFTER boot (the first-connect resync covers the boot set — those
+    // ids seed `fetched_transcripts`) + the /sessions dialog's
+    // open-time session-list refetch.
+    let (loop_fetch_tx, mut loop_fetch_rx) = spawn_loop_fetcher(client.clone());
+    let mut fetched_transcripts: std::collections::HashSet<String> =
+        app.store.open_session_ids().into_iter().collect();
+    app.store
+        .set_session_list_sink(std::rc::Rc::new(HttpSessionListSink { tx: loop_fetch_tx.clone() }));
     let mut persisted_tabs = app.store.tabs().tabs.clone();
 
     // Config reload: mtime check per tick (the reference watches the dir).
@@ -2134,9 +2295,47 @@ pub async fn run_with_size(
                 }
             }
         }
-        // Keep the resync's open-session set current.
+        // Keep the resync's open-session set current + F12 — transcript
+        // hydration for newly opened sessions: every id the boot resync
+        // did NOT cover (any tab opened after the first connect — the
+        // /sessions dialog, a tab click) fetches `message.list` once
+        // through the loop fetcher; the result merges over
+        // live-projected rows (v2's route-mount
+        // `data.session.message.sync`).
+        let open_now = app.store.open_session_ids();
         if let Ok(mut ids) = open_sessions.lock() {
-            *ids = app.store.open_session_ids();
+            ids.clone_from(&open_now);
+        }
+        for id in open_now {
+            if fetched_transcripts.insert(id.clone()) {
+                let _ = loop_fetch_tx.send(LoopRequest::Transcript(id));
+            }
+        }
+        // Drain the loop fetcher (F12 transcripts + the F13 dialog-open
+        // session-list refetch) through the store's single ingest path.
+        while let Ok(fetch) = loop_fetch_rx.try_recv() {
+            match fetch {
+                LoopFetch::Transcript { session_id, result } => match result {
+                    Ok(messages) => {
+                        app.store.ingest_all([Ingest::MessagesSnapshot { session_id, messages }]);
+                    }
+                    Err(error) => {
+                        crate::keymap::log_skip(&format!("transcript fetch {error}"));
+                        fetched_transcripts.remove(&session_id);
+                    }
+                },
+                LoopFetch::SessionList(Ok(sessions)) => {
+                    let unread = crate::data::resync_unread(&sessions);
+                    app.store.ingest_all([Ingest::Resync {
+                        sessions,
+                        unread,
+                        messages: Vec::new(),
+                    }]);
+                }
+                LoopFetch::SessionList(Err(error)) => {
+                    crate::keymap::log_skip(&format!("session list refresh: {error}"));
+                }
+            }
         }
         // Toast/spinner clock.
         let now_ms = system_now_ms();
@@ -3440,5 +3639,52 @@ mod core_interaction_tests {
         assert_eq!(composer.draft.text, "o");
         assert!(composer.undo(), "undo restores");
         assert_eq!(composer.draft.text, "one two");
+    }
+
+    /// F11 — the error panel consumes input until closed: while an
+    /// ERROR-variant toast is live, typed keys and Enter must NOT
+    /// reach the composer (no draft changes, no submit); escape
+    /// dismisses the panel and typing resumes. Info toasts stay
+    /// transparent (v2's toast never blocks typing).
+    #[test]
+    fn error_toast_consumes_keys_until_dismissed() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+
+        // The failure surface: an error toast (the "Session failed"
+        // panel class).
+        app.store.toast_show(crate::components::toast::ToastOptions {
+            title: Some("Session failed".to_owned()),
+            message: "No model is available".to_owned(),
+            variant: "error",
+            duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
+            action_label: None,
+        });
+        assert!(app.error_toast_live(), "the error panel is up");
+
+        // Type + Enter: everything consumed, nothing submitted.
+        for spec in ["h", "i"] {
+            app.press(spec);
+        }
+        app.press("enter");
+        assert!(app.store.prompt_draft("s1").is_empty(), "keystrokes never reached the composer");
+        assert!(
+            app.store.composer("s1").history.entries.is_empty(),
+            "enter did not submit under the error panel"
+        );
+        assert!(app.error_toast_live(), "the panel is still up (consumed keys do not dismiss)");
+
+        // Escape dismisses; typing reaches the composer again.
+        app.press("escape");
+        assert!(!app.error_toast_live(), "escape closed the panel");
+        app.press("o");
+        app.press("k");
+        assert_eq!(app.store.prompt_draft("s1").text, "ok", "typing resumed after dismissal");
+
+        // An INFO toast never blocks (the copy-success class).
+        app.store.toast_show(crate::components::toast::ToastOptions::info("copied"));
+        app.press("backspace");
+        app.press("backspace");
+        assert!(app.store.prompt_draft("s1").is_empty(), "info toasts stay transparent");
     }
 }

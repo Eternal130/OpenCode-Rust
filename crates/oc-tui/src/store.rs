@@ -453,6 +453,34 @@ pub struct SessionSelection {
     pub agent: Option<String>,
 }
 
+/// The session-list refresh seam (F13): the /sessions dialog's open
+/// fires a `session.list` refetch through it (the boot resync snapshot
+/// goes stale as sessions are created; v2's `DialogSessionList` syncs
+/// on mount). Tests record; production round-trips the loop fetcher.
+pub trait SessionListSink {
+    fn refresh(&self);
+}
+
+/// The no-op sink (no loop fetcher attached).
+#[derive(Debug, Default)]
+pub struct NoSessionListRefresh;
+
+impl SessionListSink for NoSessionListRefresh {
+    fn refresh(&self) {}
+}
+
+/// The recording sink (tests assert the dialog open fired a refresh).
+#[derive(Debug, Default)]
+pub struct RecordingSessionListSink {
+    pub calls: std::cell::Cell<usize>,
+}
+
+impl SessionListSink for RecordingSessionListSink {
+    fn refresh(&self) {
+        self.calls.set(self.calls.get() + 1);
+    }
+}
+
 /// The server selection seam: applying a model/agent pick POSTs
 /// `session.switchModel` / `session.switchAgent` (the reference's
 /// commit path — `prompt/index.tsx` `prepareAgent`/`commitModel`, the
@@ -765,6 +793,12 @@ pub struct Store {
     event_tap: std::cell::RefCell<Option<std::sync::Arc<dyn EventTap>>>,
     /// Plugin command execution (bridges the palette to the host).
     plugin_sink: std::cell::RefCell<Rc<dyn PluginCommandSink>>,
+    /// The session-list refresh seam (F13 — the /sessions dialog's
+    /// open-time refetch).
+    session_list_sink: std::cell::RefCell<Rc<dyn SessionListSink>>,
+    /// The configured default model (`config.model` — the selection
+    /// chain's step 3; boot + reload set it, see [`Store::resolve_model`]).
+    config_model: std::cell::RefCell<Option<ModelSelection>>,
     /// The injected clock (ms since boot) — the ONLY time source
     /// animations may read (`ManualClock` semantics: a frozen clock pins
     /// spinner frame 0; render happens on tick, only when it advances).
@@ -1061,6 +1095,8 @@ impl Store {
             plugin_group_rules,
             event_tap: std::cell::RefCell::new(None),
             plugin_sink: std::cell::RefCell::new(Rc::new(NoPluginCommands)),
+            session_list_sink: std::cell::RefCell::new(Rc::new(NoSessionListRefresh)),
+            config_model: std::cell::RefCell::new(None),
             selection_sink: Rc::new(RecordingSelectionSink::default()),
             clipboard_sink: Rc::new(crate::clipboard::RecordingClipboardSink::default()),
             editor_requested: Cell::new(false),
@@ -1365,15 +1401,18 @@ impl Store {
             state.history = state.history.clone().push(&draft.text);
         });
         let prompt = SubmittedPrompt { text: draft.text, files: draft.files, agents: draft.agents };
-        self.prompt_sink.send(session_id, &prompt);
+        let model = self.resolve_model(session_id);
+        self.prompt_sink.send_with_model(session_id, &prompt, model.as_ref());
         Some(prompt)
     }
 
     /// Forward an already-taken submission to the engine sink (the
     /// composer path: `Composer::handle_key` took the prompt and
-    /// recorded history itself — only the sink call remains).
+    /// recorded history itself — only the sink call remains). The
+    /// resolved model rides along (the v2 submit's `commitModel`).
     pub fn forward_submission(&self, session_id: &str, prompt: &SubmittedPrompt) {
-        self.prompt_sink.send(session_id, prompt);
+        let model = self.resolve_model(session_id);
+        self.prompt_sink.send_with_model(session_id, prompt, model.as_ref());
     }
 
     /// Swap the engine prompt sink (tests inject recorders; wave 3
@@ -1653,6 +1692,118 @@ impl Store {
             state.by_session.entry(session_id.to_owned()).or_default().agent =
                 Some(agent.to_owned());
         });
+    }
+
+    /// The session-list refresh seam (F13): install the production
+    /// loop-fetcher bridge; the default no-ops.
+    pub fn set_session_list_sink(&self, sink: Rc<dyn SessionListSink>) {
+        *self.session_list_sink.borrow_mut() = sink;
+    }
+
+    /// F13: the /sessions dialog's open-time refetch request (the
+    /// `DialogSessionList` mount sync).
+    pub fn request_session_list_refresh(&self) {
+        self.session_list_sink.borrow().refresh();
+    }
+
+    // -- the model selection chain (F8/F10/F22) ------------------------------
+    //
+    // v2 `fallbackModel` (context/local.tsx:186-213) +
+    // `durableSelection` (:258-266) + `sessionSelection` (:268-283):
+    // per-session explicit pick → the session record's durable model →
+    // the configured default → the ring's recent head → the catalog's
+    // first model. Every non-catalog step validates against the loaded
+    // model catalog (`isModelValid`); the catalog head needs no
+    // validation. `None` while the catalog has not loaded (v2's
+    // `models()` empty ⇒ every step invalid).
+
+    /// The configured default model (`config.model`, local.tsx:172-184's
+    /// `configuredModel` — the shared config's `model` field, string
+    /// `provider/model` or `{providerID, model, variant}`).
+    pub fn set_config_model(&self, model: Option<ModelSelection>) {
+        *self.config_model.borrow_mut() = model;
+    }
+
+    /// Whether `(provider, id)` exists in the loaded model catalog
+    /// (`isModelValid` — local.tsx's `models()` map lookup).
+    fn model_in_catalog(&self, provider_id: &str, id: &str) -> bool {
+        self.server_lists
+            .get()
+            .models
+            .rows()
+            .is_some_and(|models| models.iter().any(|m| m.provider_id == provider_id && m.id == id))
+    }
+
+    /// The durable model off the session record (`durableSelection`):
+    /// the resync's `session.list` carries each session's committed
+    /// model — restart restores the per-session selection from it.
+    fn durable_model(&self, session_id: &str) -> Option<ModelSelection> {
+        if session_id == crate::app::HOME_PROMPT_KEY {
+            return None;
+        }
+        let history = self.session_history.get();
+        let model = history
+            .iter()
+            .find(|session| session.id == session_id)
+            .and_then(|session| session.model.clone())?;
+        let selection = ModelSelection {
+            provider_id: model.provider_id,
+            model_id: model.id,
+            variant: model.variant,
+        };
+        self.model_in_catalog(&selection.provider_id, &selection.model_id).then_some(selection)
+    }
+
+    /// Resolve the model a submission of `session_id` commits (the
+    /// chain above; the home key resolves the NEXT session's model —
+    /// the staged pick then the fallbacks).
+    #[must_use]
+    pub fn resolve_model(&self, session_id: &str) -> Option<ModelSelection> {
+        // 1. The explicit per-session pick (a dialog/footer pick, a
+        //    cycle, or the home route's staged selection).
+        if let Some(model) = self.selection_for(session_id).model {
+            return Some(model);
+        }
+        // 2. The session record's durable model (restart restore).
+        if let Some(model) = self.durable_model(session_id) {
+            return Some(model);
+        }
+        // 3. The configured default (`config.model`).
+        if let Some(model) = self.config_model.borrow().clone() {
+            if self.model_in_catalog(&model.provider_id, &model.model_id) {
+                return Some(model);
+            }
+        }
+        // 4. The ring's recent head (`preferences.recent[0]`).
+        if let Some(recent) = self.model_ring.get().document.recent.first() {
+            let selection = ModelSelection {
+                provider_id: recent.provider_id.clone(),
+                model_id: recent.model_id.clone(),
+                variant: None,
+            };
+            if self.model_in_catalog(&selection.provider_id, &selection.model_id) {
+                return Some(selection);
+            }
+        }
+        // 5. The catalog's first model (`models()?.[0]` — the pristine
+        //    home's first prompt resolves SOMETHING, so the provider
+        //    call surfaces an actionable auth/provider error instead
+        //    of the "No model" dead end).
+        self.server_lists.get().models.rows().and_then(|models| {
+            models.first().map(|model| ModelSelection {
+                provider_id: model.provider_id.clone(),
+                model_id: model.id.clone(),
+                variant: None,
+            })
+        })
+    }
+
+    /// The model the UI DISPLAYS for `session_id` (the composer's
+    /// statusline hint, the pickers' `current`): the explicit pick,
+    /// else the resolved chain (`currentSelection` — local.tsx:225-236).
+    #[must_use]
+    pub fn effective_model(&self, session_id: &str) -> Option<ModelSelection> {
+        self.selection_for(session_id).model.or_else(|| self.resolve_model(session_id))
     }
 
     // -- clipboard --------------------------------------------------------
@@ -2226,7 +2377,8 @@ impl Store {
                     text: head.text,
                     ..crate::components::composer::SubmittedPrompt::default()
                 };
-                self.prompt_sink.send(&session_id, &prompt);
+                let model = self.resolve_model(&session_id);
+                self.prompt_sink.send_with_model(&session_id, &prompt, model.as_ref());
                 // The next head waits for the NEXT drain tick (serial).
                 break;
             }
@@ -2882,6 +3034,24 @@ impl Store {
                 for (session_id, list) in messages {
                     self.set_messages(&session_id, list);
                 }
+            }
+            // F12: the session-open transcript fetch (v2
+            // `data.session.message.sync`, client/solid/data.ts:1630-1651)
+            // — the fetched page REPLACES the bucket's known rows but
+            // KEEPS local rows the page does not carry (a prompt
+            // admitted between the fetch and its arrival must not be
+            // wiped: `[...fetched, ...local]`).
+            Ingest::MessagesSnapshot { session_id, messages } => {
+                self.messages.update(|state| {
+                    let local = state.by_session.remove(&session_id).unwrap_or_default();
+                    let mut ids = std::collections::HashSet::new();
+                    for message in &messages {
+                        ids.insert(message.id().to_owned());
+                    }
+                    let mut merged = messages;
+                    merged.extend(local.into_iter().filter(|message| !ids.contains(message.id())));
+                    state.by_session.insert(session_id, merged);
+                });
             }
         }
     }
@@ -3627,12 +3797,14 @@ mod tests {
             Ingest::Resync {
                 sessions: vec![
                     SessionSnapshot {
+                        model: None,
                         id: "a".to_owned(),
                         title: Some("Fresh title".to_owned()),
                         time_idle: None,
                         viewed: None,
                     },
                     SessionSnapshot {
+                        model: None,
                         id: "not-open".to_owned(),
                         title: Some("History only".to_owned()),
                         time_idle: None,
@@ -4596,5 +4768,218 @@ mod tests {
             panic!("user message");
         };
         assert_eq!(files, Vec::new());
+    }
+
+    // -- dogfood wave 1 -------------------------------------------------------
+
+    fn catalog() -> Vec<crate::store::ServerModel> {
+        let model = |id: &str| crate::store::ServerModel {
+            provider_id: "parityfake".into(),
+            id: id.into(),
+            name: id.into(),
+            cost_input: 0.0,
+            free: true,
+            deprecated: false,
+            variants: Vec::new(),
+            released: 0.0,
+        };
+        vec![model("fake-model"), model("picked-model"), model("recorded-model")]
+    }
+
+    /// F12 — the session-open transcript fetch MERGES over
+    /// live-projected rows (a prompt admitted between the fetch and
+    /// its arrival survives; v2 data.ts:1640-1647's
+    /// `[...fetched, ...local]`).
+    #[test]
+    fn messages_snapshot_merge_keeps_local_rows() {
+        use crate::components::message::model::Message;
+        use crate::data::Ingest;
+        let store = Store::new(Runtime::new());
+        // The live stream admitted a user row before the fetch landed.
+        store.ingest_all([Ingest::Event(crate::data::BusEvent::new(
+            "session.inbox.enqueued",
+            serde_json::json!({
+                "sessionID": "s1",
+                "inboxID": "msg_live",
+                "item": { "type": "user", "payload": { "text": "just admitted" } }
+            }),
+        ))]);
+        // The fetch returns the STORED page (without the live row).
+        store.ingest_all([Ingest::MessagesSnapshot {
+            session_id: "s1".to_owned(),
+            messages: vec![
+                Message::User {
+                    id: "msg_u1".into(),
+                    text: "stored ask".into(),
+                    created: 0,
+                    files: Vec::new(),
+                },
+                Message::Assistant {
+                    id: "msg_a1".into(),
+                    agent: "build".into(),
+                    model: "p/m".into(),
+                    parts: Vec::new(),
+                    finish: None,
+                    error: None,
+                    time: crate::components::message::model::PartTime::default(),
+                },
+            ],
+        }]);
+        let messages = store.messages("s1");
+        let ids: Vec<&str> =
+            messages.iter().map(crate::components::message::model::Message::id).collect();
+        assert_eq!(
+            ids,
+            vec!["msg_u1", "msg_a1", "msg_live"],
+            "fetched rows in page order, the local-only row appended (never wiped)"
+        );
+        // A re-delivery of the same snapshot is idempotent.
+        store.ingest_all([Ingest::MessagesSnapshot {
+            session_id: "s1".to_owned(),
+            messages: messages.clone(),
+        }]);
+        assert_eq!(store.messages("s1").len(), 3);
+    }
+
+    /// F8/F10/F22 — the selection chain: explicit pick > durable
+    /// (session record) > config default > recent head > catalog head;
+    /// nothing resolves while the catalog has not loaded.
+    #[test]
+    fn model_chain_resolution_steps() {
+        let store = Store::new(Runtime::new());
+        assert!(
+            store.resolve_model("s1").is_none(),
+            "nothing resolves before the catalog loads (isModelValid on an empty models())"
+        );
+
+        store.set_models(crate::store::ListState::Loaded(catalog()), Vec::new());
+
+        // Step 5: the catalog head.
+        assert_eq!(
+            store.resolve_model("s1").map(|model| model.model_id),
+            Some("fake-model".to_owned()),
+            "pristine session resolves models[0]"
+        );
+        assert_eq!(
+            store.resolve_model(crate::app::HOME_PROMPT_KEY).map(|model| model.model_id),
+            Some("fake-model".to_owned()),
+            "pristine home resolves models[0] (the first prompt gets an actionable provider error)"
+        );
+
+        // Step 4: the ring's recent head.
+        store.model_add_recent("parityfake", "picked-model");
+        assert_eq!(
+            store.resolve_model("s1").map(|model| model.model_id),
+            Some("picked-model".to_owned())
+        );
+
+        // Step 3: the config default beats recent.
+        store.set_config_model(Some(crate::store::ModelSelection {
+            provider_id: "parityfake".into(),
+            model_id: "recorded-model".into(),
+            variant: None,
+        }));
+        assert_eq!(
+            store.resolve_model("s1").map(|model| model.model_id),
+            Some("recorded-model".to_owned())
+        );
+        // …but an INVALID config model (not in the catalog) falls through.
+        store.set_config_model(Some(crate::store::ModelSelection {
+            provider_id: "gone".into(),
+            model_id: "ghost".into(),
+            variant: None,
+        }));
+        assert_eq!(
+            store.resolve_model("s1").map(|model| model.model_id),
+            Some("picked-model".to_owned()),
+            "an unknown config model is skipped (isModelValid)"
+        );
+        store.set_config_model(None);
+
+        // Step 2: the durable session record beats recent.
+        store.ingest_all([Ingest::Resync {
+            sessions: vec![crate::data::SessionSnapshot {
+                id: "s1".into(),
+                title: None,
+                time_idle: None,
+                viewed: None,
+                model: Some(crate::data::SessionModelRef {
+                    provider_id: "parityfake".into(),
+                    id: "recorded-model".into(),
+                    variant: None,
+                }),
+            }],
+            unread: Vec::new(),
+            messages: Vec::new(),
+        }]);
+        assert_eq!(
+            store.resolve_model("s1").map(|model| model.model_id),
+            Some("recorded-model".to_owned()),
+            "restart restores the per-session durable model"
+        );
+
+        // Step 1: the explicit pick beats everything.
+        store.select_model(
+            "s1",
+            &crate::store::ModelSelection {
+                provider_id: "parityfake".into(),
+                model_id: "picked-model".into(),
+                variant: None,
+            },
+        );
+        assert_eq!(
+            store.resolve_model("s1").map(|model| model.model_id),
+            Some("picked-model".to_owned())
+        );
+
+        // The DISPLAY surface uses the resolved chain too.
+        assert_eq!(
+            store.effective_model("s2").map(|model| model.model_id),
+            Some("picked-model".to_owned()),
+            "a session with no pick displays the resolved model"
+        );
+    }
+
+    /// F8 — the submit path carries the RESOLVED model into the sink
+    /// (the v2 commitModel seam).
+    #[test]
+    fn submissions_carry_the_resolved_model() {
+        use crate::components::composer::{PromptSink, SubmittedPrompt};
+        use std::cell::RefCell;
+
+        #[derive(Default)]
+        struct ResolvedSink {
+            seen: RefCell<Vec<(String, Option<String>)>>,
+        }
+        impl PromptSink for ResolvedSink {
+            fn send(&self, _session_id: &str, _prompt: &SubmittedPrompt) {
+                panic!("send_with_model must be the store's call");
+            }
+            fn send_with_model(
+                &self,
+                session_id: &str,
+                _prompt: &SubmittedPrompt,
+                model: Option<&crate::store::ModelSelection>,
+            ) {
+                self.seen
+                    .borrow_mut()
+                    .push((session_id.to_owned(), model.map(|model| model.model_id.clone())));
+            }
+        }
+
+        let sink = std::rc::Rc::new(ResolvedSink::default());
+        let mut store = Store::new(Runtime::new());
+        store.set_prompt_sink(std::rc::Rc::clone(&sink) as std::rc::Rc<dyn PromptSink>);
+        store.set_models(crate::store::ListState::Loaded(catalog()), Vec::new());
+
+        let mut composer = store.composer("s1");
+        composer.draft.text = "hi".into();
+        store.set_composer("s1", &composer);
+        let _ = store.submit_prompt("s1");
+        assert_eq!(
+            sink.seen.borrow().as_slice(),
+            &[("s1".to_owned(), Some("fake-model".to_owned()))],
+            "the submit committed the catalog-head model"
+        );
     }
 }

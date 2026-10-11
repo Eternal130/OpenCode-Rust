@@ -292,6 +292,14 @@ pub fn palette_props(store: &Store) -> SelectProps {
                 .with_search_footer(format!("Plugin · {}", entry.plugin_id)),
         );
     }
+    // F14 — duplicate-entry dedup by value: a plugin (or future
+    // registration source) that claims a builtin command id renders
+    // ONE row (the registry's own), never two rows dispatching the
+    // same command. The `suggested:` prefixed mirrors stay (v2's
+    // suggested section is deliberately a second copy,
+    // command-palette.tsx:53-59).
+    let mut seen = std::collections::HashSet::new();
+    options.retain(|option| seen.insert(option.value.clone()));
     SelectProps::new("Commands", options).flat(true).threshold(0.7)
 }
 
@@ -526,9 +534,15 @@ pub fn agent_list_props(store: &Store, title: &'static str) -> SelectProps {
 }
 
 /// The active session's model selection as a picker `current` value
-/// (`providerID/modelID`).
+/// (`providerID/modelID`) — the RESOLVED selection (the chain's
+/// fallbacks included; an unset session still marks the model a
+/// submit would commit as current).
 fn model_current_value(store: &Store) -> Option<String> {
-    active_selection(store).model.map(|model| format!("{}/{}", model.provider_id, model.model_id))
+    let key = match store.route() {
+        Route::Session { session_id } => session_id,
+        Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
+    };
+    store.effective_model(&key).map(|model| format!("{}/{}", model.provider_id, model.model_id))
 }
 
 /// The selection state of the focused route's session (home carries
@@ -722,6 +736,10 @@ impl CommandDispatcher for StoreDispatcher {
                 Dispatch::Handled
             }
             "session.new" => {
+                // v2 app.tsx:726-731: the new session inherits the
+                // CURRENT selection (`local.model.set` / the agent) —
+                // staging it onto the home draft (F10).
+                inherit_selection_onto_home(store);
                 store.navigate(Route::Home);
                 store.clear_dialogs();
                 Dispatch::Handled
@@ -730,6 +748,8 @@ impl CommandDispatcher for StoreDispatcher {
                 if let Route::Session { session_id } = store.route() {
                     store.close_tab(Some(&session_id));
                 }
+                // Same inheritance as session.new (app.tsx:742-749).
+                inherit_selection_onto_home(store);
                 store.navigate(Route::Home);
                 store.clear_dialogs();
                 Dispatch::Handled
@@ -813,6 +833,12 @@ impl CommandDispatcher for StoreDispatcher {
                 };
                 let size =
                     if command == "open.menu" { DialogSize::Large } else { DialogSize::Medium };
+                // F13: the session list refetches on open (the boot
+                // resync snapshot goes stale — v2's DialogSessionList
+                // syncs `session.list` on mount).
+                if command == "session.list" {
+                    store.request_session_list_refresh();
+                }
                 store.replace_dialog(
                     DialogKind::ServerList { command: static_command(command), title },
                     size,
@@ -959,6 +985,23 @@ fn static_command(command: &str) -> &'static str {
     palette_command(command).map_or("", |entry| entry.command)
 }
 
+/// Stage the CURRENT route's selection onto the home draft (v2
+/// `session.new`'s `local.model.set(model)` + `local.agent.set(agent)`,
+/// app.tsx:728-731 — the new tab inherits what was active).
+fn inherit_selection_onto_home(store: &Store) {
+    let key = match store.route() {
+        Route::Session { session_id } => session_id,
+        Route::Home => return, // home already carries the staged draft
+    };
+    let selection = store.selection_for(&key);
+    if let Some(model) = selection.model {
+        store.stage_model(crate::app::HOME_PROMPT_KEY, model);
+    }
+    if let Some(agent) = selection.agent {
+        store.stage_agent(crate::app::HOME_PROMPT_KEY, &agent);
+    }
+}
+
 /// Execute a submitted palette/theme selection: the suggested-section
 /// values carry a `suggested:` prefix to strip.
 #[must_use]
@@ -1073,12 +1116,14 @@ mod tests {
         store.ingest_all([Ingest::Resync {
             sessions: vec![
                 SessionSnapshot {
+                    model: None,
                     id: "s_hist".into(),
                     title: Some("History row".into()),
                     time_idle: None,
                     viewed: None,
                 },
                 SessionSnapshot {
+                    model: None,
                     id: "s_open".into(),
                     title: Some("Open tab".into()),
                     time_idle: None,
@@ -1415,5 +1460,82 @@ mod tests {
 
         assert_eq!(dispatcher.dispatch(&store, "help.show", None), Dispatch::Handled);
         assert_eq!(store.top_dialog().unwrap().kind, DialogKind::Help);
+    }
+
+    // -- dogfood wave 1 -------------------------------------------------------
+
+    /// F10 — `session.new` inherits the active session's selection (v2
+    /// app.tsx:728-731 `local.model.set(model)` + the agent): the
+    /// staged home draft carries the pick into the next submission.
+    #[test]
+    fn session_new_inherits_the_current_selection() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("S".to_owned()));
+        store.select_model(
+            "s1",
+            &ModelSelection {
+                provider_id: "parityfake".into(),
+                model_id: "picked-model".into(),
+                variant: None,
+            },
+        );
+        store.select_agent("s1", "review");
+
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "session.new", None), Dispatch::Handled);
+        assert_eq!(store.route(), Route::Home, "session.new routed home");
+        let staged = store.selection_for(crate::app::HOME_PROMPT_KEY);
+        assert_eq!(
+            staged.model.map(|model| model.model_id),
+            Some("picked-model".to_owned()),
+            "the model staged onto the home draft"
+        );
+        assert_eq!(staged.agent.as_deref(), Some("review"), "the agent staged too");
+
+        // Home's own stage (no session route) is untouched by the walk.
+        assert_eq!(dispatcher.dispatch(&store, "session.new", None), Dispatch::Handled);
+        assert_eq!(
+            store.selection_for(crate::app::HOME_PROMPT_KEY).model.map(|m| m.model_id),
+            Some("picked-model".to_owned()),
+            "a home-route session.new keeps the existing stage"
+        );
+    }
+
+    /// F13 — opening the session-list dialog fires a `session.list`
+    /// refetch through the sink (the boot resync snapshot goes stale).
+    #[test]
+    fn session_list_dialog_open_fires_the_refresh_sink() {
+        let store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(crate::store::RecordingSessionListSink::default());
+        store.set_session_list_sink(
+            std::rc::Rc::clone(&sink) as std::rc::Rc<dyn crate::store::SessionListSink>
+        );
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "session.list", None), Dispatch::Handled);
+        assert_eq!(sink.calls.get(), 1, "the dialog open refreshed the list");
+        // Other listings do not fire it.
+        assert_eq!(dispatcher.dispatch(&store, "model.list", None), Dispatch::Handled);
+        assert_eq!(sink.calls.get(), 1);
+    }
+
+    /// F14 — a plugin command claiming a builtin id renders ONE row
+    /// (the registry's own); the suggested-section mirrors stay.
+    #[test]
+    fn palette_dedups_plugin_entries_claiming_builtin_ids() {
+        let store = Store::new(Runtime::new());
+        store.set_plugin_commands(vec![crate::store::PluginCommandEntry {
+            command: "help.show".to_owned(),
+            title: "Help again".to_owned(),
+            plugin_id: "omos".to_owned(),
+        }]);
+        let props = palette_props(&store);
+        let values: Vec<&str> = props.options.iter().map(|option| option.value.as_str()).collect();
+        let duplicates = values.iter().filter(|value| **value == "help.show").count();
+        assert_eq!(duplicates, 1, "one dispatchable help.show row: {values:?}");
+        // The suggested mirror (prefixed) survives by design.
+        assert!(
+            values.iter().any(|value| value.starts_with("suggested:")),
+            "v2's suggested section keeps its prefixed copies"
+        );
     }
 }
