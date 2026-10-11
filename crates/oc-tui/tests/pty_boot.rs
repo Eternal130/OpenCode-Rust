@@ -196,7 +196,8 @@ fn run_session(reply: &'static [u8], tag: &str) -> (Boot, std::path::PathBuf) {
 
     let finished = runtime.block_on(async {
         tokio::time::timeout(std::time::Duration::from_secs(10), async move {
-            oc_tui::app::run_with_size(client, Some((80, 30))).await
+            oc_tui::app::run_with_size(client, Some((80, 30)), oc_tui::app::BootArgs::default())
+                .await
         })
         .await
     });

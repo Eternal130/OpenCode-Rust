@@ -1358,11 +1358,60 @@ pub fn spawn_connection(
     (rx, task, open_sessions)
 }
 
+/// The TUI's boot flags (v2 `input.args`): the route rules of
+/// `app.tsx:364-371` + `639-674` — the default boot is the HOME
+/// route; `--session <id>` routes that session; `--continue` resolves
+/// the directory's latest root session and routes it. A restored tab
+/// strip never moves the boot route.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BootArgs {
+    /// `--continue` / `-c`: open the most recent session for the
+    /// current directory (v2 resolves its `sessionID: "dummy"`
+    /// placeholder through `session.list` limit 1, order desc,
+    /// `parentID: null`, `directory: cwd`).
+    pub continue_last: bool,
+    /// `--session <id>` / `-s`: open this session.
+    pub session: Option<String>,
+}
+
+/// Resolve the session `--continue` opens: the newest ROOT session in
+/// the current directory (v2 `app.tsx:653-662` — `session.list`
+/// `{limit: 1, order: "desc", parentID: null, directory}`).
+async fn latest_session(client: &oc_client::Client, directory: &str) -> Option<String> {
+    let query = oc_client::types::SessionListQuery {
+        limit: Some("1".to_owned()),
+        order: Some(oc_client::types::SessionListQueryOrder::Desc),
+        // The wire's `parentID=null` filters to root sessions (the
+        // generated query type carries the raw string).
+        parent_id: Some("null".to_owned()),
+        directory: Some(directory.to_owned()),
+        ..oc_client::types::SessionListQuery::default()
+    };
+    let response = client.session().list(&query).await.ok()?;
+    response.data.first().map(|session| session.id.clone())
+}
+
+/// Apply the boot route rules to a booted store (pure seam — the PTY
+/// tests and the run loop share it).
+fn apply_boot_route(store: &crate::store::Store, boot: &BootArgs, continue_target: Option<&str>) {
+    if let Some(session_id) = &boot.session {
+        // `--session`: route it (the route effect opens its tab).
+        store.select_tab(session_id);
+    } else if boot.continue_last {
+        // `--continue`: route the resolved latest session; none found
+        // stays home (v2: `if (!match) return`).
+        if let Some(latest) = continue_target {
+            store.select_tab(latest);
+        }
+    }
+    // Default: home — the store's initial route. Never a restored tab.
+}
+
 /// The live run loop: terminal acquire/release, event drain, render.
 /// Blocks until `app.exit`; returns the terminal to its prior state.
 ///
 /// Errors clearly when stdin is not a TTY (the TUI needs a terminal).
-pub async fn run(client: oc_client::Client) -> Result<(), String> {
+pub async fn run(client: oc_client::Client, boot: BootArgs) -> Result<(), String> {
     use std::io::IsTerminal;
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Err(
@@ -1370,7 +1419,7 @@ pub async fn run(client: oc_client::Client) -> Result<(), String> {
         );
     }
     let size = crossterm::terminal::size().ok();
-    run_with_size(client, size).await
+    run_with_size(client, size, boot).await
 }
 
 /// [`run`] with an explicit terminal size (tests); `None` = the
@@ -1382,6 +1431,7 @@ pub async fn run(client: oc_client::Client) -> Result<(), String> {
 pub async fn run_with_size(
     client: oc_client::Client,
     size: Option<(u16, u16)>,
+    boot: BootArgs,
 ) -> Result<(), String> {
     use crossterm::event::Event as CrosstermEvent;
     use crossterm::event::KeyEventKind;
@@ -1474,15 +1524,29 @@ pub async fn run_with_size(
     app.store.set_worktree_sink(std::rc::Rc::new(HttpWorktreeSink { tx: worktree_tx }));
 
     // Tabs persistence (v2's useStorage contract — see storage.rs):
-    // restore on boot, save on change. The home selection stages with
-    // the created session (open + commit the staged pick). The boot
-    // load runs the one-time local→stable migration first (D-06).
+    // restore on boot, save on change. The open-tabs model restores
+    // ONLY the configured scope (`config.tabs.scope`, default cwd —
+    // `session-tabs.tsx:104-110`), a legacy all-history file resets
+    // (read_tabs), and the restore NEVER moves the route: the boot
+    // route is home unless `--continue`/`--session` says otherwise
+    // (v2 app.tsx:364-371). The boot load runs the one-time
+    // local→stable migration first (D-06).
+    app.store.set_tabs_enabled(config.tabs.enabled);
     let tabs_storage = crate::storage::ChannelStorage::open_default_migrated().ok();
+    let tabs_scope_cwd = directory.clone();
     if let Some(storage) = &tabs_storage {
-        let document: crate::storage::TabsDocument =
-            storage.read_or_default(crate::storage::KEY_TABS);
-        let tabs = document
-            .global
+        if config.tabs.enabled {
+            let document = storage.read_tabs();
+            // v2 `state()` (`session-tabs.tsx:104-107`): the cwd scope
+            // reads its own entry and falls back to EMPTY (never the
+            // global scope's tabs).
+            let empty = crate::storage::TabsScope::default();
+            let scoped: Vec<crate::store::SessionTab> = match config.tabs.scope {
+                crate::config::TabsScope::Global => &document.global,
+                crate::config::TabsScope::Cwd => {
+                    document.cwd.get(&tabs_scope_cwd).unwrap_or(&empty)
+                }
+            }
             .tabs
             .iter()
             .map(|entry| crate::store::SessionTab {
@@ -1490,13 +1554,32 @@ pub async fn run_with_size(
                 title: entry.title.clone(),
             })
             .collect();
-        app.store.restore_tabs(tabs);
+            app.store.restore_tabs(scoped);
+        }
     }
-    // The restored tabs must be visible to the connection's FIRST-
-    // connect resync (D4: boot hydration fetches `message.list` per
-    // open tab right after subscribe) — sync the registry here, in
-    // the same non-yielding boot section, so the spawned task cannot
-    // observe it empty.
+    // The boot route (v2 app.tsx:639-674): `--session` routes that
+    // session, `--continue` routes the directory's latest root
+    // session (resolved before the first frame — v2 boots a "dummy"
+    // session placeholder, then swaps; resolving first avoids the
+    // flash entirely), and the default stays home.
+    let continue_target = if boot.continue_last && boot.session.is_none() {
+        // Bounded: an unroutable server must not hang the boot (the
+        // TCP connect timeout alone can stretch past two minutes).
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            latest_session(&client, &directory),
+        )
+        .await
+        .unwrap_or_default()
+    } else {
+        None
+    };
+    apply_boot_route(&app.store, &boot, continue_target.as_deref());
+    // The restored/boot tabs must be visible to the connection's
+    // FIRST-connect resync (D4: boot hydration fetches `message.list`
+    // per open tab right after subscribe) — sync the registry here,
+    // in the same non-yielding boot section, so the spawned task
+    // cannot observe it empty.
     if let Ok(mut ids) = open_sessions.lock() {
         *ids = app.store.open_session_ids();
     }
@@ -1742,13 +1825,17 @@ pub async fn run_with_size(
             }
             app.store.request_redraw();
         }
-        // Tabs persistence: save when the tab list changed.
+        // Tabs persistence: save when the tab list changed — into the
+        // CONFIGURED scope only (v2 `session-tabs.tsx:109-115` writes
+        // `draft.cwd[cwd]` or `draft.global`), preserving the other
+        // scope's tabs, stamped with the open-tabs document version.
         let tabs_now = app.store.tabs().tabs.clone();
         if tabs_now != persisted_tabs {
             persisted_tabs = tabs_now.clone();
             if let Some(storage) = &tabs_storage {
-                let document = crate::storage::TabsDocument {
-                    global: crate::storage::TabsScope {
+                if config.tabs.enabled {
+                    let mut document = storage.read_tabs();
+                    let scope_tabs = crate::storage::TabsScope {
                         tabs: tabs_now
                             .iter()
                             .map(|tab| crate::storage::TabEntry {
@@ -1757,13 +1844,18 @@ pub async fn run_with_size(
                             })
                             .collect(),
                         unread: std::collections::BTreeMap::new(),
-                    },
-                    cwd: std::collections::BTreeMap::new(),
-                };
-                if let Err(error) = storage.write_typed(crate::storage::KEY_TABS, &document) {
-                    // Failed writes lose only tab layout — but silence
-                    // would hide tabs resetting every launch (v2 logs).
-                    eprintln!("opencode tui: failed to persist session tabs: {error}");
+                    };
+                    match config.tabs.scope {
+                        crate::config::TabsScope::Global => document.global = scope_tabs,
+                        crate::config::TabsScope::Cwd => {
+                            document.cwd.insert(tabs_scope_cwd.clone(), scope_tabs);
+                        }
+                    }
+                    if let Err(error) = storage.write_tabs(&document) {
+                        // Failed writes lose only tab layout — but silence
+                        // would hide tabs resetting every launch (v2 logs).
+                        eprintln!("opencode tui: failed to persist session tabs: {error}");
+                    }
                 }
             }
         }
@@ -2238,8 +2330,29 @@ mod tests {
         );
     }
 
+    /// The boot frame at 80×24 under the DEFAULT boot args: the home
+    /// route (wordmark + centered composer), not a restored session —
+    /// the beta.7 "Untitled session + blank void" regression guard.
+    /// (The byte-exact home view is pinned by `home_golden_tests`
+    /// against v2's `home.w80` golden; this pins the ROUTE.)
+    #[test]
+    fn boot_frame_renders_home_at_80x24() {
+        let app = App::new((80, 24));
+        apply_boot_route(&app.store, &BootArgs::default(), None);
+        app.store.runtime.run_effects();
+        let frame = app.frame_text();
+        // The wordmark paints as block glyphs (█ rows), not the
+        // literal string "OPENCODE".
+        assert!(frame.contains("█▀▀█"), "the home wordmark: {frame}");
+        assert!(frame.contains("Ask anything"), "the centered composer: {frame}");
+        assert_eq!(app.store.route(), crate::store::Route::Home);
+    }
+
     /// The tabs persistence round-trip at the seam the run loop uses:
-    /// store tabs → the v2 `tabs` document shape → a fresh store.
+    /// store tabs → the versioned `tabs` document shape (cwd scope,
+    /// like the default config) → a fresh store. The restore hydrates
+    /// the strip WITHOUT moving the route — the boot route stays home
+    /// (v2 app.tsx:364-371).
     #[test]
     fn tabs_persist_and_restore_through_the_v2_document() {
         let store = Store::new(crate::reactive::Runtime::new());
@@ -2247,21 +2360,25 @@ mod tests {
         store.open_tab("ses_2", None);
         store.navigate(crate::store::Route::Home);
 
-        // Persist exactly like the run loop does.
+        // Persist exactly like the run loop does (cwd scope).
         let document = crate::storage::TabsDocument {
-            global: crate::storage::TabsScope {
-                tabs: store
-                    .tabs()
-                    .tabs
-                    .iter()
-                    .map(|tab| crate::storage::TabEntry {
-                        session_id: tab.session_id.clone(),
-                        title: tab.title.clone(),
-                    })
-                    .collect(),
-                unread: std::collections::BTreeMap::new(),
-            },
-            cwd: std::collections::BTreeMap::new(),
+            global: crate::storage::TabsScope::default(),
+            cwd: std::collections::BTreeMap::from([(
+                "/work".to_owned(),
+                crate::storage::TabsScope {
+                    tabs: store
+                        .tabs()
+                        .tabs
+                        .iter()
+                        .map(|tab| crate::storage::TabEntry {
+                            session_id: tab.session_id.clone(),
+                            title: tab.title.clone(),
+                        })
+                        .collect(),
+                    unread: std::collections::BTreeMap::new(),
+                },
+            )]),
+            ..crate::storage::TabsDocument::default()
         };
         let root = std::env::temp_dir().join(format!(
             "oc-tui-tabs-rt-{}-{}",
@@ -2271,15 +2388,24 @@ mod tests {
                 .map_or(0, |since| since.subsec_nanos())
         ));
         let storage = crate::storage::ChannelStorage::open(&root, "local").expect("open");
-        storage.write_typed(crate::storage::KEY_TABS, &document).expect("write");
+        storage.write_tabs(&document).expect("write");
 
         // Boot a fresh store from the same file.
-        let restored: crate::storage::TabsDocument =
-            storage.read_or_default(crate::storage::KEY_TABS);
+        let restored = storage.read_tabs();
         let fresh = Store::new(crate::reactive::Runtime::new());
+        // The cwd scope reads ONLY its own entry: a global-scope list
+        // (even a populated one) never leaks into a cwd restore (v2
+        // `state()` falls back to EMPTY, not global).
+        let mut with_global = restored.clone();
+        with_global.global = crate::storage::TabsScope {
+            tabs: vec![crate::storage::TabEntry { session_id: "ses_global".into(), title: None }],
+            unread: std::collections::BTreeMap::new(),
+        };
         fresh.restore_tabs(
-            restored
-                .global
+            with_global
+                .cwd
+                .get("/work")
+                .unwrap()
                 .tabs
                 .iter()
                 .map(|entry| crate::store::SessionTab {
@@ -2290,8 +2416,51 @@ mod tests {
         );
         assert_eq!(fresh.tabs().tabs.len(), 2);
         assert_eq!(fresh.tabs().tabs[0].title.as_deref(), Some("First"));
-        assert_eq!(fresh.route(), crate::store::Route::Session { session_id: "ses_1".to_owned() });
+        assert!(
+            !fresh.tabs().tabs.iter().any(|tab| tab.session_id == "ses_global"),
+            "the global scope never leaks into a cwd restore"
+        );
+        assert_eq!(fresh.route(), crate::store::Route::Home, "restore never moves the boot route");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The boot route rules (v2 app.tsx:364-371 + 639-674): default
+    /// boot = home; `--session <id>` routes that session (opening its
+    /// tab through the route effect); `--continue` routes the resolved
+    /// latest session — and stays home when none resolves.
+    #[test]
+    fn boot_route_rules_default_home_continue_and_session() {
+        // Default: home, no tabs.
+        let store = Store::new(crate::reactive::Runtime::new());
+        apply_boot_route(&store, &BootArgs::default(), None);
+        assert_eq!(store.route(), crate::store::Route::Home);
+
+        // --session: that session, its tab open.
+        let store = Store::new(crate::reactive::Runtime::new());
+        apply_boot_route(
+            &store,
+            &BootArgs { continue_last: false, session: Some("ses_direct".into()) },
+            None,
+        );
+        assert_eq!(
+            store.route(),
+            crate::store::Route::Session { session_id: "ses_direct".to_owned() }
+        );
+        assert!(store.tabs().tabs.iter().any(|tab| tab.session_id == "ses_direct"));
+
+        // --continue: the resolved latest root session.
+        let store = Store::new(crate::reactive::Runtime::new());
+        apply_boot_route(&store, &BootArgs { continue_last: true, session: None }, Some("ses_new"));
+        assert_eq!(
+            store.route(),
+            crate::store::Route::Session { session_id: "ses_new".to_owned() }
+        );
+
+        // --continue with nothing to resume: stays home (v2 `if
+        // (!match) return`).
+        let store = Store::new(crate::reactive::Runtime::new());
+        apply_boot_route(&store, &BootArgs { continue_last: true, session: None }, None);
+        assert_eq!(store.route(), crate::store::Route::Home);
     }
 }
 

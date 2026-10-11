@@ -57,7 +57,15 @@ async fn dispatch(cli: Cli) -> i32 {
     let server = ServerParams { standalone: cli.standalone, server: cli.server.clone() };
     let auto = cli.permission.effective_auto();
     match cli.command {
-        None => handlers::misc::root(cli.directory.as_deref(), &server).await,
+        None => {
+            handlers::misc::root(
+                cli.directory.as_deref(),
+                cli.continue_,
+                cli.session.clone(),
+                &server,
+            )
+            .await
+        }
         Some(Commands::Upgrade { target, method }) => {
             handlers::misc::upgrade(target.as_deref(), method.as_deref()).await
         }
