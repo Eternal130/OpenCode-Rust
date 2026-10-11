@@ -33,3 +33,10 @@ libc = "0.2"
 parity = { path = "../../tools/parity" }
 tokio = { workspace = true }
 oc-plugin-host = { workspace = true }
+# Cell-grid stream harness (tests/vt_harness.rs): parses the PTY's raw
+# ANSI byte stream into styled cell grids over time. Pure Rust (vte +
+# utf8parse, no build scripts) — compiles clean under the pinned
+# toolchain. Pinned to 0.15: vt100 0.16 pulls unicode-width ^0.2.1,
+# which cannot unify with ratatui 0.29's exact "=0.2.0" pin (0.15's
+# unicode-width 0.1 coexists in the lock already, like console's).
+vt100 = "0.15"
