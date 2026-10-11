@@ -926,6 +926,20 @@ fn cluster_starts(text: &str) -> Vec<usize> {
 /// is wave 3's TODO(7.3)).
 pub trait PromptSink {
     fn send(&self, session_id: &str, prompt: &SubmittedPrompt);
+
+    /// Submit with the RESOLVED model selection (v2's `commitModel`,
+    /// prompt/index.tsx:1283-1294: production awaits
+    /// `session.switchModel` BEFORE the prompt POST so the turn runs
+    /// on the committed model; sinks that don't model-gate delegate to
+    /// [`Self::send`]).
+    fn send_with_model(
+        &self,
+        session_id: &str,
+        prompt: &SubmittedPrompt,
+        _model: Option<&crate::store::ModelSelection>,
+    ) {
+        self.send(session_id, prompt);
+    }
 }
 
 /// The default sink: records submissions in order (tests + the replay

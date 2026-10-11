@@ -234,6 +234,7 @@ impl Harness {
         let snapshot = server.fetch_messages_at(fetch_at);
         let batch: Vec<Ingest> = std::iter::once(Ingest::Resync {
             sessions: vec![SessionSnapshot {
+                model: None,
                 id: SESSION.to_owned(),
                 title: Some(SESSION.to_owned()),
                 time_idle: None,
