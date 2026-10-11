@@ -318,6 +318,13 @@ pub struct TabsState {
     pub pinned: Vec<String>,
     pub closed: Vec<ClosedTab>,
     pub history: TabHistory,
+    /// The strip tab under the pointer (`marquee.hovered`,
+    /// `session-tabs.tsx:338-369`) — drives the hover lift, the
+    /// `text.base` foreground, and the revealed `✕` close mark.
+    pub hover: Option<String>,
+    /// The ` + ` affordance under the pointer (`addHovered`,
+    /// `session-tabs.tsx:1301`).
+    pub add_hovered: bool,
 }
 
 impl TabsState {
@@ -763,6 +770,28 @@ pub struct Store {
     /// writes them; the run loop emits them after the cell grid draw
     /// and takes them for delta tracking.
     frame_images: std::cell::RefCell<Vec<crate::image::ImagePlacement>>,
+    /// Disclosure state per session (v2 `groupExpanded` /
+    /// `setGroupExpanded` on the session-tabs context,
+    /// `session-tabs.tsx:387-391`): the set of EXPANDED group row
+    /// keys (`group:Reasoning:…`) for each session.
+    expanded_groups: std::cell::RefCell<HashMap<String, std::collections::HashSet<String>>>,
+    /// The last frame's clickable transcript rows ([`render_session`]
+    /// writes them like `frame_images`): the reasoning-group headers
+    /// whose absolute `[y, y+height)` rect a mouse release can toggle.
+    transcript_hit_rows: std::cell::RefCell<Vec<TranscriptHitRow>>,
+}
+
+/// One clickable transcript row from the last frame (absolute rows).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptHitRow {
+    /// The session the row belongs to.
+    pub session_id: String,
+    /// The row's key (`row_key` — `group:Reasoning:…` for headers).
+    pub key: String,
+    /// Absolute screen row of the row's top (frame coordinates).
+    pub y: usize,
+    /// The row's height in rows.
+    pub height: usize,
 }
 
 /// The store's root signals (one struct so [`Store::build`] stays
@@ -913,6 +942,8 @@ impl Store {
             image_preview: Cell::new(false),
             graphics_protocol: Cell::new(crate::image::GraphicsProtocol::None),
             frame_images: std::cell::RefCell::new(Vec::new()),
+            expanded_groups: std::cell::RefCell::new(HashMap::new()),
+            transcript_hit_rows: std::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -1754,6 +1785,74 @@ impl Store {
                 state.unread.remove(session_id);
             }
         });
+    }
+
+    // -- tab-strip pointer state (beta.8 bug 3) ------------------------------
+
+    /// Set the hovered strip tab (`marquee.enter/leave`); returns
+    /// whether the state CHANGED (mouse-move events fire constantly —
+    /// only a real change may request a redraw).
+    pub fn set_tab_hover(&self, session_id: Option<&str>) -> bool {
+        let mut changed = false;
+        self.tabs.update(|state| {
+            let next = session_id.map(str::to_owned);
+            if state.hover != next {
+                state.hover = next;
+                changed = true;
+            }
+        });
+        changed
+    }
+
+    /// Set the ` + ` affordance's hover (`addHovered`); returns
+    /// whether the state changed.
+    pub fn set_tab_add_hovered(&self, hovered: bool) -> bool {
+        let mut changed = false;
+        self.tabs.update(|state| {
+            if state.add_hovered != hovered {
+                state.add_hovered = hovered;
+                changed = true;
+            }
+        });
+        changed
+    }
+
+    // -- transcript disclosure (beta.8 bug 4) --------------------------------
+
+    /// Toggle a group's disclosure (`setGroupExpanded`,
+    /// `session-tabs.tsx:390`) and report the new value.
+    pub fn toggle_group_expanded(&self, session_id: &str, key: &str) -> bool {
+        let mut groups = self.expanded_groups.borrow_mut();
+        let set = groups.entry(session_id.to_owned()).or_default();
+        if set.insert(key.to_owned()) {
+            true
+        } else {
+            // Insert returned false: it was already present — toggle off.
+            set.remove(key);
+            false
+        }
+    }
+
+    /// Whether a group row renders expanded (`groupExpanded`).
+    #[must_use]
+    pub fn group_expanded(&self, session_id: &str, key: &str) -> bool {
+        self.expanded_groups.borrow().get(session_id).is_some_and(|set| set.contains(key))
+    }
+
+    /// The session's expanded-group keys (render options input).
+    #[must_use]
+    pub fn expanded_group_keys(&self, session_id: &str) -> std::collections::HashSet<String> {
+        self.expanded_groups.borrow().get(session_id).cloned().unwrap_or_default()
+    }
+
+    /// The last frame's clickable transcript rows (reasoning headers).
+    pub fn set_transcript_hit_rows(&self, rows: Vec<TranscriptHitRow>) {
+        *self.transcript_hit_rows.borrow_mut() = rows;
+    }
+
+    #[must_use]
+    pub fn transcript_hit_rows(&self) -> Vec<TranscriptHitRow> {
+        self.transcript_hit_rows.borrow().clone()
     }
 
     // -- route / dialogs / theme / connection --------------------------------

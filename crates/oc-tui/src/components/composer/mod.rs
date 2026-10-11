@@ -238,6 +238,11 @@ pub enum KeyOutcome {
     Edited,
     /// Submit produced a prompt.
     Submitted(SubmittedPrompt),
+    /// Accepting a slash entry EXECUTED a built-in TUI command
+    /// (v2 `onSelect: command.run`, `autocomplete.tsx:481`) — the
+    /// app dispatches it through the command seam instead of
+    /// submitting text to the model.
+    Command(&'static str),
     /// The `prompt.paste` command consumed the key (D-05): the paste
     /// handler's own `preventDefault`+`stopPropagation` parity — the
     /// stroke never reaches the draft or lower layers.
@@ -597,8 +602,17 @@ impl Composer {
                     return KeyOutcome::Edited;
                 }
                 ComposerKey::Enter | ComposerKey::Tab => {
-                    self.accept_autocomplete();
-                    return KeyOutcome::Edited;
+                    // The autocomplete layer owns return/tab while
+                    // visible (`prompt.autocomplete.select` — v2's
+                    // layer shadows prompt.submit, and an EMPTY popup
+                    // swallows the key: `select()` no-ops and
+                    // `submitInner` bails on `auto()?.visible`).
+                    let outcome = self.accept_autocomplete();
+                    return if outcome == KeyOutcome::Ignored {
+                        KeyOutcome::Edited
+                    } else {
+                        outcome
+                    };
                 }
                 _ => {}
             }
@@ -676,14 +690,21 @@ impl Composer {
     }
 
     /// Accept the selected autocomplete option (select/complete).
-    pub fn accept_autocomplete(&mut self) {
+    ///
+    /// Command mode follows v2's `select()` (`autocomplete.tsx:
+    /// 615-626`): `hide(true)` removes the `/name` trigger token from
+    /// the draft, then `onSelect` runs — `command.run` for built-ins
+    /// without arguments (`autocomplete.tsx:481`), `insertSlash` only
+    /// for argument-taking commands (`/cd`). A run reports
+    /// [`KeyOutcome::Command`]; the rest of the draft survives both
+    /// paths exactly like the reference.
+    pub fn accept_autocomplete(&mut self) -> KeyOutcome {
         let Some(option) = self.autocomplete.selected_option().cloned() else {
-            return;
+            return KeyOutcome::Ignored;
         };
         match self.autocomplete.visible {
             Some(autocomplete::Mode::Command) => {
-                // `hide(true)`: the trigger token is removed and the
-                // command inserted as `/name `.
+                // `hide(true)`: the trigger token is removed first.
                 let index = self.autocomplete.trigger_index;
                 self.autocomplete.close();
                 let end = self.caret;
@@ -700,15 +721,24 @@ impl Composer {
                         }
                     }
                 }
-                let name = option.display.trim_start_matches('/');
-                self.insert_text(&format!("/{name} "));
+                // `onSelect: command.run` — the built-in executes
+                // locally; nothing is submitted to the model.
+                // `slash.arguments` (only /cd) inserts `/name `.
+                if let Some(command) = autocomplete::SlashRegistry::command_for(&option.display) {
+                    KeyOutcome::Command(command)
+                } else {
+                    let name = option.display.trim_start_matches('/');
+                    self.insert_text(&format!("/{name} "));
+                    KeyOutcome::Edited
+                }
             }
             Some(autocomplete::Mode::Reference) => {
                 self.autocomplete.close();
                 let name = option.display.trim_start_matches('@');
                 self.insert_text(&format!("@{name} "));
+                KeyOutcome::Edited
             }
-            None => {}
+            None => KeyOutcome::Ignored,
         }
     }
 }
