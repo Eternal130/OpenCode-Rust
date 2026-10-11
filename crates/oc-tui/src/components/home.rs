@@ -346,7 +346,36 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
             .then_some(composer.caret()),
     };
     let _ = theme;
-    render_home_view(&view, &state, size)
+    let mut frame = render_home_view(&view, &state, size);
+
+    // F9 — the tab strip leads the HOME route while tabs are open (v2
+    // app.tsx:576-579 `tabsAvailable`: `sessionTabs.enabled() &&
+    // tabs().length > 0` — the SessionTabs mount is app-wide, never
+    // session-route-gated; home simply has no active pill). The
+    // golden harness never opens tabs, so `home.w*` stays byte-exact.
+    let tabs = store.tabs();
+    if store.tabs_enabled() && !tabs.tabs.is_empty() {
+        let (width, height) = (usize::from(size.0), usize::from(size.1));
+        if height > 1 {
+            let strip = crate::components::session::paint_live_tabs_bar(
+                store,
+                None,
+                width,
+                &state.styles(),
+            );
+            // Shift the home view down one row under the strip.
+            let mut cells = vec![frame.cells[0].clone()];
+            cells.extend(frame.cells.clone());
+            cells.truncate(height);
+            frame = Frame { cells, width, height };
+            for (row, strip_row) in strip.cells.iter().enumerate() {
+                if let Some(slot) = frame.cells.get_mut(row) {
+                    slot.clone_from(strip_row);
+                }
+            }
+        }
+    }
+    frame
 }
 
 use crate::store::Store;
@@ -423,5 +452,35 @@ mod tests {
         let bare = Store::new(Runtime::new());
         let frame = render_home(&bare, &theme.styles(), (80, 30));
         assert!(!frame.text_grid()[28].contains("/preset"));
+    }
+
+    /// F9 — the tab strip leads the HOME route while tabs are open (v2
+    /// app.tsx:576-579 `tabsAvailable`: `enabled() && tabs().length > 0`
+    /// — the `SessionTabs` mount is app-wide). No tabs (or tabs
+    /// disabled) keeps the golden home shape byte-exact.
+    #[test]
+    fn home_mounts_the_tab_strip_while_tabs_are_open() {
+        let theme = crate::theme::ThemeState::v2_dark();
+        let bare = Store::new(Runtime::new());
+        let bare_frame = render_home(&bare, &theme.styles(), (80, 30));
+        assert!(!bare_frame.text_grid()[0].contains('+'), "no strip without tabs");
+
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Alpha".to_owned()));
+        store.navigate(crate::store::Route::Home);
+        let frame = render_home(&store, &theme.styles(), (80, 30));
+        let strip = &frame.text_grid()[0];
+        assert!(strip.contains("Alpha"), "the open tab's title leads home: {strip}");
+        assert!(strip.contains(" + "), "the add affordance: {strip}");
+        // The composer still renders under the strip.
+        assert!(
+            frame.text_grid().iter().any(|row| row.contains("Ask anything")),
+            "the home composer survives the strip row"
+        );
+
+        // tabs.enabled = false hides it again.
+        store.set_tabs_enabled(false);
+        let frame = render_home(&store, &theme.styles(), (80, 30));
+        assert!(!frame.text_grid()[0].contains("Alpha"), "the strip follows the config gate");
     }
 }
