@@ -11,6 +11,7 @@ members = [
     "crates/oc-server",
     "crates/oc-client",
     "crates/oc-tui",
+    "crates/oc-tui-core",
     "crates/oc-cli",
     "tools/openapi-gen",
     "tools/parity",
@@ -36,6 +37,7 @@ tree-sitter-toml = { path = "third_party/tree-sitter-toml" }
 
 [workspace.dependencies]
 oc-util = { path = "crates/oc-util" }
+oc-tui-core = { path = "crates/oc-tui-core" }
 oc-schema = { path = "crates/oc-schema" }
 oc-theme = { path = "crates/oc-theme" }
 oc-ai = { path = "crates/oc-ai" }

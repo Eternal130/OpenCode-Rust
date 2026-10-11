@@ -1540,10 +1540,12 @@ mod tests {
                     || step.expect.route.is_some()
             }));
         }
-        // The exit flow ends with the leader-q termination step.
+        // The exit flow ends with the empty-prompt ctrl+c termination
+        // (Wave A decollision: <leader>q is the queue manager's chord,
+        // never app.exit's).
         let exit = load_replay_script(&dir, "exit-leader-q").expect("exit script");
         let last = exit.steps.last().expect("last step");
-        assert_eq!(last.keys, vec!["ctrl+x", "q"]);
+        assert_eq!(last.keys, vec!["ctrl+c"]);
         assert_eq!(last.expect.exit, Some(true));
     }
 

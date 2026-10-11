@@ -142,7 +142,10 @@ impl ModelPreferenceRepository {
         Self { path: path.into() }
     }
 
-    fn read(&self) -> ModelPreferenceDocument {
+    /// Read the document (best-effort; the boot path shares it with
+    /// the main TUI's model ring).
+    #[must_use]
+    pub fn read(&self) -> ModelPreferenceDocument {
         std::fs::read(&self.path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
@@ -150,7 +153,7 @@ impl ModelPreferenceRepository {
             .unwrap_or_default()
     }
 
-    fn write(&self, document: &ModelPreferenceDocument) {
+    pub fn write(&self, document: &ModelPreferenceDocument) {
         let Some(parent) = self.path.parent() else { return };
         let _ = std::fs::create_dir_all(parent);
         let Ok(text) = serde_json::to_string_pretty(document) else { return };

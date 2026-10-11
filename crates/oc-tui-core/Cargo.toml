@@ -1,0 +1,12 @@
+[package]
+name = "oc-tui-core"
+description = "opencode TUI interaction-contract crate: the @opentui/keymap engine contract, text-edit primitives, and the scroll driver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = { workspace = true }

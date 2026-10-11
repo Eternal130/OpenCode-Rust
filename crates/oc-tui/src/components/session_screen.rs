@@ -244,6 +244,7 @@ pub fn session_composer_frame(
             location: location.to_owned(),
             agent_shortcut: "shift+tab".into(),
             command_shortcut: "ctrl+p".into(),
+            interrupt: String::new(),
             ..FooterHints::default()
         },
         top: 0,

@@ -162,6 +162,7 @@ pub fn render_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u16)) -
             status_agent: view.status_agent.clone(),
             status_model: view.status_model.clone(),
             plugin_hints: view.plugin_hints.clone(),
+            interrupt: String::new(),
         },
         top: 1 + popup_rows,
         rail: view.rail,
@@ -342,7 +343,7 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         autocomplete,
         rail: store.composer_rail_color(crate::app::HOME_PROMPT_KEY).map(CellColor::from),
         caret: crate::components::composer::render::cursor_blink_on(store.clock())
-            .then_some(composer.caret),
+            .then_some(composer.caret()),
     };
     let _ = theme;
     render_home_view(&view, &state, size)

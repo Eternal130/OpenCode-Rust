@@ -253,12 +253,11 @@ fn pty_help_slash_opens_the_dialog_and_sends_nothing() {
             // THE BUG: /help + Enter must open the dialog, not submit.
             let _ = writer.write_all(b"/help\r");
             std::thread::sleep(Duration::from_millis(900));
-            // Exit.
+            // Exit: escape (close the dialog), ctrl+c (empty prompt
+            // — app.exit; <leader>q is the queue manager since Wave A).
             let _ = writer.write_all(b"\x1b");
             std::thread::sleep(Duration::from_millis(200));
             let _ = writer.write_all(b"\x03");
-            std::thread::sleep(Duration::from_millis(200));
-            let _ = writer.write_all(b"\x18q");
         });
     }
 
@@ -377,11 +376,13 @@ fn pty_mouse_closes_a_tab_and_add_opens_home() {
                 "plus_home",
                 wait_for_after(&probe(), "█▀▀█".as_bytes(), mark, Duration::from_secs(5)),
             );
-            // Exit (unconditional — the run loop must always stop).
+            // Exit (unconditional — the run loop must always stop):
+            // ctrl+c on the empty prompt; <leader>q is the queue
+            // manager's chord since Wave A.
             std::thread::sleep(Duration::from_millis(300));
             let _ = writer.write_all(b"\x03");
             std::thread::sleep(Duration::from_millis(200));
-            let _ = writer.write_all(b"\x18q");
+            let _ = writer.write_all(b"\x03");
         });
     }
 

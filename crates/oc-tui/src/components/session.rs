@@ -106,6 +106,7 @@ fn paint_live_tabs_bar(
 /// so the strip is exactly ONE row and the transcript starts beneath
 /// it. (beta.8 bug 2: our port rendered the title twice — the strip
 /// pill AND a muted title row.)
+#[allow(clippy::too_many_lines)] // the route assembly: strip, transcript, dock, composer
 #[must_use]
 pub fn render_session(
     store: &Store,
@@ -131,11 +132,17 @@ pub fn render_session(
     // slash palette is open) + the transcript's height budget.
     let (mount, prompt_height, mount_height) =
         composer_mount_frame(store, session_id, &theme, width, height);
-    let spacing = usize::from(mount_height + 1 < height);
+    // The queued-prompt dock (v2's `QueuedPromptDock`,
+    // index.tsx:2312-2342): one row above the composer —
+    // `┃ {n} queued · {next}` — while prompts wait in the serial
+    // queue; absent (and byte-invisible) when the queue is empty.
+    let queued = store.queued_prompts(session_id);
+    let dock_height = usize::from(!queued.is_empty());
+    let spacing = usize::from(mount_height + dock_height + 1 < height);
     // Without the strip the chrome is one row shorter (no title row
     // exists in v2 either way).
     let chrome = usize::from(show_strip);
-    let transcript_height = height.saturating_sub(mount_height + spacing + chrome);
+    let transcript_height = height.saturating_sub(mount_height + dock_height + spacing + chrome);
     // The transcript's rows start under the strip (row 0) — no title
     // row shifts them.
     let content_top = chrome;
@@ -158,19 +165,38 @@ pub fn render_session(
         styles,
         width,
     );
+    // Wave A: the scroll driver — record this frame's metrics (the
+    // scroll commands' viewport/content inputs) and apply the live
+    // offset (sticky sits at the bottom, free keeps the scrolled
+    // offset; the scroll keys move it — see `Store::scroll_command`).
+    store.set_transcript_metrics(
+        session_id,
+        crate::store::TranscriptMetrics {
+            viewport: transcript_height,
+            content_height: transcript.content_height,
+        },
+    );
+    store.scroll_appended(session_id, transcript.content_height);
+    let scroll_offset = store.scroll_offset(session_id);
     // The clickable reasoning headers (beta.8 bug 4): record each
     // group row's ABSOLUTE rect for the mouse layer — the same
-    // content_top shift the rows below paint under.
+    // content_top shift the rows below paint under, minus the scroll
+    // offset (only rows inside the viewport are hit-testable).
     store.set_transcript_hit_rows(
         transcript
             .rows
             .iter()
             .filter(|row| row.key.starts_with("group:Reasoning:"))
-            .map(|row| crate::store::TranscriptHitRow {
-                session_id: session_id.to_owned(),
-                key: row.key.clone(),
-                y: content_top + row.y,
-                height: row.height,
+            .filter_map(|row| {
+                let screen_y = content_top + row.y.checked_sub(scroll_offset)?;
+                (screen_y < content_top + transcript_height).then(|| {
+                    crate::store::TranscriptHitRow {
+                        session_id: session_id.to_owned(),
+                        key: row.key.clone(),
+                        y: screen_y,
+                        height: row.height,
+                    }
+                })
             })
             .collect(),
     );
@@ -182,18 +208,19 @@ pub fn render_session(
         .images
         .iter()
         .filter_map(|image| {
-            // Transcripts stack rows from y=2 (below the title row);
-            // a placement survives while its top row is inside the
-            // viewport, its height clamped to the viewport bottom.
-            let top = usize::from(image.y);
-            if top >= transcript_height {
+            // The visible window in transcript coordinates is
+            // `[scroll_offset, scroll_offset + transcript_height)`.
+            let content_y = usize::from(image.y);
+            if content_y < scroll_offset || content_y >= scroll_offset + transcript_height {
                 return None;
             }
-            let clamped_rows =
-                image.rows.min(u16::try_from(transcript_height - top).unwrap_or(image.rows));
+            let top = content_y - scroll_offset;
+            let clamped_rows = image
+                .rows
+                .min(u16::try_from(transcript_height.saturating_sub(top)).unwrap_or(image.rows));
             Some(crate::image::ImagePlacement {
                 x: image.x,
-                y: image.y + u16::try_from(content_top).unwrap_or(u16::MAX),
+                y: u16::try_from(content_top + top).unwrap_or(u16::MAX),
                 id: image.id,
                 data: image.data.clone(),
                 cols: image.cols,
@@ -205,28 +232,89 @@ pub fn render_session(
     let mut placed = Vec::new();
     let mut fills = Vec::new();
     for row in &transcript.rows {
-        let y = content_top + row.y;
-        if y >= transcript_height {
+        // Content coordinates: the viewport shows
+        // `[scroll_offset, scroll_offset + transcript_height)` of the
+        // transcript (sticky sits at the bottom). The rows' placed
+        // lines/fills carry ABSOLUTE transcript coordinates.
+        if row.y + row.height <= scroll_offset {
+            continue;
+        }
+        if row.y.saturating_sub(scroll_offset) >= transcript_height {
             break;
         }
         for line in &row.placed {
+            if line.y < scroll_offset {
+                continue; // the line sits above the viewport window
+            }
             let mut shifted = line.clone();
-            shifted.y += content_top;
+            shifted.y = (line.y + content_top).saturating_sub(scroll_offset);
             placed.push(shifted);
         }
-        fills.extend(row.fills.iter().map(|fill| crate::render::Fill {
-            x: fill.x,
-            y: fill.y + u16::try_from(content_top).unwrap_or(u16::MAX),
-            width: fill.width,
-            height: fill.height,
-            style: fill.style,
-        }));
+        fills.extend(row.fills.iter().filter(|fill| usize::from(fill.y) >= scroll_offset).map(
+            |fill| {
+                crate::render::Fill {
+                    x: fill.x,
+                    y: (u16::try_from(content_top).unwrap_or(0).saturating_add(fill.y))
+                        .saturating_sub(u16::try_from(scroll_offset).unwrap_or(0)),
+                    width: fill.width,
+                    height: fill.height,
+                    style: fill.style,
+                }
+            },
+        ));
     }
     let mut frame = paint_placed_with_fills(&placed, &fills, size, fill);
     if let Some(strip) = strip {
         paste(&mut frame, &strip, 0, 0);
     }
+    if let Some(dock) = (!queued.is_empty()).then(|| paint_queued_dock(&queued, width, styles)) {
+        paste(&mut frame, &dock, 0, height - prompt_height - dock_height);
+    }
     paste(&mut frame, &mount, 0, height - prompt_height);
+    frame
+}
+
+/// The queued-prompt dock row (`QueuedPromptDock`,
+/// routes/session/index.tsx:2312-2342): a left border bar, the count
+/// in `text.base`, ` · ` then the next prompt's text (newlines
+/// flattened) muted, truncated to the width.
+fn paint_queued_dock(
+    queued: &[crate::store::QueuedPrompt],
+    width: usize,
+    styles: &crate::theme::ThemeStyles,
+) -> Frame {
+    let background = ratatui::style::Style::new()
+        .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
+        .bg(styles.background);
+    let mut frame =
+        crate::render::paint_placed(&[], (u16::try_from(width).unwrap_or(u16::MAX), 1), background);
+    let count = format!("{} queued", queued.len());
+    let next = queued.first().map(|prompt| prompt.text.replace('\n', " ")).unwrap_or_default();
+    let base = styles.base.fg.unwrap_or(crate::components::tool_rows::DEFAULT_FOREGROUND);
+    let muted = styles.text_muted.fg.unwrap_or(crate::components::tool_rows::DEFAULT_FOREGROUND);
+    let mut x = 0usize;
+    for (text, color) in
+        [("┃", styles.border), (count.as_str(), base), (" · ", muted), (next.as_str(), muted)]
+    {
+        if x >= width {
+            break;
+        }
+        let budget = width - x;
+        let segment = crate::wrap::take_width(text, budget);
+        let mut at = x;
+        for (col, ch) in segment.chars().enumerate() {
+            let column = x + col;
+            if column >= width {
+                break;
+            }
+            if let Some(slot) = frame.cells.first_mut().and_then(|row| row.get_mut(column)) {
+                slot.ch = ch;
+                slot.fg = crate::render::CellColor::from(color);
+            }
+            at = column + 1;
+        }
+        x = at;
+    }
     frame
 }
 
@@ -264,7 +352,7 @@ fn composer_mount_frame(
     // The blinking block cursor: painted only in its visible phase
     // (the run loop's clock tick re-renders every 100 ms).
     let caret = crate::components::composer::render::cursor_blink_on(store.clock())
-        .then_some(composer.caret);
+        .then_some(composer.caret());
     let mount_height =
         crate::components::composer::render::mount_height(&composer.draft, width, height)
             .min(height);
@@ -293,6 +381,15 @@ fn composer_mount_frame(
             status_agent,
             status_model,
             plugin_hints: store.plugin_footer_hints(),
+            // Wave A: the interrupt hint while the session's turn
+            // runs (v2 prompt/index.tsx:1887-1903 — the spinner +
+            // `esc interrupt` / `esc again to interrupt` status).
+            interrupt: store
+                .interrupt_hint_armed(session_id, store.clock())
+                .map(|armed| {
+                    if armed { "esc again to interrupt" } else { "esc interrupt" }.to_owned()
+                })
+                .unwrap_or_default(),
         },
         top: prompt_height - mount_height,
         rail,
