@@ -30,6 +30,14 @@ retries = 2
 filter = 'test(pty_interactions)'
 retries = 2
 
+# The invariant fuzzer drives the real binary through long key
+# sequences: same serialized PTY class, and the 3-seed smoke needs a
+# wider slow-timeout than the 60s default (it is one test fn).
+[[profile.default.overrides]]
+filter = 'test(pty_fuzz)'
+retries = 2
+slow-timeout = "15m"
+
 # Same spawn/contention class as the PTY suites: the server integration
 # pair (shell round-trip / vcs init) reads child output under 4-way
 # parallel test load and can truncate on slow runners (observed locally

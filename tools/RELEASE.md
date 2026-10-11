@@ -241,6 +241,22 @@ Current status: ALL GREEN against `target/release/opencode-rust`
 the workspace-wide fmt/clippy currently also touches the parallel
 oc-server lane's in-flight files), `tools/release-smoke.sh` green.
 
+### PTY invariant fuzz (`crates/oc-cli/tests/pty_fuzz.rs`)
+
+A seeded, human-plausible key driver over the real TUI binary (pty +
+FakeLlm-style stub) checking screen invariants after every key:
+alive / no escape-response garbage (`rgb:` leak) / non-void screen /
+escape-recoverability / bounded cell corruption. Failures dump the
+exact reproducer to `/tmp/opencode/pty-fuzz-fail-s<seed>.txt`.
+
+- CI smoke (serialized pty job): `pty_fuzz_smoke` — 3 fixed seeds ×
+  120 keys.
+- Nightly-style long pass (local, ~20× the smoke):
+  `cargo nextest run -p oc-cli --run-ignored only -E 'test(pty_fuzz_long)'`
+  — 20 seeds × 250 keys; sweep custom seeds/lengths via
+  `OC_PTY_FUZZ_SEEDS=41,42,43 OC_PTY_FUZZ_KEYS=400`. Reproduce any
+  dump by replaying its hex key list (each line = one key write).
+
 ---
 
 ## GitHub Actions release pipeline (added for the beta program)
