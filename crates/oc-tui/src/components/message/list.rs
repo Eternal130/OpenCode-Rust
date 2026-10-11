@@ -169,6 +169,12 @@ impl FollowState {
 
 /// Render the session transcript (rows from [`reduce_rows`]) at
 /// `width` terminal columns into measured rows.
+///
+/// Disclosure (beta.8 bug 4): a reasoning group whose row key is in
+/// `options.expanded_groups` renders the header PLUS its thought
+/// children (`<Show when={expanded()}>`, `group-view.tsx:190-193`) —
+/// one extra measured unit per child, each carrying its own
+/// `marginTop 1` (`ThoughtEntry`'s anchor margin).
 #[must_use]
 pub fn render_transcript(
     messages: &[Message],
@@ -187,29 +193,65 @@ pub fn render_transcript(
     let mut measured: Vec<MeasuredRow> = Vec::new();
     let mut images: Vec<crate::image::ImagePlacement> = Vec::new();
     let mut y = 0usize;
+    let mut place =
+        |render: RowRender, key: String, measured: &mut Vec<MeasuredRow>, y: &mut usize| {
+            // Every row carries marginTop=1 (the golden's blank separators,
+            // including above the FIRST row).
+            let row_y = *y + 1;
+            let mut placed = render.placed;
+            for item in &mut placed {
+                item.y += row_y;
+                item.x += inset;
+            }
+            let mut fills = render.fills;
+            for fill in &mut fills {
+                fill.y += row_y as u16;
+                fill.x += inset as u16;
+            }
+            for mut image in render.images {
+                image.y += row_y as u16;
+                image.x += inset as u16;
+                images.push(image);
+            }
+            *y = row_y + render.height;
+            measured.push(MeasuredRow { y: row_y, height: render.height, placed, fills, key });
+        };
     for row in &rows {
+        // The disclosure expansion: an expanded reasoning group emits
+        // the header unit plus one unit per thought child.
+        if let Row::Group { kind, .. } = row {
+            if matches!(kind, crate::components::message::model::GroupKind::Reasoning)
+                && options.expanded_groups.iter().any(|key| key == &row_key(row))
+            {
+                let header = render_row(row, messages, options, theme, &markdown, content_width);
+                let height = header.height;
+                place(header, row_key(row), &mut measured, &mut y);
+                let _ = height;
+                for (message_id, part_id) in row.part_refs() {
+                    let Some(Message::Assistant { parts, .. }) =
+                        messages.iter().find(|m| m.id() == message_id.as_str())
+                    else {
+                        continue;
+                    };
+                    let Some(Part::Reasoning { text, .. }) = resolve_part(parts, &part_id) else {
+                        continue;
+                    };
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+                    let entry = crate::components::message::rows::thought_entry_row(
+                        text,
+                        theme,
+                        content_width,
+                    );
+                    place(entry, format!("thought:{message_id}:{part_id}"), &mut measured, &mut y);
+                }
+                continue;
+            }
+        }
         let render = render_row(row, messages, options, theme, &markdown, content_width);
         let key = row_key(row);
-        // Every row carries marginTop=1 (the golden's blank separators,
-        // including above the FIRST row).
-        let row_y = y + 1;
-        let mut placed = render.placed;
-        for item in &mut placed {
-            item.y += row_y;
-            item.x += inset;
-        }
-        let mut fills = render.fills;
-        for fill in &mut fills {
-            fill.y += row_y as u16;
-            fill.x += inset as u16;
-        }
-        for mut image in render.images {
-            image.y += row_y as u16;
-            image.x += inset as u16;
-            images.push(image);
-        }
-        y = row_y + render.height;
-        measured.push(MeasuredRow { y: row_y, height: render.height, placed, fills, key });
+        place(render, key, &mut measured, &mut y);
     }
     Transcript { rows: measured, content_height: y, inset, images }
 }
@@ -270,7 +312,8 @@ fn render_row(
             assistant_footer_row(agent, model, duration, error.as_deref(), theme, width)
         }
         Row::Group { kind, children, completed, .. } => {
-            group_row(kind.clone(), children, *completed, messages, options, theme, width)
+            let expanded = options.expanded_groups.iter().any(|key| key == &row_key(row));
+            group_row(kind.clone(), children, *completed, expanded, messages, options, theme, width)
         }
     }
 }
@@ -296,10 +339,12 @@ fn text_part_row(text: &str, markdown: &MarkdownStyles, width: usize) -> RowRend
 
 /// A group row: the collapsed header (exploration/reasoning) or, when
 /// expanded (disclosure), the header plus child rows.
+#[allow(clippy::too_many_arguments)]
 fn group_row(
     kind: crate::components::message::model::GroupKind,
     children: &[Row],
     completed: bool,
+    expanded: bool,
     messages: &[Message],
     options: &TranscriptOptions,
     theme: &ThemeStyles,
@@ -362,6 +407,7 @@ fn group_row(
                 title.as_deref(),
                 Some(total_duration),
                 completed,
+                expanded,
                 options.clock_ms,
                 theme,
                 width,

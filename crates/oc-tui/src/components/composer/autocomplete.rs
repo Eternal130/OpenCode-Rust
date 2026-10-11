@@ -88,6 +88,47 @@ pub const V2_SLASH: &[(&str, &str)] = &[
     ("worktrees", "Manage workspaces"),
 ];
 
+/// Slash name/alias → the dot command v2's registry runs on select
+/// (`onSelect: command.run`, `autocomplete.tsx:481`; the command ids
+/// come from `app.tsx`'s `slash: { name, aliases }` entries and the
+/// prompt's own `/editor` `/skills` `/worktrees`). `/cd` takes
+/// arguments (`slash.arguments: true`) and stays an INSERT; the
+/// skills dialog is not ported (no dispatcher entry — the run is a
+/// no-op there, matching v2's "runs but the surface is absent").
+pub const SLASH_COMMANDS: &[(&str, &str)] = &[
+    ("agents", "agent.list"),
+    ("clear", "session.clear"),
+    ("connect", "provider.connect"),
+    ("continue", "session.list"),
+    ("debug", "opencode.debug"),
+    ("editor", "prompt.editor"),
+    ("effort", "variant.list"),
+    ("exit", "app.exit"),
+    ("help", "help.show"),
+    ("mcps", "mcp.list"),
+    ("models", "model.list"),
+    ("new", "session.new"),
+    ("open", "open.menu"),
+    ("pair", "server.pair"),
+    ("project", "open.menu"),
+    ("projects", "open.menu"),
+    ("q", "app.exit"),
+    ("quit", "app.exit"),
+    ("reload", "location.reload"),
+    ("restart", "service.restart"),
+    ("resume", "session.list"),
+    ("sessions", "session.list"),
+    ("settings", "opencode.settings"),
+    ("skills", "prompt.skills"),
+    ("status", "opencode.status"),
+    ("themes", "theme.switch"),
+    ("thinking", "variant.list"),
+    ("update", "opencode.update"),
+    ("variants", "variant.list"),
+    ("web", "server.pair"),
+    ("worktrees", "session.move"),
+];
+
 impl SlashRegistry {
     /// The full v2 table (sorted by display like `commands()`; the
     /// `padEnd(max + 2)` title column width derives from it).
@@ -97,6 +138,17 @@ impl SlashRegistry {
             V2_SLASH.iter().map(|(name, description)| SlashEntry::new(name, description)).collect();
         entries.sort_by(|a, b| a.display.cmp(&b.display));
         Self { entries }
+    }
+
+    /// The slash registry's `onSelect` (`autocomplete.tsx:481`):
+    /// `slash.arguments ? insertSlash(name) : command.run` — every
+    /// built-in WITHOUT arguments RUNS on select; only
+    /// argument-taking commands (`/cd`) insert. Returns the dot
+    /// command id a display (`/name` or `/alias`) executes.
+    #[must_use]
+    pub fn command_for(display: &str) -> Option<&'static str> {
+        let name = display.strip_prefix('/')?;
+        SLASH_COMMANDS.iter().find(|(slash, _)| *slash == name).map(|(_, command)| *command)
     }
 
     /// The golden harness's mount: the v2 table plus the three

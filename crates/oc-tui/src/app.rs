@@ -259,6 +259,94 @@ impl App {
         self.keymap.clear_pending();
     }
 
+    /// One terminal mouse event (beta.8 bugs 3 + 4). v2's tab strip
+    /// is a POINTER surface — hover lifts the tab and reveals the `✕`
+    /// (`session-tabs.tsx:1652-1757`), a left release selects
+    /// (`release()` → `tabs.select`, `session-tabs.tsx:1505-1514`),
+    /// the `✕` closes (`tabs.close`, `session-tabs.tsx:1745-1754`),
+    /// the ` + ` adds (`tabs.add?.()` → home route,
+    /// `session-tabs.tsx:1786-1792` + `406-416`) — and the reasoning
+    /// group's `+ Thought` header toggles its disclosure on release
+    /// (`onMouseUp={toggle}`, `group-view.tsx:152-190`). This routes
+    /// crossterm's mouse stream to exactly those surfaces.
+    pub fn mouse_event(&mut self, mouse: &crossterm::event::MouseEvent) {
+        use crate::components::session_tabs::{strip_hit, StripHit};
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let width = usize::from(self.size.0);
+        let col = usize::from(mouse.column);
+        let row = usize::from(mouse.row);
+        // The strip renders on row 0 of the session route while tabs
+        // are enabled and nothing modal owns the screen.
+        let strip_live = self.store.tabs_enabled()
+            && self.store.dialogs().is_empty()
+            && !self.permission_live()
+            && matches!(self.store.route(), Route::Session { .. });
+        let active = match self.store.route() {
+            Route::Session { session_id } => Some(session_id),
+            Route::Home => None,
+        };
+        match mouse.kind {
+            MouseEventKind::Moved => {
+                let (hover, add) = if strip_live && row == 0 {
+                    let tabs = self.store.tabs();
+                    match strip_hit(
+                        &tabs.tabs,
+                        active.as_deref(),
+                        true,
+                        width,
+                        col,
+                        tabs.hover.as_deref(),
+                    ) {
+                        StripHit::Tab(id) | StripHit::Close(id) => (Some(id), false),
+                        StripHit::Add => (None, true),
+                        StripHit::Outside => (None, false),
+                    }
+                } else {
+                    (None, false)
+                };
+                let changed = self.store.set_tab_hover(hover.as_deref());
+                let changed_add = self.store.set_tab_add_hovered(add);
+                if changed || changed_add {
+                    self.store.request_redraw();
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if strip_live && row == 0 {
+                    let tabs = self.store.tabs();
+                    match strip_hit(
+                        &tabs.tabs,
+                        active.as_deref(),
+                        true,
+                        width,
+                        col,
+                        tabs.hover.as_deref(),
+                    ) {
+                        StripHit::Tab(id) => self.store.select_tab(&id),
+                        StripHit::Close(id) => self.store.close_tab(Some(&id)),
+                        StripHit::Add => self.store.navigate(Route::Home),
+                        StripHit::Outside => {}
+                    }
+                    return;
+                }
+                // The transcript's reasoning headers toggle on release
+                // (beta.8 bug 4) — the hit rows were recorded by the
+                // last `render_session` pass with absolute positions.
+                // Nothing pointer-driven happens under a modal.
+                if !self.store.dialogs().is_empty() || self.permission_live() {
+                    return;
+                }
+                for hit in self.store.transcript_hit_rows() {
+                    if row >= hit.y && row < hit.y + hit.height {
+                        self.store.toggle_group_expanded(&hit.session_id, &hit.key);
+                        self.store.request_redraw();
+                        return;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn press(&mut self, spec: &str) {
         self.maybe_remerge_keybinds();
         let lowered = spec.to_ascii_lowercase();
@@ -457,9 +545,7 @@ impl App {
                 let outcome = composer.handle_key(&key_event);
                 if outcome != KeyOutcome::Ignored {
                     self.store.set_composer(&key, &composer);
-                    if let KeyOutcome::Submitted(prompt) = outcome {
-                        self.store.forward_submission(&key, &prompt);
-                    }
+                    self.handle_composer_outcome(&key, outcome);
                     self.keymap.clear_pending();
                     return;
                 }
@@ -487,10 +573,31 @@ impl App {
             let outcome = composer.handle_key(&key_event);
             if outcome != KeyOutcome::Ignored {
                 self.store.set_composer(&key, &composer);
-                if let KeyOutcome::Submitted(prompt) = outcome {
-                    self.store.forward_submission(&key, &prompt);
+                self.handle_composer_outcome(&key, outcome);
+            }
+        }
+    }
+
+    /// Post-`handle_key` routing of a consumed composer outcome: a
+    /// submit forwards to the engine sink; a slash-entry COMMAND run
+    /// (v2 `onSelect: command.run`) dispatches through the command
+    /// seam — `/help` opens the help dialog, `/exit` exits, `/editor`
+    /// opens $EDITOR — never a prompt submission.
+    fn handle_composer_outcome(&mut self, key: &str, outcome: KeyOutcome) {
+        match outcome {
+            KeyOutcome::Submitted(prompt) => {
+                self.store.forward_submission(key, &prompt);
+            }
+            KeyOutcome::Command(command) => {
+                let dispatch = self.dispatcher.dispatch(&self.store, command, None);
+                if command == "app.exit" && dispatch != Dispatch::Unknown {
+                    self.exit_requested = true;
+                }
+                if let Dispatch::ServerPending(reason) = dispatch {
+                    let _ = reason;
                 }
             }
+            KeyOutcome::Edited | KeyOutcome::Ignored | KeyOutcome::Paste(_) => {}
         }
     }
 
@@ -500,9 +607,7 @@ impl App {
             let outcome = composer.handle_key(&key_event);
             if outcome != KeyOutcome::Ignored {
                 self.store.set_composer(key, &composer);
-                if let KeyOutcome::Submitted(prompt) = outcome {
-                    self.store.forward_submission(key, &prompt);
-                }
+                self.handle_composer_outcome(key, outcome);
             }
         }
     }
@@ -1451,7 +1556,16 @@ pub async fn run_with_size(
         // Bracketed paste (R-07): pasted text (an image file's path,
         // typically) arrives as `Event::Paste` instead of raw keys —
         // the seam `pasteInputText`'s attachment resolution hangs off.
-        crossterm::event::EnableBracketedPaste
+        crossterm::event::EnableBracketedPaste,
+        // Mouse tracking (beta.8 bug 3/4): v2's renderer enables the
+        // terminal's mouse reporting (OpenTUI always runs it — the
+        // strip's hover/click and the reasoning rows' disclosure
+        // toggle are mouse-driven, `session-tabs.tsx:1652-1754` +
+        // `group-view.tsx:152-190`). Scope note: this port routes
+        // mouse events to the tab strip and the transcript's thought
+        // headers only — the broader mouse surface (drag reorder,
+        // context menus, scroll) stays keyboard-first.
+        crossterm::event::EnableMouseCapture
     );
     // The alternate screen owns the display from here: route EVERY
     // stderr write to `<state>/tui.log` until teardown (subsystem
@@ -1800,12 +1914,18 @@ pub async fn run_with_size(
             let draft = app.store.prompt_draft(&key).text.clone();
             let cwd = std::env::current_dir().ok();
             let _ = disable_raw_mode();
-            let _ =
-                crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::event::DisableMouseCapture,
+                crossterm::terminal::LeaveAlternateScreen
+            );
             let result = crate::editor::open_editor(&draft, cwd.as_deref(), || {}, || {});
             let _ = enable_raw_mode();
-            let _ =
-                crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen);
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::terminal::EnterAlternateScreen,
+                crossterm::event::EnableMouseCapture
+            );
             let _ = terminal.clear();
             if editor_guard.is_some() {
                 stderr_guard = crate::stderr_redirect::install(&crate::stderr_redirect::log_path());
@@ -1961,6 +2081,15 @@ pub async fn run_with_size(
             // Bracketed paste (R-07): resolve attachment file paths →
             // chips, else insert the text (`pasteInputText`).
             Some(CrosstermEvent::Paste(text)) => app.paste_terminal_text(&text),
+            // Mouse (beta.8 bugs 3/4): the tab strip's hover/select/
+            // close/add surface and the transcript's reasoning-row
+            // disclosure toggle.
+            Some(CrosstermEvent::Mouse(mouse)) => {
+                if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                    eprintln!("[tui] mouse: {mouse:?}");
+                }
+                app.mouse_event(&mouse);
+            }
             _ => {}
         }
         if app.exit_requested {
@@ -1985,6 +2114,7 @@ pub async fn run_with_size(
         LeaveAlternateScreen,
         crossterm::event::DisableFocusChange,
         crossterm::event::DisableBracketedPaste,
+        crossterm::event::DisableMouseCapture,
         // Clear any lingering graphics placements (R-07): the
         // alternate screen would discard them anyway, but an explicit
         // `a=d,d=a` keeps a same-screen exit clean.
@@ -2508,8 +2638,232 @@ fn slash_palette_opens_accepts_and_restores_the_popup_state() {
         composer.autocomplete.options.iter().map(|o| o.display.clone()).collect::<Vec<_>>()
     );
 
-    // Enter accepts the selected command into the draft (`/exit `).
+    // Enter accepts the selected command — v2 RUNS it (`onSelect:
+    // command.run`, autocomplete.tsx:481): /exit requests the app
+    // exit; the trigger token is REMOVED (hide(true)) and nothing is
+    // submitted to the model.
     app.press("enter");
-    assert_eq!(app.store.prompt_draft("s1").text, "/exit ", "the accept inserts the command");
+    assert_eq!(app.store.prompt_draft("s1").text, "", "the run removes the trigger token");
     assert!(app.store.composer("s1").autocomplete.visible.is_none(), "accept closes the popup");
+    assert!(app.exit_requested, "/exit executed app.exit, not a prompt send");
+}
+
+/// beta.8 bug 1 — the composer's slash dispatch, per v2 semantics:
+/// * known built-ins (`onSelect: command.run`) EXECUTE locally —
+///   `/help` opens `DialogHelp`, `/editor` requests $EDITOR;
+/// * the argument-taking `/cd` INSERTS (`insertSlash`);
+/// * an UNKNOWN `/word` (popup dismissed or no matches) submits as
+///   prompt text exactly like v2's `submitInner` fall-through (only
+///   `slash.arguments` commands and SERVER custom commands intercept
+///   the submit path, prompt/index.tsx:1133-1150).
+#[test]
+fn slash_builtins_execute_and_unknown_words_submit() {
+    let mut app = App::new((80, 24));
+    app.store.open_tab("s1", Some("S".to_owned()));
+
+    // /help → the DialogHelp dialog (help.show → dialog.replace).
+    for spec in ["/", "h", "e", "l", "p"] {
+        app.press(spec);
+    }
+    app.press("enter");
+    assert_eq!(
+        app.store.top_dialog().map(|dialog| dialog.kind),
+        Some(crate::store::DialogKind::Help),
+        "/help opened the help dialog"
+    );
+    assert!(app.store.prompt_draft("s1").is_empty(), "no prompt was sent");
+    // Escape closes the dialog.
+    app.press("escape");
+    assert!(app.store.dialogs().is_empty(), "escape closes the help dialog");
+
+    // /editor → prompt.editor: the run loop's editor request flag.
+    for spec in ["/", "e", "d", "i", "t", "o", "r"] {
+        app.press(spec);
+    }
+    app.press("enter");
+    assert!(
+        app.store.take_editor_request(),
+        "/editor executed prompt.editor (the $EDITOR suspend seam)"
+    );
+
+    // /cd — the one argument-taking command — still INSERTS.
+    for spec in ["/", "c", "d"] {
+        app.press(spec);
+    }
+    app.press("enter");
+    assert_eq!(app.store.prompt_draft("s1").text, "/cd ", "the argument command inserts");
+
+    // An unknown /word: v2's popup stays visible EMPTY for a
+    // non-matching query and swallows Enter (`select()` no-ops;
+    // `submitInner` bails on `auto()?.visible`) — only after ESCAPE
+    // dismisses it does Enter submit the word as prompt TEXT (the
+    // fall-through — nothing rejects it, prompt/index.tsx:1147-1163).
+    app.press("ctrl+c"); // prompt.clear: drop the /cd draft
+    for spec in ["/", "z", "z", "z"] {
+        app.press(spec);
+    }
+    let composer = app.store.composer("s1");
+    assert!(composer.autocomplete.visible.is_some(), "the popup stays up with zero matches");
+    assert!(
+        composer.autocomplete.options.is_empty(),
+        "a non-matching query filters to nothing: {:?}",
+        composer.autocomplete.options
+    );
+    app.press("enter");
+    assert!(
+        app.store.composer("s1").history.entries.is_empty(),
+        "enter with the empty popup visible does nothing"
+    );
+    app.press("escape");
+    app.press("enter");
+    assert_eq!(
+        app.store.composer("s1").history.entries.last(),
+        Some(&"/zzz".to_owned()),
+        "after dismissal the unknown word submits as text"
+    );
+}
+
+/// A crossterm mouse event at (`col`, `row`).
+#[cfg(test)]
+fn mouse(
+    kind: crossterm::event::MouseEventKind,
+    col: u16,
+    row: u16,
+) -> crossterm::event::MouseEvent {
+    crossterm::event::MouseEvent {
+        kind,
+        column: col,
+        row,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    }
+}
+
+/// beta.8 bug 3 — the tab strip's pointer surface through the pump:
+/// hover arms the lift, `✕` closes, a body click selects, ` + `
+/// navigates home (v2 `session-tabs.tsx:1505-1514`, `1745-1754`,
+/// `1786-1792`).
+#[test]
+fn mouse_strip_hover_close_select_and_add() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut app = App::new((80, 24));
+    app.store.open_tab("s1", Some("Alpha".to_owned()));
+    app.store.open_tab("s2", Some("Beta".to_owned()));
+    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+
+    // Hover the second tab (x=40 on the 32+32 split): the lift arms.
+    app.mouse_event(&mouse(MouseEventKind::Moved, 40, 0));
+    assert_eq!(app.store.tabs().hover.as_deref(), Some("s2"));
+    assert!(!app.store.tabs().add_hovered);
+    // The ✕ cell at 62 closes s2 (the mark renders one cell in from
+    // the hovered tab's right edge).
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 62, 0));
+    let tabs = app.store.tabs().tabs.clone();
+    assert_eq!(
+        tabs.iter().map(|tab| tab.session_id.as_str()).collect::<Vec<_>>(),
+        vec!["s1"],
+        "the hovered tab's ✕ closed it"
+    );
+    assert_eq!(app.store.route(), Route::Session { session_id: "s1".to_owned() });
+
+    // A body click selects: s1 is the only tab; open another and
+    // click its body mid-slot.
+    app.store.open_tab("s3", Some("Gamma".to_owned()));
+    app.mouse_event(&mouse(MouseEventKind::Moved, 40, 0));
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 40, 0));
+    assert_eq!(app.store.route(), Route::Session { session_id: "s3".to_owned() });
+
+    // The ` + ` affordance navigates home (v2 `add()` → home route).
+    app.mouse_event(&mouse(MouseEventKind::Moved, 65, 0));
+    assert!(app.store.tabs().add_hovered, "the + highlights under the pointer");
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 65, 0));
+    assert_eq!(app.store.route(), Route::Home);
+
+    // Hover off the strip clears the pointer state.
+    app.store.navigate(Route::Session { session_id: "s3".to_owned() });
+    app.mouse_event(&mouse(MouseEventKind::Moved, 40, 5));
+    assert_eq!(app.store.tabs().hover, None);
+    assert!(!app.store.tabs().add_hovered);
+}
+
+/// beta.8 bug 4 — the `+ Thought` disclosure through the pump: a
+/// completed reasoning part renders the collapsed header, a mouse
+/// release over the header row expands it (the bordered muted body
+/// renders), and a second release collapses it again
+/// (`onMouseUp={toggle}`, group-view.tsx:183).
+#[test]
+fn mouse_release_toggles_the_thought_disclosure() {
+    use crate::components::message::model::{Message, Part, PartTime};
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let mut app = App::new((80, 24));
+    app.store.set_messages(
+        "s1",
+        vec![
+            Message::User {
+                id: "u1".into(),
+                text: "think hard".into(),
+                created: 0,
+                files: Vec::new(),
+            },
+            Message::Assistant {
+                id: "a1".into(),
+                agent: "build".into(),
+                model: "fixture/fixture".into(),
+                parts: vec![Part::Reasoning {
+                    text: "**Inspecting**\n\nThe parser's edges need care.".into(),
+                    time: PartTime { created: Some(1), completed: Some(2) },
+                }],
+                finish: Some("success".into()),
+                error: None,
+                time: PartTime { created: Some(1), completed: Some(2) },
+            },
+        ],
+    );
+    app.store.open_tab("s1", Some("Thoughts".to_owned()));
+
+    // Collapsed: the header row, no body.
+    let collapsed = app.frame_text();
+    assert!(collapsed.contains("+ Thought"), "the collapsed header: {collapsed}");
+    assert!(!collapsed.contains("parser's edges"), "the body stays hidden: {collapsed}");
+
+    // The header's absolute rect comes from the last render's hit
+    // rows — release over it to expand.
+    let hit = app
+        .store
+        .transcript_hit_rows()
+        .iter()
+        .find(|row| row.key.starts_with("group:Reasoning:"))
+        .expect("the reasoning header recorded a hit row")
+        .clone();
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        10,
+        u16::try_from(hit.y).unwrap_or(u16::MAX),
+    ));
+    assert!(
+        app.store.group_expanded(&hit.session_id, &hit.key),
+        "the release toggled the disclosure open"
+    );
+    let expanded = app.frame_text();
+    assert!(expanded.contains("- Thought"), "the header flips to -: {expanded}");
+    assert!(expanded.contains("parser's edges"), "the bordered muted body renders: {expanded}");
+    assert!(expanded.contains('┃'), "the SplitBorder left border: {expanded}");
+
+    // Collapse again.
+    let hit_again = app
+        .store
+        .transcript_hit_rows()
+        .iter()
+        .find(|row| row.key.starts_with("group:Reasoning:"))
+        .expect("the header re-recorded its expanded-rect")
+        .clone();
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        10,
+        u16::try_from(hit_again.y).unwrap_or(u16::MAX),
+    ));
+    assert!(!app.store.group_expanded(&hit.session_id, &hit.key));
+    let collapsed_again = app.frame_text();
+    assert!(collapsed_again.contains("+ Thought"), "back to the collapsed header");
+    assert!(!collapsed_again.contains("parser's edges"), "the body hides again");
 }
