@@ -141,6 +141,10 @@ pub struct TuiConfig {
     /// The `tabs` section (open-tabs model): enabled defaults ON
     /// (mode "auto", `HERDR_ENV=1` turns it off), scope defaults cwd.
     pub tabs: TabsConfig,
+    /// `session.sidebar` (config/index.tsx:151-152): "auto" shows the
+    /// pane when space permits (>120 cols), "hide" never — default
+    /// auto.
+    pub session_sidebar: crate::components::sidebar::SidebarMode,
     /// The `model` field — the shared config's default model
     /// (`configuredModel`, local.tsx:172-184): string
     /// `"provider/model"` or `{ "providerID", "model", "variant" }`.
@@ -224,6 +228,10 @@ impl TuiConfig {
         let session_image_preview =
             value.pointer("/session/image_preview").and_then(Value::as_bool).unwrap_or(false);
         let tabs = TabsConfig::resolve(value.get("tabs"));
+        let session_sidebar = match value.pointer("/session/sidebar").and_then(Value::as_str) {
+            Some("hide") => crate::components::sidebar::SidebarMode::Hide,
+            _ => crate::components::sidebar::SidebarMode::Auto,
+        };
         let model = config_model_from_json(value.get("model"));
         Self {
             keybinds: value.get("keybinds").cloned().unwrap_or(Value::Null),
@@ -232,6 +240,7 @@ impl TuiConfig {
             attention,
             session_image_preview,
             tabs,
+            session_sidebar,
             model,
             path,
         }
@@ -262,6 +271,29 @@ mod tests {
         );
         assert!(
             TuiConfig::parse(r#"{"session": {"image_preview": true}}"#, None).session_image_preview
+        );
+    }
+
+    /// `session.sidebar` (config/index.tsx:151-152): "auto" default,
+    /// "hide" the only other value — anything else falls back to auto.
+    #[test]
+    fn parses_session_sidebar_mode() {
+        assert_eq!(
+            TuiConfig::parse("{}", None).session_sidebar,
+            crate::components::sidebar::SidebarMode::Auto
+        );
+        assert_eq!(
+            TuiConfig::parse(r#"{"session": {"sidebar": "hide"}}"#, None).session_sidebar,
+            crate::components::sidebar::SidebarMode::Hide
+        );
+        assert_eq!(
+            TuiConfig::parse(r#"{"session": {"sidebar": "auto"}}"#, None).session_sidebar,
+            crate::components::sidebar::SidebarMode::Auto
+        );
+        assert_eq!(
+            TuiConfig::parse(r#"{"session": {"sidebar": "bogus"}}"#, None).session_sidebar,
+            crate::components::sidebar::SidebarMode::Auto,
+            "unknown values degrade to the default"
         );
     }
 

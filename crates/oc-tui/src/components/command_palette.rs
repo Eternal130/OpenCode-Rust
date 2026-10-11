@@ -219,6 +219,14 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         group: "System",
         bindings: &[],
     },
+    // v2 registers it `palette: true` in the session frame's layer
+    // (session-frame.tsx:187-195, group "Session" — our View group).
+    PaletteCommand {
+        command: "session.sidebar.toggle",
+        title: "Toggle sidebar",
+        group: "View",
+        bindings: &["ctrl+x b"],
+    },
     PaletteCommand { command: "help.show", title: "Help", group: "System", bindings: &[] },
     PaletteCommand { command: "docs.open", title: "Open docs", group: "System", bindings: &[] },
     PaletteCommand {
@@ -762,6 +770,14 @@ impl CommandDispatcher for StoreDispatcher {
             }
             "session.tab.reopen" => {
                 let _ = store.reopen_tab(None);
+                Dispatch::Handled
+            }
+            // `<leader>b` (config/keybind.ts:95): v2's toggleSidebar
+            // (session-frame.tsx:118-130) — the store no-ops off the
+            // session route (the command lives in the session frame's
+            // keymap layer).
+            "session.sidebar.toggle" => {
+                store.toggle_sidebar();
                 Dispatch::Handled
             }
             "session.tab.next" | "session.tab.previous" => {
