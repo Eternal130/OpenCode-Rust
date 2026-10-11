@@ -374,3 +374,37 @@ tools/dev-gate.sh 'cargo run -p oc-cli -- serve --port 49374'
 A bad `OPENCODE_APP_ASSETS` path fails boot loudly (exit, stderr
 message). With neither override nor embedded archive the server is
 API-only — the historical default every test build pins.
+
+## TUI differential parity job (future CI — lane/diff-rt, not wired yet)
+
+The side-by-side TUI differential (`tools/parity/tui-diff/`, the
+`OC_TUI_DIFF` gate) needs the **runnable v2.0.24 checkout** at
+`/tmp/opencode/ref` (bun + node_modules), exactly like the local
+parity harness self-heals it (`tools/parity/src/reference.rs`:
+tar copy from the pinned `/opt/opencode-ref` source, then
+`bun install --frozen-lockfile`). When CI grows a job for it, model it
+on `web-assets`:
+
+1. **`ref-checkout` job**: fetch the pinned ref tarball (same URL +
+   `APP_REF` env as `web-assets`), `oven-sh/setup-bun`, untar to
+   `ref/`, `bun install --frozen-lockfile` at the ref root (cache on
+   the ref hash). Export a `PARITY_REF_ROOT` pointing at it and upload
+   as the workspace for the next job (or cache it — ~2 GB with
+   node_modules; the cache route matches `web-assets`' philosophy).
+2. **`tui-diff` job** (manual/nightly cadence, NOT per-PR — a full
+   corpus ×2 runs ×2 sizes takes ~1–2 h): `PARITY_BUN` pointed at the
+   runner's bun (GitHub runners install bun world-readable via
+   `oven-sh/setup-bun`, so the local `/root` permission problem does
+   not apply), then `cargo run -p parity --bin tui-diff -- --runs 2`
+   under the usual caps. The runner exits 0 as long as the RIG
+   executed (boots, settles, captures) — content mismatches are the
+   REPORT, not a red X; the current backlog lives in
+   `tools/parity/tui-diff/REPORT.md`. Once the backlog is burned down,
+   flip the `--strict` flag (exits 1 on any driver error or
+   deterministic MISMATCH step) and move the job to per-PR.
+
+Why not per-PR today: the mismatch backlog is the point of the rig —
+every deterministic mismatch is a fix-wave work item, and CI red on a
+known backlog teaches nothing. The `OC_TUI_DIFF=1` nextest gate
+(boot-home only) is the cheap per-PR variant once the ref checkout is
+cached on the runner.

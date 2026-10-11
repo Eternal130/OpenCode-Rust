@@ -1,0 +1,14 @@
+{
+  "id": "palette",
+  "description": "Open the command palette (ctrl+p), browse, close.",
+  "stub": "text",
+  "mode": "exact",
+  "steps": [
+    { "label": "boot", "wait_ms": 12000 },
+    { "label": "dismiss", "keys": ["esc"], "wait_ms": 1000 },
+    { "label": "palette-open", "keys": ["ctrl+p"], "wait_ms": 1500 },
+    { "label": "palette-down", "keys": ["down", "down"], "wait_ms": 900 },
+    { "label": "palette-close", "keys": ["esc"], "wait_ms": 1000 },
+    { "label": "exit", "keys": ["leader", "q"], "wait_ms": 2500 }
+  ]
+}
