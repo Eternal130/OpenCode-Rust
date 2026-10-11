@@ -50,6 +50,7 @@ use crate::components::footer::permission::{
 use crate::components::footer::{FooterTheme, FooterView};
 use crate::data::{Connection, HttpResync, Ingest};
 use crate::keymap::{KeyStroke, Keymap, ManualClock, Outcome};
+use crate::render::color_mode::{self, ColorMode};
 use crate::render::Frame;
 use crate::store::{Focus, Route, Store};
 use crate::theme::{ThemeRegistry, ThemeState};
@@ -1862,6 +1863,10 @@ pub async fn run_with_size(
     // none of it may splat over the frame; v2 never does). Panics
     // still reach the real stderr through the guard's saved fd.
     let mut stderr_guard = crate::stderr_redirect::install(&crate::stderr_redirect::log_path());
+    // S0: one-shot terminal color-capability probe (TERM/COLORTERM/
+    // SSH_*/WT_SESSION — v2 raster semantics; see render::color_mode).
+    let color_mode = color_mode::detect_from_env();
+    let mut color_cache = color_mode::ColorCache::default();
     let mut terminal = ratatui::Terminal::new(CrosstermBackend::new(std::io::stdout()))
         .map_err(|e| e.to_string())?;
     let size = size.unwrap_or((100, 30));
@@ -2392,7 +2397,15 @@ pub async fn run_with_size(
         let generation = app.store.redraw_generation();
         if generation != redraw_at || app.store.clock() > 0 {
             redraw_at = generation;
-            let frame = app.frame();
+            let mut frame = app.frame();
+            // S0 parity: degrade RGB → xterm-256 indices at the
+            // terminal-draw seam when the raster-level capability
+            // probe says the terminal is 256-color (v2's raster does
+            // this at emission; `App::frame()` and the goldens stay
+            // truecolor — see render::color_mode).
+            if color_mode == ColorMode::Indexed256 {
+                color_mode::degrade_frame(&mut frame, &mut color_cache);
+            }
             let draw = terminal.draw(|surface| {
                 let buffer = surface.buffer_mut();
                 for (y, row) in frame.cells.iter().enumerate() {
