@@ -24,11 +24,6 @@ use std::path::PathBuf;
 
 use parity::tui_diff::{self, RigConfig};
 
-fn parse_size(spec: &str) -> Option<(u16, u16)> {
-    let (w, h) = spec.split_once('x')?;
-    Some((w.parse().ok()?, h.parse().ok()?))
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut cfg = RigConfig::default_config();
@@ -42,7 +37,8 @@ async fn main() -> anyhow::Result<()> {
             "--filter" => cfg.script_filter = args.next(),
             "--sizes" => {
                 if let Some(spec) = args.next() {
-                    let sizes: Vec<(u16, u16)> = spec.split(',').filter_map(parse_size).collect();
+                    let sizes: Vec<(u16, u16)> =
+                        spec.split(',').filter_map(tui_diff::parse_size_spec).collect();
                     if !sizes.is_empty() {
                         cfg.sizes = sizes;
                     }
