@@ -2164,6 +2164,7 @@ dependencies = [
  "oc-plugin-host",
  "oc-syntax",
  "oc-theme",
+ "oc-tui-core",
  "oc-util",
  "parity",
  "ratatui",
@@ -2173,6 +2174,13 @@ dependencies = [
  "tokio",
  "unicode-width 0.2.0",
  "uuid",
+]
+
+[[package]]
+name = "oc-tui-core"
+version = "2.0.24"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

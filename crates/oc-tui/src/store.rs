@@ -33,8 +33,10 @@ use crate::components::message::model::{Message, Part, PartTime};
 use crate::components::toast::{ToastOptions, ToastQueue};
 use crate::data::{BusEvent, ConnectionState, Ingest};
 use crate::keymap::KeybindOverride;
+use crate::mini::model_pref;
 use crate::reactive::{Effect, Runtime, Signal};
 use crate::theme::{ThemeRegistry, ThemeState};
+use oc_tui_core::scroll::{FollowState, ScrollCommand, ScrollDriver};
 
 /// How many bus-event ids the replay-dedup window remembers (the F2
 /// contract — see [`Store::ingest_all`] and `data.rs`).
@@ -114,6 +116,11 @@ pub enum DialogKind {
     /// `ui.dialog.open` request) and renders natively — the id keys
     /// the store's [`PluginDialogContent`].
     Plugin { id: String },
+    /// The queued-prompts manager (`session.queued_prompts`,
+    /// `<leader>q` — v2's `DialogSelect` "Queued prompts",
+    /// index.tsx:627-675): enter steers the selected prompt, ctrl+d
+    /// deletes it (`queued_prompt.delete`).
+    QueuedPrompts,
 }
 
 /// One stack entry: the dialog kind, chrome size and content state.
@@ -158,6 +165,10 @@ pub struct TabHistory {
 pub const CLOSED_TAB_LIMIT: usize = 25;
 pub const TAB_HISTORY_LIMIT: usize = 100;
 pub const NEW_SESSION_TAB_TITLE: &str = "New session";
+
+/// The interrupt-arm window (prompt/index.tsx:517-519: the 5000 ms
+/// reset timer after the first escape).
+pub const INTERRUPT_ARM_WINDOW_MS: u64 = 5000;
 
 /// The tabs model (`session-tabs-model.ts`): pure functions, ported
 /// one-to-one so the golden components share semantics with the store.
@@ -574,6 +585,9 @@ pub struct PromptState {
     /// the composer store round-trip between keypresses).
     pub autocomplete:
         std::collections::HashMap<String, crate::components::composer::AutocompleteState>,
+    /// The editing state keyed by session (Wave A: the text-edit
+    /// core's caret/selection/undo stacks survive the round-trip).
+    pub edits: std::collections::HashMap<String, oc_tui_core::text_edit::TextArea>,
     pub history: PromptHistory,
 }
 
@@ -779,6 +793,19 @@ pub struct Store {
     /// writes them like `frame_images`): the reasoning-group headers
     /// whose absolute `[y, y+height)` rect a mouse release can toggle.
     transcript_hit_rows: std::cell::RefCell<Vec<TranscriptHitRow>>,
+    /// Per-session scroll state (Wave A's scroll driver over
+    /// [`FollowState`]); the render pass records the metrics.
+    scroll: std::cell::RefCell<HashMap<String, ScrollDriver>>,
+    transcript_metrics: std::cell::RefCell<HashMap<String, TranscriptMetrics>>,
+    /// The queued-prompt store (Wave A) + the interrupt-arm state +
+    /// the model ring — reactive so the dock/hints re-render.
+    queue: Signal<QueueState>,
+    interrupts: Signal<HashMap<String, InterruptArm>>,
+    model_ring: Signal<ModelRing>,
+    /// The interrupt API seam.
+    interrupt_sink: std::cell::RefCell<Rc<dyn InterruptSink>>,
+    /// The model-ring persistence flag (the run loop drains it).
+    model_ring_dirty: Cell<bool>,
 }
 
 /// One clickable transcript row from the last frame (absolute rows).
@@ -792,6 +819,107 @@ pub struct TranscriptHitRow {
     pub y: usize,
     /// The row's height in rows.
     pub height: usize,
+}
+
+/// One queued prompt (`session.inbox` row with `delivery: "queue"`,
+/// the local serial-queue model lifted from mini/queue.rs — see
+/// `QueueState`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueuedPrompt {
+    pub id: String,
+    pub text: String,
+}
+
+/// The queued-prompt state per session (mini/queue.rs's serial queue
+/// lifted into the MAIN store, Wave A): prompts submitted with
+/// `<leader>return` while a turn is ACTIVE wait here; the drain loop
+/// delivers the head through the prompt sink when the session goes
+/// idle; an empty-enter STEERS the head immediately (v2's
+/// `onEmptySubmit` → `mutatePending("steer", …)`,
+/// routes/session/index.tsx:1504-1508).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct QueueState {
+    pub by_session: HashMap<String, Vec<QueuedPrompt>>,
+    /// The serial drain's in-flight marker (the head being delivered).
+    pub delivering: Option<(String, String)>,
+}
+
+impl QueueState {
+    /// The queued prompts of one session.
+    #[must_use]
+    pub fn queue_of(&self, session_id: &str) -> &[QueuedPrompt] {
+        self.by_session.get(session_id).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// The interrupt-arm state (v2's 2-press machine,
+/// prompt/index.tsx:500-529): the first escape on a RUNNING turn arms
+/// (`store.interrupt = 1` + a 5000 ms reset timer), the second fires
+/// the server interrupt (`resume: true`). `count == 0` = disarmed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InterruptArm {
+    pub count: u32,
+    /// When the arm expires (store clock, ms).
+    pub expires_at: u64,
+}
+
+/// The interrupt API seam (`client.api.session.interrupt`): tests
+/// record; production POSTs with `resume: true` (the 2-press flow's
+/// fire path, prompt/index.tsx:522-525).
+pub trait InterruptSink {
+    fn interrupt(&self, session_id: &str);
+}
+
+/// The default recording sink (tests assert against its log).
+#[derive(Debug, Default)]
+pub struct RecordingInterruptSink {
+    pub calls: std::cell::RefCell<Vec<String>>,
+}
+
+impl InterruptSink for RecordingInterruptSink {
+    fn interrupt(&self, session_id: &str) {
+        self.calls.borrow_mut().push(session_id.to_owned());
+    }
+}
+
+/// What one escape did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InterruptStep {
+    /// Not a running turn — the binding rejects (v2's
+    /// `enabled: status() === "running"` gate) and the stroke falls
+    /// through to the composer.
+    Ignored,
+    /// First press: armed ("esc again to interrupt").
+    Armed,
+    /// Second press within the window: the interrupt fired.
+    Fired,
+}
+
+/// The cycle step (`local.agent.move` / `local.model.cycle`,
+/// local.tsx:114-124 + 412-423): `index + direction` wrapping the
+/// list length.
+fn wrap_step(index: usize, direction: i8, len: usize) -> usize {
+    let len = i64::try_from(len).unwrap_or(1).max(1);
+    let stepped = i64::try_from(index).unwrap_or(0) + i64::from(direction);
+    usize::try_from(stepped.rem_euclid(len)).unwrap_or(0)
+}
+
+/// The model-preference ring (`context/local.tsx`'s preferences:
+/// `recent`/`favorite` lists + the variant map, `mini/model_pref.rs`'s
+/// pure functions) — the f2/favorite cycle source.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ModelRing {
+    pub document: model_pref::ModelPreferenceDocument,
+}
+
+/// The per-session transcript metrics the scroll driver needs (the
+/// last render pass records them).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TranscriptMetrics {
+    /// The transcript pane's row budget (the viewport).
+    pub viewport: usize,
+    /// The transcript's full content height.
+    pub content_height: usize,
 }
 
 /// The store's root signals (one struct so [`Store::build`] stays
@@ -820,6 +948,9 @@ struct StoreSignals {
     plugin_hints: Signal<Vec<(String, String)>>,
     plugin_home_actions: Signal<Vec<crate::components::home::PluginQuickAction>>,
     plugin_group_rules: Signal<crate::components::message::model::GroupRules>,
+    queue: Signal<QueueState>,
+    interrupts: Signal<HashMap<String, InterruptArm>>,
+    model_ring: Signal<ModelRing>,
 }
 
 impl Store {
@@ -858,6 +989,9 @@ impl Store {
                 watchers.plugin_hints.get(),
                 watchers.plugin_home_actions.get(),
                 watchers.plugin_group_rules.get(),
+                watchers.queue.get(),
+                watchers.interrupts.get(),
+                watchers.model_ring.get(),
                 watch_clock.get(),
             );
             bump.set(bump.get() + 1);
@@ -894,6 +1028,9 @@ impl Store {
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
+            queue,
+            interrupts,
+            model_ring,
         } = signals;
         Self {
             runtime,
@@ -944,6 +1081,13 @@ impl Store {
             frame_images: std::cell::RefCell::new(Vec::new()),
             expanded_groups: std::cell::RefCell::new(HashMap::new()),
             transcript_hit_rows: std::cell::RefCell::new(Vec::new()),
+            scroll: std::cell::RefCell::new(HashMap::new()),
+            transcript_metrics: std::cell::RefCell::new(HashMap::new()),
+            queue,
+            interrupts,
+            model_ring,
+            interrupt_sink: std::cell::RefCell::new(Rc::new(RecordingInterruptSink::default())),
+            model_ring_dirty: Cell::new(false),
         }
     }
 
@@ -978,6 +1122,9 @@ impl Store {
             Signal::new(&runtime, Vec::<crate::components::home::PluginQuickAction>::new());
         let plugin_group_rules =
             Signal::new(&runtime, crate::components::message::model::GroupRules::empty());
+        let queue = Signal::new(&runtime, QueueState::default());
+        let interrupts = Signal::new(&runtime, HashMap::<String, InterruptArm>::new());
+        let model_ring = Signal::new(&runtime, ModelRing::default());
         Self::build(
             runtime,
             StoreSignals {
@@ -1003,6 +1150,9 @@ impl Store {
                 plugin_hints,
                 plugin_home_actions,
                 plugin_group_rules,
+                queue,
+                interrupts,
+                model_ring,
             },
         )
     }
@@ -1171,10 +1321,19 @@ impl Store {
     pub fn composer(&self, session_id: &str) -> Composer {
         let state = self.prompt.get();
         let draft = state.drafts.get(session_id).cloned().unwrap_or_default();
-        let caret = draft.text.chars().count();
         let autocomplete =
             state.autocomplete.get(session_id).cloned().unwrap_or_else(Composer::live_autocomplete);
-        Composer { draft, caret, history: state.history, autocomplete, ..Composer::default() }
+        let edit = state.edits.get(session_id).cloned().unwrap_or_else(Composer::fresh_edit);
+        let mut composer =
+            Composer { draft, history: state.history, autocomplete, edit, ..Composer::default() };
+        // The text mirror resyncs on the way in (the draft is the
+        // store-facing source; the caret/selection persist in `edit`).
+        if composer.edit.text != composer.draft.text {
+            composer.edit.text = composer.draft.text.clone();
+            let caret = composer.edit.caret.min(composer.draft.text.chars().count());
+            composer.edit.caret = caret;
+        }
+        composer
     }
 
     /// Store a composer edit (draft + history + autocomplete advance
@@ -1187,6 +1346,7 @@ impl Store {
                 state.drafts.insert(session_id.to_owned(), composer.draft.clone());
             }
             state.autocomplete.insert(session_id.to_owned(), composer.autocomplete.clone());
+            state.edits.insert(session_id.to_owned(), composer.edit.clone());
             state.history = composer.history.clone();
         });
     }
@@ -1608,10 +1768,13 @@ impl Store {
 
     /// Mutate one session's message tree through a closure (the SSE
     /// reducers' shared entry).
-    fn update_messages(&self, session_id: &str, update: impl FnOnce(&mut Vec<Message>)) {
-        self.messages.update(|state| {
-            update(state.by_session.entry(session_id.to_owned()).or_default());
-        });
+    fn update_messages<R>(
+        &self,
+        session_id: &str,
+        update: impl FnOnce(&mut Vec<Message>) -> R,
+    ) -> R {
+        self.messages
+            .update(|state| update(state.by_session.entry(session_id.to_owned()).or_default()))
     }
 
     // -- clock (injected; ManualClock semantics) --------------------------------
@@ -1853,6 +2016,401 @@ impl Store {
     #[must_use]
     pub fn transcript_hit_rows(&self) -> Vec<TranscriptHitRow> {
         self.transcript_hit_rows.borrow().clone()
+    }
+
+    // -- scroll (Wave A: the session scroll driver) ---------------------------
+
+    /// Record the transcript metrics of the last render pass (the
+    /// scroll commands' viewport/content inputs).
+    pub fn set_transcript_metrics(&self, session_id: &str, metrics: TranscriptMetrics) {
+        self.transcript_metrics.borrow_mut().insert(session_id.to_owned(), metrics);
+    }
+
+    #[must_use]
+    pub fn transcript_metrics(&self, session_id: &str) -> TranscriptMetrics {
+        self.transcript_metrics.borrow().get(session_id).copied().unwrap_or_default()
+    }
+
+    /// The session's follow state (defaults sticky — the fresh-session
+    /// vscroll-stick-bottom).
+    #[must_use]
+    pub fn follow_state(&self, session_id: &str) -> FollowState {
+        self.scroll.borrow().get(session_id).map_or(FollowState::Sticky, ScrollDriver::follow)
+    }
+
+    /// The paint offset for the session's transcript (sticky sits at
+    /// the maximum scrollTop).
+    #[must_use]
+    pub fn scroll_offset(&self, session_id: &str) -> usize {
+        let metrics = self.transcript_metrics(session_id);
+        ScrollDriver::offset(
+            self.follow_state(session_id),
+            metrics.viewport,
+            metrics.content_height,
+        )
+    }
+
+    /// Apply one of v2's scroll commands (`routes/session/index.tsx:
+    /// 763-805`) against the recorded metrics; `true` when the state
+    /// moved (the redraw rides the request bump).
+    pub fn scroll_command(&self, session_id: &str, command: ScrollCommand) -> bool {
+        let metrics = self.transcript_metrics(session_id);
+        let mut scroll = self.scroll.borrow_mut();
+        let driver = scroll.entry(session_id.to_owned()).or_default();
+        let before = driver.follow();
+        driver.scroll(command, metrics.viewport, metrics.content_height);
+        driver.follow() != before
+    }
+
+    /// An append transition (a streaming part grew the transcript):
+    /// sticky follows the tail, free keeps its offset.
+    pub fn scroll_appended(&self, session_id: &str, new_content_height: usize) {
+        let viewport = self.transcript_metrics(session_id).viewport;
+        let maximum = new_content_height.saturating_sub(viewport);
+        let mut scroll = self.scroll.borrow_mut();
+        scroll.entry(session_id.to_owned()).or_default().appended(maximum);
+    }
+
+    // -- interrupt (Wave A: the 2-press escape machine) ------------------------
+
+    /// The interrupt sink (production POSTs `session.interrupt` with
+    /// `resume: true`).
+    pub fn set_interrupt_sink(&self, sink: Rc<dyn InterruptSink>) {
+        *self.interrupt_sink.borrow_mut() = sink;
+    }
+
+    /// Whether the session's turn is RUNNING (the interrupt gate, v2's
+    /// `enabled: status() === "running"`): the trailing message is
+    /// either a submitted user prompt (no assistant yet) or an
+    /// assistant message whose finish is absent / tool-calls /
+    /// unknown with no `session.idle` marker after it.
+    #[must_use]
+    pub fn session_running(&self, session_id: &str) -> bool {
+        use crate::components::message::model::Message;
+        let messages = self.messages(session_id);
+        // A trailing `session.idle` marker CLOSES the turn (the
+        // marker is the boundary; earlier messages stay earlier).
+        if matches!(messages.last(), Some(Message::Idle { .. })) {
+            return false;
+        }
+        let Some(last) =
+            messages.iter().rev().find(|message| !matches!(message, Message::Idle { .. }))
+        else {
+            return false;
+        };
+        match last {
+            Message::User { .. } => true,
+            Message::Assistant { finish, error, .. } => {
+                error.is_none()
+                    && finish
+                        .as_deref()
+                        .is_none_or(|finish| ["tool-calls", "unknown"].contains(&finish))
+            }
+            _ => false,
+        }
+    }
+
+    /// The armed hint (v2 prompt/index.tsx:141: armed shows "again to
+    /// interrupt"): `Some(true)` armed, `Some(false)` = running but
+    /// not armed, `None` = not running.
+    #[must_use]
+    pub fn interrupt_hint_armed(&self, session_id: &str, now_ms: u64) -> Option<bool> {
+        if !self.session_running(session_id) {
+            return None;
+        }
+        let armed = self
+            .interrupts
+            .get()
+            .get(session_id)
+            .is_some_and(|arm| arm.count > 0 && now_ms < arm.expires_at);
+        Some(armed)
+    }
+
+    /// One escape press on the session (prompt/index.tsx:513-527):
+    /// arm on the first press (5000 ms window), fire on the second.
+    pub fn interrupt_pressed(&self, session_id: &str, now_ms: u64) -> InterruptStep {
+        if !self.session_running(session_id) {
+            return InterruptStep::Ignored;
+        }
+        let mut state = self.interrupts.get();
+        let arm = state.get(session_id).copied().unwrap_or_default();
+        // An expired arm starts over.
+        let count = if arm.count > 0 && now_ms < arm.expires_at { arm.count } else { 0 };
+        if count == 0 {
+            state.insert(
+                session_id.to_owned(),
+                InterruptArm { count: 1, expires_at: now_ms + INTERRUPT_ARM_WINDOW_MS },
+            );
+            self.interrupts.set(state);
+            return InterruptStep::Armed;
+        }
+        state.insert(session_id.to_owned(), InterruptArm::default());
+        self.interrupts.set(state);
+        self.interrupt_sink.borrow().interrupt(session_id);
+        InterruptStep::Fired
+    }
+
+    /// Clear the arm (the turn ended — the hint row collapses).
+    pub fn interrupt_clear(&self, session_id: &str) {
+        self.interrupts.update(|state| {
+            state.remove(session_id);
+        });
+    }
+
+    // -- queued prompts (Wave A: mini/queue.rs lifted into the main store) ----
+
+    /// The queued prompts of one session (the dock + manager rows).
+    #[must_use]
+    pub fn queued_prompts(&self, session_id: &str) -> Vec<QueuedPrompt> {
+        self.queue.get().queue_of(session_id).to_vec()
+    }
+
+    /// `<leader>return` over an ACTIVE turn (mini/queue.rs's Admit):
+    /// the prompt waits in the local serial queue; the drain loop
+    /// delivers the head when the session goes idle.
+    pub fn queue_prompt(&self, session_id: &str, text: &str) {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.queue.update(|state| {
+            state
+                .by_session
+                .entry(session_id.to_owned())
+                .or_default()
+                .push(QueuedPrompt { id, text: text.to_owned() });
+        });
+    }
+
+    /// Pop the head for delivery (the serial drain — one at a time,
+    /// only while the session is idle).
+    #[must_use]
+    pub fn pop_queued_prompt(&self, session_id: &str) -> Option<QueuedPrompt> {
+        if self.session_running(session_id) {
+            return None;
+        }
+        let head = self.queue.get().queue_of(session_id).first().cloned()?;
+        self.queue.update(|state| {
+            if let Some(list) = state.by_session.get_mut(session_id) {
+                list.retain(|item| item.id != head.id);
+            }
+        });
+        Some(head)
+    }
+
+    /// Delete one queued prompt (`queued_prompt.delete`, ctrl+d in the
+    /// manager): `true` when it existed.
+    pub fn delete_queued_prompt(&self, session_id: &str, id: &str) -> bool {
+        let existed = self.queue.get().queue_of(session_id).iter().any(|item| item.id == id);
+        if existed {
+            self.queue.update(|state| {
+                if let Some(list) = state.by_session.get_mut(session_id) {
+                    list.retain(|item| item.id != id);
+                }
+            });
+        }
+        existed
+    }
+
+    /// The drain step (called between ingests): while a session with a
+    /// non-empty queue sits idle, deliver the head through the prompt
+    /// sink — one prompt at a time (serial, mini/queue.rs's drain).
+    pub fn drain_queued_prompts(&self) {
+        let sessions: Vec<String> = self.queue.get().by_session.keys().cloned().collect();
+        for session_id in sessions {
+            if self.queue.get().queue_of(&session_id).is_empty() {
+                continue;
+            }
+            if self.session_running(&session_id) {
+                continue;
+            }
+            if let Some(head) = self.pop_queued_prompt(&session_id) {
+                let prompt = crate::components::composer::SubmittedPrompt {
+                    text: head.text,
+                    ..crate::components::composer::SubmittedPrompt::default()
+                };
+                self.prompt_sink.send(&session_id, &prompt);
+                // The next head waits for the NEXT drain tick (serial).
+                break;
+            }
+        }
+    }
+
+    // -- model ring (Wave A: the f2/favorite cycle source) --------------------
+
+    /// The model-preference ring (recent/favorite/variant —
+    /// `context/local.tsx`'s preferences document).
+    #[must_use]
+    pub fn model_ring(&self) -> ModelRing {
+        self.model_ring.get()
+    }
+
+    /// Seed the ring (boot: the persisted `<state>/model.json`, when
+    /// available).
+    pub fn set_model_ring(&self, ring: ModelRing) {
+        self.model_ring.set(ring);
+    }
+
+    /// `local.model.set(model, { recent: true })` — `addRecent`
+    /// (model-preference.ts:150-152): dedup, front-insert, cap 10.
+    pub fn model_add_recent(&self, provider_id: &str, model_id: &str) {
+        let model = model_pref::ModelPreferenceModel {
+            provider_id: provider_id.to_owned(),
+            model_id: model_id.to_owned(),
+        };
+        self.model_ring.update(|ring| {
+            ring.document.recent = model_pref::recent_models(&model, &ring.document.recent);
+        });
+        self.model_ring_dirty.set(true);
+    }
+
+    /// `local.model.cycle(direction)` (local.tsx:412-423): step through
+    /// the VALID recent ring (validity against the loaded model list),
+    /// wrapping; returns the next selection.
+    #[must_use]
+    pub fn model_cycle_recent(&self, direction: i8) -> Option<ModelSelection> {
+        let ring = self.model_ring.get();
+        let valid = |model: &model_pref::ModelPreferenceModel| -> bool {
+            self.server_lists().models.rows().is_none_or(|rows| {
+                rows.iter()
+                    .any(|row| row.provider_id == model.provider_id && row.id == model.model_id)
+            })
+        };
+        let recent: Vec<&model_pref::ModelPreferenceModel> =
+            ring.document.recent.iter().filter(|model| valid(model)).collect();
+        if recent.is_empty() {
+            return None;
+        }
+        let route = self.route();
+        let current = match &route {
+            Route::Session { session_id } => self.selection_for(session_id).model,
+            Route::Home => self.selection_for(crate::app::HOME_PROMPT_KEY).model,
+        };
+        let index = current.as_ref().and_then(|selection| {
+            recent.iter().position(|model| {
+                model.provider_id == selection.provider_id && model.model_id == selection.model_id
+            })
+        });
+        let next = match index {
+            None if direction > 0 => 0,
+            None => recent.len() - 1,
+            Some(index) => wrap_step(index, direction, recent.len()),
+        };
+        let model = recent.get(next)?;
+        Some(ModelSelection {
+            provider_id: model.provider_id.clone(),
+            model_id: model.model_id.clone(),
+            variant: None,
+        })
+    }
+
+    /// `local.model.cycleFavorite(direction)` (local.tsx:424-451):
+    /// step the favorites (info toast when none — the caller shows it),
+    /// and push the pick onto recent.
+    #[must_use]
+    pub fn model_cycle_favorite(&self, direction: i8) -> Option<ModelSelection> {
+        let ring = self.model_ring.get();
+        let valid = |model: &model_pref::ModelPreferenceModel| -> bool {
+            self.server_lists().models.rows().is_none_or(|rows| {
+                rows.iter()
+                    .any(|row| row.provider_id == model.provider_id && row.id == model.model_id)
+            })
+        };
+        let favorites: Vec<&model_pref::ModelPreferenceModel> =
+            ring.document.favorite.iter().filter(|model| valid(model)).collect();
+        if favorites.is_empty() {
+            return None;
+        }
+        let route = self.route();
+        let current = match &route {
+            Route::Session { session_id } => self.selection_for(session_id).model,
+            Route::Home => self.selection_for(crate::app::HOME_PROMPT_KEY).model,
+        };
+        let index = current.as_ref().and_then(|selection| {
+            favorites.iter().position(|model| {
+                model.provider_id == selection.provider_id && model.model_id == selection.model_id
+            })
+        });
+        let next = match index {
+            None if direction > 0 => 0,
+            None => favorites.len() - 1,
+            Some(index) => wrap_step(index, direction, favorites.len()),
+        };
+        let model = favorites.get(next)?;
+        self.model_add_recent(&model.provider_id, &model.model_id);
+        Some(ModelSelection {
+            provider_id: model.provider_id.clone(),
+            model_id: model.model_id.clone(),
+            variant: None,
+        })
+    }
+
+    /// The model-ring persistence flag (the run loop drains it: write
+    /// `<state>/model.json` when set).
+    pub fn take_model_ring_dirty(&self) -> Option<ModelRing> {
+        if self.model_ring_dirty.replace(false) {
+            Some(self.model_ring.get())
+        } else {
+            None
+        }
+    }
+
+    /// The current selection's variant cycle
+    /// (`local.model.variant.cycle`, local.tsx:494-498 over
+    /// `cycleModelVariant`): `None` = the model has no variants.
+    #[must_use]
+    pub fn variant_cycle(&self) -> Option<Option<String>> {
+        let route = self.route();
+        let selection = match &route {
+            Route::Session { session_id } => self.selection_for(session_id).model?,
+            Route::Home => self.selection_for(crate::app::HOME_PROMPT_KEY).model?,
+        };
+        let variants = self
+            .server_lists()
+            .models
+            .rows()?
+            .iter()
+            .find(|row| row.provider_id == selection.provider_id && row.id == selection.model_id)
+            .map(|row| row.variants.clone())
+            .unwrap_or_default();
+        if variants.is_empty() {
+            return None;
+        }
+        Some(model_pref::cycle_model_variant(selection.variant.as_deref(), &variants))
+    }
+
+    /// The visible agents for the agent cycle (`local.tsx:57-59`:
+    /// `mode !== "subagent" && !hidden`).
+    #[must_use]
+    pub fn cycleable_agents(&self) -> Vec<ServerAgent> {
+        match self.server_lists().agents.rows() {
+            Some(rows) => rows
+                .iter()
+                .filter(|agent| agent.mode != "subagent" && !agent.hidden)
+                .cloned()
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// `local.agent.move(direction)` (local.tsx:114-124): step the
+    /// visible agents, wrapping; `None` when the list is unavailable.
+    #[must_use]
+    pub fn agent_cycle(&self, direction: i8) -> Option<String> {
+        let agents = self.cycleable_agents();
+        if agents.is_empty() {
+            return None;
+        }
+        let route = self.route();
+        let current = match &route {
+            Route::Session { session_id } => self.selection_for(session_id).agent,
+            Route::Home => self.selection_for(crate::app::HOME_PROMPT_KEY).agent,
+        }
+        .or_else(|| agents.first().map(|agent| agent.id.clone()));
+        let index = current.as_ref().and_then(|id| agents.iter().position(|agent| agent.id == *id));
+        let next = match index {
+            None if direction > 0 => 0,
+            None => agents.len() - 1,
+            Some(index) => wrap_step(index, direction, agents.len()),
+        };
+        Some(agents.get(next)?.id.clone())
     }
 
     // -- route / dialogs / theme / connection --------------------------------
@@ -2633,11 +3191,20 @@ impl Store {
                     .filter(|id| !id.is_empty())
                     .unwrap_or_else(|| format!("msg_{}", event.id.trim_start_matches("evt_")));
                 let created = event.created.unwrap_or(0);
-                self.update_messages(&session, |messages| {
-                    if !messages.iter().any(|m| m.id() == id.as_str()) {
+                let appended = self.update_messages(&session, |messages| {
+                    let fresh = messages.iter().all(|m| m.id() != id.as_str());
+                    if fresh {
                         messages.push(Message::Idle { id, created });
                     }
+                    fresh
                 });
+                if appended {
+                    // The turn ended: the queued-prompt drain admits
+                    // the next head (serial — one per idle) and the
+                    // interrupt arm collapses (the hint row goes).
+                    self.interrupt_clear(&session);
+                    self.drain_queued_prompts();
+                }
             }
             "session.compaction.started" => {
                 let Some(session) = event.string("sessionID") else { return };

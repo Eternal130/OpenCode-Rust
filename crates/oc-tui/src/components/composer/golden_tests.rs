@@ -56,6 +56,7 @@ fn harness_view<'a>(
             location: "/tmp/opencode/packages/tui:main".into(),
             agent_shortcut: String::new(),
             command_shortcut: String::new(),
+            interrupt: String::new(),
             ..FooterHints::default()
         },
         top: 2,
@@ -65,7 +66,7 @@ fn harness_view<'a>(
 }
 
 fn autocomplete_query(composer: &Composer) -> String {
-    let caret = composer.caret;
+    let caret = composer.caret();
     crate::components::composer::autocomplete::query_between(
         &composer.draft.text,
         composer.autocomplete.trigger_index,
