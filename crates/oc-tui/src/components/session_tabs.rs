@@ -312,6 +312,15 @@ fn glow_over(background: Rgb, hue: Rgb, alpha: f64) -> Rgb {
 /// [overflow-right] " + "` like `HorizontalSessionTabs` with animations
 /// off; the unread tab paints its full-width resting pulse (per-cell
 /// backgrounds) and per-character tinted title.
+///
+/// Pointer state (beta.8 bug 3): `hover` names the tab under the
+/// pointer — v2's `hovered()` lifts a NON-selected tab to
+/// `background.action.primary.hovered`, turns the title
+/// `text.base`, shrinks the title two cells and reveals the `✕`
+/// close mark one cell in from the right edge
+/// (`session-tabs.tsx:1570-1575`, `1588-1591`, `1731-1757`);
+/// `add_hovered` highlights the ` + ` affordance
+/// (`session-tabs.tsx:1768-1796`).
 #[must_use]
 pub fn render_bar(
     tabs: &[TabView],
@@ -319,6 +328,8 @@ pub fn render_bar(
     show_plus: bool,
     available: usize,
     theme: &ThemeStyles,
+    hover: Option<&str>,
+    add_hovered: bool,
 ) -> TabRender {
     let owned: Vec<SessionTab> = tabs.iter().map(|view| view.tab.clone()).collect();
     let layout = adaptive_session_tab_layout(
@@ -347,9 +358,11 @@ pub fn render_bar(
     // order (`layout.tabs` is its clone) — iterate the source views.
     let window: &[TabView] = &tabs[layout.start..layout.start + layout.tabs.len()];
     let mut tab_x = if layout.before > 0 { session_tab_overflow_width(layout.before) } else { 0 };
+    let mut close_marks = Vec::new();
     for (index, view) in window.iter().enumerate() {
         let width = layout.widths[index];
-        bar_tab_fills(&mut fills, view, active, theme, tab_x, width, selected_bg);
+        let hovered = hover == Some(view.tab.session_id.as_str());
+        bar_tab_fills(&mut fills, view, active, theme, tab_x, width, selected_bg, hovered);
         children.push(bar_tab_node(
             &mut tree,
             view,
@@ -358,7 +371,13 @@ pub fn render_bar(
             width,
             number_width,
             selected_bg,
+            hovered,
         ));
+        // The revealed `✕` mark: absolute `right={1}` — one cell in
+        // from the tab's right edge (v2 renders it only on hover).
+        if hovered && width >= 2 {
+            close_marks.push(close_mark(tab_x + width - 2, theme, active, &view.tab.session_id));
+        }
         tab_x += width;
     }
     let mut plus_x = tab_x;
@@ -373,14 +392,45 @@ pub fn render_bar(
     let strip = tree.box_node(&BoxSpec::row().height(1.0), &children);
     tree.set_root(strip);
     let mut placed = tree.compute((available as f32, AvailableSpace::Definite(1.0))).placed;
+    placed.extend(close_marks);
     if show_plus {
-        placed.push(add_affordance(plus_x, theme));
+        placed.push(add_affordance(plus_x, theme, add_hovered));
     }
     TabRender { placed, fills }
 }
 
+/// The `✕` close glyph as a one-cell placed run (`closeColor =
+/// tint(text.muted, text.base, 0.6)`, `session-tabs.tsx:1645`), over
+/// the tab's own background (lifted when hovered, selected pill when
+/// the hovered tab is the active one).
+fn close_mark(x: usize, theme: &ThemeStyles, active: Option<&str>, session_id: &str) -> Placed {
+    let bg =
+        if Some(session_id) == active { theme.background_prompt } else { theme.action_hovered };
+    let close_color = tint(
+        rgb(theme.text_muted.fg.unwrap_or(Color::Rgb(128, 128, 128))),
+        rgb(theme.text.fg.unwrap_or(Color::Rgb(255, 255, 255))),
+        0.6,
+    );
+    Placed {
+        x,
+        y: 0,
+        width: 1,
+        lines: vec![PlacedLine {
+            runs: vec![StyledSpan {
+                text: "✕".to_owned(),
+                style: Style::new()
+                    .fg(Color::Rgb(close_color.0, close_color.1, close_color.2))
+                    .bg(bg),
+            }],
+        }],
+        tag: Some(format!("session-tabs.close:{session_id}")),
+    }
+}
+
 /// One bar tab's background fills: the resting pulse per cell while
-/// glowing, else the flat tab background.
+/// glowing, else the flat tab background. A hovered NON-selected tab
+/// lifts to `background.action.primary.hovered`
+/// (`session-tabs.tsx:1570-1572`).
 #[allow(clippy::too_many_arguments)]
 fn bar_tab_fills(
     fills: &mut Vec<Fill>,
@@ -390,9 +440,16 @@ fn bar_tab_fills(
     tab_x: usize,
     width: usize,
     selected_bg: Color,
+    hovered: bool,
 ) {
     let selected = Some(view.tab.session_id.as_str()) == active;
-    let tab_bg = if selected { selected_bg } else { theme.background };
+    let tab_bg = if selected {
+        selected_bg
+    } else if hovered {
+        theme.action_hovered
+    } else {
+        theme.background
+    };
     if !view.status.glows(selected) {
         fills.push(Fill {
             x: tab_x as u16,
@@ -420,7 +477,10 @@ fn bar_tab_fills(
 }
 
 /// One bar tab's layout node: the indicator glyph and the title runs
-/// (per-character glow tints while glowing — `characterColor`).
+/// (per-character glow tints while glowing — `characterColor`). A
+/// hovered tab's title renders `text.base` and shrinks two cells to
+/// make room for the revealed `✕` (`session-tabs.tsx:1588-1591`,
+/// `1611-1613`).
 #[allow(clippy::too_many_arguments)]
 fn bar_tab_node(
     tree: &mut LayoutTree,
@@ -430,9 +490,16 @@ fn bar_tab_node(
     width: usize,
     number_width: usize,
     selected_bg: Color,
+    hovered: bool,
 ) -> taffy::NodeId {
     let selected = Some(view.tab.session_id.as_str()) == active;
-    let tab_bg = if selected { selected_bg } else { theme.background };
+    let tab_bg = if selected {
+        selected_bg
+    } else if hovered {
+        theme.action_hovered
+    } else {
+        theme.background
+    };
     let glows = view.status.glows(selected);
     let hue = glow_hue(view.status, theme);
     let glow = glow_over(rgb(tab_bg), hue, 1.0);
@@ -479,9 +546,11 @@ fn bar_tab_node(
         )
     };
     let title = view.tab.title.clone().unwrap_or_else(|| "Untitled session".into());
-    let title_width = width.saturating_sub(1 + number_width).max(1);
+    // `restingTitleWidth` = width − 1 − numberWidth; hovering shifts
+    // the right bound left of the close mark (− 2).
+    let title_width = width.saturating_sub(1 + number_width + usize::from(hovered) * 2).max(1);
     let title_text = take_width(&title, title_width);
-    let foreground = if selected {
+    let foreground = if selected || hovered {
         theme.text.fg.unwrap_or(Color::Rgb(255, 255, 255))
     } else {
         theme.text_muted.fg.unwrap_or(Color::Rgb(128, 128, 128))
@@ -523,19 +592,20 @@ fn bar_tab_node(
 
 /// The `" + "` affordance, placed directly (the wrap seam eats the
 /// trailing pad space of a tree leaf at some widths — 160 — and the
-/// golden bytes pin it verbatim).
-fn add_affordance(x: usize, theme: &ThemeStyles) -> Placed {
+/// golden bytes pin it verbatim). Hovered: `text.base` over
+/// `background.action.primary.hovered` (`session-tabs.tsx:1771-1772`).
+fn add_affordance(x: usize, theme: &ThemeStyles, hovered: bool) -> Placed {
+    let (fg, bg) = if hovered {
+        (theme.text.fg.unwrap_or_default(), theme.action_hovered)
+    } else {
+        (theme.text_muted.fg.unwrap_or_default(), theme.background)
+    };
     Placed {
         x,
         y: 0,
         width: ADD_TAB_WIDTH,
         lines: vec![PlacedLine {
-            runs: vec![StyledSpan {
-                text: " + ".to_owned(),
-                style: Style::new()
-                    .fg(theme.text_muted.fg.unwrap_or_default())
-                    .bg(theme.background),
-            }],
+            runs: vec![StyledSpan { text: " + ".to_owned(), style: Style::new().fg(fg).bg(bg) }],
         }],
         tag: Some("session-tabs.add".to_owned()),
     }
@@ -846,7 +916,8 @@ fn rail_separators(
     }
 }
 
-/// Paint the horizontal strip frame (golden scenario shape).
+/// Paint the horizontal strip frame (golden scenario shape — no
+/// pointer state; the goldens pin the resting bytes).
 #[must_use]
 pub fn paint_bar(
     tabs: &[TabView],
@@ -855,7 +926,7 @@ pub fn paint_bar(
     size: (u16, u16),
     theme: &ThemeStyles,
 ) -> Frame {
-    let render = render_bar(tabs, active, show_plus, usize::from(size.0), theme);
+    let render = render_bar(tabs, active, show_plus, usize::from(size.0), theme, None, false);
     paint_placed_with_fills(
         &render.placed,
         &render.fills,
@@ -889,6 +960,69 @@ pub fn paint_rail(
         size,
         Style::new().fg(crate::components::tool_rows::DEFAULT_FOREGROUND).bg(theme.background),
     )
+}
+
+/// What a pointer column over the strip addresses — the hit-test
+/// mirror of [`render_bar`]'s geometry (beta.8 bug 3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StripHit {
+    /// The tab body (click = select; `release()` → `tabs.select`,
+    /// `session-tabs.tsx:1505-1514`).
+    Tab(String),
+    /// The revealed `✕` cell on a HOVERED tab ("the close glyph sits
+    /// one cell in from the right edge: x = tab start + width − 2",
+    /// `session-tabs.tsx:264`; the click path is `tabs.close`,
+    /// `session-tabs.tsx:1745-1754`).
+    Close(String),
+    /// The ` + ` affordance (`tabs.add?.()` — navigates home,
+    /// `session-tabs.tsx:1786-1792` + `session-tabs.tsx:406-416`).
+    Add,
+    /// Outside every control.
+    Outside,
+}
+
+/// Resolve pointer column `col` (strip-local) against the strip's
+/// layout. `hover` gates the close cell exactly like v2: the mark
+/// only renders on the hovered tab, and a release elsewhere selects.
+#[must_use]
+pub fn strip_hit(
+    tabs: &[SessionTab],
+    active: Option<&str>,
+    show_plus: bool,
+    width: usize,
+    col: usize,
+    hover: Option<&str>,
+) -> StripHit {
+    let layout = adaptive_session_tab_layout(
+        tabs,
+        active,
+        width.saturating_sub(if show_plus { ADD_TAB_WIDTH } else { 0 }),
+        0,
+    );
+    let mut x = if layout.before > 0 { session_tab_overflow_width(layout.before) } else { 0 };
+    for (index, tab) in layout.tabs.iter().enumerate() {
+        let tab_width = layout.widths[index];
+        if col < x + tab_width {
+            // The close cell: one in from the right edge ("x = tab
+            // start + width − 2"), only while this tab is hovered.
+            if hover == Some(tab.session_id.as_str()) && col + 2 == x + tab_width {
+                return StripHit::Close(tab.session_id.clone());
+            }
+            return StripHit::Tab(tab.session_id.clone());
+        }
+        x += tab_width;
+    }
+    if layout.after > 0 {
+        let after_width = session_tab_overflow_width(layout.after);
+        if col < x + after_width {
+            return StripHit::Outside;
+        }
+        x += after_width;
+    }
+    if show_plus && col >= x && col < x + ADD_TAB_WIDTH {
+        return StripHit::Add;
+    }
+    StripHit::Outside
 }
 
 #[cfg(test)]
@@ -962,5 +1096,82 @@ mod tests {
         );
         assert!(TabStatus { unread: Some(Unread::Activity), ..TabStatus::EMPTY }.glows(false));
         assert!(!TabStatus { unread: Some(Unread::Activity), ..TabStatus::EMPTY }.glows(true));
+    }
+
+    /// beta.8 bug 3 — the pointer geometry: the body selects, the
+    /// `✕` cell (one in from the hovered tab's right edge) closes,
+    /// the ` + ` adds. Mirrors `render_bar`'s layout exactly.
+    #[test]
+    fn strip_hit_maps_pointer_columns_to_controls() {
+        let tabs: Vec<SessionTab> = vec![
+            SessionTab { session_id: "s1".into(), title: Some("Alpha".into()) },
+            SessionTab { session_id: "s2".into(), title: Some("Beta".into()) },
+        ];
+        // Two 32-wide tabs + " + " at 80: tab1 0..32, tab2 32..64,
+        // plus 64..67.
+        assert_eq!(strip_hit(&tabs, Some("s1"), true, 80, 5, None), StripHit::Tab("s1".into()));
+        assert_eq!(strip_hit(&tabs, Some("s1"), true, 80, 40, None), StripHit::Tab("s2".into()));
+        assert_eq!(strip_hit(&tabs, Some("s1"), true, 80, 65, None), StripHit::Add);
+        assert_eq!(strip_hit(&tabs, Some("s1"), true, 80, 70, None), StripHit::Outside);
+        // The close cell: x = tab start + width − 2, ONLY while that
+        // tab is hovered.
+        assert_eq!(
+            strip_hit(&tabs, Some("s1"), true, 80, 62, Some("s2")),
+            StripHit::Close("s2".into())
+        );
+        assert_eq!(
+            strip_hit(&tabs, Some("s1"), true, 80, 62, Some("s1")),
+            StripHit::Tab("s2".into()),
+            "no close mark on an unhovered tab — the release selects"
+        );
+        assert_eq!(
+            strip_hit(&tabs, Some("s1"), true, 80, 30, Some("s1")),
+            StripHit::Close("s1".into()),
+            "the active tab's own mark closes it too"
+        );
+    }
+
+    /// beta.8 bug 3 — the hover surface: a hovered NON-selected tab
+    /// lifts its background, turns the title `text.base`, shrinks the
+    /// title two cells and reveals the `✕`; the ` + ` affordance
+    /// highlights on its own hover.
+    #[test]
+    fn hover_lifts_the_tab_and_reveals_the_close_mark() {
+        let tabs = golden_tabs();
+        let theme = crate::theme::ThemeState::v2_dark().styles();
+        // Hover the SECOND (inactive) tab: "Second" occupies the
+        // 32-wide slot at x=32; the mark sits at 32+32−2=62.
+        let render = render_bar(&tabs, Some("first"), true, 80, &theme, Some("second"), false);
+        let mark = render
+            .placed
+            .iter()
+            .find(|p| p.tag.as_deref().is_some_and(|tag| tag.starts_with("session-tabs.close:")))
+            .expect("the hovered tab reveals its close mark");
+        assert_eq!(mark.x, 62);
+        assert_eq!(mark.lines[0].runs[0].text, "✕");
+        assert_eq!(mark.tag.as_deref(), Some("session-tabs.close:second"));
+        // The lifted background fill covers the whole tab.
+        let lift = render
+            .fills
+            .iter()
+            .find(|fill| fill.width == 32 && fill.x == 32)
+            .expect("the hovered tab's fill");
+        assert_eq!(lift.style.bg, Some(theme.action_hovered));
+        // No hover: no mark anywhere, the resting fill stays base.
+        let resting = render_bar(&tabs, Some("first"), true, 80, &theme, None, false);
+        assert!(
+            !resting.placed.iter().any(|p| p
+                .tag
+                .as_deref()
+                .is_some_and(|tag| tag.starts_with("session-tabs.close:"))),
+            "no close mark without hover"
+        );
+        // The hovered ` + ` affordance swaps to text.base over the
+        // hovered action background.
+        let plus = render_bar(&tabs, Some("first"), true, 80, &theme, None, true);
+        let affordance =
+            plus.placed.iter().find(|p| p.tag.as_deref() == Some("session-tabs.add")).unwrap();
+        assert_eq!(affordance.lines[0].runs[0].style.fg, theme.text.fg);
+        assert_eq!(affordance.lines[0].runs[0].style.bg, Some(theme.action_hovered));
     }
 }
