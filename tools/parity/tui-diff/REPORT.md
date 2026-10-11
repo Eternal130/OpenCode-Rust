@@ -557,3 +557,149 @@ ref = `temperature` present + 1 title-request per session-turn
 cadence; ours = `temperature` absent (#26) + extra title-path
 request (#27). This section is the standing regression surface for
 the config→wire pipeline on both stacks.
+
+# Addendum — corpus3: subagent differential (lane/corpus3, 2026-10-11)
+
+Three new scripts (`subagent-basic`, `subagent-browser`,
+`subagent-sidebar`) walk a REAL subagent flow through the shared stub
+on BOTH stacks, then diff the TUI surfaces: transcript tool-card
+rendering, the subagent picker / browser chrome, tab titles, sidebar
+suppression on the child session, and exit states. All runs:
+`PARITY_BUN=/tmp/opencode/bun/bin/bun tools/dev-gate.sh 'cargo run -p
+parity --bin tui-diff -- --filter subagent --runs 1'` (the filter now
+matches by stem PREFIX), artifacts under `/tmp/opencode/tui-diff/`
+(`report.md` + `subagent-*/` per-run dumps; probe evidence under
+`/tmp/opencode/corpus3-probe/`).
+
+## Rig extension: the attribution-keyed flow stub
+
+`SharedStub` gained a second arming mode (`stub: "subagent-flow"`):
+instead of one fixed SSE script, each MAIN request is answered by
+ATTRIBUTION — body-substring matching, never request order (corpus2
+#27 showed cadence drift misaligns any ordering scheme):
+
+| request | attribution (body substring) | SSE reply |
+|---|---|---|
+| main | `max_completion_tokens` present, no tool result yet | one `delta.tool_calls` entry: tool `subagent` (v2 tool name, `packages/core/src/tool/plugin/subagent.ts:10`), args `{agent: "general", description: "Check the fixture", prompt: "PARITY-SUBAGENT-TASK …"}` |
+| subagent | `"You are a subagent spawned by another session."` (the child's first-prompt prefix — byte-identical on both stacks: subagent.ts:209-212 / our `FIRST_PROMPT_PREFIX`) | reasoning delta + `Subagent fixture done.` |
+| continuation | `max_completion_tokens` present + the subagent's reply text (the tool result) | `Main flow final reply.` |
+| title | no `max_completion_tokens` (the corpus2-#27 split) | `Parity Subagent Flow` (fixed title → comparable tab titles) |
+
+`general` is the built-in subagent-mode agent on BOTH stacks (ref
+`packages/core/src/plugin/agent.ts:88-95`), so the flow never depends
+on config-defined agents (see #38). Single-turn by design (the
+continuation marker enters history after exchange 1); documented
+in-code. `RecordedRequest` gained the attribution `kind` so
+request-count drift is visible PER FLOW STAGE, and the request-path
+report section renders it.
+
+## Baseline rows (single run per size)
+
+| script | size | steps | identical | text-only | mismatch | boot r/o | error |
+|---|---|---|---|---|---|---|---|
+| subagent-basic | 80x24 | 14 | 0 | 0 | 14 | true/true | |
+| subagent-basic | 120x30 | 14 | 0 | 0 | 14 | true/true | |
+| subagent-browser | 80x24 | 21 | 0 | 0 | 21 | true/true | |
+| subagent-sidebar | 160x36 | 19 | 0 | 0 | 19 | true/true | |
+
+0 driver errors; both stacks booted everywhere; the flow COMPLETED on
+both stacks (request-path: ref = main 1 + subagent 1 + continuation 1
++ title 1; ours = main 1 + subagent **2** + continuation 1 + title 1).
+
+## New findings (continuing the backlog numbering)
+
+38. **(a) CONFIG `agents` MAP NOT APPLIED (ours)**: a config-defined
+     agent never reaches our agent registry (`location.rs`
+     `AgentRegistry` — the config lane is wired as
+     `TODO(lane-integration)`); a `subagent` tool call naming one fails
+     `Unknown agent: <id>`. Differential proof (manual probe,
+     `/tmp/opencode/corpus3-probe/`): identical config with
+     `agents.researcher` + a researcher tool call — the REF resolved it
+     and completed the flow (main → subagent → continuation → title);
+     ours answered every attempt with
+     `{"error":{"message":"Unknown agent: researcher","type":"tool.execution"}}`.
+     The ref loads config agents in
+     `packages/core/src/config/plugin/agent.ts:100-127`. Rig
+     consequence: the flow targets the built-in `general` agent.
+39. **RIG OBSERVATION (both stacks, with an ours-side cadence note)**:
+     a persistently failing tool call (deterministic stub re-issuing
+     it) loops WITHOUT BOUND on BOTH stacks — probe with a nonexistent
+     `ghost` agent, 25 s each: ours 613 requests, ref 59 (both unbounded;
+     ours ~10x the cadence). Not registered as (a) since the ref loops
+     too; the cadence difference is worth a look when the engine's
+     retry pacing is revisited.
+40. **(a) SUBAGENT TOOL CARD MISSING (ours)**: the ref transcript
+     renders the completed tool call as an InlineTool card
+     `✓ General Subagent — Check the fixture` between the user text
+     and the final reply (routes/session/index.tsx:3087-3120); ours
+     renders NOTHING for the subagent tool part at any capture
+     (running or settled) — the card row is absent from our
+     transcript entirely.
+41. **(a) REQUEST-PATH — DUPLICATE SUBAGENT REQUEST (ours)**: ours
+     issued exactly TWO subagent-classified primary requests (both
+     carrying `max_completion_tokens`, so not the title path) where
+     the ref issued one — deterministic across all 6 executions
+     (3 scripts + tuning reruns). Root cause uninvestigated (out of
+     lane scope; oc-core is off-limits here).
+42. **(a) #26 EXTENSION — temperature overlay absent on ALL flow
+     requests (ours)**: main, subagent, continuation AND title
+     requests on the ref carry `temperature: 0`; ours drops it on
+     every one (same root as #26, now measured across the subagent
+     paths too).
+43. **#16 CORRECTION (attribution)**: `leader+l` was a NO-OP on the
+     REF in this corpus as well (session screen, live session, live
+     subagent — no dialog ever opened). The "sessions browser
+     (Subagents / Shell / Terminals tabs)" recorded in #16 was the
+     COMPOSER panel opened by the following `down` keypress
+     (`session.child.first` = "Toggle subagent picker", keybind.ts:136).
+     #16's ours-side observation (no-op) stands; the ref-side
+     attribution is corrected: neither stack opens a leader+l dialog
+     in this rig.
+44. **(a) SUBAGENT PICKER MISSING (ours)**: on the ref session screen,
+     `down` opens the composer with tabs `Subagents  Shell  Terminals`,
+     body `No active subagents`, hint `show inactive ctrl+a`;
+     `ctrl+a` flips the filter and reveals the completed run
+     (`General: Check the fixture`), `down` selects it, `enter`
+     (composer.subagent.select) navigates into the child session.
+     Ours: `down` is inert — our keymap table LISTS `session.child.first`
+     (oc-tui-core keymap/table.rs:490) but oc-tui has no handler, so
+     the subagent session is KEYBOARD-UNREACHABLE in our TUI.
+45. **(a) CHILD-SESSION VIEW UNREACHABLE (ours; ref surfaces verified)**:
+     on the ref, navigating into the subagent session shows the child
+     transcript — first-prompt prefix + task, `+ Thought · 8ms` (the
+     thought block renders inside the subagent run), the reply, stats
+     `General · Fake Model · 93ms · 225.8 tok/s` — and at 160x36 the
+     SIDEBAR IS ABSENT (session-frame.tsx:106-111, parentID sessions
+     never show it — verified live, full-width transcript). Ours cannot
+     reach the child view from the TUI (#44); our code-level
+     suppression exists (store.rs:5120 unit test) but is
+     TUI-unobservable in this rig.
+46. **(a) EXIT FAREWELL SCREEN MISSING (ours)**: `ctrl+c` from a live
+     session: the ref renders the opencode wordmark plus
+     `Session  Parity Subagent Flow` and `Continue  opencode -s <id>`
+     (a resume hint); ours exits straight to a blank grid. Visible in
+     every corpus3 exit step. (The earlier corpus "identical post-exit
+     blanks" were from HOME with an empty composer — from a session
+     the ref prints this screen.)
+47. **(a) SIDEBAR CONTENT GAP on the subagent corpus (#35 re-verified)**:
+     at 160x36 the ref sidebar shows `Context / 18 tokens / 0% used`
+     under the session title; ours shows the title row only. Plus the
+     #12 family: the ref sidebar title reads the generated
+     `Parity Subagent Flow`, ours stays `Untitled session` (the
+     title REQUEST/RESPONSE itself is at parity — 1 title request on
+     each side, served the same fixed string; the display gap is #12).
+
+### Parity positives worth protecting (corpus3 evidence)
+
+- The full flow completes on BOTH stacks: tool call executed, child
+  session spawned with the byte-identical first prompt, reasoning +
+  reply rendered, tool completed, continuation answered, one title
+  request each — the stub's attribution held under the request-count
+  drift (#41) exactly as designed (ordering-free).
+- Ref-side surfaces now pinned for the fix waves: the InlineTool card
+  format, the composer tab labels (`Subagents  Shell  Terminals` +
+  per-state hints), the inactive-filter interaction (ctrl+a), the
+  child-session transcript shape, and the sidebar suppression at the
+  child route.
+- Exit teardown stays clean on both stacks (no hangs; the grids
+  settle and the alt-screen leave is observed).
