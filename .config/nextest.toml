@@ -41,3 +41,8 @@ retries = 2
 [[profile.default.overrides]]
 filter = 'test(handlers_vcs_init_and_status)'
 retries = 2
+
+# PTY/heavyweight integration profile: serialized (one at a time) — the
+# spawn-contention flake class only appears under 4-way parallel load.
+[profile.pty]
+test-threads = 1

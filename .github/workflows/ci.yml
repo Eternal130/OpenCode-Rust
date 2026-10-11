@@ -28,6 +28,25 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  pty-integration:
+    name: nextest (pty, serialized)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Prepare scratch dir
+        run: mkdir -p /tmp/opencode
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Run PTY integration suites (serialized + retries)
+        run: cargo nextest run --workspace --locked --profile pty -E 'test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions)'
+
   test:
     name: nextest
     runs-on: ubuntu-latest
@@ -47,7 +66,7 @@ jobs:
           tool: cargo-nextest
 
       - name: Run test suite
-        run: cargo nextest run --workspace --locked --no-fail-fast
+        run: cargo nextest run --workspace --locked --no-fail-fast -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions))' 
 
       # Frame-budget guard runs in RELEASE (the product profile);
       # debug numbers are informational only (see the test's notes).
