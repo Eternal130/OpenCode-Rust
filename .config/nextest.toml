@@ -29,3 +29,15 @@ retries = 2
 [[profile.default.overrides]]
 filter = 'test(pty_interactions)'
 retries = 2
+
+# Same spawn/contention class as the PTY suites: the server integration
+# pair (shell round-trip / vcs init) reads child output under 4-way
+# parallel test load and can truncate on slow runners (observed locally
+# under lane load and on CI).
+[[profile.default.overrides]]
+filter = 'test(handlers_shell_round_trip)'
+retries = 2
+
+[[profile.default.overrides]]
+filter = 'test(handlers_vcs_init_and_status)'
+retries = 2
