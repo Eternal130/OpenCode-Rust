@@ -78,7 +78,7 @@ async fn model_list(
         .collect();
     for provider in crate::boot::location_custom_providers(&state.engine, &location) {
         for model in &provider.models {
-            data.push((0.0, custom_model_json(&provider, model)));
+            data.push((0.0, custom_model_json(&provider, model.id.as_str())));
         }
     }
     data.sort_by(|a, b| b.0.total_cmp(&a.0));

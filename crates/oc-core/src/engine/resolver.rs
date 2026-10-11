@@ -147,8 +147,8 @@ impl CatalogModelResolver {
             let canonical_model = custom
                 .models
                 .iter()
-                .find(|id| id.eq_ignore_ascii_case(&reference.id.0))
-                .cloned()
+                .find(|model| model.id.eq_ignore_ascii_case(&reference.id.0))
+                .map(|model| model.id.clone())
                 .unwrap_or_else(|| reference.id.0.clone());
             let model = custom_language_model(&self.context, custom, &canonical_model)
                 .map_err(|error| map_custom(error, &custom.id, &canonical_model))?;
