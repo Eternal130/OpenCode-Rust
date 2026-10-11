@@ -1,5 +1,10 @@
 [profile.default]
 slow-timeout = "60s"
+# Global single retry: parallel-spawn interference flakes (PTY/shared-CWD
+# classes observed across oc-core/oc-cli/oc-server) pass on retry, while
+# real failures fail consistently both attempts. Per-suite overrides
+# below raise specific retries to 2.
+retries = 1
 # 降载纪律：newapi 同机，限制测试并行度
 test-threads = 4
 
