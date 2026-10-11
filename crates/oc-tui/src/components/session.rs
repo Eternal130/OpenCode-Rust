@@ -39,24 +39,27 @@ fn statusline_agent_label(store: &Store, agent: &str) -> String {
 
 /// The composer statusline inputs for one session key: the staged
 /// agent · model selection (v2's persistent model hint — the
-/// footer-prompt-idle statusline).
+/// footer-prompt-idle statusline). The model falls back through the
+/// resolution chain (F8: the footer shows what a submit WOULD commit,
+/// `currentSelection` — local.tsx:225-236 — never an empty "unset").
 #[must_use]
 pub fn composer_statusline(store: &Store, session_id: &str) -> (String, String) {
     let selection = store.selection_for(session_id);
     let agent =
         selection.agent.map(|agent| statusline_agent_label(store, &agent)).unwrap_or_default();
-    let model = selection.model.map(|model| model.model_id).unwrap_or_default();
+    let model = store.effective_model(session_id).map(|model| model.model_id).unwrap_or_default();
     (agent, model)
 }
 
 /// The horizontal tabs strip over the store's tab list (the live mount
 /// of `component/session-tabs.tsx` — active pill, unread `•` on
 /// inactive tabs, permission `!` on the active tab, the ` + `
-/// affordance).
+/// affordance). `active` marks the active tab (None on the home
+/// route — no pill).
 #[must_use]
-fn paint_live_tabs_bar(
+pub fn paint_live_tabs_bar(
     store: &Store,
-    session_id: &str,
+    active: Option<&str>,
     width: usize,
     styles: &crate::theme::ThemeStyles,
 ) -> Frame {
@@ -71,7 +74,7 @@ fn paint_live_tabs_bar(
             status: TabStatus {
                 unread: tabs.unread.get(&tab.session_id).copied(),
                 busy: false,
-                attention: (permission_live && tab.session_id == session_id)
+                attention: (permission_live && Some(tab.session_id.as_str()) == active)
                     .then_some(Attention::Permission),
             },
             detail: None,
@@ -79,7 +82,7 @@ fn paint_live_tabs_bar(
         .collect();
     let render = session_tabs::render_bar(
         &views,
-        Some(session_id),
+        active,
         true,
         width,
         styles,
@@ -126,7 +129,7 @@ pub fn render_session(
     // same `enabled()` gate); the transcript starts directly under
     // it. With tabs off the frame starts at the transcript.
     let show_strip = store.tabs_enabled();
-    let strip = show_strip.then(|| paint_live_tabs_bar(store, session_id, width, styles));
+    let strip = show_strip.then(|| paint_live_tabs_bar(store, Some(session_id), width, styles));
 
     // The composer's docked mount (popup rows above it when the
     // slash palette is open) + the transcript's height budget.
@@ -524,5 +527,83 @@ mod tests {
         assert_eq!(submitted.text, "hello");
         assert!(store.prompt_draft("s1").is_empty(), "draft cleared");
         assert_eq!(store.composer("s1").history.entries, vec!["hello".to_owned()]);
+    }
+
+    /// F7 — cross-session render purity: switching to another tab's
+    /// route and back repaints the SAME session frame byte-for-byte
+    /// (no per-session state leaks between buckets; the dogfood's
+    /// staircase fragments pinned at the store level).
+    #[test]
+    fn transcript_renders_identically_across_tab_switches() {
+        use crate::components::message::model::{Message, Part, PartTime};
+        let store = Store::new(Runtime::new());
+        let turn = |n: usize| {
+            vec![
+                Message::User {
+                    id: format!("u{n}"),
+                    text: format!("ask number {n}"),
+                    created: n as u64,
+                    files: Vec::new(),
+                },
+                Message::Assistant {
+                    id: format!("a{n}"),
+                    agent: "build".into(),
+                    model: "p/m".into(),
+                    parts: vec![Part::Text {
+                        text: format!("answer number {n} with some longer body text"),
+                        time: PartTime::default(),
+                    }],
+                    finish: Some("stop".into()),
+                    error: None,
+                    time: PartTime { created: Some(n as u64), completed: Some(n as u64 + 1) },
+                },
+            ]
+        };
+        let mut long = Vec::new();
+        for n in 0..12 {
+            long.extend(turn(n));
+        }
+        store.set_messages("s_long", long);
+        store.set_messages("s_short", turn(0));
+        store.open_tab("s_long", Some("Long".to_owned()));
+        store.open_tab("s_short", Some("Short".to_owned()));
+
+        let theme = crate::theme::ThemeState::v2_dark().styles();
+        let size = (80, 24);
+        store.runtime.run_effects();
+        let first = render_session(&store, "s_long", &theme, size);
+        // Visit the other session, then come back — byte-identical.
+        let _ = render_session(&store, "s_short", &theme, size);
+        store.runtime.run_effects();
+        let back = render_session(&store, "s_long", &theme, size);
+        assert_eq!(
+            first.text_grid(),
+            back.text_grid(),
+            "switch-away-and-back repaints the same frame (no cross-session contamination)"
+        );
+        assert!(
+            back.text_grid().iter().any(|row| row.contains("answer number 11")),
+            "the long session's tail stays visible (sticky bottom)"
+        );
+        // A background append then advances only by the new turn: the
+        // prior tail rows scroll up, the fresh turn renders at bottom.
+        store.set_messages("s_long", {
+            let mut grown = store.messages("s_long");
+            grown.extend(turn(99));
+            grown
+        });
+        store.runtime.run_effects();
+        let after = render_session(&store, "s_long", &theme, size);
+        assert!(
+            after.text_grid().iter().any(|row| row.contains("answer number 99")),
+            "the appended background turn renders (the F19 store-side contract)"
+        );
+        assert_ne!(after.text_grid(), back.text_grid(), "the frame moved");
+        // The SHORT session's transcript never bleeds into the long
+        // one's frame: its rows exist only on the strip (row 0).
+        assert!(
+            !back.text_grid()[1..].iter().any(|row| row.contains("Short")),
+            "the other tab's title stays on the strip row only"
+        );
     }
 }

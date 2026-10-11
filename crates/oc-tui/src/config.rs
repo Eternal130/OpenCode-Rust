@@ -141,9 +141,57 @@ pub struct TuiConfig {
     /// The `tabs` section (open-tabs model): enabled defaults ON
     /// (mode "auto", `HERDR_ENV=1` turns it off), scope defaults cwd.
     pub tabs: TabsConfig,
+    /// The `model` field — the shared config's default model
+    /// (`configuredModel`, local.tsx:172-184): string
+    /// `"provider/model"` or `{ "providerID", "model", "variant" }`.
+    pub model: Option<ConfigModel>,
     /// The file this was loaded from (`None` when no config file
     /// exists — all defaults).
     pub path: Option<PathBuf>,
+}
+
+/// The configured default model (`config.model`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigModel {
+    pub provider_id: String,
+    pub model_id: String,
+    pub variant: Option<String>,
+}
+
+/// Parse the `model` field's two shapes (string `provider/model`, or
+/// the `{providerID, model, variant}` object — local.tsx:177-184).
+fn config_model_from_json(value: Option<&Value>) -> Option<ConfigModel> {
+    match value {
+        Some(Value::String(raw)) => {
+            let (provider_id, model_id) = raw.split_once('/')?;
+            let (provider_id, model_id) = (provider_id.trim(), model_id.trim());
+            (!provider_id.is_empty() && !model_id.is_empty()).then(|| ConfigModel {
+                provider_id: provider_id.to_owned(),
+                model_id: model_id.to_owned(),
+                variant: None,
+            })
+        }
+        Some(Value::Object(map)) => {
+            let provider_id = map.get("providerID").and_then(Value::as_str)?.trim().to_owned();
+            let model_id = map
+                .get("model")
+                .or_else(|| map.get("modelID"))
+                .and_then(Value::as_str)?
+                .trim()
+                .to_owned();
+            let variant = map
+                .get("variant")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .filter(|variant| variant != "default");
+            (!provider_id.is_empty() && !model_id.is_empty()).then_some(ConfigModel {
+                provider_id,
+                model_id,
+                variant,
+            })
+        }
+        _ => None,
+    }
 }
 
 impl TuiConfig {
@@ -176,6 +224,7 @@ impl TuiConfig {
         let session_image_preview =
             value.pointer("/session/image_preview").and_then(Value::as_bool).unwrap_or(false);
         let tabs = TabsConfig::resolve(value.get("tabs"));
+        let model = config_model_from_json(value.get("model"));
         Self {
             keybinds: value.get("keybinds").cloned().unwrap_or(Value::Null),
             theme,
@@ -183,6 +232,7 @@ impl TuiConfig {
             attention,
             session_image_preview,
             tabs,
+            model,
             path,
         }
     }

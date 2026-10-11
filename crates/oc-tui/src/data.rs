@@ -114,12 +114,15 @@ impl BusEvent {
     }
 }
 
-/// A session row from a resync fetch.
+/// One session row from a resync fetch.
 ///
 /// `time_idle` / `viewed` come from the `session.list` wire shape
 /// (`SessionInfo.time.idle` / `.viewed`, epoch seconds) and drive the
 /// **unread derivation** (see [`resync_unread`]); both are `None` when
-/// the server omits them.
+/// the server omits them. `model` is the session record's durable
+/// model selection (`SessionInfo.model`) — the TUI selection chain's
+/// per-session restore input (v2 `durableSelection`,
+/// context/local.tsx:258-266).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionSnapshot {
     pub id: String,
@@ -128,6 +131,16 @@ pub struct SessionSnapshot {
     pub time_idle: Option<f64>,
     /// Last view timestamp (`time.viewed`); absent when unknown.
     pub viewed: Option<f64>,
+    /// The session record's model (`{providerID, id, variant?}`).
+    pub model: Option<SessionModelRef>,
+}
+
+/// The durable model off a session record (`ModelRef` subset).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionModelRef {
+    pub provider_id: String,
+    pub id: String,
+    pub variant: Option<String>,
 }
 
 /// Sessions a resync marks unread: exactly those whose last activity
@@ -160,6 +173,14 @@ pub enum Ingest {
     Connection(ConnectionState),
     /// A live bus event, in arrival order.
     Event(BusEvent),
+    /// A transcript fetch result for one session (the session-open
+    /// path — v2's `data.session.message.sync` when the route mounts;
+    /// the store MERGES it over live-projected rows, unlike the
+    /// reconnect resync's wholesale rebuild).
+    MessagesSnapshot {
+        session_id: String,
+        messages: Vec<crate::components::message::model::Message>,
+    },
     /// A post-reconnect resync snapshot (applied only after the channel
     /// drained — see [`crate::store::Store::ingest_all`]): refreshed
     /// sessions, the idle>viewed unread derivation, and the re-fetched
@@ -270,6 +291,11 @@ impl ResyncSource for HttpResync {
                 title: session.title,
                 time_idle: session.time.idle,
                 viewed: session.time.viewed,
+                model: session.model.map(|model| SessionModelRef {
+                    provider_id: model.provider_id,
+                    id: model.id,
+                    variant: model.variant,
+                }),
             })
             .collect())
     }
@@ -282,16 +308,32 @@ impl ResyncSource for HttpResync {
         &self,
         session_id: &str,
     ) -> Result<Vec<crate::components::message::model::Message>, String> {
-        let query = oc_client::types::SessionMessageListQuery {
-            cursor: None,
-            limit: None,
-            order: None,
-            type_: None,
-        };
-        let response =
-            self.client.message().list(session_id, &query).await.map_err(|e| e.to_string())?;
-        Ok(response.data.iter().filter_map(message_from_info).collect())
+        fetch_session_messages(&self.client, session_id).await
     }
+}
+
+/// One session's `message.list` as a CHRONOLOGICAL transcript (the
+/// store's bucket order). v2 fetches `order: "desc"` and
+/// `toReversed()`s the page (client/solid/data.ts:1633-1637) — the
+/// wire default is newest-first, and the transcript renders oldest →
+/// newest with the sticky-bottom viewport, so the raw page order would
+/// scramble the restored transcript (F19: new turns landing "after"
+/// the oldest rows, below the fold).
+pub async fn fetch_session_messages(
+    client: &oc_client::Client,
+    session_id: &str,
+) -> Result<Vec<crate::components::message::model::Message>, String> {
+    let query = oc_client::types::SessionMessageListQuery {
+        cursor: None,
+        limit: None,
+        order: Some(oc_client::types::SessionMessageListQueryOrder::Desc),
+        type_: None,
+    };
+    let response = client.message().list(session_id, &query).await.map_err(|e| e.to_string())?;
+    let mut messages: Vec<crate::components::message::model::Message> =
+        response.data.iter().filter_map(message_from_info).collect();
+    messages.reverse();
+    Ok(messages)
 }
 
 /// Convert the wire `files` array (resolved `Prompt.FileAttachment`)
@@ -551,6 +593,7 @@ mod tests {
         // known marks unread; absent data marks nothing (no false
         // unread on reconnect).
         let session = |id: &str, idle: Option<f64>, viewed: Option<f64>| SessionSnapshot {
+            model: None,
             id: id.to_owned(),
             title: None,
             time_idle: idle,
@@ -596,6 +639,7 @@ mod tests {
     /// (b) the idle>viewed unread derivation over the wire, and (c) the
     /// reconnect carrying the tracked cursor as `Last-Event-ID`.
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // scripted end-to-end listener
     async fn reconnect_resyncs_and_orders_ingest() {
         use std::sync::{Arc, Mutex};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -616,7 +660,14 @@ mod tests {
                 let mut request = vec![0u8; 8192];
                 let _ = reader.read(&mut request).await;
                 let head = String::from_utf8_lossy(&request);
-                let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
+                let path = head
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .split('?')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
                 if path.starts_with("/api/event") {
                     let cursor = head.lines().find_map(|line| {
                         let lower = line.to_lowercase();
@@ -753,8 +804,9 @@ mod tests {
         let addr = listener.local_addr().expect("addr");
         // The server-side message list — advances while the client is
         // offline (the missed events).
+        // DESC order (the wire default): the assistant turn precedes
+        // its user prompt; the fetch reverses into chronological.
         let messages = r#"{"cursor":{},"data":[
-            {"type":"user","id":"msg_u1","text":"What does the parser do?","time":{"created":1}},
             {"type":"assistant","id":"msg_a1","agent":"build",
              "model":{"providerID":"fixture","id":"fixture"},"finish":"stop",
              "time":{"created":2,"completed":3},
@@ -762,7 +814,8 @@ mod tests {
                {"type":"tool","id":"t1","name":"read","time":{"created":2,"completed":2},
                 "state":{"status":"completed","input":{},"content":[]}},
                {"type":"text","text":"It reads the configuration."}
-             ]}
+             ]},
+            {"type":"user","id":"msg_u1","text":"What does the parser do?","time":{"created":1}}
         ]}"#;
         let server = tokio::spawn(async move {
             loop {
@@ -771,7 +824,14 @@ mod tests {
                 let mut request = vec![0u8; 8192];
                 let _ = reader.read(&mut request).await;
                 let head = String::from_utf8_lossy(&request);
-                let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
+                let path = head
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .split('?')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
                 let respond = |body: String, kind: &'static str| {
                     format!(
                         "HTTP/1.1 200 OK\r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -959,7 +1019,14 @@ mod tests {
                 let mut request = vec![0u8; 8192];
                 let _ = reader.read(&mut request).await;
                 let head = String::from_utf8_lossy(&request);
-                let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
+                let path = head
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .split('?')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
                 let respond = |body: String, kind: &'static str| {
                     format!(
                         "HTTP/1.1 200 OK\r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -1092,6 +1159,60 @@ mod tests {
             messages[0].parts()[0].text(),
             "Hello World",
             "replay deduped; fresh delta applied"
+        );
+    }
+
+    /// F19 — `fetch_session_messages` asks `order: "desc"` and REVERSES
+    /// the page into a chronological transcript (v2 data.ts:1633-1637
+    /// `order: "desc"` + `toReversed()`). The store's bucket renders
+    /// oldest → newest with the sticky-bottom viewport; the raw
+    /// newest-first page scrambled restored transcripts (new turns
+    /// landing "after" the oldest rows, below the fold).
+    #[tokio::test]
+    async fn fetch_session_messages_reverses_the_desc_page() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            // DESC wire order: newest (msg_a2) first.
+            let body = r#"{"cursor":{},"data":[
+                {"type":"assistant","id":"msg_a2","agent":"build",
+                 "model":{"providerID":"p","id":"m"},"time":{"created":4,"completed":5},
+                 "content":[{"type":"text","text":"second reply"}]},
+                {"type":"user","id":"msg_u2","text":"second ask","time":{"created":3}},
+                {"type":"assistant","id":"msg_a1","agent":"build",
+                 "model":{"providerID":"p","id":"m"},"time":{"created":2,"completed":2},
+                 "content":[{"type":"text","text":"first reply"}]},
+                {"type":"user","id":"msg_u1","text":"first ask","time":{"created":1}}
+            ]}"#;
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let (mut reader, _) = socket.split();
+            let mut request = vec![0u8; 8192];
+            let _ = reader.read(&mut request).await;
+            let head = String::from_utf8_lossy(&request);
+            let raw_path = head.split_whitespace().nth(1).unwrap_or_default();
+            // The query carries the explicit desc order (the path is
+            // the transcript endpoint).
+            assert!(raw_path.contains("order=desc"), "the fetch asks desc: {raw_path}");
+            assert!(raw_path.starts_with("/api/session/s1/message"), "the endpoint: {raw_path}");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        });
+
+        let client = Client::new(&format!("http://{addr}")).expect("client");
+        let messages = fetch_session_messages(&client, "s1").await.expect("fetch");
+        server.abort();
+        // Chronological: the store's bucket order.
+        let ids: Vec<&str> =
+            messages.iter().map(crate::components::message::model::Message::id).collect();
+        assert_eq!(ids, vec!["msg_u1", "msg_a1", "msg_u2", "msg_a2"], "reversed to oldest-first");
+        assert!(
+            matches!(&messages[0], crate::components::message::model::Message::User { text, .. }
+                if text == "first ask")
         );
     }
 }

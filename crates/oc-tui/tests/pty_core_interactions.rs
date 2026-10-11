@@ -167,6 +167,8 @@ struct Shared {
     shutdown: Arc<AtomicBool>,
     prompt_posts: Arc<AtomicUsize>,
     interrupt_posts: Arc<AtomicUsize>,
+    /// session.switchModel POSTs (the submit's commitModel step).
+    model_posts: Arc<AtomicUsize>,
     /// The SSE broadcast channel: whatever lands here is written on
     /// EVERY open /api/event stream (the scripted turn).
     broadcast: Arc<Mutex<std::collections::VecDeque<String>>>,
@@ -235,10 +237,12 @@ fn session_list_body() -> String {
 }
 
 /// The long message fixture: 20 user/assistant turns (~90 transcript
-/// rows ≫ the 24-row viewport).
+/// rows ≫ the 24-row viewport). Wire order is DESC (newest first —
+/// the server default; the client reverses into the chronological
+/// bucket, v2 data.ts:1633-1637).
 fn long_message_list_body() -> String {
     let mut messages = Vec::new();
-    for index in 0..20 {
+    for index in (0..20).rev() {
         messages.push(format!(
             r#"{{"id":"u{index}","type":"user","text":"turn {index} of the long fixture","time":{{"created":{index}}}}}"#
         ));
@@ -278,6 +282,7 @@ fn spawn_scripted_server(long_transcript: bool) -> (String, Arc<Shared>) {
         shutdown: Arc::new(AtomicBool::new(false)),
         prompt_posts: Arc::new(AtomicUsize::new(0)),
         interrupt_posts: Arc::new(AtomicUsize::new(0)),
+        model_posts: Arc::new(AtomicUsize::new(0)),
         broadcast,
         long_transcript,
     });
@@ -370,6 +375,21 @@ fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
         // SessionInfo in a `data` envelope).
         let session = r#"{"id":"ses_live","title":"Live turn","time":{"created":0,"updated":0},"location":{"directory":"/tmp"},"projectID":"p","cost":0,"tokens":{"cache":{"read":0,"write":0},"input":0,"output":0,"read":0,"write":0,"reasoning":0}}"#;
         let _ = socket.write_all(json(format!(r#"{{"data":{session}}}"#)).as_bytes());
+        return;
+    }
+    if is_post && path.ends_with("/model") {
+        // session.switchModel — 204 No Content (the wire success
+        // shape; the submit's commitModel step POSTs here before the
+        // prompt).
+        shared.model_posts.fetch_add(1, Ordering::SeqCst);
+        let _ = socket.write_all(b"HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n");
+        return;
+    }
+    if is_post && path.ends_with("/agent") {
+        // session.switchAgent — 204 No Content (the wire success
+        // shape; a 200-with-body is a client error and its log-skip
+        // surfaces an untitled error toast).
+        let _ = socket.write_all(b"HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n");
         return;
     }
     if is_post && path.ends_with("/interrupt") {
@@ -602,27 +622,30 @@ fn pty_shift_tab_and_f2_cycle_the_footer_hints() {
             wait_for_after(&probe(), b"Plan", before, Duration::from_secs(5)),
             "shift+tab cycled the agent hint"
         );
-        // f2: with NO current selection the ring's head lands first
-        // (m-alpha), the next press steps to m-beta.
-        let before = len(&probe());
+        // f2 cycles the model ring. F8 changed the pre-state: the hint
+        // already shows the RESOLVED catalog head (m-alpha) from the
+        // moment the session opens (`currentSelection` resolves — no
+        // more empty "unset" statusline), so the FIRST press commits
+        // the ring head with identical text; the assertion is the
+        // full-repaint frame (still m-alpha), then the second press
+        // steps to m-beta. ONE toggle counter threads both repaints
+        // (a repeated size emits no SIGWINCH).
+        let mut rows: u16 = 24;
         let _ = writer.write_all(b"\x1b[12~");
+        std::thread::sleep(Duration::from_millis(300));
+        let head_frame =
+            strip_ansi(&screen_after_toggle(&writer, &probe(), len(&probe()), &mut rows));
         assert!(
-            wait_for_after(&probe(), b"m-alpha", before, Duration::from_secs(5)),
-            "f2 landed the ring head"
+            head_frame.contains("m-alpha"),
+            "the resolved catalog head shows and survives the first f2: {head_frame:?}"
         );
         let before = len(&probe());
         let _ = writer.write_all(b"\x1b[12~");
         // A resize forces ratatui's FULL repaint (diff draws emit only
         // changed cells — a shifted statusline never yields a
         // contiguous `m-beta` run in the byte stream).
-        unsafe {
-            let winsize = libc::winsize { ws_row: 25, ws_col: 80, ws_ypixel: 0, ws_xpixel: 0 };
-            libc::ioctl(writer.as_raw_fd(), libc::TIOCSWINSZ, &winsize);
-        }
-        assert!(
-            wait_for_after(&probe(), b"m-beta", before, Duration::from_secs(5)),
-            "the second f2 stepped the ring"
-        );
+        let stepped = strip_ansi(&screen_after_toggle(&writer, &probe(), before, &mut rows));
+        assert!(stepped.contains("m-beta"), "the second f2 stepped the ring: {stepped:?}");
         // Exit.
         let _ = writer.write_all(b"\x03");
         std::thread::sleep(Duration::from_millis(200));
