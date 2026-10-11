@@ -18,6 +18,18 @@
 //!   migration proof (styled leaves reproduce the plain-leaf frames
 //!   byte-for-byte) and markdown-style cross-boundary span frames at
 //!   80/40 with a golden-style ANSI roundtrip.
+//!
+//! ## TERM independence (S0 lane)
+//!
+//! These goldens serialize component frames (`App::frame()` /
+//! `paint_*` output) through [`crate::render::serialize_canonical`]
+//! in TRUECOLOR — they never pass through the terminal-draw seam, so
+//! the runner's `TERM`/`COLORTERM` cannot influence them (CI and
+//! local runs are byte-identical by construction). The live TUI's
+//! 256-color degradation (`render::color_mode`, applied only inside
+//! `app::run`'s ratatui draw) is unit-tested separately; the parity
+//! rig exercises it end-to-end under its pinned
+//! `TERM=xterm-256color`.
 
 #![cfg(test)]
 // Frame dimensions come from the manifest (bounded by terminal sizes),
