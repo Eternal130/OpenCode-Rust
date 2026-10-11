@@ -150,6 +150,10 @@ pub fn render_session(
     let transcript = render_transcript(
         &store.messages(session_id),
         &TranscriptOptions {
+            // The store's clock drives the running-tool spinner frames
+            // (the vt-temporal harness caught this frozen at 0 when the
+            // default leaked in here).
+            clock_ms: store.clock(),
             group_rules: store.plugin_group_rules(),
             expanded_groups: store
                 .expanded_group_keys(session_id)
