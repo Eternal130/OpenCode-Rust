@@ -25,7 +25,7 @@ pub mod variant;
 
 pub use catalog::{body_digest, Catalog, Snapshot, SNAPSHOT_TEXT};
 pub use facade::{
-    custom_language_model, family_of, language_model, CustomProvider, FacadeContext,
+    custom_language_model, family_of, language_model, CustomModel, CustomProvider, FacadeContext,
     ModelConnection, ProtocolFamily, ProviderError,
 };
 pub use native::{aisdk, native, native_package, package_name, AISDK_PREFIX};
