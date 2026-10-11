@@ -31,7 +31,11 @@ jobs:
   pty-integration:
     name: nextest (pty, serialized)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # vt-stream lane note: the cell-grid suites (test(vt_hover) /
+    # test(vt_temporal)) joined this serialized job — 13 band/Temporal
+    # tests ≈ 8 min serialized on top of the existing suites; 40 min
+    # covers worst-case retry storms of the older flake-class suites.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -45,7 +49,7 @@ jobs:
           tool: cargo-nextest
 
       - name: Run PTY integration suites (serialized + retries)
-        run: cargo nextest run --workspace --locked --profile pty -E 'test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions)'
+        run: cargo nextest run --workspace --locked --profile pty -E 'test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(vt_hover) or test(vt_temporal)'
 
   test:
     name: nextest
@@ -66,7 +70,7 @@ jobs:
           tool: cargo-nextest
 
       - name: Run test suite
-        run: cargo nextest run --workspace --locked --no-fail-fast -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions))' 
+        run: cargo nextest run --workspace --locked --no-fail-fast -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(vt_hover) or test(vt_temporal))' 
 
       # Frame-budget guard runs in RELEASE (the product profile);
       # debug numbers are informational only (see the test's notes).
