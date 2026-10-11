@@ -1,0 +1,32 @@
+{
+  "id": "tabs-live-session",
+  "description": "REPORT #25 phase-2: seed live sessions first (pin the fake model, submit, fixed reply), then exercise the tab ops where they are observable. Tab CREATION is the strip's + affordance (mouse press+release at the + column — v2 2.0.24 has NO keyboard binding for tab creation; leader+n is unbound on both stacks and is probed as a recorded no-op), then the real chords: alt+down/alt+up cycle, leader+w close. Settle+capture after every op so the tab-strip changes are observable on both stacks.",
+  "stub": "text",
+  "mode": "struct",
+  "steps": [
+    { "label": "boot", "wait_ms": 12000 },
+    { "label": "dismiss", "keys": ["esc"], "wait_ms": 1000 },
+    { "label": "models-cmd", "text": "/models", "wait_ms": 800 },
+    { "label": "models-open", "keys": ["enter"], "wait_ms": 1800 },
+    { "label": "models-filter", "text": "fake", "wait_ms": 800 },
+    { "label": "models-select", "keys": ["enter"], "wait_ms": 2000 },
+    { "label": "variant-dismiss", "keys": ["esc"], "wait_ms": 900 },
+    { "label": "type-1", "text": "Seed tab one", "wait_ms": 500 },
+    { "label": "submit-1", "keys": ["enter"], "wait_ms": 6000 },
+    { "label": "reply-1-settled", "wait_ms": 2000 },
+    { "label": "one-tab-strip", "wait_ms": 1000 },
+    { "label": "tab-add-press", "mouse": { "action": "press", "x": 33, "y": 0 }, "wait_ms": 700 },
+    { "label": "tab-add-release", "mouse": { "action": "release", "x": 33, "y": 0 }, "wait_ms": 1500 },
+    { "label": "new-tab-settled", "wait_ms": 1000 },
+    { "label": "type-2", "text": "Seed tab two", "wait_ms": 500 },
+    { "label": "submit-2", "keys": ["enter"], "wait_ms": 6000 },
+    { "label": "reply-2-settled", "wait_ms": 2000 },
+    { "label": "two-tab-strip", "wait_ms": 1000 },
+    { "label": "leader-n-probe", "keys": ["leader", "n"], "wait_ms": 1200 },
+    { "label": "tab-cycle-next", "keys": ["alt+down"], "wait_ms": 1200 },
+    { "label": "tab-cycle-prev", "keys": ["alt+up"], "wait_ms": 1200 },
+    { "label": "tab-close", "keys": ["leader", "w"], "wait_ms": 2000 },
+    { "label": "tab-closed-settled", "wait_ms": 1000 },
+    { "label": "exit", "keys": ["leader", "q"], "wait_ms": 2500 }
+  ]
+}

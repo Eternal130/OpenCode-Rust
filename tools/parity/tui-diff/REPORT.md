@@ -241,3 +241,185 @@ catalog-vs-config list source), S3 #12/#13 (titles/stats), then the
 per-dialog row-height family (#17/#22/#23), then scroll (#15).
 #18/#21 and the transcript/thought geometry are already at parity —
 protect them with regression expectations once S0 lands.
+
+---
+
+# Addendum — corpus phase-2 (lane/corpus2, 2026-10-11)
+
+Nine new scripts + rig extensions (isolated worktree, one commit).
+All runs: `PARITY_BUN=/tmp/opencode/bun/bin/bun tools/dev-gate.sh
+'cargo run -p parity --bin tui-diff -- --filter <id> --runs 1'`,
+artifacts under `/tmp/opencode/tui-diff/corpus2/`.
+
+## Rig extensions (tools/parity/src/tui_diff.rs, all justified in-code)
+
+1. **Per-script `size` override** (`"size": "160x36"`): the sidebar's
+   v2 auto breakpoint (`width − verticalTabsWidth > 120`,
+   session-frame.tsx:107) is unreachable at the corpus sizes 80/120
+   cols; `--sizes` stays the global knob, a malformed spec is a loud
+   corpus error.
+2. **`sweep` step** (hover/click coverage mandate): `motion` feeds an
+   SGR move for EVERY grid cell (batch settle — per-move settling is
+   unaffordable at 1920+ cells, mandate allows batching; skipped
+   cells reported per side); `click` feeds move+press+release per
+   listed cell (real clicks follow a move; hover-gated affordances
+   need it) with a per-click settle probe and a per-side reaction
+   matrix — the click-parity signal is "cells where exactly one side
+   reacted". Matrix caveats (documented): reactions are counted only
+   above the 2-cell caret-blink budget, and single-shot renders
+   slower than the 400ms settle budget escape per-click detection
+   (the step's end-state diff is the backstop — it caught #28).
+3. **Request-path parity**: the shared config's model now carries a
+   `body` overlay (`temperature: 0`) — v2's sanctioned wire-field
+   forcing (config ModelOverlays.body merges into the provider
+   request body; the model `options` key is v1-only and silently
+   dropped by v2's current schema, verified against
+   packages/schema/src/config/provider.ts). The stub records each
+   main request's transport shape (top-level keys minus
+   `messages`/`tools`, option values, model, user-agent);
+   attribution is by UA (`opencode/stable/2.0.24/cli` = ref,
+   `opencode/unknown/unknown/opencode` = ours).
+4. Fixed a pre-existing `unused_assignments` warning in the spawn
+   path (the file must stay `-D warnings`-clean for the RELEASE.md
+   gate shape).
+
+## Phase-2 baseline rows (steps aggregated, single run per size)
+
+| script | size | steps | identical | text-only | mismatch | boot r/o | error |
+|---|---|---|---|---|---|---|---|
+| tabs-live-session | 80x24 | 24 | 0 | 0 | 24 | true/true | |
+| tabs-live-session | 120x30 | 24 | 0 | 0 | 24 | true/true | |
+| multi-session | 80x24 | 25 | 0 | 0 | 25 | true/true | |
+| multi-session | 120x30 | 25 | 0 | 0 | 25 | true/true | |
+| sidebar-wide | 160x36 | 16 | 0 | 0 | 16 | true/true | |
+| thought-expand-structural | 80x24 | 17 | 0 | 0 | 17 | true/true | |
+| thought-expand-structural | 120x30 | 17 | 0 | 0 | 17 | true/true | |
+| hover-sweep | 80x24 | 17 | 0 | 0 | 17 | true/true | |
+| hover-sweep | 120x30 | 17 | 0 | 0 | 17 | true/true | |
+| multi-turn | 80x24 | 24 | 0 | 0 | 24 | true/true | |
+| multi-turn | 120x30 | 24 | 0 | 0 | 24 | true/true | |
+| click-coverage-home | 80x24 | 5 | 1 | 0 | 4 | true/true | |
+| click-coverage-session | 80x24 | 15 | 1 | 0 | 14 | true/true | |
+| click-coverage-dialog | 80x24 | 9 | 0 | 0 | 9 | true/true | |
+
+- 0 driver errors anywhere; the two `identical` steps are post-exit
+  blanks (`ctrl+c` exits both from home/session — same teardown
+  parity as #help-dialog's).
+- Hover coverage: **complete** — home, session-with-transcript and
+  open-dialog sweeps fed every cell on both sides, 0 skipped
+  (1920/1920 at 80x24, 3600/3600 at 120x30, per side).
+- Click coverage: complete per documented class map (below), at the
+  coverage size 80x24.
+
+## New findings (classified; continuation of the backlog numbering)
+
+26. **(a) REQUEST-PATH — model `body` overlay dropped by our stack**:
+    the shared config forces `temperature: 0` via the model's `body`
+    overlay; the stub records `temperature` in EVERY ref main
+    request (chat AND title-generation) and in NONE of ours
+    (multi-turn: ref 4/4 carry it, ours 0/5; multi-session 4/4 vs
+    0/4). UA-attributed, deterministic.
+27. **(a) REQUEST-PATH — request-count drift**: across 3 turns ours
+    issued 5 main requests where ref issued 4 (the extra one is a
+    no-`max_completion_tokens` request — the title-generation path
+    fires an extra time on our side). The conditional
+    `max_completion_tokens` parity itself is exact (both send it on
+    primary requests only).
+28. **(a) TAB-STRIP `+` HIT-ZONE OVER-WIDE (ours)**: our Add zone is
+    the full 3-col `" + "` cell incl. padding
+    (session_tabs.rs `strip_hit`, ADD_TAB_WIDTH=3) — clicks on the
+    padding cells (no visible affordance) navigate home on OUR side
+    only; ref shows no reaction there. Found by the no-op click
+    class consuming the session state (end-state diff; the per-click
+    matrix missed it — slow single-shot render, see caveats).
+29. **(a) THOUGHT-TOGGLE HIT-ZONE (ours)**: our expand toggle reacts
+    across the whole header row (row-6 OUR-only reactions across
+    cols 0-79 in the session no-op matrix); ref's visible reactions
+    concentrate at the glyph cells.
+30. **(a) THOUGHT EXPAND GEOMETRY**: expanded reasoning renders
+    inside a `┃` gutter on ref (`┃ Let me think…`), bare on ours,
+    and the reply block below shifts one row differently. Toggle
+    itself works on both (expand AND collapse recorded).
+31. **(a) DIALOG OUTSIDE-CLICK DISMISSAL missing (ours)**: ref closes
+    the /help dialog on ring/margin clicks (observed mid-sweep: Help
+    text gone after the ring class); ours stays open through ALL
+    1248 outside + 288 ring clicks.
+32. **(a, needs 1-confirm) ctrl+c WITH OPEN DIALOG**: ref exits
+    (final grid blank), ours still fully rendered at the exit-step
+    capture (click-coverage-dialog last step).
+33. **(a) FOOTER/COMPOSER CELL REACTIVITY (ours inert)**: ref reacts
+    (hover/click styling) to footer hint cells (rows 17/22/23 spans)
+    and scattered composer-adjacent cells on home and dialog
+    screens; our side showed ZERO click reactions on those screens.
+34. **(a) TRANSCRIPT CLICK-SELECTION (ours inert)**: ref reacts to
+    transcript-row clicks (rows 2-4 of the session screen,
+    selection rendering); ours inert across the whole no-op class.
+35. **(a) SIDEBAR CONTENT GAP**: at 160x36 the sidebar renders on
+    BOTH (getting-started card byte-visible on both — parity
+    positive) but ref shows a Context section (`Context / 18 tokens
+    / 0% used`) that ours lacks (title row only); footer/border seam
+    rows also differ (the #20 family at a new width).
+36. **RIG OBSERVATION (both stacks, NOT a divergence)**: leader
+    chords `<leader>n` (session.new), `<leader>w` (tab close),
+    `<leader>b` (sidebar toggle) produce NO grid change in the rig
+    on EITHER stack (burst AND split pacing, with and without live
+    sessions), while `<leader>l` opens the browser on ref (#16) and
+    `alt+down/up` cycle on both. `<leader>q` dispatches
+    `session.queued_prompts` (keybind.ts:131 SHADOWS app.exit's
+    `<leader>q`) — byte-invisible on an empty queue, so the rig's
+    historical `\x18q` auto-exit fallback is inert and teardown
+    always relied on the kill path. Scripts that need a VISIBLE exit
+    use `ctrl+c`. Root cause of the n/w/b no-ops is unexplained
+    (v2's dispatch layers look correct on paper); both stacks agree,
+    so the differential rows stay comparable.
+37. **SCRIPT-BUG CORRECTION (existing corpus)**: `thought-expand.json`
+    clicks (4,8) but the thought header sits at row 6 — the legacy
+    click hits the reply text and never toggled anything on either
+    side. The new script clicks (6,6) and toggles on both.
+
+### Parity positives worth protecting (phase-2 evidence)
+
+- Tab creation via the strip `+` affordance: opening class 25/25
+  reacted-BOTH; both stacks navigate to the new-tab home state.
+- `alt+down`/`alt+up` cycle: transcript bodies switch on both.
+- Thought expand + collapse toggle: both, in both directions.
+- Sidebar mounts at 160x36 on both (auto semantics agree).
+- Request shape symmetry (minus #26/#27): identical key sets,
+  identical conditional `max_completion_tokens`, identical stream/
+  store flags — ref vs ours differ ONLY in `temperature` presence.
+- Hover coverage: 0 skipped cells anywhere; the #18 hover lifecycle
+  stays intact under whole-grid motion.
+
+## Click class maps (documented per the mandate)
+
+Predicted at authoring; observed refinements noted. Cells outside
+the listed affordances = no-op class (clicked in full). Destructive
+classes run LAST; the session screen orders nav → no-op → opening →
+destructive because the `+` (opening) consumes the session view BY
+DESIGN on both stacks.
+
+- **HOME (80x24)**: selection = composer block rows 12-16 cols 2-77;
+  opening/destructive = none predicted. Observed: ref-only reactions
+  on footer row 17 spans + a few rows 13-15 cells (#33).
+- **SESSION (80x24, reasoning reply)**: nav = strip pill (row 0
+  cols 3-25) + composer rows 12-16 cols 2-77; opening = thought
+  header row 6 cols 2-25 + `+` (row 0 col 33); destructive = close
+  zone row 0 cols 26-30 (hover-revealed ✕); no-op = rest (observed
+  Add-box cols 31-35 EXCLUDED after #28; row 6 excluded after #29).
+  Observed: opening 25/25 both; destructive REF-only (our ✕ needs a
+  latched hover state, 60ms motion→press is too fast to arm it);
+  no-op REF-only on transcript rows (#34).
+- **DIALOG (/help, 80x24)**: selection = interior rows 8-15 cols
+  16-63; no-op = border/padding ring; destructive = outside margins
+  (rows 0-5/18-23 full width + side bands). Observed: ref dismisses
+  from the RING (#31); ours never dismisses; ref-only reactions on
+  scattered interior cells.
+
+## Request-path parity section
+
+Every script with submits now records the stub's view of both
+stacks' main requests (shape lines in the report). Baseline summary:
+ref = `temperature` present + 1 title-request per session-turn
+cadence; ours = `temperature` absent (#26) + extra title-path
+request (#27). This section is the standing regression surface for
+the config→wire pipeline on both stacks.
