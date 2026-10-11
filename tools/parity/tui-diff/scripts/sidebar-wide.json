@@ -1,0 +1,25 @@
+{
+  "id": "sidebar-wide",
+  "description": "Corpus phase-2 (per-script size 160x36): pin the fake model, submit (session route), then the session sidebar under v2 auto semantics — width − verticalTabsWidth > 120 makes it visible at 160 cols on both stacks; leader+b hides it (persists hide), leader+b shows it again (auto + manual open). Captured at every stage.",
+  "stub": "text",
+  "mode": "struct",
+  "size": "160x36",
+  "steps": [
+    { "label": "boot", "wait_ms": 12000 },
+    { "label": "dismiss", "keys": ["esc"], "wait_ms": 1000 },
+    { "label": "models-cmd", "text": "/models", "wait_ms": 800 },
+    { "label": "models-open", "keys": ["enter"], "wait_ms": 1800 },
+    { "label": "models-filter", "text": "fake", "wait_ms": 800 },
+    { "label": "models-select", "keys": ["enter"], "wait_ms": 2000 },
+    { "label": "variant-dismiss", "keys": ["esc"], "wait_ms": 900 },
+    { "label": "type", "text": "Wide session", "wait_ms": 500 },
+    { "label": "submit", "keys": ["enter"], "wait_ms": 6000 },
+    { "label": "reply-settled", "wait_ms": 2000 },
+    { "label": "sidebar-auto", "wait_ms": 1500 },
+    { "label": "sidebar-hide", "keys": ["leader", "b"], "wait_ms": 1500 },
+    { "label": "sidebar-hidden-settled", "wait_ms": 1000 },
+    { "label": "sidebar-show", "keys": ["leader", "b"], "wait_ms": 1500 },
+    { "label": "sidebar-shown-settled", "wait_ms": 1000 },
+    { "label": "exit", "keys": ["leader", "q"], "wait_ms": 2500 }
+  ]
+}

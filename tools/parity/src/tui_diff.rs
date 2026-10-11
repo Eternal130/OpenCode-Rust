@@ -309,7 +309,41 @@ pub struct SharedStub {
     active: Arc<Mutex<String>>,
     main_requests: Arc<AtomicUsize>,
     shutdown: Arc<AtomicUsize>,
+    /// Request-path parity: recorded shapes of main requests (the
+    /// transport/options surface — everything EXCEPT `messages`, whose
+    /// text legitimately differs per stack's system prompt).
+    recorded: Arc<Mutex<Vec<RecordedRequest>>>,
 }
+
+/// The transport/options shape of one main request: the sorted
+/// top-level body keys minus `messages`/`tools`, the option values
+/// (temperature and friends), the model id, and the user-agent (the
+/// only attribution hint the shared stub gets — both stacks hit it
+/// from the same config).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedRequest {
+    pub keys: Vec<String>,
+    pub options: Vec<(String, String)>,
+    pub model: String,
+    pub user_agent: String,
+}
+
+impl RecordedRequest {
+    fn shape(&self) -> String {
+        format!(
+            "model={} keys=[{}] options={{{}}} ua={}",
+            self.model,
+            self.keys.join(","),
+            self.options.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(","),
+            self.user_agent
+        )
+    }
+}
+
+/// Option-ish keys whose VALUES are recorded (request-path parity:
+/// did each stack forward the config's per-model options?).
+const OPTION_KEYS: [&str; 6] =
+    ["temperature", "top_p", "top_k", "max_tokens", "reasoning_effort", "frequency_penalty"];
 
 impl SharedStub {
     /// Start the stub (background thread; std::net like the vt-harness
@@ -320,9 +354,11 @@ impl SharedStub {
         let active = Arc::new(Mutex::new(StubScript::Text.sse()));
         let main_requests = Arc::new(AtomicUsize::new(0));
         let shutdown = Arc::new(AtomicUsize::new(0));
+        let recorded = Arc::new(Mutex::new(Vec::new()));
         let thread_active = Arc::clone(&active);
         let thread_requests = Arc::clone(&main_requests);
         let thread_shutdown = Arc::clone(&shutdown);
+        let thread_recorded = Arc::clone(&recorded);
         std::thread::spawn(move || {
             listener.set_nonblocking(true).expect("stub nonblocking");
             while thread_shutdown.load(Ordering::SeqCst) == 0 {
@@ -330,7 +366,10 @@ impl SharedStub {
                     Ok((socket, _)) => {
                         let active = Arc::clone(&thread_active);
                         let requests = Arc::clone(&thread_requests);
-                        std::thread::spawn(move || stub_handle(socket, active, requests));
+                        let recorded = Arc::clone(&thread_recorded);
+                        std::thread::spawn(move || {
+                            stub_handle(socket, &active, &requests, &recorded)
+                        });
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(10));
@@ -339,7 +378,7 @@ impl SharedStub {
                 }
             }
         });
-        Ok(Self { url: format!("http://{addr}"), active, main_requests, shutdown })
+        Ok(Self { url: format!("http://{addr}"), active, main_requests, shutdown, recorded })
     }
 
     pub fn arm(&self, script: StubScript) {
@@ -351,6 +390,13 @@ impl SharedStub {
         self.main_requests.load(Ordering::SeqCst)
     }
 
+    /// Drain the recorded main-request shapes (the rig snapshots per
+    /// script run: fresh servers per run, so nothing leaks across).
+    #[must_use]
+    pub fn take_recorded(&self) -> Vec<RecordedRequest> {
+        std::mem::take(&mut *self.recorded.lock().expect("stub recorded"))
+    }
+
     pub fn stop(&self) {
         self.shutdown.store(1, Ordering::SeqCst);
     }
@@ -358,21 +404,24 @@ impl SharedStub {
 
 fn stub_handle(
     mut socket: std::net::TcpStream,
-    active: Arc<Mutex<String>>,
-    main_requests: Arc<AtomicUsize>,
+    active: &Arc<Mutex<String>>,
+    main_requests: &Arc<AtomicUsize>,
+    recorded: &Arc<Mutex<Vec<RecordedRequest>>>,
 ) {
     socket.set_read_timeout(Some(Duration::from_secs(10))).ok();
     let mut buffer = vec![0u8; 256 * 1024];
     let mut seen = 0;
+    let header_end;
+    let length;
     // Read the request head (+ body if content-length present).
     loop {
         match socket.read(&mut buffer[seen..]) {
             Ok(0) | Err(_) => return,
             Ok(count) => {
                 seen += count;
-                if let Some(header_end) = buffer[..seen].windows(4).position(|w| w == b"\r\n\r\n") {
-                    let head = String::from_utf8_lossy(&buffer[..header_end]).to_string();
-                    let length = head
+                if let Some(found) = buffer[..seen].windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&buffer[..found]).to_string();
+                    let parsed = head
                         .lines()
                         .find_map(|line| {
                             line.split(':')
@@ -383,7 +432,9 @@ fn stub_handle(
                         .and_then(|line| line.split(':').nth(1))
                         .and_then(|value| value.trim().parse::<usize>().ok())
                         .unwrap_or(0);
-                    if seen >= header_end + 4 + length {
+                    if seen >= found + 4 + parsed {
+                        header_end = found;
+                        length = parsed;
                         break;
                     }
                 }
@@ -393,6 +444,33 @@ fn stub_handle(
     let is_main = buffer[..seen].windows(10).any(|w| w == b"\"messages\"");
     if is_main {
         main_requests.fetch_add(1, Ordering::SeqCst);
+        // Request-path parity: record the transport/options shape.
+        let head = String::from_utf8_lossy(&buffer[..header_end]).to_string();
+        let user_agent = head
+            .lines()
+            .find(|line| line.len() > 11 && line[..11].eq_ignore_ascii_case("user-agent:"))
+            .map_or_else(|| "(none)".to_owned(), |line| line[11..].trim().to_owned());
+        let body = &buffer[header_end + 4..header_end + 4 + length];
+        let shape = serde_json::from_slice::<serde_json::Value>(body).ok().and_then(|json| {
+            let object = json.as_object()?;
+            let mut keys: Vec<String> = object
+                .keys()
+                .filter(|key| key.as_str() != "messages" && key.as_str() != "tools")
+                .cloned()
+                .collect();
+            keys.sort();
+            let options = OPTION_KEYS
+                .iter()
+                .filter_map(|key| {
+                    object.get(*key).map(|value| ((*key).to_owned(), value.to_string()))
+                })
+                .collect::<Vec<_>>();
+            let model = object.get("model").and_then(serde_json::Value::as_str)?.to_owned();
+            Some(RecordedRequest { keys, options, model, user_agent })
+        });
+        if let Some(shape) = shape {
+            recorded.lock().expect("stub recorded").push(shape);
+        }
         let script = active.lock().expect("stub script").clone();
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n{script}"
@@ -615,12 +693,148 @@ fn set_winsize(master: &File, cols: u16, rows: u16) {
     }
 }
 
+/// Encode one SGR mouse event (same encoding `ScriptStep::payload`
+/// uses for single mouse ops).
+fn sgr_mouse(code: u32, x: u16, y: u16, final_byte: u8) -> Vec<u8> {
+    format!("\x1b[<{};{};{}{}", code, x + 1, y + 1, final_byte as char).into_bytes()
+}
+
+fn side_alive(side: &mut Option<PtyChild>) -> bool {
+    side.as_mut().is_some_and(PtyChild::is_running)
+}
+
+fn write_both(ref_side: &mut Option<PtyChild>, our_side: &mut Option<PtyChild>, bytes: &[u8]) {
+    if let Some(side) = ref_side.as_mut() {
+        side.write(bytes);
+    }
+    if let Some(side) = our_side.as_mut() {
+        side.write(bytes);
+    }
+}
+
+/// Feed a sweep step to both PTYs and return the coverage summary.
+///
+/// * `motion` — an SGR hover-move for EVERY grid cell, batched (the
+///   mandate's allowed mode: per-move settling is unaffordable at
+///   1920+ cells); the step's normal settle+capture follows.
+/// * `click` — press+release for every listed cell with a per-click
+///   settle probe and a per-side reaction matrix (grid changed by
+///   more than the caret-blink budget of 2 cells), which is the
+///   click-parity signal; cells where exactly one side reacts are
+///   listed.
+///
+/// Skipped cells (a TUI died mid-sweep) are counted per side.
+async fn run_sweep(
+    sweep: &SweepOp,
+    cols: u16,
+    rows: u16,
+    ref_side: &mut Option<PtyChild>,
+    our_side: &mut Option<PtyChild>,
+) -> String {
+    if sweep.action == "click" {
+        click_sweep(sweep, cols, rows, ref_side, our_side).await
+    } else {
+        motion_sweep(sweep, cols, rows, ref_side, our_side).await
+    }
+}
+
+/// The click class executor (see [`run_sweep`]).
+async fn click_sweep(
+    sweep: &SweepOp,
+    cols: u16,
+    rows: u16,
+    ref_side: &mut Option<PtyChild>,
+    our_side: &mut Option<PtyChild>,
+) -> String {
+    let mut agree = 0usize;
+    let mut ref_only = Vec::new();
+    let mut our_only = Vec::new();
+    let mut neither = 0usize;
+    for &(x, y) in &sweep.cells {
+        if x >= cols || y >= rows {
+            continue;
+        }
+        let pre_ref = ref_side.as_ref().map(PtyChild::grid_now);
+        let pre_our = our_side.as_ref().map(PtyChild::grid_now);
+        // A real click always follows a move — and hover-gated
+        // affordances (the strip's ✕) need the motion to arm.
+        // The reaction matrix therefore measures the composite
+        // move+press+release interaction, documented as such.
+        write_both(ref_side, our_side, &sgr_mouse(35, x, y, b'M'));
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        write_both(ref_side, our_side, &sgr_mouse(0, x, y, b'M'));
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        write_both(ref_side, our_side, &sgr_mouse(0, x, y, b'm'));
+        let budget = Duration::from_millis(sweep.settle_ms.max(120));
+        if let Some(side) = ref_side.as_ref() {
+            let _ = side.wait_grid_stable(2, 120, budget);
+        }
+        if let Some(side) = our_side.as_ref() {
+            let _ = side.wait_grid_stable(2, 120, budget);
+        }
+        let reacted = |pre: Option<Grid>, side: &Option<PtyChild>| match (pre, side.as_ref()) {
+            (Some(pre), Some(side)) => pre.diff_cells(&side.grid_now()).len() > 2,
+            _ => false,
+        };
+        let hit_ref = reacted(pre_ref, ref_side);
+        let hit_our = reacted(pre_our, our_side);
+        match (hit_ref, hit_our) {
+            (true, true) => agree += 1,
+            (true, false) => ref_only.push(format!("{x},{y}")),
+            (false, true) => our_only.push(format!("{x},{y}")),
+            (false, false) => neither += 1,
+        }
+    }
+    format!(
+        "click sweep: {} clicks — reacted both={}, neither={}, REF-only=[{}] OUR-only=[{}]",
+        sweep.cells.len(),
+        agree,
+        neither,
+        ref_only.join(" "),
+        our_only.join(" ")
+    )
+}
+
+/// The motion-sweep executor (see [`run_sweep`]).
+async fn motion_sweep(
+    sweep: &SweepOp,
+    cols: u16,
+    rows: u16,
+    ref_side: &mut Option<PtyChild>,
+    our_side: &mut Option<PtyChild>,
+) -> String {
+    let total = usize::from(cols) * usize::from(rows);
+    let mut fed_ref = 0usize;
+    let mut fed_our = 0usize;
+    'rows: for y in 0..rows {
+        if !side_alive(ref_side) && !side_alive(our_side) {
+            break 'rows;
+        }
+        for x in 0..cols {
+            write_both(ref_side, our_side, &sgr_mouse(35, x, y, b'M'));
+            if side_alive(ref_side) {
+                fed_ref += 1;
+            }
+            if side_alive(our_side) {
+                fed_our += 1;
+            }
+            tokio::time::sleep(Duration::from_millis(sweep.gap_ms.min(200))).await;
+        }
+    }
+    format!(
+        "motion sweep: {total} cells — fed ref={fed_ref} our={fed_our}, skipped ref={} our={}",
+        total - fed_ref,
+        total - fed_our
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Operation scripts (JSON)
 // ---------------------------------------------------------------------------
 
 /// One script step. Exactly one of `keys` / `text` / `mouse` /
-/// `resize` is set (a bare `wait_ms` step only settles+captures).
+/// `resize` / `sweep` is set (a bare `wait_ms` step only
+/// settles+captures).
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ScriptStep {
     #[serde(default)]
@@ -633,6 +847,8 @@ pub struct ScriptStep {
     pub mouse: Option<MouseOp>,
     #[serde(default)]
     pub resize: Option<ResizeOp>,
+    #[serde(default)]
+    pub sweep: Option<SweepOp>,
     /// Settle budget after the op (ms).
     #[serde(default = "default_step_wait")]
     pub wait_ms: u64,
@@ -640,6 +856,37 @@ pub struct ScriptStep {
 
 fn default_step_wait() -> u64 {
     800
+}
+
+/// Grid-wide mouse coverage (the hover-sweep / click-sweep mandate):
+/// `motion` feeds an SGR mouse-move for EVERY cell of the grid (batch
+/// settle afterwards — per-move settling is unaffordable at 1920+
+/// cells, the mandate explicitly allows batching); `click` feeds a
+/// press+release for every listed cell with a per-click settle probe
+/// and a per-side reaction matrix (did THIS side's grid change),
+/// which is the click-parity signal. Skipped cells (child died
+/// mid-sweep) are counted and reported.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SweepOp {
+    /// `motion` | `click`.
+    pub action: String,
+    /// Cells to click, `[[x, y], …]` (click mode). Motion mode always
+    /// covers the whole grid.
+    #[serde(default)]
+    pub cells: Vec<(u16, u16)>,
+    /// Gap between generated motion events (motion mode), ms.
+    #[serde(default = "default_sweep_gap")]
+    pub gap_ms: u64,
+    /// Press→release gap and per-click settle budget (click mode), ms.
+    #[serde(default = "default_click_settle")]
+    pub settle_ms: u64,
+}
+
+fn default_sweep_gap() -> u64 {
+    15
+}
+fn default_click_settle() -> u64 {
+    400
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -669,6 +916,14 @@ pub struct Script {
     /// Both modes are always computed; this only picks the headline.
     #[serde(default = "default_mode")]
     pub mode: String,
+    /// Optional per-script size override `WxH`: the script runs at
+    /// EXACTLY this size instead of the corpus sizes (`--sizes`
+    /// remains the global knob). Needed when a feature is only
+    /// observable off the default grid — e.g. the session sidebar's
+    /// v2 auto breakpoint (`width − verticalTabsWidth > 120`,
+    /// session-frame.tsx:107) is unreachable at 80/120 cols.
+    #[serde(default)]
+    pub size: Option<String>,
     pub steps: Vec<ScriptStep>,
 }
 
@@ -677,6 +932,14 @@ fn default_stub() -> String {
 }
 fn default_mode() -> String {
     "exact".to_owned()
+}
+
+/// Parse a `WxH` size spec into `(cols, rows)` (shared by the
+/// runner's `--sizes` flag and the per-script `size` override).
+#[must_use]
+pub fn parse_size_spec(spec: &str) -> Option<(u16, u16)> {
+    let (w, h) = spec.split_once('x')?;
+    Some((w.parse().ok()?, h.parse().ok()?))
 }
 
 /// Encode one key token to its terminal byte sequence.
@@ -763,6 +1026,12 @@ impl ScriptStep {
         }
         if let Some(resize) = &self.resize {
             parts.push(format!("resize({}x{})", resize.cols, resize.rows));
+        }
+        if let Some(sweep) = &self.sweep {
+            parts.push(match sweep.action.as_str() {
+                "click" => format!("sweep(click, {} cells)", sweep.cells.len()),
+                _ => "sweep(motion, whole grid)".to_owned(),
+            });
         }
         if parts.is_empty() {
             "wait".to_owned()
@@ -1065,6 +1334,9 @@ pub struct StepOutcome {
     pub structural: StructDiff,
     pub ref_text: Vec<String>,
     pub our_text: Vec<String>,
+    /// Sweep coverage / click-parity summary (hover-sweep and
+    /// click-sweep steps only; `None` for ordinary steps).
+    pub coverage: Option<String>,
 }
 
 impl StepOutcome {
@@ -1091,6 +1363,9 @@ pub struct ScriptRun {
     pub error: Option<String>,
     pub booted_ref: bool,
     pub booted_our: bool,
+    /// Main-request shapes the stub recorded during this run
+    /// (request-path parity; see `RecordedRequest`).
+    pub requests: Vec<RecordedRequest>,
 }
 
 impl ScriptRun {
@@ -1177,6 +1452,11 @@ fn seed_project(project: &Path, stub_url: &str) -> Result<()> {
         "notes for the diff rig\n- seeded\n- identical on both sides\n",
     )?;
     // The ONE config both stacks read (same provider, same model id).
+    // The model-level `body` overlay is v2's sanctioned way to force a
+    // wire field (config ModelOverlays.body merges into the provider
+    // request body) — request-path parity checks whether each stack
+    // forwards it (`temperature: 0` must appear in the stub-recorded
+    // request shape).
     let config = format!(
         r#"{{
   "$schema": "https://opencode.ai/config.json",
@@ -1185,7 +1465,7 @@ fn seed_project(project: &Path, stub_url: &str) -> Result<()> {
     "parityfake": {{
       "package": "@opencode/ai/providers/openai-compatible",
       "settings": {{ "baseURL": "{stub_url}/v1" }},
-      "models": {{ "fake-model": {{ "name": "Fake Model" }} }}
+      "models": {{ "fake-model": {{ "name": "Fake Model", "body": {{ "temperature": 0 }} }} }}
     }}
   }}
 }}
@@ -1300,7 +1580,10 @@ pub async fn run_script_once(
         error: None,
         booted_ref: false,
         booted_our: false,
+        requests: Vec::new(),
     };
+    // Request-path parity: start from a clean recording window.
+    let _ = stub.take_recorded();
     let tag = format!("{}-{}x{}-r{}", script.id, cols, rows, run);
     let root = cfg.out_dir.join(tag);
     let _ = std::fs::remove_dir_all(&root);
@@ -1330,7 +1613,6 @@ pub async fn run_script_once(
     let config_path = project.join("opencode.json");
     let config_env = config_path.display().to_string();
     let mut ref_server = None;
-    let mut our_server = None;
     if !cfg.no_ref {
         match crate::reference::spawn_reference(crate::reference::ReferenceSpawn {
             extra_env: vec![("OPENCODE_CONFIG", config_env.as_str())],
@@ -1345,13 +1627,13 @@ pub async fn run_script_once(
             }
         }
     }
-    match crate::rust_server::spawn_rust(crate::rust_server::RustSpawn {
+    let mut our_server = match crate::rust_server::spawn_rust(crate::rust_server::RustSpawn {
         extra_env: vec![("OPENCODE_CONFIG", config_env.as_str())],
         seed_files: Vec::new(),
     })
     .await
     {
-        Ok(server) => our_server = Some(server),
+        Ok(server) => Some(server),
         Err(error) => {
             outcome.error = Some(format!("rust server: {error}"));
             if let Some(server) = ref_server.take() {
@@ -1359,7 +1641,7 @@ pub async fn run_script_once(
             }
             return outcome;
         }
-    }
+    };
 
     // TUIs: identical env shape, own homes, same cwd (the project).
     // The ref TUI is launched like p10_cross_tui, EXCEPT `bun run
@@ -1466,6 +1748,13 @@ pub async fn run_script_once(
     // Steps: identical bytes, same pacing, both PTYs; compare after.
     for (index, step) in script.steps.iter().enumerate() {
         let payload = step.payload().unwrap_or_default();
+        let coverage = if let Some(sweep) = step.sweep.as_ref() {
+            // Sweep steps feed the PTYs themselves (per-cell captures
+            // for clicks); the final settle+capture below closes them.
+            Some(run_sweep(sweep, cols, rows, &mut ref_side, &mut our_side).await)
+        } else {
+            None
+        };
         if let Some(side) = ref_side.as_mut() {
             if !payload.is_empty() {
                 side.write(&payload);
@@ -1521,6 +1810,7 @@ pub async fn run_script_once(
             structural,
             ref_text: ref_grid.text(),
             our_text: our_grid.text(),
+            coverage,
         });
         // Grid artifacts for mismatching steps (decision-grade dumps).
         if class != StepClass::Identical {
@@ -1593,6 +1883,8 @@ pub async fn run_script_once(
     if let Some(server) = our_server.take() {
         let _ = server.stop().await;
     }
+    // Request-path parity: everything the stub saw during this run.
+    outcome.requests = stub.take_recorded();
     outcome
 }
 
@@ -1700,6 +1992,45 @@ impl CorpusReport {
                     .collect::<Vec<_>>()
             ));
         }
+        // Request-path parity (stub-recorded main requests).
+        out.push_str("\n## Request-path parity (stub-recorded main requests)\n\n");
+        out.push_str("Transport/options shape per request: top-level body keys minus\n");
+        out.push_str("`messages`/`tools` (system-prompt text legitimately differs), option\n");
+        out.push_str("values, model id, user-agent. Both stacks read ONE config whose model\n");
+        out.push_str("carries `options: { temperature: 0 }` — a missing option in a shape\n");
+        out.push_str("means that stack dropped it.\n\n");
+        let mut any_requests = false;
+        for run in &self.runs {
+            if run.requests.is_empty() {
+                continue;
+            }
+            any_requests = true;
+            let mut shapes: Vec<(String, usize)> = Vec::new();
+            for request in &run.requests {
+                let shape = request.shape();
+                match shapes.iter_mut().find(|(s, _)| *s == shape) {
+                    Some((_, count)) => *count += 1,
+                    None => shapes.push((shape, 1)),
+                }
+            }
+            shapes.sort();
+            out.push_str(&format!(
+                "### {} @ {}x{} run {} — {} main requests, {} distinct shape(s)\n",
+                run.script_id,
+                run.cols,
+                run.rows,
+                run.run,
+                run.requests.len(),
+                shapes.len()
+            ));
+            for (shape, count) in shapes {
+                out.push_str(&format!("- x{count}: {shape}\n"));
+            }
+            out.push('\n');
+        }
+        if !any_requests {
+            out.push_str("(no main requests recorded — no submit steps ran)\n\n");
+        }
         // Per-mismatch detail.
         out.push_str("\n## Mismatch detail\n\n");
         for run in &self.runs {
@@ -1730,6 +2061,9 @@ impl CorpusReport {
                     if step.label.is_empty() { &step.op } else { &step.label },
                 ));
                 out.push_str(&format!("op: {}\n", step.op));
+                if let Some(coverage) = &step.coverage {
+                    out.push_str(&format!("coverage: {coverage}\n"));
+                }
                 out.push_str(&format!(
                     "settled: ref={} our={} | mismatches: {} (char {} / style {}), text-only {}\n",
                     step.settled_ref,
@@ -1842,7 +2176,15 @@ pub async fn run_corpus(cfg: &RigConfig) -> Result<CorpusReport> {
     let cli = crate::rust_server::cli_binary()?;
     let mut report = CorpusReport::default();
     for script in &scripts {
-        for &(cols, rows) in &cfg.sizes {
+        // Per-script size override (e.g. sidebar-wide @160x36); a
+        // malformed spec is a loud corpus error, never a silent
+        // fallback to the default sizes.
+        let script_sizes = match script.size.as_deref() {
+            Some(spec) => vec![parse_size_spec(spec)
+                .ok_or_else(|| anyhow!("script {}: bad size spec {spec:?}", script.id))?],
+            None => cfg.sizes.clone(),
+        };
+        for &(cols, rows) in &script_sizes {
             for run in 0..cfg.runs {
                 eprintln!("[tui-diff] {} @ {cols}x{rows} run {run}", script.id);
                 let started = Instant::now();
