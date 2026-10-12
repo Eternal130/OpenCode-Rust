@@ -52,6 +52,36 @@ impl Default for AppMetadata {
     }
 }
 
+impl AppMetadata {
+    /// The process app identity, mirroring the ref's `App` inputs
+    /// (`packages/cli/src/version.ts` + `server-process.ts:92-97`):
+    ///
+    /// - `name`: `OPENCODE_CLIENT ?? OPENCODE_ARTIFACT` — the artifact
+    ///   fallback is `"cli"` (version.ts:8);
+    /// - `version`: the workspace pin (`CARGO_PKG_VERSION` = 2.0.24, the
+    ///   parity pin of tools/RELEASE.md § version stamping);
+    /// - `channel`: the ONE workspace channel source
+    ///   ([`oc_util::channel::current`] — v2 bakes a build-time
+    ///   `OPENCODE_CHANNEL` define; the port resolves it at runtime,
+    ///   P10-DB1), so the UA, the database path, and the service
+    ///   registration always agree.
+    ///
+    /// The release build + the parity rig both run `stable`, so the
+    /// request-path UA reads `opencode/stable/2.0.24/cli` exactly like
+    /// the pinned reference build.
+    #[must_use]
+    pub fn detected() -> Self {
+        Self {
+            name: std::env::var("OPENCODE_CLIENT")
+                .ok()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "cli".to_owned()),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            channel: oc_util::channel::current(),
+        }
+    }
+}
+
 /// `App.useragent` (app.ts:24-26).
 #[must_use]
 pub fn useragent(app: &AppMetadata) -> String {
