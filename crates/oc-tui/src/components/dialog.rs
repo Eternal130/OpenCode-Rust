@@ -751,15 +751,7 @@ pub fn execute_submission(
         }
         Some(DialogKind::ServerList { command: picker, .. }) => {
             let selection = value.to_owned();
-            // Every picker's `onSelect` clears its dialog
-            // (`DialogAgent` dialog-agent.tsx:25-28, the session list
-            // dialog-session-list.tsx:243-246) — EXCEPT the model
-            // pick, whose close-vs-replace is `DialogModel.onSelect`'s
-            // variant dance (dialog-model.tsx:126-139) inside
-            // [`execute_server_list_selection`].
-            if picker != "model.list" {
-                store.clear_dialogs();
-            }
+            store.clear_dialogs();
             return crate::components::command_palette::execute_server_list_selection(
                 store, picker, &selection,
             );

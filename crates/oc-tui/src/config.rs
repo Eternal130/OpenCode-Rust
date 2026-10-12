@@ -145,10 +145,15 @@ pub struct TuiConfig {
     /// pane when space permits (>120 cols), "hide" never — default
     /// auto.
     pub session_sidebar: crate::components::sidebar::SidebarMode,
+    /// The `model` field — the shared config's default model
     /// The file this was loaded from (`None` when no config file
     /// exists — all defaults).
     pub path: Option<PathBuf>,
 }
+
+
+/// Parse the `model` field's two shapes (string `provider/model`, or
+/// the `{providerID, model, variant}` object — local.tsx:177-184).
 
 impl TuiConfig {
     /// Load `<config_root>/cli.json` (missing file = defaults; invalid
