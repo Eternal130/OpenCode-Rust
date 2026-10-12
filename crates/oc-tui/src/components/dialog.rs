@@ -5,13 +5,23 @@
 //! assembly (selects via [`crate::components::dialog_select`], the
 //! rename prompt).
 //!
-//! Overlay geometry (pinned by the `command-palette` golden):
+//! Overlay geometry (pinned by the `command-palette` golden + the
+//! parity rig's dialog corpus):
 //! * backdrop: `RGBA(0,0,0,150)` alpha-composited over the whole frame
-//!   (over the v2-dark base 10,10,10 → 4,4,4);
+//!   — BOTH channels of every covered cell (a glyph keeps its shape,
+//!   dimmed; whitespace fg stays at the terminal default), over the
+//!   v2-dark base 10,10,10 → 4,4,4;
 //! * the box: `dialogWidth(size)` columns (60/88/116, clamped to
-//!   `width - 2`), horizontally centered, `paddingTop = height / 4`,
-//!   background `surface("dialog").background.base` (20,20,20), one
-//!   row of top padding before the content.
+//!   `width - 2`), horizontally centered, `paddingTop = height / 4`
+//!   rounded HALF-UP (taffy: 30/4 = 7.5 renders the box at row 8 —
+//!   rig-pinned at 120x30), background
+//!   `surface("dialog").background.base` (20,20,20), one row of top
+//!   padding before the content;
+//! * per-family content roots (all rig-pinned against v2.0.24):
+//!   `DialogSelect` — title block paddingLeft 4, root `gap 1
+//!   paddingBottom 1`; `DialogPrompt` (rename / worktree name) and
+//!   `DialogHelp` — root paddingLeft/right 2 `gap 1`, their own
+//!   paddingBottom rows (dialog-prompt.tsx:99, dialog-help.tsx:20).
 
 // Backdrop alpha compositing rounds f64 channel math to u8 — bounded
 // terminal colors, no truncation risk.
@@ -298,10 +308,10 @@ pub fn render_overlay_with(
     let styles = DialogStyles::from_theme(theme);
     let dialog_bg = styles.surface_bg;
 
-    // Backdrop: alpha-composite black@150 over every cell's bg.
+    // Backdrop: alpha-composite black@150 over every covered cell.
     for row in &mut base.cells {
         for cell in row {
-            cell.bg = blend_backdrop(cell.bg);
+            blend_backdrop(cell);
         }
     }
 
@@ -310,7 +320,10 @@ pub fn render_overlay_with(
     let height = usize::from(terminal.1);
     let box_width = entry.size.width().min(width.saturating_sub(2));
     let box_x = (width - box_width) / 2;
-    let box_y = height / 4;
+    // paddingTop = height / 4 rounded HALF-UP (dialog.tsx:51): taffy
+    // lays the box at round(height/4) — 120x30's 7.5 renders the box
+    // at row 8 (rig-pinned; floor put ours one row high).
+    let box_y = (height + 2) / 4;
 
     let content = match &entry.kind {
         DialogKind::SessionRename { .. } => {
@@ -361,18 +374,33 @@ pub fn render_overlay_with(
     }
 }
 
-/// Backdrop composite: `out = src·α + dst·(1-α)` with `src = black`.
-fn blend_backdrop(bg: crate::render::CellColor) -> crate::render::CellColor {
-    match bg {
+/// Backdrop composite: `out = src·α + dst·(1-α)` with `src = black`,
+/// applied to the cell's background ALWAYS and to its foreground only
+/// where a glyph actually renders — the raster leaves whitespace fg at
+/// the terminal default (rig-pinned: the composer placeholder's 'A'
+/// dims idx8→idx236 under the dialog while the blank cells beside it
+/// stay idx15; every covered bg dims).
+fn blend_backdrop(cell: &mut crate::render::Cell) {
+    let dim = |value: u8| -> u8 { (f64::from(value) * (1.0 - BACKDROP_ALPHA)).round() as u8 };
+    cell.bg = match cell.bg {
         crate::render::CellColor::Rgb(r, g, b) => {
-            let keep = 1.0 - BACKDROP_ALPHA;
-            crate::render::CellColor::Rgb(
-                (f64::from(r) * keep).round() as u8,
-                (f64::from(g) * keep).round() as u8,
-                (f64::from(b) * keep).round() as u8,
-            )
+            crate::render::CellColor::Rgb(dim(r), dim(g), dim(b))
         }
-        other => other,
+        // The raster's default bg is black: black over black stays black.
+        crate::render::CellColor::Default => crate::render::CellColor::Rgb(0, 0, 0),
+        crate::render::CellColor::Indexed(index) => crate::render::CellColor::Indexed(index),
+    };
+    if cell.ch != ' ' {
+        cell.fg = match cell.fg {
+            crate::render::CellColor::Rgb(r, g, b) => {
+                crate::render::CellColor::Rgb(dim(r), dim(g), dim(b))
+            }
+            // defaultForeground() is white; the composite materializes it.
+            crate::render::CellColor::Default => {
+                crate::render::CellColor::Rgb(dim(255), dim(255), dim(255))
+            }
+            crate::render::CellColor::Indexed(index) => crate::render::CellColor::Indexed(index),
+        };
     }
 }
 
@@ -407,9 +435,13 @@ fn render_plugin_rows(
     SelectView { rows, width }
 }
 
-/// `DialogPrompt` (rename): title row + input row with the session
-/// title placeholder (`dialog-session-rename.tsx` mounts title
-/// "Rename session", placeholder "Session title").
+/// `DialogPrompt` (rename): the prompt-family root is paddingLeft 2 /
+/// paddingRight 2 / gap 1 (`ui/dialog-prompt.tsx:99`) — title row,
+/// the 1-row textarea (NO formfield background: the textarea paints
+/// text only — rig-pinned, the input row keeps the box surface), and
+/// the `enter submit` footer whose box adds paddingBottom 1. The
+/// input seeds with the session's current title
+/// (`value={currentTitle}`, `dialog-session-rename.tsx:16`).
 fn render_rename_prompt(
     entry: &DialogEntry,
     styles: &DialogStyles,
@@ -419,41 +451,54 @@ fn render_rename_prompt(
     let default = styles.default_fg;
     let mut rows: Vec<Vec<crate::render::Cell>> = Vec::new();
 
-    // Title row (same geometry as the select's).
+    // Title row (bold, esc hint right-aligned at the paddingRight-2 edge).
     let mut title_row = blank_row(width, default, surface);
-    put_text(&mut title_row, 4, "Rename session", styles.text, surface, 1);
-    put_text_end(&mut title_row, width - 4, "esc", styles.muted, surface, 0);
+    put_text(&mut title_row, 2, "Rename session", styles.text, surface, 1);
+    put_text_end(&mut title_row, width - 2, "esc", styles.muted, surface, 0);
     rows.push(title_row);
 
     rows.push(blank_row(width, default, surface));
 
-    // Input row over the formfield background.
+    // The textarea row: value fg = text.formfield.base, placeholder
+    // muted; the block cursor (gotoLineEnd) paints cursorColor =
+    // text.base (`dialog-prompt.tsx:115-129`).
     let mut input = blank_row(width, default, surface);
-    let input_width = width.saturating_sub(8);
-    for slot in input.iter_mut().skip(4).take(input_width) {
-        *slot = crate_render_cell(' ', 0, default, styles.formfield_bg);
-    }
+    let input_width = width.saturating_sub(4);
     if entry.value.is_empty() {
-        put_text(&mut input, 4, "Session title", styles.muted, styles.formfield_bg, 0);
+        put_text(&mut input, 2, "Session title", styles.muted, surface, 0);
     } else {
-        let end =
-            put_text(&mut input, 4, &entry.value, styles.formfield_fg, styles.formfield_bg, 0);
-        if end < 4 + input_width {
-            input[end] = crate_render_cell(' ', 0, surface, styles.formfield_fg);
+        let end = put_text(&mut input, 2, &entry.value, styles.formfield_base_fg, surface, 0);
+        if end < 2 + input_width {
+            input[end] = crate_render_cell(' ', 0, surface, styles.text);
         }
     }
     rows.push(input);
 
     rows.push(blank_row(width, default, surface));
+
+    // Footer: `enter submit` — the space belongs to the styled
+    // "enter " text node (fg text.base; rig-pinned: ref renders the
+    // space at idx255, not the ambient default), `submit` muted
+    // (`dialog-prompt.tsx:134-142`; the binding is `return`,
+    // config/keybind.ts:264).
+    let mut footer = blank_row(width, default, surface);
+    let end = put_text(&mut footer, 2, "enter ", styles.text, surface, 0);
+    put_text(&mut footer, end, "submit", styles.muted, surface, 0);
+    rows.push(footer);
+
+    // The footer box's paddingBottom.
     rows.push(blank_row(width, default, surface));
 
     SelectView { rows, width }
 }
 
 /// `DialogWorktreeName` (`component/dialog-worktree-name.tsx`): the
-/// bold "Name worktree" title with the `esc` hint, the input over
-/// the formfield background ("Worktree name" placeholder), and the
-/// `enter submit` / `tab generate one` footer hints.
+/// same prompt-family root (paddingLeft/right 2, gap 1 — the input
+/// follows the title DIRECTLY, no inner gap box), the plain input row
+/// ("Worktree name" placeholder, cursorColor = text.formfield.base),
+/// and the two-hint footer (`enter submit`, gap 2, `tab generate one`;
+/// the bindings are `return`/`tab`, config/keybind.ts:264/267) whose
+/// box adds paddingBottom 1.
 fn render_worktree_name_prompt(
     entry: &DialogEntry,
     styles: &DialogStyles,
@@ -464,37 +509,38 @@ fn render_worktree_name_prompt(
     let mut rows: Vec<Vec<crate::render::Cell>> = Vec::new();
 
     let mut title_row = blank_row(width, default, surface);
-    put_text(&mut title_row, 4, "Name worktree", styles.text, surface, 1);
-    put_text_end(&mut title_row, width - 4, "esc", styles.muted, surface, 0);
+    put_text(&mut title_row, 2, "Name worktree", styles.text, surface, 1);
+    put_text_end(&mut title_row, width - 2, "esc", styles.muted, surface, 0);
     rows.push(title_row);
 
     rows.push(blank_row(width, default, surface));
 
     let mut input = blank_row(width, default, surface);
-    let input_width = width.saturating_sub(8);
-    for slot in input.iter_mut().skip(4).take(input_width) {
-        *slot = crate_render_cell(' ', 0, default, styles.formfield_bg);
-    }
+    let input_width = width.saturating_sub(4);
     if entry.value.is_empty() {
-        put_text(&mut input, 4, "Worktree name", styles.muted, styles.formfield_bg, 0);
+        put_text(&mut input, 2, "Worktree name", styles.muted, surface, 0);
     } else {
-        let end =
-            put_text(&mut input, 4, &entry.value, styles.formfield_fg, styles.formfield_bg, 0);
-        if end < 4 + input_width {
-            input[end] = crate_render_cell(' ', 0, surface, styles.formfield_fg);
+        let end = put_text(&mut input, 2, &entry.value, styles.formfield_base_fg, surface, 0);
+        if end < 2 + input_width {
+            input[end] = crate_render_cell(' ', 0, surface, styles.formfield_base_fg);
         }
     }
     rows.push(input);
 
     rows.push(blank_row(width, default, surface));
 
-    // The footer hints (enter submit · tab generate one).
+    // The footer hints: enter submit · (gap 2) · tab generate one. The
+    // spaces inside each hint belong to the styled text runs
+    // ("enter ", "tab ") — rig-pinned at idx255, not ambient.
     let mut footer = blank_row(width, default, surface);
-    let end = put_text(&mut footer, 4, "enter", styles.text, surface, 0);
-    put_text(&mut footer, end + 1, "submit", styles.muted, surface, 0);
-    let end = put_text(&mut footer, 16, "tab", styles.text, surface, 0);
-    put_text(&mut footer, end + 1, "generate one", styles.muted, surface, 0);
+    let end = put_text(&mut footer, 2, "enter ", styles.text, surface, 0);
+    let end = put_text(&mut footer, end, "submit", styles.muted, surface, 0);
+    let end = put_text(&mut footer, end + 2, "tab ", styles.text, surface, 0);
+    put_text(&mut footer, end, "generate one", styles.muted, surface, 0);
     rows.push(footer);
+
+    // The footer box's paddingBottom.
+    rows.push(blank_row(width, default, surface));
 
     SelectView { rows, width }
 }
@@ -502,26 +548,27 @@ fn render_worktree_name_prompt(
 /// `DialogHelp` (`ui/dialog-help.tsx`) — v2's help is NOT a keybind
 /// table: the bold "Help" title with the `esc/enter` close hint, the
 /// command-palette hint line ("Press ctrl+p to see all available
-/// actions and commands in any context."), and a right-justified
-/// `ok` button (`paddingHorizontal 3` over
-/// `background.action.primary.focused` /
-/// `text.action.primary.focused`). D-05: the port's earlier
-/// keybinding table (and its 22-column binding clamp) is gone — v2
-/// renders no list here.
+/// actions and commands in any context.", WORD-WRAPPED at the content
+/// width), and a right-justified `ok` button. The root is the
+/// prompt-family box — paddingLeft/right 2, gap 1 (`dialog-help.tsx:20`)
+/// — and BOTH the hint box and the button row carry paddingBottom 1
+/// (rig-pinned: the 60-col dialog is 9 rows tall — title, gap, TWO
+/// wrapped hint rows, pad, gap, button, pad).
 fn render_help_content(styles: &DialogStyles, surface: Color, width: usize) -> SelectView {
     let default = styles.default_fg;
     let mut rows: Vec<Vec<crate::render::Cell>> = Vec::new();
+    // paddingLeft 2 + paddingRight 2 (`dialog-help.tsx:20`).
+    let content_width = width.saturating_sub(4);
 
-    // Header: bold "Help", right-aligned "esc/enter".
+    // Header: bold "Help", right-aligned "esc/enter" at the pad-2 edge.
     let mut header = blank_row(width, default, surface);
-    put_text(&mut header, 4, "Help", styles.text, surface, 1);
-    put_text_end(&mut header, width - 4, "esc/enter", styles.muted, surface, 0);
+    put_text(&mut header, 2, "Help", styles.text, surface, 1);
+    put_text_end(&mut header, width - 2, "esc/enter", styles.muted, surface, 0);
     rows.push(header);
     rows.push(blank_row(width, default, surface));
 
     // The palette hint (dialog-help.tsx's body copy; the binding is
-    // the palette command's default).
-    let mut hint = blank_row(width, default, surface);
+    // the palette command's default), wrapped at the content width.
     let palette = crate::keymap::default_table()
         .iter()
         .find(|def| def.command == "command.palette.show")
@@ -529,28 +576,32 @@ fn render_help_content(styles: &DialogStyles, surface: Color, width: usize) -> S
             || "ctrl+p".to_owned(),
             |def| spec_display(def.defaults.split(',').next().unwrap_or("none")),
         );
-    put_text(
-        &mut hint,
-        4,
-        &format!("Press {palette} to see all available actions and commands in any context."),
-        styles.muted,
-        surface,
-        0,
-    );
-    rows.push(hint);
+    let hint = format!("Press {palette} to see all available actions and commands in any context.");
+    for line in crate::wrap::wrap_label(&hint, content_width.max(1)) {
+        let mut hint_row = blank_row(width, default, surface);
+        put_text(&mut hint_row, 2, &line, styles.muted, surface, 0);
+        rows.push(hint_row);
+    }
+    // The hint box's paddingBottom (dialog-help.tsx:29).
+    rows.push(blank_row(width, default, surface));
+    // The root's gap between the hint box and the button row.
     rows.push(blank_row(width, default, surface));
 
     // The right-justified `ok` button: paddingLeft/Right 3 over the
-    // focused primary action pair, text `text.action.primary.focused`.
+    // focused primary action background; the PADDING cells keep the
+    // ambient default fg (the button box paints background only —
+    // rig-pinned padding fg idx15), the label uses
+    // `text.action.primary.focused` (dialog-help.tsx:34-43).
     let mut button = blank_row(width, default, surface);
     let button_width = 3 + 2 + 3;
-    let start = width.saturating_sub(4 + button_width).max(4);
+    let start = width.saturating_sub(2 + button_width).max(2);
     for cell in &mut button[start..start + button_width] {
         cell.bg = to_cell_color(styles.selected_bg);
-        cell.fg = to_cell_color(styles.selected_fg);
     }
     put_text(&mut button, start + 3, "ok", styles.selected_fg, styles.selected_bg, 0);
     rows.push(button);
+    // The button row's paddingBottom (dialog-help.tsx:34).
+    rows.push(blank_row(width, default, surface));
 
     SelectView { rows, width }
 }
@@ -712,9 +763,10 @@ mod tests {
         }
     }
 
-    /// The overlay geometry from the command-palette golden: backdrop
-    /// (4,4,4) over the base 10, box (20,20,20) at `height / 4`,
-    /// centered, 60 wide with a 78-column clamp.
+    /// The overlay geometry from the command-palette golden + the rig's
+    /// dialog corpus: backdrop (4,4,4) over the base 10 with the FG
+    /// dimmed on glyph cells only, box (20,20,20) at `round(height/4)`
+    /// (half-up), centered, 60 wide with a 78-column clamp.
     #[test]
     fn overlay_backdrop_and_box_geometry() {
         let theme = crate::theme::ThemeState::v2_dark();
@@ -722,10 +774,18 @@ mod tests {
         store.replace_dialog(DialogKind::CommandPalette, DialogSize::Medium);
         let mut frame = blank_base(80, 24);
         render_overlay(&mut frame, &store, &theme, (80, 24));
-        // Backdrop over the base 10 → (4,4,4) everywhere outside the box.
+        // Backdrop over the base 10 → (4,4,4) everywhere outside the box;
+        // the blank cell's fg (white) stays UNdimmed (whitespace fg keeps
+        // the terminal default under the overlay — rig-pinned idx15).
         assert_eq!(rgb(frame.cell(0, 0).bg), (4, 4, 4));
         assert_eq!(rgb(frame.cell(23, 79).bg), (4, 4, 4));
-        // Box: 60 wide centered at x=10, from y = 24/4 = 6.
+        assert_eq!(rgb(frame.cell(0, 0).fg), (255, 255, 255));
+        // A GLYPH cell's fg dims by the same 150/255 black (the base's
+        // 'X' at (1,1): 255 → 105 — rig-pinned 'A' idx8 → idx236).
+        frame.cells[1][1].ch = 'X';
+        blend_backdrop(&mut frame.cells[1][1]);
+        assert_eq!(rgb(frame.cell(1, 1).fg), (105, 105, 105));
+        // Box: 60 wide centered at x=10, from y = round(24/4) = 6.
         assert_eq!(rgb(frame.cell(6, 10).bg), (20, 20, 20));
         assert_eq!(rgb(frame.cell(6, 69).bg), (20, 20, 20));
         assert_eq!(rgb(frame.cell(6, 70).bg), (4, 4, 4));
@@ -733,6 +793,20 @@ mod tests {
         // dialog formfield background.
         assert_eq!(frame.cell(7, 14).ch, 'C');
         assert_eq!(rgb(frame.cell(9, 14).bg), (20, 20, 20));
+    }
+
+    /// paddingTop = height/4 rounds HALF-UP (taffy): 30/4 = 7.5 lands
+    /// the box at row 8 — the 120x30 rig runs pinned ref row 8 vs our
+    /// old floor(7).
+    #[test]
+    fn overlay_box_y_rounds_half_up() {
+        let theme = crate::theme::ThemeState::v2_dark();
+        let store = Store::new(Runtime::new());
+        store.replace_dialog(DialogKind::Help, DialogSize::Medium);
+        let mut frame = blank_base(120, 30);
+        render_overlay(&mut frame, &store, &theme, (120, 30));
+        assert_eq!(rgb(frame.cell(7, 30).bg), (4, 4, 4), "row 7 stays backdrop");
+        assert_eq!(rgb(frame.cell(8, 30).bg), (20, 20, 20), "box top at row 8");
     }
 
     /// The clamp: the box never exceeds `width - 2`.
@@ -826,30 +900,73 @@ mod tests {
         assert_eq!(store.dialogs().len(), 0);
     }
 
-    /// The rename prompt renders its title and placeholder.
+    /// The rename prompt: prompt-family geometry (paddingLeft 2, no
+    /// formfield background, `enter submit` footer + paddingBottom),
+    /// seeded with the session's current title.
     #[test]
-    fn rename_prompt_renders_title_and_input() {
+    fn rename_prompt_renders_title_input_and_footer() {
         let theme = crate::theme::ThemeState::v2_dark();
         let store = Store::new(Runtime::new());
-        store.open_tab("s1", None);
+        store.open_tab("s1", Some("Parity fake says hello.".to_owned()));
         store.replace_dialog(
             DialogKind::SessionRename { session_id: "s1".to_owned() },
             DialogSize::Medium,
         );
         let mut frame = blank_base(80, 24);
         render_overlay(&mut frame, &store, &theme, (80, 24));
-        let row: String = frame.cells[7].iter().map(|cell| cell.ch).collect();
-        assert!(row.contains("Rename session"), "{row}");
-        let input: String = frame.cells[9].iter().map(|cell| cell.ch).collect();
-        assert!(input.contains("Session title"), "{input}");
+        let rows: Vec<String> = frame.text_grid();
+        let styles = DialogStyles::from_theme(&theme);
+        let surface = match styles.surface_bg {
+            Color::Rgb(r, g, b) => (r, g, b),
+            _ => panic!("surface must be RGB"),
+        };
+        // Title row at box_y + 1, x = box_x + 2 (prompt-family padding).
+        assert!(rows[7].contains("Rename session"), "{}", rows[7]);
+        assert_eq!(rows[7].find("Rename session"), Some(12), "paddingLeft 2");
+        // The input row keeps the box surface (NO formfield bg) and
+        // shows the placeholder when the value is empty.
+        assert!(rows[9].contains("Session title"), "{}", rows[9]);
+        assert_eq!(rgb(frame.cell(9, 30).bg), surface, "no formfield background");
+        // The `enter submit` footer + its paddingBottom close the box
+        // at row 12 (7 rows total: chrome + 6 content).
+        assert!(rows[11].contains("enter submit"), "{}", rows[11]);
+        assert_eq!(rows[11].find("enter"), Some(12), "footer at paddingLeft 2");
+        assert_eq!(rgb(frame.cell(12, 30).bg), surface, "footer paddingBottom row");
+        assert_eq!(rgb(frame.cell(13, 30).bg), (4, 4, 4), "box ends at row 12");
+        // The footer's inner space ("enter " is one styled text node)
+        // carries text.base like the `enter` glyphs (rig-pinned
+        // idx255, not the ambient default).
+        let text_fg = match styles.text {
+            Color::Rgb(r, g, b) => (r, g, b),
+            _ => panic!("text token must be RGB"),
+        };
+        assert_eq!(rgb(frame.cell(11, 17).fg), text_fg, "frame x=17 is the styled space");
+        assert_eq!(rgb(frame.cell(11, 12).fg), text_fg, "frame x=12 is `enter`");
     }
 
-    /// `DialogHelp` (D-05): v2's help is the small surface — the bold
-    /// "Help" + `esc/enter` header, the palette hint line, and the
-    /// right-justified `ok` button. NO keybinding table (the port's
-    /// clamped table is removed); return and escape both close.
+    /// `session.rename` seeds the prompt with the tab's live title
+    /// (`value={currentTitle}`, dialog-session-rename.tsx:16).
     #[test]
-    fn help_dialog_lists_bindings_and_closes_on_return() {
+    fn rename_dialog_seeds_the_current_title() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Parity fake says hello.".to_owned()));
+        store.navigate(Route::Session { session_id: "s1".to_owned() });
+        let mut dispatcher = crate::components::dialog::store_dispatcher();
+        dispatcher.dispatch(&store, "session.rename", None);
+        let entry = store.top_dialog().expect("dialog opened");
+        assert!(matches!(entry.kind, DialogKind::SessionRename { .. }));
+        assert_eq!(entry.value, "Parity fake says hello.");
+    }
+
+    /// `DialogHelp` (D-05 + the geometry wave): the prompt-family root
+    /// (paddingLeft/right 2, gap 1), the palette hint WORD-WRAPPED at
+    /// the content width, the hint box's paddingBottom, the gap, the
+    /// right-justified `ok` button (padding fg = ambient default) and
+    /// the button row's paddingBottom — 9 box rows at 80 cols
+    /// (rig-pinned). return and escape both close; printables pass
+    /// through; NO keybinding table.
+    #[test]
+    fn help_dialog_renders_the_prompt_family_geometry() {
         let theme = crate::theme::ThemeState::v2_dark();
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
@@ -857,43 +974,75 @@ mod tests {
         let mut frame = blank_base(80, 24);
         render_overlay(&mut frame, &store, &theme, (80, 24));
         let rows: Vec<String> = frame.text_grid();
+        let styles = DialogStyles::from_theme(&theme);
+        let surface = match styles.surface_bg {
+            Color::Rgb(r, g, b) => (r, g, b),
+            _ => panic!("surface must be RGB"),
+        };
+
+        // Title row at box_y + 1 with paddingLeft 2 (col 12, not 14).
         assert!(rows[7].contains("Help"), "title row: {:?}", rows[7]);
+        assert_eq!(rows[7].find("Help"), Some(12), "prompt-family paddingLeft 2");
         assert!(rows[7].contains("esc/enter"), "close hint: {:?}", rows[7]);
-        // The palette hint (dialog-help.tsx's body copy).
-        assert!(
-            rows[9].contains("Press ctrl+p to see all available actions and commands"),
-            "hint row: {:?}",
+        assert_eq!(
+            rows[7].find("esc/enter"),
+            Some(59),
+            "hint ends at paddingRight 2: {:?}",
+            rows[7]
+        );
+
+        // The palette hint wraps at the 56-column content width:
+        // "…commands" then "in any context." (rig-pinned 80-col rows).
+        assert_eq!(
+            rows[9].find("Press ctrl+p to see all available actions and commands"),
+            Some(12),
+            "hint line 1 at paddingLeft 2: {:?}",
             rows[9]
         );
-        // The right-justified `ok` button (padding 3 each side over
-        // the focused primary action pair).
-        let ok_row = rows[11].trim_end();
+        assert!(!rows[9].contains(" in "), "no spill past the wrap: {:?}", rows[9]);
+        assert_eq!(rows[10].trim(), "in any context.", "hint line 2: {:?}", rows[10]);
+
+        // The hint box's paddingBottom (row 11) + the root gap (row 12).
+        assert_eq!(rgb(frame.cell(11, 30).bg), surface);
+        assert_eq!(rgb(frame.cell(12, 30).bg), surface);
+
+        // The right-justified `ok` button on row 13: 8 cells ending at
+        // the paddingRight-2 edge (cols 60..68 — `ok` at 63), padding
+        // cells keep the ambient default fg, label uses the focused
+        // primary action pair.
+        let ok_row = rows[13].trim_end();
         assert!(ok_row.ends_with("ok"), "ok button right-justified: {ok_row:?}");
-        assert!(
-            ok_row.ends_with("   ok"),
-            "three cells of focused-bg padding left of the label: {ok_row:?}"
-        );
-        let styles = DialogStyles::from_theme(&theme);
+        assert_eq!(rows[13].find("ok"), Some(63), "button at the content edge");
         let expected = match (styles.selected_fg, styles.selected_bg) {
             (Color::Rgb(r, g, b), Color::Rgb(br, bg_, bb)) => ((r, g, b), (br, bg_, bb)),
             _ => panic!("focused action tokens must be RGB"),
         };
-        let button_cells = &frame.cells[11];
-        let ok_pos = rows[11].find("ok").expect("ok text");
-        let fg = match button_cells[ok_pos].fg {
+        let button_cells = &frame.cells[13];
+        let fg = match button_cells[63].fg {
             CellColor::Rgb(r, g, b) => (r, g, b),
             _ => (0, 0, 0),
         };
-        let bg = match button_cells[ok_pos].bg {
+        let bg = match button_cells[63].bg {
             CellColor::Rgb(r, g, b) => (r, g, b),
             _ => (0, 0, 0),
         };
         assert_eq!((fg, bg), expected, "ok text uses the focused primary action pair");
-        let pad_bg = match button_cells[ok_pos - 3].bg {
+        let pad_bg = match button_cells[60].bg {
             CellColor::Rgb(r, g, b) => (r, g, b),
             _ => (0, 0, 0),
         };
         assert_eq!(pad_bg, expected.1, "button padding carries the focused bg");
+        assert_eq!(
+            rgb(button_cells[60].fg),
+            (255, 255, 255),
+            "button padding keeps the default fg (rig-pinned idx15)"
+        );
+
+        // The button row's paddingBottom closes the box at row 14 (9
+        // rows total: chrome + 8 content).
+        assert_eq!(rgb(frame.cell(14, 30).bg), surface);
+        assert_eq!(rgb(frame.cell(15, 30).bg), (4, 4, 4), "box ends at row 14");
+
         // No keybinding table: no mode sections, no binding rows, no
         // clamp artifacts.
         let text = rows.join("\n");
