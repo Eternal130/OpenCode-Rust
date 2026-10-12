@@ -314,6 +314,8 @@ pub fn palette_props(store: &Store) -> SelectProps {
 /// The select props for one select-style dialog kind (the dialog
 /// renderer's content source).
 #[must_use]
+// The per-kind props table (one arm per dialog kind).
+#[allow(clippy::too_many_lines)]
 pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
     match kind {
         DialogKind::CommandPalette => palette_props(store),
@@ -410,6 +412,31 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         DialogKind::ServerList { title, .. } => SelectProps::new(
             *title,
             vec![SelectOption::titled("Not wired in this build", "stub").muted_placeholder()],
+        ),
+        // `DialogMessage` (`routes/session/dialog-message.tsx`): the
+        // four fixed actions over the clicked user message.
+        DialogKind::MessageActions { .. } => SelectProps::new(
+            "Message Actions",
+            vec![
+                SelectOption::titled("Jump to", "message.jump")
+                    .described("view message in session"),
+                SelectOption::titled("Revert", "session.revert")
+                    .described("undo messages and file changes"),
+                SelectOption::titled("Copy", "message.copy").described("message text to clipboard"),
+                SelectOption::titled("Fork", "session.fork").described("create a new session"),
+            ],
+        ),
+        // `ui/working-directory-actions.tsx`: the three fixed actions
+        // over the footer's `{dir}:{branch}` label.
+        DialogKind::WorkingDirectory { directory } => SelectProps::new(
+            "Working directory",
+            vec![
+                SelectOption::titled("Copy path", "location.copy").described(directory.clone()),
+                SelectOption::titled("Open folder", "location.open")
+                    .described("in system file manager"),
+                SelectOption::titled("Workspaces", "session.move")
+                    .described("to another working directory"),
+            ],
         ),
     }
 }

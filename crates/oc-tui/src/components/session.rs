@@ -223,34 +223,85 @@ pub fn render_session(
     // scroll commands' viewport/content inputs) and apply the live
     // offset (sticky sits at the bottom, free keeps the scrolled
     // offset; the scroll keys move it — see `Store::scroll_command`).
+    // The VIEWPORT is the scrollbox alone: v2's transcript pane rows
+    // are `scrollbox` + the 1-row jump-to-latest slot under it
+    // (`session-frame.tsx`: the scrollbox is `flex: 1` beside a
+    // `height: 1` indicator row), so the scroll math sees
+    // `transcript_height - 1` — the long-reply corpus pins the page
+    // steps (-7/-7/+8 at 24 rows ⇒ viewport 15, not the pane's 16).
     store.set_transcript_metrics(
         session_id,
         crate::store::TranscriptMetrics {
-            viewport: transcript_height,
+            viewport: transcript_height.saturating_sub(1),
             content_height: transcript.content_height,
         },
     );
     store.scroll_appended(session_id, transcript.content_height);
     let scroll_offset = store.scroll_offset(session_id);
-    // The clickable reasoning headers (beta.8 bug 4): record each
-    // group row's ABSOLUTE rect for the mouse layer — the same
-    // content_top shift the rows below paint under, minus the scroll
-    // offset (only rows inside the viewport are hit-testable).
+    // The transcript's click surface (absolute rects from the last
+    // render pass — the same content_top shift the rows paint under,
+    // minus the scroll offset; only rows inside the viewport are
+    // hit-testable):
+    // * reasoning group headers toggle (beta.8 bug 4) with a TIGHT
+    //   rect — v2's toggle box is the `InlineToolRow` content
+    //   (paddingLeft 3 + the 2-wide icon slot + the label's own
+    //   glyphs, `group-view.tsx:176-190`), not the whole row;
+    // * user-message blocks open the Message Actions select
+    //   (`UserMessage`'s `onMouseUp`, session/index.tsx:2210-2250).
     store.set_transcript_hit_rows(
         transcript
             .rows
             .iter()
-            .filter(|row| row.key.starts_with("group:Reasoning:"))
             .filter_map(|row| {
                 let screen_y = content_top + row.y.checked_sub(scroll_offset)?;
-                (screen_y < content_top + transcript_height).then(|| {
-                    crate::store::TranscriptHitRow {
+                if screen_y >= content_top + transcript_height {
+                    return None;
+                }
+                if row.key.starts_with("group:Reasoning:") {
+                    let heads = row.placed.iter().filter(|item| item.y == row.y);
+                    let x = heads.clone().map(|item| item.x).min().unwrap_or_default();
+                    let end = heads
+                        .map(|item| {
+                            item.x
+                                + item
+                                    .lines
+                                    .first()
+                                    .map(|line| {
+                                        line.runs
+                                            .iter()
+                                            .map(|run| crate::wrap::display_width(&run.text))
+                                            .sum::<usize>()
+                                    })
+                                    .unwrap_or_default()
+                        })
+                        .max()
+                        .unwrap_or_default();
+                    (end > x).then(|| crate::store::TranscriptHitRow {
                         session_id: session_id.to_owned(),
-                        key: row.key.clone(),
+                        action: crate::store::TranscriptHitAction::ToggleGroup(row.key.clone()),
                         y: screen_y,
                         height: row.height,
-                    }
-                })
+                        x,
+                        width: end - x,
+                    })
+                } else if let Some(message_id) = row.key.strip_prefix("message:") {
+                    // The user-message block (`UserMessage`'s inner
+                    // content box, session/index.tsx:2219-2250):
+                    // full-width rows of the raised box.
+                    let content_width = column - transcript.inset * 2;
+                    Some(crate::store::TranscriptHitRow {
+                        session_id: session_id.to_owned(),
+                        action: crate::store::TranscriptHitAction::MessageActions {
+                            message_id: message_id.to_owned(),
+                        },
+                        y: screen_y,
+                        height: row.height,
+                        x: transcript.inset + 1,
+                        width: content_width.saturating_sub(1),
+                    })
+                } else {
+                    None
+                }
             })
             .collect(),
     );
@@ -521,11 +572,28 @@ fn composer_mount_frame(
                     if armed { "esc again to interrupt" } else { "esc interrupt" }.to_owned()
                 })
                 .unwrap_or_default(),
+            location_hovered: store.location_hovered(),
         },
         top: prompt_height - mount_height,
         rail,
         caret,
     };
+    // #33 — the location label's hit rect (the status row docks at
+    // `height - 2`; the label's painted extent from the same math the
+    // row paints with). Empty label ⇒ no hit.
+    let status_row = height.saturating_sub(2);
+    let location_hit = crate::components::composer::render::footer_location_extent(&view, width)
+        .map(|(x, label_width)| crate::store::FooterLocationHit {
+            directory: view
+                .footer
+                .location
+                .rsplit_once(':')
+                .map_or_else(|| view.footer.location.clone(), |(dir, _)| dir.to_owned()),
+            row: status_row,
+            x,
+            width: label_width,
+        });
+    store.set_footer_location_hit(location_hit);
     (render_prompt_frame(&view, width, prompt_height, theme), prompt_height, mount_height)
 }
 
