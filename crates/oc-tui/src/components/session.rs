@@ -21,7 +21,7 @@ use crate::components::sidebar::{
     render_sidebar, SidebarSections, SidebarView, SIDEBAR_AUTO_BREAKPOINT,
 };
 use crate::render::{paint_placed_with_fills, Fill, Frame};
-use crate::store::Store;
+use crate::store::{SessionTab, Store};
 use ratatui::style::Style;
 
 /// The agent label for the composer's statusline hint: the server
@@ -73,7 +73,10 @@ pub fn paint_live_tabs_bar(
         .tabs
         .iter()
         .map(|tab| TabView {
-            tab: tab.clone(),
+            // Session-title-first (session-tabs.tsx:754): the live
+            // session registry shadows the tab's persisted title, so
+            // a rename that raced the tab's opening still shows.
+            tab: SessionTab { title: store.display_title(tab), ..tab.clone() },
             status: TabStatus {
                 unread: tabs.unread.get(&tab.session_id).copied(),
                 busy: false,
@@ -424,12 +427,14 @@ fn scrim_frame(width: usize, height: usize) -> Frame {
 /// `{dir}:{branch}` source — the composer's status seam is empty
 /// too).
 fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarView {
+    // Session-title-first (the tab list's title resolution —
+    // session-tabs.tsx:754), the strip's "Untitled session" fallback.
     let title = store
         .tabs()
         .tabs
         .iter()
         .find(|tab| tab.session_id == session_id)
-        .and_then(|tab| tab.title.clone())
+        .and_then(|tab| store.display_title(tab))
         .unwrap_or_else(|| "Untitled session".to_owned());
     SidebarView {
         title,
@@ -914,6 +919,84 @@ mod tests {
             grid.iter().filter(|row| row.contains("Alpha notes")).collect::<Vec<_>>();
         assert_eq!(rows_with_title.len(), 1, "title on one row only: {grid:?}");
         assert!(!grid[1].contains("Alpha notes"), "no title row under the strip: {}", grid[1]);
+    }
+
+    /// Lane/title #12 — the auto-title CONSUMPTION seam. The forked
+    /// title task publishes `session.renamed` while the submit flow's
+    /// tab-open may still be in flight (drain.rs `fork_title` races
+    /// the prompt response), so the tab label resolves the live
+    /// session registry FIRST — v2 `data?.session.get(tab.sessionID)
+    /// ?.title ?? tab.title ?? "Untitled session"`
+    /// (component/session-tabs.tsx:754) — and a title that landed
+    /// BEFORE the tab existed still displays.
+    #[test]
+    fn tab_title_lands_when_renamed_beat_the_tab_open() {
+        use crate::data::Ingest;
+        let store = Store::new(Runtime::new());
+        // The rename arrives while NO tab exists (the race the rig
+        // pinned: renamed at seq 13, navigate open_tab after
+        // execution.succeeded).
+        store.ingest_all([Ingest::Event(crate::data::BusEvent::new(
+            "session.renamed",
+            serde_json::json!({ "sessionID": "s1", "title": "Parity fake says hello." }),
+        ))]);
+        store.open_tab("s1", None);
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
+        let strip = &frame.text_grid()[0];
+        assert!(
+            strip.starts_with("   Parity fake says hello."),
+            "registry title leads the strip: {strip}"
+        );
+        assert!(!strip.contains("Untitled session"), "placeholder replaced: {strip}");
+    }
+
+    /// #12 placeholder semantics: an untitled session holds
+    /// `Untitled session` until a title lands, then the SAME open tab
+    /// re-renders it (the renamed event on the live stream).
+    #[test]
+    fn strip_placeholder_holds_until_titled_then_refreshes() {
+        use crate::data::Ingest;
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", None);
+        let theme = crate::theme::ThemeState::v2_dark();
+        let strip = render_session(&store, "s1", &theme.styles(), (80, 24)).text_grid()[0].clone();
+        assert!(strip.contains("Untitled session"), "placeholder until titled: {strip}");
+        store.ingest_all([Ingest::Event(crate::data::BusEvent::new(
+            "session.renamed",
+            serde_json::json!({ "sessionID": "s1", "title": "Fix the flux capacitor" }),
+        ))]);
+        let strip = render_session(&store, "s1", &theme.styles(), (80, 24)).text_grid()[0].clone();
+        assert!(strip.contains("Fix the flux capacitor"), "renamed refresh: {strip}");
+        assert!(!strip.contains("Untitled session"), "placeholder gone: {strip}");
+    }
+
+    /// #12 downstream: a long generated title truncates to the strip
+    /// width and the ` + ` affordance keeps its column at the right
+    /// margin (the strip's layout math sizes by the title, never the
+    /// reverse — `restingTitleWidth`, session-tabs.tsx:751).
+    #[test]
+    fn long_registry_title_truncates_and_keeps_the_plus_affordance() {
+        let store = Store::new(Runtime::new());
+        let long_title =
+            "A very long generated session title that cannot fit the strip width at all";
+        store.open_tab("s1", Some(long_title.to_owned()));
+        let theme = crate::theme::ThemeState::v2_dark();
+        for width in [40usize, 80, 120] {
+            let frame =
+                render_session(&store, "s1", &theme.styles(), (u16::try_from(width).unwrap(), 24));
+            let grid = frame.text_grid();
+            let strip = &grid[0];
+            assert_eq!(strip.chars().count(), width, "strip spans the width: {strip}");
+            assert!(strip.contains(" + "), "affordance kept at {width}: {strip}");
+            assert!(
+                strip.contains("A very long generated"),
+                "truncated title visible at {width}: {strip}"
+            );
+            assert!(!strip.contains(long_title), "title truncated at {width}: {strip}");
+            // Nothing bleeds onto the row below the strip.
+            assert!(!grid[1].contains("generated"), "one-row strip at {width}: {}", grid[1]);
+        }
     }
 
     /// `tabs.enabled = false`: the strip is absent AND no title row
