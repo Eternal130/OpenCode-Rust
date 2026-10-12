@@ -102,7 +102,7 @@
 - CI（GitHub Actions）豁免（不在本机跑）。
 - 其余冻结纪律继续有效：绝不触碰 49374 与线上目录；测试一律 `127.0.0.1:0`；/tmp/opencode 顶层用 PID 唯一名；无裸 PID 杀进程；开发测试只写沙箱，不写用户真实数据目录；DNS 探针（/tmp/opencode/dns-probe.*）不属于构建产物，勿清理。
 - 之后所有泳道规格必须写明「本地命令一律经 `tools/dev-gate.sh`」。
-- **泳道写入隔离（2026-10-11 二次事故后新增；2026-10-12 /tmp 清空事故后升级）**：泳道一律使用独立 git worktree，且**工作区必须放在 `/opt/opencode-rust/.worktrees/lane-X`**（仓库内、gitignore 保护）——/tmp 会遭遇系统性清空（2026-10-12 09:40 /tmp/opencode 整目录被清，五条在途泳道未提交工作全失）。**里程碑即 WIP 提交为强制纪律**（小步提交、终了 squash 为一门提交）。共享 main 检出的泳道必须：早提交勤提交、只碰自己范围的文件、最终提交前 `git status` 复核。可重建资产（ref checkout/bun/证据目录）允许留在 /tmp（自愈路径覆盖）；不可重建资产（未提交代码）不允许。
+- **泳道写入隔离（2026-10-11 二次事故后新增）**：多泳道并行时各自使用独立 git worktree（`git worktree add`），整合时串行合回 main——共享单一检出目录已造成一次泳道文件被误删。共享 main 检出的泳道必须：早提交勤提交（WIP 小步提交，后续 squash）、只碰自己范围的文件、最终提交前 `git status` 复核。
 
 ### 架构决策（2026-10-11，用户裁定 B）：交互契约层 `oc-tui-core`
 
@@ -146,7 +146,3 @@
 - 2026-10-11（波 F 落地）：请求路径对齐（lane/reqpath 并入，oc-core 1017/1017 绿）——#26 根因=overlay 解析只取 model 键+body 被塞进 provider_options（协议 lowering 静默丢弃），修为 provider⊕model 深合并折入 RouteDefaults.http.body（照抄 v2 model.ts:204-209/provider.ts:172-205/openai-compatible.ts:48-59/anthropic.ts:55-68 全链 cite）；#27 根因=标题任务乐观序号发布确定性失败（并发 chat 事件抢占序号→吞掉 rename→会话永无标题→每轮重发；v2 以 isUntitled 门控）→修为不匹配时 ≤20 次退避重试+现行守卫（同源顺带解释 #12 的 Untitled）。rig 请求形状：4=4、temperature 全上线、键集一致，零形状差。
 
 - 2026-10-11（语料二期并入）：9 新脚本（活会话 tab 和弦/多会话/160 列侧边栏对照/逐格悬停扫/多轮对话/点击分组矩阵×3/思考展开强化）+ rig 扩展（每脚本尺寸覆盖、sweep 步型、请求路径差分——stub 记录请求形状）；新登记 #26-#37，要点：**#26 我们完全丢弃模型 body/options 覆盖（temperature 从不上线）**、#27 请求计数/标题路径漂移（5 vs 4）、#28 标签 + 命中区越界、#29 思考切换整行命中、#30 展开态 ┃ 槽缺失、#31 对话框外点关闭缺失、#32 ctrl+c 带对话框不退出、#33 页脚/输入框格位反应性死、#34 转录点击选择死；#35 rig 观察：leader 和弦 n/w/b 在 rig 内双端皆 no-op（此前脚本的和弦步等于空转）、<leader>q 被 queued_prompts 遮蔽。正面项：tab + 命中 25/25、循环、160 列侧边栏挂载、展开/收起、请求形状对称。后续队列：F（请求路径 #26/#27，已出发）、子代理差分语料（已出发：stub 多请求编排+任务卡/浏览器 Subagents 标签/侧边栏抑制三面）、D/E 待合并位。
-
-- 2026-10-12（/tmp 清空事故+重启复活）：API 5h 限额击毙五泳道后，/tmp/opencode 于 09:40 被系统性清空——五泳道未提交工作全失、ref/bun/证据目录同失（/opt/opencode-ref 完好）。恢复：ref 自愈重建、bun 改用 ~/.cache 副本、/tmp/opencode 属主修复；纪律升级=泳道 worktree 迁入 `.worktrees/`（仓库内）+里程碑 WIP 提交强制。随后用户改上下文长度重启宿主——会话再灭、磁盘 WIP 完好，task_revive 带断点清单全部复活。
-
-- 2026-10-12（波 E2 落地）：子代理 UI 面（lane/subui 并入，main 745/745 绿）——#40 转录任务卡（ToolState/ToolStatus+实时工具事件 reducer+canonical subagent 行）；#44 子代理选择器（PickerState+family walk+`session.child.*` 键位族）；#45 子会话视图+侧边栏抑制（rig 160×36 实证）；#46 退出送别屏（presentation.rs 逐字 SGR wordmark）。rig：68 失配步→64+4 纯文本（会话 id 随机字符），四项全塌缩；残余全映射他线。vt_harness SSE 窗 5s→55s 修 flakes。G 线（#38/#41/#39/#48）已出发。

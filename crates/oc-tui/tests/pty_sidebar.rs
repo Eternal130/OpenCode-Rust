@@ -72,7 +72,8 @@ fn transition_extent(h: &HarnessHandle) -> Option<usize> {
     let grid = h.grid_now();
     (0..grid.rows).find_map(|row| {
         let text = grid.row_text(row);
-        if !text.starts_with('╹') {
+        let trimmed = text.trim_start_matches(' ');
+        if !trimmed.starts_with('╹') {
             return None;
         }
         text.chars().enumerate().filter(|(_, ch)| *ch == '▀').map(|(col, _)| col).last()

@@ -704,212 +704,130 @@ both stacks (request-path: ref = main 1 + subagent 1 + continuation 1
 - Exit teardown stays clean on both stacks (no hangs; the grids
   settle and the alt-screen leave is observed).
 
-# Addendum — fix-wave E2: the subagent UI surfaces (lane/subui, 2026-10-12)
+## Lane C — screen chrome family (fix wave; #4 #5 #6 #12 #13 #14 #20 + NEW-S1a/S3a)
 
-The four class-(a) TUI findings of the corpus3 backlog, fixed and
-rig-verified. All runs:
-`PARITY_BUN=… OC_TUI_DIFF` gates through `tools/dev-gate.sh`;
-differential `cargo run -p parity --bin tui-diff -- --filter subagent
---runs 1` (artifacts under `/tmp/opencode/tui-diff/`).
+Scope: the composer/footer chrome family. One commit on `lane/chrome`
+(worktree `.worktrees/lane-chrome`). All findings re-verified against
+the current ref checkout; the S3a direction was RE-PINNED (see below).
 
-## #40 — the subagent tool card
+### Per-finding root cause + ref citation
 
-**Root cause (ours)**: `Part::Tool` carried only `{id, name, time}` —
-the wire `part.state` (`{status, input, metadata}`) was dropped at
-every ingest seam, and the transcript's `Part::Tool` render arm
-returned an empty row. The ref renders the card via `Subagent`
-(routes/session/index.tsx:3087-3120) over `InlineTool`/
-`InlineToolRow` (message-parts.tsx:198-275).
+- **#4 footer left slot** — root cause: our footer left slot was
+  empty (no location); ref renders `{abbreviateHome(cwd)}:{branch}`
+  muted, truncating via `truncateFilePath` (ui/file-path.tsx:23-87),
+  in a `flexShrink 1 minWidth 0` box whose measured width feeds back
+  into the truncation (prompt/index.tsx:1873-1885, `onSizeChange` →
+  `setLocationWidth`). Ported: `LoopRequest::LocationVcs` boot worker
+  (one `vcs.get`), `Store::footer_location`, full `truncate_file_path`
+  + `truncate_basename` ports, and the usage arm (`18 (0%)` +
+  COMMANDS-only hints — footer.tsx:65-94 first `Match` drops the
+  agents hint) including `promptFooterLayout`'s `width-8` drop gate
+  (footer.tsx:50-60,131-143). Adjacent: the server's `vcs.get` wire
+  shape was flat (`"branch": "master"`); the generated client +
+  ref's `Info` type nest `branch.current` — oc-server now emits the
+  nested shape.
+- **#20 footer collision** — root cause: the model statusline shared
+  the footer row; a long location collided with the hints. Fix: the
+  model statusline is GONE from the footer (it lives in the composer
+  metadata row, #5); the location truncates into whatever the right
+  block leaves and can never push it (right block `flexShrink 0`).
+- **#5 composer model row** — root cause: ref renders
+  `PromptMetadataRow` INSIDE the prompt box (`agent · model provider
+  · variant`; metadata.tsx:36-146): agent in the rail color, `·`
+  muted, model `text.base`, provider muted, variant warning-bold,
+  with `promptMetadataLayout`'s ordered drop ladder + terminal-width
+  budget `width - (w<44 ? 9 : 13)` (metadata.tsx:101-136). Ported as
+  `MetadataLine`/`MetadataLayout` + the painted row at the box's last
+  content row.
+- **NEW-S1a caret** — root cause: our port painted a software block
+  caret; ref's live caret is the TERMINAL hardware cursor (the corpus
+  never caught a painted caret cell). Live routes now never paint a
+  block: `Store::caret_cell` + `prompt_caret_screen_cell` +
+  `surface.set_cursor_position` at the draw seam (suppressed while a
+  dialog overlays — ref blurs the prompt then).
+- **#6 placeholder pool** — pool contents were already right; ref
+  picks its entry at RANDOM per boot (`randomIndex`,
+  prompt/index.tsx:103-106). Added `SHELL_PLACEHOLDERS` +
+  `random_placeholder_index` (xorshift64* over clock/pid/ASLR),
+  `PromptState.placeholder_index` round-tripped through
+  `set_composer`, seeded once at boot.
+- **#12 auto-title** — the server-side mechanism (optimistic-sequence
+  publish with bounded retry/backoff) landed on main via lane/reqpath
+  (title.rs); this lane stays consumption-level: the TUI `session.
+  renamed` → tab-title display verified (displays when the rename
+  arrives; see hand-offs for the residual late-publish flake).
+- **#13 stats row** — root causes: (1) a `message.list` snapshot
+  REPLACED the live message and erased `finish` (data.rs now maps the
+  wire finish enum); (2) ref's footer row carries the model DISPLAY
+  name (`ctx.models().find(...)?.name`, index.tsx:1858-1864), width
+  gates (model ≥28, duration <28||≥36, index.tsx:1886-1891), and
+  `X.X tok/s` (`turnTokensPerSecond`, rows.ts:442-463). Added
+  `tokens`/`usage_total` message fields (live reducer +
+  `assistant_snapshot_stats` from snapshots), `model_names` table via
+  `TranscriptOptions`, `ServerModel.context_limit`.
+- **#14 thought suffix** — root cause: no `session.reasoning.started`
+  reducer → `time.created` stayed `None` → the `· 8ms` duration
+  suffix never rendered. Reducer added.
+- **NEW-S3a transcript fg — RE-PINNED**: against the CURRENT ref,
+  plain reply TEXT paints `markdown.text` #eeeeee→idx255 in every
+  settled frame (type-edit-submit / thought-render / long-reply-scroll);
+  the original default-fg (#ffffff→idx15) reading matches the ref's
+  BLANK-cell fill, not text runs. The port keeps `markdown.text`
+  (documented in render_markdown).
+- **Resize 60-col panic** — a resize race: one frame built at the
+  previous size hit the auto-resized buffer (`buffer[(x, y)]` panic at
+  the 60-col rig shrink). The draw loop now clamps to `surface.area()`.
 
-**Port**: `ToolState`/`ToolStatus` on the model
-(components/message/model.rs) + the live reducers the v2 client runs
-(data.ts:919-980 — `tool.input.started` streaming reset, `called`
-running+parsed input, `progress` metadata swap, `success/failed`
-settlement) + `stringify_value/map` (`stringValue` semantics) at both
-ingest seams (typed wire + raw events) +
-`rows::subagent_tool_row` (completed `✓ {Titlecase(agent)} Subagent —
-{description}`; running spinner+label — the `spinner` arm renders
-`children`; streaming `⠋ Delegating…`; continuation `↳ Continue
-subagent — …`; the `· {model}` suffix) wired through the
-`Entry::Part` arm for canonical tool name `subagent`, with the
-child-session live status (`metadata.sessionID` → running map) fed
-through `TranscriptOptions.subagent_running`.
+### Rig before/after (runs 1; chain 0)
 
-**Rig**: our s09 = the ref row-for-row (`✓ General Subagent — Check
-the fixture` at the ref's row/cols/muted style); only #12 (strip
-title) and #13 (stats row) cells remain at those steps.
+| script | before | after | residual maps to |
+|---|---|---|---|
+| boot-home | footer/hints/statusline rows diffing | 80: 20 cells; 120: 59 | placeholder pick (b) + model value #3 (lane B) |
+| type-edit-submit | 52+ rows | settled-reply: stats-row name/values + footer usage percent only | #3 + dialog family #7-11 (lane B); values (b) |
+| thought-render | 53+ rows | settled: thought-header fade + name/values | header gradient (groups lane); values (b); #12 late-publish flake (lane F) |
+| long-reply-scroll | 197+ rows | scroll offsets + header fade | #15 scroll + #19 wordmark rows (scroll/S4 lanes) |
+| resize | 60-col PANIC + footer diffs | panic GONE; footer byte-exact (idle arm) | #3 + #19 (60-col shrink rows) |
 
-## #44 — the subagent picker
+### Hand-offs
 
-**Root cause (ours)**: the keymap table listed `session.child.first`
-but no handler existed — `down` fell to `input.move.down` and the
-panel was unreachable.
+- **Usage percent** `18 (0%)`: needs parityfake's context limit in
+  the wire model catalog (models-dialog lane). Without it the usage
+  arm renders `18` and the location budget differs by the percent's
+  5 cells (`/…/tui-d…/` vs `/…/tui-diff/…` boundary) — re-pin the
+  truncation boundary once the catalog entry lands.
+- **Model display name after dialog select** (`fake-model` vs `Fake
+  Model`): same catalog gap (parityfake entry absent from our wire
+  list). Boot-time names resolve (NanoGPT entries display).
+- **Thought-header fade**: ref paints a per-char gradient
+  (idx251→236 bold) on the collapsed `Thought` header; ours is flat
+  idx255. Groups-lane surface.
+- **#12/#27 late publish**: one rig run showed our tab still
+  `Untitled session` at settle while ref was titled (the NEXT run
+  displayed it) — the retry window occasionally outlives the rig's
+  quiescence. Wire cadence = lane F / server title path.
 
-**Port**: `PickerState` (open/tab/filter/selection — v2's Session
-`composer` store, index.tsx:217-220 + the tab's memory filter,
-subagents-tab.tsx:36-37) in the store; the panel component
-(components/subagent_picker.rs — tabs `Subagents  Shell  Terminals`
-+ right-aligned `esc`, the 5-row body (` No active subagents` /
-`{agent}: {title}` rows in the action.primary palette, focused =
-peach+bold), the `show {inactive|active} ctrl+a  tabs ←/→` hints row;
-box = border col 2 over raised, content [4, W−5]) mounted in place of
-the whole prompt mount (`open={composer.open || parentID}`,
-index.tsx:1451 — the ╹▀/status rows belong to the prompt); the
-`composer` keymap MODE (table entries `composer.*` +
-`session.child.next/previous` mirroring keybind.ts:136-138) pushed
-while live so escape/ctrl+c close and the arrows/enter/ctrl+a drive
-the list; `session.child.first` resolves ABOVE `input.move.down` on
-an empty draft (stroke_matches_command — the corpus3 evidence that
-`down` opens the panel on the ref); the family walk
-(`sessionFamily`, util/session.ts) over the extended session registry
-(agent/title/created/running off `session.created`/`renamed`/
-`agent.selected`/`execution.*`, seeded by the resync snapshot).
+### Tests + goldens
 
-**Rig**: our s14/s15 are byte-shaped with the ref (tabs row, `esc` at
-cols 73-75, `No active subagents`, the ctrl+a flip to `General: Check
-the fixture`, both hint states); enter navigates into the child (no
-new tab — the strip keeps the root's pill).
+- New pins: metadata row paint + drop ladder; footer location/hints
+  collision (wide+narrow) + `truncate_file_path` corpus shapes;
+  no-painted-caret (render + live route + vt_temporal idle
+  style-stability); placeholder pool + in-bounds rotation; stats row
+  shape (`Build · model · Nms · X.X tok/s`); thought duration suffix;
+  `assistant_snapshot_stats` finish/tokens mapping (data.rs resync
+  test).
+- Harness: `PARITY_UPDATE` write-through added to the pinned-only
+  toast/message-groups golden tests (message-groups splices the
+  23-row transcript into the full 30-row scenario golden so the blob
+  stays a parseable full frame); pty needles cell-run-scoped
+  (`ses_new_1.`, `Model Alpha/Beta`); sidebar transition accepts the
+  2-cell inset; hover sweep settles on grid stability.
+- Goldens regenerated (sanctioned): composer footer/metadata/inset
+  shapes across session-*/sidebar-*/vscroll-*/toast/message-groups +
+  manifest hashes; double-regen byte-stable.
 
-## #45 — the child-session view + sidebar suppression
+### Gates
 
-**Port**: navigation roots the tab bookkeeping
-(`session-tabs.tsx`'s `root()` — context/session-tabs.tsx:138,188):
-`Store::navigate` uses the family root, so a child route never opens
-a tab and the strip's active pill stays the parent's; the child's
-transcript renders from the live event trees; the child route ALWAYS
-mounts the picker (the `parentID` composer) and its close NAVIGATES
-to the parent (index.tsx:1453-1460 — v2's keyed remount resets the
-composer state, mirrored by clearing the open flag). The sidebar
-suppression itself (`session-frame.tsx:106-111`) was already ported
-(store `sidebar_shown`) — this lane made it TUI-OBSERVABLE.
-
-**Rig**: our s16/s17 (160×36): the child's transcript (user box
-`You are a subagent spawned…`, thought, reply) renders with the
-picker at FULL width (`esc` past col 118) and NO sidebar pane; esc
-re-docks the parent's sidebar (Getting started card back) and
-restores the prompt. The 80×24 child step's row shifts trace to #41
-(the duplicate subagent request doubles the child transcript —
-server-side lane G), not to the view.
-
-## #46 — the exit farewell screen
-
-**Root cause (ours)**: the loop tore down to a blank primary screen;
-the ref prints the session epilogue after the renderer stops
-(app.tsx:443-450 → `sessionEpilogue`, util/presentation.ts:26-34).
-
-**Port**: `presentation.rs` — a byte-exact port of `sessionEpilogue`
-(the per-glyph SGR wordmark over logo.ts, `_`/`^`/`~` cell kinds with
-the 235/238 palettes, `weak()` 10-padded dim labels, bold values,
-`Locale.truncate(_, 50)` UTF-16 semantics); `Store::exit_epilogue`
-stages it from the routed session's registry title; the run loop
-writes it + `\n` to stdout AFTER `LeaveAlternateScreen` (home exits
-print nothing — the corpus's identical post-exit blanks).
-
-**Rig**: all four executions' exit steps are now **text-only, 16
-cells, styles identical** — the `Continue  opencode -s <id>` session
-IDS alone differ (each stack generates its own). The wordmark + both
-label rows are byte-identical through the SGR digests.
-
-## Verification (this lane)
-
-- Rig (before → after): 68 mismatched steps → 64 mismatched + 4
-  text-only exits; the picker/child/card surfaces render byte-shaped;
-  every remaining cell maps to OTHER lanes' findings (#12 auto-title,
-  #13 stats row, #14 thought duration, #41 duplicate subagent request
-  — server-side lane G, and the B/C/D chrome families), none to E2's
-  list.
-- Tests: `pty_subagent.rs` — the live-loop walk over a scripted
-  subagent flow (card → down → ctrl+a → enter → child at 80 and 160
-  (sidebar absent) → esc → ctrl+c farewell with the epilogue +
-  home-exit negative); unit pins for the card states (streaming/
-  running/completed/continuation/model-suffix), the tool-event state
-  machine, the registry family/status, the picker walk (open/filter/
-  navigate/close-to-parent/wrap-move), the epilogue bytes/route
-  tracking, and the panel geometry (both corpus shapes).
-- Gates: `cargo fmt --all -- --check` clean; `cargo clippy -p oc-tui
-  -p oc-tui-core -p parity --all-targets` adds ZERO warnings (the 45
-  `parity` warnings predate the lane — main-identical);
-  `cargo nextest run -p oc-tui -p oc-tui-core -p parity` 745/745
-  (`pty_sidebar_plugin_section_renders_through_the_host` is a
-  load-dependent bun-cold-start flake — passes in isolation on main
-  and here); the gated entry
-  `OC_TUI_DIFF=1 … -E 'test(tui_diff)'` PASS.
-- Goldens: `PARITY_UPDATE=1` regen rewrites ZERO bytes (double-regen
-  byte-stable; nothing to commit) — the new surfaces render only
-  under live state the fixtures never carry.
----
-
-## Fix-wave B results (lane/models, 2026-10-12) — #3 #7 #8 #9 #10 #11
-
-### Root-cause map (ref citations)
-
-* **#3 boot model** — the TUI read a TUI-local `model` config field
-  that does not exist in v2's TUI config schema
-  (`packages/tui/src/config` has keybinds/theme/attention/tabs only);
-  v2's `configuredModel` reads the SERVER's config API
-  (`context/local.tsx:170-179`, `findLast` document entry with
-  `model`, both wire shapes). Fix: the boot fetch in
-  `spawn_server_lists` leads with `GET /api/config`
-  (`context/data.tsx:27-31` sync order); `TuiConfig::model` removed;
-  `set_config_model` bumps the redraw generation.
-* **#9 list source** — `/api/model` dumped the bundled catalog; v2
-  serves `Model.available()` over the providers that passed the
-  availability fold (`provider.ts:393-406`): the keyless `opencode`
-  zen provider's free tier (`plugin/provider/opencode.ts:317-342`)
-  plus providers with an env credential; config custom providers are
-  activation-"enabled" (`config/plugin/provider.ts:67`) with their
-  config display names (`:112`) and effort variants (`:151-159`).
-  The dialog additionally renders NO categories while unconnected
-  (`dialog-model.tsx:81`, grouped=false `:102-103`) and carries the
-  `View all integrations ctrl+a` footer action (`:147`,
-  `config/keybind.ts:162`); it opens `focusCurrent={false}`
-  (`:171`, `dialog-select.tsx:138`).
-* **#7 title** — the dialog title is the component mount's:
-  `Select model` (`dialog-model.tsx:122`), `Select variant`
-  (`dialog-variant.tsx:35`); the PALETTE entries keep
-  `Switch model`/`Switch model variant` (`app.tsx:840/921`).
-* **#8 filter echo** — already collapsed on current main (the
-  report's evidence predates the S0-era tree); the residual 1-cell
-  divergence was OUR painted inverse-block cursor: v2's input shows
-  the hardware cursor only and paints NO cursor cell (raw-ANSI
-  mirrors: `fg15/bg-dialog` past the typed text). Painted cursor
-  removed.
-* **#10 80-col overflow** — v2 truncates titles
-  (`Locale.truncate(title, 61)`, `dialog-select.tsx:893-898`,
-  `util/locale.ts:50-53`) and the flex layout clips the title at the
-  footer's start (flexGrow title / flexShrink-0 footer). Ported:
-  truncate + clip; long rows can no longer reach the right border.
-* **#11 variant sub-dialog** — `DialogModel.onSelect`'s dance
-  (`dialog-model.tsx:126-139`): set + recent ring, then close
-  (current variant valid) / REPLACE with the variant picker (model
-  has variants) / close; `DialogVariant.onSelect` applies via
-  `local.model.variant.set` (`dialog-variant.tsx:13-29`,
-  `local.tsx:485-493`); `/variants` with none toasts
-  (`app.tsx:925-935`).
-
-### Verification (type-edit-submit + boot-home, 80x24 & 120x30)
-
-* The models/variant dialogs are row-for-row identical at 80x24
-  (browse list, `●` marker placement, filter echo, action row,
-  variant rows; zero in-dialog char diffs). Boot resolves the pinned
-  `parityfake/fake-model` (footer shows it; submit reaches the stub —
-  the NANO_GPT failure is gone).
-* Remaining per-step diffs map to OTHER lanes: #4 (footer left slot
-  cwd:branch), #5 (composer `Build · Fake Model` row), #6
-  (placeholder pool, (b)), NEW-S1a (composer input styles), NEW-S2a
-  (backdrop), the rail/label styles behind the dialog, #12/#13
-  (reply chrome) at 80x24; the 120x30 dialog box sits one row higher
-  (the `height/4` fractional-rounding family, #19) plus the same
-  chrome. Deterministic 13/13 across `--runs 2`.
-* Rig hardening: `--out` now anchors relative dirs to the process
-  cwd — a relative out leaked a relative `OPENCODE_CONFIG` into the
-  rust server (cwd mirrors the ref checkout), silently dropping the
-  rig's provider pin (a false "regression" during this lane).
-* Goldens: zero pinned frames changed; `PARITY_UPDATE=1` double-regen
-  byte-stable.
-* Gates: fmt clean; clippy `-p oc-tui -p oc-tui-core -p parity
-  --all-targets` adds zero warnings (the parity-lib warnings
-  pre-date the lane); nextest oc-tui/oc-tui-core/parity = 733
-  passed, oc-core/oc-server = 935 passed (the `pty_sidebar` plugin
-  host test needs `~/.cache/opencode/bin/bun` — an offline-box
-  environment repair, not a code change).
+fmt clean; clippy `-p oc-tui -p oc-tui-core -p parity -p oc-server
+--all-targets` zero oc-tui/oc-server warnings (parity's pre-existing
+35 = main's); nextest 912/913 (1 = `pty_sidebar_plugin_section…`
+github-bun network flake, passes standalone, identical on main).

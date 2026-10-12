@@ -634,12 +634,7 @@ fn handle(
         if socket.write_all(response).is_err() {
             return;
         }
-        // The no-prompt quiet-hold window: generous — a loaded box
-        // can stretch the boot → dialog → type → submit walk well
-        // past a tight deadline, and parking early would silently
-        // drop the armed script (the flapping-reconnect races make
-        // each new SSE thread restart this window).
-        let deadline = std::time::Instant::now() + Duration::from_secs(55);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while prompt_posts.load(Ordering::SeqCst) == 0 {
             if std::time::Instant::now() > deadline {
                 // No prompt arrived: hold the stream quietly (drain

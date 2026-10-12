@@ -105,71 +105,6 @@ pub fn running_tool_row(
     RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() }
 }
 
-/// The subagent tool card (`Subagent`, routes/session/index.tsx:3087-3120
-/// over `InlineTool`/`InlineToolRow`, message-parts.tsx:198-275) — #40.
-///
-/// * completed: `✓ {Titlecase(agent)} Subagent — {description}` (the
-///   icon slot's 2-wide shape, muted);
-/// * running (a fresh, non-continuation call): the spinner + the SAME
-///   composed label (`spinner` arm renders `children`, never
-///   `pending`);
-/// * streaming (args still arriving — `complete` falsy, no spinner):
-///   the spinner + the `Delegating…` pending row;
-/// * continuation (`input.sessionID` present): the `↳` icon + the
-///   `Continue subagent — …` label, never a spinner.
-///
-/// `session_running` carries the child session's live status (the
-/// `metadata.sessionID` lookup — `isRunning`'s second clause); the
-/// `· {model}` suffix appends when the input names a model (the raw
-/// reference — the model-list name resolution is the store's to add).
-#[must_use]
-pub fn subagent_tool_row(
-    state: &crate::components::message::model::ToolState,
-    session_running: Option<bool>,
-    clock_ms: u64,
-    theme: &ThemeStyles,
-    width: usize,
-) -> RowRender {
-    use crate::components::message::model::ToolStatus;
-    let continuation = state.input.contains_key("sessionID");
-    let running = state.status == ToolStatus::Running
-        || (session_running.unwrap_or(false) && state.metadata.contains_key("sessionID"));
-    let description = state.input.get("description").map(String::as_str).filter(|d| !d.is_empty());
-    let agent = state
-        .input
-        .get("agent")
-        .or_else(|| state.input.get("subagent_type"))
-        .map_or("General", String::as_str);
-    let mut label = if continuation {
-        "Continue subagent".to_owned()
-    } else {
-        format!("{} Subagent", titlecase(agent))
-    };
-    label.push_str(" — ");
-    label.push_str(description.unwrap_or("Subagent"));
-    if let Some(model) = state.input.get("model") {
-        label.push_str(" · ");
-        label.push_str(model);
-    }
-    let spinner = !continuation && running;
-    if spinner {
-        running_tool_row(&label, clock_ms, theme, width)
-    } else if description.is_some() || state.status == ToolStatus::Error {
-        // `complete || failed` (InlineToolRow's Show gate): either a
-        // truthy description or the error state renders the icon row.
-        let icon = if continuation {
-            '↳'
-        } else if state.status == ToolStatus::Completed {
-            '✓'
-        } else {
-            '│'
-        };
-        completed_tool_row(icon, &label, theme, width)
-    } else {
-        running_tool_row("Delegating…", clock_ms, theme, width)
-    }
-}
-
 /// The completed exploration header (`→ Explored: 1 read`): icon in a
 /// 2-wide slot, then the summary label — both `text.muted`
 /// (`color={hover ? base : muted}` with hover off).
@@ -591,6 +526,7 @@ pub fn assistant_footer_row(
     agent: &str,
     model: &str,
     duration_ms: u64,
+    tps: Option<f64>,
     error: Option<&str>,
     theme: &ThemeStyles,
     width: usize,
@@ -607,11 +543,18 @@ pub fn assistant_footer_row(
             Style::new().fg(agent_color).bg(theme.background)
         },
     }];
-    if !model.is_empty() {
+    // Width gates (index.tsx:1886-1891): model at ≥ 28, duration at
+    // < 28 or ≥ 36.
+    let show_model = width >= 28;
+    let show_duration = !(28..36).contains(&width);
+    if show_model && !model.is_empty() {
         spans.push(StyledSpan { text: format!(" · {model}"), style: muted });
     }
-    if !duration.is_empty() {
+    if show_duration && !duration.is_empty() {
         spans.push(StyledSpan { text: format!(" · {duration}"), style: muted });
+    }
+    if let Some(tps) = tps.filter(|tps| *tps > 0.0) {
+        spans.push(StyledSpan { text: format!(" · {tps:.1} tok/s"), style: muted });
     }
     let label_width = width.saturating_sub(ROW_PADDING_LEFT);
     let placed = wrap_atoms(&crate::wrap::flatten_spans(&spans), label_width)
@@ -844,7 +787,7 @@ mod tests {
     #[test]
     fn assistant_footer_matches_the_golden_line() {
         let theme = theme();
-        let row = assistant_footer_row("build", "fixture/fixture", 2, None, &theme, 76);
+        let row = assistant_footer_row("build", "fixture/fixture", 2, None, None, &theme, 76);
         let frame = crate::render::paint_placed(
             &row.placed,
             (76, 1),
@@ -867,6 +810,7 @@ mod tests {
             "build",
             "fixture/fixture",
             0,
+            None,
             Some("unexpected status 500"),
             &theme,
             76,
