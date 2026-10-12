@@ -93,6 +93,8 @@ pub mod resolver;
 pub mod skills;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_subagent_flow;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -184,6 +186,11 @@ pub struct EngineOptions {
     /// each location's assembly applies its agents + tool
     /// registrations natively. `None` = no plugin host attached.
     pub plugin_source: Option<Arc<dyn crate::plugin_apply::LocationPluginSource>>,
+    /// The app identity stamping the request User-Agent
+    /// (`opencode/<channel>/<version>/<name>`, app.ts:24-26). Defaults to
+    /// [`AppMetadata::detected`]
+    /// (the workspace version pin + the one channel source).
+    pub app: AppMetadata,
 }
 
 impl EngineOptions {
@@ -206,6 +213,7 @@ impl EngineOptions {
             code_mode_runtime: None,
             code_mode_timeout: std::time::Duration::from_secs(120),
             plugin_source: None,
+            app: AppMetadata::detected(),
         }
     }
 }
@@ -339,6 +347,8 @@ pub struct Engine {
     /// The plugin registration source (the wave-12 seam): applied at
     /// every location's assembly.
     plugin_source: Option<Arc<dyn crate::plugin_apply::LocationPluginSource>>,
+    /// The app identity for the request User-Agent (options.app).
+    app: AppMetadata,
 }
 
 impl Engine {
@@ -442,6 +452,7 @@ impl Engine {
             code_mode_runtime: options.code_mode_runtime.clone(),
             code_mode_timeout: options.code_mode_timeout,
             plugin_source: options.plugin_source.clone(),
+            app: options.app,
         };
         engine
     }
@@ -794,7 +805,7 @@ impl Engine {
         let requests = Arc::new(SessionModelRequest::new(
             Arc::clone(&graph.hooks),
             Arc::clone(&graph.tools),
-            AppMetadata::default(),
+            self.app.clone(),
         ));
         let compaction = Arc::new(SessionCompaction::new(
             (*self.db).clone(),
@@ -1397,6 +1408,12 @@ impl ChildExecution for EngineChildExecution {
         services.execution.resume(session_id).await.map(|_| ()).map_err(|error| error.to_string())
     }
 
+    fn wake(&self, session_id: &str) {
+        if let Some(services) = self.services.get(&self.location) {
+            services.execution.wake(session_id, crate::session::inbox::Promotable::Input);
+        }
+    }
+
     async fn interrupt(&self, session_id: &str) {
         if let Some(services) = self.services.get(&self.location) {
             let _ = services
@@ -1495,7 +1512,6 @@ fn skill_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
 fn subagent_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
     let inputs = Arc::clone(inputs);
     InternalPlugin::new("opencode.tool.subagent", move |hooks, ports| {
-        let _ = hooks;
         let db = inputs.tool_services.db.clone().expect("tool services db");
         let bus = inputs.tool_services.bus.clone().expect("tool services bus");
         let models = Arc::new(CatalogModelSource { catalog: Arc::clone(&inputs.catalog) });
@@ -1522,6 +1538,59 @@ fn subagent_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
             ports.tools,
             Arc::new(crate::tool::subagent::SubagentTool::new(deps)),
         );
+        // The `Available subagents` description hook (subagent.ts:282-306):
+        // the selected agent's context lists the subagent-eligible,
+        // non-hidden, not-denied agents (sorted by id) under the
+        // `subagent` tool's description — the surface that makes
+        // CONFIG-defined agents visible to the model (corpus3 #38).
+        let registry = Arc::clone(&inputs.agents);
+        let describe_registry = Arc::clone(&inputs.agents);
+        let describe =
+            crate::hooks::fn_hook(move |event: &mut crate::hooks::SessionContextEvent| {
+                let Some(tool) = event.tools.get_mut(crate::tool::subagent::NAME) else {
+                    return Ok(());
+                };
+                let Some(selected) = describe_registry.resolve(Some(event.agent.as_str())) else {
+                    return Ok(());
+                };
+                let agents = describe_registry.list();
+                tool.description = crate::subagent::append_available_subagents(
+                    &tool.description,
+                    &agents,
+                    &selected.permissions,
+                );
+                Ok(())
+            });
+        let compaction =
+            crate::hooks::fn_hook(move |event: &mut crate::hooks::SessionCompactionEvent| {
+                let Some(tool) = event.context.tools.get_mut(crate::tool::subagent::NAME) else {
+                    return Ok(());
+                };
+                let Some(selected) = registry.resolve(Some(event.context.agent.as_str())) else {
+                    return Ok(());
+                };
+                let agents = registry.list();
+                tool.description = crate::subagent::append_available_subagents(
+                    &tool.description,
+                    &agents,
+                    &selected.permissions,
+                );
+                Ok(())
+            });
+        // Registrations live for the location lifetime (dropped with
+        // the graph) — the same pattern patch.rs uses. The ref hooks
+        // context + compaction + generate (subagent.ts:302-304);
+        // `SessionGenerateEvent` is the context event type.
+        std::mem::forget(futures::executor::block_on(hooks.register_session_context(
+            std::sync::Arc::clone(&describe),
+            crate::hooks::HookOptions::default(),
+        )));
+        std::mem::forget(futures::executor::block_on(
+            hooks.register_session_generate(describe, crate::hooks::HookOptions::default()),
+        ));
+        std::mem::forget(futures::executor::block_on(
+            hooks.register_session_compaction(compaction, crate::hooks::HookOptions::default()),
+        ));
         Ok(())
     })
 }
