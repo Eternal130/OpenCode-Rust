@@ -17,6 +17,13 @@
 //! Wave A lane (oc-tui re-exports it — the goldens' imports are
 //! unchanged).
 
+// v2's scroll math is f64 (opentui's ScrollBar keeps fractional
+// scroll positions and rounds at the setter); the casts back to the
+// cell-grid's usize are exact under the round().
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::cast_precision_loss)]
+
 /// The follow/jump state machine (the sticky/free contract the
 /// vscroll goldens pin).
 ///
@@ -144,6 +151,18 @@ impl ScrollCommand {
     }
 }
 
+/// JS `Math.round` — halves round toward +∞ (the [`ScrollBar`]
+/// rounds the landed scroll position; `round(-7.5) = -7`,
+/// `round(7.5) = 8`).
+fn js_round(value: f64) -> usize {
+    let rounded = (value + 0.5).floor();
+    if rounded.is_finite() && rounded >= 0.0 {
+        rounded as usize
+    } else {
+        0
+    }
+}
+
 /// The scroll driver: one [`FollowState`] per session, stepped by the
 /// eight commands. The host supplies the CURRENT viewport +
 /// content-height metrics each step (the render pass records them —
@@ -184,10 +203,19 @@ impl ScrollDriver {
 
     /// Apply one scroll command (v2's `moveTranscript` /
     /// `toBottom`, index.tsx:732-761): the deltas are
-    /// `viewport/2` (page), `viewport/4` (half), `1` (line); the
-    /// offset clamps to `[0, maximum]`; landing at the maximum
-    /// re-sticks (`updateAwayFromBottom`), `Last` re-sticks
-    /// unconditionally, `First` jumps to the top (sticky off).
+    /// `viewport/2` (page), `viewport/4` (half), `1` (line) as
+    /// FLOATS, and the scrollbar ROUNDS the landed position —
+    /// opentui's `ScrollBar.scrollPosition` setter is
+    /// `Math.round(clamp(value, 0, scrollSize - viewportSize))`
+    /// (`@opentui/core` `src/renderables/ScrollBar.ts:72-74`), so a
+    /// half-viewport delta of N.5 lands at `N` going up and `N+1`
+    /// coming down (`Math.round` halves go toward +∞: pageup from
+    /// an integer offset moves 7 at a 15-row viewport, pagedown 8
+    /// — pinned by the long-reply-scroll corpus: 20→13→6, then
+    /// 6→14); the offset clamps to `[0, maximum]`; landing at the
+    /// maximum re-sticks (`updateAwayFromBottom`), `Last`
+    /// re-sticks unconditionally, `First` jumps to the top (sticky
+    /// off).
     pub fn scroll(&mut self, command: ScrollCommand, viewport: usize, content_height: usize) {
         let maximum = content_height.saturating_sub(viewport);
         let current = Self::offset(self.follow, viewport, content_height);
@@ -199,18 +227,16 @@ impl ScrollDriver {
                 self.follow = FollowState::Sticky;
             }
             other => {
-                let delta: i64 = match other {
-                    ScrollCommand::PageUp => -(i64::try_from(viewport).unwrap_or(0) / 2),
-                    ScrollCommand::PageDown => i64::try_from(viewport).unwrap_or(0) / 2,
-                    ScrollCommand::HalfPageUp => -(i64::try_from(viewport).unwrap_or(0) / 4),
-                    ScrollCommand::HalfPageDown => i64::try_from(viewport).unwrap_or(0) / 4,
-                    ScrollCommand::LineUp => -1,
-                    ScrollCommand::LineDown => 1,
-                    ScrollCommand::First | ScrollCommand::Last => 0,
+                let delta: f64 = match other {
+                    ScrollCommand::PageUp => -(f64::from(viewport as u32) / 2.0),
+                    ScrollCommand::PageDown => f64::from(viewport as u32) / 2.0,
+                    ScrollCommand::HalfPageUp => -(f64::from(viewport as u32) / 4.0),
+                    ScrollCommand::HalfPageDown => f64::from(viewport as u32) / 4.0,
+                    ScrollCommand::LineUp => -1.0,
+                    ScrollCommand::LineDown => 1.0,
+                    ScrollCommand::First | ScrollCommand::Last => 0.0,
                 };
-                let next = (i64::try_from(current).unwrap_or(0) + delta)
-                    .clamp(0, i64::try_from(maximum).unwrap_or(0));
-                let next = usize::try_from(next).unwrap_or(0);
+                let next = js_round((f64::from(current as u32) + delta).clamp(0.0, maximum as f64));
                 self.follow = self.follow.scrolled_to(next, maximum);
             }
         }
@@ -261,6 +287,44 @@ mod tests {
         driver.scroll(ScrollCommand::PageDown, 40, 200);
         assert_eq!(driver.follow(), FollowState::Sticky);
         assert!(!driver.follow().jump_to_latest_visible());
+    }
+
+    /// The long-reply-scroll corpus pin (80x24: viewport 15, content
+    /// 41): sticky shows reply rows 20..32; pageup lands at 13, the
+    /// second at 6, pagedown from there at 14 — the HALF-ROW deltas
+    /// round through opentui's `Math.round` (halves toward +∞), so
+    /// pageup moves 7 (round(-7.5) = -7) and pagedown 8
+    /// (round(7.5) = 8) at an ODD viewport.
+    #[test]
+    fn half_viewport_deltas_round_like_opentui() {
+        // Sticky offset 26 (content 41 − viewport 15).
+        let mut driver = ScrollDriver::new();
+        driver.scrolled_to(26, 26);
+        assert_eq!(driver.paint_offset(15, 41), 26);
+        driver.scroll(ScrollCommand::PageUp, 15, 41);
+        assert_eq!(driver.follow(), FollowState::Free { offset: 19, maximum: 26 });
+        driver.scroll(ScrollCommand::PageUp, 15, 41);
+        assert_eq!(driver.follow(), FollowState::Free { offset: 12, maximum: 26 });
+        driver.scroll(ScrollCommand::PageDown, 15, 41);
+        assert_eq!(driver.follow(), FollowState::Free { offset: 20, maximum: 26 });
+        // Even viewport: no halves, exact steps.
+        let mut driver = ScrollDriver::new();
+        driver.scrolled_to(160, 184);
+        driver.scroll(ScrollCommand::PageUp, 16, 200);
+        assert_eq!(driver.follow(), FollowState::Free { offset: 152, maximum: 184 });
+        driver.scroll(ScrollCommand::PageDown, 16, 200);
+        assert_eq!(driver.follow(), FollowState::Free { offset: 160, maximum: 184 });
+    }
+
+    /// The end-anchor (`session.last`): sticky re-arms and the paint
+    /// offset sits at the maximum — the post-`end` state the corpus
+    /// captures (the last viewport-15 window).
+    #[test]
+    fn end_re_anchors_to_the_bottom() {
+        let mut driver = driver_at(12, 26);
+        driver.scroll(ScrollCommand::Last, 15, 41);
+        assert_eq!(driver.follow(), FollowState::Sticky);
+        assert_eq!(driver.paint_offset(15, 41), 26);
     }
 
     /// Clamping: the offset never leaves [0, maximum].
