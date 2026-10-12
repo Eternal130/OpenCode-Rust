@@ -54,6 +54,15 @@ async fn main() -> anyhow::Result<()> {
             other => anyhow::bail!("unknown flag {other}"),
         }
     }
+    // Anchor the out dir to THIS process's cwd: a relative --out would
+    // leak relative paths into the spawned stacks (OPENCODE_CONFIG is
+    // resolved against the SERVER's cwd, which mirrors the reference
+    // checkout — a relative config path silently drops the rig's
+    // provider/model pin and the run degrades invisibly).
+    if cfg.out_dir.is_relative() {
+        let cwd = std::env::current_dir()?;
+        cfg.out_dir = cwd.join(&cfg.out_dir);
+    }
     std::fs::create_dir_all(&cfg.out_dir)?;
     let report = tui_diff::run_corpus(&cfg).await?;
     let text = report.render();
