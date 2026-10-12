@@ -14,6 +14,9 @@
 
 #![allow(unsafe_code)] // pty(7) is only reachable through libc FFI
 
+#[path = "vt_harness.rs"]
+mod vt_harness;
+
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
@@ -291,6 +294,43 @@ fn pty_help_slash_opens_the_dialog_and_sends_nothing() {
         prompt_posts.load(Ordering::SeqCst),
         0,
         "/help must execute locally, never POST session.prompt"
+    );
+
+    // Geometry pin (the parity rig's dialog corpus, lane/geom).
+    assert_help_dialog_geometry(&captured);
+}
+
+/// The 80-col help box spans rows 6..14 — title row 7 at paddingLeft 2,
+/// the palette hint WORD-WRAPPED onto rows 9-10, the right-justified
+/// `ok` button on row 13, and the button row's paddingBottom at 14
+/// (`dialog-help.tsx`'s prompt-family root; lane/geom).
+fn assert_help_dialog_geometry(captured: &str) {
+    let mut vt = vt_harness::VtStream::new(80, 24);
+    let end = captured
+        .rfind("in any context.")
+        .map_or(captured.len(), |at| (at + 2048).min(captured.len()));
+    vt.feed(&captured.as_bytes()[..end], 0);
+    let grid = vt.grid_now();
+    let text = |y: usize, from: usize, to: usize| -> String {
+        (from..to).map(|x| grid.cell(x, y).ch).collect()
+    };
+    assert_eq!(text(7, 12, 16), "Help", "title row 7 at paddingLeft 2");
+    assert_eq!(text(7, 59, 68), "esc/enter", "hint ends at paddingRight 2");
+    assert_eq!(
+        text(9, 12, 66),
+        "Press ctrl+p to see all available actions and commands",
+        "hint line 1 wrapped at the 56-col content width (54 cells at 12..65): {:?}",
+        text(9, 0, 80)
+    );
+    assert_eq!(text(10, 12, 27), "in any context.", "hint line 2");
+    assert_eq!(text(13, 63, 65), "ok", "the ok button on row 13");
+    assert!(
+        (10..70).all(|x| grid.cell(x, 14).ch == ' '),
+        "the button's paddingBottom row 14 is blank"
+    );
+    assert!(
+        (10..70).all(|x| grid.cell(x, 15).ch == ' '),
+        "the box ends at row 14 (9 rows: chrome + 8 content)"
     );
 }
 
