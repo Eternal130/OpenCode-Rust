@@ -913,3 +913,150 @@ label rows are byte-identical through the SGR digests.
   passed, oc-core/oc-server = 935 passed (the `pty_sidebar` plugin
   host test needs `~/.cache/opencode/bin/bun` — an offline-box
   environment repair, not a code change).
+
+---
+
+# Fix-wave E1 — MOUSE INTERACTION FAMILY (lane/mouse, 2026-10-12)
+
+Findings #15 #29 #30 #31 #32 #33 #34 (all class (a)); #16 NOT ported
+per the #43 correction (leader+l is a no-op on the ref too — the old
+attribution was the composer panel opened by the following `down`).
+
+## Per-finding root causes + ref citations
+
+15. **Transcript scroll semantics — three stacked causes, all fixed:**
+    1. *Page-step rounding*: v2's page = `moveTranscript(∓ scroll.height
+       / 2)` with the FLOAT half (routes/session/index.tsx:765-805),
+       and opentui's `ScrollBar.scrollPosition` setter lands it as
+       `Math.round(clamp(old + delta))` (@opentui/core
+       `src/renderables/ScrollBar.ts:72-74` — extracted from the
+       shipped sourcemap) — halves round toward +∞, so pageup steps 7
+       and pagedown 8 at the odd 15-row viewport. Our integer
+       `viewport/2` truncated both to 7. `ScrollDriver::scroll`
+       (oc-tui-core scroll.rs) now keeps f64 deltas and rounds through
+       a JS `Math.round` equivalent (`js_round`).
+    2. *Viewport off by one*: v2's transcript pane = scrollbox + the
+       1-row jump-to-latest slot (`session-frame.tsx`), so the scroll
+       math sees `transcript_height - 1`; we fed the full 16-row pane.
+       `render_session` now records `transcript_height - 1` as the
+       viewport metric.
+    3. *Content height*: our markdown renderer joined soft `\n`
+       inside a paragraph ("marked without breaks:true" — wrong for
+       the raster): opentui's Markdown parses raw `Lexer` tokens whose
+       `token.text` KEEPS `\n` (`src/renderables/Markdown.ts` — the
+       `br` case pushes the chunk text verbatim) and `TextRenderable`
+       breaks rows on `\n` (the same seam as the user-message F6). A
+       `\n` inside a paragraph is now a HARD row break
+       (`Inline::Break`, each source line wrapping alone) — the
+       32-line reply renders one row per line (content 41 rows, was
+       18 wrapped).
+    Corpus after (long-reply-scroll@80x24): pageup 20→13→6 on the ref,
+    18→11→4 on ours (identical −7/−7 steps once the viewport matches);
+    pagedown +8 both; `end` re-anchors both; the remaining constant
+    2-row window offset is the reply-stats row (#13, open) — not
+    scroll math.
+29. **Thought-toggle hit zone**: v2's toggle is the `InlineToolRow`
+    CONTENT box (paddingLeft 3 + the 2-wide icon slot + the label's
+    own glyphs — `group-view.tsx:176-190` `onMouseUp={toggle}` wraps
+    only that row), not the header's full width. `TranscriptHitRow`
+    now carries `x`/`width` (the header's painted glyph extent,
+    recorded in `render_session`) and `App::mouse_event` gates the
+    toggle on the column. The session no-op matrix no longer lists
+    row-6 OUR-only cells.
+30. **Expanded-reasoning gutter**: the gutter itself was already
+    right (`┃` col 5, body col 7 — `ThoughtEntry`,
+    group-view.tsx:351-399); the divergence was the entry's top
+    margin rendered TWICE (our `thought_entry_row` carried an internal
+    margin row on top of the list's per-row marginTop-1). The internal
+    row is gone; the corpus expanded state is byte-identical modulo
+    #13/#14.
+31. **Dialog outside-click dismissal**: v2's `Dialog` backdrop is a
+    full-screen box whose `onMouseUp` closes, with the inner chrome
+    box's own mouseup calling `stopPropagation` (`ui/dialog.tsx:
+    34-63`; a mousedown inside an active text selection suppresses
+    via the `dismiss` flag — lines 31-44). `render_overlay` now
+    records the chrome rect (`Store::dialog_frame_rect`) and an
+    outside left-release closes. The ring/margin class dismisses on
+    both sides; the post-ring /help capture shows home on both.
+32. **ctrl+c with an open dialog**: the ref's exit-step blank was
+    #31's shadow — the ring clicks had already dismissed the ref's
+    dialog, so its ctrl+c hit home-with-empty-composer and exited.
+    Our modal layer's ctrl+c routing already matched
+    (`ui/dialog.tsx:135-156`: clear the filter first, then pop —
+    dialog.rs); with #31 in, click-coverage-dialog's exit step is
+    IDENTICAL (both blank). Unit-pinned
+    (`ctrl_c_closes_the_dialog_then_exits_from_home`).
+33. **Footer/composer cell reactivity**: the reactive footer cells are
+    the status line's `{dir}:{branch}` label — hover lifts it from
+    `text.muted` to `text.base` and a release opens the
+    "Working directory" select (Copy path / Open folder / Workspaces)
+    — `useWorkingDirectoryActions` (`ui/working-directory-actions.tsx`)
+    mounted at `prompt.footer.status`
+    (component/prompt/index.tsx:1627-1630, 1925-1937). Ported the full
+    seam: `FooterHints.location_hovered` + `footer_location_extent`
+    (the painted-label rect, single-sourced with the row's budget
+    math), `Store::{set_,}footer_location_hit` hover transitions,
+    `DialogKind::WorkingDirectory` with the three actions (Copy path
+    → clipboard + info toast; Open folder → `xdg-open` detached, error
+    toast on spawn failure; Workspaces → the Worktrees dialog), and
+    the click routing. RIG-INERT UNTIL #4 LANDS: our live status row
+    still renders the model name in the left slot (#4's finding) with
+    an empty `location` string, so no hit rect records on live routes
+    yet — the machinery is unit-pinned
+    (`footer_location_hover_and_click`) and activates the moment the
+    label renders. The composer metadata row and the `shift+tab` /
+    `ctrl+p` hints have NO pointer handlers in v2 (verified —
+    metadata.tsx / feature-plugins/prompt/footer.tsx carry none); the
+    remaining ref-only composer-cell reactions are opentui
+    renderer-level selection/caret pixels on mousedown, not v2 app
+    logic (no handler in the v2 tree), left as documented residue.
+34. **Transcript click-selection**: the filed rows 2-4 are the
+    USER-message block — `UserMessage`'s inner box carries
+    `onMouseUp` → `dialog.replace(DialogMessage)`
+    (session/index.tsx:2210-2250), the four-option "Message Actions"
+    select (dialog-message.tsx:23-90: Jump to / Revert / Copy / Fork).
+    Ported: user-message rows record full-width hit rects
+    (`TranscriptHitAction::MessageActions`), the release opens
+    `DialogKind::MessageActions` with the four v2 options (Revert
+    seeds the composer via `Composer::set_text` — the `revert.stage`
+    POST is the 7.3 seam; Copy writes the clipboard sink; Fork needs
+    the fork dialog, 7.3), and the shared DialogSelect POINTER SURFACE
+    rides along (`dialog-select.tsx:757-775`): option rows move the
+    selection on motion and submit on release
+    (`option_dialog_rows` → `Store::dialog_option_rows` →
+    `App::{dialog_option_at, move_dialog_selection_to,
+    submit_dialog_option}` — the release routes through the same
+    stroke path as enter). The session matrix's user-box class now
+    reacts on BOTH sides (203 cells) and the no-op end state is
+    clean of E1 items.
+
+## Rig verification (all `--runs 1 --out /tmp/opencode/e1-verify/*`)
+
+| filter | result |
+|---|---|
+| long-reply-scroll | scroll steps COLLAPSED (−7/−7/+8 both sizes); residual = #13 stats row (+title byte) |
+| thought-render / thought-expand / thought-expand-structural | #30 byte-collapsed (expanded = `- Thought` header, blank, `┃ body`, reply); toggle both directions; residual = #13/#14 |
+| click-coverage-dialog | #31 collapsed (ring/outside dismiss both); #32 collapsed (exit step IDENTICAL); residual = the ref's WorkingDirectory toast trail (#33↔#4-gated) + DialogHelp hint-row clicks (#22 row-height family) |
+| click-coverage-session | #29 collapsed (no row-6 OUR-only); #34 collapsed (user-box reacts both, end state clean); residual = renderer-level selection anchors on assistant text (unfiled), composer/status cells (#33↔#4/#5-gated), strip edge cells, the ✕ hover-latch timing artifact (documented in corpus2's class map) |
+| click-coverage-home | row-17 reactivity = the location label (#33 machinery in, #4-gated); residual maps #4 (left slot) + #6 (placeholder) |
+| hover-sweep | 0 skipped cells either side (1920+3600 fed); the #18 tab-hover lifecycle intact under whole-grid motion; residual = #12/#13/#14 |
+
+## Tests, goldens, gates
+
+- Unit/PTY pins: oc-tui-core scroll (the corpus half-row rounding
+  `half_viewport_deltas_round_like_opentui`, end-anchor
+  `end_re_anchors_to_the_bottom`), markdown hard breaks (the 32-line
+  pin + the re-pinned paragraph-margin golden test), thought-entry
+  margin, and in app.rs: the tight hit zone, outside-release
+  dismissal, ctrl+c-then-exit, Message-Actions open + props parity,
+  the select pointer surface (move+submit+dismiss), and the footer
+  location hover/click (clipboard sink asserted).
+- Goldens: `PARITY_UPDATE=1` rewrites ZERO bytes (99/99 pass;
+  double-regen byte-stable) — the new surfaces render only under
+  live state the fixtures never carry; nothing to commit.
+- Gates: `cargo fmt --all -- --check` clean; `cargo clippy -p oc-tui
+  -p oc-tui-core -p parity --all-targets` — oc-tui/oc-tui-core add
+  ZERO warnings (parity's 35 predate the lane, sources untouched);
+  `cargo nextest run -p oc-tui -p oc-tui-core -p parity` green
+  (`pty_sidebar_plugin_section_renders_through_the_host` is the
+  known load-dependent flake — passes in isolation on main and here).

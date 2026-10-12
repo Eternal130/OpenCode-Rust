@@ -302,6 +302,34 @@ pub fn viewport_height(rows: usize, terminal_height: usize) -> usize {
     rows.min((terminal_height / 2).saturating_sub(6))
 }
 
+/// The DIALOG-CONTENT row of each flat option (the mouse surface,
+/// `dialog-select.tsx:757-775`: pointer motion over an option row
+/// moves the selection; a release submits it). Content layout: row 0
+/// title, row 1 gap, row 2 filter, row 3 gap, then the scroll window
+/// — an option's row is `4 + (content_row - scroll)` when the window
+/// shows it, `None` when scrolled away.
+#[must_use]
+pub fn option_dialog_rows(
+    props: &SelectProps,
+    state: &SelectState,
+    terminal_height: usize,
+) -> Vec<Option<usize>> {
+    let groups = grouped(props, &state.filter);
+    let indices = flat_indices(&groups);
+    let rows_total = content_rows(&groups);
+    let viewport = viewport_height(rows_total, terminal_height);
+    (0..indices.len())
+        .map(|flat| {
+            let content_row = row_of_index(&groups, flat);
+            if content_row >= state.scroll && content_row < state.scroll + viewport {
+                Some(4 + (content_row - state.scroll))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// The content row of the flat `selected` index (headers included).
 #[must_use]
 pub fn row_of_index(groups: &[SelectGroup], flat_index: usize) -> usize {
