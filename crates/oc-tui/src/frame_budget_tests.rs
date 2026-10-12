@@ -55,6 +55,7 @@ fn large_transcript(groups: usize) -> Vec<Message> {
                     id: format!("bench-tool-{index}"),
                     name: "read".into(),
                     time: PartTime { created: Some(index as u64), completed: Some(index as u64) },
+                    state: crate::components::message::model::ToolState::default(),
                 },
                 Part::Text {
                     text,
