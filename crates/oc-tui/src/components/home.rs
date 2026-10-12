@@ -140,6 +140,10 @@ pub struct HomeView<'a> {
 }
 
 /// Render the home route at `size` (the golden-pinned layout).
+// One flat, order-explicit renderer: the layout is golden-pinned
+// (byte-exact frames), so extracting sections would reorder/churn the
+// pinned surface for a 8-line overage — not worth it.
+#[allow(clippy::too_many_lines)]
 #[must_use]
 pub fn render_home_view(
     view: &HomeView,
