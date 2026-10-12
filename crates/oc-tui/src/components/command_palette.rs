@@ -396,12 +396,18 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             // `data.session.list()` — every session the resync
             // reported, newest first), NOT the open tabs; selecting a
             // row navigates and the route effect opens its tab.
+            // Rows resolve the live registry title first (v2's list
+            // memo re-derives from `session.info`, which the renamed
+            // handler writes — data.ts:687-699).
             let history = store.session_history();
             let options: Vec<SelectOption> = history
                 .iter()
                 .map(|session| {
                     SelectOption::titled(
-                        session.title.clone().unwrap_or_else(|| session.id.clone()),
+                        store
+                            .session_title(&session.id)
+                            .or_else(|| session.title.clone())
+                            .unwrap_or_else(|| session.id.clone()),
                         session.id.clone(),
                     )
                     .categorized("Sessions")
@@ -840,14 +846,16 @@ impl CommandDispatcher for StoreDispatcher {
                 );
                 // The prompt seeds with the session's current title
                 // (`value={props.currentTitle}`,
-                // dialog-session-rename.tsx:16) — the tab carries the
-                // live title; an untitled session opens empty.
+                // dialog-session-rename.tsx:16) — the session row's
+                // live title (registry-first, index.tsx:905's
+                // `session()?.title`); an untitled session opens
+                // empty.
                 let current = store
                     .tabs()
                     .tabs
                     .iter()
                     .find(|tab| tab.session_id == session_id)
-                    .and_then(|tab| tab.title.clone())
+                    .and_then(|tab| store.display_title(tab))
                     .unwrap_or_default();
                 store.update_dialog(|top| top.value = current);
                 Dispatch::Handled

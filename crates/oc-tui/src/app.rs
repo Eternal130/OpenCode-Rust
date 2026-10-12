@@ -82,6 +82,11 @@ pub struct App {
     /// Every permission reply the pump sent (assertions / the server
     /// call seam).
     pub permission_replies: Vec<PermissionReply>,
+    /// Rename submits pending their `session.update` POST (v2
+    /// routes/session/index.tsx:908 — the dialog closes immediately;
+    /// the `session.renamed` echo lands the new title through the
+    /// event stream).
+    pub rename_requests: Vec<(String, String)>,
     size: (u16, u16),
     /// Whether the exit command fired (the run loop's teardown gate).
     pub exit_requested: bool,
@@ -117,6 +122,7 @@ impl App {
             input_mode: false,
             permission_states: HashMap::new(),
             permission_replies: Vec::new(),
+            rename_requests: Vec::new(),
             size,
             exit_requested: false,
             applied_keybinds: Vec::new(),
@@ -594,8 +600,12 @@ impl App {
         }
     }
 
-    /// Rename submit: update the tab title locally (the `session.update`
-    /// server call is TODO(7.3)).
+    /// Rename submit: optimistically update the tab title (v2's tabs
+    /// state re-resolves on its next mutation) and POST
+    /// `session.update` — the `session.renamed` echo then lands the
+    /// title across every surface (tab label, sidebar, session list)
+    /// through the live session registry
+    /// (routes/session/index.tsx:903-908).
     fn submit_rename(&mut self, value: &str) {
         let dialogs = self.store.dialogs();
         if let Some(entry) = dialogs.last() {
@@ -604,6 +614,7 @@ impl App {
                     let session_id = session_id.clone();
                     if !value.is_empty() {
                         self.store.open_tab(&session_id, Some(value.to_owned()));
+                        self.rename_requests.push((session_id, value.to_owned()));
                     }
                 }
                 // `DialogWorktreeName`'s enter (`confirm()`): slugify
@@ -1641,6 +1652,23 @@ pub fn post_permission_reply(client: oc_client::Client, reply: PermissionReply) 
     });
 }
 
+/// The rename submit's `session.update` POST (v2
+/// routes/session/index.tsx:908: `client.api.session.update({
+/// sessionID, title })`). The `session.renamed` echo — not this
+/// response — lands the new title across the TUI (the live session
+/// registry refreshes the tab label, sidebar, and session-list rows).
+pub fn post_session_rename(client: oc_client::Client, session_id: String, title: String) {
+    tokio::spawn(async move {
+        let body = oc_client::types::SessionUpdateBody {
+            title: Some(title),
+            ..oc_client::types::SessionUpdateBody::default()
+        };
+        if let Err(error) = client.session().update(&session_id, &body).await {
+            crate::keymap::log_skip(&format!("session rename {session_id}: {error}"));
+        }
+    });
+}
+
 /// The production engine prompt sink: submitting from an open session
 /// POSTs `session.prompt`; a home submission first creates the session
 /// (`POST /api/session`) and reports it back through the event channel.
@@ -2368,6 +2396,14 @@ pub async fn run_with_size(
             }
             post_permission_reply(client.clone(), reply);
         }
+        // Rename submits (v2 index.tsx:908): the POST's
+        // `session.renamed` echo lands the title in the store.
+        for (session_id, title) in std::mem::take(&mut app.rename_requests) {
+            if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                eprintln!("[tui] session rename {session_id}: {title}");
+            }
+            post_session_rename(client.clone(), session_id, title);
+        }
         // Attention: the bell request set by permission asks / unread
         // transitions — write `\x07` once (raw mode passes it through
         // to the terminal, audible/visible over ssh).
@@ -2886,6 +2922,7 @@ fn to_ratatui_color(color: crate::render::CellColor) -> ratatui::style::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::DialogSize;
 
     /// `apply_config` resolves the theme through the registry and
     /// merges keybind overrides into the live keymap; a config reload
@@ -3114,6 +3151,39 @@ mod tests {
         app.press("e");
         assert!(app.store.take_editor_request(), "the pump set the request");
         assert!(!app.store.take_editor_request());
+    }
+
+    /// Lane/title #12: the rename dialog's enter records the
+    /// `session.update` intent for the run loop's drain (v2
+    /// index.tsx:908 — the server's `session.renamed` echo lands the
+    /// title across every surface) alongside the optimistic tab
+    /// patch.
+    #[test]
+    fn rename_dialog_records_the_server_intent() {
+        use crate::store::DialogKind;
+        let mut app = App::new((100, 30));
+        app.store.open_tab("s1", None);
+        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        app.store.replace_dialog(
+            DialogKind::SessionRename { session_id: "s1".to_owned() },
+            DialogSize::Medium,
+        );
+        for key in ["F", "i", "x", " ", "i", "t"] {
+            app.press(key);
+        }
+        app.press("enter");
+        assert_eq!(app.rename_requests, vec![("s1".to_owned(), "Fix it".to_owned())]);
+        assert_eq!(
+            app.store.tabs().tabs.iter().find(|t| t.session_id == "s1").unwrap().title.as_deref(),
+            Some("Fix it"),
+            "optimistic tab patch holds until the renamed echo"
+        );
+        // The rename body maps onto the wire shape.
+        let body = oc_client::types::SessionUpdateBody {
+            title: Some("Fix it".to_owned()),
+            ..oc_client::types::SessionUpdateBody::default()
+        };
+        assert_eq!(body.title.as_deref(), Some("Fix it"));
     }
 
     /// A model pick through the DIALOG applies server-side: the sink

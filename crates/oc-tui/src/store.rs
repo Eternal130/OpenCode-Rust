@@ -1348,6 +1348,30 @@ impl Store {
         self.session_history.get()
     }
 
+    /// The session's live title (v2 `data.session.get(id)?.title`):
+    /// the notifications plugin's session index — fed UNCONDITIONALLY
+    /// by `session.updated`/`renamed` events on the same ingest
+    /// stream, with no open-tab guard. The tab label resolves
+    /// session-title-first (`session()?.title ?? tab.title ??
+    /// "Untitled session"`, component/session-tabs.tsx:754) so a title
+    /// that lands BEFORE the submit flow opens the tab (the forked
+    /// title task races the prompt response — drain.rs `fork_title`)
+    /// still displays once the tab renders.
+    #[must_use]
+    pub fn session_title(&self, session_id: &str) -> Option<String> {
+        self.session_index.borrow().title(session_id).map(str::to_owned)
+    }
+
+    /// The displayed tab label: the session row's title when known,
+    /// else the tab's persisted title (v2
+    /// `data?.session.get(tab.sessionID)?.title ?? tab.title ?? …` —
+    /// session-tabs.tsx:754, 1585; the placeholder itself renders in
+    /// the strip component).
+    #[must_use]
+    pub fn display_title(&self, tab: &SessionTab) -> Option<String> {
+        self.session_title(&tab.session_id).or_else(|| tab.title.clone())
+    }
+
     #[must_use]
     pub fn route(&self) -> Route {
         self.route.get()
@@ -2804,12 +2828,13 @@ impl Store {
             // `data.session.get(id)?.title ?? persisted ?? fallback`);
             // `session.updated` refreshes open tabs in place later.
             if self.tabs_enabled.get() {
-                let title = self
-                    .session_history
-                    .get()
-                    .iter()
-                    .find(|session| &session.id == session_id)
-                    .and_then(|session| session.title.clone());
+                let title = self.session_title(session_id).or_else(|| {
+                    self.session_history
+                        .get()
+                        .iter()
+                        .find(|session| &session.id == session_id)
+                        .and_then(|session| session.title.clone())
+                });
                 self.tabs.update(|state| {
                     if !state.tabs.iter().any(|tab| &tab.session_id == session_id) {
                         state.tabs = model::open_session_tab(
@@ -3360,6 +3385,17 @@ impl Store {
             "session.updated" | "session.renamed" => {
                 let Some(id) = event.string("sessionID") else { return };
                 let title = event.string("title");
+                // The session-list history refreshes in place (v2's
+                // renamed handler writes the session store's
+                // `info[sessionID].title` — client/solid/data.ts:687-699
+                // — and `data.session.list()` re-derives from it).
+                if let Some(title) = &title {
+                    self.session_history.update(|history| {
+                        if let Some(row) = history.iter_mut().find(|row| row.id == id) {
+                            row.title = Some(title.clone());
+                        }
+                    });
+                }
                 self.tabs.update(|state| {
                     if state.tabs.iter().any(|tab| tab.session_id == id) {
                         state.tabs = model::open_session_tab(
@@ -4152,6 +4188,60 @@ mod tests {
             serde_json::json!({ "sessionID": "b" }),
         ))]);
         assert!(!store.tabs().tabs.iter().any(|t| t.session_id == "b"));
+    }
+
+    /// Lane/title #12: a rename that lands with NO tab open still
+    /// registers (the title task races the submit flow's tab-open),
+    /// the session-list history row refreshes in place (v2's renamed
+    /// handler writes the session store — data.ts:687-699 — and
+    /// `session.list()` re-derives), and `display_title` resolves
+    /// registry-first (`session()?.title ?? tab.title`,
+    /// session-tabs.tsx:754).
+    #[test]
+    fn renamed_registers_without_a_tab_and_refreshes_history() {
+        let store = store_with_tabs(&["a"]);
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.renamed",
+            serde_json::json!({ "sessionID": "ghost", "title": "Parity fake says hello." }),
+        ))]);
+        // No tab opened — the registry still carries the title.
+        assert_eq!(store.session_title("ghost").as_deref(), Some("Parity fake says hello."));
+        assert!(
+            !store.tabs().tabs.iter().any(|t| t.session_id == "ghost"),
+            "the event never admits a tab (routing is the only way in)"
+        );
+        // The open tab's displayed label resolves registry-first: an
+        // untitled tab shadows to the registry title, and the
+        // registry shadows a stale persisted tab title.
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.renamed",
+            serde_json::json!({ "sessionID": "a", "title": "Registry wins" }),
+        ))]);
+        let binding = store.tabs();
+        let tab = binding.tabs.iter().find(|t| t.session_id == "a").unwrap();
+        assert_eq!(store.display_title(tab).as_deref(), Some("Registry wins"));
+        // The session-list history row refreshes in place.
+        store.ingest_all([Ingest::Resync {
+            sessions: vec![SessionSnapshot {
+                model: None,
+                id: "ghost".to_owned(),
+                title: Some("Old wire title".to_owned()),
+                time_idle: None,
+                viewed: None,
+            }],
+            unread: Vec::new(),
+            messages: Vec::new(),
+        }]);
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.renamed",
+            serde_json::json!({ "sessionID": "ghost", "title": "Parity fake says hello." }),
+        ))]);
+        let history = store.session_history();
+        assert_eq!(
+            history.iter().find(|s| s.id == "ghost").and_then(|s| s.title.as_deref()),
+            Some("Parity fake says hello."),
+            "history row carries the fresh title"
+        );
     }
 
     #[test]
