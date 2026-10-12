@@ -130,14 +130,9 @@ pub fn render_session(
     // The tabs strip (height 1) leads the column when the tabs config
     // is enabled (v2's session-frame renders the strip behind the
     // same `enabled()` gate); the transcript starts directly under
-    // it. With tabs off the frame starts at the transcript. The
-    // active pill keys on the routed session's family ROOT
-    // (session-tabs.tsx:138 — a child-session route keeps the root's
-    // pill active, #45).
+    // it. With tabs off the frame starts at the transcript.
     let show_strip = store.tabs_enabled();
-    let strip_active = show_strip.then(|| store.session_root(session_id));
-    let strip =
-        show_strip.then(|| paint_live_tabs_bar(store, strip_active.as_deref(), width, styles));
+    let strip = show_strip.then(|| paint_live_tabs_bar(store, Some(session_id), width, styles));
 
     // The session sidebar (session-frame.tsx:106-117): v2's right
     // pane — `auto` shows it above 120 cols, the manual toggle forces
@@ -146,6 +141,9 @@ pub fn render_session(
     // the transcript column reflows to `width − 42`
     // (SESSION_SIDEBAR_WIDTH, ui/layout.ts:1).
     let sidebar_shown = store.sidebar_shown(session_id, width);
+    // The session column's padding (v2's prompt mounts inside
+    // paddingLeft/Right 2): the composer `┃` and footer paste at x2.
+    let inset = 2;
     let sidebar_docked = sidebar_shown && width > SIDEBAR_AUTO_BREAKPOINT;
     let sidebar_overlay = sidebar_shown && !sidebar_docked;
     let column = if sidebar_docked {
@@ -155,37 +153,22 @@ pub fn render_session(
     };
 
     // The composer's docked mount (popup rows above it when the
-    // slash palette is open) + the transcript's height budget. With
-    // the subagent picker open (or on a child session — #44/#45) the
-    // picker panel REPLACES the whole prompt mount (v2's Composer:
-    // `open={composer.open || parentID}` at index.tsx:1451 — the
-    // ╹▀ transition and status row belong to the prompt, not the
-    // panel).
-    let picker_live = store.picker_live(session_id);
-    let (mount, prompt_height, mount_height) = if picker_live {
-        let entries = store.picker_entries(session_id);
-        let selected = store.picker_selection(session_id, entries.len());
-        let panel = crate::components::subagent_picker::picker_panel_frame(
-            &store.picker(),
-            &entries,
-            selected,
-            &theme,
-            u16::try_from(column).unwrap_or(u16::MAX),
-        );
-        (
-            panel,
-            crate::components::subagent_picker::PICKER_MOUNT_ROWS,
-            crate::components::subagent_picker::PICKER_MOUNT_ROWS,
-        )
-    } else {
-        composer_mount_frame(store, session_id, &theme, column, height)
-    };
+    // slash palette is open) + the transcript's height budget.
+    let (mount, prompt_height, mount_height, caret_screen) =
+        composer_mount_frame(store, session_id, &theme, column - inset, width, height);
+    // NEW-S1a: position the terminal cursor at the caret cell while
+    // the composer owns the frame (cleared when a dialog overlays —
+    // v2 blurs the prompt while any dialog is open).
+    store.set_caret_cell(
+        caret_screen
+            .filter(|_| store.top_dialog().is_none())
+            .map(|(x, y)| (u16::try_from(x + inset).unwrap_or(0), u16::try_from(y).unwrap_or(0))),
+    );
     // The queued-prompt dock (v2's `QueuedPromptDock`,
     // index.tsx:2312-2342): one row above the composer —
     // `┃ {n} queued · {next}` — while prompts wait in the serial
-    // queue; absent (and byte-invisible) when the queue is empty or
-    // the composer panel is open (index.tsx:1445's `!composer.open`).
-    let queued = if picker_live { Vec::new() } else { store.queued_prompts(session_id) };
+    // queue; absent (and byte-invisible) when the queue is empty.
+    let queued = store.queued_prompts(session_id);
     let dock_height = usize::from(!queued.is_empty());
     let spacing = usize::from(mount_height + dock_height + 1 < height);
     // Without the strip the chrome is one row shorter (no title row
@@ -213,7 +196,9 @@ pub fn render_session(
                 protocol: store.graphics_protocol(),
                 terminal_rows: size.1,
             },
-            subagent_running: store.subagent_running_map(),
+            // #13: the footer row's model display names (the server
+            // model catalog).
+            model_names: model_display_names(store),
             ..TranscriptOptions::default()
         },
         styles,
@@ -321,10 +306,12 @@ pub fn render_session(
     if let Some(strip) = strip {
         paste(&mut frame, &strip, 0, 0);
     }
-    if let Some(dock) = (!queued.is_empty()).then(|| paint_queued_dock(&queued, column, styles)) {
-        paste(&mut frame, &dock, 0, height - prompt_height - dock_height);
+    if let Some(dock) =
+        (!queued.is_empty()).then(|| paint_queued_dock(&queued, column - inset, styles))
+    {
+        paste(&mut frame, &dock, inset, height - prompt_height - dock_height);
     }
-    paste(&mut frame, &mount, 0, height - prompt_height);
+    paste(&mut frame, &mount, inset, height - prompt_height);
     // The sidebar pane mounts under the strip across the frame's full
     // remaining height (session-frame.tsx:325-331 — `flexShrink 0`,
     // width 42): docked at the right edge beside the reflowed
@@ -460,10 +447,10 @@ fn composer_mount_frame(
     session_id: &str,
     theme: &crate::theme::ThemeState,
     width: usize,
+    terminal_width: usize,
     height: usize,
-) -> (Frame, usize, usize) {
+) -> (Frame, usize, usize, Option<(usize, usize)>) {
     let composer = store.composer(session_id);
-    let (status_agent, status_model) = composer_statusline(store, session_id);
     // The popup over the composer: live slash-palette state
     // (`component/prompt/autocomplete.tsx`'s mount).
     let popup_options = match composer.autocomplete.visible {
@@ -480,10 +467,10 @@ fn composer_mount_frame(
     // the list loads the no-agent fallback `border.base` stands
     // (promptDisplay keeps its previous undefined color).
     let rail = store.composer_rail_color(session_id).map(crate::render::CellColor::from);
-    // The blinking block cursor: painted only in its visible phase
-    // (the run loop's clock tick re-renders every 100 ms).
-    let caret = crate::components::composer::render::cursor_blink_on(store.clock())
-        .then_some(composer.caret());
+    // NEW-S1a: v2's live caret is the TERMINAL cursor (never a
+    // cell-painted block — the corpus never caught one painted); the
+    // route hands the hardware-cursor position to the app instead
+    // (`Store::set_caret_cell`).
     let mount_height =
         crate::components::composer::render::mount_height(&composer.draft, width, height)
             .min(height);
@@ -506,11 +493,19 @@ fn composer_mount_frame(
         placeholder: composer.placeholder_text(),
         autocomplete,
         footer: FooterHints {
-            location: String::new(),
+            // #4: the session's `{directory}:{branch}` label when
+            // idle (v2 hides it while a turn runs — the interrupt
+            // status owns the left slot then).
+            location: if store.session_running(session_id) {
+                String::new()
+            } else {
+                store.footer_location()
+            },
             agent_shortcut: "shift+tab".into(),
             command_shortcut: "ctrl+p".into(),
-            status_agent,
-            status_model,
+            // #4's usage arm: the context-usage segment (PromptFooter's
+            // first Match) — present after a completed turn.
+            usage: composer_usage(store, session_id),
             plugin_hints: store.plugin_footer_hints(),
             // Wave A: the interrupt hint while the session's turn
             // runs (v2 prompt/index.tsx:1887-1903 — the spinner +
@@ -522,11 +517,154 @@ fn composer_mount_frame(
                 })
                 .unwrap_or_default(),
         },
+        metadata: composer_metadata(store, session_id),
+        terminal_width,
         top: prompt_height - mount_height,
         rail,
-        caret,
+        caret: None,
     };
-    (render_prompt_frame(&view, width, prompt_height, theme), prompt_height, mount_height)
+    let frame = render_prompt_frame(&view, width, prompt_height, theme);
+    // NEW-S1a: the caret's screen cell — the mount pastes at
+    // (inset, height - prompt_height); the helper's y already includes
+    // the composer's `top` inside the mount frame.
+    let caret_screen = crate::components::composer::render::prompt_caret_screen_cell(
+        &composer.draft,
+        width,
+        prompt_height - mount_height,
+        height,
+        composer.caret(),
+    )
+    .map(|(x, cell_y)| (x, height - prompt_height + cell_y))
+    .filter(|(_, row_y)| *row_y < height);
+    (frame, prompt_height, mount_height, caret_screen)
+}
+
+/// The composer's metadata row inputs (#5, `PromptMetadataRow`): the
+/// staged agent + model selection — the agent's display name, the
+/// model's display NAME (catalog `name`, `parsed().model`), the
+/// provider's display name, and the selected variant.
+pub fn composer_metadata(
+    store: &Store,
+    session_id: &str,
+) -> crate::components::composer::render::MetadataLine {
+    let selection = store.selection_for(session_id);
+    // `promptDisplay().agentLabel = Locale.titlecase(agent.id)` — the
+    // CURRENT agent (v2's `local.agent.current()` always resolves;
+    // build by default), never an empty label once the list loads.
+    let agent_id = selection.agent.or_else(|| {
+        store
+            .server_lists()
+            .agents
+            .rows()
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|agent| !agent.hidden)
+                    .map(|agent| agent.id.clone())
+                    .or_else(|| rows.first().map(|agent| agent.id.clone()))
+            })
+            .or_else(|| Some("build".to_owned()))
+    });
+    let agent = agent_id.map(|agent| statusline_agent_label(store, &agent)).unwrap_or_default();
+    let model_ref = store.effective_model(session_id);
+    let lists = store.server_lists();
+    let (model, provider) = match &model_ref {
+        Some(reference) => {
+            let model = lists
+                .models
+                .rows()
+                .and_then(|rows| {
+                    rows.iter()
+                        .find(|row| {
+                            row.provider_id == reference.provider_id && row.id == reference.model_id
+                        })
+                        .map(|row| row.name.clone())
+                })
+                .unwrap_or_else(|| format!("{} (unavailable)", reference.model_id));
+            let provider = lists
+                .providers
+                .iter()
+                .find(|row| row.id == reference.provider_id)
+                .map_or_else(|| reference.provider_id.clone(), |row| row.name.clone());
+            (model, provider)
+        }
+        None => (String::new(), String::new()),
+    };
+    crate::components::composer::render::MetadataLine {
+        agent,
+        // `auto` rides `local.permission.mode === "autoaccept"` — the
+        // rig's config stays "prompt"; the permission-mode surface is
+        // the permissions lane's seam.
+        auto: false,
+        model,
+        provider,
+        // The staged variant (`local.model.variant.current()`); the
+        // selection's model ref carries it when pinned.
+        variant: model_ref
+            .as_ref()
+            .and_then(|reference| reference.variant.clone())
+            .unwrap_or_default(),
+    }
+}
+
+/// The footer's context-usage segment (#4's usage arm,
+/// `formatContextUsage`): the LAST assistant's
+/// `input+output+reasoning+cache` tokens vs the model's context
+/// limit — `18 (0%)`; `None` until a turn completed.
+fn composer_usage(store: &Store, session_id: &str) -> String {
+    let messages = store.messages(session_id);
+    let Some(crate::components::message::model::Message::Assistant { model, usage_total, .. }) =
+        messages.iter().rev().find(|message| {
+            matches!(message, crate::components::message::model::Message::Assistant { .. })
+        })
+    else {
+        return String::new();
+    };
+    let Some(total) = usage_total else { return String::new() };
+    if *total == 0 {
+        return String::new();
+    }
+    let percent = store
+        .server_lists()
+        .models
+        .rows()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| format!("{}/{}", row.provider_id, row.id) == *model)
+                .and_then(|row| row.context_limit)
+        })
+        .filter(|limit| *limit > 0)
+        .map(|limit| {
+            // Integer floor percent — `18 (0%)`: sub-1% reads 0, the
+            // ref's Math.round only differs at a .5 boundary.
+            total.saturating_mul(100) / u64::try_from(limit).unwrap_or(u64::MAX)
+        });
+    #[allow(clippy::cast_precision_loss)]
+    let number = if *total >= 1_000_000 {
+        format!("{:.1}M", *total as f64 / 1_000_000.0)
+    } else if *total >= 1_000 {
+        format!("{:.1}K", *total as f64 / 1_000.0)
+    } else {
+        total.to_string()
+    };
+    match percent {
+        Some(percent) => format!("{number} ({percent}%)"),
+        None => number,
+    }
+}
+
+/// The assistant-footer model display-name table (#13): the server
+/// model catalog's `name` keyed by `providerID/modelID`.
+fn model_display_names(store: &Store) -> Vec<(String, String)> {
+    store
+        .server_lists()
+        .models
+        .rows()
+        .map(|rows| {
+            rows.iter()
+                .map(|row| (format!("{}/{}", row.provider_id, row.id), row.name.clone()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
 
 /// Paste `region`'s cells at (`x`, `y`); anything left keeps the fill.
@@ -542,6 +680,114 @@ fn paste(target: &mut Frame, region: &Frame, x: usize, y: usize) {
 mod tests {
     use super::*;
     use crate::reactive::Runtime;
+
+    /// Lane/chrome #13: the streamed-turn event sequence must render
+    /// the assistant footer row under the reply, with the tok/s
+    /// suffix (` · Nms · X.X tok/s`; values per-run, format pinned).
+    #[test]
+    fn session_frame_renders_the_assistant_footer_row() {
+        use crate::data::Ingest;
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Bug hunt".to_owned()));
+        let mut started = crate::data::BusEvent::new(
+            "session.step.started",
+            serde_json::json!({
+                "sessionID": "s1",
+                "assistantMessageID": "msg_a1",
+                "agent": "build",
+                "model": { "providerID": "parityfake", "id": "fake-model" },
+            }),
+        );
+        started.created = Some(101);
+        store.ingest_all([Ingest::Event(started)]);
+        store.ingest_all([Ingest::Event(crate::data::BusEvent::new(
+            "session.text.started",
+            serde_json::json!({ "sessionID": "s1", "assistantMessageID": "msg_a1" }),
+        ))]);
+        store.ingest_all([Ingest::Event(crate::data::BusEvent::new(
+            "session.text.ended",
+            serde_json::json!({ "sessionID": "s1", "assistantMessageID": "msg_a1", "ordinal": 0, "text": "Parity fake says hello." }),
+        ))]);
+        let mut step_ended = crate::data::BusEvent::new(
+            "session.step.ended",
+            serde_json::json!({
+                "sessionID": "s1",
+                "assistantMessageID": "msg_a1",
+                "finish": "stop",
+                "tokens": { "input": 11, "output": 5, "reasoning": 2 }
+            }),
+        );
+        step_ended.created = Some(259);
+        store.ingest_all([Ingest::Event(step_ended)]);
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
+        let grid = frame.text_grid().join("\n");
+        assert!(grid.contains("Parity fake says hello."), "{grid}");
+        assert!(grid.contains("Build"), "assistant footer row: {grid}");
+        assert!(grid.contains(" · 158ms"), "duration: {grid}");
+        assert!(grid.contains(" tok/s"), "tok/s suffix: {grid}");
+        let stats =
+            grid.lines().find(|line| line.contains("tok/s")).unwrap_or_default().trim().to_owned();
+        assert!(stats.starts_with("Build · "), "row shape: {stats}");
+        assert!(stats.contains("ms · "), "row shape: {stats}");
+    }
+
+    /// Lane/chrome #14: the reasoning group header carries the
+    /// duration suffix (`+ Thought · 8ms`) — `session.reasoning.started`
+    /// carries `time.created` (the missing reducer this lane adds) and
+    /// `reasoning.ended` completes it.
+    #[test]
+    fn session_frame_renders_the_thought_duration_suffix() {
+        use crate::data::Ingest;
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Bug hunt".to_owned()));
+        let mut started = crate::data::BusEvent::new(
+            "session.step.started",
+            serde_json::json!({
+                "sessionID": "s1",
+                "assistantMessageID": "msg_a1",
+                "agent": "build",
+                "model": { "providerID": "parityfake", "id": "fake-model" },
+            }),
+        );
+        started.created = Some(100);
+        store.ingest_all([Ingest::Event(started)]);
+        let mut reasoning_started = crate::data::BusEvent::new(
+            "session.reasoning.started",
+            serde_json::json!({ "sessionID": "s1", "assistantMessageID": "msg_a1", "ordinal": 0 }),
+        );
+        reasoning_started.created = Some(100);
+        store.ingest_all([Ingest::Event(reasoning_started)]);
+        store.ingest_all([Ingest::Event(crate::data::BusEvent::new(
+            "session.reasoning.delta",
+            serde_json::json!({ "sessionID": "s1", "assistantMessageID": "msg_a1", "ordinal": 0, "delta": "Let me think." }),
+        ))]);
+        let mut reasoning_ended = crate::data::BusEvent::new(
+            "session.reasoning.ended",
+            serde_json::json!({ "sessionID": "s1", "assistantMessageID": "msg_a1", "ordinal": 0, "text": "Let me think." }),
+        );
+        reasoning_ended.created = Some(108);
+        store.ingest_all([Ingest::Event(reasoning_ended)]);
+        let mut text_ended = crate::data::BusEvent::new(
+            "session.text.ended",
+            serde_json::json!({ "sessionID": "s1", "assistantMessageID": "msg_a1", "ordinal": 0, "text": "Parity fake says hello." }),
+        );
+        text_ended.created = Some(120);
+        store.ingest_all([Ingest::Event(text_ended)]);
+        let mut step_ended = crate::data::BusEvent::new(
+            "session.step.ended",
+            serde_json::json!({ "sessionID": "s1", "assistantMessageID": "msg_a1", "finish": "stop" }),
+        );
+        step_ended.created = Some(121);
+        store.ingest_all([Ingest::Event(step_ended)]);
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
+        let grid = frame.text_grid().join("\n");
+        assert!(
+            grid.contains("Thought · 8ms"),
+            "the collapsed header with its duration suffix: {grid}"
+        );
+    }
 
     #[test]
     fn session_frame_docks_the_composer_under_the_transcript() {
@@ -680,6 +926,8 @@ mod tests {
                     finish: Some("stop".into()),
                     error: None,
                     time: PartTime { created: Some(n as u64), completed: Some(n as u64 + 1) },
+                    tokens: None,
+                    usage_total: None,
                 },
             ]
         };
@@ -754,7 +1002,9 @@ mod tests {
         // (the box's `┃` rows); the sidebar region keeps its own
         // background — no composer bytes leak into the pane.
         assert!(
-            grid.iter().any(|row| row.starts_with("┃") || row.starts_with(" ┃")),
+            grid.iter().any(|row| {
+                row.starts_with("┃") || row.starts_with(" ┃") || row.starts_with("  ┃")
+            }),
             "the composer mounts at the reflowed column"
         );
         let card_row = grid

@@ -22,9 +22,9 @@
                                                                                                                             Connect from 75+ providers to       
                                                                                                                             use other models, including         
                                                                                                                             Claude, GPT, Gemini etc             
-┃                                                                                                                                                               
-┃                                                                                                                           Connect provider        /connect    
-┃                                                                                                                                                               
-┃                                                                                                                                                               
-╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                          
+  ┃                                                                                                                                                             
+  ┃                                                                                                                         Connect provider        /connect    
+  ┃                                                                                                                                                             
+  ┃  Build                                                                                                                                                      
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                          
                                                                                      shift+tab agents  ctrl+p commands                                          

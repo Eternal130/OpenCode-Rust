@@ -592,12 +592,6 @@ pub fn render_select(
     rows.push(Row::blank(width, default, surface_bg).cells);
 
     // Filter input row: [pad 4][input bg formfield (width-8)][pad 4].
-    // NO painted cursor: v2's input shows the TERMINAL's hardware
-    // cursor (`?25h`, repositioned after the value — the raw-ANSI
-    // mirrors) and paints no cursor cell; the cells past the typed
-    // text stay default-fg on the formfield background. (The port's
-    // earlier inverse-block cursor was a 1-cell style divergence on
-    // every typed frame — the rig's EXACT mode.)
     let mut input = Row::blank(width, default, surface_bg);
     let input_width = width.saturating_sub(8);
     for slot in input.cells.iter_mut().skip(4).take(input_width) {
@@ -606,7 +600,13 @@ pub fn render_select(
     if state.filter.is_empty() {
         input.text(4, &props.placeholder, styles.muted, styles.formfield_bg, 0);
     } else {
-        input.text(4, &state.filter, styles.formfield_fg, styles.formfield_bg, 0);
+        let end = input.text(4, &state.filter, styles.formfield_fg, styles.formfield_bg, 0);
+        // Block cursor at the end of the typed text (the reference's
+        // `cursorColor`/`focusedTextColor`; no golden pins a typed
+        // frame — see the module notes).
+        if end < 4 + input_width {
+            input.cells[end] = cell(' ', 0, surface_bg, styles.formfield_fg);
+        }
     }
     rows.push(input.cells);
 
@@ -648,14 +648,6 @@ pub fn render_select(
 /// One option row: scroll pad 1; the row box spans `[1, width-2)`;
 /// paddingLeft 3 (1 + `●` marker + gap when current); paddingRight 3;
 /// the footer right-aligned ending at `width - 4`.
-///
-/// The title is `Locale.truncate(title, titleWidth ?? 61)` — v2's
-/// `Option` (dialog-select.tsx:893-898, `util/locale.ts:50-53`: code
-/// units, `slice(0, len-1) + "…"`) — and the painted title +
-/// description clip at the footer's start column (the flex layout's
-/// flexGrow title / flexShrink-0 footer split), so long rows can
-/// never run into the right border (the 80-col overflow, finding
-/// #10).
 #[allow(clippy::too_many_arguments)]
 fn paint_option_row(
     cells: &mut [Cell],
@@ -683,37 +675,13 @@ fn paint_option_row(
         pad_cells(cells, 1, width.saturating_sub(2), default, styles.selected_bg);
     }
 
-    // The footer reserves its columns first (flexShrink 0): the title
-    // + description may not paint past its start.
-    let footer = option_footer(option, flatten_mode);
-    let clip = match &footer {
-        Some(footer) => width.saturating_sub(4).saturating_sub(crate::wrap::display_width(footer)),
-        None => width.saturating_sub(4),
-    };
-
     let at = if current {
         // paddingLeft 1, marker, gap 1, title at 4.
         let marker_fg = if selected { styles.selected_fg } else { styles.current_fg };
         put(cells, 2, "●", marker_fg, row_bg, 0);
-        put_until(
-            cells,
-            4,
-            &locale_truncate(&option.title, TITLE_WIDTH),
-            title_fg_color,
-            row_bg,
-            title_attrs,
-            clip,
-        )
+        put(cells, 4, &option.title, title_fg_color, row_bg, title_attrs)
     } else {
-        put_until(
-            cells,
-            4,
-            &locale_truncate(&option.title, TITLE_WIDTH),
-            title_fg_color,
-            row_bg,
-            title_attrs,
-            clip,
-        )
+        put(cells, 4, &option.title, title_fg_color, row_bg, title_attrs)
     };
     // Description (" " + text) — hidden when it merely repeats the
     // category; the selected row paints it in the row color (bold).
@@ -723,39 +691,13 @@ fn paint_option_row(
     };
     if let Some(description) = description {
         let fg = if selected { title_fg_color } else { styles.muted };
-        put_until(cells, at, &format!(" {description}"), fg, row_bg, title_attrs, clip);
+        put(cells, at, &format!(" {description}"), fg, row_bg, title_attrs);
     }
 
     // Right-aligned footer: while flattened (filtering on a flat
     // select) the search footer (group · binding), else the plain
     // footer.
-    if let Some(footer) = footer {
-        let fg = if selected { styles.selected_fg } else { styles.muted };
-        let end = width.saturating_sub(4);
-        let start = end.saturating_sub(crate::wrap::display_width(&footer));
-        put(cells, start, &footer, fg, row_bg, 0);
-    }
-}
-
-/// v2's default `titleWidth` (dialog-select.tsx:898).
-const TITLE_WIDTH: usize = 61;
-
-/// `Locale.truncate` (util/locale.ts:50-53): UTF-16 code units; the
-/// ellipsis replaces the cut so the result spans exactly `len` units.
-fn locale_truncate(text: &str, len: usize) -> String {
-    let units = text.encode_utf16().count();
-    if units <= len {
-        return text.to_owned();
-    }
-    let mut out: String = text.chars().take(len.saturating_sub(1)).collect();
-    out.push('…');
-    out
-}
-
-/// The row's right-column footer text (the flatten-mode fallback
-/// chain, dialog-select.tsx:802-804).
-fn option_footer(option: &SelectOption, flatten_mode: bool) -> Option<String> {
-    if flatten_mode {
+    let footer = if flatten_mode {
         option
             .search_footer
             .clone()
@@ -763,28 +705,13 @@ fn option_footer(option: &SelectOption, flatten_mode: bool) -> Option<String> {
             .or_else(|| option.footer.clone())
     } else {
         option.footer.clone()
+    };
+    if let Some(footer) = footer {
+        let fg = if selected { styles.selected_fg } else { styles.muted };
+        let end = width.saturating_sub(4);
+        let start = end.saturating_sub(crate::wrap::display_width(&footer));
+        put(cells, start, &footer, fg, row_bg, 0);
     }
-}
-
-/// [`put`] with an exclusive end column (the flex-clip seam).
-fn put_until(
-    cells: &mut [Cell],
-    x: usize,
-    text: &str,
-    fg: Color,
-    bg: Color,
-    attrs: u16,
-    limit: usize,
-) -> usize {
-    let mut at = x;
-    for atom in flatten(text, Style::new().fg(fg).bg(bg)) {
-        if at >= cells.len() || at >= limit {
-            break;
-        }
-        cells[at] = cell(atom.text.chars().next().unwrap_or(' '), attrs, fg, bg);
-        at += atom.width.max(1);
-    }
-    at
 }
 
 /// Blank `count` cells starting at `x`.
@@ -1000,79 +927,6 @@ mod tests {
         assert!(text.contains("Item 29"), "last visible row: {text}");
         let text: String = view.rows[8].iter().map(|cell| cell.ch).collect();
         assert_eq!(text.trim(), "", "row below the viewport is blank");
-    }
-
-    /// Lane/models #8 — the filter echo paints EVERY typed glyph at
-    /// full width with NO painted cursor cell: v2's input shows the
-    /// terminal's hardware cursor only, and the cells past the text
-    /// stay default-fg on the formfield background (raw-ANSI
-    /// evidence: `fg15/bg-dialog` after the value).
-    #[test]
-    fn filter_echo_paints_all_glyphs_with_no_cursor_cell() {
-        let props = SelectProps::new("Items", vec![SelectOption::titled("A", "a")]);
-        let styles = styles();
-        let formfield = match styles.formfield_bg {
-            Color::Rgb(r, g, b) => (r, g, b),
-            _ => (0, 0, 0),
-        };
-        let mut state = SelectState::default();
-        state.set_filter("fake");
-        let view = render_select(&props, &state, &styles, Color::Rgb(10, 10, 10), 60, 20, None);
-        let input = &view.rows[2];
-        let text: String = (4..8).map(|col| input[col].ch).collect();
-        assert_eq!(text, "fake", "every glyph paints");
-        // No inverse block cursor: the cell after the text keeps the
-        // formfield bg with the DEFAULT fg (previously a fg=surface /
-        // bg=formfield_fg inverse cell sat here).
-        assert_eq!(cell_color(&input[8]), formfield, "no painted cursor cell");
-        assert_eq!(fg_color(&input[8]), (255, 255, 255), "default fg past the text");
-    }
-
-    /// Lane/models #10 — a long title never runs into the right
-    /// border: `Locale.truncate(title, 61)` (dialog-select.tsx:
-    /// 893-898) then the flex clip at the footer's start column; the
-    /// row's last painted text column stays left of the footer.
-    #[test]
-    fn long_titles_truncate_before_the_right_border() {
-        let long = "x".repeat(90);
-        let options = vec![
-            SelectOption::titled(long.clone(), "a").with_footer("302.AI"),
-            SelectOption::titled(long.clone(), "b"),
-        ];
-        let props = SelectProps::new("Items", options);
-        let styles = styles();
-        let view = render_select(
-            &props,
-            &SelectState::default(),
-            &styles,
-            Color::Rgb(10, 10, 10),
-            60,
-            20,
-            None,
-        );
-        let row = &view.rows[4];
-        // The string truncates to 61 code units (60 x's + "…"), then
-        // the flex clip cuts at the footer's start column
-        // (60 - 4 - len("302.AI") = 50): the title paints 4..50 and
-        // NOTHING past it — the ellipsis shows only when the row has
-        // room for it (wider dialog).
-        let title_cells: usize = (4..50).map(|col| usize::from(row[col].ch == 'x')).sum();
-        assert_eq!(title_cells, 46, "the title fills exactly the pre-footer span");
-        assert!(
-            !row[4..50].iter().any(|cell| cell.ch == '…'),
-            "clipped before the ellipsis at this width"
-        );
-        // The footer occupies its reserved columns.
-        let footer: String = (50..56).map(|col| row[col].ch).collect();
-        assert_eq!(footer, "302.AI");
-        // The border/pad columns 57..=59 stay blank.
-        for (col, cell) in row.iter().enumerate().take(60).skip(56) {
-            assert_eq!(cell.ch, ' ', "border col {col} blank");
-        }
-        // `Locale.truncate` itself (util/locale.ts:50-53).
-        assert_eq!(locale_truncate("short", 61), "short");
-        assert_eq!(locale_truncate(&"x".repeat(61), 61), "x".repeat(61));
-        assert_eq!(locale_truncate(&"x".repeat(90), 61), format!("{}…", "x".repeat(60)));
     }
 
     #[test]

@@ -128,6 +128,8 @@ impl ScriptedServer {
                             finish: None,
                             error: None,
                             time: PartTime { created: Some(frame.t), completed: None },
+                            tokens: None,
+                            usage_total: None,
                         });
                     }
                 }

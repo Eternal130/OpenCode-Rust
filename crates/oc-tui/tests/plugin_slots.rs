@@ -18,7 +18,7 @@ use std::time::Duration;
 use oc_plugin_host::{BroadcastTap, PluginDialogSpec, TapEvent, UiRequest};
 use oc_tui::components::command_palette::{Dispatch, StoreDispatcher};
 use oc_tui::components::message::list::{render_transcript, TranscriptOptions};
-use oc_tui::components::message::model::{Message, Part, PartTime, ToolState};
+use oc_tui::components::message::model::{Message, Part, PartTime};
 use oc_tui::data::{BusEvent, Ingest};
 use oc_tui::keymap::{KeyStroke, Keymap, ManualClock, Outcome, OwnedCommandDef};
 use oc_tui::plugin_ui::{apply_plugin_ui, PluginUiEvent};
@@ -364,7 +364,7 @@ fn plugin_group_rules_claim_raw_tool_names() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)] // the golden fixture's message ladder
+#[allow(clippy::too_many_lines)] // a full-screen fixture assembly
 fn plugin_group_rule_renders_a_custom_header() {
     // Pure TUI side: rules (as projected above) group omo_* tools.
     let store = Store::new(Runtime::new());
@@ -392,30 +392,28 @@ fn plugin_group_rule_renders_a_custom_header() {
                     id: "t1".into(),
                     name: "omo_admission".into(),
                     time: PartTime { created: Some(1), completed: Some(2) },
-                    state: ToolState::default(),
                 },
                 Part::Tool {
                     id: "t2".into(),
                     name: "omo_scheduler".into(),
                     time: PartTime { created: Some(3), completed: Some(4) },
-                    state: ToolState::default(),
                 },
                 Part::Tool {
                     id: "t3".into(),
                     name: "specialprobe".into(),
                     time: PartTime { created: Some(5), completed: Some(6) },
-                    state: ToolState::default(),
                 },
                 Part::Tool {
                     id: "t4".into(),
                     name: "bash".into(),
                     time: PartTime { created: Some(7), completed: Some(8) },
-                    state: ToolState::default(),
                 },
             ],
             finish: None,
             error: None,
             time: PartTime { created: Some(1), completed: None },
+            tokens: None,
+            usage_total: None,
         },
         Message::Idle { id: "idle".into(), created: 9 },
     ];
@@ -451,11 +449,12 @@ fn plugin_group_rule_renders_a_custom_header() {
             id: "t9".into(),
             name: "grep".into(),
             time: PartTime { created: Some(1), completed: Some(2) },
-            state: ToolState::default(),
         }],
         finish: None,
         error: None,
         time: PartTime { created: Some(1), completed: None },
+        tokens: None,
+        usage_total: None,
     }];
     let transcript = render_transcript(
         &native,

@@ -247,6 +247,8 @@ pub fn session_composer_frame(
             interrupt: String::new(),
             ..FooterHints::default()
         },
+        metadata: crate::components::composer::render::MetadataLine::default(),
+        terminal_width: usize::from(width),
         top: 0,
         rail: None,
         caret: None,

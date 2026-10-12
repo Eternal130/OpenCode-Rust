@@ -488,11 +488,6 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "session_queued_prompts" => "session.queued_prompts", "<leader>q", "View queued prompts", "base", palette Prompt;
     "queued_prompt_delete" => "queued_prompt.delete", "ctrl+d", "Delete queued prompt", "dialog";
     "session_child_first" => "session.child.first", "down", "Toggle subagent picker", "base";
-    // keybind.ts:137-138 — table-only defaults (v2 registers no
-    // command handler for either; the input layer shadows the raw
-    // arrows while a textarea is focused, matching v2's inert pair).
-    "session_child_next" => "session.child.next", "right", "Go to next child session", "base";
-    "session_child_previous" => "session.child.previous", "left", "Go to previous child session", "base";
     "session_parent" => "session.parent", "up", "Go to parent session", "base";
     "session_pin_toggle" => "session.pin.toggle", "ctrl+f", "Pin or unpin session in the session list", "dialog";
     "session_quick_switch_1" => "session.quick_switch.1", "<leader>1", "Switch to session in quick slot 1", "base";
@@ -621,22 +616,6 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "dialog.mcp.toggle" => "dialog.mcp.toggle", "space", "Toggle MCP server", "dialog";
     "terminal_suspend" => "terminal.suspend", "ctrl+z", "Suspend terminal", "base", palette System;
     "terminal_title_toggle" => "terminal.title.toggle", "none", "Toggle terminal title", "base";
-    // The composer panel's keybind family (config/keybind.ts:245-255
-    // + the `bind` props on the layer commands — composer/index.tsx:72-82,
-    // composer/subagents-tab.tsx:136-194). The mode is pushed while
-    // the picker is open (`Keymap.mode.push("composer")`).
-    "composer_subagent_up" => "composer.subagent.up", "up", "Previous subagent", "composer";
-    "composer_subagent_down" => "composer.subagent.down", "down", "Next subagent", "composer";
-    "composer_subagent_select" => "composer.subagent.select", "return", "Navigate to subagent", "composer";
-    "composer_subagent_toggle_activity" => "composer.subagent.toggle-activity", "ctrl+a", "Toggle active subagents", "composer";
-    "composer_subagent_interrupt" => "composer.subagent.interrupt", "ctrl+d", "Interrupt subagent", "composer";
-    "composer_shell_up" => "composer.shell.up", "up", "Previous shell", "composer";
-    "composer_shell_down" => "composer.shell.down", "down", "Next shell", "composer";
-    "composer_shell_select" => "composer.shell.select", "return", "View shell output", "composer";
-    "composer_shell_kill" => "composer.shell.kill", "ctrl+d", "Kill shell command", "composer";
-    "composer_close" => "composer.close", "escape,ctrl+c", "Close composer", "composer";
-    "composer_tab_prev" => "composer.tab.prev", "left", "Previous composer tab", "composer";
-    "composer_tab_next" => "composer.tab.next", "right", "Next composer tab", "composer";
 };
 
 /// Clock abstraction so leader-timeout behavior is testable with a

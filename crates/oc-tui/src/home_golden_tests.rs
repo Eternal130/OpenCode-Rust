@@ -26,8 +26,7 @@ fn view(draft: &PromptDraft) -> HomeView<'_> {
         placeholder: "Ask anything… \"Fix a TODO in the codebase\"".into(),
         location: "/tmp/opencode/packages/tui:main".into(),
         version: "test".into(),
-        status_agent: String::new(),
-        status_model: String::new(),
+        metadata: crate::components::composer::render::MetadataLine::default(),
         plugin_hints: Vec::new(),
         plugin_actions: Vec::new(),
         autocomplete: None,
@@ -66,7 +65,7 @@ fn assert_matches(id: &str, width: usize, frame: &Frame) {
 fn home_matches_text_grid_and_ansi_at_80() {
     let theme = ThemeState::v2_dark();
     let draft = PromptDraft::default();
-    let frame = render_home_view(&view(&draft), &theme, (80, 30));
+    let (frame, _) = render_home_view(&view(&draft), &theme, (80, 30));
     assert_matches("home", 80, &frame);
 }
 
@@ -74,6 +73,6 @@ fn home_matches_text_grid_and_ansi_at_80() {
 fn home_matches_text_grid_and_ansi_at_160() {
     let theme = ThemeState::v2_dark();
     let draft = PromptDraft::default();
-    let frame = render_home_view(&view(&draft), &theme, (160, 30));
+    let (frame, _) = render_home_view(&view(&draft), &theme, (160, 30));
     assert_matches("home", 160, &frame);
 }

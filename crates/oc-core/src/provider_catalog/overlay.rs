@@ -71,10 +71,6 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
                             .iter()
                             .map(|(id, model)| CustomModel {
                                 id: id.clone(),
-                                // The display name (`models.<id>.name` — the
-                                // listing surfaces show it, v2
-                                // config/plugin/provider.ts:112).
-                                name: model.name.clone(),
                                 // Per-model overlays (`providers.<id>.models.<mid>
                                 // .headers|body`) — v2 merges them onto the
                                 // effective model (core/src/model.ts:204-209);
@@ -166,11 +162,6 @@ mod tests {
         assert_eq!(acme.base_url, "https://acme.test/v1");
         assert_eq!(acme.api_key.as_deref(), Some("s3cret"));
         assert_eq!(acme.models.len(), 2);
-        // `models.<id>.name` rides the entry (provider.ts:112).
-        let large = acme.models.iter().find(|model| model.id == "acme-large").expect("large");
-        assert_eq!(large.name.as_deref(), Some("Large"));
-        let small = acme.models.iter().find(|model| model.id == "acme-small").expect("small");
-        assert_eq!(small.name, None, "unnamed models fall back to the id at the listing");
         let default = providers.default_model.expect("default selection");
         assert_eq!(default.provider_id.as_str(), "acme");
         assert_eq!(default.model.as_str(), "acme-large");

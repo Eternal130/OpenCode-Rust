@@ -425,6 +425,25 @@ fn message_groups_transcript_ansi_is_byte_exact_at_80_and_40() {
     for width in [80u16, 40] {
         let theme = theme();
         let transcript = transcript_frame(width, 23, &theme);
+        if std::env::var("PARITY_UPDATE").is_ok_and(|value| value == "1") {
+            // The scenario golden is the FULL 30-row frame; the test
+            // pins the transcript's top 23 rows — splice the fresh
+            // transcript into the existing golden's tail so the blob
+            // stays a parseable full-frame artifact.
+            let path = goldens().join(format!("message-groups.w{width}.ansi"));
+            let existing = std::fs::read_to_string(&path).expect("golden ansi");
+            let frame = pf::parse_ansi(&existing, Some((30, usize::from(width))))
+                .expect("golden parses")
+                .rows;
+            let mut rows =
+                pf::parse_ansi(&serialize_canonical(&transcript), Some((23, usize::from(width))))
+                    .expect("transcript parses")
+                    .rows;
+            rows.extend(frame.into_iter().skip(23));
+            let spliced = pf::AnsiFrame { rows, height: 30, width: usize::from(width) };
+            std::fs::write(&path, pf::render_ansi(&spliced)).expect("write golden ansi");
+            continue;
+        }
         let golden =
             std::fs::read_to_string(goldens().join(format!("message-groups.w{width}.ansi")))
                 .expect("golden ansi");

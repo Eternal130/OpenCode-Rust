@@ -38,40 +38,23 @@ fn model_json(
 /// `Model.Info` shape — clients like `run`'s model.default fallback parse
 /// the payload into `ModelInfo`, whose `limit.context`/`limit.output`,
 /// `modelID`, `status`, and `time.released` are REQUIRED; v2 defaults
-/// unspecified config-model limits to 0). A model without an explicit
-/// config `variants` list inherits the provider package's protocol
-/// variants (`packages/core/src/config/plugin/provider.ts:151-159` —
-/// `Variant.resolve(model.package ?? provider.package)` with the default
-/// effort support; the openai-compatible protocol yields low/medium/
-/// high `reasoningEffort` overlays). The display name is the config's
-/// `models.<id>.name` when given (provider.ts:112), else the id.
+/// unspecified config-model limits to 0).
 fn custom_model_json(
     provider: &oc_core::provider_catalog::facade::CustomProvider,
-    model: &oc_core::provider_catalog::facade::CustomModel,
+    model: &str,
 ) -> Value {
-    let variants = oc_core::provider_catalog::variant::resolve(
-        &oc_core::provider_catalog::support::VariantModel {
-            // The overlay binds every baseURL custom provider onto the
-            // openai-compatible package (`provider_catalog/overlay.rs`).
-            package: Some("@opencode/ai/providers/openai-compatible".to_owned()),
-            provider_id: provider.id.clone(),
-            model_id: model.id.clone(),
-            limit_output: 0,
-        },
-        &[oc_core::provider_catalog::support::Support::Effort { values: None }],
-    );
     json!({
-        "id": model.id,
-        "modelID": model.id,
+        "id": model,
+        "modelID": model,
         "providerID": provider.id,
-        "name": model.name.clone().unwrap_or_else(|| model.id.clone()),
+        "name": model,
         "enabled": true,
         "status": "active",
         "time": { "released": 0 },
         "capabilities": { "input": ["text"], "output": ["text"], "tools": true },
         "limit": { "context": 0, "output": 0 },
         "cost": [],
-        "variants": serde_json::to_value(&variants).unwrap_or_else(|_| json!([])),
+        "variants": [],
     })
 }
 
@@ -84,21 +67,18 @@ async fn model_list(
     let _services = services(&state, &location).await?;
     let catalog = &state.engine.catalog;
     // v2's `Model.available()` serves the flattened list sorted by
-    // `time.released` DESCENDING (core model.ts:218-220) over the
-    // AVAILABLE providers only — the availability fold
-    // (`Catalog::available_models`: the keyless `opencode` zen
-    // provider's free tier + providers with an env credential set);
-    // config-defined custom providers are activation-"enabled"
-    // (config/plugin/provider.ts:67) and ride the same stable sort
-    // (released = 0, after every dated catalog model).
+    // `time.released` DESCENDING (core model.ts:218-220) — catalog
+    // pairs through `flat_models_by_release`, config-defined custom
+    // providers (released = 0) ride the same stable sort so they land
+    // after every dated catalog model, ties keeping source order.
     let mut data: Vec<(f64, Value)> = catalog
-        .available_models(|name| std::env::var_os(name).is_some())
+        .flat_models_by_release()
         .into_iter()
         .map(|(snapshot, model)| (model.time.released.0, model_json(snapshot, model)))
         .collect();
     for provider in crate::boot::location_custom_providers(&state.engine, &location) {
         for model in &provider.models {
-            data.push((0.0, custom_model_json(&provider, model)));
+            data.push((0.0, custom_model_json(&provider, model.id.as_str())));
         }
     }
     data.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -123,18 +103,7 @@ async fn model_default(
         // provider's default resolves through the catalog so the payload
         // keeps the full (client-parseable) Model.Info shape.
         let default = if let Some(provider) = provider {
-            let model = provider
-                .models
-                .iter()
-                .find(|model| model.id == selection.model.as_str())
-                .cloned()
-                .unwrap_or_else(|| oc_core::provider_catalog::facade::CustomModel {
-                    id: selection.model.to_string(),
-                    name: None,
-                    headers: None,
-                    body: None,
-                });
-            custom_model_json(&provider, &model)
+            custom_model_json(&provider, selection.model.as_str())
         } else {
             let catalog = &state.engine.catalog;
             let catalog_snapshot = catalog

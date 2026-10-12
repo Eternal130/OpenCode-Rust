@@ -105,9 +105,6 @@ impl ModelConnection {
 #[derive(Debug, Clone)]
 pub struct CustomModel {
     pub id: String,
-    /// The config display name (`models.<id>.name`,
-    /// config/plugin/provider.ts:112).
-    pub name: Option<String>,
     pub headers: Option<BTreeMap<String, String>>,
     pub body: Option<BTreeMap<String, Value>>,
 }
@@ -613,12 +610,7 @@ mod tests {
             api_key: Some("secret".into()),
             headers: None,
             body: None,
-            models: vec![CustomModel {
-                id: "acme-large".into(),
-                name: None,
-                headers: None,
-                body: None,
-            }],
+            models: vec![CustomModel { id: "acme-large".into(), headers: None, body: None }],
         };
         let model =
             custom_language_model(&context, &custom, "acme-large").expect("custom provider binds");
@@ -651,7 +643,6 @@ mod tests {
             body: Some(BTreeMap::from([("top_k".to_string(), serde_json::json!(7))])),
             models: vec![CustomModel {
                 id: "acme-large".into(),
-                name: None,
                 headers: None,
                 body: Some(BTreeMap::from([("temperature".to_string(), serde_json::json!(0))])),
             }],

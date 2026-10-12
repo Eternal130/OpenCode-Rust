@@ -40,11 +40,42 @@ use crate::wrap::display_width;
 use oc_theme::Rgba;
 
 /// The home placeholder rotation (`routes/home.tsx` `placeholder.normal`)
-/// — the reference picks its entry at RANDOM (`randomIndex`); the port
-/// pins index 0 (the exporter seeds `Math.random = () => 0` for the
-/// same reason).
+/// — the reference picks its entry at RANDOM per boot (`randomIndex`,
+/// prompt/index.tsx:103-106; the initial pick at :364, re-rolled on
+/// session change :407-415 and shell-mode entry :977).
 pub const PLACEHOLDERS: &[&str] =
     &["Fix a TODO in the codebase", "What is the tech stack of this project?", "Fix broken tests"];
+
+/// The shell-mode pool (`placeholder.shell`, home.tsx:22) — the `!`
+/// composer's `Run a command… "…"` rotation source.
+pub const SHELL_PLACEHOLDERS: &[&str] = &["ls -la", "git status", "pwd"];
+
+/// `randomIndex` (prompt/index.tsx:103-106): a uniform pick over
+/// `count` — `Math.floor(Math.random() * count)`; 0 for an empty
+/// pool. Seeded from the clock + pid + a stack address (no rand
+/// dependency; uniform enough for a 3-entry pool).
+#[must_use]
+pub fn random_placeholder_index(count: usize) -> usize {
+    if count <= 1 {
+        return 0;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| (elapsed.as_secs() ^ u64::from(elapsed.subsec_nanos())) << 11);
+    let seed = nanos
+        ^ (u64::from(std::process::id()) << 32)
+        // ASLR entropy — two processes launched together differ.
+        ^ (std::ptr::addr_of!(count) as u64);
+    // xorshift64* (Marsaglia): full period, uniform low bits.
+    let mut state = seed | 1;
+    state ^= state >> 12;
+    state ^= state << 25;
+    state ^= state >> 27;
+    let rolled = state.wrapping_mul(0x2545_F491_4F6C_DD1D);
+    #[allow(clippy::cast_possible_truncation)]
+    let pick = (rolled % count as u64) as usize;
+    pick
+}
 
 /// The wordmark art (`logo.ts`) — 19-cell halves joined by a 1-cell
 /// gap (`gap={1}`): `_` renders as a space over the shadow, `^` as `▀`
@@ -82,10 +113,9 @@ pub struct HomeView<'a> {
     pub location: String,
     /// The app version (`home.footer`'s right-aligned label).
     pub version: String,
-    /// The staged agent label for the composer hint row.
-    pub status_agent: String,
-    /// The staged model label for the composer hint row.
-    pub status_model: String,
+    /// The composer metadata row (#5): the staged agent · model line
+    /// (`PromptMetadataRow`) — empty in every pinned golden state.
+    pub metadata: crate::components::composer::render::MetadataLine,
     /// Plugin footer hint segments (wave 3).
     pub plugin_hints: Vec<String>,
     /// Plugin quick-action labels (wave 3's home slot; rendered on
@@ -106,7 +136,11 @@ pub struct HomeView<'a> {
 
 /// Render the home route at `size` (the golden-pinned layout).
 #[must_use]
-pub fn render_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u16)) -> Frame {
+pub fn render_home_view(
+    view: &HomeView,
+    theme: &ThemeState,
+    size: (u16, u16),
+) -> (Frame, Option<(usize, usize)>) {
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     let tokens = &theme.resolved.tokens;
     let base = cell(tokens.background.base);
@@ -159,17 +193,36 @@ pub fn render_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u16)) -
             location: view.location.clone(),
             agent_shortcut: "shift+tab".into(),
             command_shortcut: "ctrl+p".into(),
-            status_agent: view.status_agent.clone(),
-            status_model: view.status_model.clone(),
             plugin_hints: view.plugin_hints.clone(),
             interrupt: String::new(),
+            usage: String::new(),
         },
+        metadata: view.metadata.clone(),
+        terminal_width: width,
         top: 1 + popup_rows,
         rail: view.rail,
-        caret: view.caret,
+        // NEW-S1a: no software block — the live caret is the terminal
+        // cursor (see `caret_screen` above).
+        caret: None,
     };
     let prompt_frame = render_prompt_frame(&prompt_view, prompt_width, mount + popup_rows, theme);
     paste(&mut frame, &prompt_frame, centered(prompt_width), y - popup_rows);
+    // NEW-S1a: the caret's screen cell (the terminal cursor's
+    // position) — the paste origin plus the frame-relative cell.
+    // None while the caret sits outside the visible textarea rows.
+    let caret_screen = view
+        .caret
+        .and_then(|offset| {
+            crate::components::composer::render::prompt_caret_screen_cell(
+                view.draft,
+                prompt_width,
+                1 + popup_rows,
+                height,
+                offset,
+            )
+        })
+        .map(|(x, row)| (centered(prompt_width) + x, y - popup_rows + row))
+        .filter(|(_, row_y)| *row_y < height);
 
     // The home.footer slot: pad · version · pad at h≥16, else one row.
     if show_footer {
@@ -203,7 +256,7 @@ pub fn render_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u16)) -
             }
         }
     }
-    frame
+    (frame, caret_screen)
 }
 
 /// One logo cell: `_`/`^` paint over the shadow, `~`/`,` paint IN the
@@ -314,9 +367,10 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         composer.placeholder_text()
     };
     // The staged next-session selection (agent · model) rides the
-    // composer's hint row (the prompt-idle statusline).
-    let (status_agent, status_model) =
-        crate::components::session::composer_statusline(store, crate::app::HOME_PROMPT_KEY);
+    // composer's METADATA row (#5 — `PromptMetadataRow`, not the
+    // footer: the footer's left slot is the location label, #4).
+    let metadata =
+        crate::components::session::composer_metadata(store, crate::app::HOME_PROMPT_KEY);
     // The live slash-palette popup + rail + blinking caret (the golden
     // harness leaves all three absent — its HomeView defaults).
     let autocomplete = match composer.autocomplete.visible {
@@ -330,10 +384,12 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
     let view = HomeView {
         draft: &composer.draft,
         placeholder,
-        location: String::new(),
+        // #4: home shows where the next session will be created —
+        // the launch cwd (`currentLocation.ref ??
+        // data.location.default()`, prompt/index.tsx:1605-1610).
+        location: store.footer_location(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
-        status_agent,
-        status_model,
+        metadata,
         plugin_hints: store.plugin_footer_hints(),
         plugin_actions: store
             .plugin_home_actions()
@@ -342,11 +398,15 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
             .collect(),
         autocomplete,
         rail: store.composer_rail_color(crate::app::HOME_PROMPT_KEY).map(CellColor::from),
-        caret: crate::components::composer::render::cursor_blink_on(store.clock())
-            .then_some(composer.caret()),
+        // NEW-S1a: the caret's char offset — the terminal cursor
+        // positions at the computed cell (never a painted block).
+        caret: Some(composer.caret()),
     };
     let _ = theme;
-    let mut frame = render_home_view(&view, &state, size);
+    let (mut frame, caret_screen) = render_home_view(&view, &state, size);
+    store.set_caret_cell(
+        caret_screen.map(|(x, y)| (u16::try_from(x).unwrap_or(0), u16::try_from(y).unwrap_or(0))),
+    );
 
     // F9 — the tab strip leads the HOME route while tabs are open (v2
     // app.tsx:576-579 `tabsAvailable`: `sessionTabs.enabled() &&
@@ -398,6 +458,63 @@ pub fn run_plugin_quick_action(
 mod tests {
     use super::*;
     use crate::reactive::Runtime;
+
+    /// #6: the pool contents match v2's `routes/home.tsx:20-23`
+    /// (normal + shell), and the per-boot rotation picks a uniform
+    /// in-bounds entry (`randomIndex`, prompt/index.tsx:103-106).
+    #[test]
+    fn placeholder_pool_matches_and_rotation_stays_in_bounds() {
+        assert_eq!(
+            PLACEHOLDERS,
+            &[
+                "Fix a TODO in the codebase",
+                "What is the tech stack of this project?",
+                "Fix broken tests"
+            ]
+        );
+        assert_eq!(SHELL_PLACEHOLDERS, &["ls -la", "git status", "pwd"]);
+        assert_eq!(random_placeholder_index(0), 0, "empty pool");
+        assert_eq!(random_placeholder_index(1), 0, "single entry");
+        // The roll: every index reachable across many draws, none out
+        // of bounds.
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..64 {
+            let pick = random_placeholder_index(PLACEHOLDERS.len());
+            assert!(pick < PLACEHOLDERS.len());
+            seen.insert(pick);
+        }
+        assert_eq!(seen.len(), PLACEHOLDERS.len(), "every entry reachable");
+        // The rendered home placeholder always draws from the pool.
+        for (pick, entry) in PLACEHOLDERS.iter().enumerate() {
+            let store = Store::new(Runtime::new());
+            let mut composer = store.composer(crate::app::HOME_PROMPT_KEY);
+            composer.placeholder_index = pick;
+            store.set_composer(crate::app::HOME_PROMPT_KEY, &composer);
+            let theme = crate::theme::ThemeState::v2_dark();
+            let frame = render_home(&store, &theme.styles(), (80, 30));
+            let grid = frame.text_grid().join("\n");
+            assert!(grid.contains(entry), "pick {pick}: {grid}");
+        }
+    }
+
+    /// NEW-S1a: the live home route positions the terminal cursor at
+    /// the composer's caret cell (never painting a block).
+    #[test]
+    fn home_route_positions_the_terminal_cursor() {
+        let store = Store::new(Runtime::new());
+        let mut composer = store.composer(crate::app::HOME_PROMPT_KEY);
+        composer.draft.text = "hi".into();
+        store.set_composer(crate::app::HOME_PROMPT_KEY, &composer);
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame = render_home(&store, &theme.styles(), (80, 30));
+        let (x, y) = store.caret_cell().expect("caret cell recorded");
+        let cell = frame.cell(usize::from(y), usize::from(x));
+        assert_eq!(cell.ch, 'h', "the caret blinks over the char it precedes");
+        // No block-painted caret anywhere on the composer row (the
+        // draft text stays unpainted-under).
+        let row: String = frame.text_grid()[usize::from(y)].clone();
+        assert!(row.contains("hi"), "draft text at the caret row: {row}");
+    }
 
     #[test]
     fn home_renders_the_logo_and_hint() {

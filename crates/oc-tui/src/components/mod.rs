@@ -20,7 +20,6 @@ pub mod session;
 pub mod session_screen;
 pub mod session_tabs;
 pub mod sidebar;
-pub mod subagent_picker;
 pub mod syntax;
 pub mod tab_pulse;
 pub mod toast;
