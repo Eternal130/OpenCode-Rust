@@ -348,7 +348,10 @@ impl SubagentTool {
 
         // Standard prompt admission outside the job: Job.start joining a
         // running child skips its run effect, and the wake below starts an
-        // idle child or steers a running one.
+        // idle child or steers a running one. The wake does NOT await the
+        // drain (v2 session.ts:174 `execution.wake` — never the awaiting
+        // `sessions.resume`): the only awaiting resume is the job body's,
+        // which joins this wake-started execution.
         let text = if existing_is_none(&input.session_id) {
             format!("{FIRST_PROMPT_PREFIX}\n{}", input.prompt)
         } else {
@@ -372,7 +375,7 @@ impl SubagentTool {
         // `resume: false` only applies to a brand-new background child.
         let wake = !(background && existing_is_none(&input.session_id));
         if wake {
-            let _ = deps.execution.resume(child.id.as_str()).await;
+            deps.execution.wake(child.id.as_str());
         }
 
         let recovery = SubagentRecovery {

@@ -376,6 +376,14 @@ fn now_ms() -> u64 {
 pub trait ChildExecution: Send + Sync {
     /// `sessions.resume` — start or join the drain.
     async fn resume(&self, session_id: &str) -> Result<(), String>;
+    /// `execution.wake` (session.ts:174 — `sessions.prompt`'s
+    /// `resume !== false` arm): register work WITHOUT awaiting the drain.
+    /// The subagent tool's prompt admission wakes the child; the only
+    /// awaiting resume is the job body's, which joins the wake-started
+    /// execution (awaiting a resume in the tool instead lets the child
+    /// settle idle before the job body runs, whose forced resume then
+    /// drained one extra empty step — corpus3 #41).
+    fn wake(&self, session_id: &str);
     /// `sessions.interrupt`.
     async fn interrupt(&self, session_id: &str);
 }

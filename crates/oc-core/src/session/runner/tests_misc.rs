@@ -219,6 +219,70 @@ fn runner_useragent_shape() {
     assert_eq!(useragent(&app), "opencode/stable/2.0.24/opencode");
 }
 
+#[test]
+fn runner_app_metadata_detected_release_identity() {
+    // The release/rig identity (corpus3 #48): channel through the ONE
+    // workspace channel source, version pinned to the workspace
+    // 2.0.24, artifact name `cli` (version.ts:8 fallback) —
+    // `opencode/stable/2.0.24/cli`, byte-identical to the pinned
+    // reference build's UA.
+    let _env = locked_channel_env(&["OPENCODE_CHANNEL", "OPENCODE_CLIENT"]);
+    std::env::set_var("OPENCODE_CHANNEL", "stable");
+    let app = AppMetadata::detected();
+    assert_eq!(useragent(&app), format!("opencode/stable/{}/cli", env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn runner_app_metadata_detected_client_override_and_default() {
+    // `OPENCODE_CLIENT` overrides the artifact name (server-process.ts:
+    // 94 `process.env.OPENCODE_CLIENT ?? OPENCODE_ARTIFACT`).
+    {
+        let _env = locked_channel_env(&["OPENCODE_CHANNEL", "OPENCODE_CLIENT"]);
+        std::env::set_var("OPENCODE_CHANNEL", "stable");
+        std::env::set_var("OPENCODE_CLIENT", "desktop");
+        assert_eq!(
+            useragent(&AppMetadata::detected()),
+            format!("opencode/stable/{}/desktop", env!("CARGO_PKG_VERSION"))
+        );
+    }
+    // Unset channel resolves the workspace default (P10-DB1 `latest`).
+    {
+        let _env = locked_channel_env(&["OPENCODE_CHANNEL", "OPENCODE_CLIENT"]);
+        assert_eq!(
+            useragent(&AppMetadata::detected()),
+            format!("opencode/latest/{}/cli", env!("CARGO_PKG_VERSION"))
+        );
+    }
+}
+
+/// Serializes env-mutating UA tests and restores on drop (the
+/// `ChannelEnv` pattern of the engine tests).
+fn locked_channel_env(vars: &'static [&'static str]) -> EnvRestore {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let guard = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let saved = vars.iter().map(|&name| (name, std::env::var_os(name))).collect::<Vec<_>>();
+    for name in vars {
+        std::env::remove_var(name);
+    }
+    EnvRestore { _guard: guard, saved }
+}
+
+struct EnvRestore {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+}
+
+impl Drop for EnvRestore {
+    fn drop(&mut self) {
+        for (name, value) in &self.saved {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
 // ------------------------------------------------- to-session-error
 
 fn session_error_of(reason: AiErrorReason) -> SessionError {
