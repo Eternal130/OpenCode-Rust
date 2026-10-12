@@ -556,6 +556,16 @@ fn flush(spans: &mut Vec<Inline>, plain: &mut String) {
 
 /// Render markdown source to styled terminal lines at `width` (the
 /// content column — the caller has already applied `paddingLeft 3`).
+/// Render markdown source to styled terminal lines at `width` (the
+/// content column — the caller has already applied `paddingLeft 3`).
+///
+/// NEW-S3a verification (lane/chrome, re-pinned against the current
+/// ref): plain-text prose — streamed replies included — paints at
+/// `markdown.text` (#eeeeee→idx255), NOT the default foreground; the
+/// rig's live corpus (type-edit-submit / thought-render /
+/// long-reply-scroll settled frames) shows ref idx255 on every text
+/// run. The earlier default-fg reading was the ref's BLANK-cell fill
+/// (whitespace at fg idx15), not its text runs.
 #[must_use]
 pub fn render_markdown(source: &str, width: usize, styles: &MarkdownStyles) -> Vec<MarkdownLine> {
     let blocks = parse_blocks(source);

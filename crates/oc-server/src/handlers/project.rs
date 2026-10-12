@@ -326,11 +326,16 @@ async fn vcs_get(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
+    // The wire schema (`VcsInfo`: `branch.current` — the generated
+    // client's `VcsBranch` and the ref's `Info` agree; a flat string
+    // here failed every typed client's deserialization).
     let data = match &services.project.vcs {
         Some(vcs) => json!({
-            "branch": git_output(services.project.canonical.as_path(), &["rev-parse", "--abbrev-ref", "HEAD"])
-                .map(|output| output.trim().to_owned())
-                .unwrap_or_default(),
+            "branch": {
+                "current": git_output(services.project.canonical.as_path(), &["rev-parse", "--abbrev-ref", "HEAD"])
+                    .map(|output| output.trim().to_owned())
+                    .unwrap_or_default(),
+            },
             "provider": vcs.kind(),
         }),
         None => Value::Null,

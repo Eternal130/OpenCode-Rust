@@ -636,7 +636,7 @@ fn pty_shift_tab_and_f2_cycle_the_footer_hints() {
         let head_frame =
             strip_ansi(&screen_after_toggle(&writer, &probe(), len(&probe()), &mut rows));
         assert!(
-            head_frame.contains("m-alpha"),
+            head_frame.contains("Model Alpha"),
             "the resolved catalog head shows and survives the first f2: {head_frame:?}"
         );
         let before = len(&probe());
@@ -645,7 +645,7 @@ fn pty_shift_tab_and_f2_cycle_the_footer_hints() {
         // changed cells — a shifted statusline never yields a
         // contiguous `m-beta` run in the byte stream).
         let stepped = strip_ansi(&screen_after_toggle(&writer, &probe(), before, &mut rows));
-        assert!(stepped.contains("m-beta"), "the second f2 stepped the ring: {stepped:?}");
+        assert!(stepped.contains("Model Beta"), "the second f2 stepped the ring: {stepped:?}");
         // Exit.
         let _ = writer.write_all(b"\x03");
         std::thread::sleep(Duration::from_millis(200));
