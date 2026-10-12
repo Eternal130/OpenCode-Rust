@@ -807,7 +807,22 @@ impl CommandDispatcher for StoreDispatcher {
                     Route::Session { session_id } => session_id,
                     Route::Home => return Dispatch::Handled,
                 };
-                store.replace_dialog(DialogKind::SessionRename { session_id }, DialogSize::Medium);
+                store.replace_dialog(
+                    DialogKind::SessionRename { session_id: session_id.clone() },
+                    DialogSize::Medium,
+                );
+                // The prompt seeds with the session's current title
+                // (`value={props.currentTitle}`,
+                // dialog-session-rename.tsx:16) — the tab carries the
+                // live title; an untitled session opens empty.
+                let current = store
+                    .tabs()
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.session_id == session_id)
+                    .and_then(|tab| tab.title.clone())
+                    .unwrap_or_default();
+                store.update_dialog(|top| top.value = current);
                 Dispatch::Handled
             }
             "theme.switch" => {

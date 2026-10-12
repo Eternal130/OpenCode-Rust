@@ -424,6 +424,11 @@ pub struct DialogStyles {
     pub formfield_bg: Color,
     /// `text.formfield.focused` — typed filter fg + cursor color.
     pub formfield_fg: Color,
+    /// `text.formfield.base` — the PROMPT inputs' typed-value fg
+    /// (`DialogPrompt`'s textarea/`DialogWorktreeName`'s input set
+    /// `textColor`/`focusedTextColor` to the base, not the focused
+    /// variant — dialog-prompt.tsx:125-126, dialog-worktree-name.tsx:64).
+    pub formfield_base_fg: Color,
 }
 
 impl DialogStyles {
@@ -442,6 +447,7 @@ impl DialogStyles {
             current_fg: color(tokens.text.formfield.selected),
             formfield_bg: color(tokens.background.formfield.focused),
             formfield_fg: color(tokens.text.formfield.focused),
+            formfield_base_fg: color(tokens.text.formfield.base),
         }
     }
 }
