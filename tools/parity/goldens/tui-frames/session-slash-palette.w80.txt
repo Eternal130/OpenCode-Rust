@@ -6,19 +6,19 @@
                                                                                 
                                                                                 
                                                                                 
-┃ /agents      Switch agent                                                    ┃
-┃ /cd          Change working directory                                        ┃
-┃ /clear       Clear session                                                   ┃
-┃ /connect     Connect an integration                                          ┃
-┃ /continue    Switch session                                                  ┃
-┃ /debug       View debug info                                                 ┃
-┃ /editor      Open editor                                                     ┃
-┃ /effort      Switch model variant                                            ┃
-┃ /exit        Exit the app                                                    ┃
-┃ /help        Help                                                            ┃
-┃                                                                               
-┃  /                                                                            
-┃                                                                               
-┃                                                                               
-╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  ┃ /agents      Switch agent                                                  ┃
+  ┃ /cd          Change working directory                                      ┃
+  ┃ /clear       Clear session                                                 ┃
+  ┃ /connect     Connect an integration                                        ┃
+  ┃ /continue    Switch session                                                ┃
+  ┃ /debug       View debug info                                               ┃
+  ┃ /editor      Open editor                                                   ┃
+  ┃ /effort      Switch model variant                                          ┃
+  ┃ /exit        Exit the app                                                  ┃
+  ┃ /help        Help                                                          ┃
+  ┃                                                                             
+  ┃  /                                                                          
+  ┃                                                                             
+  ┃  Build                                                                      
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
                                                shift+tab agents  ctrl+p commands

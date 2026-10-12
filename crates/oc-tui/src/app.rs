@@ -196,12 +196,6 @@ impl App {
         let overrides = crate::keymap::parse_keybind_overrides(&config.keybinds);
         self.store.set_keybinds(overrides);
         self.remerge_keybinds();
-        // NOTE: the config `model` default does NOT ride the TUI-local
-        // config file — v2's TUI config schema has no `model` field
-        // (packages/tui/src/config has keybinds/theme/attention/tabs
-        // only); the default comes from the SERVER's config API
-        // (`configuredModel`, local.tsx:170-179 — the boot fetch in
-        // [`spawn_server_lists`]).
         // R-07: the transcript image strip's gate (`session.image_preview`).
         self.store.set_image_preview(config.session_image_preview);
     }
@@ -503,15 +497,6 @@ impl App {
             if (plain && stroke.key == "escape") || (stroke.ctrl && plain && stroke.key == "c") {
                 self.store.toast_dismiss();
             }
-        } else if self.picker_live() {
-            // The composer's subagent picker (#44): the panel REPLACES
-            // the prompt (v2's Switch mounts no prompt while
-            // `composer.open || parentID` — index.tsx:1464-1465), so
-            // the composer-mode layers own the keys: escape/ctrl+c
-            // close (navigating to the parent on a child session),
-            // arrows/enter/ctrl+a drive the list, tabs switch with
-            // left/right; leader chords still resolve through base.
-            self.stroke_in_picker(stroke);
         } else {
             self.stroke_on_route(&stroke);
         }
@@ -523,33 +508,6 @@ impl App {
         if self.store.keybinds() != self.applied_keybinds {
             self.remerge_keybinds();
         }
-    }
-
-    /// The composer's subagent picker holds the session route (#44):
-    /// explicitly open or the route is a child session (which always
-    /// mounts the panel — v2 index.tsx:1451).
-    fn picker_live(&self) -> bool {
-        matches!(self.store.route(), crate::store::Route::Session { session_id }
-            if self.store.picker_live(&session_id))
-    }
-
-    /// One stroke while the picker panel is mounted: the composer
-    /// mode's bindings (`composer.*` — the table's `composer` layer,
-    /// pushed while live) resolve ABOVE base, so ctrl+c/escape close
-    /// the panel instead of exiting and the arrows/list keys drive
-    /// the entries. Unbound strokes are consumed — the prompt is
-    /// unmounted, nothing types.
-    fn stroke_in_picker(&mut self, stroke: KeyStroke) {
-        if let Outcome::Command { command, args } = self.keymap.lookup(stroke, &self.clock) {
-            let dispatch = self.dispatcher.dispatch(&self.store, &command, args.as_deref());
-            if let Dispatch::ServerPending(reason) = dispatch {
-                let _ = reason;
-            }
-            self.keymap.clear_pending();
-        }
-        // A pending leader sequence, its cancellation, or an unbound
-        // stroke: consumed — the prompt is unmounted while the panel
-        // shows, nothing types.
     }
 
     /// A permission ask is the live footer view.
@@ -655,12 +613,6 @@ impl App {
         }
     }
 
-    /// Whether `stroke` matches one of `command`'s effective bindings
-    /// (user overrides respected — the engine's stroke matcher).
-    fn stroke_matches_command(&self, stroke: &KeyStroke, command: &str) -> bool {
-        self.keymap.stroke_triggers(stroke, command)
-    }
-
     /// Route-layer stroke: conditional exit layer → managed textarea →
     /// input/base keymap (see the module docs).
     fn stroke_on_route(&mut self, stroke: &KeyStroke) {
@@ -746,22 +698,6 @@ impl App {
                     return;
                 }
             }
-        }
-
-        // 2b. `session.child.first` over an EMPTY draft (#44): the
-        //     subagent picker's toggle resolves ABOVE the textarea's
-        //     `input.move.down`/`history.next` when nothing is typed
-        //     (the corpus3 evidence: `down` opens the composer panel
-        //     on a settled session — keybind.ts:136). The picker-live
-        //     case never reaches here (press routes it to the
-        //     composer layers).
-        if draft_empty
-            && matches!(self.store.route(), Route::Session { .. })
-            && self.stroke_matches_command(stroke, "session.child.first")
-        {
-            self.store.toggle_picker();
-            self.keymap.clear_pending();
-            return;
         }
 
         // 3. The input/base keymap (input mode pushed while a composer
@@ -915,21 +851,15 @@ impl App {
 
     /// Keep the keymap's mode stack aligned: `dialog` while dialogs are
     /// open (the reference's `modal` mode), `input` below it while a
-    /// composer holds the route focus (the managed textarea layer),
-    /// `composer` while the subagent picker replaces the prompt (v2's
-    /// `keymap.mode.push("composer")` — composer/index.tsx:59-63).
+    /// composer holds the route focus (the managed textarea layer).
     /// The stack is recomputed whole each stroke (LIFO push/pop ordering
     /// hazards when a dialog opens over the input mode).
     fn sync_modes(&mut self) {
         let dialog = !self.store.dialogs().is_empty();
         let input = !dialog && !self.permission_live();
-        let picker = input && self.picker_live();
         let mut modes: Vec<&str> = Vec::new();
         if input {
             modes.push("input");
-        }
-        if picker {
-            modes.push("composer");
         }
         if dialog {
             modes.push("dialog");
@@ -1282,42 +1212,6 @@ pub enum ServerListEvent {
     Agents(Result<Vec<crate::store::ServerAgent>, String>),
 }
 
-/// `configuredModel` (local.tsx:170-179): `findLast` over the config
-/// entries for a document whose `info.model` is set, mapped onto the
-/// selection shape. Missing/invalid segments yield `None`.
-fn configured_model_from_entries(
-    entries: &[oc_client::types::ConfigEntry],
-) -> Option<crate::store::ModelSelection> {
-    let model = entries.iter().rev().find_map(|entry| match entry {
-        oc_client::types::ConfigEntry::DocumentEncoded(document) => document.info.model.as_ref(),
-        oc_client::types::ConfigEntry::DirectoryEncoded(_) => None,
-    })?;
-    match model {
-        oc_client::types::ConfigInfoEncodedModel::String(raw) => {
-            let (provider_id, model_id) = raw.split_once('/')?;
-            let (provider_id, model_id) = (provider_id.trim(), model_id.trim());
-            (!provider_id.is_empty() && !model_id.is_empty()).then(|| {
-                crate::store::ModelSelection {
-                    provider_id: provider_id.to_owned(),
-                    model_id: model_id.to_owned(),
-                    variant: None,
-                }
-            })
-        }
-        oc_client::types::ConfigInfoEncodedModel::ConfigInfoEncodedModelVariant2(object) => {
-            let provider_id = object.provider_id.trim();
-            let model_id = object.model.trim();
-            (!provider_id.is_empty() && !model_id.is_empty()).then(|| {
-                crate::store::ModelSelection {
-                    provider_id: provider_id.to_owned(),
-                    model_id: model_id.to_owned(),
-                    variant: object.variant.clone(),
-                }
-            })
-        }
-    }
-}
-
 /// One `worktree.list` call mapped into the dialog's row type.
 async fn fetch_worktree_list(
     client: &oc_client::Client,
@@ -1515,12 +1409,41 @@ impl crate::store::WorktreeSink for HttpWorktreeSink {
 }
 
 /// Fetch the picker lists once against the resolved server
-/// (`config.get` + `model.list` + `provider.list` + `agent.list`;
-/// failures land as the picker's error state, never a crash). The
-/// config fetch leads — v2's boot `data.location.sync` runs
-/// `config.sync` alongside the location data
-/// (`context/data.tsx:27-31`) and the selection chain's
-/// `configuredModel` reads it (local.tsx:170-179).
+/// (`model.list` + `provider.list` + `agent.list`; failures land as
+/// the picker's error state, never a crash).
+fn configured_model_from_entries(
+    entries: &[oc_client::types::ConfigEntry],
+) -> Option<crate::store::ModelSelection> {
+    let model = entries.iter().rev().find_map(|entry| match entry {
+        oc_client::types::ConfigEntry::DocumentEncoded(document) => document.info.model.as_ref(),
+        oc_client::types::ConfigEntry::DirectoryEncoded(_) => None,
+    })?;
+    match model {
+        oc_client::types::ConfigInfoEncodedModel::String(raw) => {
+            let (provider_id, model_id) = raw.split_once('/')?;
+            let (provider_id, model_id) = (provider_id.trim(), model_id.trim());
+            (!provider_id.is_empty() && !model_id.is_empty()).then(|| {
+                crate::store::ModelSelection {
+                    provider_id: provider_id.to_owned(),
+                    model_id: model_id.to_owned(),
+                    variant: None,
+                }
+            })
+        }
+        oc_client::types::ConfigInfoEncodedModel::ConfigInfoEncodedModelVariant2(object) => {
+            let provider_id = object.provider_id.trim();
+            let model_id = object.model.trim();
+            (!provider_id.is_empty() && !model_id.is_empty()).then(|| {
+                crate::store::ModelSelection {
+                    provider_id: provider_id.to_owned(),
+                    model_id: model_id.to_owned(),
+                    variant: object.variant.clone(),
+                }
+            })
+        }
+    }
+}
+
 #[must_use]
 pub fn spawn_server_lists(
     client: oc_client::Client,
@@ -1567,6 +1490,7 @@ pub fn spawn_server_lists(
                         deprecated: model.status == oc_client::types::ModelInfoStatus::Deprecated,
                         variants: model.variants.iter().map(|variant| variant.id.clone()).collect(),
                         released: model.time.released,
+                        context_limit: (model.limit.context > 0).then_some(model.limit.context),
                     })
                     .collect();
                 let providers = providers
@@ -1891,6 +1815,8 @@ pub enum LoopRequest {
     Transcript(String),
     /// `session.list` (the dialog-open refetch).
     SessionList,
+    /// `vcs.get` for one directory (the footer's branch lookup).
+    LocationVcs(String),
 }
 
 /// One resolved [`LoopRequest`].
@@ -1901,6 +1827,10 @@ pub enum LoopFetch {
         result: Result<Vec<crate::components::message::model::Message>, String>,
     },
     SessionList(Result<Vec<crate::data::SessionSnapshot>, String>),
+    LocationVcs {
+        directory: String,
+        branch: Result<Option<String>, String>,
+    },
 }
 
 /// The fetch worker: requests spawn per-fetch tasks (no head-of-line
@@ -1934,6 +1864,25 @@ pub fn spawn_loop_fetcher(
                         let fetcher = HttpResync::new(client);
                         let result = crate::data::ResyncSource::fetch_sessions(&fetcher).await;
                         let _ = tx.send(LoopFetch::SessionList(result));
+                    });
+                }
+                LoopRequest::LocationVcs(directory) => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let branch = client
+                            .vcs()
+                            .get(&oc_client::types::VcsGetQuery {
+                                location: Some(oc_client::types::QueryLocation {
+                                    directory: Some(directory.clone()),
+                                }),
+                            })
+                            .await
+                            .map(|response| {
+                                response.data.branch.current.filter(|branch| !branch.is_empty())
+                            })
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::LocationVcs { directory, branch });
                     });
                 }
             }
@@ -2245,6 +2194,25 @@ pub async fn run_with_size(
     app.store
         .set_session_list_sink(std::rc::Rc::new(HttpSessionListSink { tx: loop_fetch_tx.clone() }));
     let mut persisted_tabs = app.store.tabs().tabs.clone();
+
+    // Lane/chrome #4: the footer location's vcs lookup — one request
+    // for the launch cwd at boot (the label paints once it resolves).
+    if !directory.is_empty() {
+        let _ = loop_fetch_tx.send(LoopRequest::LocationVcs(directory.clone()));
+    }
+    // Lane/chrome #6: v2 picks the home placeholder at RANDOM per boot
+    // (`randomIndex` on the Prompt mount, prompt/index.tsx:103-106 +
+    // :364 — the exporter pinned `Math.random = () => 0`; the live
+    // process rolls). The per-boot pick is inherently unsyncable
+    // between two live stacks — the rig's structural glyph mask
+    // absorbs the difference.
+    {
+        let mut composer = app.store.composer(crate::app::HOME_PROMPT_KEY);
+        composer.placeholder_index = crate::components::home::random_placeholder_index(
+            crate::components::home::PLACEHOLDERS.len(),
+        );
+        app.store.set_composer(crate::app::HOME_PROMPT_KEY, &composer);
+    }
 
     // Config reload: mtime check per tick (the reference watches the dir).
     let mut config_mtime = config
@@ -2600,6 +2568,30 @@ pub async fn run_with_size(
                 LoopFetch::SessionList(Err(error)) => {
                     crate::keymap::log_skip(&format!("session list refresh: {error}"));
                 }
+                // #4: the footer location label — `abbreviateHome(cwd)`
+                // plus `:{branch}` when vcs resolves one
+                // (prompt/index.tsx:1613-1619).
+                LoopFetch::LocationVcs { directory, branch: Ok(branch) } => {
+                    let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
+                    let mut label = match home {
+                        Some(home) => {
+                            crate::components::dialog_worktrees::abbreviate_home(&directory, &home)
+                        }
+                        None => directory.clone(),
+                    };
+                    if let Some(branch) = branch {
+                        label.push(':');
+                        label.push_str(&branch);
+                    }
+                    app.store.set_footer_location(label);
+                }
+                // A failed/absent vcs lookup leaves the label as the
+                // bare directory (v2's `vcs.sync` failures are silent
+                // — `location.vcs.info()` just stays undefined; never
+                // a user-facing error surface).
+                LoopFetch::LocationVcs { branch: Err(error), .. } => {
+                    eprintln!("opencode tui: vcs lookup skipped: {error}");
+                }
             }
         }
         // Toast/spinner clock.
@@ -2652,6 +2644,13 @@ pub async fn run_with_size(
                 color_mode::degrade_frame(&mut frame, &mut color_cache);
             }
             let draw = terminal.draw(|surface| {
+                // Resize race guard: the frame may have been built at
+                // the PREVIOUS size in the same tick the terminal
+                // buffer auto-resized (lane/chrome — the 60-col rig
+                // resize caught a 100-wide frame against a 60-wide
+                // buffer). Cells outside the surface are skipped for
+                // one frame.
+                let area = surface.area();
                 let buffer = surface.buffer_mut();
                 for (y, row) in frame.cells.iter().enumerate() {
                     for (x, cell) in row.iter().enumerate() {
@@ -2669,6 +2668,19 @@ pub async fn run_with_size(
                                 ratatui::style::Style::new()
                                     .add_modifier(ratatui::style::Modifier::BOLD),
                             );
+                        }
+                    }
+                }
+                // NEW-S1a (lane/chrome): the live caret is the TERMINAL
+                // cursor — v2's textarea positions the hardware cursor
+                // (never a painted block; the parity corpus never caught
+                // a painted caret cell on the ref). The route render
+                // stashed the cell; a dialog over the composer hides it
+                // (v2 blurs the prompt while any dialog is open).
+                if app.store.top_dialog().is_none() {
+                    if let Some((x, y)) = app.store.caret_cell() {
+                        if x < area.width && y < area.height {
+                            surface.set_cursor_position(ratatui::layout::Position { x, y });
                         }
                     }
                 }
@@ -2765,20 +2777,6 @@ pub async fn run_with_size(
         // alternate screen would discard them anyway, but an explicit
         // `a=d,d=a` keeps a same-screen exit clean.
     );
-    // #46 — the exit epilogue (v2 app.tsx:446-450: the renderer stops,
-    // then `process.stdout.write(epilogue + "\n")`): the wordmark +
-    // resume hint the session route staged while mounted
-    // (session/index.tsx:185-189). Absent from the home route — the
-    // corpus's identical post-exit blanks.
-    if result.is_ok() {
-        if let Some(epilogue) = app.store.exit_epilogue() {
-            use std::io::Write as _;
-            let mut out = std::io::stdout();
-            let _ = out.write_all(epilogue.as_bytes());
-            let _ = out.write_all(b"\n");
-            let _ = out.flush();
-        }
-    }
     result
 }
 
@@ -2848,73 +2846,6 @@ fn to_ratatui_color(color: crate::render::CellColor) -> ratatui::style::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// `configuredModel` (local.tsx:170-179): the LAST config document
-    /// entry carrying a `model` field wins; both wire shapes parse;
-    /// directory entries and missing/invalid segments yield `None`.
-    #[test]
-    fn configured_model_from_entries_follows_the_last_document() {
-        use oc_client::types::{
-            ConfigDirectoryEncoded, ConfigDocumentEncoded, ConfigDocumentEncodedType, ConfigEntry,
-            ConfigInfoEncoded, ConfigInfoEncodedModel, ConfigInfoEncodedModelVariant2,
-        };
-        let doc = |model: Option<ConfigInfoEncodedModel>| {
-            ConfigEntry::DocumentEncoded(ConfigDocumentEncoded {
-                info: ConfigInfoEncoded { model, ..Default::default() },
-                path: None,
-                type_: ConfigDocumentEncodedType::Document,
-            })
-        };
-        let string_doc =
-            || doc(Some(ConfigInfoEncodedModel::String("parityfake/fake-model".to_owned())));
-        // String shape.
-        assert_eq!(
-            configured_model_from_entries(&[string_doc()]).map(|m| (
-                m.provider_id,
-                m.model_id,
-                m.variant
-            )),
-            Some(("parityfake".to_owned(), "fake-model".to_owned(), None))
-        );
-        // Object shape with a variant.
-        assert_eq!(
-            configured_model_from_entries(&[doc(Some(
-                ConfigInfoEncodedModel::ConfigInfoEncodedModelVariant2(
-                    ConfigInfoEncodedModelVariant2 {
-                        model: "glm".to_owned(),
-                        provider_id: "z-ai".to_owned(),
-                        variant: Some("high".to_owned()),
-                    },
-                )
-            ))])
-            .map(|m| (m.provider_id, m.model_id, m.variant)),
-            Some(("z-ai".to_owned(), "glm".to_owned(), Some("high".to_owned())))
-        );
-        // The LAST document wins.
-        assert_eq!(
-            configured_model_from_entries(&[
-                string_doc(),
-                doc(Some(ConfigInfoEncodedModel::String("a/b".to_owned())))
-            ]),
-            configured_model_from_entries(&[doc(Some(ConfigInfoEncodedModel::String(
-                "a/b".to_owned()
-            )))])
-        );
-        // Invalid segments fall through; directory entries never pin.
-        assert_eq!(
-            configured_model_from_entries(&[doc(Some(ConfigInfoEncodedModel::String(
-                "nodash".to_owned()
-            )))]),
-            None
-        );
-        assert_eq!(
-            configured_model_from_entries(&[ConfigEntry::DirectoryEncoded(
-                ConfigDirectoryEncoded::default()
-            )]),
-            None
-        );
-        assert_eq!(configured_model_from_entries(&[]), None);
-    }
 
     /// `apply_config` resolves the theme through the registry and
     /// merges keybind overrides into the live keymap; a config reload
@@ -3012,6 +2943,7 @@ mod tests {
                     deprecated: false,
                     variants: Vec::new(),
                     released: 0.0,
+                    context_limit: None,
                 },
                 crate::store::ServerModel {
                     provider_id: "opencode".into(),
@@ -3022,6 +2954,7 @@ mod tests {
                     deprecated: false,
                     variants: Vec::new(),
                     released: 0.0,
+                    context_limit: None,
                 },
             ]),
             vec![crate::store::ServerProvider { id: "opencode".into(), name: "OpenCode".into() }],
@@ -3070,6 +3003,8 @@ mod tests {
                 finish: None,
                 error: None,
                 time: PartTime::default(),
+                tokens: None,
+                usage_total: None,
             }],
         );
         app.press("ctrl+x");
@@ -3163,6 +3098,7 @@ mod tests {
                 deprecated: false,
                 variants: Vec::new(),
                 released: 0.0,
+                context_limit: None,
             }]),
             Vec::new(),
         );
@@ -3545,6 +3481,8 @@ fn mouse_release_toggles_the_thought_disclosure() {
                 finish: Some("success".into()),
                 error: None,
                 time: PartTime { created: Some(1), completed: Some(2) },
+                tokens: None,
+                usage_total: None,
             },
         ],
     );
@@ -3636,6 +3574,8 @@ fn thought_toggle_hit_zone_is_tight_to_the_glyphs() {
                 }],
                 finish: Some("success".into()),
                 error: None,
+                tokens: None,
+                usage_total: None,
                 time: PartTime { created: Some(1), completed: Some(2) },
             },
         ],
@@ -3740,6 +3680,8 @@ fn user_message_release_opens_message_actions() {
                 parts: vec![Part::Text { text: "the reply".into(), time: PartTime::default() }],
                 finish: Some("success".into()),
                 error: None,
+                tokens: None,
+                usage_total: None,
                 time: PartTime { created: Some(1), completed: Some(2) },
             },
         ],
@@ -3918,6 +3860,8 @@ mod core_interaction_tests {
                     finish: None,
                     error: None,
                     time: PartTime::default(),
+                    tokens: None,
+                    usage_total: None,
                 },
             ],
         );
@@ -4002,6 +3946,8 @@ mod core_interaction_tests {
                 finish: Some("stop".into()),
                 error: None,
                 time: PartTime::default(),
+                tokens: None,
+                usage_total: None,
             });
         }
         app.store.set_messages("s1", messages);
@@ -4207,6 +4153,7 @@ mod core_interaction_tests {
                     deprecated: false,
                     variants: Vec::new(),
                     released: 0.0,
+                    context_limit: None,
                 },
                 crate::store::ServerModel {
                     provider_id: "openai".into(),
@@ -4217,6 +4164,7 @@ mod core_interaction_tests {
                     deprecated: false,
                     variants: Vec::new(),
                     released: 0.0,
+                    context_limit: None,
                 },
             ]),
             Vec::new(),
@@ -4232,14 +4180,17 @@ mod core_interaction_tests {
         app.store.model_add_recent("anthropic", "claude");
         app.store.model_add_recent("openai", "gpt");
         let before = app.frame_text();
-        assert!(before.contains("claude"), "the initial model hint: {before}");
+        // Lane/chrome #5: the model now rides the composer's METADATA
+        // row under its DISPLAY NAME (metadata.tsx — the ref shows
+        // `Build · Claude anthropic`, never the bare model id).
+        assert!(before.contains("Claude"), "the initial model hint: {before}");
         app.press("f2");
         let after = app.frame_text();
-        assert!(after.contains("gpt"), "f2 stepped to gpt: {after}");
-        assert!(!after.contains("claude"), "claude left the hint: {after}");
+        assert!(after.contains("GPT"), "f2 stepped to GPT: {after}");
+        assert!(!after.contains("Claude"), "Claude left the hint: {after}");
         // shift+f2 steps back (model.cycle_recent_reverse).
         app.press("shift+f2");
-        assert!(app.frame_text().contains("claude"), "shift+f2 stepped back");
+        assert!(app.frame_text().contains("Claude"), "shift+f2 stepped back");
     }
 
     /// The text-edit core's full command surface through the pump:

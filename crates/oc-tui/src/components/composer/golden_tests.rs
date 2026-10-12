@@ -42,6 +42,7 @@ fn scenario(id: &str) -> pf::ManifestScenario {
 fn harness_view<'a>(
     composer: &'a Composer,
     options: &'a [crate::components::composer::autocomplete::AutocompleteOption],
+    terminal_width: usize,
 ) -> PromptView<'a> {
     let autocomplete = composer.autocomplete.visible.map(|_| AutocompleteView {
         options,
@@ -59,6 +60,10 @@ fn harness_view<'a>(
             interrupt: String::new(),
             ..FooterHints::default()
         },
+        metadata: crate::components::composer::render::MetadataLine::default(),
+        // The golden frame IS the whole terminal (the footer hints
+        // gate on the terminal width, footer.tsx:56).
+        terminal_width,
         top: 2,
         rail: None,
         caret: None,
@@ -84,7 +89,8 @@ fn assert_matches_golden(id: &str, width: usize, height: usize, composer: &Compo
     } else {
         Vec::new()
     };
-    let frame = render_prompt_frame(&harness_view(composer, &options), width, height, &theme);
+    let frame =
+        render_prompt_frame(&harness_view(composer, &options, width), width, height, &theme);
     let text_grid = frame.text_grid();
     let golden_grid = pf::load_text_grid(&goldens(), id, width).expect("golden text grid");
     let rendered = pf::TextGrid { rows: text_grid, height, width };

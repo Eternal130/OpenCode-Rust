@@ -326,7 +326,21 @@ fn home_band(y0: usize, y1: usize) -> SweepOutcome {
         if !harness.wait_for(WORDMARK, Duration::from_secs(8)) {
             return Err("the home wordmark never rendered".to_owned());
         }
-        std::thread::sleep(Duration::from_millis(600));
+        // Lane/chrome: settle on true GRID stability — boot-time async
+        // surfaces (the onboarding card's dismissal, the footer
+        // location's vcs round-trip) may land after the wordmark; a
+        // fixed sleep raced them.
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        let mut previous = harness.grid_now();
+        loop {
+            std::thread::sleep(Duration::from_millis(400));
+            let current = harness.grid_now();
+            if current == previous || std::time::Instant::now() > deadline {
+                break;
+            }
+            previous = current;
+        }
+        std::thread::sleep(Duration::from_millis(200));
         let (baseline, volatile) = harness.capture_baseline();
         if baseline.is_blank() {
             return Err("the settled home screen is blank".to_owned());

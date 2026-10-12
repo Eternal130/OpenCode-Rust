@@ -723,7 +723,11 @@ fn pty_pristine_home_submit_commits_the_catalog_head() {
         );
         type_keys(&writer, b"from home\r");
         assert!(
-            wait_for(&boot, b"Live reply for ses_new_1.", Duration::from_secs(8)),
+            // Lane/chrome (NEW-S3a): plain transcript text renders at
+            // the DEFAULT fg — cell-addressed redraws split the line's
+            // runs, so byte needles must stay WITHIN one styled run
+            // (`ses_new_1.` never crosses a style boundary).
+            wait_for(&boot, b"ses_new_1.", Duration::from_secs(8)),
             "the home submission ran its turn"
         );
         // Exit this instance.
@@ -783,7 +787,11 @@ fn pty_new_tab_inherits_the_active_pick() {
         assert!(wait_for(&boot, b"sk anything", Duration::from_secs(8)), "session.new routed home");
         type_keys(&writer, b"inherited\r");
         assert!(
-            wait_for(&boot, b"Live reply for ses_new_1.", Duration::from_secs(8)),
+            // Lane/chrome (NEW-S3a): plain transcript text renders at
+            // the DEFAULT fg — cell-addressed redraws split the line's
+            // runs, so byte needles must stay WITHIN one styled run
+            // (`ses_new_1.` never crosses a style boundary).
+            wait_for(&boot, b"ses_new_1.", Duration::from_secs(8)),
             "the inherited submission ran its turn"
         );
         // Exit: escape clears any pending leader/panel, then ctrl+c

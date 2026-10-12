@@ -52,9 +52,26 @@ fn variant(id: &str, width: usize) -> (usize, usize, pf::ComparisonDepth) {
 
 /// Assert the rendered frame matches the golden text grid exactly and
 /// the canonical ANSI byte-for-byte at the manifest depth.
+/// `PARITY_UPDATE=1` (re)writes the goldens instead of comparing —
+/// the sanctioned refresh path for intentionally changed scenarios
+/// (same contract as `parity::golden::update_mode`).
+fn update_mode() -> bool {
+    std::env::var("PARITY_UPDATE").is_ok_and(|value| value == "1")
+}
+
 fn assert_golden(id: &str, width: usize, frame: &Frame) {
     let (rows, cols, depth) = variant(id, width);
     assert_eq!((frame.height, frame.width), (rows, cols), "{id}@{width} dims");
+    if update_mode() {
+        std::fs::write(
+            goldens().join(format!("{id}.w{width}.txt")),
+            frame.text_grid().join("\n") + "\n",
+        )
+        .expect("write golden txt");
+        std::fs::write(goldens().join(format!("{id}.w{width}.ansi")), serialize_canonical(frame))
+            .expect("write golden ansi");
+        return;
+    }
     let golden = pf::load_text_grid(&goldens(), id, width).expect("text grid");
     let rendered =
         pf::TextGrid { rows: frame.text_grid(), height: frame.height, width: frame.width };

@@ -271,8 +271,11 @@ fn vt_temporal_cursor_blinks_500ms() {
         |_| {},
         |harness| {
             boot_to_session(harness)?;
-            // Idle: no streaming, no interaction. The caret blink is
-            // the only animation; watch 2.6 s.
+            // Lane/chrome (NEW-S1a): the live caret is the TERMINAL
+            // cursor (v2's textarea positions the hardware cursor;
+            // `config.cursor` unset — no cell-painted block anywhere).
+            // The old 500 ms painted blink is gone BY DESIGN: idle
+            // screens must show NO char-stable style toggles at all.
             let snaps = collect_snapshots(harness, 2600);
             let (rows, cols) = (
                 snaps.first().map_or(0, |s| s.grid.rows),
@@ -280,43 +283,27 @@ fn vt_temporal_cursor_blinks_500ms() {
             );
             if snaps.len() < 4 {
                 return Err(format!(
-                    "only {} snapshots in 2.6s of idle — the caret is not blinking (frozen clock?)",
+                    "only {} snapshots in 2.6s — the render loop stalled",
                     snaps.len()
                 ));
             }
-            let mut best: Option<(usize, usize, Vec<u64>)> = None;
+            let mut painted = 0usize;
             for y in 0..rows {
                 for x in 0..cols {
                     let timeline = style_timeline(&snaps, x, y);
-                    if timeline.len() < 3 {
-                        continue;
-                    }
-                    // The caret is CHAR-stable (a block over a space)
-                    // and only its STYLE (fg/bg swap) toggles.
-                    if char_timeline(&snaps, x, y).len() > 1 {
-                        continue;
-                    }
-                    let times: Vec<u64> = timeline.iter().map(|(t, _)| *t).collect();
-                    if best.as_ref().is_none_or(|(_, _, prev)| prev.len() < times.len()) {
-                        best = Some((x, y, times));
+                    if timeline.len() >= 2 && char_timeline(&snaps, x, y).len() <= 1 {
+                        painted += 1;
                     }
                 }
             }
-            let Some((x, y, times)) = best else {
+            if painted > 0 {
                 return Err(format!(
-                    "no char-stable cell toggles style over {} idle snapshots — the caret blink is missing",
-                    snaps.len()
+                    "{painted} cells toggle style while idle — a painted caret/animation leaked back in"
                 ));
-            };
-            let toggles = times.len();
-            let period = median_gap(&times).unwrap_or(0);
-            // EXISTS and animates: nominal 500 ms (visible 500 /
-            // hidden 500); robust bound 300–900 ms.
-            if !(300..=900).contains(&period) {
-                return Err(format!("caret blink median gap {period} ms outside 300–900"));
             }
             Ok(vec![format!(
-                "caret cell ({x},{y}): {toggles} style toggles, median gap {period} ms (nominal 500)"
+                "idle screen style-stable across {} snapshots (the caret lives on the terminal cursor)",
+                snaps.len()
             )])
         },
     );

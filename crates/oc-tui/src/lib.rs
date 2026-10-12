@@ -51,7 +51,6 @@ pub mod notifications_plugin;
 pub mod os_notify;
 pub mod plugin_boot;
 pub mod plugin_ui;
-pub mod presentation;
 pub mod reactive;
 pub mod render;
 pub mod replay;
