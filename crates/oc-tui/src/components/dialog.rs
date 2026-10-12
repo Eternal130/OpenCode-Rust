@@ -76,6 +76,8 @@ pub fn handle_dialog_key(
         | DialogKind::Help
         | DialogKind::Worktrees
         | DialogKind::WorktreeDeleteConfirm { .. }
+        | DialogKind::MessageActions { .. }
+        | DialogKind::WorkingDirectory { .. }
         | DialogKind::ServerList { .. } => true,
     };
     let is_help = matches!(entry.kind, DialogKind::Help);
@@ -271,8 +273,12 @@ pub fn render_overlay(
     theme: &crate::theme::ThemeState,
     terminal: (u16, u16),
 ) {
-    let Some(entry) = store.top_dialog() else { return };
+    let Some(entry) = store.top_dialog() else {
+        store.set_dialog_frame_rect(None);
+        return;
+    };
     if store.focus() != Focus::Dialog {
+        store.set_dialog_frame_rect(None);
         return;
     }
     let props = select_props_for(&entry.kind, store);
@@ -280,13 +286,62 @@ pub fn render_overlay(
         DialogKind::Plugin { id } => store.plugin_dialog_content(id),
         _ => None,
     };
-    render_overlay_with(base, &entry, &props, plugin.as_ref(), theme, terminal);
+    let (rect, option_rows) =
+        render_overlay_with_options(base, &entry, &props, plugin.as_ref(), theme, terminal);
+    // The backdrop's dismissal surface: mouseups outside this rect
+    // close the dialog (`ui/dialog.tsx:34-63`).
+    store.set_dialog_frame_rect(Some(rect));
+    store.set_dialog_option_rows(option_rows);
+}
+
+/// [`render_overlay_with`] plus the option-row map (the mouse surface).
+pub fn render_overlay_with_options(
+    base: &mut Frame,
+    entry: &DialogEntry,
+    props: &crate::components::dialog_select::SelectProps,
+    plugin: Option<&crate::store::PluginDialogContent>,
+    theme: &crate::theme::ThemeState,
+    terminal: (u16, u16),
+) -> ((usize, usize, usize, usize), Vec<Option<usize>>) {
+    // Select dialogs record their option rows (absolute screen rows,
+    // flat-index order); static content records none.
+    let option_rows = if match &entry.kind {
+        DialogKind::CommandPalette
+        | DialogKind::QueuedPrompts
+        | DialogKind::ThemeList
+        | DialogKind::Worktrees
+        | DialogKind::WorktreeDeleteConfirm { .. }
+        | DialogKind::ServerList { .. }
+        | DialogKind::MessageActions { .. }
+        | DialogKind::WorkingDirectory { .. } => true,
+        // A plugin dialog records rows only when its content is a
+        // select (rows-only dialogs render statically).
+        DialogKind::Plugin { .. } => {
+            plugin.is_some_and(crate::store::PluginDialogContent::is_select)
+        }
+        DialogKind::Help | DialogKind::SessionRename { .. } | DialogKind::WorktreeName => false,
+    } {
+        crate::components::dialog_select::option_dialog_rows(
+            props,
+            &entry.select,
+            usize::from(terminal.1),
+        )
+    } else {
+        Vec::new()
+    };
+    let rect = render_overlay_with(base, entry, props, plugin, theme, terminal);
+    let (_box_x, box_y, _, _) = rect;
+    let option_rows =
+        option_rows.into_iter().map(|row| row.map(|content_row| box_y + 1 + content_row)).collect();
+    (rect, option_rows)
 }
 
 /// The overlay compositor with explicit content props (the golden
 /// fixtures mount custom command registries). `plugin` carries a
 /// plugin dialog's materialized content (rows-only dialogs render it
 /// statically; select dialogs' options already live in `props`).
+/// Returns the chrome box's absolute rect — the outside-click
+/// dismissal surface (`ui/dialog.tsx:34-63`).
 pub fn render_overlay_with(
     base: &mut Frame,
     entry: &DialogEntry,
@@ -294,7 +349,7 @@ pub fn render_overlay_with(
     plugin: Option<&crate::store::PluginDialogContent>,
     theme: &crate::theme::ThemeState,
     terminal: (u16, u16),
-) {
+) -> (usize, usize, usize, usize) {
     let styles = DialogStyles::from_theme(theme);
     let dialog_bg = styles.surface_bg;
 
@@ -359,6 +414,7 @@ pub fn render_overlay_with(
             }
         }
     }
+    (box_x, box_y, box_width.min(width - box_x), box_height.min(height.saturating_sub(box_y)))
 }
 
 /// Backdrop composite: `out = src·α + dst·(1-α)` with `src = black`.
@@ -624,6 +680,9 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
 
 /// Execute a submitted select value through a dispatcher (the palette's
 /// `onSelect`: clear, then run).
+// The per-kind submission table grew with the mouse-opened dialogs
+// (message actions + working directory); same shape as the key layer.
+#[allow(clippy::too_many_lines)]
 pub fn execute_submission(
     store: &Store,
     dispatcher: &mut dyn CommandDispatcher,
@@ -693,10 +752,102 @@ pub fn execute_submission(
             store.clear_dialogs();
             return crate::components::command_palette::Dispatch::Handled;
         }
+        // `DialogMessage`'s actions (`routes/session/dialog-message.
+        // tsx:23-85`): Jump to clears; Revert seeds the composer with
+        // the message text (the server's `revert.stage` POST is the
+        // 7.3 seam — not yet wired); Copy writes the clipboard;
+        // Fork needs the fork dialog (7.3 — closes for now).
+        Some(DialogKind::MessageActions { session_id, message_id }) => {
+            use crate::components::message::model::{Message, Part};
+            let text = store
+                .messages(session_id.as_str())
+                .iter()
+                .find(|message| message.id() == message_id.as_str())
+                .map(|message| match message {
+                    Message::User { text, .. } => text.clone(),
+                    Message::Assistant { parts, .. } => parts
+                        .iter()
+                        .filter_map(|part| match part {
+                            Part::Text { text, .. } => Some(text.clone()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    _ => String::new(),
+                })
+                .unwrap_or_default();
+            match command {
+                "session.revert" => {
+                    // `setPrompt(projectedPromptInput(value))`: the
+                    // message text lands in the composer (draft +
+                    // editing state kept in sync by the setter).
+                    if !text.is_empty() {
+                        let mut composer = store.composer(session_id.as_str());
+                        composer.set_text(&text);
+                        store.set_composer(session_id.as_str(), &composer);
+                    }
+                }
+                "message.copy" => {
+                    let _ = store.clipboard_write(&text);
+                }
+                _ => {}
+            }
+            store.clear_dialogs();
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // The working-directory actions (`ui/working-directory-actions.
+        // tsx:26-67`): Copy path writes the clipboard and toasts;
+        // Open folder shells out to the system opener (a spawn
+        // failure surfaces the error toast); Workspaces opens the
+        // Worktrees dialog (`move.open()`).
+        Some(DialogKind::WorkingDirectory { directory }) => {
+            match command {
+                "location.copy" => {
+                    let _ = store.clipboard_write(directory.as_str());
+                    store.toast_show(crate::components::toast::ToastOptions::info(
+                        "Path copied to clipboard",
+                    ));
+                    store.clear_dialogs();
+                }
+                "location.open" => match open_path(directory.as_str()) {
+                    Ok(()) => store.clear_dialogs(),
+                    Err(error) => {
+                        store.clear_dialogs();
+                        store.toast_show(crate::components::toast::ToastOptions {
+                            message: error,
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    }
+                },
+                "session.move" => {
+                    let project = store.worktree_dialog().project_id;
+                    if !project.is_empty() {
+                        store.worktree_sink_refresh(&project);
+                    }
+                    store.replace_dialog(DialogKind::Worktrees, DialogSize::Medium);
+                }
+                _ => store.clear_dialogs(),
+            }
+            return crate::components::command_palette::Dispatch::Handled;
+        }
         _ => {}
     }
     store.clear_dialogs();
     dispatcher.dispatch(store, command, None)
+}
+
+/// `openPath` (`util/open.ts`): hand a path to the system opener —
+/// `xdg-open` on Linux, detached (no wait); the spawn error message
+/// feeds the error toast (`toast.error`).
+fn open_path(directory: &str) -> Result<(), String> {
+    std::process::Command::new("xdg-open")
+        .arg(directory)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("open {directory}: {error}"))
 }
 
 /// Default dispatcher accessor for embedders that just want store
