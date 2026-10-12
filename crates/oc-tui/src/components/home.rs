@@ -80,6 +80,11 @@ pub struct HomeView<'a> {
     pub placeholder: String,
     /// The status row's `{directory}:{branch}` label.
     pub location: String,
+    /// The RAW directory behind the label (the working-directory
+    /// actions' target — `footerLocation().directory`).
+    pub directory: String,
+    /// The location label's hover state (#33 — the render input).
+    pub location_hovered: bool,
     /// The app version (`home.footer`'s right-aligned label).
     pub version: String,
     /// The staged agent label for the composer hint row.
@@ -163,6 +168,7 @@ pub fn render_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u16)) -
             status_model: view.status_model.clone(),
             plugin_hints: view.plugin_hints.clone(),
             interrupt: String::new(),
+            location_hovered: view.location_hovered,
         },
         top: 1 + popup_rows,
         rail: view.rail,
@@ -331,6 +337,8 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         draft: &composer.draft,
         placeholder,
         location: String::new(),
+        directory: String::new(),
+        location_hovered: store.location_hovered(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         status_agent,
         status_model,
