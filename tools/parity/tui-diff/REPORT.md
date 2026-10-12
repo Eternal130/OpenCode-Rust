@@ -837,3 +837,79 @@ label rows are byte-identical through the SGR digests.
 - Goldens: `PARITY_UPDATE=1` regen rewrites ZERO bytes (double-regen
   byte-stable; nothing to commit) — the new surfaces render only
   under live state the fixtures never carry.
+---
+
+## Fix-wave B results (lane/models, 2026-10-12) — #3 #7 #8 #9 #10 #11
+
+### Root-cause map (ref citations)
+
+* **#3 boot model** — the TUI read a TUI-local `model` config field
+  that does not exist in v2's TUI config schema
+  (`packages/tui/src/config` has keybinds/theme/attention/tabs only);
+  v2's `configuredModel` reads the SERVER's config API
+  (`context/local.tsx:170-179`, `findLast` document entry with
+  `model`, both wire shapes). Fix: the boot fetch in
+  `spawn_server_lists` leads with `GET /api/config`
+  (`context/data.tsx:27-31` sync order); `TuiConfig::model` removed;
+  `set_config_model` bumps the redraw generation.
+* **#9 list source** — `/api/model` dumped the bundled catalog; v2
+  serves `Model.available()` over the providers that passed the
+  availability fold (`provider.ts:393-406`): the keyless `opencode`
+  zen provider's free tier (`plugin/provider/opencode.ts:317-342`)
+  plus providers with an env credential; config custom providers are
+  activation-"enabled" (`config/plugin/provider.ts:67`) with their
+  config display names (`:112`) and effort variants (`:151-159`).
+  The dialog additionally renders NO categories while unconnected
+  (`dialog-model.tsx:81`, grouped=false `:102-103`) and carries the
+  `View all integrations ctrl+a` footer action (`:147`,
+  `config/keybind.ts:162`); it opens `focusCurrent={false}`
+  (`:171`, `dialog-select.tsx:138`).
+* **#7 title** — the dialog title is the component mount's:
+  `Select model` (`dialog-model.tsx:122`), `Select variant`
+  (`dialog-variant.tsx:35`); the PALETTE entries keep
+  `Switch model`/`Switch model variant` (`app.tsx:840/921`).
+* **#8 filter echo** — already collapsed on current main (the
+  report's evidence predates the S0-era tree); the residual 1-cell
+  divergence was OUR painted inverse-block cursor: v2's input shows
+  the hardware cursor only and paints NO cursor cell (raw-ANSI
+  mirrors: `fg15/bg-dialog` past the typed text). Painted cursor
+  removed.
+* **#10 80-col overflow** — v2 truncates titles
+  (`Locale.truncate(title, 61)`, `dialog-select.tsx:893-898`,
+  `util/locale.ts:50-53`) and the flex layout clips the title at the
+  footer's start (flexGrow title / flexShrink-0 footer). Ported:
+  truncate + clip; long rows can no longer reach the right border.
+* **#11 variant sub-dialog** — `DialogModel.onSelect`'s dance
+  (`dialog-model.tsx:126-139`): set + recent ring, then close
+  (current variant valid) / REPLACE with the variant picker (model
+  has variants) / close; `DialogVariant.onSelect` applies via
+  `local.model.variant.set` (`dialog-variant.tsx:13-29`,
+  `local.tsx:485-493`); `/variants` with none toasts
+  (`app.tsx:925-935`).
+
+### Verification (type-edit-submit + boot-home, 80x24 & 120x30)
+
+* The models/variant dialogs are row-for-row identical at 80x24
+  (browse list, `●` marker placement, filter echo, action row,
+  variant rows; zero in-dialog char diffs). Boot resolves the pinned
+  `parityfake/fake-model` (footer shows it; submit reaches the stub —
+  the NANO_GPT failure is gone).
+* Remaining per-step diffs map to OTHER lanes: #4 (footer left slot
+  cwd:branch), #5 (composer `Build · Fake Model` row), #6
+  (placeholder pool, (b)), NEW-S1a (composer input styles), NEW-S2a
+  (backdrop), the rail/label styles behind the dialog, #12/#13
+  (reply chrome) at 80x24; the 120x30 dialog box sits one row higher
+  (the `height/4` fractional-rounding family, #19) plus the same
+  chrome. Deterministic 13/13 across `--runs 2`.
+* Rig hardening: `--out` now anchors relative dirs to the process
+  cwd — a relative out leaked a relative `OPENCODE_CONFIG` into the
+  rust server (cwd mirrors the ref checkout), silently dropping the
+  rig's provider pin (a false "regression" during this lane).
+* Goldens: zero pinned frames changed; `PARITY_UPDATE=1` double-regen
+  byte-stable.
+* Gates: fmt clean; clippy `-p oc-tui -p oc-tui-core -p parity
+  --all-targets` adds zero warnings (the parity-lib warnings
+  pre-date the lane); nextest oc-tui/oc-tui-core/parity = 733
+  passed, oc-core/oc-server = 935 passed (the `pty_sidebar` plugin
+  host test needs `~/.cache/opencode/bin/bun` — an offline-box
+  environment repair, not a code change).
