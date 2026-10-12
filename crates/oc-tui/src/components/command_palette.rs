@@ -371,6 +371,12 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         DialogKind::ServerList { command: "model.list", title } => {
             model_list_props(store, title).with_current(model_current_value(store))
         }
+        // The variant picker (`component/dialog-variant.tsx`): Default
+        // + the current selection's model variants, the current
+        // variant marked.
+        DialogKind::ServerList { command: "variant.list", title } => {
+            variant_list_props(store, title)
+        }
         // The Worktrees dialog (R-05): the store's worktree state
         // builds the rows; the move action rides a session route.
         DialogKind::Worktrees => crate::components::dialog_worktrees::worktree_props(
@@ -423,21 +429,24 @@ fn home_directory() -> String {
 }
 
 /// The model picker's props from the store's `model.list` state
-/// (`component/dialog-model.tsx`): non-deprecated rows, provider-name
-/// categories, the "Free" footer (`cost.length > 0 && every input
-/// zero`), `providerID/modelID` values. Loading/error show a muted
-/// status row (the reference's empty state); an empty list renders
-/// the select's "No items available".
+/// (`component/dialog-model.tsx`): non-deprecated rows, the "Free"
+/// footer (`cost.length > 0 && every input zero`), `providerID/modelID`
+/// values. Loading/error show a muted status row (the reference's
+/// empty state); an empty list renders the select's "No items
+/// available".
+///
+/// While no integration is connected (`connected()` —
+/// `component/use-connected.tsx` over the integration list; the Rust
+/// TUI tracks no oauth connections yet) v2 builds NO categories
+/// (`category: connected() ? provider.name : undefined`,
+/// dialog-model.tsx:81) and sorts with `grouped = false`
+/// (dialog-model.tsx:102-103) — a flat, headerless browse list — and
+/// the footer action reads "View all integrations" (dialog-model.tsx:
+/// 147) with the `model.dialog.provider` binding label
+/// (`config/keybind.ts:162` — ctrl+a).
 #[must_use]
 pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
     let lists = store.server_lists();
-    let provider_name = |id: &str| -> String {
-        lists
-            .providers
-            .iter()
-            .find(|provider| provider.id == id)
-            .map_or_else(|| id.to_owned(), |provider| provider.name.clone())
-    };
     let options = match &lists.models {
         ListState::Loading => vec![status_option("Loading models…")],
         ListState::Failed(error) => vec![status_option(&format!("Models unavailable: {error}"))],
@@ -445,15 +454,15 @@ pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
             let mut rows: Vec<&crate::store::ServerModel> =
                 models.iter().filter(|model| !model.deprecated).collect();
             // The dialog's browse mode sorts its full option list with
-            // `sortModelOptions(…, connected())` — connected → grouped.
-            sort_model_options(&mut rows, true, &provider_name);
+            // `sortModelOptions(…, connected())` — not connected →
+            // ungrouped (Free/release/title keys only).
+            sort_model_options(&mut rows, false, &|_id: &str| String::new());
             rows.iter()
                 .map(|model| {
                     let title =
                         if model.name.is_empty() { model.id.clone() } else { model.name.clone() };
                     let value = format!("{}/{}", model.provider_id, model.id);
                     let mut option = SelectOption::titled(title, value)
-                        .categorized(provider_name(&model.provider_id))
                         .with_search(format!("{} {}", model.provider_id, model.id));
                     if model.free {
                         option = option.with_footer("Free");
@@ -465,7 +474,57 @@ pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
     };
     let mut props = SelectProps::new(title, options);
     props = props.flat(true);
+    // The footer action (`actions[0]`, dialog-model.tsx:144-156): the
+    // integration browser hint. The `Favorite` action is
+    // `hidden: !connected()` — not rendered.
+    props = props.with_actions(vec![crate::components::dialog_select::SelectAction::new(
+        "model.dialog.provider",
+        "View all integrations",
+        model_dialog_provider_label(),
+    )]);
     props
+}
+
+/// The `model.dialog.provider` binding's display label — the keymap's
+/// default (v2 `shortcuts.all(command)`; `config/keybind.ts:162` binds
+/// ctrl+a).
+fn model_dialog_provider_label() -> String {
+    let spec = crate::keymap::default_table()
+        .iter()
+        .find(|def| def.command == "model.dialog.provider")
+        .and_then(|def| def.defaults.split(',').next())
+        .unwrap_or("ctrl+a");
+    let leader =
+        crate::keymap::KeyStroke::parse("ctrl+x").unwrap_or_else(|| crate::keymap::KeyStroke {
+            key: "x".into(),
+            ctrl: true,
+            alt: false,
+            shift: false,
+            super_key: false,
+        });
+    crate::keymap::Chord::parse(spec, &leader)
+        .map_or_else(|| spec.to_owned(), |chord| chord.display())
+}
+
+/// The variant picker's props (`component/dialog-variant.tsx`): a
+/// `Default` row plus one per named variant of the CURRENT selection's
+/// model, the current variant marked (`variant.current() ?? "default"`).
+#[must_use]
+pub fn variant_list_props(store: &Store, title: &'static str) -> SelectProps {
+    let selection = store.effective_model(&store.route_selection_key());
+    let variants = selection
+        .as_ref()
+        .map(|model| store.model_variants(&model.provider_id, &model.model_id))
+        .unwrap_or_default();
+    let current = selection.and_then(|model| model.variant).unwrap_or_else(|| "default".to_owned());
+    let mut options = vec![SelectOption::titled("Default", "default")];
+    options.extend(
+        variants
+            .iter()
+            .filter(|variant| variant.as_str() != "default")
+            .map(|variant| SelectOption::titled(variant.clone(), variant.clone())),
+    );
+    SelectProps::new(title, options).with_current(Some(current)).flat(true)
 }
 
 /// `localeCompare` approximation — the repo convention (ICU primary
@@ -589,17 +648,49 @@ pub fn execute_server_list_selection(
     match command {
         "model.list" => {
             let Some((provider_id, model_id)) = value.split_once('/') else {
+                store.clear_dialogs();
                 return Dispatch::Handled;
             };
-            let model = ModelSelection {
+            let mut model = ModelSelection {
                 provider_id: provider_id.to_owned(),
                 model_id: model_id.to_owned(),
                 variant: None,
             };
+            // `preferredSelection` (local.tsx:236-251): the ring's
+            // saved variant for the key, validated against the
+            // catalog's variant ids.
+            model.variant = store.preferred_variant(&model);
+            let variants = store.model_variants(&model.provider_id, &model.model_id);
+            let current_variant = model.variant.clone();
             match store.route() {
                 Route::Session { session_id } => store.select_model(&session_id, &model),
                 Route::Home => store.stage_model(crate::app::HOME_PROMPT_KEY, model),
             }
+            // `local.model.set(…, { recent: true })` — the recent ring
+            // (dialog-model.tsx:127).
+            store.model_add_recent(provider_id, model_id);
+            // `DialogModel.onSelect`'s variant dance
+            // (dialog-model.tsx:126-139): the selection's current
+            // variant already valid → close; a model WITH variants →
+            // REPLACE with the variant picker; else close.
+            if current_variant.as_ref().is_some_and(|current| variants.contains(current)) {
+                store.clear_dialogs();
+            } else if !variants.is_empty() {
+                store.replace_dialog(
+                    DialogKind::ServerList { command: "variant.list", title: "Select variant" },
+                    DialogSize::Medium,
+                );
+            } else {
+                store.clear_dialogs();
+            }
+            Dispatch::Handled
+        }
+        // `DialogVariant.onSelect` (dialog-variant.tsx:13-29): close,
+        // then set the variant (`local.model.variant.set` — the
+        // session draft + the persisted ring).
+        "variant.list" => {
+            store.model_set_variant(if value == "default" { None } else { Some(value) });
+            store.clear_dialogs();
             Dispatch::Handled
         }
         "agent.list" => {
@@ -617,19 +708,29 @@ pub fn execute_server_list_selection(
                     variant: "warning",
                     ..crate::components::toast::ToastOptions::info("")
                 });
+                store.clear_dialogs();
                 return Dispatch::Handled;
             }
             match store.route() {
                 Route::Session { session_id } => store.select_agent(&session_id, value),
                 Route::Home => store.stage_agent(crate::app::HOME_PROMPT_KEY, value),
             }
+            // `DialogAgent.onSelect` clears after the set
+            // (dialog-agent.tsx:25-28).
+            store.clear_dialogs();
             Dispatch::Handled
         }
         "session.list" => {
             store.select_tab(value);
+            // `DialogSessionList.onSelect` clears after navigate
+            // (dialog-session-list.tsx:243-246).
+            store.clear_dialogs();
             Dispatch::Handled
         }
-        _ => Dispatch::Handled,
+        _ => {
+            store.clear_dialogs();
+            Dispatch::Handled
+        }
     }
 }
 
@@ -840,13 +941,35 @@ impl CommandDispatcher for StoreDispatcher {
             | "open.menu" | "provider.connect" | "opencode.settings" | "opencode.status"
             | "session.share" | "session.fork" | "server.pair" | "location.reload"
             | "opencode.debug" | "docs.open" => {
-                // DialogSessions mounts titled "Sessions"; every other
-                // listing takes the palette entry's title.
-                let title: &'static str = if command == "session.list" {
-                    "Sessions"
-                } else {
-                    palette_command(command).map_or("", |entry| entry.title)
+                // The DIALOG titles are the component mounts', not the
+                // palette entries': DialogSessions mounts "Sessions";
+                // DialogModel "Select model" (dialog-model.tsx:122);
+                // DialogVariant "Select variant" (dialog-variant.tsx:
+                // 35). Every other listing takes the palette entry's
+                // title.
+                let title: &'static str = match command {
+                    "session.list" => "Sessions",
+                    "model.list" => "Select model",
+                    "variant.list" => "Select variant",
+                    _ => palette_command(command).map_or("", |entry| entry.title),
                 };
+                // `variant.list` with no variants on the current model
+                // toasts instead of opening (app.tsx:925-935).
+                if command == "variant.list" {
+                    let selection = store.effective_model(&store.route_selection_key());
+                    let empty = selection
+                        .as_ref()
+                        .map(|model| store.model_variants(&model.provider_id, &model.model_id))
+                        .is_none_or(|variants| variants.is_empty());
+                    if empty {
+                        store.toast_show(crate::components::toast::ToastOptions {
+                            title: Some("No variants available".into()),
+                            message: "The current model does not support any variants.".into(),
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                        return Dispatch::Handled;
+                    }
+                }
                 let size =
                     if command == "open.menu" { DialogSize::Large } else { DialogSize::Medium };
                 // F13: the session list refetches on open (the boot
@@ -1083,7 +1206,9 @@ mod tests {
         match &store.top_dialog().unwrap().kind {
             DialogKind::ServerList { command, title } => {
                 assert_eq!(*command, "model.list");
-                assert_eq!(*title, "Switch model");
+                // The DIALOG title is DialogModel's mount
+                // (dialog-model.tsx:122), not the palette entry's.
+                assert_eq!(*title, "Select model");
             }
             other => panic!("unexpected dialog {other:?}"),
         }
@@ -1170,12 +1295,15 @@ mod tests {
         store.open_tab("s1", None);
 
         // Loading: one muted status row.
-        let props = model_list_props(&store, "Switch model");
+        let props = model_list_props(&store, "Select model");
         assert_eq!(props.options.len(), 1);
         assert!(props.options[0].title.contains("Loading models"));
 
-        // Loaded: deprecated filtered, Free footer, provider name as
-        // the category (falling back to the providerID).
+        // Loaded: deprecated filtered, Free footer; NO categories and
+        // no group headers while unconnected (dialog-model.tsx:81 —
+        // `category: connected() ? provider.name : undefined`; the
+        // Rust TUI tracks no oauth connections). The browse action
+        // row rides the footer (dialog-model.tsx:147 + keybind.ts:162).
         store.set_models(
             ListState::Loaded(vec![
                 model("anthropic", "claude", "Claude", true, false),
@@ -1184,18 +1312,22 @@ mod tests {
             ]),
             vec![ServerProvider { id: "anthropic".into(), name: "Anthropic".into() }],
         );
-        let props = model_list_props(&store, "Switch model");
+        let props = model_list_props(&store, "Select model");
         assert_eq!(props.options.len(), 2, "deprecated row filtered");
         assert_eq!(props.options[0].title, "Claude");
         assert_eq!(props.options[0].value, "anthropic/claude");
-        assert_eq!(props.options[0].category.as_deref(), Some("Anthropic"));
+        assert_eq!(props.options[0].category, None, "no category while unconnected");
         assert_eq!(props.options[0].footer.as_deref(), Some("Free"));
-        assert_eq!(props.options[1].category.as_deref(), Some("custom"), "no provider row");
+        assert_eq!(props.options[1].category, None);
         assert_eq!(props.options[1].footer, None, "paid model has no footer");
+        assert_eq!(props.actions.len(), 1, "the integrations browse action");
+        assert_eq!(props.actions[0].command, "model.dialog.provider");
+        assert_eq!(props.actions[0].title, "View all integrations");
+        assert_eq!(props.actions[0].label, "ctrl+a");
 
         // Failed: the error surfaces in the row.
         store.set_models(ListState::Failed("503".into()), Vec::new());
-        let props = model_list_props(&store, "Switch model");
+        let props = model_list_props(&store, "Select model");
         assert!(props.options[0].title.contains("Models unavailable"));
         assert!(props.options[0].title.contains("503"));
     }
@@ -1328,6 +1460,150 @@ mod tests {
         assert_eq!(props.options[0].title, "build");
         assert_eq!(props.options[0].description.as_deref(), Some("Does things"));
         assert_eq!(props.current.as_deref(), Some("build"), "current from the selection");
+    }
+
+    /// Lane/models #11 — `DialogModel.onSelect`'s variant dance
+    /// (dialog-model.tsx:126-139): a model WITH variants replaces the
+    /// dialog with the `Select variant` picker instead of closing; the
+    /// variant picker's rows are Default + the named variants with the
+    /// current marked; submitting a variant stages it and persists the
+    /// ring. A model WITHOUT variants just closes.
+    #[test]
+    fn model_pick_dances_into_the_variant_picker() {
+        let store = Store::new(Runtime::new());
+        store.replace_dialog(
+            DialogKind::ServerList { command: "model.list", title: "Select model" },
+            DialogSize::Medium,
+        );
+        let mut models = vec![
+            model("anthropic", "claude", "Claude", false, false),
+            model("plain", "plain-1", "Plain One", false, false),
+        ];
+        models[0].variants = vec!["low".into(), "medium".into(), "high".into()];
+        store.set_models(ListState::Loaded(models), Vec::new());
+
+        // Pick the variant-carrying model: dialog REPLACED, not closed.
+        assert_eq!(
+            execute_server_list_selection(&store, "model.list", "anthropic/claude"),
+            Dispatch::Handled
+        );
+        assert_eq!(
+            store.top_dialog().map(|entry| entry.kind.clone()),
+            Some(DialogKind::ServerList { command: "variant.list", title: "Select variant" }),
+            "the variant picker replaces the model dialog"
+        );
+        // The staged selection is the picked model; the recent ring
+        // carries it (`local.model.set(…, { recent: true })`).
+        assert_eq!(
+            store.effective_model(crate::app::HOME_PROMPT_KEY).map(|m| m.model_id),
+            Some("claude".to_owned())
+        );
+        assert_eq!(
+            store.model_ring().document.recent.first().map(|m| m.model_id.clone()),
+            Some("claude".to_owned())
+        );
+        // The variant picker's props: Default + named variants, current
+        // unmarked (fresh pick resolves no variant).
+        let props = variant_list_props(&store, "Select variant");
+        let titles: Vec<&str> = props.options.iter().map(|o| o.title.as_str()).collect();
+        assert_eq!(titles, vec!["Default", "low", "medium", "high"]);
+        assert_eq!(props.current.as_deref(), Some("default"));
+
+        // Apply `high`: staged variant + ring persisted + closed.
+        assert_eq!(
+            execute_server_list_selection(&store, "variant.list", "high"),
+            Dispatch::Handled
+        );
+        assert!(store.dialogs().as_slice().is_empty(), "variant apply closes the dialog");
+        assert_eq!(
+            store.effective_model(crate::app::HOME_PROMPT_KEY).and_then(|m| m.variant),
+            Some("high".to_owned())
+        );
+        assert_eq!(
+            store.model_ring().document.variant.get("anthropic/claude").map(String::as_str),
+            Some("high")
+        );
+
+        // Re-picking the same model now has the saved variant in the
+        // list → straight close (dialog-model.tsx:130-133).
+        store.replace_dialog(
+            DialogKind::ServerList { command: "model.list", title: "Select model" },
+            DialogSize::Medium,
+        );
+        assert_eq!(
+            execute_server_list_selection(&store, "model.list", "anthropic/claude"),
+            Dispatch::Handled
+        );
+        assert!(store.dialogs().is_empty(), "valid saved variant closes without the sub-dialog");
+
+        // A model WITHOUT variants closes immediately.
+        store.replace_dialog(
+            DialogKind::ServerList { command: "model.list", title: "Select model" },
+            DialogSize::Medium,
+        );
+        assert_eq!(
+            execute_server_list_selection(&store, "model.list", "plain/plain-1"),
+            Dispatch::Handled
+        );
+        assert_eq!(store.dialogs().len(), 0);
+    }
+
+    /// Lane/models #7 — the dialog titles are the component mounts':
+    /// `model.list` opens "Select model", `variant.list` "Select
+    /// variant" (dialog-model.tsx:122 / dialog-variant.tsx:35); the
+    /// PALETTE entries keep their own titles (app.tsx:840/921).
+    #[test]
+    fn dispatcher_opens_mount_titled_model_and_variant_dialogs() {
+        let store = Store::new(Runtime::new());
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "model.list", None), Dispatch::Handled);
+        match &store.top_dialog().unwrap().kind {
+            DialogKind::ServerList { command, title } => {
+                assert_eq!((*command, *title), ("model.list", "Select model"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert_eq!(palette_command("model.list").unwrap().title, "Switch model");
+        assert_eq!(palette_command("variant.list").unwrap().title, "Switch model variant");
+
+        // variant.list with variants on the current selection opens
+        // "Select variant"; with none it toasts and opens nothing.
+        let mut models = vec![model("anthropic", "claude", "Claude", false, false)];
+        models[0].variants = vec!["low".into(), "high".into()];
+        store.set_models(ListState::Loaded(models), Vec::new());
+        store.stage_model(
+            crate::app::HOME_PROMPT_KEY,
+            crate::store::ModelSelection {
+                provider_id: "anthropic".into(),
+                model_id: "claude".into(),
+                variant: None,
+            },
+        );
+        assert_eq!(dispatcher.dispatch(&store, "variant.list", None), Dispatch::Handled);
+        match &store.top_dialog().unwrap().kind {
+            DialogKind::ServerList { command, title } => {
+                assert_eq!((*command, *title), ("variant.list", "Select variant"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        store.clear_dialogs();
+        store.set_models(
+            ListState::Loaded(vec![model("plain", "plain-1", "Plain One", false, false)]),
+            Vec::new(),
+        );
+        store.stage_model(
+            crate::app::HOME_PROMPT_KEY,
+            crate::store::ModelSelection {
+                provider_id: "plain".into(),
+                model_id: "plain-1".into(),
+                variant: None,
+            },
+        );
+        assert_eq!(dispatcher.dispatch(&store, "variant.list", None), Dispatch::Handled);
+        assert!(store.dialogs().is_empty(), "no variants → toast, no dialog");
+        let message =
+            store.toasts().current().map(|toast| toast.message.clone()).unwrap_or_default();
+        assert!(message.contains("does not support any variants"), "{message:?}");
     }
 
     /// Model/agent submissions apply through the selection sink on a
