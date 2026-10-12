@@ -517,6 +517,19 @@ impl Composer {
         let _ = self.run_tracked(|area| area.insert_tracked(text), false);
     }
 
+    /// Replace the whole prompt (v2's `promptRef.set({ text })`: the
+    /// edit state resets to a fresh area carrying the text — caret at
+    /// the end, no undo history from the previous draft).
+    pub fn set_text(&mut self, text: &str) {
+        self.edit = Self::fresh_edit();
+        self.draft = PromptDraft::default();
+        self.files_undo.clear();
+        self.files_redo.clear();
+        if !text.is_empty() {
+            self.insert_text(text);
+        }
+    }
+
     /// `input.newline` (shift/ctrl/alt+return, ctrl+j).
     pub fn newline(&mut self) {
         self.insert_text("\n");

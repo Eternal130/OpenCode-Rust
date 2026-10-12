@@ -280,6 +280,10 @@ impl App {
     /// group's `+ Thought` header toggles its disclosure on release
     /// (`onMouseUp={toggle}`, `group-view.tsx:152-190`). This routes
     /// crossterm's mouse stream to exactly those surfaces.
+    // The pointer routing table (modal → footer label → strip →
+    // transcript hits) — one screen-sized match, kept whole like the
+    // sibling key layers.
+    #[allow(clippy::too_many_lines)]
     pub fn mouse_event(&mut self, mouse: &crossterm::event::MouseEvent) {
         use crate::components::session_tabs::{strip_hit, StripHit};
         use crossterm::event::{MouseButton, MouseEventKind};
@@ -298,6 +302,22 @@ impl App {
         };
         match mouse.kind {
             MouseEventKind::Moved => {
+                // A modal select's option rows track the pointer
+                // (`dialog-select.tsx:762-767`: `onMouseMove` moves
+                // the selection).
+                if !self.store.dialogs().is_empty() {
+                    if let Some(index) = self.dialog_option_at(col, row) {
+                        self.move_dialog_selection_to(index);
+                    }
+                    return;
+                }
+                // #33 — the footer location label's hover lift
+                // (`useWorkingDirectoryActions`: muted → text.base).
+                let location_hover =
+                    self.store.footer_location_hit().is_some_and(|hit| {
+                        row == hit.row && col >= hit.x && col < hit.x + hit.width
+                    }) && !self.permission_live();
+                let changed_location = self.store.set_location_hovered(location_hover);
                 let (hover, add) = if strip_live && row == 0 {
                     let tabs = self.store.tabs();
                     match strip_hit(
@@ -317,11 +337,29 @@ impl App {
                 };
                 let changed = self.store.set_tab_hover(hover.as_deref());
                 let changed_add = self.store.set_tab_add_hovered(add);
-                if changed || changed_add {
+                if changed || changed_add || changed_location {
                     self.store.request_redraw();
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                // A modal dialog's option rows submit on release
+                // (`dialog-select.tsx:768-773`: mousedown moved the
+                // selection, mouseup fires `onSelect`); the backdrop
+                // dismisses on an OUTSIDE release (`ui/dialog.tsx:
+                // 34-63`: the full-screen backdrop box closes on
+                // mouseup; the inner chrome box's own mouseup stops
+                // propagation).
+                if !self.store.dialogs().is_empty() {
+                    if let Some(index) = self.dialog_option_at(col, row) {
+                        self.submit_dialog_option(index);
+                    } else if let Some((x, y, width, height)) = self.store.dialog_frame_rect() {
+                        if col < x || row < y || col >= x + width || row >= y + height {
+                            self.store.close_dialog();
+                        }
+                    }
+                    self.store.request_redraw();
+                    return;
+                }
                 if strip_live && row == 0 {
                     let tabs = self.store.tabs();
                     match strip_hit(
@@ -339,16 +377,58 @@ impl App {
                     }
                     return;
                 }
-                // The transcript's reasoning headers toggle on release
-                // (beta.8 bug 4) — the hit rows were recorded by the
-                // last `render_session` pass with absolute positions.
+                // #33 — the footer location label opens the Working
+                // directory select on release
+                // (`useWorkingDirectoryActions.openMenu`,
+                // prompt/index.tsx:1932-1934).
+                if !self.permission_live() {
+                    if let Some(hit) = self.store.footer_location_hit() {
+                        if row == hit.row && col >= hit.x && col < hit.x + hit.width {
+                            self.store.open_dialog(
+                                crate::store::DialogKind::WorkingDirectory {
+                                    directory: hit.directory.clone(),
+                                },
+                                crate::store::DialogSize::Medium,
+                            );
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
+                }
+                // The transcript's click surface — the hit rows were
+                // recorded by the last `render_session` pass with
+                // absolute positions:
+                // * reasoning headers toggle on release (beta.8 bug
+                //   4) with a TIGHT rect: v2's toggle box is the
+                //   InlineToolRow content (icon + label glyphs), not
+                //   the whole row (`group-view.tsx:176-190`);
+                // * user-message blocks open the Message Actions
+                //   select (`UserMessage`'s `onMouseUp`,
+                //   session/index.tsx:2210-2250).
                 // Nothing pointer-driven happens under a modal.
-                if !self.store.dialogs().is_empty() || self.permission_live() {
+                if self.permission_live() {
                     return;
                 }
                 for hit in self.store.transcript_hit_rows() {
-                    if row >= hit.y && row < hit.y + hit.height {
-                        self.store.toggle_group_expanded(&hit.session_id, &hit.key);
+                    if row >= hit.y
+                        && row < hit.y + hit.height
+                        && col >= hit.x
+                        && col < hit.x + hit.width
+                    {
+                        match &hit.action {
+                            crate::store::TranscriptHitAction::ToggleGroup(key) => {
+                                self.store.toggle_group_expanded(&hit.session_id, key);
+                            }
+                            crate::store::TranscriptHitAction::MessageActions { message_id } => {
+                                self.store.open_dialog(
+                                    crate::store::DialogKind::MessageActions {
+                                        session_id: hit.session_id.clone(),
+                                        message_id: message_id.clone(),
+                                    },
+                                    crate::store::DialogSize::Medium,
+                                );
+                            }
+                        }
                         self.store.request_redraw();
                         return;
                     }
@@ -356,6 +436,35 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// The flat option index under (`col`, `row`), when the top dialog
+    /// is a select showing that row (`dialog-select.tsx`'s option box
+    /// spans the dialog width).
+    fn dialog_option_at(&self, col: usize, row: usize) -> Option<usize> {
+        let (x, _y, width, _) = self.store.dialog_frame_rect()?;
+        if col < x || col >= x + width {
+            return None;
+        }
+        self.store.dialog_option_rows().into_iter().position(|option_row| option_row == Some(row))
+    }
+
+    /// Move the top dialog's selection to a flat index (pointer
+    /// motion over an option row — `moveTo`).
+    fn move_dialog_selection_to(&mut self, index: usize) {
+        let before = self.store.dialogs().last().map_or(usize::MAX, |top| top.select.selected);
+        self.store.update_dialog(|top| top.select.selected = index);
+        if before != index {
+            self.store.request_redraw();
+        }
+    }
+
+    /// Release on an option row: select it and submit — through the
+    /// same stroke path as a keyboard enter (the keymap's modal layer
+    /// is armed by `press`'s mode sync).
+    fn submit_dialog_option(&mut self, index: usize) {
+        self.move_dialog_selection_to(index);
+        self.press("enter");
     }
 
     pub fn press(&mut self, spec: &str) {
@@ -3433,7 +3542,10 @@ fn mouse_release_toggles_the_thought_disclosure() {
         .store
         .transcript_hit_rows()
         .iter()
-        .find(|row| row.key.starts_with("group:Reasoning:"))
+        .find(|row| matches!(
+            &row.action,
+            crate::store::TranscriptHitAction::ToggleGroup(key) if key.starts_with("group:Reasoning:")
+        ))
         .expect("the reasoning header recorded a hit row")
         .clone();
     app.mouse_event(&mouse(
@@ -3442,7 +3554,10 @@ fn mouse_release_toggles_the_thought_disclosure() {
         u16::try_from(hit.y).unwrap_or(u16::MAX),
     ));
     assert!(
-        app.store.group_expanded(&hit.session_id, &hit.key),
+        app.store.group_expanded(
+            &hit.session_id,
+            hit.action.toggle_key().expect("the reasoning header hit toggles"),
+        ),
         "the release toggled the disclosure open"
     );
     let expanded = app.frame_text();
@@ -3455,7 +3570,10 @@ fn mouse_release_toggles_the_thought_disclosure() {
         .store
         .transcript_hit_rows()
         .iter()
-        .find(|row| row.key.starts_with("group:Reasoning:"))
+        .find(|row| matches!(
+            &row.action,
+            crate::store::TranscriptHitAction::ToggleGroup(key) if key.starts_with("group:Reasoning:")
+        ))
         .expect("the header re-recorded its expanded-rect")
         .clone();
     app.mouse_event(&mouse(
@@ -3463,10 +3581,290 @@ fn mouse_release_toggles_the_thought_disclosure() {
         10,
         u16::try_from(hit_again.y).unwrap_or(u16::MAX),
     ));
-    assert!(!app.store.group_expanded(&hit.session_id, &hit.key));
+    let key = hit.action.toggle_key().expect("a toggle hit").to_owned();
+    assert!(!app.store.group_expanded(&hit.session_id, key.as_str()));
     let collapsed_again = app.frame_text();
     assert!(collapsed_again.contains("+ Thought"), "back to the collapsed header");
     assert!(!collapsed_again.contains("parser's edges"), "the body hides again");
+}
+
+/// #29 — the toggle hit zone is TIGHT: v2's disclosure toggle is the
+/// `InlineToolRow` content box (icon + label glyphs,
+/// `group-view.tsx:176-190`), not the full header row — a release on
+/// the empty columns to the right of `+ Thought…` is a no-op there.
+#[test]
+fn thought_toggle_hit_zone_is_tight_to_the_glyphs() {
+    use crate::components::message::model::{Message, Part, PartTime};
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let mut app = App::new((80, 24));
+    app.store.set_messages(
+        "s1",
+        vec![
+            Message::User {
+                id: "u1".into(),
+                text: "think hard".into(),
+                created: 0,
+                files: Vec::new(),
+            },
+            Message::Assistant {
+                id: "a1".into(),
+                agent: "build".into(),
+                model: "fixture/fixture".into(),
+                parts: vec![Part::Reasoning {
+                    text: "The parser's edges need care.".into(),
+                    time: PartTime { created: Some(1), completed: Some(2) },
+                }],
+                finish: Some("success".into()),
+                error: None,
+                time: PartTime { created: Some(1), completed: Some(2) },
+            },
+        ],
+    );
+    app.store.open_tab("s1", Some("Thoughts".to_owned()));
+    let _ = app.frame(); // the render pass records the hit rows
+    let hit = app
+        .store
+        .transcript_hit_rows()
+        .iter()
+        .find(|row| matches!(row.action, crate::store::TranscriptHitAction::ToggleGroup(_)))
+        .expect("the reasoning header recorded a hit row")
+        .clone();
+    // The recorded rect hugs the glyphs: it starts at the icon and
+    // ends after the label text (well short of the 80-col row).
+    assert_eq!(hit.x, 5, "paddingLeft 3 + the transcript's 2-col inset");
+    assert!(hit.width < 40, "the zone is the label's glyphs, not the row: {hit:?}");
+    assert_eq!(hit.height, 1);
+    let row = u16::try_from(hit.y).unwrap_or(u16::MAX);
+    // A release past the glyphs (col 79): nothing toggles.
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 79, row));
+    assert!(
+        !app.store.group_expanded(&hit.session_id, hit.action.toggle_key().expect("a toggle hit")),
+        "the empty columns beside the header are inert"
+    );
+    // Inside the glyphs: the disclosure opens.
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        u16::try_from(hit.x + 2).unwrap_or(u16::MAX),
+        row,
+    ));
+    assert!(app
+        .store
+        .group_expanded(&hit.session_id, hit.action.toggle_key().expect("a toggle hit")));
+}
+
+/// #31 — the dialog backdrop dismisses on an OUTSIDE release
+/// (`ui/dialog.tsx:34-63`); a release inside the chrome box stays.
+#[test]
+fn dialog_outside_release_dismisses() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let mut app = App::new((80, 24));
+    app.store.open_dialog(crate::store::DialogKind::Help, crate::store::DialogSize::Medium);
+    let _ = app.frame(); // the render pass records the chrome rect
+    let (x, y, width, height) =
+        app.store.dialog_frame_rect().expect("the render pass recorded the frame rect");
+    assert!(x > 0 && y > 0 && width < 80, "centered with margins: {x},{y},{width},{height}");
+    // Inside the frame: stays open.
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        u16::try_from(x + width / 2).unwrap_or(u16::MAX),
+        u16::try_from(y + height / 2).unwrap_or(u16::MAX),
+    ));
+    assert!(!app.store.dialogs().is_empty(), "an inside release does not dismiss");
+    // Outside (top margin): dismissed.
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 40, 0));
+    assert!(app.store.dialogs().is_empty(), "the backdrop's outside release closes the dialog");
+    assert_eq!(app.store.dialog_frame_rect(), None, "the rect cleared with the dialog");
+}
+
+/// #32 — ctrl+c routing with a modal open (`ui/dialog.tsx:115-156`):
+/// the modal layer CLOSES the dialog (clearing any filter text
+/// first); it does not exit. Once the dialog is gone, the home
+/// route's empty-composer ctrl+c exits — the rig's
+/// click-coverage-dialog teardown sequence.
+#[test]
+fn ctrl_c_closes_the_dialog_then_exits_from_home() {
+    let mut app = App::new((80, 24));
+    app.store.open_dialog(crate::store::DialogKind::Help, crate::store::DialogSize::Medium);
+    assert_eq!(app.store.focus(), crate::store::Focus::Dialog);
+    app.press("ctrl+c");
+    assert!(app.store.dialogs().is_empty(), "the modal layer consumed ctrl+c to close");
+    assert!(!app.exit_requested, "the close is not an exit");
+    // The empty home composer: the same chord now exits.
+    app.press("ctrl+c");
+    assert!(app.exit_requested, "post-dismissal ctrl+c exits at home");
+}
+
+/// #34 — a user-message block release opens the Message Actions
+/// select (`UserMessage`'s `onMouseUp` → `dialog.replace(DialogMessage)`,
+/// session/index.tsx:2243-2249); its options carry the four v2 actions.
+#[test]
+fn user_message_release_opens_message_actions() {
+    use crate::components::message::model::{Message, Part, PartTime};
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let mut app = App::new((80, 24));
+    app.store.set_messages(
+        "s1",
+        vec![
+            Message::User {
+                id: "u1".into(),
+                text: "edit this turn".into(),
+                created: 0,
+                files: Vec::new(),
+            },
+            Message::Assistant {
+                id: "a1".into(),
+                agent: "build".into(),
+                model: "fixture/fixture".into(),
+                parts: vec![Part::Text { text: "the reply".into(), time: PartTime::default() }],
+                finish: Some("success".into()),
+                error: None,
+                time: PartTime { created: Some(1), completed: Some(2) },
+            },
+        ],
+    );
+    app.store.open_tab("s1", Some("Edit me".to_owned()));
+    let _ = app.frame(); // the render pass records the hit rows
+    let hits = app.store.transcript_hit_rows();
+    let user_hit = hits
+        .iter()
+        .find(|hit| matches!(hit.action, crate::store::TranscriptHitAction::MessageActions { .. }))
+        .expect("the user-message block recorded a hit row")
+        .clone();
+    assert!(user_hit.height >= 3, "the box's padding rows are clickable too");
+    assert!(user_hit.x >= 2 && user_hit.width >= 60, "the inner box spans the block");
+    // A release inside the block opens the dialog.
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        u16::try_from(user_hit.x + 2).unwrap_or(u16::MAX),
+        u16::try_from(user_hit.y + 1).unwrap_or(u16::MAX),
+    ));
+    let dialogs = app.store.dialogs();
+    assert!(
+        matches!(
+            dialogs.last().map(|entry| &entry.kind),
+            Some(crate::store::DialogKind::MessageActions { message_id, .. }) if message_id == "u1"
+        ),
+        "the Message Actions select opened: {dialogs:?}"
+    );
+    // The assistant reply text is NOT clickable (no handlers on
+    // TextPart rows).
+    assert!(hits.iter().all(|hit| !matches!(
+        hit.action,
+        crate::store::TranscriptHitAction::MessageActions { ref message_id } if message_id == "a1"
+    )));
+}
+
+/// The select dialog's pointer surface (`dialog-select.tsx:757-775`):
+/// pointer motion over an option row moves the selection, a release
+/// submits it (the same path as enter), a release outside the frame
+/// dismisses.
+#[test]
+fn dialog_select_pointer_moves_and_submits() {
+    use crate::components::command_palette::select_props_for;
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let mut app = App::new((80, 24));
+    let clipboard = std::rc::Rc::new(crate::clipboard::RecordingClipboardSink::default());
+    app.store.set_clipboard_sink(std::rc::Rc::clone(&clipboard) as std::rc::Rc<_>);
+    app.store.open_dialog(
+        crate::store::DialogKind::MessageActions {
+            session_id: "s1".into(),
+            message_id: "u1".into(),
+        },
+        crate::store::DialogSize::Medium,
+    );
+    let _ = app.frame(); // the render pass records the rects
+    let rows = app.store.dialog_option_rows();
+    assert_eq!(rows.len(), 4, "the four Message Actions");
+    assert!(rows.iter().all(Option::is_some), "all four visible at 80x24");
+    // Motion over the third row (Copy) moves the selection.
+    let copy_row = u16::try_from(rows[2].unwrap_or_default()).unwrap_or(u16::MAX);
+    let (_, box_y, _, _) = app.store.dialog_frame_rect().unwrap_or_default();
+    assert!(usize::from(copy_row) > box_y, "the option rows sit inside the frame");
+    app.mouse_event(&mouse(MouseEventKind::Moved, 40, copy_row));
+    assert_eq!(
+        app.store.dialogs().last().map(|top| top.select.selected),
+        Some(2),
+        "pointer motion moved the selection to Copy"
+    );
+    // Release there submits: Copy writes the clipboard and closes.
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 40, copy_row));
+    assert!(app.store.dialogs().is_empty(), "the release submitted and closed");
+    assert!(
+        clipboard.writes.lock().is_ok_and(|writes| writes.len() == 1),
+        "the message text hit the clipboard sink"
+    );
+    // A release far outside any dialog dismisses without submitting.
+    app.store.open_dialog(
+        crate::store::DialogKind::MessageActions {
+            session_id: "s1".into(),
+            message_id: "u1".into(),
+        },
+        crate::store::DialogSize::Medium,
+    );
+    let _ = app.frame();
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 79, 0));
+    assert!(app.store.dialogs().is_empty(), "the outside release dismissed");
+    // Props parity: the four v2 actions with descriptions.
+    let props = select_props_for(
+        &crate::store::DialogKind::MessageActions {
+            session_id: "s1".into(),
+            message_id: "u1".into(),
+        },
+        &app.store,
+    );
+    assert_eq!(props.title, "Message Actions");
+    assert_eq!(
+        props.options.iter().map(|o| o.value.as_str()).collect::<Vec<_>>(),
+        vec!["message.jump", "session.revert", "message.copy", "session.fork"]
+    );
+}
+
+/// #33 — the footer location label: hover lifts the label and a
+/// release opens the Working directory select
+/// (`useWorkingDirectoryActions`, prompt/index.tsx:1925-1937).
+#[test]
+fn footer_location_hover_and_click() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let mut app = App::new((80, 24));
+    let clipboard = std::rc::Rc::new(crate::clipboard::RecordingClipboardSink::default());
+    app.store.set_clipboard_sink(std::rc::Rc::clone(&clipboard) as std::rc::Rc<_>);
+    // The hit rect is recorded by the render pass whenever the label
+    // paints (the live routes render it once the #4 footer-slot lane
+    // lands; the seam is exercised directly here).
+    app.store.set_footer_location_hit(Some(crate::store::FooterLocationHit {
+        directory: "/tmp/opencode/project".into(),
+        row: 22,
+        x: 0,
+        width: 26,
+    }));
+    // Hover: the lift arms.
+    app.mouse_event(&mouse(MouseEventKind::Moved, 10, 22));
+    assert!(app.store.location_hovered(), "the label lifts under the pointer");
+    app.mouse_event(&mouse(MouseEventKind::Moved, 10, 21));
+    assert!(!app.store.location_hovered(), "off the label the lift clears");
+    // Release on the label: the Working directory select opens.
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 10, 22));
+    let dialogs = app.store.dialogs();
+    assert!(
+        matches!(
+            dialogs.last().map(|entry| &entry.kind),
+            Some(crate::store::DialogKind::WorkingDirectory { directory }) if directory == "/tmp/opencode/project"
+        ),
+        "the working-directory select opened: {dialogs:?}"
+    );
+    // Copy path writes the clipboard + the info toast.
+    let _ = app.frame(); // the render pass records the rects
+    let rows = app.store.dialog_option_rows();
+    let copy_row = u16::try_from(rows[0].unwrap_or_default()).unwrap_or(u16::MAX);
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 40, copy_row));
+    assert!(app.store.dialogs().is_empty(), "Copy path closed the dialog");
+    let last_write = clipboard.writes.lock().ok().and_then(|writes| writes.last().cloned());
+    assert_eq!(last_write.as_deref(), Some("/tmp/opencode/project"));
 }
 
 // -- Wave A lane: the interaction-contract wiring ---------------------------

@@ -110,6 +110,16 @@ pub enum DialogKind {
     /// `DialogWorkspaceFileChanges` in its delete-confirm role: the
     /// forced-remove question after a `forceRequired` rejection.
     WorktreeDeleteConfirm { directory: String },
+    /// `DialogMessage` (`routes/session/dialog-message.tsx`): the
+    /// user-message "Message Actions" select (Jump to / Revert /
+    /// Copy / Fork) opened by clicking a user-message block
+    /// ([`UserMessage`]'s `onMouseUp`, session/index.tsx:2210-2250).
+    MessageActions { session_id: String, message_id: String },
+    /// The working-directory select (`ui/working-directory-actions.tsx`):
+    /// Copy path / Open folder / Workspaces, opened by clicking the
+    /// composer footer's `{dir}:{branch}` label
+    /// (component/prompt/index.tsx:1925-1937).
+    WorkingDirectory { directory: String },
     /// A plugin dialog (`DialogKind::Plugin`, wave 3's open dialog
     /// seam): the content was materialized at OPEN time through
     /// [`PluginDialogSource`] (or arrived fully-built on a
@@ -839,6 +849,15 @@ pub struct Store {
     /// writes them like `frame_images`): the reasoning-group headers
     /// whose absolute `[y, y+height)` rect a mouse release can toggle.
     transcript_hit_rows: std::cell::RefCell<Vec<TranscriptHitRow>>,
+    /// The top dialog's frame rect from the last render (dismissal).
+    dialog_frame_rect: std::cell::RefCell<Option<(usize, usize, usize, usize)>>,
+    /// The top dialog's visible option rows (flat index → screen row).
+    dialog_option_rows: std::cell::RefCell<Vec<Option<usize>>>,
+    /// The footer location label's hit rect + directory from the last
+    /// render (None when the label didn't paint — empty location).
+    footer_location: std::cell::RefCell<Option<FooterLocationHit>>,
+    /// The location label's hover state (`hovered()`).
+    location_hovered: std::cell::Cell<bool>,
     /// Per-session scroll state (Wave A's scroll driver over
     /// [`FollowState`]); the render pass records the metrics.
     scroll: std::cell::RefCell<HashMap<String, ScrollDriver>>,
@@ -942,17 +961,64 @@ pub struct PickerEntry {
     pub prefix: String,
 }
 
+/// What a transcript hit does when released (`onMouseUp`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TranscriptHitAction {
+    /// Toggle the reasoning group's disclosure ([`group-view.tsx`]
+    /// `InlineToolRow` `onMouseUp={toggle}`).
+    ToggleGroup(String),
+    /// Open the user message's "Message Actions" select
+    /// ([`UserMessage`]'s `onMouseUp` → `dialog.replace(DialogMessage)`,
+    /// session/index.tsx:2243-2249).
+    MessageActions { message_id: String },
+}
+
+impl TranscriptHitAction {
+    /// The disclosure key, when this is a toggle hit (tests).
+    #[cfg(test)]
+    #[must_use]
+    pub fn toggle_key(&self) -> Option<&str> {
+        match self {
+            Self::ToggleGroup(key) => Some(key.as_str()),
+            Self::MessageActions { .. } => None,
+        }
+    }
+}
+
 /// One clickable transcript row from the last frame (absolute rows).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranscriptHitRow {
     /// The session the row belongs to.
     pub session_id: String,
-    /// The row's key (`row_key` — `group:Reasoning:…` for headers).
-    pub key: String,
+    /// What the release does.
+    pub action: TranscriptHitAction,
     /// Absolute screen row of the row's top (frame coordinates).
     pub y: usize,
     /// The row's height in rows.
     pub height: usize,
+    /// The hit rect's column extent (absolute screen columns): v2's
+    /// disclosure toggle is the `InlineToolRow` BOX — `paddingLeft 3`
+    /// plus the icon slot plus the label's own glyphs
+    /// (`group-view.tsx:176-190`, the box hugs its content) — NOT the
+    /// full row. A release inside `[x, x + width)` toggles. The
+    /// user-message box is its full-width raised block.
+    pub x: usize,
+    /// The hit rect's width in columns.
+    pub width: usize,
+}
+
+/// The footer location label's hit surface (#33): the painted label's
+/// rect plus the RAW directory the working-directory actions use
+/// (`ui/working-directory-actions.tsx`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FooterLocationHit {
+    pub directory: String,
+    /// Absolute screen row of the status line.
+    pub row: usize,
+    /// The label's first column.
+    pub x: usize,
+    /// The label's painted width.
+    pub width: usize,
 }
 
 /// One queued prompt (`session.inbox` row with `delivery: "queue"`,
@@ -1146,6 +1212,9 @@ impl Store {
 
     /// The store's constructor body (the signal graph + the redraw
     /// effect over every root signal).
+    // The constructor body (one line per signal/seed field — the
+    // pointer-surface seeds crossed the pedantic line budget).
+    #[allow(clippy::too_many_lines)]
     fn build(runtime: Runtime, signals: StoreSignals) -> Self {
         let prompt_sink: std::rc::Rc<dyn PromptSink> =
             std::rc::Rc::new(RecordingPromptSink::default());
@@ -1237,6 +1306,10 @@ impl Store {
             frame_images: std::cell::RefCell::new(Vec::new()),
             expanded_groups: std::cell::RefCell::new(HashMap::new()),
             transcript_hit_rows: std::cell::RefCell::new(Vec::new()),
+            dialog_frame_rect: std::cell::RefCell::new(None),
+            dialog_option_rows: std::cell::RefCell::new(Vec::new()),
+            footer_location: std::cell::RefCell::new(None),
+            location_hovered: std::cell::Cell::new(false),
             scroll: std::cell::RefCell::new(HashMap::new()),
             transcript_metrics: std::cell::RefCell::new(HashMap::new()),
             queue,
@@ -2368,6 +2441,67 @@ impl Store {
         *self.transcript_hit_rows.borrow_mut() = rows;
     }
 
+    /// The last frame's top-dialog frame rect (absolute screen cells)
+    /// — the outside-click dismissal surface (`ui/dialog.tsx:34-63`:
+    /// the full-screen backdrop closes on mouseup; the inner box's
+    /// own mouseup stops propagation).
+    pub fn set_dialog_frame_rect(&self, rect: Option<(usize, usize, usize, usize)>) {
+        *self.dialog_frame_rect.borrow_mut() = rect;
+        if rect.is_none() {
+            self.set_dialog_option_rows(Vec::new());
+        }
+    }
+
+    /// The top dialog's frame rect, when a dialog rendered last frame.
+    #[must_use]
+    pub fn dialog_frame_rect(&self) -> Option<(usize, usize, usize, usize)> {
+        *self.dialog_frame_rect.borrow()
+    }
+
+    /// The top select-dialog's option rows from the last render: for
+    /// each FLAT option index, its absolute screen row (only visible
+    /// options recorded). The pointer surface
+    /// (`dialog-select.tsx:757-775`: motion moves the selection, a
+    /// release submits).
+    pub fn set_dialog_option_rows(&self, rows: Vec<Option<usize>>) {
+        *self.dialog_option_rows.borrow_mut() = rows;
+    }
+
+    /// The visible options' absolute rows (flat-index order).
+    #[must_use]
+    pub fn dialog_option_rows(&self) -> Vec<Option<usize>> {
+        self.dialog_option_rows.borrow().clone()
+    }
+
+    /// #33 — the footer location label's hit rect from the last
+    /// render (`useWorkingDirectoryActions`: hover lifts the label,
+    /// a release opens the Working directory select).
+    pub fn set_footer_location_hit(&self, hit: Option<FooterLocationHit>) {
+        *self.footer_location.borrow_mut() = hit;
+    }
+
+    /// The location label's hit rect, when one painted.
+    #[must_use]
+    pub fn footer_location_hit(&self) -> Option<FooterLocationHit> {
+        self.footer_location.borrow().clone()
+    }
+
+    /// The location label's hover transition (returns whether it
+    /// CHANGED — the redraw key).
+    pub fn set_location_hovered(&self, hovered: bool) -> bool {
+        if self.location_hovered.get() == hovered {
+            return false;
+        }
+        self.location_hovered.set(hovered);
+        true
+    }
+
+    /// The location label's hover state (the render input).
+    #[must_use]
+    pub fn location_hovered(&self) -> bool {
+        self.location_hovered.get()
+    }
+
     #[must_use]
     pub fn transcript_hit_rows(&self) -> Vec<TranscriptHitRow> {
         self.transcript_hit_rows.borrow().clone()
@@ -2882,11 +3016,13 @@ impl Store {
         self.dialogs.update(|stack| {
             stack.pop();
         });
+        self.set_dialog_frame_rect(None);
     }
 
     /// Close every dialog (`dialog.clear`).
     pub fn clear_dialogs(&self) {
         self.dialogs.update(std::vec::Vec::clear);
+        self.set_dialog_frame_rect(None);
     }
 
     /// Mutate the top dialog's entry (selection moves, filter typing,

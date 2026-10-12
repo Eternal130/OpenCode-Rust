@@ -74,6 +74,10 @@ pub struct FooterHints {
     /// `esc again to interrupt` once armed; EMPTY renders nothing
     /// (every golden stays byte-exact while no turn is running).
     pub interrupt: String,
+    /// #33 — the location label's hover lift
+    /// (`useWorkingDirectoryActions.hovered`: `text.base` under the
+    /// pointer, `text.muted` at rest, prompt/index.tsx:1927).
+    pub location_hovered: bool,
 }
 
 /// Everything [`render_prompt_frame`] paints.
@@ -554,6 +558,55 @@ fn paint_composer_box(
     let _ = width;
 }
 
+/// The location label's remaining column budget on the footer row —
+/// the width left of the right-aligned hints block (and the interrupt
+/// hint, when a turn runs).
+#[must_use]
+fn footer_location_budget(view: &PromptView, width: usize) -> usize {
+    let hints_shown = width >= 44;
+    let agent_hint = format!("{} agents", view.footer.agent_shortcut);
+    let command_hint = format!("{} commands", view.footer.command_shortcut);
+    let block_width = display_width(&agent_hint) + 2 + display_width(&command_hint);
+    let plugin_width = display_width(&view.footer.plugin_hints.join(" · "));
+    let status_text =
+        match (view.footer.status_agent.is_empty(), view.footer.status_model.is_empty()) {
+            (true, true) => String::new(),
+            (false, false) => {
+                format!("{} · {}", view.footer.status_agent, view.footer.status_model)
+            }
+            (false, true) => view.footer.status_agent.clone(),
+            (true, false) => view.footer.status_model.clone(),
+        };
+    let status_width = display_width(&status_text);
+    let right_block = if hints_shown {
+        block_width
+            + if status_width > 0 { status_width + 2 } else { 0 }
+            + if plugin_width > 0 { plugin_width + 2 } else { 0 }
+    } else {
+        status_width + plugin_width
+    };
+    let location_width =
+        if right_block > 0 { width.saturating_sub(right_block + 2).max(1) } else { width };
+    let interrupt_width = display_width(&view.footer.interrupt);
+    location_width.saturating_sub(if interrupt_width > 0 { interrupt_width + 2 } else { 0 })
+}
+
+/// The location label's column extent on the footer row
+/// (`prompt.footer.status`, prompt/index.tsx:1925-1937): the label
+/// truncates into the space left of the right-aligned hints — the
+/// hover/click surface (`useWorkingDirectoryActions`). None when the
+/// label is empty. `(x, width)` in frame columns.
+#[must_use]
+pub fn footer_location_extent(view: &PromptView, width: usize) -> Option<(usize, usize)> {
+    if view.footer.location.is_empty() {
+        return None;
+    }
+    let budget = footer_location_budget(view, width);
+    let location = truncate_width(&view.footer.location, budget);
+    let painted = display_width(&location);
+    (painted > 0).then_some((0, painted))
+}
+
 /// The footer row: the `{directory}:{branch}` label muted at the left,
 /// the agent · model statusline + the plugin hints right-aligned
 /// (gated at ≥ 44 cols).
@@ -596,17 +649,17 @@ fn paint_footer_row(
     } else {
         status_width + plugin_width
     };
-    let location_width =
-        if right_block > 0 { width.saturating_sub(right_block + 2).max(1) } else { width };
     // Wave A: the interrupt hint (`PromptInterruptStatus`,
     // prompt/index.tsx:137-144) sits at the row's left — `esc` in
     // text.base with the label muted — while a turn runs; the
     // location label follows it (empty hint ⇒ the golden geometry).
     let interrupt_width = display_width(&view.footer.interrupt);
-    let location_budget =
-        location_width.saturating_sub(if interrupt_width > 0 { interrupt_width + 2 } else { 0 });
+    let location_budget = footer_location_budget(view, width);
     let location = truncate_width(&view.footer.location, location_budget);
-    paint_text(frame, 0, row_index, &location, colors.muted, colors.base, 0);
+    // The hover lift (`locationActions.hovered()` → text.base,
+    // prompt/index.tsx:1927).
+    let location_fg = if view.footer.location_hovered { colors.text_base } else { colors.muted };
+    paint_text(frame, 0, row_index, &location, location_fg, colors.base, 0);
     if interrupt_width > 0 {
         let mut x = display_width(&location);
         if !location.is_empty() {
