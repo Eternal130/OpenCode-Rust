@@ -703,3 +703,137 @@ both stacks (request-path: ref = main 1 + subagent 1 + continuation 1
   child route.
 - Exit teardown stays clean on both stacks (no hangs; the grids
   settle and the alt-screen leave is observed).
+
+# Addendum — fix-wave E2: the subagent UI surfaces (lane/subui, 2026-10-12)
+
+The four class-(a) TUI findings of the corpus3 backlog, fixed and
+rig-verified. All runs:
+`PARITY_BUN=… OC_TUI_DIFF` gates through `tools/dev-gate.sh`;
+differential `cargo run -p parity --bin tui-diff -- --filter subagent
+--runs 1` (artifacts under `/tmp/opencode/tui-diff/`).
+
+## #40 — the subagent tool card
+
+**Root cause (ours)**: `Part::Tool` carried only `{id, name, time}` —
+the wire `part.state` (`{status, input, metadata}`) was dropped at
+every ingest seam, and the transcript's `Part::Tool` render arm
+returned an empty row. The ref renders the card via `Subagent`
+(routes/session/index.tsx:3087-3120) over `InlineTool`/
+`InlineToolRow` (message-parts.tsx:198-275).
+
+**Port**: `ToolState`/`ToolStatus` on the model
+(components/message/model.rs) + the live reducers the v2 client runs
+(data.ts:919-980 — `tool.input.started` streaming reset, `called`
+running+parsed input, `progress` metadata swap, `success/failed`
+settlement) + `stringify_value/map` (`stringValue` semantics) at both
+ingest seams (typed wire + raw events) +
+`rows::subagent_tool_row` (completed `✓ {Titlecase(agent)} Subagent —
+{description}`; running spinner+label — the `spinner` arm renders
+`children`; streaming `⠋ Delegating…`; continuation `↳ Continue
+subagent — …`; the `· {model}` suffix) wired through the
+`Entry::Part` arm for canonical tool name `subagent`, with the
+child-session live status (`metadata.sessionID` → running map) fed
+through `TranscriptOptions.subagent_running`.
+
+**Rig**: our s09 = the ref row-for-row (`✓ General Subagent — Check
+the fixture` at the ref's row/cols/muted style); only #12 (strip
+title) and #13 (stats row) cells remain at those steps.
+
+## #44 — the subagent picker
+
+**Root cause (ours)**: the keymap table listed `session.child.first`
+but no handler existed — `down` fell to `input.move.down` and the
+panel was unreachable.
+
+**Port**: `PickerState` (open/tab/filter/selection — v2's Session
+`composer` store, index.tsx:217-220 + the tab's memory filter,
+subagents-tab.tsx:36-37) in the store; the panel component
+(components/subagent_picker.rs — tabs `Subagents  Shell  Terminals`
++ right-aligned `esc`, the 5-row body (` No active subagents` /
+`{agent}: {title}` rows in the action.primary palette, focused =
+peach+bold), the `show {inactive|active} ctrl+a  tabs ←/→` hints row;
+box = border col 2 over raised, content [4, W−5]) mounted in place of
+the whole prompt mount (`open={composer.open || parentID}`,
+index.tsx:1451 — the ╹▀/status rows belong to the prompt); the
+`composer` keymap MODE (table entries `composer.*` +
+`session.child.next/previous` mirroring keybind.ts:136-138) pushed
+while live so escape/ctrl+c close and the arrows/enter/ctrl+a drive
+the list; `session.child.first` resolves ABOVE `input.move.down` on
+an empty draft (stroke_matches_command — the corpus3 evidence that
+`down` opens the panel on the ref); the family walk
+(`sessionFamily`, util/session.ts) over the extended session registry
+(agent/title/created/running off `session.created`/`renamed`/
+`agent.selected`/`execution.*`, seeded by the resync snapshot).
+
+**Rig**: our s14/s15 are byte-shaped with the ref (tabs row, `esc` at
+cols 73-75, `No active subagents`, the ctrl+a flip to `General: Check
+the fixture`, both hint states); enter navigates into the child (no
+new tab — the strip keeps the root's pill).
+
+## #45 — the child-session view + sidebar suppression
+
+**Port**: navigation roots the tab bookkeeping
+(`session-tabs.tsx`'s `root()` — context/session-tabs.tsx:138,188):
+`Store::navigate` uses the family root, so a child route never opens
+a tab and the strip's active pill stays the parent's; the child's
+transcript renders from the live event trees; the child route ALWAYS
+mounts the picker (the `parentID` composer) and its close NAVIGATES
+to the parent (index.tsx:1453-1460 — v2's keyed remount resets the
+composer state, mirrored by clearing the open flag). The sidebar
+suppression itself (`session-frame.tsx:106-111`) was already ported
+(store `sidebar_shown`) — this lane made it TUI-OBSERVABLE.
+
+**Rig**: our s16/s17 (160×36): the child's transcript (user box
+`You are a subagent spawned…`, thought, reply) renders with the
+picker at FULL width (`esc` past col 118) and NO sidebar pane; esc
+re-docks the parent's sidebar (Getting started card back) and
+restores the prompt. The 80×24 child step's row shifts trace to #41
+(the duplicate subagent request doubles the child transcript —
+server-side lane G), not to the view.
+
+## #46 — the exit farewell screen
+
+**Root cause (ours)**: the loop tore down to a blank primary screen;
+the ref prints the session epilogue after the renderer stops
+(app.tsx:443-450 → `sessionEpilogue`, util/presentation.ts:26-34).
+
+**Port**: `presentation.rs` — a byte-exact port of `sessionEpilogue`
+(the per-glyph SGR wordmark over logo.ts, `_`/`^`/`~` cell kinds with
+the 235/238 palettes, `weak()` 10-padded dim labels, bold values,
+`Locale.truncate(_, 50)` UTF-16 semantics); `Store::exit_epilogue`
+stages it from the routed session's registry title; the run loop
+writes it + `\n` to stdout AFTER `LeaveAlternateScreen` (home exits
+print nothing — the corpus's identical post-exit blanks).
+
+**Rig**: all four executions' exit steps are now **text-only, 16
+cells, styles identical** — the `Continue  opencode -s <id>` session
+IDS alone differ (each stack generates its own). The wordmark + both
+label rows are byte-identical through the SGR digests.
+
+## Verification (this lane)
+
+- Rig (before → after): 68 mismatched steps → 64 mismatched + 4
+  text-only exits; the picker/child/card surfaces render byte-shaped;
+  every remaining cell maps to OTHER lanes' findings (#12 auto-title,
+  #13 stats row, #14 thought duration, #41 duplicate subagent request
+  — server-side lane G, and the B/C/D chrome families), none to E2's
+  list.
+- Tests: `pty_subagent.rs` — the live-loop walk over a scripted
+  subagent flow (card → down → ctrl+a → enter → child at 80 and 160
+  (sidebar absent) → esc → ctrl+c farewell with the epilogue +
+  home-exit negative); unit pins for the card states (streaming/
+  running/completed/continuation/model-suffix), the tool-event state
+  machine, the registry family/status, the picker walk (open/filter/
+  navigate/close-to-parent/wrap-move), the epilogue bytes/route
+  tracking, and the panel geometry (both corpus shapes).
+- Gates: `cargo fmt --all -- --check` clean; `cargo clippy -p oc-tui
+  -p oc-tui-core -p parity --all-targets` adds ZERO warnings (the 45
+  `parity` warnings predate the lane — main-identical);
+  `cargo nextest run -p oc-tui -p oc-tui-core -p parity` 745/745
+  (`pty_sidebar_plugin_section_renders_through_the_host` is a
+  load-dependent bun-cold-start flake — passes in isolation on main
+  and here); the gated entry
+  `OC_TUI_DIFF=1 … -E 'test(tui_diff)'` PASS.
+- Goldens: `PARITY_UPDATE=1` regen rewrites ZERO bytes (double-regen
+  byte-stable; nothing to commit) — the new surfaces render only
+  under live state the fixtures never carry.

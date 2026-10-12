@@ -130,9 +130,14 @@ pub fn render_session(
     // The tabs strip (height 1) leads the column when the tabs config
     // is enabled (v2's session-frame renders the strip behind the
     // same `enabled()` gate); the transcript starts directly under
-    // it. With tabs off the frame starts at the transcript.
+    // it. With tabs off the frame starts at the transcript. The
+    // active pill keys on the routed session's family ROOT
+    // (session-tabs.tsx:138 — a child-session route keeps the root's
+    // pill active, #45).
     let show_strip = store.tabs_enabled();
-    let strip = show_strip.then(|| paint_live_tabs_bar(store, Some(session_id), width, styles));
+    let strip_active = show_strip.then(|| store.session_root(session_id));
+    let strip =
+        show_strip.then(|| paint_live_tabs_bar(store, strip_active.as_deref(), width, styles));
 
     // The session sidebar (session-frame.tsx:106-117): v2's right
     // pane — `auto` shows it above 120 cols, the manual toggle forces
@@ -150,14 +155,37 @@ pub fn render_session(
     };
 
     // The composer's docked mount (popup rows above it when the
-    // slash palette is open) + the transcript's height budget.
-    let (mount, prompt_height, mount_height) =
-        composer_mount_frame(store, session_id, &theme, column, height);
+    // slash palette is open) + the transcript's height budget. With
+    // the subagent picker open (or on a child session — #44/#45) the
+    // picker panel REPLACES the whole prompt mount (v2's Composer:
+    // `open={composer.open || parentID}` at index.tsx:1451 — the
+    // ╹▀ transition and status row belong to the prompt, not the
+    // panel).
+    let picker_live = store.picker_live(session_id);
+    let (mount, prompt_height, mount_height) = if picker_live {
+        let entries = store.picker_entries(session_id);
+        let selected = store.picker_selection(session_id, entries.len());
+        let panel = crate::components::subagent_picker::picker_panel_frame(
+            &store.picker(),
+            &entries,
+            selected,
+            &theme,
+            u16::try_from(column).unwrap_or(u16::MAX),
+        );
+        (
+            panel,
+            crate::components::subagent_picker::PICKER_MOUNT_ROWS,
+            crate::components::subagent_picker::PICKER_MOUNT_ROWS,
+        )
+    } else {
+        composer_mount_frame(store, session_id, &theme, column, height)
+    };
     // The queued-prompt dock (v2's `QueuedPromptDock`,
     // index.tsx:2312-2342): one row above the composer —
     // `┃ {n} queued · {next}` — while prompts wait in the serial
-    // queue; absent (and byte-invisible) when the queue is empty.
-    let queued = store.queued_prompts(session_id);
+    // queue; absent (and byte-invisible) when the queue is empty or
+    // the composer panel is open (index.tsx:1445's `!composer.open`).
+    let queued = if picker_live { Vec::new() } else { store.queued_prompts(session_id) };
     let dock_height = usize::from(!queued.is_empty());
     let spacing = usize::from(mount_height + dock_height + 1 < height);
     // Without the strip the chrome is one row shorter (no title row
@@ -185,6 +213,7 @@ pub fn render_session(
                 protocol: store.graphics_protocol(),
                 terminal_rows: size.1,
             },
+            subagent_running: store.subagent_running_map(),
             ..TranscriptOptions::default()
         },
         styles,

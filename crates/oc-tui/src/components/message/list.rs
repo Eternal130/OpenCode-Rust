@@ -37,7 +37,7 @@ use ratatui::style::Style;
 use crate::components::message::markdown::{render_markdown, MarkdownStyles};
 use crate::components::message::model::{
     canonical_tool_name, exploration_label, reasoning_summary, reduce_rows_with_rules, Entry,
-    Message, Part, Row,
+    Message, Part, Row, ToolState,
 };
 use crate::components::message::rows::{
     assistant_footer_row, completed_tool_row, reasoning_header_row, running_tool_row,
@@ -75,6 +75,10 @@ pub struct TranscriptOptions {
     /// The user-message image strip (R-07): disabled by default — the
     /// goldens predate it; `render_session` enables it per config.
     pub image_strip: crate::components::message::rows::ImageStripOptions,
+    /// Live child-session statuses (#40): `metadata.sessionID` →
+    /// running — the subagent card's `isRunning` second clause
+    /// (`data.session.status(id) === "running"`). Empty in fixtures.
+    pub subagent_running: std::collections::HashMap<String, bool>,
 }
 
 impl Default for TranscriptOptions {
@@ -86,6 +90,7 @@ impl Default for TranscriptOptions {
             expanded_groups: Vec::new(),
             group_rules: crate::components::message::model::GroupRules::empty(),
             image_strip: crate::components::message::rows::ImageStripOptions::default(),
+            subagent_running: std::collections::HashMap::new(),
         }
     }
 }
@@ -248,6 +253,23 @@ fn render_row(
             };
             match part {
                 Part::Text { text, .. } => text_part_row(text, markdown, width),
+                // The subagent tool renders its InlineTool card (#40 —
+                // `Subagent`, session/index.tsx:3087-3120); other
+                // ungrouped tools stay wave-2 surfaces (exploration
+                // tools render through their group header).
+                Part::Tool { name, state, .. } if canonical_tool_name(name) == "subagent" => {
+                    let session_running = state
+                        .metadata
+                        .get("sessionID")
+                        .and_then(|id| options.subagent_running.get(id).copied());
+                    crate::components::message::rows::subagent_tool_row(
+                        state,
+                        session_running,
+                        options.clock_ms,
+                        theme,
+                        width,
+                    )
+                }
                 // Ungrouped tool parts (non-exploration tools) render via
                 // the tool_rows component (wave 2 integration surface);
                 // the golden transcript only carries grouped exploration
@@ -597,6 +619,7 @@ pub fn message_groups_fixture() -> Vec<Message> {
                     id: "grp-tool-read".into(),
                     name: "read".into(),
                     time: PartTime { created: Some(1), completed: Some(1) },
+                    state: ToolState::default(),
                 },
                 Part::Text {
                     text: "It reads the configuration and produces a build plan.".into(),
@@ -798,6 +821,153 @@ mod tests {
         assert!(line.trim_end().ends_with("Jump to latest ↓"), "{line}");
     }
 
+    // -- #40: the subagent tool card --------------------------------------
+
+    use crate::components::message::model::ToolState;
+
+    fn tool_state(
+        status: crate::components::message::model::ToolStatus,
+        input: &[(&str, &str)],
+    ) -> ToolState {
+        ToolState {
+            status,
+            input: input.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect(),
+            metadata: std::collections::BTreeMap::new(),
+        }
+    }
+
+    fn card_line(state: &ToolState, theme: &crate::theme::ThemeStyles) -> String {
+        let row = crate::components::message::rows::subagent_tool_row(state, None, 0, theme, 76);
+        let frame = crate::render::paint_placed(
+            &row.placed,
+            (76, 1),
+            crate::components::tool_rows::fill_style(theme),
+        );
+        frame.text_grid().remove(0)
+    }
+
+    /// The completed card: `✓ General Subagent — Check the fixture`
+    /// (the corpus3 ref row byte-for-byte — icon slot + label muted).
+    #[test]
+    fn subagent_card_completed_matches_the_ref_row() {
+        let theme = theme();
+        let state = tool_state(
+            crate::components::message::model::ToolStatus::Completed,
+            &[("agent", "general"), ("description", "Check the fixture")],
+        );
+        let frame = crate::render::paint_placed(
+            &crate::components::message::rows::subagent_tool_row(&state, None, 0, &theme, 76)
+                .placed,
+            (76, 1),
+            crate::components::tool_rows::fill_style(&theme),
+        );
+        let line = &frame.text_grid()[0];
+        assert!(line.starts_with("   ✓ General Subagent — Check the fixture"), "{line}");
+        assert_eq!(frame.cell(0, 3).fg, crate::render::CellColor::Rgb(128, 128, 128));
+    }
+
+    /// The running card: the spinner + the SAME composed label (v2's
+    /// `spinner` arm renders `children`, never `pending`).
+    #[test]
+    fn subagent_card_running_spins_the_label() {
+        let theme = theme();
+        let state = tool_state(
+            crate::components::message::model::ToolStatus::Running,
+            &[("agent", "general"), ("description", "Check the fixture")],
+        );
+        let line = card_line(&state, &theme);
+        assert!(line.starts_with("   ⠋ General Subagent — Check the fixture"), "{line}");
+    }
+
+    /// The streaming card (args arriving, `complete` falsy, no
+    /// spinner): the pending row `⠋ Delegating…`.
+    #[test]
+    fn subagent_card_streaming_shows_the_pending_row() {
+        let theme = theme();
+        let state = ToolState::default();
+        let line = card_line(&state, &theme);
+        assert!(line.starts_with("   ⠋ Delegating…"), "{line}");
+    }
+
+    /// A continuation call (`input.sessionID`): the `↳` icon + the
+    /// `Continue subagent` label, never a spinner even while running.
+    #[test]
+    fn subagent_card_continuation_uses_the_return_icon() {
+        let theme = theme();
+        let state = tool_state(
+            crate::components::message::model::ToolStatus::Running,
+            &[("sessionID", "ses_child"), ("description", "Keep going")],
+        );
+        let line = card_line(&state, &theme);
+        assert!(line.starts_with("   ↳ Continue subagent — Keep going"), "{line}");
+    }
+
+    /// The model suffix: `input.model` appends ` · {reference}` (the
+    /// model-list name resolution is the store's to add).
+    #[test]
+    fn subagent_card_appends_the_model_suffix() {
+        let theme = theme();
+        let state = tool_state(
+            crate::components::message::model::ToolStatus::Completed,
+            &[
+                ("agent", "general"),
+                ("description", "Check the fixture"),
+                ("model", "parityfake/fake-model"),
+            ],
+        );
+        let line = card_line(&state, &theme);
+        assert!(
+            line.starts_with("   ✓ General Subagent — Check the fixture · parityfake/fake-model"),
+            "{line}"
+        );
+    }
+
+    /// The transcript renders the card as its own row: a standalone
+    /// `subagent` tool part does NOT group (not an exploration tool)
+    /// and paints between the user message and the text part.
+    #[test]
+    fn transcript_renders_the_subagent_card_row() {
+        use crate::components::message::model::{Message, Part, PartTime};
+        let theme = theme();
+        let messages = vec![
+            Message::User {
+                id: "u1".into(),
+                text: "delegate now".into(),
+                created: 0,
+                files: Vec::new(),
+            },
+            Message::Assistant {
+                id: "a1".into(),
+                agent: "build".into(),
+                model: "p/m".into(),
+                parts: vec![
+                    Part::Tool {
+                        id: "tool_1".into(),
+                        name: "subagent".into(),
+                        time: PartTime { created: Some(1), completed: Some(2) },
+                        state: tool_state(
+                            crate::components::message::model::ToolStatus::Completed,
+                            &[("agent", "general"), ("description", "Check the fixture")],
+                        ),
+                    },
+                    Part::Text { text: "Main flow final reply.".into(), time: PartTime::default() },
+                ],
+                finish: Some("stop".into()),
+                error: None,
+                time: PartTime { created: Some(1), completed: Some(3) },
+            },
+        ];
+        let transcript = render_transcript(&messages, &TranscriptOptions::default(), &theme, 80);
+        let frame = transcript.paint(FollowState::Sticky, &theme, (80, 24), None);
+        let grid = frame.text_grid();
+        let card_row = grid
+            .iter()
+            .find(|row| row.contains("✓ General Subagent — Check the fixture"))
+            .unwrap_or_else(|| panic!("card row missing: {grid:?}"));
+        assert!(card_row.starts_with("     ✓"), "paddingLeft 3 + inset 2: {card_row}");
+        assert!(grid.iter().any(|row| row.contains("Main flow final reply.")));
+    }
+
     #[test]
     fn resolve_part_ords_and_tool_ids() {
         use crate::components::message::model::PartTime;
@@ -805,7 +975,12 @@ mod tests {
             Part::Text { text: "a".into(), time: PartTime::default() },
             Part::Reasoning { text: "r".into(), time: PartTime::default() },
             Part::Text { text: "b".into(), time: PartTime::default() },
-            Part::Tool { id: "t9".into(), name: "read".into(), time: PartTime::default() },
+            Part::Tool {
+                id: "t9".into(),
+                name: "read".into(),
+                time: PartTime::default(),
+                state: ToolState::default(),
+            },
         ];
         assert!(matches!(resolve_part(&parts, "text:0"), Some(Part::Text { .. })));
         assert!(
