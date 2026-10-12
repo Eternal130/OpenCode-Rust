@@ -515,6 +515,23 @@ impl App {
         matches!(self.store.footer().view, FooterView::Permission { .. })
     }
 
+    /// v2's overlay-sidebar keymap gate (routes/session/index.tsx:244):
+    /// the close layer is armed only while the session sidebar is
+    /// visible on a NARROW frame — `dimensions().width -
+    /// props.verticalTabsWidth <= 120` (the floating scrim overlay;
+    /// the wide dock keeps escape for the prompt/dialog chain, and
+    /// the sidebar never mounts on Home).
+    fn overlay_sidebar_live(&self) -> bool {
+        let width = usize::from(self.size.0);
+        if width > crate::components::sidebar::SIDEBAR_AUTO_BREAKPOINT {
+            return false;
+        }
+        match self.store.route() {
+            Route::Session { session_id } => self.store.sidebar_shown(&session_id, width),
+            Route::Home => false,
+        }
+    }
+
     /// F11: whether an ERROR panel currently holds the screen — a
     /// TITLED error toast (the "Session failed" / "Failed to send
     /// prompt" panel class). Untitled error notices (the log-skip
@@ -616,6 +633,29 @@ impl App {
     /// Route-layer stroke: conditional exit layer → managed textarea →
     /// input/base keymap (see the module docs).
     fn stroke_on_route(&mut self, stroke: &KeyStroke) {
+        // 0. The overlay-sidebar close layer (v2 routes/session/index.tsx:
+        //    243-245 — `Keymap.createLayer({ priority: 10, enabled: () =>
+        //    props.sidebarVisible && dimensions().width -
+        //    props.verticalTabsWidth <= 120 && !disabled(), commands: [{
+        //    bind: "escape,ctrl+c", run: props.onToggleSidebar }] })`):
+        //    while the session sidebar floats over a narrow frame (the
+        //    scrim overlay — visible and width ≤ 120), escape and
+        //    ctrl+c close it before any other route layer sees the
+        //    key. Without this the overlay's opaque scrim hides the
+        //    composer entirely and NO key recovers the frame (the
+        //    pty_fuzz dead end); v2's `disabled()` guard (permissions/
+        //    forms open) is the pump's earlier Dialog/permission
+        //    branches, which keep their precedence here.
+        if self.overlay_sidebar_live() {
+            let plain = !stroke.ctrl && !stroke.alt;
+            let close_chord = (plain && stroke.key == "escape")
+                || (stroke.ctrl && !stroke.alt && stroke.key == "c");
+            if close_chord {
+                self.store.toggle_sidebar();
+                self.keymap.clear_pending();
+                return;
+            }
+        }
         let key = self.prompt_key();
         let draft_empty = self.store.prompt_draft(&key).is_empty();
         self.keymap.set_command_enabled("app.exit", draft_empty);
@@ -4299,5 +4339,54 @@ mod core_interaction_tests {
         app.press("backspace");
         app.press("backspace");
         assert!(app.store.prompt_draft("s1").is_empty(), "info toasts stay transparent");
+    }
+
+    /// v2's overlay-sidebar close layer (routes/session/index.tsx:
+    /// 243-245): at a narrow width the manually-opened sidebar floats
+    /// over a scrim that hides the composer — escape and ctrl+c must
+    /// close it (priority 10, above every route layer), restoring the
+    /// composer rail. The `pty_fuzz` recoverability invariant depends on
+    /// this (the pre-fix dead end: no `┃`, no visible echo).
+    #[test]
+    fn escape_closes_the_overlay_sidebar_back_to_the_composer() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("Bug hunt".to_owned()));
+
+        // <leader>b at 80 cols: the manual overlay — the sidebar shows
+        // and the opaque scrim covers the composer (no `┃` anywhere).
+        app.press("ctrl+x");
+        app.press("b");
+        assert!(app.store.sidebar_shown("s1", 80), "the manual overlay is up");
+        assert!(!app.frame_text().contains('┃'), "the scrim hides the composer");
+
+        // Escape closes it (v2 binds "escape,ctrl+c" → onToggleSidebar)
+        // and the composer rail returns.
+        app.press("escape");
+        assert!(!app.store.sidebar_shown("s1", 80), "escape closed the overlay");
+        assert!(app.frame_text().contains('┃'), "the composer is back");
+
+        // Re-open: ctrl+c closes it too — and unlike escape it must
+        // still be able to reach `app.exit` once the overlay is down
+        // (the chord order the exit protocol relies on).
+        app.press("ctrl+x");
+        app.press("b");
+        assert!(app.store.sidebar_shown("s1", 80));
+        app.press("ctrl+c");
+        assert!(!app.store.sidebar_shown("s1", 80), "ctrl+c closed the overlay");
+        assert!(!app.exit_requested, "the first ctrl+c closes, not exits");
+        assert!(app.frame_text().contains('┃'), "the composer is back again");
+    }
+
+    /// The close layer stays armed ONLY for the floating overlay: at a
+    /// wide width the docked sidebar leaves escape to the normal
+    /// prompt/dialog chain (v2's `<= 120` width guard).
+    #[test]
+    fn escape_does_not_close_the_wide_docked_sidebar() {
+        let mut app = App::new((160, 24));
+        app.store.open_tab("s1", Some("Bug hunt".to_owned()));
+        // 160 cols: auto mode already docks the pane.
+        assert!(app.store.sidebar_shown("s1", 160), "the wide pane docks");
+        app.press("escape");
+        assert!(app.store.sidebar_shown("s1", 160), "escape left the docked pane alone");
     }
 }
