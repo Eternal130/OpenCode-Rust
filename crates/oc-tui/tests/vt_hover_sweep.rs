@@ -131,6 +131,11 @@ struct SweepOutcome {
     strip: String,
     /// Baseline volatile cells (the caret blink etc.), for the report.
     volatile: Vec<(usize, usize)>,
+    /// Targeted probes at the `+` glyph column and its two padding
+    /// neighbors (stride-2 sweeps can miss the glyph column; the
+    /// glyph-tight hit-zone rule — corpus2 #28 — pins the exact rect:
+    /// the GLYPH highlights, the padding cells are no-ops).
+    plus_probes: Vec<(usize, Response)>,
 }
 
 /// Hover one cell, then classify the settled grid against the
@@ -159,6 +164,23 @@ fn probe_hover(
     } else {
         Response::ContentChange
     }
+}
+
+/// Targeted probes of the `" + "` affordance's EXACT columns: the
+/// glyph and its two padding neighbors (corpus2 #28 — the hit zone is
+/// glyph-tight; the padding cells must be no-ops). Stride-2 sweeps can
+/// never observe this rect directly.
+fn probe_plus_rect(
+    harness: &mut HarnessHandle,
+    strip: &str,
+    baseline: &Grid,
+    volatile: &HashSet<(usize, usize)>,
+) -> Vec<(usize, Response)> {
+    let plus = strip.chars().position(|ch| ch == '+').expect("the affordance glyph");
+    [plus.saturating_sub(1), plus, plus + 1]
+        .into_iter()
+        .map(|x| (x, probe_hover(harness, x as u16, 0, baseline, volatile)))
+        .collect()
 }
 
 /// Sweep the strided cells of rows `[y0, y1)` of the settled screen,
@@ -314,6 +336,7 @@ fn home_band(y0: usize, y1: usize) -> SweepOutcome {
             sweep: result,
             strip: baseline.row_text(0),
             volatile: volatile.iter().copied().collect(),
+            plus_probes: Vec::new(),
         })
     });
     eprintln!(
@@ -393,15 +416,40 @@ fn assert_strip_surfaces(outcome: &SweepOutcome, label: &str) {
         }
         best.map_or(Response::NoChange, |(_, response)| response)
     };
-    // The add affordance: the `+` column must respond — StyleOnly
-    // (the affordance highlights; nothing re-renders).
-    let plus_cols: Vec<usize> =
-        strip.chars().enumerate().filter(|(_, ch)| *ch == '+').map(|(x, _)| x).collect();
-    assert!(
-        plus_cols.iter().any(|&x| response_at(x) == Response::StyleOnly),
-        "{label}: the '+' affordance did not classify StyleOnly (strip: {strip:?}): {}",
-        sweep.summary()
-    );
+    // The add affordance: the GLYPH column must respond — StyleOnly
+    // (the affordance highlights; nothing re-renders) — and its two
+    // padding cells must be NO-OPS (glyph-tight hit zone, corpus2
+    // #28). Targeted probes: stride-2 sweeps can miss the glyph.
+    if outcome.plus_probes.is_empty() {
+        let plus_cols: Vec<usize> =
+            strip.chars().enumerate().filter(|(_, ch)| *ch == '+').map(|(x, _)| x).collect();
+        assert!(
+            plus_cols.iter().any(|&x| response_at(x) == Response::StyleOnly),
+            "{label}: the '+' affordance did not classify StyleOnly (strip: {strip:?}): {}",
+            sweep.summary()
+        );
+    } else {
+        let plus = outcome.strip.chars().position(|ch| ch == '+').expect("the glyph");
+        for &(x, response) in &outcome.plus_probes {
+            if x == plus {
+                assert_eq!(
+                    response,
+                    Response::StyleOnly,
+                    "{label}: the '+' GLYPH must highlight (strip: {:?}): {}",
+                    outcome.strip,
+                    sweep.summary()
+                );
+            } else {
+                assert_eq!(
+                    response,
+                    Response::NoChange,
+                    "{label}: the '+' padding cell at col {x} must be a no-op (glyph-tight, corpus2 #28; strip: {:?}): {}",
+                    outcome.strip,
+                    sweep.summary()
+                );
+            }
+        }
+    }
     // Tab titles: the majority of the strip's letter columns must
     // respond (hover lift + `✕` reveal).
     let letter_cols: Vec<usize> =
@@ -436,7 +484,13 @@ fn session_band(y0: usize, y1: usize) -> SweepOutcome {
             return Err(format!("the strip never painted its affordance: {strip:?}"));
         }
         let result = sweep_band(harness, &baseline, &volatile, 1, y0, y1);
-        Ok(SweepOutcome { sweep: result, strip, volatile: volatile.iter().copied().collect() })
+        let plus_probes = probe_plus_rect(harness, &strip, &baseline, &volatile);
+        Ok(SweepOutcome {
+            sweep: result,
+            strip,
+            volatile: volatile.iter().copied().collect(),
+            plus_probes,
+        })
     });
     eprintln!(
         "[vt_hover session 80x24 rows {y0}-{y1}] {} (volatile: {:?})",
@@ -462,7 +516,13 @@ fn session_band_160(y0: usize, y1: usize) -> SweepOutcome {
         // Strided subset (every 2nd cell both axes) for speed — still
         // hits the strip's marks at 2-cell resolution.
         let result = sweep_band(harness, &baseline, &volatile, 2, y0, y1);
-        Ok(SweepOutcome { sweep: result, strip, volatile: volatile.iter().copied().collect() })
+        let plus_probes = probe_plus_rect(harness, &strip, &baseline, &volatile);
+        Ok(SweepOutcome {
+            sweep: result,
+            strip,
+            volatile: volatile.iter().copied().collect(),
+            plus_probes,
+        })
     });
     eprintln!(
         "[vt_hover session 160x50 strided rows {y0}-{y1}] {} (volatile: {:?})",
