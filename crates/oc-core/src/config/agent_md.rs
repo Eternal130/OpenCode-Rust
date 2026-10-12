@@ -4,7 +4,9 @@
 //! primary agents (per `Config.Directory` entry). Each file decodes through
 //! gray-matter frontmatter (native v2 fields, or legacy v1 frontmatter
 //! detected by unknown keys and migrated), and is emitted as a synthetic
-//! config document `{agents: {<id>: <agent>}}`.
+//! config document `{agents: {<id>: <agent>}}`. Config `Document` entries
+//! (the `agents` map of `opencode.json` & co.) pass through verbatim — the
+//! ref's `loadEntry` returns them as-is (config/plugin/agent.ts:34-36).
 
 use std::path::{Path, PathBuf};
 
@@ -97,16 +99,23 @@ pub fn discover(directory: &Path) -> Vec<AgentFile> {
     subagents
 }
 
-/// Loads every `Directory` entry's markdown agents as synthetic documents.
+/// Loads the agent-plugin document set: every config `Document` entry
+/// verbatim (ref `config/plugin/agent.ts:34-36` — `loadEntry` returns a
+/// `document` entry as-is, so the config `agents` map flows into the
+/// transform), plus every `Directory` entry's markdown agents as
+/// synthetic documents.
 #[must_use]
 pub fn load_documents(entries: &[Entry]) -> Vec<Document> {
     let mut documents = Vec::new();
     for entry in entries {
-        if let Entry::Directory(directory) = entry {
-            for file in discover(Path::new(&directory.path)) {
-                if let Ok(content) = std::fs::read_to_string(&file.filepath) {
-                    if let Some(document) = decode(&file, &content) {
-                        documents.push(document);
+        match entry {
+            Entry::Document(document) => documents.push((**document).clone()),
+            Entry::Directory(directory) => {
+                for file in discover(Path::new(&directory.path)) {
+                    if let Ok(content) = std::fs::read_to_string(&file.filepath) {
+                        if let Some(document) = decode(&file, &content) {
+                            documents.push(document);
+                        }
                     }
                 }
             }
@@ -633,6 +642,59 @@ mod tests {
             &mut editor,
         );
         assert_eq!(editor.default.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn config_agent_md_load_documents_passes_config_documents_through() {
+        // Ref `loadEntry` (config/plugin/agent.ts:34-36): a `document`
+        // entry is returned verbatim — the config `agents` map flows
+        // into the transform alongside markdown sources (corpus3 #38).
+        let info = serde_json::from_value::<oc_schema::config::Info>(serde_json::json!({
+            "agents": {
+                "researcher": {
+                    "mode": "subagent",
+                    "description": "Researches complex topics",
+                    "system": "You are a careful researcher."
+                }
+            }
+        }))
+        .unwrap();
+        let document = Document { info, path: None };
+        let loaded = load_documents(&[Entry::Document(Box::new(document))]);
+        assert_eq!(loaded.len(), 1, "config documents pass through verbatim");
+
+        // End-to-end through the transform: the registry gains the
+        // config-defined agent with every configured field.
+        let mut editor = MapAgentEditor::default();
+        transform(&loaded, Path::new("/home/test"), &mut editor);
+        let researcher = editor.get("researcher").expect("config agent registered (#38)");
+        assert_eq!(researcher.mode, oc_schema::agent::Mode::Subagent);
+        assert_eq!(researcher.description.as_deref(), Some("Researches complex topics"));
+        assert_eq!(researcher.system.as_deref(), Some("You are a careful researcher."));
+    }
+
+    #[test]
+    fn config_agent_md_load_documents_mixes_documents_and_directories() {
+        let dir = tempdir("agent-md-mixed");
+        write(&dir.join("agents").join("reviewer.md"), "Review.");
+        let info = serde_json::from_value::<oc_schema::config::Info>(serde_json::json!({
+            "agents": {"researcher": {"mode": "subagent"}}
+        }))
+        .unwrap();
+        let loaded = load_documents(&[
+            Entry::Document(Box::new(Document { info, path: None })),
+            Entry::Directory(oc_schema::config::Directory { path: dir.display().to_string() }),
+        ]);
+        let mut ids = std::collections::BTreeSet::new();
+        for document in &loaded {
+            if let Some(map) = &document.info.agents {
+                for id in map.keys() {
+                    ids.insert(id.clone());
+                }
+            }
+        }
+        assert!(ids.contains("researcher"), "config document: {ids:?}");
+        assert!(ids.contains("reviewer"), "markdown document: {ids:?}");
     }
 
     #[test]
