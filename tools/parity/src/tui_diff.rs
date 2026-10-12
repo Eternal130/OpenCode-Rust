@@ -262,8 +262,8 @@ pub enum StubScript {
 }
 
 impl StubScript {
-    fn sse(&self) -> String {
-        let ev = |v: &Value| format!("data: {}\n\n", v);
+    fn sse(self) -> String {
+        let ev = |v: &Value| format!("data: {v}\n\n");
         let mut out = String::new();
         let role = serde_json::json!({"choices":[{"delta":{"role":"assistant"}}]});
         out.push_str(&ev(&role));
@@ -276,7 +276,7 @@ impl StubScript {
                     out.push_str(&ev(&r1));
                     out.push_str(&ev(&r2));
                 }
-                if *self == StubScript::ReasoningLong {
+                if self == StubScript::ReasoningLong {
                     for line in 0..32 {
                         let text =
                             format!("Long reply line {} of the parity scroll fixture.", line + 1);
@@ -284,7 +284,7 @@ impl StubScript {
                         out.push_str(&ev(&delta));
                     }
                 } else {
-                    let text = if *self == StubScript::Text {
+                    let text = if self == StubScript::Text {
                         "Parity fake says hello."
                     } else {
                         "Parity fake says hello after thinking."
@@ -525,8 +525,8 @@ const OPTION_KEYS: [&str; 6] =
     ["temperature", "top_p", "top_k", "max_tokens", "reasoning_effort", "frequency_penalty"];
 
 impl SharedStub {
-    /// Start the stub (background thread; std::net like the vt-harness
-    /// FakeLlm — no runtime entanglement with the async rig driver).
+    /// Start the stub (background thread; `std::net` like the vt-harness
+    /// `FakeLlm` — no runtime entanglement with the async rig driver).
     pub fn start() -> Result<Self> {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").context("bind stub")?;
         let addr = listener.local_addr().context("stub addr")?;
@@ -550,7 +550,7 @@ impl SharedStub {
                         let requests = Arc::clone(&thread_requests);
                         let recorded = Arc::clone(&thread_recorded);
                         std::thread::spawn(move || {
-                            stub_handle(socket, &active, &flow, &requests, &recorded)
+                            stub_handle(socket, &active, &flow, &requests, &recorded);
                         });
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -713,7 +713,7 @@ pub struct PtyChild {
 impl PtyChild {
     /// Spawn `program argv` with `cwd`/`env` on a fresh `cols×rows`
     /// pty. The slave becomes the child's stdio AND controlling
-    /// terminal (setsid + TIOCSCTTY in pre_exec), so SIGWINCH reaches
+    /// terminal (setsid + TIOCSCTTY in `pre_exec`), so SIGWINCH reaches
     /// it on resize and it behaves exactly as under a real terminal.
     pub fn spawn(
         program: &Path,
@@ -865,7 +865,7 @@ impl PtyChild {
     }
 
     pub fn is_running(&mut self) -> bool {
-        self.child.try_wait().map(|status| status.is_none()).unwrap_or(false)
+        self.child.try_wait().is_ok_and(|status| status.is_none())
     }
 
     /// Terminate: SIGTERM to the group (filtered allowlist), then
@@ -1219,6 +1219,7 @@ impl ScriptStep {
     }
 
     /// Human description for the report.
+    #[must_use]
     pub fn describe(&self) -> String {
         let mut parts = Vec::new();
         if !self.keys.is_empty() {
@@ -2081,6 +2082,11 @@ pub async fn run_error_tool_probe(
 
 /// Run ONE script once at ONE size. Spawns fresh servers + TUIs,
 /// replays the steps, compares after each step, tears everything down.
+// One linear harness fn by design: spawn → replay → compare → teardown
+// reads top-to-bottom as the run's lifecycle. Bundling the 8 params or
+// extracting phases would reshuffle the harness for lint aesthetics —
+// not worth it in a test-only tool.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub async fn run_script_once(
     script: &Script,
     cols: u16,
@@ -2309,11 +2315,14 @@ pub async fn run_script_once(
             .is_some_and(|side| side.wait_grid_stable(2, 250, Duration::from_secs(5)));
         // One extra blink-phase beat, then capture.
         tokio::time::sleep(Duration::from_millis(400)).await;
-        let our_grid = our_side.as_ref().map(|side| side.grid_now()).unwrap_or_else(|| Grid {
-            cols: usize::from(cols),
-            rows: usize::from(rows),
-            cells: vec![VtCell { ch: ' ', style: 0 }; usize::from(cols) * usize::from(rows)],
-        });
+        let our_grid = our_side.as_ref().map_or_else(
+            || Grid {
+                cols: usize::from(cols),
+                rows: usize::from(rows),
+                cells: vec![VtCell { ch: ' ', style: 0 }; usize::from(cols) * usize::from(rows)],
+            },
+            PtyChild::grid_now,
+        );
         let ref_grid = match ref_side.as_ref() {
             Some(side) => side.grid_now(),
             None => our_grid.clone(),
@@ -2342,7 +2351,7 @@ pub async fn run_script_once(
         });
         // Grid artifacts for mismatching steps (decision-grade dumps).
         if class != StepClass::Identical {
-            let prefix = root.join(format!("s{:02}", index));
+            let prefix = root.join(format!("s{index:02}"));
             let _ =
                 std::fs::write(prefix.with_extension("ref.txt"), ref_grid.text().join("\n") + "\n");
             let _ =
@@ -2479,8 +2488,13 @@ impl CorpusReport {
     }
 
     /// Render the human-readable report.
+    // A markdown report generator: literal-string section pushes read as
+    // the report's outline; extracting subsections would bury that
+    // structure for a lint overage — keeping it flat on purpose.
+    #[allow(clippy::too_many_lines)]
     #[must_use]
     pub fn render(&self) -> String {
+        use std::fmt::Write as _;
         let mut out = String::new();
         out.push_str("# TUI side-by-side differential — corpus report\n\n");
         out.push_str("Comparison bar: COMPLETE cell-grid identity (char + style digest)\n");
@@ -2493,8 +2507,9 @@ impl CorpusReport {
         out.push_str("| script | size | run | steps | identical | text-only | mismatch | boot r/o | error |\n");
         out.push_str("|---|---|---|---|---|---|---|---|---|\n");
         for run in &self.runs {
-            out.push_str(&format!(
-                "| {} | {}x{} | {} | {} | {} | {} | {} | {}/{} | {} |\n",
+            let _ = writeln!(
+                out,
+                "| {} | {}x{} | {} | {} | {} | {} | {} | {}/{} | {} |",
                 run.script_id,
                 run.cols,
                 run.rows,
@@ -2506,19 +2521,20 @@ impl CorpusReport {
                 run.booted_ref,
                 run.booted_our,
                 run.error.as_deref().unwrap_or("")
-            ));
+            );
         }
         // Determinism split.
         let deterministic = self.deterministic_mismatches();
         if self.runs.iter().any(|r| r.run > 0) || self.runs.len() > 1 {
             out.push_str("\n## Determinism split (across runs)\n\n");
-            out.push_str(&format!(
-                "Mismatches present in EVERY run (deterministic — fix-wave backlog):\n{:?}\n\n",
+            let _ = writeln!(
+                out,
+                "Mismatches present in EVERY run (deterministic — fix-wave backlog):\n{:?}\n",
                 deterministic
                     .iter()
                     .map(|(s, c, r, i)| format!("{s}@{c}x{r}#{i}"))
                     .collect::<Vec<_>>()
-            ));
+            );
         }
         // Request-path parity (stub-recorded main requests).
         out.push_str("\n## Request-path parity (stub-recorded main requests)\n\n");
@@ -2544,17 +2560,18 @@ impl CorpusReport {
                 }
             }
             shapes.sort();
-            out.push_str(&format!(
-                "### {} @ {}x{} run {} — {} main requests, {} distinct shape(s)\n",
+            let _ = writeln!(
+                out,
+                "### {} @ {}x{} run {} — {} main requests, {} distinct shape(s)",
                 run.script_id,
                 run.cols,
                 run.rows,
                 run.run,
                 run.requests.len(),
                 shapes.len()
-            ));
+            );
             for (shape, count) in shapes {
-                out.push_str(&format!("- x{count}: {shape}\n"));
+                let _ = writeln!(out, "- x{count}: {shape}");
             }
             out.push('\n');
         }
@@ -2565,14 +2582,15 @@ impl CorpusReport {
         out.push_str("\n## Mismatch detail\n\n");
         for run in &self.runs {
             if run.error.is_some() {
-                out.push_str(&format!(
-                    "### {} @ {}x{} (run {}) — DRIVER ERROR\n\n```\n{}\n```\n\n",
+                let _ = writeln!(
+                    out,
+                    "### {} @ {}x{} (run {}) — DRIVER ERROR\n\n```\n{}\n```\n",
                     run.script_id,
                     run.cols,
                     run.rows,
                     run.run,
                     run.error.as_deref().unwrap_or("")
-                ));
+                );
                 continue;
             }
             for step in &run.steps {
@@ -2580,8 +2598,9 @@ impl CorpusReport {
                     continue;
                 }
                 let first = step.exact.first.as_ref();
-                out.push_str(&format!(
-                    "### {} @ {}x{} run {} step {} — {} ({})\n\n",
+                let _ = writeln!(
+                    out,
+                    "### {} @ {}x{} run {} step {} — {} ({})\n",
                     run.script_id,
                     run.cols,
                     run.rows,
@@ -2589,79 +2608,87 @@ impl CorpusReport {
                     step.step_index,
                     step.class_name(),
                     if step.label.is_empty() { &step.op } else { &step.label },
-                ));
-                out.push_str(&format!("op: {}\n", step.op));
+                );
+                let _ = writeln!(out, "op: {}", step.op);
                 if let Some(coverage) = &step.coverage {
-                    out.push_str(&format!("coverage: {coverage}\n"));
+                    let _ = writeln!(out, "coverage: {coverage}");
                 }
-                out.push_str(&format!(
-                    "settled: ref={} our={} | mismatches: {} (char {} / style {}), text-only {}\n",
+                let _ = writeln!(
+                    out,
+                    "settled: ref={} our={} | mismatches: {} (char {} / style {}), text-only {}",
                     step.settled_ref,
                     step.settled_our,
                     step.exact.mismatched_cells,
                     step.exact.char_mismatches,
                     step.exact.style_mismatches,
                     step.structural.text_only_cells,
-                ));
+                );
                 if let Some(first) = first {
-                    out.push_str(&format!(
-                        "first diff: ({}, {}) ref={:?} our={:?} styles ref[{}] our[{}]\n",
+                    let _ = writeln!(
+                        out,
+                        "first diff: ({}, {}) ref={:?} our={:?} styles ref[{}] our[{}]",
                         first.x,
                         first.y,
                         first.ref_cell.ch,
                         first.our_cell.ch,
                         decode_style(first.ref_cell.style),
                         decode_style(first.our_cell.style)
-                    ));
+                    );
                     let y = first.y;
-                    out.push_str(&format!(
-                        "ref row {y}: `{}`\n",
-                        step.ref_text.get(y).map(String::as_str).unwrap_or("")
-                    ));
-                    out.push_str(&format!(
-                        "our row {y}: `{}`\n",
-                        step.our_text.get(y).map(String::as_str).unwrap_or("")
-                    ));
+                    let _ = writeln!(
+                        out,
+                        "ref row {y}: `{}`",
+                        step.ref_text.get(y).map_or("", String::as_str)
+                    );
+                    let _ = writeln!(
+                        out,
+                        "our row {y}: `{}`",
+                        step.our_text.get(y).map_or("", String::as_str)
+                    );
                     if step.class == StepClass::Mismatch {
                         // Extra context rows around the first diff.
                         for dy in 1..=2 {
                             let ry = y + dy;
                             if ry < step.ref_text.len() || ry < step.our_text.len() {
-                                out.push_str(&format!(
-                                    "ref row {ry}: `{}`\nour row {ry}: `{}`\n",
-                                    step.ref_text.get(ry).map(String::as_str).unwrap_or(""),
-                                    step.our_text.get(ry).map(String::as_str).unwrap_or("")
-                                ));
+                                let _ = writeln!(
+                                    out,
+                                    "ref row {ry}: `{}`\nour row {ry}: `{}`",
+                                    step.ref_text.get(ry).map_or("", String::as_str),
+                                    step.our_text.get(ry).map_or("", String::as_str)
+                                );
                             }
                         }
                     }
                 }
                 if step.class == StepClass::Mismatch {
                     if let Some(diverge) = step.structural.digest_first_divergence {
-                        out.push_str(&format!(
-                            "structure: first run-digest divergence at row {diverge} (masked-text runs/margins differ)\n"
-                        ));
+                        let _ = writeln!(
+                            out,
+                            "structure: first run-digest divergence at row {diverge} (masked-text runs/margins differ)"
+                        );
                         if let (Some(ref_digest), Some(our_digest)) =
                             (&step.structural.digest_ref, &step.structural.digest_our)
                         {
-                            out.push_str(&format!(
-                                "structure: ref text-rows={} our text-rows={}\n",
+                            let _ = writeln!(
+                                out,
+                                "structure: ref text-rows={} our text-rows={}",
                                 ref_digest.text_rows.len(),
                                 our_digest.text_rows.len()
-                            ));
+                            );
                         }
                     }
                     out.push_str("cell samples (x,y): ref→our\n");
                     for miss in step.exact.samples.iter().take(8) {
-                        out.push_str(&format!(
-                            "  ({},{}) {:?}→{:?} ref[{}] our[{}]\n",
+                        let _ = writeln!(
+                            out,
+                            "  ({},{}) {:?}→{:?} ref[{}] our[{}]",
                             miss.x,
                             miss.y,
                             miss.ref_cell.ch,
                             miss.our_cell.ch,
                             decode_style(miss.ref_cell.style),
                             decode_style(miss.our_cell.style)
-                        ));
+                        );
                     }
                 }
                 out.push('\n');
@@ -2672,6 +2699,7 @@ impl CorpusReport {
 }
 
 /// Locate bun (same search order as the parity harness).
+#[must_use]
 pub fn find_bun() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("PARITY_BUN") {
         return Some(PathBuf::from(path));
