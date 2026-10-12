@@ -82,3 +82,58 @@ async fn tui_diff_side_by_side() -> anyhow::Result<()> {
     let _ = Duration::from_secs(0); // keep Duration import for future gates
     Ok(())
 }
+
+/// The corpus3 #39 retry-cadence probe (lane G), gated like the
+/// differential: both stacks loop a deterministically-failing tool
+/// call (the ghost agent) for a fixed window; BOTH loops are unbounded
+/// by parity, so the assertion is only the CADENCE ratio (ours within
+/// ~2x of the ref's request rate).
+#[tokio::test]
+#[ignore = "differential TUI rig: opt in with OC_TUI_DIFF=1 (needs bun + ref checkout)"]
+async fn tui_diff_error_tool_cadence_probe() -> anyhow::Result<()> {
+    if std::env::var("OC_TUI_DIFF").ok().as_deref() != Some("1") {
+        eprintln!("skipping: OC_TUI_DIFF != 1 (opt-in; see the module docs)");
+        return Ok(());
+    }
+    if tui_diff::find_bun().is_none() {
+        eprintln!("skipping: bun not found");
+        return Ok(());
+    }
+    if parity::reference::skip_if_no_bun() {
+        eprintln!("skipping: reference checkout missing and not rebuildable");
+        return Ok(());
+    }
+
+    let cfg = RigConfig::default_config();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let out_dir =
+        std::path::PathBuf::from("/tmp/opencode/tui-diff").join(format!("probe-test-{stamp}"));
+    std::fs::create_dir_all(&out_dir)?;
+    let cfg = RigConfig { out_dir, ..cfg };
+
+    let report = tui_diff::run_error_tool_probe(&cfg, Duration::from_secs(10)).await?;
+    let text = report.render();
+    std::fs::write(cfg.out_dir.join("error-tool-probe.md"), &text)?;
+    eprintln!(
+        "[tui-diff-test] probe report: {}",
+        cfg.out_dir.join("error-tool-probe.md").display()
+    );
+
+    // Both sides must have looped (the unbounded parity behavior) before
+    // the ratio is meaningful.
+    anyhow::ensure!(
+        report.reference.as_ref().is_some_and(|side| side.main_requests > 5),
+        "ref side never entered the error-tool loop"
+    );
+    anyhow::ensure!(
+        report.ours.as_ref().is_some_and(|side| side.main_requests > 5),
+        "our side never entered the error-tool loop"
+    );
+    anyhow::ensure!(
+        report.within_tolerance(2.0),
+        "our error-tool request cadence exceeds 2x the reference's:\n{text}"
+    );
+    Ok(())
+}

@@ -82,7 +82,11 @@
 //! mirror, stability waits).
 
 #![allow(unsafe_code)] // pty(7)/TIOCSCTTY are only reachable through libc FFI
-#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss // request-count/gap arithmetic feeds f64 rates
+)]
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -331,9 +335,9 @@ pub mod flow_markers {
     /// The `subagent` tool-call arguments served on the main request.
     /// `general` is the built-in subagent-mode agent present on BOTH
     /// stacks (ref `packages/core/src/plugin/agent.ts:88-95`, ours in
-    /// the default agent table) — config-defined agents cannot be used
-    /// here because ours does not apply the config `agents` map to the
-    /// agent registry yet (corpus3 finding; see the REPORT addendum).
+    /// the default agent table) — the flow stays independent of the
+    /// config `agents` map (whose application is pinned separately by
+    /// the researcher-fixture tests).
     pub const TOOL_AGENT: &str = "general";
     pub const TOOL_DESCRIPTION: &str = "Check the fixture";
     pub const TOOL_PROMPT: &str = "PARITY-SUBAGENT-TASK inspect the seeded fixture and report.";
@@ -400,8 +404,12 @@ pub struct FlowScripts {
 /// Build the deterministic subagent-flow payloads.
 #[must_use]
 pub fn subagent_flow_scripts() -> FlowScripts {
+    flow_scripts(flow_markers::TOOL_AGENT)
+}
+
+fn flow_scripts(agent: &str) -> FlowScripts {
     let arguments = serde_json::json!({
-        "agent": flow_markers::TOOL_AGENT,
+        "agent": agent,
         "description": flow_markers::TOOL_DESCRIPTION,
         "prompt": flow_markers::TOOL_PROMPT,
     })
@@ -423,6 +431,17 @@ pub fn subagent_flow_scripts() -> FlowScripts {
     FlowScripts { main, subagent, continuation, title }
 }
 
+/// The error-tool loop arm (corpus3 #39): the main payload names a
+/// `ghost` agent NO stack defines, so the `subagent` tool errors
+/// (`Unknown agent: ghost`) on every attempt and the deterministic
+/// stub re-issues the identical call — the unbounded tool-error loop
+/// BOTH stacks exhibit (v2 parity: keep it unbounded; the probe only
+/// measures each side's request CADENCE).
+#[must_use]
+pub fn ghost_flow_scripts() -> FlowScripts {
+    flow_scripts("ghost")
+}
+
 /// Classify one main-request body against the flow (see [`SharedStub`]).
 /// Returns the SSE payload and the attribution kind for the recording.
 ///
@@ -432,7 +451,8 @@ pub fn subagent_flow_scripts() -> FlowScripts {
 /// corpus3 script submits exactly once into a fresh session (fresh
 /// servers per run), and a misclassification's failure mode is benign
 /// (the terminal final-text reply), so the constraint is documented
-/// rather than enforced.
+/// rather than enforced. The ERROR-TOOL probe (below) breaks this
+/// constraint deliberately and arms [`ghost_flow_scripts`] instead.
 fn classify_flow_request(body: &[u8], flow: &FlowScripts) -> (String, &'static str) {
     let contains = |needle: &str| body.windows(needle.len()).any(|w| w == needle.as_bytes());
     if contains(flow_markers::FIRST_PROMPT_PREFIX) {
@@ -474,6 +494,8 @@ pub struct SharedStub {
 /// from the same config), and — for flow runs — the stub's
 /// body-substring attribution (`main`/`subagent`/`continuation`/
 /// `title`), which makes request-count drift per flow stage visible.
+/// `received_at` stamps arrival (the retry-cadence probe's rate
+/// source, corpus3 #39).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedRequest {
     pub keys: Vec<String>,
@@ -481,6 +503,7 @@ pub struct RecordedRequest {
     pub model: String,
     pub user_agent: String,
     pub kind: String,
+    pub received_at: std::time::Instant,
 }
 
 impl RecordedRequest {
@@ -642,7 +665,14 @@ fn stub_handle(
                 })
                 .collect::<Vec<_>>();
             let model = object.get("model").and_then(serde_json::Value::as_str)?.to_owned();
-            Some(RecordedRequest { keys, options, model, user_agent, kind: kind.to_owned() })
+            Some(RecordedRequest {
+                keys,
+                options,
+                model,
+                user_agent,
+                kind: kind.to_owned(),
+                received_at: std::time::Instant::now(),
+            })
         });
         if let Some(shape) = shape {
             recorded.lock().expect("stub recorded").push(shape);
@@ -1740,6 +1770,315 @@ pub fn ref_checkout_root() -> PathBuf {
         .map_or_else(|_| PathBuf::from("/tmp/opencode/ref"), PathBuf::from)
 }
 
+// ---------------------------------------------------------------------------
+// The error-tool retry-cadence probe (corpus3 #39)
+// ---------------------------------------------------------------------------
+
+/// One side's measurement: the unbounded error-tool loop's request
+/// cadence over the fixed window.
+#[derive(Debug, Clone, Default)]
+pub struct ProbeSideStats {
+    /// `main`-attributed requests inside the window (the loop body).
+    pub main_requests: usize,
+    /// `title`-attributed requests (fired once at input admission).
+    pub title_requests: usize,
+    /// Inter-request gaps (ms) between consecutive main requests.
+    pub gaps_ms: Vec<u64>,
+    /// First→last main-request span (ms).
+    pub span_ms: u64,
+}
+
+impl ProbeSideStats {
+    /// Requests per second over the observed span.
+    #[must_use]
+    pub fn rate_per_sec(&self) -> f64 {
+        if self.gaps_ms.is_empty() {
+            return 0.0;
+        }
+        let intervals = self.gaps_ms.len() as f64;
+        let span_secs = self.span_ms as f64 / 1000.0;
+        if span_secs <= 0.0 {
+            return 0.0;
+        }
+        intervals / span_secs
+    }
+
+    /// Median inter-request gap (ms).
+    #[must_use]
+    pub fn median_gap_ms(&self) -> u64 {
+        if self.gaps_ms.is_empty() {
+            return 0;
+        }
+        let mut sorted = self.gaps_ms.clone();
+        sorted.sort_unstable();
+        sorted[sorted.len() / 2]
+    }
+}
+
+/// The probe report: per-side cadence of the unbounded tool-error loop
+/// (both stacks loop without bound — v2 parity; the assertion is only
+/// on the CADENCE ratio).
+#[derive(Debug, Clone, Default)]
+pub struct ErrorToolProbeReport {
+    pub window_secs: u64,
+    pub reference: Option<ProbeSideStats>,
+    pub ours: Option<ProbeSideStats>,
+}
+
+impl ErrorToolProbeReport {
+    /// Whether our request rate is within `factor` of the ref's (the
+    /// mandated ~2×; `None` sides never pass — a missing side is a
+    /// probe failure, not a pass).
+    #[must_use]
+    pub fn within_tolerance(&self, factor: f64) -> bool {
+        match (&self.reference, &self.ours) {
+            (Some(reference), Some(ours)) => {
+                ours.rate_per_sec() <= reference.rate_per_sec() * factor
+            }
+            _ => false,
+        }
+    }
+
+    /// Human-readable report (printed by the bin).
+    #[must_use]
+    pub fn render(&self) -> String {
+        let side = |stats: &Option<ProbeSideStats>| {
+            match stats {
+                Some(stats) => format!(
+                    "{} requests in {}ms span — {:.2} req/s, median gap {}ms (min {}ms, max {}ms), {} title",
+                    stats.main_requests,
+                    stats.span_ms,
+                    stats.rate_per_sec(),
+                    stats.median_gap_ms(),
+                    stats.gaps_ms.iter().min().copied().unwrap_or(0),
+                    stats.gaps_ms.iter().max().copied().unwrap_or(0),
+                    stats.title_requests
+                ),
+                None => "(not run)".to_owned(),
+            }
+        };
+        let verdict = if self.within_tolerance(2.0) { "PASS (within 2x)" } else { "FAIL" };
+        format!(
+            "# error-tool retry-cadence probe (corpus3 #39)\n\n\
+             window: {}s (both loops unbounded by parity — cadence only)\n\n\
+             | side | main requests | cadence |\n|---|---|---|\n\
+             | ref | {} | {} |\n| ours | {} | {} |\n\n\
+             tolerance (ours <= 2x ref): {verdict}\n",
+            self.window_secs,
+            self.reference.as_ref().map_or(0, |s| s.main_requests),
+            side(&self.reference),
+            self.ours.as_ref().map_or(0, |s| s.main_requests),
+            side(&self.ours),
+        )
+    }
+}
+
+/// Type alias: deferred server teardown (consumes the server handle).
+type StopServer = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+/// The ref side's server + TUI (the `run_script_once` spawn shape: bun
+/// with the release defines, `--server <url>`, same cwd as the corpus).
+async fn probe_ref_processes(
+    bun: &Path,
+    project: &Path,
+    home: &Path,
+    config_env: &str,
+    config_path: &Path,
+) -> Result<(PtyChild, StopServer)> {
+    let server = crate::reference::spawn_reference(crate::reference::ReferenceSpawn {
+        extra_env: vec![("OPENCODE_CONFIG", config_env)],
+        seed_files: Vec::new(),
+    })
+    .await?;
+    let preload =
+        ref_checkout_root().join("packages/cli/node_modules/@opentui/solid/scripts/preload.js");
+    let entry = ref_checkout_root().join("packages/cli/src/index.ts");
+    let argv = vec![
+        "--preload".to_owned(),
+        preload.display().to_string(),
+        "--define".to_owned(),
+        "OPENCODE_VERSION=\"2.0.24\"".to_owned(),
+        "--define".to_owned(),
+        "OPENCODE_CHANNEL=\"stable\"".to_owned(),
+        "--define".to_owned(),
+        "OPENCODE_ARTIFACT=\"cli\"".to_owned(),
+        entry.display().to_string(),
+        "--server".to_owned(),
+        server.url().to_owned(),
+    ];
+    let env = home_env(home, server.password(), config_path);
+    let stop = Box::pin(async move {
+        let _ = server.stop().await;
+    }) as StopServer;
+    Ok((PtyChild::spawn(bun, &argv, project, &env, 80, 24)?, stop))
+}
+
+/// Our side's server + TUI (the `rust_server` spawn shape, with the
+/// same app-identity pinning as the corpus runs —
+/// `OPENCODE_CHANNEL=stable`, corpus3 #48).
+async fn probe_our_processes(
+    cli: &Path,
+    project: &Path,
+    home: &Path,
+    config_env: &str,
+    config_path: &Path,
+) -> Result<(PtyChild, StopServer)> {
+    let server = crate::rust_server::spawn_rust(crate::rust_server::RustSpawn {
+        extra_env: vec![("OPENCODE_CONFIG", config_env), ("OPENCODE_CHANNEL", "stable")],
+        seed_files: Vec::new(),
+    })
+    .await?;
+    let argv = vec!["--server".to_owned(), server.url().to_owned()];
+    let env = home_env(home, server.password(), config_path);
+    let stop = Box::pin(async move {
+        let _ = server.stop().await;
+    }) as StopServer;
+    Ok((PtyChild::spawn(cli, &argv, project, &env, 80, 24)?, stop))
+}
+
+/// The corpus submit dance (both stacks pin the fake model through
+/// /models — the corpus3 script prefix), ending at the submit keypress
+/// whose return value OPENS the measurement window.
+async fn probe_submit_dance<F>(feed: &mut F) -> Result<()>
+where
+    F: FnMut(&[&str], &str) -> Result<()>,
+{
+    feed(&["esc"], "")?;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    feed(&[], "/models")?;
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    feed(&["enter"], "")?;
+    tokio::time::sleep(Duration::from_millis(1800)).await;
+    feed(&[], "fake")?;
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    feed(&["enter"], "")?;
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+    feed(&["esc"], "")?;
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    feed(&[], "PARITY-GHOST-PROBE delegate now")?;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    Ok(())
+}
+
+/// Drive ONE side (ref or ours) through the ghost-agent loop for
+/// `window` and return its cadence. The side gets its OWN stub (same
+/// payloads) so per-side attribution never depends on the UA.
+async fn probe_side(
+    tag: &str,
+    root: &Path,
+    window: Duration,
+    bun: Option<&Path>,
+    cli: Option<&Path>,
+) -> Result<ProbeSideStats> {
+    let stub = SharedStub::start()?;
+    let project = root.join("project");
+    let home = root.join("home");
+    for dir in [".config", ".local/share", ".local/state", ".cache", "tmp"] {
+        let _ = std::fs::create_dir_all(home.join(dir));
+    }
+    seed_project(&project, &stub.url)?;
+    stub.arm_flow(ghost_flow_scripts());
+    let config_path = project.join("opencode.json");
+    let config_env = config_path.display().to_string();
+
+    // Server (hermetic env, config pinned to THIS side's stub) + the
+    // TUI over it (the corpus3 probe shape: the SSE subscriber stays
+    // attached while the loop runs).
+    let (mut tui, stop_server) = if tag == "ref" {
+        probe_ref_processes(
+            bun.context("ref side needs bun")?,
+            &project,
+            &home,
+            &config_env,
+            &config_path,
+        )
+        .await?
+    } else {
+        probe_our_processes(
+            cli.context("our side needs the cli binary")?,
+            &project,
+            &home,
+            &config_env,
+            &config_path,
+        )
+        .await?
+    };
+
+    // Boot paint (bounded), then the feed helper.
+    let boot_deadline = Instant::now() + Duration::from_secs(45);
+    while Instant::now() < boot_deadline {
+        if tui.grid_now().cells.iter().any(|c| c.ch != ' ') {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let mut feed = |keys: &[&str], text: &str| -> Result<()> {
+        let mut bytes = Vec::new();
+        for token in keys {
+            bytes.extend_from_slice(&encode_key(token)?);
+        }
+        bytes.extend_from_slice(text.as_bytes());
+        tui.write(&bytes);
+        Ok(())
+    };
+    probe_submit_dance(&mut feed).await?;
+
+    // Measurement window opens at submit.
+    let _ = stub.take_recorded();
+    feed(&["enter"], "")?;
+    tokio::time::sleep(window).await;
+
+    // Teardown (kill the loop's driver: TUI first, then the server).
+    tui.kill();
+    stop_server.await;
+    stub.stop();
+
+    // Cadence from the recorded main-attributed requests.
+    let recorded = stub.take_recorded();
+    let mut stats = ProbeSideStats::default();
+    let mut last: Option<Instant> = None;
+    for request in &recorded {
+        if request.kind == "main" {
+            if let Some(previous) = last.replace(request.received_at) {
+                let gap = request.received_at.saturating_duration_since(previous);
+                stats.gaps_ms.push(gap.as_millis() as u64);
+            }
+            stats.main_requests += 1;
+        } else if request.kind == "title" {
+            stats.title_requests += 1;
+        }
+    }
+    if !stats.gaps_ms.is_empty() {
+        stats.span_ms = stats.gaps_ms.iter().sum();
+    }
+    Ok(stats)
+}
+
+/// The full probe: ref side then ours (sequential — no cross-side CPU
+/// contention), each against its own identically-armed stub.
+pub async fn run_error_tool_probe(
+    cfg: &RigConfig,
+    window: Duration,
+) -> Result<ErrorToolProbeReport> {
+    let mut report = ErrorToolProbeReport { window_secs: window.as_secs(), ..Default::default() };
+    if !cfg.no_ref {
+        let bun = find_bun().ok_or_else(|| anyhow!("bun not found (set PARITY_BUN)"))?;
+        crate::reference::ensure_reference_checkout()?;
+        let root = cfg.out_dir.join("error-tool-probe-ref");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root)?;
+        eprintln!("[tui-diff] error-tool probe: ref side ({}s window)...", window.as_secs());
+        report.reference = Some(probe_side("ref", &root, window, Some(&bun), None).await?);
+    }
+    let cli = crate::rust_server::cli_binary()?;
+    let root = cfg.out_dir.join("error-tool-probe-our");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    eprintln!("[tui-diff] error-tool probe: our side ({}s window)...", window.as_secs());
+    report.ours = Some(probe_side("our", &root, window, None, Some(&cli)).await?);
+    Ok(report)
+}
+
 /// Run ONE script once at ONE size. Spawns fresh servers + TUIs,
 /// replays the steps, compares after each step, tears everything down.
 pub async fn run_script_once(
@@ -1811,7 +2150,13 @@ pub async fn run_script_once(
         }
     }
     let mut our_server = match crate::rust_server::spawn_rust(crate::rust_server::RustSpawn {
-        extra_env: vec![("OPENCODE_CONFIG", config_env.as_str())],
+        // `OPENCODE_CHANNEL=stable` mirrors the ref side's
+        // `--define OPENCODE_CHANNEL="stable"` (the app-identity knob of
+        // each stack's channel source — v2 bakes it at build time, ours
+        // resolves it at runtime through `oc_util::channel`): the stub's
+        // UA attribution must read `opencode/stable/2.0.24/cli` on BOTH
+        // sides (corpus3 #48).
+        extra_env: vec![("OPENCODE_CONFIG", config_env.as_str()), ("OPENCODE_CHANNEL", "stable")],
         seed_files: Vec::new(),
     })
     .await

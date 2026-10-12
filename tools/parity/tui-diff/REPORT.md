@@ -1060,3 +1060,149 @@ attribution was the composer panel opened by the following `down`).
   `cargo nextest run -p oc-tui -p oc-tui-core -p parity` green
   (`pty_sidebar_plugin_section_renders_through_the_host` is the
   known load-dependent flake — passes in isolation on main and here).
+# Addendum — fix-wave G: the server-side subagent/request family (lane/g, 2026-10-12)
+
+The four server-side findings of the corpus3 backlog, fixed and
+rig-verified. All runs:
+`PARITY_BUN=… tools/dev-gate.sh 'cargo run -p parity --bin tui-diff
+-- --filter subagent --runs 1'` + the new
+`-- --probe error-tool [SECS]` (artifacts under `/tmp/opencode/tui-diff/`).
+
+## #38 — the config `agents` map now reaches the agent registry
+
+**Root cause (ours)**: `agent_md::load_documents` walked ONLY the
+`Directory` entries (markdown agents). The ref's `ConfigAgentPlugin.load`
+returns `document`-type entries VERBATIM before walking directories
+(`packages/core/src/config/plugin/agent.ts:34-36` — `loadEntry`), so
+the config `agents` map (`opencode.json`'s `agents.<id>`) flows into
+the SAME transform (`config/plugin/agent.ts:100-127`) as the markdown
+sources; ours dropped it at the loader, so `AgentRegistry` never saw
+config agents and a `subagent` call naming one failed
+`Unknown agent: <id>`.
+
+**Fix**: `load_documents` passes `Entry::Document` entries through
+(both call sites — the engine's `agent_plugin` AND the server-boot
+`native_agent_seed`); the existing `transform` already implemented the
+ref's overlay semantics verbatim. Additionally the ref's
+`Available subagents:` description hook (`subagent.ts:282-306` —
+context/compaction/generate hooks appending the eligible agents to the
+`subagent` tool description) is now registered by the subagent plugin,
+so config agents are advertised to the model exactly like the ref.
+
+**Rig/tests**: engine flow test `engine_subagent_flow_config_defined_
+agent_resolves` — a `researcher` fixture in `<location>/opencode.json`
+resolves end-to-end (main → child as `researcher` → completed tool
+result; the main request's `subagent` tool lists
+`- researcher: Researches complex topics`); unit pins in
+`config/agent_md.rs` (document passthrough + transform application +
+markdown mixing).
+
+## #41 — the duplicate subagent request
+
+**Root cause (ours)**: `SubagentTool::execute` woke the child with an
+AWAITING forced resume (`execution.resume` = `coordinator.run(force)`,
+which runs the drain to completion), then registered the subagent job
+whose body resumes AGAIN (`subagent-job.ts:47` shape). By then the
+child was idle, so the job body's forced resume started a SECOND drain
+that — force skipping the entry gate — ran one more LLM step on the
+settled transcript (requests: child 1-message + child 2-messages;
+child transcript doubled). The ref's tool NEVER awaits a drain:
+`Session.prompt` fires a non-awaiting `execution.wake`
+(`session.ts:174`), and the ONLY awaiting resume is the job body's,
+which JOINS the wake-started execution (`run-coordinator.ts:133` —
+`run` = start-or-join; the wake registers the execution synchronously,
+so the join is deterministic).
+
+**Fix**: `ChildExecution::wake` added (engine: `SessionExecution::
+wake(session, Input)`); the tool's prompt admission calls wake instead
+of the awaiting resume. The child transcript, request count, and the
+80×24 child-view geometry (E2's "row shifts trace to #41") all
+collapse to single-exchange.
+
+## #39 — the error-tool retry cadence (loop shape pinned, no bound)
+
+**Ref loop shape (cite)**: a failing TOOL call never engages the retry
+schedule — `step.ts:107-125` catches `Tool.Error` into
+`publisher.failTool`, the step completes `needsContinuation`
+(`step.ts:262-265`), and `llm.ts:190-196`'s `while (true)` re-enters
+`advanceToStep` IMMEDIATELY. The exponential backoff (`retry.ts:37-52`,
+2 s→10 s ×10) applies ONLY to LLM stream failures
+(`step.ts:169-176`). Both stacks therefore loop a deterministically
+re-issued tool call WITHOUT BOUND and WITHOUT backoff — parity keeps
+ours unbounded (no bound added).
+
+**The cadence ratio**: the corpus3 evidence (ours 613 vs ref 59 over
+25 s, ~10×) does not reproduce under equal conditions. The new
+`--probe error-tool` rig mode (both sides run SEQUENTIALLY against
+identically-armed stubs, same models-selection prefix, fixed window,
+timestamps on every recorded request) measures:
+
+| window | ref | ours | ratio |
+|---|---|---|---|
+| 10 s | 14.9 req/s (median gap 70 ms) | 27.1 req/s (39 ms) | 1.81× |
+| 25 s | 13.5 req/s (70 ms) | 19.9 req/s (50 ms) | 1.47× |
+| 25 s (rerun) | 14.2 req/s (70 ms) | 20.4 req/s (50 ms) | 1.43× |
+
+Our rate matches the corpus3 ours-side measurement (24.5 req/s); the
+REF now runs ~6× faster than its corpus3 measurement — the original
+~10× ratio was environment skew (concurrent load degrades the JS stack
+far more than the native one; the evidence dirs were wiped, the rig
+now owns the measurement). Residual ~1.5× is implementation speed
+(bun+effect vs rust per-iteration work: SSE roundtrip, durable event
+writes, per-step snapshot captures — both stacks do all three).
+
+**Guard**: the probe bin exits 1 beyond 2× and the gated test
+`tui_diff_error_tool_cadence_probe` asserts the ratio (OC_TUI_DIFF=1
+opt-in, the standing pattern).
+
+## #48 — the request User-Agent stamp
+
+**Root cause (ours)**: the UA construction already matched the ref
+(`opencode/{channel}/{version}/{name}`, `app.ts:24-26`) but the engine
+constructed `AppMetadata::default()` — `unknown/unknown/opencode`.
+
+**Fix**: `AppMetadata::detected()` mirrors the ref's identity inputs:
+version = the workspace `2.0.24` pin (`CARGO_PKG_VERSION`, RELEASE.md
+§ version stamping), name = `OPENCODE_CLIENT ?? "cli"`
+(`server-process.ts:92-97`, `version.ts:8`), channel = the ONE
+workspace channel source (`oc_util::channel` — the runtime port of
+v2's build-time `OPENCODE_CHANNEL` define, P10-DB1). The engine
+carries it through `EngineOptions::app` into `SessionModelRequest`.
+The rig pins `OPENCODE_CHANNEL=stable` for our server exactly as it
+passes `--define OPENCODE_CHANNEL="stable"` to the ref, so both UAs
+read `opencode/stable/2.0.24/cli`.
+
+## Rig verification (before → after)
+
+- Request-path report (`--filter subagent --runs 1`), every run:
+  before — `x2 main / x3 subagent / x2 continuation / x2 title` with
+  UAs `opencode/stable/2.0.24/cli` (ref) vs
+  `opencode/unknown/unknown/opencode` (ours); after — **every stage
+  exactly x2 with ONE shared shape line**:
+  `kind=… keys=[max_completion_tokens,model,store,stream,
+  stream_options,temperature] options={temperature=0}
+  ua=opencode/stable/2.0.24/cli` — per-kind counts ours == ref (1/1/1/1
+  each), UA strings identical, temperature present on ALL requests
+  (the wave-F #26/#42 fix stays green).
+- The subagent-browser child-view step: transcript text-rows now 9 == 9
+  (the duplicate-request doubling is gone); remaining cells trace to
+  other lanes (#12 auto-title, #13/#14 stats/duration, B/C/D chrome).
+- Corpus totals unchanged from E2's after-state (64 mismatch + 4
+  text-only exits) — lane G is server-side; no TUI surfaces touched.
+
+## Tests + gates (this lane)
+
+- oc-core: `engine/tests_subagent_flow.rs` (single request per stage —
+  general + config-researcher flows through the FULL engine with
+  TestLlm counting; child single-exchange pin), `config/agent_md.rs`
+  document-passthrough pins, `tests_misc.rs` UA identity pins
+  (stable/latest + OPENCODE_CLIENT override).
+- parity: probe unit surfaces + the gated
+  `tui_diff_error_tool_cadence_probe` (PASS, 42 s).
+- Gates: `cargo fmt --all -- --check` clean; `cargo clippy -p oc-core
+  -p oc-server -p parity --all-targets` adds ZERO warnings vs main
+  (fixes one pre-existing bin doc-lint); `cargo nextest run -p oc-core
+  -p oc-server -p parity` 1028 passed / 11 skipped (gated entries
+  included above). NB: the lane spec's `-p oc-config` does not exist
+  as a crate in this workspace — the config code lives in oc-core
+  (`oc-core/src/config*`), which is covered.

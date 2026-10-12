@@ -237,6 +237,8 @@ impl ChildExecution for FakeExecution {
         Ok(())
     }
 
+    fn wake(&self, _session_id: &str) {}
+
     async fn interrupt(&self, _session_id: &str) {}
 }
 

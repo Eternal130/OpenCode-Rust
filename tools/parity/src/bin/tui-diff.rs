@@ -17,8 +17,12 @@
 //! * `--sizes WxH,…`  — sizes (default `80x24,120x30`).
 //! * `--out DIR`      — artifact root (default `/tmp/opencode/tui-diff`).
 //! * `--no-ref`       — driver smoke mode: our side only.
-//! * `--strict`       — exit 1 on any driver error or MISMATCH step
-//!                      (for CI once the backlog is burned down).
+//! * `--strict` — exit 1 on any driver error or MISMATCH step (for CI
+//!   once the backlog is burned down).
+//! * `--probe error-tool [SECS]` — run the corpus3 #39 retry-cadence
+//!   probe instead of the corpus: both stacks loop a deterministically
+//!   failing tool call for a fixed window (default 10 s); exits 1 when
+//!   our request rate exceeds ~2x the ref's.
 
 use std::path::PathBuf;
 
@@ -28,6 +32,8 @@ use parity::tui_diff::{self, RigConfig};
 async fn main() -> anyhow::Result<()> {
     let mut cfg = RigConfig::default_config();
     let mut strict = false;
+    let mut probe: Option<String> = None;
+    let mut probe_window = 10_u64;
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         match flag.as_str() {
@@ -51,19 +57,40 @@ async fn main() -> anyhow::Result<()> {
             }
             "--no-ref" => cfg.no_ref = true,
             "--strict" => strict = true,
+            "--probe" => {
+                probe = args.next();
+                if probe.is_some() {
+                    if let Some(window) = args.next().and_then(|v| v.parse::<u64>().ok()) {
+                        probe_window = window;
+                    }
+                }
+            }
             other => anyhow::bail!("unknown flag {other}"),
         }
     }
-    // Anchor the out dir to THIS process's cwd: a relative --out would
-    // leak relative paths into the spawned stacks (OPENCODE_CONFIG is
-    // resolved against the SERVER's cwd, which mirrors the reference
-    // checkout — a relative config path silently drops the rig's
-    // provider/model pin and the run degrades invisibly).
-    if cfg.out_dir.is_relative() {
-        let cwd = std::env::current_dir()?;
-        cfg.out_dir = cwd.join(&cfg.out_dir);
-    }
     std::fs::create_dir_all(&cfg.out_dir)?;
+    if let Some(probe) = probe {
+        match probe.as_str() {
+            "error-tool" => {
+                let report = tui_diff::run_error_tool_probe(
+                    &cfg,
+                    std::time::Duration::from_secs(probe_window),
+                )
+                .await?;
+                let text = report.render();
+                let path = cfg.out_dir.join("error-tool-probe.md");
+                std::fs::write(&path, &text)?;
+                println!("{text}");
+                eprintln!("[tui-diff] probe report written to {}", path.display());
+                anyhow::ensure!(
+                    report.within_tolerance(2.0),
+                    "error-tool probe: our request cadence exceeds 2x the reference's"
+                );
+                return Ok(());
+            }
+            other => anyhow::bail!("unknown probe {other}"),
+        }
+    }
     let report = tui_diff::run_corpus(&cfg).await?;
     let text = report.render();
     let path = cfg.out_dir.join("report.md");
