@@ -46,6 +46,11 @@
 
 use ratatui::style::{Modifier, Style};
 
+/// The hard-break sentinel `inline_spans` emits for [`Inline::Break`]
+/// (`push_wrapped` splits segments on it; never a real glyph — source
+/// lines are split before inline parsing).
+const HARD_BREAK: &str = "\u{0}";
+
 use crate::layout::StyledSpan;
 use crate::theme::ThemeStyles;
 use crate::wrap::{flatten_spans, styled_runs, wrap_atoms};
@@ -155,6 +160,14 @@ pub struct ListItem {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Inline {
     Text(String),
+    /// A source line boundary inside a paragraph. opentui's Markdown
+    /// renderable parses with the raw `Lexer` tokens — `token.text`
+    /// keeps the `\n` characters — and its text layer treats them as
+    /// line breaks (`Markdown.ts` pushes the chunk text verbatim;
+    /// `TextRenderable` breaks rows on `\n`, the same seam as the
+    /// user-message block's F6). A soft `\n` therefore renders as a
+    /// HARD row break, each source line wrapping independently.
+    Break,
     Strong(Vec<Inline>),
     Em(Vec<Inline>),
     Code(String),
@@ -378,9 +391,19 @@ pub fn parse_blocks(source: &str) -> Vec<Block> {
             text.push(trimmed_line.to_owned());
             index += 1;
         }
-        // Soft line breaks collapse to spaces (`marked` without
-        // `breaks: true`).
-        blocks.push(Block::Paragraph { inline: parse_inline(&text.join(" ")), trailing_breaks });
+        // Hard line breaks: the paragraph keeps its source line
+        // structure (opentui's lexer-level chunks carry `\n` through
+        // to the text layer — see [`Inline::Break`]); each line's
+        // inline content parses independently and the breaks join
+        // them.
+        let mut inline = Vec::new();
+        for (position, line) in text.iter().enumerate() {
+            if position > 0 {
+                inline.push(Inline::Break);
+            }
+            inline.extend(parse_inline(line));
+        }
+        blocks.push(Block::Paragraph { inline, trailing_breaks });
     }
     lines.clear();
     blocks
@@ -757,6 +780,21 @@ fn push_wrapped(spans: &[StyledSpan], width: usize, lines: &mut Vec<MarkdownLine
     if width == 0 {
         return;
     }
+    // Hard breaks split the stream: each source line wraps alone
+    // (the `\u{0}` sentinel never reaches `wrap_atoms`).
+    let mut segment: Vec<StyledSpan> = Vec::new();
+    for span in spans {
+        if span.text == HARD_BREAK {
+            push_wrapped_segment(&segment, width, lines);
+            segment.clear();
+        } else {
+            segment.push(span.clone());
+        }
+    }
+    push_wrapped_segment(&segment, width, lines);
+}
+
+fn push_wrapped_segment(spans: &[StyledSpan], width: usize, lines: &mut Vec<MarkdownLine>) {
     for line in wrap_atoms(&flatten_spans(spans), width) {
         lines.push(MarkdownLine(styled_runs(&line)));
     }
@@ -768,6 +806,7 @@ fn inline_spans(nodes: &[Inline], style: Style, styles: &MarkdownStyles) -> Vec<
     for node in nodes {
         match node {
             Inline::Text(text) => push_span(&mut out, text.clone(), style),
+            Inline::Break => out.push(StyledSpan { text: HARD_BREAK.to_owned(), style }),
             Inline::Strong(children) => {
                 extend_spans(&mut out, inline_spans(children, styles.strong, styles));
             }
@@ -950,11 +989,32 @@ mod tests {
 
     #[test]
     fn paragraph_margin_needs_a_source_blank_line() {
-        // Two paragraphs separated by a blank line → margin; a hard-wrapped
-        // single paragraph → none.
+        // Hard breaks: source lines render one row each (opentui's
+        // lexer keeps `\n` in the text chunks); a blank line splits
+        // paragraphs → the margin row.
         let spaced = rendered("one\ntwo\n\nthree", 40);
-        assert_eq!(spaced, vec!["one two", "", "three"]);
+        assert_eq!(spaced, vec!["one", "two", "", "three"]);
+        // Long source lines still WRAP inside their own hard-break
+        // segment.
         let wrapped_once = rendered("one two\nthree", 40);
-        assert_eq!(wrapped_once, vec!["one two three"]);
+        assert_eq!(wrapped_once, vec!["one two", "three"]);
+    }
+
+    /// The long-reply corpus pin: the stub's 32 `Long reply line N…`
+    /// lines render ONE PER ROW (each SSE delta ends `\n`; the
+    /// hard break survives the paragraph accumulator).
+    #[test]
+    fn multiline_paragraph_renders_one_row_per_source_line() {
+        let styles = MarkdownStyles::from_theme(&crate::theme::ThemeState::v2_dark().styles());
+        let src = "Long reply line 1 of the parity scroll fixture.\nLong reply line 2 of the parity scroll fixture.";
+        let lines: Vec<String> =
+            render_markdown(src, 75, &styles).into_iter().map(|line| line.text()).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "Long reply line 1 of the parity scroll fixture.",
+                "Long reply line 2 of the parity scroll fixture."
+            ]
+        );
     }
 }

@@ -233,14 +233,17 @@ pub fn reasoning_header_row(
 }
 
 /// One expanded reasoning child (`ThoughtEntry`,
-/// `group-view.tsx:351-399`): a blank `marginTop 1` row, then the
-/// thought's markdown body inside a left `┃` border (`SplitBorder`
-/// vertical, `ui/border.ts:26`), `paddingLeft 1`, in `text.muted`.
+/// group-view.tsx:351-399): the thought's markdown body inside a left
+/// `┃` border (`SplitBorder` vertical, `ui/border.ts:26`),
+/// `paddingLeft 1`, in `text.muted`. The entry's `marginTop 1` lives
+/// on the LIST's per-row margin (the `EntryAnchor marginTop={1}` is
+/// the same marginTop-1 every transcript row carries — rendered once,
+/// not twice: no internal margin row here).
 #[must_use]
 pub fn thought_entry_row(text: &str, theme: &ThemeStyles, width: usize) -> RowRender {
     let muted = theme.text_muted;
     // The group's expanded children sit inside `paddingLeft 3`
-    // (`group-view.tsx:190-192`); the border takes column 3 and the
+    // (group-view.tsx:190-192); the border takes column 3 and the
     // body starts one cell right of it.
     let border_x = 3;
     let body_x = border_x + 2;
@@ -252,10 +255,10 @@ pub fn thought_entry_row(text: &str, theme: &ThemeStyles, width: usize) -> RowRe
     };
     let mut placed = Vec::new();
     for (index, line) in lines.iter().enumerate() {
-        placed.push(text_at(border_x, index + 1, "┃", muted));
-        placed.push(text_at(body_x, index + 1, line.clone(), muted));
+        placed.push(text_at(border_x, index, "┃", muted));
+        placed.push(text_at(body_x, index, line.clone(), muted));
     }
-    RowRender { placed, fills: Vec::new(), height: lines.len() + 1, images: Vec::new() }
+    RowRender { placed, fills: Vec::new(), height: lines.len().max(1), images: Vec::new() }
 }
 
 /// A 0.6-alpha tint **composited over the background** (opentui blends
@@ -793,22 +796,21 @@ mod tests {
     }
 
     /// The expanded thought body: a `┃` left border, `text.muted`,
-    /// body, and the leading blank margin row ([`ThoughtEntry`]'s
-    /// marginTop 1).
+    /// body — the leading blank margin comes from the LIST's
+    /// per-row marginTop (rendered once, not inside the row).
     #[test]
     fn thought_entry_row_borders_and_mutes_the_body() {
         let theme = theme();
         let row = thought_entry_row("Inspecting the parser edges", &theme, 40);
-        assert_eq!(row.height, 2, "margin row + one body line");
+        assert_eq!(row.height, 1, "one body line, no internal margin");
         let frame = crate::render::paint_placed(
             &row.placed,
-            (40, 2),
+            (40, 1),
             crate::components::tool_rows::fill_style(&theme),
         );
         let grid = frame.text_grid();
-        assert!(grid[0].trim().is_empty(), "margin row blank: {}", grid[0]);
-        assert!(grid[1].starts_with("   ┃ Inspecting the parser edges"), "{grid:?}");
-        assert_eq!(frame.cell(1, 3).fg, crate::render::CellColor::Rgb(128, 128, 128));
+        assert!(grid[0].starts_with("   ┃ Inspecting the parser edges"), "{grid:?}");
+        assert_eq!(frame.cell(0, 3).fg, crate::render::CellColor::Rgb(128, 128, 128));
     }
 
     #[test]
