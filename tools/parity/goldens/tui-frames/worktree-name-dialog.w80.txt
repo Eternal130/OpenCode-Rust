@@ -5,11 +5,11 @@
                                                                                 
                                                                                 
                                                                                 
-              Name worktree                                    esc              
+            Name worktree                                        esc            
                                                                                 
-              feat                                                              
+            feat                                                                
                                                                                 
-              enter submittab generate one                                      
+            enter submit  tab generate one                                      
                                                                                 
                                                                                 
                                                                                 
