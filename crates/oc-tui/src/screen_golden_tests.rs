@@ -452,6 +452,8 @@ fn session_error_part_matches_text_grid_and_ansi() {
                 finish: Some("error".into()),
                 error: Some("unexpected status 500".into()),
                 time: PartTime { created: Some(1), completed: Some(2) },
+                tokens: None,
+                usage_total: None,
             },
         ],
     );
@@ -524,6 +526,8 @@ fn session_sidebar_live_matches_text_grid_and_ansi() {
                     finish: Some("stop".into()),
                     error: None,
                     time: PartTime { created: Some(1), completed: Some(2) },
+                    tokens: None,
+                    usage_total: None,
                 },
             ],
         );
