@@ -88,69 +88,7 @@ pub enum Part {
         id: String,
         name: String,
         time: PartTime,
-        /// The tool part's live state (`part.state` on the wire —
-        /// `{status, input, metadata}` per the v2 client reducers,
-        /// data.ts:919-980). Drives the subagent card's running/
-        /// completed shape (#40).
-        state: ToolState,
     },
-}
-
-/// A tool part's state (the `SessionMessageAssistantTool.state`
-/// union's display-relevant projection): status + the stringified
-/// input/metadata maps the cards read (`stringValue` semantics —
-/// non-string JSON coerces, `null` drops).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ToolState {
-    pub status: ToolStatus,
-    /// `state.input` (parsed args; empty while streaming).
-    pub input: std::collections::BTreeMap<String, String>,
-    /// `state.metadata` (the subagent tool's progress payload carries
-    /// the child `sessionID`).
-    pub metadata: std::collections::BTreeMap<String, String>,
-}
-
-/// The tool part status (`state.status`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ToolStatus {
-    /// `streaming` — args still arriving.
-    #[default]
-    Streaming,
-    /// `running` — executing.
-    Running,
-    /// `completed`.
-    Completed,
-    /// `error`.
-    Error,
-}
-
-impl ToolStatus {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Streaming => "streaming",
-            Self::Running => "running",
-            Self::Completed => "completed",
-            Self::Error => "error",
-        }
-    }
-
-    /// Parse the wire discriminator.
-    #[must_use]
-    pub fn parse(value: &str) -> Self {
-        match value {
-            "running" => Self::Running,
-            "completed" => Self::Completed,
-            "error" => Self::Error,
-            _ => Self::Streaming,
-        }
-    }
-
-    /// The part is settled (`completed`/`error`).
-    #[must_use]
-    pub const fn settled(self) -> bool {
-        matches!(self, Self::Completed | Self::Error)
-    }
 }
 
 impl Part {
@@ -210,6 +148,15 @@ pub enum Message {
         /// (`AssistantFooter`, ref session/index.tsx:1879).
         error: Option<String>,
         time: PartTime,
+        /// `tokens.output + tokens.reasoning` of the terminal step
+        /// (lane/chrome #13 — the footer's tok/s numerator; the ref's
+        /// `turnTokensPerSecond` sums over the turn's steps).
+        tokens: Option<u64>,
+        /// The full context-usage total
+        /// (`input+output+reasoning+cache.read+cache.write`,
+        /// `contextUsage`, util/session.ts:58-73) — the footer usage
+        /// row's numerator.
+        usage_total: Option<u64>,
     },
     /// `session.idle` marker: closes a turn (drives turn duration and
     /// the wave-3 unread semantics).
@@ -793,6 +740,8 @@ mod tests {
             finish: Some("stop".into()),
             error: None,
             time: PartTime { created: Some(created), completed: Some(completed) },
+            tokens: None,
+            usage_total: None,
         }
     }
 
@@ -811,7 +760,6 @@ mod tests {
                         id: "grp-tool-read".into(),
                         name: "read".into(),
                         time: PartTime { created: Some(1), completed: Some(1) },
-                        state: ToolState::default(),
                     },
                     Part::Text {
                         text: "It reads the configuration and produces a build plan.".into(),
@@ -890,18 +838,18 @@ mod tests {
                         id: "t1".into(),
                         name: "grep".into(),
                         time: PartTime { created: Some(1), completed: None },
-                        state: ToolState::default(),
                     },
                     Part::Tool {
                         id: "t2".into(),
                         name: "read".into(),
                         time: PartTime { created: Some(2), completed: None },
-                        state: ToolState::default(),
                     },
                 ],
                 finish: None,
                 error: None,
                 time: PartTime { created: Some(1), completed: None },
+                tokens: None,
+                usage_total: None,
             },
         ];
         let rows = reduce_rows(&messages, &std::collections::HashSet::<String>::new());
@@ -930,6 +878,8 @@ mod tests {
                 finish: Some("stop".into()),
                 error: None,
                 time: PartTime { created: Some(1), completed: Some(5) },
+                tokens: None,
+                usage_total: None,
             },
             Message::Idle { id: "i".into(), created: 6 },
         ];
@@ -948,6 +898,8 @@ mod tests {
                 finish: Some("tool-calls".into()),
                 error: None,
                 time: PartTime { created: Some(1), completed: Some(5) },
+                tokens: None,
+                usage_total: None,
             },
             Message::Assistant {
                 id: "b".into(),
@@ -957,6 +909,8 @@ mod tests {
                 finish: Some("stop".into()),
                 error: None,
                 time: PartTime { created: Some(6), completed: Some(9) },
+                tokens: None,
+                usage_total: None,
             },
         ];
         let rows = reduce_rows(&steered, &std::collections::HashSet::<String>::new());
@@ -981,6 +935,8 @@ mod tests {
             finish: None,
             error: None,
             time: PartTime::default(),
+            tokens: None,
+            usage_total: None,
         }];
         let rows = reduce_rows(&messages, &std::collections::HashSet::<String>::new());
         assert_eq!(rows.len(), 1);
