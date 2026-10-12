@@ -1,7 +1,7 @@
-//! The OC_TUI_DIFF gated differential test (lane/diff-rt): the same
+//! The `OC_TUI_DIFF` gated differential test (lane/diff-rt): the same
 //! rig as the standalone `tui-diff` binary, runnable under nextest.
 //!
-//! Opt-in (the OC_TUI_SMOKE pattern): `#[ignore]`d AND requires
+//! Opt-in (the `OC_TUI_SMOKE` pattern): `#[ignore]`d AND requires
 //! `OC_TUI_DIFF=1` at runtime:
 //!
 //! ```text
@@ -49,8 +49,7 @@ async fn tui_diff_side_by_side() -> anyhow::Result<()> {
     }
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     cfg.out_dir = std::path::PathBuf::from("/tmp/opencode/tui-diff").join(format!("test-{stamp}"));
 
     let report = tui_diff::run_corpus(&cfg).await?;

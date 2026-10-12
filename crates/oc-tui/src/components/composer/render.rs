@@ -802,9 +802,11 @@ pub fn footer_location_extent(view: &PromptView, width: usize) -> Option<(usize,
         plugin_width
     };
     let interrupt_width = display_width(&view.footer.interrupt);
-    let budget = width
-        .saturating_sub(right_block + 2)
-        .saturating_sub(if interrupt_width > 0 { interrupt_width + 2 } else { 0 });
+    let budget = width.saturating_sub(right_block + 2).saturating_sub(if interrupt_width > 0 {
+        interrupt_width + 2
+    } else {
+        0
+    });
     if budget == 0 {
         return None;
     }

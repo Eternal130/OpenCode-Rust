@@ -12,7 +12,7 @@
 //!
 //! Flags:
 //! * `--runs N`       — repeat the corpus N times (default 1; 2 gives
-//!                      the deterministic-vs-timing split).
+//!   the deterministic-vs-timing split).
 //! * `--filter ID`    — run one script only.
 //! * `--sizes WxH,…`  — sizes (default `80x24,120x30`).
 //! * `--out DIR`      — artifact root (default `/tmp/opencode/tui-diff`).
