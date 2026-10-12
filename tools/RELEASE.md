@@ -56,6 +56,18 @@ PORT_REPORT §3):
   compilation profile for the hidden `--version-rust` flag, plus
   `OC_RELEASE_TAG` (the release workflow's git tag, `"dev"` locally)
   — the update channel's release identity.
+* **Request User-Agent** (the provider-facing `User-Agent` header,
+  v2 `app.ts:24-26` `opencode/{channel}/{version}/{name}`): the
+  engine stamps it from
+  `AppMetadata::detected()` (oc-core `session/runner/model_request.rs`)
+  — version = the same workspace `2.0.24` pin, name = `OPENCODE_CLIENT`
+  ?? `"cli"` (v2 `version.ts:8` artifact fallback), channel = the ONE
+  workspace channel source (`oc_util::channel`, the runtime port of
+  v2's build-time `OPENCODE_CHANNEL` define — P10-DB1). The parity rig
+  pins `OPENCODE_CHANNEL=stable` for our server exactly as it passes
+  `--define OPENCODE_CHANNEL="stable"` to the reference, so both
+  stacks' request-path UAs read `opencode/stable/2.0.24/cli`
+  (corpus3 #48; asserted in the tui-diff request-path report).
 * Never report a TS-stream version (`2.0.25+`) — see the upgrade
   policy below.
 
