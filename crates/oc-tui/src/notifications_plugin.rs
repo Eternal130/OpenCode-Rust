@@ -38,11 +38,17 @@ impl AttentionSink for Attention {
 }
 
 /// The slice of session info the plugin needs (v2's client session
-/// cache: `session.get(id)` → `{ title, parentID }`).
+/// cache: `session.get(id)` → `{ title, parentID }`) — plus the
+/// subagent picker's fields (#44): `agent` (the entry label's
+/// titlecased prefix) and `created` (the timestamped fallback title).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SessionInfo {
     pub title: Option<String>,
     pub parent_id: Option<String>,
+    /// The session's agent id (`session.created` / `session.agent.selected`).
+    pub agent: Option<String>,
+    /// `time.created` (epoch ms) — the fallback title's timestamp.
+    pub created: Option<u64>,
 }
 
 /// The plugin's session index — filled from the session lifecycle
@@ -51,6 +57,10 @@ pub struct SessionInfo {
 #[derive(Debug, Default)]
 pub struct SessionIndex {
     sessions: HashMap<String, SessionInfo>,
+    /// The RUNNING set (`data.session.status`: `session.execution.started`
+    /// inserts; the terminal execution events remove — subagents-tab.tsx's
+    /// active/inactive filter reads it).
+    running: HashSet<String>,
 }
 
 impl SessionIndex {
@@ -63,6 +73,8 @@ impl SessionIndex {
                     let info = self.sessions.entry(id).or_default();
                     info.title = event.string("title").or_else(|| info.title.take());
                     info.parent_id = event.string("parentID").or_else(|| info.parent_id.take());
+                    info.agent = event.string("agent").or_else(|| info.agent.take());
+                    info.created = info.created.or(event.created);
                 }
             }
             "session.updated" | "session.renamed" => {
@@ -73,8 +85,34 @@ impl SessionIndex {
                     }
                 }
             }
+            "session.agent.selected" => {
+                if let Some(id) = event.string("sessionID") {
+                    let info = self.sessions.entry(id).or_default();
+                    if let Some(agent) = event.string("agent") {
+                        info.agent = Some(agent);
+                    }
+                }
+            }
+            "session.execution.started" => {
+                if let Some(id) = event.string("sessionID") {
+                    self.running.insert(id);
+                }
+            }
+            "session.execution.succeeded"
+            | "session.execution.failed"
+            | "session.execution.interrupted" => {
+                if let Some(id) = event.string("sessionID") {
+                    self.running.remove(&id);
+                }
+            }
             _ => {}
         }
+    }
+
+    /// The registry entry for `session_id`, inserted when absent
+    /// (the resync's title seed — see the store's Resync arm).
+    pub fn registry_entry_mut(&mut self, session_id: &str) -> &mut SessionInfo {
+        self.sessions.entry(session_id.to_owned()).or_default()
     }
 
     /// The plugin's `session.get` (absent sessions are root sessions
@@ -94,6 +132,47 @@ impl SessionIndex {
     #[must_use]
     pub fn title(&self, session_id: &str) -> Option<&str> {
         self.get(session_id).and_then(|info| info.title.as_deref())
+    }
+
+    /// `data.session.status(id)` — the running set's verdict (unknown
+    /// sessions idle, matching the client cache's absent entry).
+    #[must_use]
+    pub fn is_running(&self, session_id: &str) -> bool {
+        self.running.contains(session_id)
+    }
+
+    /// The running set (the subagent card's live-status oracle).
+    #[must_use]
+    pub fn running_ids(&self) -> Vec<String> {
+        self.running.iter().cloned().collect()
+    }
+
+    /// Every known session id (the picker's `session.list()` input).
+    #[must_use]
+    pub fn ids(&self) -> Vec<&str> {
+        let mut ids: Vec<&str> = self.sessions.keys().map(String::as_str).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// The family ROOT of a session (`session-tabs.tsx`'s `root`):
+    /// walks `parentID` links to the topmost known ancestor.
+    #[must_use]
+    pub fn root_of(&self, session_id: &str) -> String {
+        let mut current = session_id.to_owned();
+        let mut depth = 0;
+        while let Some(parent) = self
+            .get(&current)
+            .and_then(|info| info.parent_id.clone())
+            .filter(|parent| parent != &current)
+        {
+            if depth >= 8 {
+                break; // cycle guard
+            }
+            current = parent;
+            depth += 1;
+        }
+        current
     }
 }
 
