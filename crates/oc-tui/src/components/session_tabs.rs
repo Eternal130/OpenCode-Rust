@@ -594,6 +594,11 @@ fn bar_tab_node(
 /// trailing pad space of a tree leaf at some widths — 160 — and the
 /// golden bytes pin it verbatim). Hovered: `text.base` over
 /// `background.action.primary.hovered` (`session-tabs.tsx:1771-1772`).
+/// The whole `" + "` run carries the muted fg at rest — ref-dumped
+/// golden truth (`session-tabs-horizontal.w80.ansi`: one
+/// `38;2;128;128;128` run over all three cells). The HIT zone is
+/// still glyph-tight (see [`strip_hit`] — corpus2 #28); the paint is
+/// uniform.
 fn add_affordance(x: usize, theme: &ThemeStyles, hovered: bool) -> Placed {
     let (fg, bg) = if hovered {
         (theme.text.fg.unwrap_or_default(), theme.action_hovered)
@@ -969,13 +974,17 @@ pub enum StripHit {
     /// The tab body (click = select; `release()` → `tabs.select`,
     /// `session-tabs.tsx:1505-1514`).
     Tab(String),
-    /// The revealed `✕` cell on a HOVERED tab ("the close glyph sits
-    /// one cell in from the right edge: x = tab start + width − 2",
-    /// `session-tabs.tsx:264`; the click path is `tabs.close`,
-    /// `session-tabs.tsx:1745-1754`).
+    /// The revealed `✕` affordance cell on a HOVERED tab ("the close
+    /// glyph sits one cell in from the right edge: x = tab start +
+    /// width − 2", `session-tabs.tsx:264`; the click path is
+    /// `tabs.close`, `session-tabs.tsx:1745-1754`). Glyph-tight like
+    /// the ref — the `✕` is a 1-cell text renderable.
     Close(String),
-    /// The ` + ` affordance (`tabs.add?.()` — navigates home,
-    /// `session-tabs.tsx:1786-1792` + `session-tabs.tsx:406-416`).
+    /// The `+` glyph cell of the `" + "` affordance (`tabs.add?.()` —
+    /// navigates home, `session-tabs.tsx:1786-1792` +
+    /// `session-tabs.tsx:406-416`). GLYPH-TIGHT: opentui hit-tests the
+    /// 3-cell text renderable per glyph, so the surrounding padding
+    /// cells are NOT part of the zone (corpus2 #28).
     Add,
     /// Outside every control.
     Outside,
@@ -1020,7 +1029,15 @@ pub fn strip_hit(
         x += after_width;
     }
     if show_plus && col >= x && col < x + ADD_TAB_WIDTH {
-        return StripHit::Add;
+        // Glyph-tight: the affordance is the ` + ` TEXT renderable
+        // (`session-tabs.tsx:1786-1801`) and opentui hit-tests text
+        // elements per GLYPH cell — the `" + "` padding cells show no
+        // affordance and take no click (corpus2 #28: padding clicks
+        // navigated home on our side only, ref reacted nowhere). Only
+        // the center `+` cell is the zone.
+        if col == x + 1 {
+            return StripHit::Add;
+        }
     }
     StripHit::Outside
 }
@@ -1113,6 +1130,19 @@ mod tests {
         assert_eq!(strip_hit(&tabs, Some("s1"), true, 80, 40, None), StripHit::Tab("s2".into()));
         assert_eq!(strip_hit(&tabs, Some("s1"), true, 80, 65, None), StripHit::Add);
         assert_eq!(strip_hit(&tabs, Some("s1"), true, 80, 70, None), StripHit::Outside);
+        // Corpus2 #28 — the Add zone is GLYPH-TIGHT: the `" + "`
+        // padding cells (64 and 66) take no click on the ref; our old
+        // full-box zone navigated home on invisible affordances.
+        assert_eq!(
+            strip_hit(&tabs, Some("s1"), true, 80, 64, None),
+            StripHit::Outside,
+            "the left ` + ` padding cell is not a control"
+        );
+        assert_eq!(
+            strip_hit(&tabs, Some("s1"), true, 80, 66, None),
+            StripHit::Outside,
+            "the right ` + ` padding cell is not a control"
+        );
         // The close cell: x = tab start + width − 2, ONLY while that
         // tab is hovered.
         assert_eq!(
@@ -1128,6 +1158,19 @@ mod tests {
             strip_hit(&tabs, Some("s1"), true, 80, 30, Some("s1")),
             StripHit::Close("s1".into()),
             "the active tab's own mark closes it too"
+        );
+        // The ✕ zone is exactly ONE cell (the glyph): its neighbors
+        // select the tab even while hovered (session-tabs.tsx:264 —
+        // the mark is a 1-cell text renderable; no padding disease).
+        assert_eq!(
+            strip_hit(&tabs, Some("s1"), true, 80, 61, Some("s2")),
+            StripHit::Tab("s2".into()),
+            "the cell left of the ✕ selects"
+        );
+        assert_eq!(
+            strip_hit(&tabs, Some("s1"), true, 80, 63, Some("s2")),
+            StripHit::Tab("s2".into()),
+            "the cell right of the ✕ selects"
         );
     }
 

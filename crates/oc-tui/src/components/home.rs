@@ -129,12 +129,31 @@ pub fn render_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u16)) -
 
     let show_logo = height >= 12;
     let show_footer = height >= 12 && width >= 44;
+    // The footer slot's height (`feature-plugins/home/footer.tsx`):
+    // paddingY 1/1 at h≥16 (none below), one content row — which
+    // COLLAPSES when nothing in it is visible. The version hides
+    // below 64 cols (`homeFooterVisibility`, footer.tsx:6-11) and a
+    // row whose only child is the flexGrow spacer has zero height,
+    // so a quiet ≤63-col footer is just its two padding rows.
+    // Rig-pinned at 60x20: the 2-row footer leaves free = 3 and the
+    // wordmark centers a row HIGHER than a 3-row footer allows
+    // (corpus #19 — our old always-3 model sat it one row low).
+    let footer_content = width >= 64 || !view.plugin_actions.is_empty();
+    let footer_rows = if !show_footer {
+        0
+    } else if height < 16 {
+        usize::from(footer_content)
+    } else if footer_content {
+        3
+    } else {
+        2
+    };
     // The prompt mount: paddingTop 1 + the composer's own height.
     let prompt_width = content.clamp(1, PROMPT_MAX_WIDTH);
     let mount =
         1 + crate::components::composer::render::mount_height(view.draft, prompt_width, height);
     let fixed = if show_logo { 3 + 4 + 1 } else { 0 } + mount;
-    let free = height.saturating_sub(if show_footer { 3 } else { 0 } + fixed);
+    let free = height.saturating_sub(footer_rows + fixed);
     let spacer_top = free.div_ceil(2);
     let mut y = spacer_top;
     if show_logo {
@@ -182,7 +201,11 @@ pub fn render_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u16)) -
         let padded = height >= 16;
         let row = if padded { height - 2 } else { height - 1 };
         let muted = cell(tokens.text.muted);
-        let version_width = display_width(&view.version);
+        // The version renders only at ≥64 cols (homeFooterVisibility,
+        // footer.tsx:6-11 — rig-pinned: the 60-col footer shows no
+        // version and its content row collapses).
+        let version_visible = width >= 64;
+        let version_width = if version_visible { display_width(&view.version) } else { 0 };
         let x = width.saturating_sub(padding + version_width);
         if version_width > 0 {
             for (index, ch) in view.version.chars().enumerate() {
@@ -414,6 +437,40 @@ mod tests {
         let frame = render_home(&store, &theme.styles(), (40, 12));
         let grid = frame.text_grid().join("\n");
         assert!(grid.contains("Ask anything"), "{grid}");
+    }
+
+    /// Corpus #19 — the 60x20 wordmark row. The footer slot's version
+    /// hides below 64 cols and its content row collapses (2-row
+    /// footer), so the column's free space is 3 and the logo block
+    /// starts at row 5 (rig-pinned: `resize` shrink step). Our old
+    /// always-3 footer model mis-centered it (corpus #19: "ref block
+    /// starts one row higher than ours").
+    #[test]
+    fn home_sixty_by_twenty_centers_the_wordmark_at_row_five() {
+        let store = Store::new(Runtime::new());
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame = render_home(&store, &theme.styles(), (60, 20));
+        let rows = frame.text_grid();
+        // The logo's top shadow cell (▄) opens the 4-row block.
+        let logo_row = rows.iter().position(|row| row.contains('▄')).expect("logo rendered");
+        assert_eq!(logo_row, 5, "wordmark block starts at row 5:\n{}", rows.join("\n"));
+        // The collapsed footer: NO version anywhere (hidden <64 cols).
+        assert!(
+            !rows.iter().any(|row| row.contains(env!("CARGO_PKG_VERSION"))),
+            "version hidden below 64 cols: {}",
+            rows.join("\n")
+        );
+        // At 80x24 the version shows and the footer is 3 rows (the
+        // golden shape — the collapse must be width-gated).
+        let frame = render_home(&store, &theme.styles(), (80, 24));
+        let rows = frame.text_grid();
+        let logo_row = rows.iter().position(|row| row.contains('▄')).expect("logo rendered");
+        assert_eq!(logo_row, 6, "80x24 stays at row 6");
+        assert!(
+            rows[22].trim_end().ends_with(env!("CARGO_PKG_VERSION")),
+            "version visible at ≥64 cols: {:?}",
+            rows[22]
+        );
     }
 
     /// The data-driven mount: the store's home draft types into the

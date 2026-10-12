@@ -2626,6 +2626,22 @@ pub async fn run_with_size(
         let generation = app.store.redraw_generation();
         if generation != redraw_at || app.store.clock() > 0 {
             redraw_at = generation;
+            // Live-size reconciliation (found by the parity rig's
+            // resize corpus): ratatui's `autoresize` inside `draw()`
+            // snaps the internal buffer to the PTY's CURRENT size the
+            // moment the kernel delivers SIGWINCH — potentially one
+            // tick BEFORE crossterm's Resize event reaches this loop
+            // and updates `app.size`. Drawing a frame built at the
+            // stale size then indexed a 100-col row into a 60-col
+            // buffer (`index outside of buffer … index is (60, 0)` —
+            // resize@60x20, our side panicked mid-script). v2 renders
+            // at the live terminal dimensions; mirror that by adopting
+            // the backend's size before building the frame.
+            if let Ok(area) = terminal.size() {
+                if (area.width, area.height) != app.size {
+                    app.resize((area.width, area.height));
+                }
+            }
             let mut frame = app.frame();
             // S0 parity: degrade RGB → xterm-256 indices at the
             // terminal-draw seam when the raster-level capability
@@ -2641,7 +2657,10 @@ pub async fn run_with_size(
                     for (x, cell) in row.iter().enumerate() {
                         let Ok(x) = u16::try_from(x) else { continue };
                         let Ok(y) = u16::try_from(y) else { continue };
-                        let slot = &mut buffer[(x, y)];
+                        // Bounds-safe write: the frame is built at the
+                        // reconciled size (above), but never panic if a
+                        // resize slips between frame build and draw.
+                        let Some(slot) = buffer.cell_mut((x, y)) else { continue };
                         slot.set_char(cell.ch);
                         slot.set_fg(to_ratatui_color(cell.fg));
                         slot.set_bg(to_ratatui_color(cell.bg));
