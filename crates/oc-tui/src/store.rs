@@ -1725,6 +1725,74 @@ impl Store {
         });
     }
 
+    /// The route key a picker selection targets (home drafts onto the
+    /// home prompt key — `selectModel`'s newSessionModel slot).
+    pub fn route_selection_key(&self) -> String {
+        match self.route() {
+            Route::Session { session_id } => session_id,
+            Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
+        }
+    }
+
+    /// `preferredSelection`'s variant derivation (local.tsx:236-251):
+    /// the ring's saved variant for the key — validated against the
+    /// loaded catalog's variant ids — else `None`. (The configured
+    /// `agent.model`/fallback variant arms cover agent-pinned models;
+    /// the picker path resolves through the ring only.)
+    #[must_use]
+    pub fn preferred_variant(&self, model: &ModelSelection) -> Option<String> {
+        let key = model_pref::model_preference_key(&model_pref::ModelPreferenceModel {
+            provider_id: model.provider_id.clone(),
+            model_id: model.model_id.clone(),
+        });
+        let saved = self
+            .model_ring
+            .get()
+            .document
+            .variant
+            .get(&key)
+            .cloned()
+            .and_then(|value| model_pref::normalize_model_variant(Some(value.as_str())));
+        let variants = self.model_variants(&model.provider_id, &model.model_id);
+        saved.filter(|variant| variants.contains(variant))
+    }
+
+    /// `local.model.variant.list()` (local.tsx:479-484): the loaded
+    /// model info's variant ids for `(provider, model)`.
+    #[must_use]
+    pub fn model_variants(&self, provider_id: &str, model_id: &str) -> Vec<String> {
+        self.server_lists
+            .get()
+            .models
+            .rows()
+            .and_then(|models| {
+                models.iter().find(|model| model.provider_id == provider_id && model.id == model_id)
+            })
+            .map(|model| model.variants.clone())
+            .unwrap_or_default()
+    }
+
+    /// `local.model.variant.set(value)` (local.tsx:485-493): stage the
+    /// variant onto the current selection (the session draft) and
+    /// persist it through the preference ring (`saveVariant` —
+    /// `default` is preserved so it can override later defaults).
+    pub fn model_set_variant(&self, value: Option<&str>) {
+        let key = self.route_selection_key();
+        let Some(mut selection) = self.selection_for(&key).model else { return };
+        let normalized = model_pref::normalize_model_variant(value);
+        let stored = normalized.clone().unwrap_or_else(|| "default".to_owned());
+        selection.variant = normalized;
+        let ring_key = model_pref::model_preference_key(&model_pref::ModelPreferenceModel {
+            provider_id: selection.provider_id.clone(),
+            model_id: selection.model_id.clone(),
+        });
+        self.stage_model(&key, selection);
+        self.model_ring.update(|ring| {
+            ring.document.variant.insert(ring_key, stored);
+        });
+        self.model_ring_dirty.set(true);
+    }
+
     /// Stage an agent selection without the server call (home route).
     pub fn stage_agent(&self, session_id: &str, agent: &str) {
         self.selection.update(|state| {
@@ -1756,11 +1824,15 @@ impl Store {
     // validation. `None` while the catalog has not loaded (v2's
     // `models()` empty ⇒ every step invalid).
 
-    /// The configured default model (`config.model`, local.tsx:172-184's
-    /// `configuredModel` — the shared config's `model` field, string
-    /// `provider/model` or `{providerID, model, variant}`).
+    /// The configured default model (the server config's `model` field,
+    /// local.tsx:172-184's `configuredModel` — string `provider/model`
+    /// or `{providerID, model, variant}`). Landing it after boot moves
+    /// the resolution chain (the footer/pickers re-render), so the
+    /// write bumps the redraw generation like every other selection
+    /// mutation.
     pub fn set_config_model(&self, model: Option<ModelSelection>) {
         *self.config_model.borrow_mut() = model;
+        self.request_redraw();
     }
 
     /// Whether `(provider, id)` exists in the loaded model catalog
@@ -2683,9 +2755,20 @@ impl Store {
     /// A freshly-opened select dialog focuses its `current` option
     /// (`DialogSelect` mount: `focus(current)` + the edge-follow reveal
     /// — the theme list opens scrolled to the active theme).
+    /// A freshly-opened select dialog focuses its `current` option
+    /// (`DialogSelect` mount: `focus(current)` + the edge-follow reveal
+    /// — the theme list opens scrolled to the active theme). The model
+    /// picker opts out — `DialogModel` mounts with
+    /// `focusCurrent={false}` (dialog-model.tsx:171; the mount effect
+    /// returns early, dialog-select.tsx:138) — so the browse list
+    /// opens at the TOP row with the `●` marker painted wherever the
+    /// current model sits.
     fn focus_dialog_current(&self) {
         let Some(entry) = self.top_dialog() else { return };
         if matches!(entry.kind, DialogKind::SessionRename { .. }) {
+            return;
+        }
+        if matches!(entry.kind, DialogKind::ServerList { command: "model.list", .. }) {
             return;
         }
         let props = crate::components::command_palette::select_props_for(&entry.kind, self);
@@ -4953,6 +5036,86 @@ mod tests {
             messages: messages.clone(),
         }]);
         assert_eq!(store.messages("s1").len(), 3);
+    }
+
+    /// Lane/models #3 — the boot selection uses the SERVER-configured
+    /// default (`configuredModel`, local.tsx:170-179): with the catalog
+    /// loaded and the config default landing (the boot
+    /// `/api/config` fetch), the home route resolves the pinned model
+    /// — never the catalog head — and the model's variant list is
+    /// exposed for the variant picker.
+    #[test]
+    fn boot_selection_uses_the_server_configured_default() {
+        let store = Store::new(Runtime::new());
+        store.set_models(crate::store::ListState::Loaded(catalog()), Vec::new());
+        store.set_config_model(Some(crate::store::ModelSelection {
+            provider_id: "parityfake".into(),
+            model_id: "fake-model".into(),
+            variant: None,
+        }));
+        let resolved =
+            store.effective_model(crate::app::HOME_PROMPT_KEY).expect("config default resolves");
+        assert_eq!(
+            (resolved.provider_id.as_str(), resolved.model_id.as_str()),
+            ("parityfake", "fake-model")
+        );
+        assert_eq!(store.model_variants("parityfake", "fake-model"), Vec::<String>::new());
+    }
+
+    /// Lane/models #11 — `preferred_variant` reads the ring's saved
+    /// variant for the key, validated against the catalog's variant
+    /// ids (local.tsx:236-251); `model_set_variant` stages the variant
+    /// onto the current selection and persists `default` explicitly
+    /// (local.tsx:485-493).
+    #[test]
+    fn preferred_variant_and_set_variant_round_trip() {
+        let store = Store::new(Runtime::new());
+        let mut models = catalog();
+        models[0].variants = vec!["low".into(), "medium".into(), "high".into()];
+        store.set_models(crate::store::ListState::Loaded(models), Vec::new());
+        store.stage_model(
+            crate::app::HOME_PROMPT_KEY,
+            crate::store::ModelSelection {
+                provider_id: "parityfake".into(),
+                model_id: "fake-model".into(),
+                variant: None,
+            },
+        );
+        assert_eq!(
+            store.preferred_variant(&crate::store::ModelSelection {
+                provider_id: "parityfake".into(),
+                model_id: "fake-model".into(),
+                variant: None,
+            }),
+            None,
+            "empty ring → no preferred variant"
+        );
+        // Pick `high` through the variant setter: staged + persisted.
+        store.model_set_variant(Some("high"));
+        assert_eq!(
+            store.effective_model(crate::app::HOME_PROMPT_KEY).and_then(|m| m.variant),
+            Some("high".to_owned())
+        );
+        assert_eq!(
+            store.preferred_variant(&crate::store::ModelSelection {
+                provider_id: "parityfake".into(),
+                model_id: "fake-model".into(),
+                variant: None,
+            }),
+            Some("high".to_owned()),
+            "the ring remembers the variant for the model key"
+        );
+        // `default` normalizes to None on the selection but persists
+        // the explicit `default` marker (model-preference.ts:176-181).
+        store.model_set_variant(Some("default"));
+        assert_eq!(
+            store.effective_model(crate::app::HOME_PROMPT_KEY).and_then(|m| m.variant),
+            None
+        );
+        assert_eq!(
+            store.model_ring().document.variant.get("parityfake/fake-model").map(String::as_str),
+            Some("default")
+        );
     }
 
     /// F8/F10/F22 — the selection chain: explicit pick > durable
