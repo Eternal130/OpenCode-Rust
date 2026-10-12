@@ -248,10 +248,18 @@ Current status: ALL GREEN against `target/release/opencode-rust`
 
 ## Gates
 
-`cargo fmt --check` + `cargo clippy -D warnings` + `cargo nextest`
-(green for this lane's crates: oc-util, oc-plugin-host, oc-cli — note
-the workspace-wide fmt/clippy currently also touches the parallel
-oc-server lane's in-flight files), `tools/release-smoke.sh` green.
+`cargo fmt --all --check` + `cargo clippy --workspace --all-targets --
+-D warnings` + `cargo nextest` (green for this lane's crates: oc-util,
+oc-plugin-host, oc-cli — note the workspace-wide fmt/clippy currently
+also touches the parallel oc-server lane's in-flight files),
+`tools/release-smoke.sh` green.
+
+The clippy invocation must stay byte-equivalent to CI's (`.github/
+workflows/ci.yml`: `cargo clippy --workspace --all-targets -D warnings
+--locked`): local gates that omit `--all-targets` or `-D warnings`
+leave exactly the drift CI then rejects (the lane/lint lesson — ~45
+pedantic warnings accumulated in `tools/parity` because local muscle
+memory ran bare `cargo clippy`).
 
 ### PTY invariant fuzz (`crates/oc-cli/tests/pty_fuzz.rs`)
 
