@@ -196,15 +196,12 @@ impl App {
         let overrides = crate::keymap::parse_keybind_overrides(&config.keybinds);
         self.store.set_keybinds(overrides);
         self.remerge_keybinds();
-        // The configured default model (the selection chain's step 3,
-        // `configuredModel` — local.tsx:172-184).
-        self.store.set_config_model(config.model.as_ref().map(|model| {
-            crate::store::ModelSelection {
-                provider_id: model.provider_id.clone(),
-                model_id: model.model_id.clone(),
-                variant: model.variant.clone(),
-            }
-        }));
+        // NOTE: the config `model` default does NOT ride the TUI-local
+        // config file — v2's TUI config schema has no `model` field
+        // (packages/tui/src/config has keybinds/theme/attention/tabs
+        // only); the default comes from the SERVER's config API
+        // (`configuredModel`, local.tsx:170-179 — the boot fetch in
+        // [`spawn_server_lists`]).
         // R-07: the transcript image strip's gate (`session.image_preview`).
         self.store.set_image_preview(config.session_image_preview);
     }
@@ -1102,8 +1099,50 @@ pub enum PromptSinkEvent {
 /// Server-list fetch results (the pickers' data side).
 #[derive(Debug, Clone)]
 pub enum ServerListEvent {
+    /// The config `model` default from the server's config API — v2's
+    /// `configuredModel` (`context/local.tsx:170-179`: the LAST config
+    /// document entry carrying a `model` field; string `provider/model`
+    /// or the `{providerID, model, variant}` object). `None` = no
+    /// configured default (the chain falls through to recent/catalog).
+    Config(Option<crate::store::ModelSelection>),
     Models(Result<(Vec<crate::store::ServerModel>, Vec<crate::store::ServerProvider>), String>),
     Agents(Result<Vec<crate::store::ServerAgent>, String>),
+}
+
+/// `configuredModel` (local.tsx:170-179): `findLast` over the config
+/// entries for a document whose `info.model` is set, mapped onto the
+/// selection shape. Missing/invalid segments yield `None`.
+fn configured_model_from_entries(
+    entries: &[oc_client::types::ConfigEntry],
+) -> Option<crate::store::ModelSelection> {
+    let model = entries.iter().rev().find_map(|entry| match entry {
+        oc_client::types::ConfigEntry::DocumentEncoded(document) => document.info.model.as_ref(),
+        oc_client::types::ConfigEntry::DirectoryEncoded(_) => None,
+    })?;
+    match model {
+        oc_client::types::ConfigInfoEncodedModel::String(raw) => {
+            let (provider_id, model_id) = raw.split_once('/')?;
+            let (provider_id, model_id) = (provider_id.trim(), model_id.trim());
+            (!provider_id.is_empty() && !model_id.is_empty()).then(|| {
+                crate::store::ModelSelection {
+                    provider_id: provider_id.to_owned(),
+                    model_id: model_id.to_owned(),
+                    variant: None,
+                }
+            })
+        }
+        oc_client::types::ConfigInfoEncodedModel::ConfigInfoEncodedModelVariant2(object) => {
+            let provider_id = object.provider_id.trim();
+            let model_id = object.model.trim();
+            (!provider_id.is_empty() && !model_id.is_empty()).then(|| {
+                crate::store::ModelSelection {
+                    provider_id: provider_id.to_owned(),
+                    model_id: model_id.to_owned(),
+                    variant: object.variant.clone(),
+                }
+            })
+        }
+    }
 }
 
 /// One `worktree.list` call mapped into the dialog's row type.
@@ -1303,8 +1342,12 @@ impl crate::store::WorktreeSink for HttpWorktreeSink {
 }
 
 /// Fetch the picker lists once against the resolved server
-/// (`model.list` + `provider.list` + `agent.list`; failures land as
-/// the picker's error state, never a crash).
+/// (`config.get` + `model.list` + `provider.list` + `agent.list`;
+/// failures land as the picker's error state, never a crash). The
+/// config fetch leads — v2's boot `data.location.sync` runs
+/// `config.sync` alongside the location data
+/// (`context/data.tsx:27-31`) and the selection chain's
+/// `configuredModel` reads it (local.tsx:170-179).
 #[must_use]
 pub fn spawn_server_lists(
     client: oc_client::Client,
@@ -1312,6 +1355,13 @@ pub fn spawn_server_lists(
     let (tx, rx) = tokio::sync::mpsc::channel(4);
     let task = tokio::spawn(async move {
         let to_string = |error: oc_client::ClientError| error.to_string();
+        let config = client
+            .config()
+            .get(&oc_client::types::ConfigGetQuery { location: None })
+            .await
+            .ok()
+            .and_then(|entries| configured_model_from_entries(&entries));
+        let _ = tx.send(ServerListEvent::Config(config)).await;
         let models = client
             .model()
             .list(&oc_client::types::ModelListQuery { location: None })
@@ -2149,6 +2199,12 @@ pub async fn run_with_size(
         // Drain the server-list fetches into the picker state.
         while let Ok(event) = list_rx.try_recv() {
             match event {
+                ServerListEvent::Config(model) => {
+                    // The selection chain's step 3 (`configuredModel`,
+                    // local.tsx:170-179) — the server's merged config
+                    // view, not any TUI-local file.
+                    app.store.set_config_model(model);
+                }
                 ServerListEvent::Models(Ok((models, providers))) => {
                     app.store.set_models(crate::store::ListState::Loaded(models), providers);
                 }
@@ -2586,6 +2642,73 @@ fn to_ratatui_color(color: crate::render::CellColor) -> ratatui::style::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `configuredModel` (local.tsx:170-179): the LAST config document
+    /// entry carrying a `model` field wins; both wire shapes parse;
+    /// directory entries and missing/invalid segments yield `None`.
+    #[test]
+    fn configured_model_from_entries_follows_the_last_document() {
+        use oc_client::types::{
+            ConfigDirectoryEncoded, ConfigDocumentEncoded, ConfigDocumentEncodedType, ConfigEntry,
+            ConfigInfoEncoded, ConfigInfoEncodedModel, ConfigInfoEncodedModelVariant2,
+        };
+        let doc = |model: Option<ConfigInfoEncodedModel>| {
+            ConfigEntry::DocumentEncoded(ConfigDocumentEncoded {
+                info: ConfigInfoEncoded { model, ..Default::default() },
+                path: None,
+                type_: ConfigDocumentEncodedType::Document,
+            })
+        };
+        let string_doc =
+            || doc(Some(ConfigInfoEncodedModel::String("parityfake/fake-model".to_owned())));
+        // String shape.
+        assert_eq!(
+            configured_model_from_entries(&[string_doc()]).map(|m| (
+                m.provider_id,
+                m.model_id,
+                m.variant
+            )),
+            Some(("parityfake".to_owned(), "fake-model".to_owned(), None))
+        );
+        // Object shape with a variant.
+        assert_eq!(
+            configured_model_from_entries(&[doc(Some(
+                ConfigInfoEncodedModel::ConfigInfoEncodedModelVariant2(
+                    ConfigInfoEncodedModelVariant2 {
+                        model: "glm".to_owned(),
+                        provider_id: "z-ai".to_owned(),
+                        variant: Some("high".to_owned()),
+                    },
+                )
+            ))])
+            .map(|m| (m.provider_id, m.model_id, m.variant)),
+            Some(("z-ai".to_owned(), "glm".to_owned(), Some("high".to_owned())))
+        );
+        // The LAST document wins.
+        assert_eq!(
+            configured_model_from_entries(&[
+                string_doc(),
+                doc(Some(ConfigInfoEncodedModel::String("a/b".to_owned())))
+            ]),
+            configured_model_from_entries(&[doc(Some(ConfigInfoEncodedModel::String(
+                "a/b".to_owned()
+            )))])
+        );
+        // Invalid segments fall through; directory entries never pin.
+        assert_eq!(
+            configured_model_from_entries(&[doc(Some(ConfigInfoEncodedModel::String(
+                "nodash".to_owned()
+            )))]),
+            None
+        );
+        assert_eq!(
+            configured_model_from_entries(&[ConfigEntry::DirectoryEncoded(
+                ConfigDirectoryEncoded::default()
+            )]),
+            None
+        );
+        assert_eq!(configured_model_from_entries(&[]), None);
+    }
 
     /// `apply_config` resolves the theme through the registry and
     /// merges keybind overrides into the live keymap; a config reload
