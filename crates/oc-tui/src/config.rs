@@ -151,10 +151,9 @@ pub struct TuiConfig {
     pub path: Option<PathBuf>,
 }
 
-
-/// Parse the `model` field's two shapes (string `provider/model`, or
-/// the `{providerID, model, variant}` object — local.tsx:177-184).
-
+// (Historical note, kept from the pre-merge layout.) Parse the `model`
+// field's two shapes (string `provider/model`, or the
+// `{providerID, model, variant}` object — local.tsx:177-184).
 impl TuiConfig {
     /// Load `<config_root>/cli.json` (missing file = defaults; invalid
     /// JSON = defaults + a logged skip).
