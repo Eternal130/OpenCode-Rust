@@ -793,7 +793,9 @@ fn glow_ranges(inputs: &StripInputs) -> Vec<(usize, usize)> {
 /// base-fill + `Fill` layer, so the copy is direct; the one divergence
 /// is the glow fills' `fg(Color::Reset)` semantics, restored via
 /// [`glow_ranges`] (space cells inside a glow range read fg Default).
-fn frame_from_buffer(buffer: &OptimizedBuffer, glows: &[(usize, usize)]) -> Frame {
+/// Shared with the later solid surfaces (lane M2's dialogs pass an
+/// empty glow set).
+pub(crate) fn frame_from_buffer(buffer: &OptimizedBuffer, glows: &[(usize, usize)]) -> Frame {
     let width = buffer.width as usize;
     let mut cells = Vec::with_capacity(buffer.height as usize);
     for y in 0..buffer.height {
