@@ -211,8 +211,24 @@ fn sgr_left_up(col: u16, row: u16) -> Vec<u8> {
     format!("\x1b[<0;{};{}m", col + 1, row + 1).into_bytes()
 }
 
+/// Lane M2: the dialog family's renderer flag is read once at the
+/// first dialog paint — the parametrized tests below set it before
+/// the TUI boots (nextest's per-test process isolation makes the
+/// once-per-process flag testable; the same pattern `pty_tabs` uses).
 #[test]
-fn pty_help_slash_opens_the_dialog_and_sends_nothing() {
+fn pty_help_dialog_old_path() {
+    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
+    pty_help_dialog_body();
+}
+
+/// The opentui-solid dialog path (`OC_DIALOGS_OPENTUI=1`).
+#[test]
+fn pty_help_dialog_solid_path() {
+    std::env::set_var("OC_DIALOGS_OPENTUI", "1");
+    pty_help_dialog_body();
+}
+
+fn pty_help_dialog_body() {
     let _sandbox = sandbox_env("help");
     let (url, shutdown, prompt_posts) = spawn_scripted_server();
     let guard = attach_pty();
@@ -455,4 +471,119 @@ fn pty_mouse_closes_a_tab_and_add_opens_home() {
             "stage {stage} failed — stages: {results:?}"
         );
     }
+}
+
+// -- lane M2: the dialog family's open→browse→filter→select→apply cycle ----
+
+/// The palette cycle through the REAL app loop: ctrl+p opens the
+/// palette (`Commands`), arrow keys browse, typing filters, enter
+/// APPLIES the selected command (`Switch theme` → the Themes list
+/// opens), escape unwinds. Parametrized over both dialog renderer
+/// paths — the choreography is renderer-agnostic (the store's dialog
+/// machinery), the FLAG selects the painter.
+#[test]
+fn pty_dialog_palette_cycle_old_path() {
+    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
+    pty_dialog_palette_cycle_body();
+}
+
+/// The opentui-solid dialog path (`OC_DIALOGS_OPENTUI=1`) — the new
+/// path's first live interaction-cycle proof.
+#[test]
+fn pty_dialog_palette_cycle_solid_path() {
+    std::env::set_var("OC_DIALOGS_OPENTUI", "1");
+    pty_dialog_palette_cycle_body();
+}
+
+fn pty_dialog_palette_cycle_body() {
+    let _sandbox = sandbox_env("palette-cycle");
+    let (url, shutdown, prompt_posts) = spawn_scripted_server();
+    let guard = attach_pty();
+    let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let reader_master = guard.master.try_clone().expect("clone read");
+    {
+        let output = Arc::clone(&output);
+        std::thread::spawn(move || {
+            let mut reader = reader_master;
+            let mut chunk = [0u8; 4096];
+            loop {
+                match reader.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => {
+                        output.lock().expect("lock").extend_from_slice(&chunk[..count]);
+                    }
+                }
+            }
+        });
+    }
+    let boot = Boot { output: Arc::clone(&output) };
+
+    {
+        let mut writer = guard.master.try_clone().expect("clone keys");
+        let output = Arc::clone(&output);
+        std::thread::spawn(move || {
+            let probe = || Boot { output: Arc::clone(&output) };
+            assert!(
+                wait_for_after(&probe(), "█▀▀█".as_bytes(), 0, Duration::from_secs(5)),
+                "the home wordmark rendered"
+            );
+            std::thread::sleep(Duration::from_millis(400));
+            // OPEN: ctrl+p mounts the palette.
+            let _ = writer.write_all(b"\x10");
+            assert!(
+                wait_for_after(&probe(), b"Commands", len(&probe()), Duration::from_secs(5)),
+                "the palette opened with its title"
+            );
+            // BROWSE: two down-moves shift the selection.
+            let _ = writer.write_all(b"\x1b[B\x1b[B");
+            std::thread::sleep(Duration::from_millis(400));
+            // FILTER: typing narrows to the theme command.
+            let _ = writer.write_all(b"theme");
+            assert!(
+                wait_for_after(&probe(), b"Switch theme", len(&probe()), Duration::from_secs(5)),
+                "the filter surfaced the theme command"
+            );
+            std::thread::sleep(Duration::from_millis(300));
+            // APPLY: enter dispatches the selection — the Themes
+            // list dialog REPLACES the palette. (The assert targets a
+            // full NEW row: the frame DIFF serializer patches changed
+            // cells only, so the "Themes" title over "Commands"
+            // arrives as sparse runs, never the contiguous word.)
+            let _ = writer.write_all(b"\r");
+            assert!(
+                wait_for_after(&probe(), b"lucent-orng", len(&probe()), Duration::from_secs(5)),
+                "enter applied the selection: the theme list opened"
+            );
+            std::thread::sleep(Duration::from_millis(300));
+            // Unwind: escape closes the theme list, ctrl+c exits.
+            let _ = writer.write_all(b"\x1b");
+            std::thread::sleep(Duration::from_millis(250));
+            let _ = writer.write_all(b"\x03");
+        });
+    }
+
+    let client = oc_client::Client::new(&url).expect("client");
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("rt");
+    let finished = runtime.block_on(async {
+        tokio::time::timeout(
+            Duration::from_secs(20),
+            oc_tui::app::run_with_size(client, Some((80, 24)), oc_tui::app::BootArgs::default()),
+        )
+        .await
+    });
+    match finished {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => panic!("run_with_size failed: {error}"),
+        Err(elapsed) => panic!("the TUI did not exit in time: {elapsed}"),
+    }
+    shutdown.store(true, Ordering::SeqCst);
+    drop(guard);
+
+    let captured = String::from_utf8_lossy(&boot.output.lock().expect("lock").clone()).into_owned();
+    assert!(captured.contains("Commands"), "the palette title painted");
+    assert!(captured.contains("Switch theme"), "the filtered row painted");
+    assert!(captured.contains("lucent-orng"), "the applied dialog painted");
+    // The apply navigated the dialog stack, not the prompt: no
+    // session.prompt POSTs.
+    assert_eq!(prompt_posts.load(Ordering::SeqCst), 0, "the cycle is fully local");
 }
