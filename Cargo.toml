@@ -35,6 +35,23 @@ agent-client-protocol-schema = { path = "third_party/agent-client-protocol-schem
 # — see each third_party/*/README.md.
 tree-sitter-toml = { path = "third_party/tree-sitter-toml" }
 
+# ── OpenTUI local-dev patch (lane M0) ─────────────────────────────────────
+# The opentui crates below are consumed as a pinned GitHub git dep; CI's
+# clean checkout resolves them straight from the repo. For local dev
+# velocity against the sibling checkout, UNCOMMENT this block to redirect
+# all three crates to /opt/opentui-rust (edits there rebuild instantly):
+#
+# [patch.'https://github.com/Eternal130/opentui-rust']
+# opentui-core = { path = "/opt/opentui-rust/crates/opentui-core" }
+# opentui-keymap = { path = "/opt/opentui-rust/crates/opentui-keymap" }
+# opentui-solid = { path = "/opt/opentui-rust/crates/opentui-solid" }
+#
+# The block MUST stay commented in the committed tree: cargo hard-errors
+# on a [patch] path that does not exist (`patch location ... does not
+# contain packages matching ...`), which would break CI. Note that with
+# the patch active cargo rewrites Cargo.lock to the path sources — do not
+# commit that churn; `git checkout -- Cargo.lock` after local patch runs.
+
 [workspace.dependencies]
 oc-util = { path = "crates/oc-util" }
 oc-tui-core = { path = "crates/oc-tui-core" }
@@ -47,6 +64,15 @@ oc-plugin-host = { path = "crates/oc-plugin-host" }
 oc-server = { path = "crates/oc-server" }
 oc-client = { path = "crates/oc-client" }
 oc-tui = { path = "crates/oc-tui" }
+
+# OpenTUI (lane M0): API-level port of @opentui/{core,keymap,solid}@0.5.14
+# (github.com/Eternal130/opentui-rust) that the oc-tui migration will
+# consume. Pinned to the reviewed main rev (74/74 differential green in
+# that repo's CI). Dev-only for now — see the [patch] note above for
+# local-dev redirection to /opt/opentui-rust.
+opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "2f75746d7070b0df666c61339695c20f15b327e2" }
+opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "2f75746d7070b0df666c61339695c20f15b327e2" }
+opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "2f75746d7070b0df666c61339695c20f15b327e2" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
