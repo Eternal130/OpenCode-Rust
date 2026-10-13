@@ -19,6 +19,10 @@ pub mod message;
 pub mod session;
 pub mod session_screen;
 pub mod session_tabs;
+/// Lane M1: the tab strip on opentui-solid — the DEFAULT renderer
+/// (the hand-rolled one is the `OC_TABS_OPENTUI=0` fallback for one
+/// release; see the module doc + `docs/migration-m1-tabstrip.md`).
+pub mod session_tabs_solid;
 pub mod sidebar;
 pub mod syntax;
 pub mod tab_pulse;

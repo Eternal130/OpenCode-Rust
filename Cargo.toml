@@ -66,9 +66,11 @@ oc-client = { path = "crates/oc-client" }
 oc-tui = { path = "crates/oc-tui" }
 
 # OpenTUI (lane M0): API-level port of @opentui/{core,keymap,solid}@0.5.14
-# (github.com/Eternal130/opentui-rust) that the oc-tui migration will
-# consume. Pinned to the reviewed main rev (74/74 differential green in
-# that repo's CI). Dev-only for now — see the [patch] note above for
+# (github.com/Eternal130/opentui-rust) that the oc-tui migration
+# consumes. Pinned to the reviewed main rev (74/74 differential green
+# in that repo's CI). REAL deps of oc-tui since lane M1 (the session
+# tab strip renders on opentui-solid; release size +1.17 MiB, measured
+# in docs/migration-m1-tabstrip.md) — see the [patch] note above for
 # local-dev redirection to /opt/opentui-rust.
 opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "2f75746d7070b0df666c61339695c20f15b327e2" }
 opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "2f75746d7070b0df666c61339695c20f15b327e2" }

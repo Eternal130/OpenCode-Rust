@@ -2216,15 +2216,16 @@ pub async fn run_script_once(
         })
         .transpose();
     let our_side = our_server.as_ref().and_then(|server| {
-        PtyChild::spawn(
-            cli,
-            &["--server".to_owned(), our_url],
-            &project,
-            &home_env(&our_home, server.password(), &config_path),
-            cols,
-            rows,
-        )
-        .ok()
+        // Lane M1 (换血 pilot): forward the tab-strip renderer flag to
+        // OUR side only (the ref has no such switch) — the solid path
+        // is our default; run the rig with `OC_TABS_OPENTUI=0` in the
+        // environment to measure the hand-rolled fallback instead.
+        // The flag is read once at our TUI's boot.
+        let mut env = home_env(&our_home, server.password(), &config_path);
+        if let Ok(value) = std::env::var("OC_TABS_OPENTUI") {
+            env.push(("OC_TABS_OPENTUI".to_owned(), value));
+        }
+        PtyChild::spawn(cli, &["--server".to_owned(), our_url], &project, &env, cols, rows).ok()
     });
 
     let (mut ref_side, mut our_side): (Option<PtyChild>, Option<PtyChild>) =
