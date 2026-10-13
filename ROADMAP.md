@@ -182,3 +182,5 @@
 - 2026-10-12（用户裁定·换血令）：opentui-rust 移植完成后，**用移植库整体替换 opencode-rust 的 TUI 层**——M 阶段换血计划入册：M0 依赖接线（opencode-rust 以 path/git 依赖消费 opentui-rust 三 crate；opentui-rust 需建远端仓供 CI——待用户示下建仓）；M1..Mn 逐面换血（v2 TSX→opentui-solid 构建器 1:1 移植，每面以 tui-diff 差分为门禁：新路径一致度必须≥旧路径，过了删旧路径，旧新共存可回退）；终态=自研渲染/布局/keymap 退役、K-1..K-9 与 nord/样式残差族（终扫 (a) 类四族）随面消解、v2 上游跟踪变机械 diff 移植。前置：O2e textarea、O2f solid、markdown/code+tree-sitter、perf 四线完成后面齐开工。
 
 - 2026-10-13（opentui-rust 建仓）：GitHub Eternal130/opentui-rust（PUBLIC，MIT，本地 master 统一改 main），首次推送 CI 已跑。M0 接线前置就绪。
+
+- 2026-10-13（O2f 完成+唤醒机制修正）：solid 调和器落地（lane/solid 7daedd7，基 ffca27a 待融合后并入）——keyed 引擎（前缀/后缀修剪、锚前插入、省图删除、换位=两移动、map+序列启发式，universal.js:108-163）/setProperty 全开关（事件/id/focused/样式袋子域 diff/文本）/unmount 子先己后 LIFO/Portal/extend 注册/scrollback writer/JSX≈构建器宏（box_!{...}、show()、for_list()）。**8 solid 场景全零 diff**（bun 侧真 solid-js Show/For/Portal）+29 回归，169/169 测试。oracle 陷阱+2：bun 全局缓存静默以 @opentui/solid@0.6.1 冒充钉版、solid-js node 条件吐 SSR 桩（spread 永不重跑）——均在 tools/diff/README 钉纪律。唤醒机制复盘：小时级后台 sleep 被宿主回收（40 分钟级曾成功）→ 改链式短观察器（50 分钟/个，完成通知自续）+用户消息兜底。O2g（markdown+code+tree-sitter）已出发；在途：融合线（textarea×events 30 冲突+CI 修复）。
