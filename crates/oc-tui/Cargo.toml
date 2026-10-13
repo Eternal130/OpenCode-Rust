@@ -26,6 +26,15 @@ taffy = { version = "0.9", default-features = false, features = ["std", "flexbox
 crossterm = "0.28"
 unicode-width = "0.2"
 uuid = { version = "1", features = ["v4"] }
+# Lane M1 (换血 pilot): the opentui trio moves from dev-dependencies
+# to REAL dependencies — session_tabs_solid renders the tab strip on
+# opentui-solid behind OC_TABS_OPENTUI=1 (default off; the hand-rolled
+# renderer stays the default for one release). First surface whose
+# release graph links opentui: release size delta measured in the lane
+# report (M0's dev-only baseline was 64,659,904 B).
+opentui-core = { workspace = true }
+opentui-keymap = { workspace = true }
+opentui-solid = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -41,11 +50,3 @@ oc-plugin-host = { workspace = true }
 # which cannot unify with ratatui 0.29's exact "=0.2.0" pin (0.15's
 # unicode-width 0.1 coexists in the lock already, like console's).
 vt100 = "0.15"
-
-# Lane M0 smoke-wiring: the opentui crates enter this workspace's graph
-# (pinned git dep; see root Cargo.toml for the local-dev [patch] recipe).
-# DEV-ONLY until the migration lanes consume them — the shipped binary
-# must stay untouched (M0 gate: release size delta < 1%, verified).
-opentui-core = { workspace = true }
-opentui-keymap = { workspace = true }
-opentui-solid = { workspace = true }

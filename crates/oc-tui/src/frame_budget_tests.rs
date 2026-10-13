@@ -140,3 +140,77 @@ fn frame_budget_large_transcript_200x50() {
     // (ref index.tsx:462) and tightens this space; the release budget
     // stays 5ms regardless.
 }
+
+/// Lane M1 (换血 pilot): the tab strip's per-frame cost on the LIVE
+/// session route (`render_session` mounts the strip via
+/// `paint_live_tabs_bar`), measured over a 12-tab store with glowing
+/// tabs and alternating hover — the worst realistic strip workload at
+/// the budget harness's 200×50 scale. Both renderer paths get their
+/// own test process (the flag is read once at boot; nextest isolates
+/// the two fns), so the two numbers compare cleanly.
+#[test]
+fn frame_budget_session_with_tabs_strip_old_path() {
+    std::env::set_var("OC_TABS_OPENTUI", "0");
+    strip_frame_budget_body();
+}
+
+/// The opentui-solid strip path — the default (see
+/// [`frame_budget_session_with_tabs_strip_old_path`] for the
+/// `OC_TABS_OPENTUI=0` fallback).
+#[test]
+fn frame_budget_session_with_tabs_strip_solid_path() {
+    std::env::set_var("OC_TABS_OPENTUI", "1");
+    strip_frame_budget_body();
+}
+
+fn strip_frame_budget_body() {
+    use crate::components::session::render_session;
+    use crate::reactive::Runtime;
+    use crate::store::{Store, Unread};
+
+    let theme = theme();
+    let store = Store::new(Runtime::new());
+    for index in 0..12 {
+        store.open_tab(&format!("s{index}"), Some(format!("Session {index} title")));
+        if index % 3 == 0 {
+            store.set_unread(&format!("s{index}"), Some(Unread::Activity));
+        }
+    }
+    // Warmup (mount + caches).
+    for frame in 0..3 {
+        let hover = if frame % 2 == 0 { Some("s4") } else { None };
+        store.set_tab_hover(hover);
+        let _ = render_session(&store, "s1", &theme.styles(), (200, 50));
+    }
+    let mut worst = 0u128;
+    let mut worst_micros = 0u128;
+    let mut total_micros = 0u128;
+    let frames = 20u128;
+    for frame in 0..frames {
+        // Alternate hover targets so every frame performs real patch
+        // work (widths shift, ✕ reveals, glow titles re-derive).
+        let hover = if frame % 2 == 0 { Some("s4") } else { Some("s7") };
+        store.set_tab_hover(hover);
+        let start = std::time::Instant::now();
+        let painted = render_session(&store, "s1", &theme.styles(), (200, 50));
+        let elapsed = start.elapsed();
+        worst = worst.max(elapsed.as_millis());
+        worst_micros = worst_micros.max(elapsed.as_micros());
+        total_micros += elapsed.as_micros();
+        assert_eq!(painted.height, 50);
+    }
+    eprintln!(
+        "[frame-budget] 200x50 session route, 12 tabs strip ({}): worst {} µs, avg {} µs \
+         ({} build)",
+        if crate::components::session_tabs_solid::opentui_tabs_enabled() { "solid" } else { "old" },
+        worst_micros,
+        (total_micros / frames),
+        if cfg!(debug_assertions) { "debug" } else { "release" },
+    );
+    #[cfg(not(debug_assertions))]
+    assert!(
+        worst <= FRAME_BUDGET_MS,
+        "frame budget exceeded with the tabs strip mounted: worst {worst} ms > \
+         {FRAME_BUDGET_MS} ms"
+    );
+}
