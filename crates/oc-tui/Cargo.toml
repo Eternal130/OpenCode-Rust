@@ -41,3 +41,11 @@ oc-plugin-host = { workspace = true }
 # which cannot unify with ratatui 0.29's exact "=0.2.0" pin (0.15's
 # unicode-width 0.1 coexists in the lock already, like console's).
 vt100 = "0.15"
+
+# Lane M0 smoke-wiring: the opentui crates enter this workspace's graph
+# (pinned git dep; see root Cargo.toml for the local-dev [patch] recipe).
+# DEV-ONLY until the migration lanes consume them — the shipped binary
+# must stay untouched (M0 gate: release size delta < 1%, verified).
+opentui-core = { workspace = true }
+opentui-keymap = { workspace = true }
+opentui-solid = { workspace = true }
