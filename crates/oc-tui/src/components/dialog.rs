@@ -360,6 +360,29 @@ pub fn render_overlay_with(
     theme: &crate::theme::ThemeState,
     terminal: (u16, u16),
 ) -> (usize, usize, usize, usize) {
+    // Lane M2: the dialog family's opentui-solid path — the DEFAULT
+    // (`OC_DIALOGS_OPENTUI=0` selects the hand-rolled fallback below
+    // for one release) — the same inputs, the same geometry, the flag
+    // read once at the first dialog paint.
+    if crate::components::dialog_solid::opentui_dialogs_enabled() {
+        return crate::components::dialog_solid::render_overlay_solid(
+            base, entry, props, plugin, theme, terminal,
+        );
+    }
+    render_overlay_with_old(base, entry, props, plugin, theme, terminal)
+}
+
+/// The hand-rolled renderer (the `OC_DIALOGS_OPENTUI` fallback for
+/// one release after the flip) — also the parity oracle the solid
+/// path's unit gate diffs against.
+pub(crate) fn render_overlay_with_old(
+    base: &mut Frame,
+    entry: &DialogEntry,
+    props: &crate::components::dialog_select::SelectProps,
+    plugin: Option<&crate::store::PluginDialogContent>,
+    theme: &crate::theme::ThemeState,
+    terminal: (u16, u16),
+) -> (usize, usize, usize, usize) {
     let styles = DialogStyles::from_theme(theme);
     let dialog_bg = styles.surface_bg;
 
@@ -435,8 +458,10 @@ pub fn render_overlay_with(
 /// where a glyph actually renders — the raster leaves whitespace fg at
 /// the terminal default (rig-pinned: the composer placeholder's 'A'
 /// dims idx8→idx236 under the dialog while the blank cells beside it
-/// stay idx15; every covered bg dims).
-fn blend_backdrop(cell: &mut crate::render::Cell) {
+/// stay idx15; every covered bg dims). Shared by BOTH renderer paths
+/// (the NEW-S2a semantics: the scrim is a bridge-side compositing
+/// step because the raster cannot see the route frame beneath).
+pub(crate) fn blend_backdrop(cell: &mut crate::render::Cell) {
     let dim = |value: u8| -> u8 { (f64::from(value) * (1.0 - BACKDROP_ALPHA)).round() as u8 };
     cell.bg = match cell.bg {
         crate::render::CellColor::Rgb(r, g, b) => {
@@ -662,8 +687,9 @@ fn render_help_content(styles: &DialogStyles, surface: Color, width: usize) -> S
     SelectView { rows, width }
 }
 
-/// Display one binding spec alternative with `<leader>` expanded.
-fn spec_display(spec: &str) -> String {
+/// Display one binding spec alternative with `<leader>` expanded
+/// (shared with the opentui-solid path).
+pub(crate) fn spec_display(spec: &str) -> String {
     let leader =
         crate::keymap::KeyStroke::parse("ctrl+x").unwrap_or_else(|| crate::keymap::KeyStroke {
             key: "x".into(),
