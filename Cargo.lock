@@ -2166,6 +2166,9 @@ dependencies = [
  "oc-theme",
  "oc-tui-core",
  "oc-util",
+ "opentui-core",
+ "opentui-keymap",
+ "opentui-solid",
  "parity",
  "ratatui",
  "serde",
@@ -2216,6 +2219,38 @@ dependencies = [
  "oc-util",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "opentui-core"
+version = "0.1.0"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=2f75746d7070b0df666c61339695c20f15b327e2#2f75746d7070b0df666c61339695c20f15b327e2"
+dependencies = [
+ "cc",
+ "serde",
+ "serde_json",
+ "taffy",
+ "tree-sitter",
+ "tree-sitter-language",
+ "unicode-segmentation",
+ "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "opentui-keymap"
+version = "0.1.0"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=2f75746d7070b0df666c61339695c20f15b327e2#2f75746d7070b0df666c61339695c20f15b327e2"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "opentui-solid"
+version = "0.1.0"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=2f75746d7070b0df666c61339695c20f15b327e2#2f75746d7070b0df666c61339695c20f15b327e2"
+dependencies = [
+ "opentui-core",
 ]
 
 [[package]]
