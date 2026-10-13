@@ -214,3 +214,82 @@ fn strip_frame_budget_body() {
          {FRAME_BUDGET_MS} ms"
     );
 }
+
+/// Lane M2: the dialog family's per-frame cost on the LIVE app frame
+/// (`render_app` composites the top dialog through
+/// `render_overlay`), measured over the command palette open with its
+/// full registry and alternating selection moves — the hot path
+/// (stable content height, in-place prop patches). Both dialog
+/// renderer paths get their own test process (the flag is read once
+/// at boot; nextest isolates the two fns); the tab strip is pinned to
+/// the OLD path on both sides so the numbers isolate the dialog path.
+#[test]
+fn frame_budget_dialog_open_old_path() {
+    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
+    std::env::set_var("OC_TABS_OPENTUI", "0");
+    dialog_frame_budget_body();
+}
+
+/// The opentui-solid dialog path (`OC_DIALOGS_OPENTUI=1`).
+#[test]
+fn frame_budget_dialog_open_solid_path() {
+    std::env::set_var("OC_DIALOGS_OPENTUI", "1");
+    std::env::set_var("OC_TABS_OPENTUI", "0");
+    dialog_frame_budget_body();
+}
+
+fn dialog_frame_budget_body() {
+    use crate::reactive::Runtime;
+    use crate::store::{Store, Unread};
+
+    let theme = theme();
+    let store = Store::new(Runtime::new());
+    for index in 0..4 {
+        store.open_tab(&format!("s{index}"), Some(format!("Session {index}")));
+        if index % 2 == 0 {
+            store.set_unread(&format!("s{index}"), Some(Unread::Activity));
+        }
+    }
+    store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+    store
+        .replace_dialog(crate::store::DialogKind::CommandPalette, crate::store::DialogSize::Medium);
+    // Warmup (mount + caches).
+    for frame in 0..3 {
+        let selected = if frame % 2 == 0 { 0 } else { 3 };
+        store.update_dialog(|top| top.select.selected = selected);
+        let _ = crate::components::dialog::render_app(&store, &theme, (200, 50));
+    }
+    let mut worst = 0u128;
+    let mut worst_micros = 0u128;
+    let mut total_micros = 0u128;
+    let frames = 20u128;
+    for frame in 0..frames {
+        // Alternate the selection so every frame performs real patch
+        // work (row backgrounds, bold runs, footers re-derive).
+        let selected = if frame % 2 == 0 { 2 } else { 9 };
+        store.update_dialog(|top| {
+            top.select.selected = selected;
+            top.select.scroll = selected.saturating_sub(3);
+        });
+        let start = std::time::Instant::now();
+        let painted = crate::components::dialog::render_app(&store, &theme, (200, 50));
+        let elapsed = start.elapsed();
+        worst = worst.max(elapsed.as_millis());
+        worst_micros = worst_micros.max(elapsed.as_micros());
+        total_micros += elapsed.as_micros();
+        assert_eq!(painted.height, 50);
+    }
+    eprintln!(
+        "[frame-budget] 200x50 session route, palette dialog open ({}): worst {} µs, avg {} µs \
+         ({} build)",
+        if crate::components::dialog_solid::opentui_dialogs_enabled() { "solid" } else { "old" },
+        worst_micros,
+        total_micros / frames,
+        if cfg!(debug_assertions) { "debug" } else { "release" },
+    );
+    #[cfg(not(debug_assertions))]
+    assert!(
+        worst <= FRAME_BUDGET_MS,
+        "frame budget exceeded with a dialog open: worst {worst} ms > {FRAME_BUDGET_MS} ms"
+    );
+}
