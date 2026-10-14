@@ -80,6 +80,17 @@
 //! (same vt100 0.15 pin, same style digest) with the burst machinery
 //! trimmed to what the differential needs (live `grid_now`, raw
 //! mirror, stability waits).
+//!
+//! # Ref-capture cache (lane/accel)
+//!
+//! The ref (bun) side is identical across OUR flag changes, so its
+//! settled per-step grids are cached under `tui-diff/cache/ref/`
+//! (gitignored), keyed by a fingerprint of the bun identity + ref
+//! checkout revision + spawn defines + script bytes + stub payload +
+//! size, and replayed instead of spawning the bun PTY. Discipline:
+//! only SETTLED grids are cached, only when two consecutive captures
+//! are byte-identical, only as COMPLETE per-script entries (partial
+//! observations run live). See [`RefCaptureCache`].
 
 #![allow(unsafe_code)] // pty(7)/TIOCSCTTY are only reachable through libc FFI
 #![allow(
@@ -100,6 +111,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::scenario::ScenarioHost;
 
@@ -1130,6 +1142,11 @@ pub struct Script {
     /// session-frame.tsx:107) is unreachable at 80/120 cols.
     #[serde(default)]
     pub size: Option<String>,
+    /// Source file (set by [`load_scripts`]; not deserialized). The
+    /// ref-capture cache hashes the script JSON bytes, so the rig
+    /// needs the path alongside the parsed value.
+    #[serde(skip)]
+    pub path: Option<PathBuf>,
     pub steps: Vec<ScriptStep>,
 }
 
@@ -1541,6 +1558,11 @@ pub struct StepOutcome {
     pub structural: StructDiff,
     pub ref_text: Vec<String>,
     pub our_text: Vec<String>,
+    /// SHA-256-derived digest of the REF grid at capture (char+style
+    /// cells). Identical digests across runs = the ref capture is
+    /// deterministic for that step (the ref-cache stability
+    /// measurement + verdict-preservation checks key on this).
+    pub ref_digest: u64,
     /// Sweep coverage / click-parity summary (hover-sweep and
     /// click-sweep steps only; `None` for ordinary steps).
     pub coverage: Option<String>,
@@ -1553,6 +1575,30 @@ impl StepOutcome {
             StepClass::Identical => "identical",
             StepClass::TextOnly => "text-only",
             StepClass::Mismatch => "MISMATCH",
+        }
+    }
+}
+
+/// Where one run's ref grids came from (lane/accel cache reporting).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RefSource {
+    /// Live bun PTY + ref server for every step.
+    #[default]
+    Live,
+    /// Per-step hybrid: cache-stable steps replayed, unstable steps
+    /// live (the bun PTY still booted).
+    CachePartial,
+    /// Every step replayed from the cache — no bun spawned at all.
+    Cache,
+}
+
+impl RefSource {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RefSource::Live => "live",
+            RefSource::CachePartial => "cache(part)",
+            RefSource::Cache => "cache",
         }
     }
 }
@@ -1570,6 +1616,9 @@ pub struct ScriptRun {
     pub error: Option<String>,
     pub booted_ref: bool,
     pub booted_our: bool,
+    /// Where this run's ref grids came from (lane/accel): live bun, a
+    /// fully-cached replay (no bun spawned), or a per-step hybrid.
+    pub ref_source: RefSource,
     /// Main-request shapes the stub recorded during this run
     /// (request-path parity; see `RecordedRequest`).
     pub requests: Vec<RecordedRequest>,
@@ -1591,7 +1640,7 @@ impl ScriptRun {
 }
 
 // ---------------------------------------------------------------------------
-// The rig
+// Rig knobs.
 // ---------------------------------------------------------------------------
 
 /// Rig knobs.
@@ -1603,6 +1652,15 @@ pub struct RigConfig {
     pub script_filter: Option<String>,
     /// Skip the ref side entirely (driver smoke mode).
     pub no_ref: bool,
+    /// Ref-capture cache directory (`Some` = cache enabled; the env
+    /// kill switch `OC_TUI_DIFF_REF_CACHE=0` disables it at runtime).
+    /// Default: `<manifest>/tui-diff/cache/ref` (gitignored).
+    pub ref_cache: Option<PathBuf>,
+    /// Force every script to a live CAPTURE run (no replay) even when
+    /// a confirmed cache entry exists — the `--measure-stability`
+    /// mode: N independent live observations, then the caller
+    /// confirms the entries from the collected digests.
+    pub capture_only: bool,
 }
 
 impl RigConfig {
@@ -1615,6 +1673,430 @@ impl RigConfig {
             runs: 1,
             script_filter: None,
             no_ref: false,
+            ref_cache: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tui-diff/cache/ref")),
+            capture_only: false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ref-capture cache (lane/accel)
+// ---------------------------------------------------------------------------
+
+/// The defines every ref TUI spawn passes (the cache fingerprint pins
+/// them — a changed define changes ref rendering and must invalidate).
+pub const REF_DEFINES: [(&str, &str); 3] = [
+    ("OPENCODE_VERSION", "\"2.0.24\""),
+    ("OPENCODE_CHANNEL", "\"stable\""),
+    ("OPENCODE_ARTIFACT", "\"cli\""),
+];
+
+/// Bump when ANY capture-side semantics change (settle policy, capture
+/// timing, stub payloads' derivation, env shape, this file's hashing).
+const REF_CACHE_PROTOCOL_VERSION: u32 = 1;
+
+/// sha256 hex of arbitrary bytes.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let digest = Sha256::digest(bytes);
+    digest.iter().fold(String::with_capacity(digest.len() * 2), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    })
+}
+
+/// Compact digest of one grid's cells (char + style), for stability
+/// measurement and verdict-preservation comparisons. Same bytes ⇒ same
+/// grid; the u64 form is the first 8 bytes of the sha256.
+fn grid_digest(grid: &Grid) -> u64 {
+    let mut bytes = Vec::with_capacity(grid.cells.len() * 12);
+    for cell in &grid.cells {
+        let mut buf = [0u8; 4];
+        cell.ch.encode_utf8(&mut buf);
+        bytes.extend_from_slice(&buf);
+        bytes.extend_from_slice(&cell.style.to_be_bytes());
+    }
+    let digest = Sha256::digest(&bytes);
+    u64::from_be_bytes(digest[..8].try_into().expect("8 bytes"))
+}
+
+/// The SSE body a script's stub mode serves (mirrors the arm logic in
+/// [`run_script_once`] — the cache fingerprints it so a stub payload
+/// change invalidates every affected entry).
+fn stub_payload_for(script: &Script) -> String {
+    match script.stub.as_str() {
+        "reasoning" => StubScript::Reasoning.sse(),
+        "reasoning-long" => StubScript::ReasoningLong.sse(),
+        "subagent-flow" => {
+            let flow = subagent_flow_scripts();
+            format!("{}{}{}{}", flow.main, flow.subagent, flow.continuation, flow.title)
+        }
+        _ => StubScript::Text.sse(),
+    }
+}
+
+/// One run-length-encoded cell run of a cached grid.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedRun {
+    /// Repeat count.
+    n: u32,
+    /// The cell's char (single grapheme).
+    ch: String,
+    /// The cell's style digest.
+    style: u64,
+}
+
+/// One cached step: the SETTLED ref grid plus the stability facts
+/// measured at capture time.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedStep {
+    label: String,
+    /// Quiescence achieved within the settle budget at capture.
+    settled: bool,
+    /// Two consecutive captures 250 ms apart were byte-identical at
+    /// capture time. `false` ⇒ the grid is NOT cached (mid-run
+    /// transient: spinner/animation/blink phase — timing-dependent).
+    stable: bool,
+    /// `None` for unstable steps (never replayed).
+    grid: Option<Vec<CachedRun>>,
+    cols: usize,
+    rows: usize,
+}
+
+/// One cache file: `<script id>-<WxH>.json`.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RefCacheEntry {
+    version: u32,
+    fingerprint: String,
+    script_id: String,
+    cols: u16,
+    rows: u16,
+    /// Multi-run CONFIRMED observation? Only confirmed entries are
+    /// replayed: a single capture's double-capture bar (two captures
+    /// 250 ms apart equal) is NECESSARY but NOT SUFFICIENT — the
+    /// ref's home placeholder is random per BOOT, fixed within a run,
+    /// so a within-run bar passes while the grid flips across runs
+    /// (the lane's first A/B caught exactly this). Confirmation
+    /// (`--measure-stability N` → [`RefCaptureCache::confirm`])
+    /// requires the per-step ref digest to be identical across N
+    /// independent runs before the step becomes replayable.
+    #[serde(default)]
+    confirmed: bool,
+    steps: Vec<CachedStep>,
+}
+
+fn grid_to_rle(grid: &Grid) -> Vec<CachedRun> {
+    let mut runs: Vec<CachedRun> = Vec::new();
+    for cell in &grid.cells {
+        match runs.last_mut() {
+            Some(run)
+                if run.style == cell.style
+                    && run.ch.starts_with(cell.ch)
+                    && run.ch.chars().count() == 1 =>
+            {
+                run.n += 1;
+            }
+            _ => runs.push(CachedRun { n: 1, ch: cell.ch.to_string(), style: cell.style }),
+        }
+    }
+    runs
+}
+
+fn rle_to_grid(runs: &[CachedRun], cols: usize, rows: usize) -> Option<Grid> {
+    let mut cells = Vec::with_capacity(cols * rows);
+    for run in runs {
+        let ch = run.ch.chars().next()?;
+        for _ in 0..run.n {
+            cells.push(VtCell { ch, style: run.style });
+        }
+    }
+    (cells.len() == cols * rows).then_some(Grid { cols, rows, cells })
+}
+
+/// How [`run_script_once`] treats the ref side this invocation.
+pub enum RefPlan {
+    /// Plain live run (no cache interaction: cache disabled, `--no-ref`,
+    /// or the script carries sweep steps whose per-side reaction matrix
+    /// needs the live ref).
+    Live,
+    /// Live run that probes per-step capture stability (a second capture
+    /// 250 ms after the settled one) and stores a cache entry when EVERY
+    /// step proved settled + double-capture-stable. Carries the cache
+    /// handle so the run's tail can store the observation.
+    Capture { cache: Arc<RefCaptureCache>, fingerprint: String },
+    /// Replay cached grids per step (HYBRID, per-step granularity — the
+    /// ref's home placeholder is random per boot, so whole-corpus
+    /// all-stable scripts are rare). Each entry is `Some((grid,
+    /// settled))` for cache-stable steps and `None` for unstable ones.
+    /// * every step `Some` → the ref side is not spawned at all;
+    /// * any `None` → the ref PTY still boots and is fed every payload
+    ///   (its state evolution is needed by the later live steps), but
+    ///   cached steps compare against the cached grid and skip the ref
+    ///   settle probe.
+    Replay { steps: Vec<Option<(Grid, bool)>> },
+}
+
+impl std::fmt::Debug for RefPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RefPlan::Live => f.write_str("RefPlan::Live"),
+            RefPlan::Capture { .. } => f.write_str("RefPlan::Capture"),
+            RefPlan::Replay { steps } => {
+                let cached = steps.iter().filter(|step| step.is_some()).count();
+                write!(f, "RefPlan::Replay({cached}/{} steps cached)", steps.len())
+            }
+        }
+    }
+}
+
+/// The ref-capture cache: fingerprint-keyed settled ref grids.
+///
+/// # Determinism discipline (the guard rails)
+///
+/// * Only SETTLED final grids are cached — one per step, after the
+///   rig's quiescence settle (`wait_grid_stable`) + blink beat. Mid-run
+///   transient frames are never captured, let alone cached.
+/// * A step is cached only when TWO CONSECUTIVE captures (250 ms apart)
+///   are byte-identical — spinner/animation/blink-phase frames fail
+///   this and are stored as `stable: false` (never replayed).
+/// * Replay is PER-STEP: stable steps compare against their cached
+///   grid, unstable steps stay live. The ref side is skipped entirely
+///   only when EVERY step is cached (a partial entry still boots the
+///   bun PTY — its state evolution feeds the later live steps; the
+///   ref's home placeholder is random per boot, so all-stable scripts
+///   are the exception, not the rule).
+/// * The fingerprint covers: protocol version, the bun identity
+///   (path + `--version` + byte length), the ref checkout revision
+///   (git HEAD of the rebuild source + a manifest hash of the live
+///   ref root), the ref spawn defines, the script JSON bytes, the
+///   stub's SSE payload, and the size. Any component change misses
+///   the cache (live run, re-capture).
+/// * Scripts with `sweep` steps are never cached (the click/hover
+///   reaction matrix measures the LIVE ref side).
+/// * Replay is safe at any `--runs`: replayed steps are exactly the
+///   cross-run-stable ones, where the live ref produces the same
+///   grids anyway — the deterministic-vs-timing split only lives on
+///   the flaky steps, which stay live. (`verify-lane.sh final` still
+///   pins `--no-ref-cache`: final verdicts are live verdicts.)
+pub struct RefCaptureCache {
+    dir: PathBuf,
+    /// Fingerprint of everything script-independent (computed once).
+    base_fingerprint: String,
+}
+
+impl RefCaptureCache {
+    /// Open the cache at `dir`, computing the base fingerprint (spawns
+    /// `bun --version` once and hashes the ref-root manifest).
+    pub fn open(dir: &Path, bun: &Path) -> Result<Self> {
+        Ok(Self::with_base(dir, Self::base_fingerprint(bun)?))
+    }
+
+    /// Open without the base fingerprint — enough for
+    /// [`Self::confirm`] (which only touches existing entries).
+    #[must_use]
+    pub fn open_unfingerprinted(dir: &Path) -> Self {
+        Self::with_base(dir, String::new())
+    }
+
+    fn with_base(dir: &Path, base_fingerprint: String) -> Self {
+        Self { dir: dir.to_owned(), base_fingerprint }
+    }
+
+    /// Everything script-independent the fingerprint pins (see the
+    /// struct docs). Extracted from [`Self::open`] so tests can build
+    /// caches with a synthetic base.
+    fn base_fingerprint(bun: &Path) -> Result<String> {
+        use std::fmt::Write as _;
+        let mut base = format!("version={REF_CACHE_PROTOCOL_VERSION}\n");
+        for (key, value) in REF_DEFINES {
+            let _ = writeln!(base, "define.{key}={value}");
+        }
+        // PARITY_BUN identity: resolved path + version + byte length.
+        // (Length + version, not a full content hash: the pinned bun is
+        // a stable copy, and any swap changes at least one of the two.)
+        let _ = writeln!(base, "bun.path={}", bun.display());
+        let version = std::process::Command::new(bun)
+            .arg("--version")
+            .output()
+            .context("bun --version (fingerprint)")?;
+        let _ = writeln!(base, "bun.version={}", String::from_utf8_lossy(&version.stdout).trim());
+        let _ = writeln!(base, "bun.bytes={}", std::fs::metadata(bun).map_or(0, |m| m.len()));
+        // Ref checkout revision: the rebuild source's git HEAD (the
+        // working root is a tar copy WITHOUT .git), plus a manifest
+        // hash of the live root so a drifted rebuild also misses.
+        let source = std::env::var("PARITY_REF_SOURCE")
+            .map_or_else(|_| PathBuf::from("/opt/opencode-ref"), PathBuf::from);
+        let head = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&source)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .map_or_else(
+                || "nogit".to_owned(),
+                |out| String::from_utf8_lossy(&out.stdout).trim().to_owned(),
+            );
+        let _ = writeln!(base, "ref.source_head={head}");
+        let root = ref_checkout_root();
+        let mut manifest = Vec::new();
+        for relative in ["package.json", "bun.lock", "bun.lockb", "packages/cli/package.json"] {
+            let path = root.join(relative);
+            if let Ok(bytes) = std::fs::read(&path) {
+                manifest.extend_from_slice(relative.as_bytes());
+                manifest.push(b'\0');
+                manifest.extend_from_slice(&sha256_hex(&bytes).into_bytes());
+                manifest.push(b'\n');
+            }
+        }
+        let _ = writeln!(base, "ref.manifest={}", sha256_hex(&manifest));
+        Ok(base)
+    }
+
+    fn fingerprint(&self, script: &Script, cols: u16, rows: u16) -> Result<String> {
+        let path = script.path.as_ref().context("script has no source path (cache)")?;
+        let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        let full = format!(
+            "{}script.sha256={}\nstub.sha256={}\nsize={cols}x{rows}\n",
+            self.base_fingerprint,
+            sha256_hex(&bytes),
+            sha256_hex(stub_payload_for(script).as_bytes()),
+        );
+        Ok(sha256_hex(full.as_bytes()))
+    }
+
+    fn entry_path(&self, script: &Script, cols: u16, rows: u16) -> PathBuf {
+        self.dir.join(format!("{}-{cols}x{rows}.json", script.id))
+    }
+
+    /// Decide the ref plan for one (script, size): replay the
+    /// CONFIRMED stable steps (per-step hybrid), capture on a miss, or
+    /// plain live for sweep scripts / confirmed-unplayable entries.
+    #[must_use]
+    pub fn plan(self: &Arc<Self>, script: &Script, cols: u16, rows: u16) -> RefPlan {
+        if script.steps.iter().any(|step| step.sweep.is_some()) {
+            return RefPlan::Live;
+        }
+        let Ok(fingerprint) = self.fingerprint(script, cols, rows) else {
+            return RefPlan::Live;
+        };
+        let capture =
+            || RefPlan::Capture { cache: Arc::clone(self), fingerprint: fingerprint.clone() };
+        if let Ok(bytes) = std::fs::read(self.entry_path(script, cols, rows)) {
+            if let Ok(entry) = serde_json::from_slice::<RefCacheEntry>(&bytes) {
+                if entry.version == REF_CACHE_PROTOCOL_VERSION
+                    && entry.fingerprint == fingerprint
+                    && entry.steps.len() == script.steps.len()
+                {
+                    if entry.confirmed {
+                        let mut steps = Vec::with_capacity(entry.steps.len());
+                        for step in &entry.steps {
+                            let cached = if step.stable {
+                                step.grid
+                                    .as_ref()
+                                    .and_then(|rle| rle_to_grid(rle, step.cols, step.rows))
+                                    .map(|grid| (grid, step.settled))
+                            } else {
+                                None
+                            };
+                            steps.push(cached);
+                        }
+                        if steps.iter().any(std::option::Option::is_some) {
+                            return RefPlan::Replay { steps };
+                        }
+                        // A CONFIRMED all-unstable entry can never
+                        // replay anything — plain live (the entry
+                        // stays on disk as the coverage record).
+                        return RefPlan::Live;
+                    }
+                    // Unconfirmed observation: refresh it (the next
+                    // measure/confirm pass promotes it).
+                    return capture();
+                }
+            }
+        }
+        capture()
+    }
+
+    /// Promote an entry to CONFIRMED using the per-step ref digests of
+    /// N independent runs: a step stays/becomes replayable iff its
+    /// digests agree across EVERY run (and it already passed the
+    /// capture-time double-capture bar in the stored observation).
+    /// `digests_per_run[i][step]` is run i's step digest; runs with
+    /// driver errors or short step lists are rejected (honesty over
+    /// convenience).
+    pub fn confirm(&self, script_id: &str, cols: u16, rows: u16, digests_per_run: &[Vec<u64>]) {
+        let path = self.dir.join(format!("{script_id}-{cols}x{rows}.json"));
+        let Ok(bytes) = std::fs::read(&path) else {
+            eprintln!("[tui-diff] ref-cache confirm: no entry for {script_id}@{cols}x{rows}");
+            return;
+        };
+        let Ok(mut entry) = serde_json::from_slice::<RefCacheEntry>(&bytes) else {
+            eprintln!("[tui-diff] ref-cache confirm: corrupt entry {script_id}@{cols}x{rows}");
+            return;
+        };
+        if digests_per_run.len() < 2 {
+            eprintln!(
+                "[tui-diff] ref-cache confirm: need >=2 runs, got {} — entry left unconfirmed",
+                digests_per_run.len()
+            );
+            return;
+        }
+        for (index, step) in entry.steps.iter_mut().enumerate() {
+            // Stable across the N independent runs? (Missing digests —
+            // a short run — never confirm.)
+            let agreed_all_runs = digests_per_run[0].get(index).is_some_and(|first| {
+                digests_per_run.iter().all(|run| run.get(index) == Some(first))
+            });
+            step.stable &= agreed_all_runs;
+        }
+        entry.confirmed = true;
+        let replayable = entry.steps.iter().filter(|step| step.stable).count();
+        eprintln!(
+            "[tui-diff] ref-cache confirmed {script_id}@{cols}x{rows}: {replayable}/{} steps replayable",
+            entry.steps.len()
+        );
+        match serde_json::to_vec_pretty(&entry) {
+            Ok(bytes) => {
+                if let Err(error) = std::fs::write(&path, bytes) {
+                    eprintln!("[tui-diff] ref-cache confirm write failed: {error}");
+                }
+            }
+            Err(error) => eprintln!("[tui-diff] ref-cache confirm encode failed: {error}"),
+        }
+    }
+
+    /// Store an observation — COMPLETE (every step stable) or PARTIAL
+    /// (unstable steps carry `stable: false` and no grid). Stored
+    /// UNCONFIRMED by capture runs; only [`Self::confirm`] (multi-run
+    /// digest agreement) marks the entry replayable.
+    fn store(
+        &self,
+        script: &Script,
+        cols: u16,
+        rows: u16,
+        fingerprint: &str,
+        steps: Vec<CachedStep>,
+        confirmed: bool,
+    ) {
+        let entry = RefCacheEntry {
+            version: REF_CACHE_PROTOCOL_VERSION,
+            fingerprint: fingerprint.to_owned(),
+            script_id: script.id.clone(),
+            cols,
+            rows,
+            confirmed,
+            steps,
+        };
+        let _ = std::fs::create_dir_all(&self.dir);
+        let path = self.entry_path(script, cols, rows);
+        match serde_json::to_vec_pretty(&entry) {
+            Ok(bytes) => {
+                if let Err(error) = std::fs::write(&path, bytes) {
+                    eprintln!("[tui-diff] ref-cache write failed {}: {error}", path.display());
+                }
+            }
+            Err(error) => eprintln!("[tui-diff] ref-cache encode failed: {error}"),
         }
     }
 }
@@ -1639,7 +2121,7 @@ pub fn load_scripts(dir: &Path, filter: &Option<String>) -> Result<Vec<Script>> 
         let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
         let script: Script =
             serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
-        scripts.push(script);
+        scripts.push(Script { path: Some(path), ..script });
     }
     if scripts.is_empty() {
         return Err(anyhow!("no scripts found in {}", dir.display()));
@@ -2082,8 +2564,10 @@ pub async fn run_error_tool_probe(
 
 /// Run ONE script once at ONE size. Spawns fresh servers + TUIs,
 /// replays the steps, compares after each step, tears everything down.
+/// With [`RefPlan::Replay`] the ref side is NOT spawned: our side boots
+/// fresh and compares against the cached settled grids.
 // One linear harness fn by design: spawn → replay → compare → teardown
-// reads top-to-bottom as the run's lifecycle. Bundling the 8 params or
+// reads top-to-bottom as the run's lifecycle. Bundling the params or
 // extracting phases would reshuffle the harness for lint aesthetics —
 // not worth it in a test-only tool.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -2096,7 +2580,24 @@ pub async fn run_script_once(
     cfg: &RigConfig,
     bun: &Path,
     cli: &Path,
+    ref_plan: &RefPlan,
 ) -> ScriptRun {
+    // Hybrid replay: which steps have a cached grid. When EVERY step
+    // is cached the ref side (server + PTY) is not spawned at all;
+    // otherwise it boots and is fed every payload so later live steps
+    // see the same ref state evolution.
+    let replayed_steps: Vec<Option<&(Grid, bool)>> = match ref_plan {
+        RefPlan::Replay { steps } => steps.iter().map(Option::as_ref).collect(),
+        _ => Vec::new(),
+    };
+    let skip_ref = !replayed_steps.is_empty() && replayed_steps.iter().all(Option::is_some);
+    let ref_source = if skip_ref {
+        RefSource::Cache
+    } else if replayed_steps.iter().any(Option::is_some) {
+        RefSource::CachePartial
+    } else {
+        RefSource::Live
+    };
     let mut outcome = ScriptRun {
         script_id: script.id.clone(),
         mode: script.mode.clone(),
@@ -2107,6 +2608,7 @@ pub async fn run_script_once(
         error: None,
         booted_ref: false,
         booted_our: false,
+        ref_source,
         requests: Vec::new(),
     };
     // Request-path parity: start from a clean recording window.
@@ -2114,9 +2616,25 @@ pub async fn run_script_once(
     let tag = format!("{}-{}x{}-r{}", script.id, cols, rows, run);
     let root = cfg.out_dir.join(tag);
     let _ = std::fs::remove_dir_all(&root);
-    let project = root.join("project");
-    let ref_home = root.join("ref-home");
-    let our_home = root.join("our-home");
+    // Artifacts (per-step dumps) land here; the sandbox moved to the
+    // fixed work root below, so create it explicitly now.
+    let _ = std::fs::create_dir_all(&root);
+    // The sandbox project + homes live at a FIXED path (independent of
+    // the run tag AND of --out): BOTH TUIs render the cwd in the home
+    // footer, so a run-unique path made every capture differ from the
+    // previous run's — poison for the ref-capture cache (a replayed
+    // grid would embed the capture run's path while the live side
+    // shows another). One rig per work root at a time (the rig is
+    // sequential by design; override with OC_TUI_DIFF_WORK_ROOT for
+    // parallel sandboxes). Artifacts (dumps, reports) stay under the
+    // per-run `root`.
+    let work_root = std::env::var("OC_TUI_DIFF_WORK_ROOT")
+        .map_or_else(|_| PathBuf::from("/tmp/opencode/tui-diff-work"), PathBuf::from);
+    let fixed = work_root.join(format!("{}-{}x{}", script.id, cols, rows));
+    let _ = std::fs::remove_dir_all(&fixed);
+    let project = fixed.join("project");
+    let ref_home = fixed.join("ref-home");
+    let our_home = fixed.join("our-home");
     for (path, dirs) in [
         (&ref_home, [".config", ".local/share", ".local/state", ".cache", "tmp"]),
         (&our_home, [".config", ".local/share", ".local/state", ".cache", "tmp"]),
@@ -2137,11 +2655,12 @@ pub async fn run_script_once(
     }
 
     // Servers: fresh per run so restored tabs/sessions never leak
-    // across scripts (determinism requirement).
+    // across scripts (determinism requirement). Cache replay skips the
+    // ref server entirely — the ref grids are already in hand.
     let config_path = project.join("opencode.json");
     let config_env = config_path.display().to_string();
     let mut ref_server = None;
-    if !cfg.no_ref {
+    if !cfg.no_ref && !skip_ref {
         match crate::reference::spawn_reference(crate::reference::ReferenceSpawn {
             extra_env: vec![("OPENCODE_CONFIG", config_env.as_str())],
             seed_files: Vec::new(),
@@ -2189,20 +2708,20 @@ pub async fn run_script_once(
         ref_checkout_root().join("packages/cli/node_modules/@opentui/solid/scripts/preload.js");
     let ref_url = ref_server.as_ref().map(|s| s.url().to_owned()).unwrap_or_default();
     let our_url = our_server.as_ref().map(|s| s.url().to_owned()).unwrap_or_default();
-    let ref_argv = vec![
-        "--preload".to_owned(),
-        ref_preload.display().to_string(),
-        "--define".to_owned(),
-        "OPENCODE_VERSION=\"2.0.24\"".to_owned(),
-        "--define".to_owned(),
-        "OPENCODE_CHANNEL=\"stable\"".to_owned(),
-        "--define".to_owned(),
-        "OPENCODE_ARTIFACT=\"cli\"".to_owned(),
-        ref_entry.display().to_string(),
-        "--server".to_owned(),
-        ref_url,
-    ];
-    let ref_side = (!cfg.no_ref)
+    let ref_argv = {
+        // Built from REF_DEFINES so the spawn argv and the ref-cache
+        // fingerprint cannot drift apart.
+        let mut argv = vec!["--preload".to_owned(), ref_preload.display().to_string()];
+        for (key, value) in REF_DEFINES {
+            argv.push("--define".to_owned());
+            argv.push(format!("{key}={value}"));
+        }
+        argv.push(ref_entry.display().to_string());
+        argv.push("--server".to_owned());
+        argv.push(ref_url);
+        argv
+    };
+    let ref_side = (!cfg.no_ref && !skip_ref)
         .then(|| {
             let server = ref_server.as_ref().unwrap();
             PtyChild::spawn(
@@ -2258,10 +2777,12 @@ pub async fn run_script_once(
         };
 
     // Boot marker: wait for non-blank grids on both sides (bounded).
+    // Full cache replay waits for OUR side only (no ref PTY exists; the
+    // cached entry is proof the ref booted at capture time).
     let boot_deadline = Instant::now() + Duration::from_secs(45);
     while Instant::now() < boot_deadline {
-        let ref_painted =
-            ref_side.as_ref().is_some_and(|s| s.grid_now().cells.iter().any(|c| c.ch != ' '));
+        let ref_painted = skip_ref
+            || ref_side.as_ref().is_some_and(|s| s.grid_now().cells.iter().any(|c| c.ch != ' '));
         let our_painted =
             our_side.as_ref().is_some_and(|s| s.grid_now().cells.iter().any(|c| c.ch != ' '));
         if ref_painted && our_painted {
@@ -2269,8 +2790,8 @@ pub async fn run_script_once(
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    outcome.booted_ref =
-        ref_side.as_ref().is_some_and(|s| s.grid_now().cells.iter().any(|c| c.ch != ' '));
+    outcome.booted_ref = skip_ref
+        || ref_side.as_ref().is_some_and(|s| s.grid_now().cells.iter().any(|c| c.ch != ' '));
     outcome.booted_our =
         our_side.as_ref().is_some_and(|s| s.grid_now().cells.iter().any(|c| c.ch != ' '));
     if let Some(side) = ref_side.as_ref() {
@@ -2285,6 +2806,21 @@ pub async fn run_script_once(
     }
 
     // Steps: identical bytes, same pacing, both PTYs; compare after.
+    // In Capture mode each step's settled ref grid + stability verdict
+    // is collected for the cache entry (stored after teardown).
+    // In a hybrid Replay, once the LAST live (uncached) step has been
+    // captured, every remaining step replays — the ref PTY + server
+    // are retired early (their teardown waits — the ALT_SCREEN_LEAVE
+    // poll, the kill, the server stop — are pure overhead then).
+    let last_live_step: Option<usize> = if ref_source == RefSource::CachePartial {
+        let last = (0..script.steps.len())
+            .filter(|&i| replayed_steps.get(i).copied().flatten().is_none())
+            .max();
+        last
+    } else {
+        None
+    };
+    let mut captured_steps: Vec<CachedStep> = Vec::new();
     for (index, step) in script.steps.iter().enumerate() {
         let payload = step.payload().unwrap_or_default();
         let coverage = if let Some(sweep) = step.sweep.as_ref() {
@@ -2312,9 +2848,18 @@ pub async fn run_script_once(
         }
         let budget = Duration::from_millis(step.wait_ms.min(20_000));
         tokio::time::sleep(budget).await;
-        let settled_ref = ref_side
-            .as_ref()
-            .is_some_and(|side| side.wait_grid_stable(2, 250, Duration::from_secs(5)));
+        // Per-step hybrid replay: a cached step compares against the
+        // cached grid with the cached settle flag (skipping the ref
+        // settle probe entirely); an uncached step settles + captures
+        // the live ref (which is spawned whenever any step is uncached).
+        let cached_step = replayed_steps.get(index).copied().flatten();
+        let settled_ref = if let Some((_, settled)) = cached_step {
+            *settled
+        } else {
+            ref_side
+                .as_ref()
+                .is_some_and(|side| side.wait_grid_stable(2, 250, Duration::from_secs(5)))
+        };
         let settled_our = our_side
             .as_ref()
             .is_some_and(|side| side.wait_grid_stable(2, 250, Duration::from_secs(5)));
@@ -2328,10 +2873,47 @@ pub async fn run_script_once(
             },
             PtyChild::grid_now,
         );
-        let ref_grid = match ref_side.as_ref() {
-            Some(side) => side.grid_now(),
-            None => our_grid.clone(),
+        let ref_grid = if let Some((grid, _)) = cached_step {
+            grid.clone()
+        } else {
+            match ref_side.as_ref() {
+                Some(side) => side.grid_now(),
+                // No cached grid and no ref PTY: `--no-ref` mode — the
+                // ref grid mirrors ours (identical by construction).
+                None => our_grid.clone(),
+            }
         };
+        // Ref-cache capture probe: one more capture 250 ms after the
+        // settled one — byte-identical means the grid is at a fixed
+        // point (no spinner/blink-phase coin) and is safe to cache.
+        // A DEAD ref (frozen vt mirror) must never look cacheable.
+        if let RefPlan::Capture { .. } = ref_plan {
+            if let Some(side) = ref_side.as_mut() {
+                let ref_alive = side.is_running();
+                if ref_alive {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    let resample = side.grid_now();
+                    let stable = resample == ref_grid && settled_ref;
+                    captured_steps.push(CachedStep {
+                        label: step.label.clone().unwrap_or_default(),
+                        settled: settled_ref,
+                        stable,
+                        grid: stable.then(|| grid_to_rle(&ref_grid)),
+                        cols: ref_grid.cols,
+                        rows: ref_grid.rows,
+                    });
+                } else {
+                    captured_steps.push(CachedStep {
+                        label: step.label.clone().unwrap_or_default(),
+                        settled: false,
+                        stable: false,
+                        grid: None,
+                        cols: ref_grid.cols,
+                        rows: ref_grid.rows,
+                    });
+                }
+            }
+        }
         let exact = exact_diff(&ref_grid, &our_grid);
         let structural = struct_diff(&ref_grid, &our_grid, &exact);
         let class = if exact.mismatched_cells == 0 {
@@ -2352,6 +2934,7 @@ pub async fn run_script_once(
             structural,
             ref_text: ref_grid.text(),
             our_text: our_grid.text(),
+            ref_digest: grid_digest(&ref_grid),
             coverage,
         });
         // Grid artifacts for mismatching steps (decision-grade dumps).
@@ -2361,6 +2944,17 @@ pub async fn run_script_once(
                 std::fs::write(prefix.with_extension("ref.txt"), ref_grid.text().join("\n") + "\n");
             let _ =
                 std::fs::write(prefix.with_extension("our.txt"), our_grid.text().join("\n") + "\n");
+        }
+        // Early ref retirement (hybrid replay): past the last live
+        // step, every remaining step replays from the cache — the ref
+        // PTY + server would only add teardown waits at the end.
+        if last_live_step == Some(index) {
+            if let Some(mut side) = ref_side.take() {
+                side.kill();
+            }
+            if let Some(server) = ref_server.take() {
+                let _ = server.stop().await;
+            }
         }
     }
 
@@ -2424,6 +3018,38 @@ pub async fn run_script_once(
     }
     if let Some(server) = our_server.take() {
         let _ = server.stop().await;
+    }
+    // Ref-cache capture: store the observation. A COMPLETE entry (every
+    // step settled + double-capture-stable, no driver error, both sides
+    // booted) becomes replayable; a partial one is kept for coverage
+    // introspection only (`plan` never replays it).
+    if let RefPlan::Capture { cache, fingerprint } = ref_plan {
+        if outcome.error.is_none()
+            && outcome.booted_ref
+            && outcome.booted_our
+            && captured_steps.len() == script.steps.len()
+        {
+            let complete = captured_steps.iter().all(|step| step.stable);
+            eprintln!(
+                "[tui-diff] ref-cache capture {}: {} — {} stable / {} steps",
+                script.id,
+                if complete {
+                    "all-stable (needs confirmation)"
+                } else {
+                    "partial (not replayable)"
+                },
+                captured_steps.iter().filter(|step| step.stable).count(),
+                captured_steps.len()
+            );
+            cache.store(
+                script,
+                cols,
+                rows,
+                fingerprint,
+                std::mem::take(&mut captured_steps),
+                false,
+            );
+        }
     }
     // Request-path parity: everything the stub saw during this run.
     outcome.requests = stub.take_recorded();
@@ -2509,12 +3135,14 @@ impl CorpusReport {
         out.push_str("still match); chrome is never masked.\n\n");
         // Corpus table.
         out.push_str("## Corpus results\n\n");
-        out.push_str("| script | size | run | steps | identical | text-only | mismatch | boot r/o | error |\n");
-        out.push_str("|---|---|---|---|---|---|---|---|---|\n");
+        out.push_str(
+            "| script | size | run | steps | identical | text-only | mismatch | boot r/o | ref | error |\n",
+        );
+        out.push_str("|---|---|---|---|---|---|---|---|---|---|\n");
         for run in &self.runs {
             let _ = writeln!(
                 out,
-                "| {} | {}x{} | {} | {} | {} | {} | {} | {}/{} | {} |",
+                "| {} | {}x{} | {} | {} | {} | {} | {} | {}/{} | {} | {} |",
                 run.script_id,
                 run.cols,
                 run.rows,
@@ -2525,6 +3153,7 @@ impl CorpusReport {
                 run.mismatch_steps(),
                 run.booted_ref,
                 run.booted_our,
+                run.ref_source.as_str(),
                 run.error.as_deref().unwrap_or("")
             );
         }
@@ -2736,6 +3365,30 @@ pub async fn run_corpus(cfg: &RigConfig) -> Result<CorpusReport> {
     if !cfg.no_ref {
         crate::reference::ensure_reference_checkout()?;
     }
+    // Ref-capture cache: enabled unless disabled by config/`--no-ref`
+    // or the OC_TUI_DIFF_REF_CACHE=0 kill switch. Opened ONCE — the
+    // base fingerprint (bun identity, ref revision, defines) is shared
+    // by every entry.
+    let cache_enabled = cfg.ref_cache.is_some()
+        && !cfg.no_ref
+        && std::env::var("OC_TUI_DIFF_REF_CACHE").ok().as_deref() != Some("0");
+    let ref_cache = if cache_enabled {
+        let dir = cfg.ref_cache.clone().unwrap_or_default();
+        match RefCaptureCache::open(&dir, &bun) {
+            Ok(cache) => {
+                eprintln!("[tui-diff] ref-cache enabled at {}", dir.display());
+                Some(Arc::new(cache))
+            }
+            Err(error) => {
+                // A fingerprint failure must never block the run: fall
+                // back to plain live comparisons.
+                eprintln!("[tui-diff] ref-cache unavailable ({error}); running live");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let cli = crate::rust_server::cli_binary()?;
     let mut report = CorpusReport::default();
     for script in &scripts {
@@ -2748,11 +3401,47 @@ pub async fn run_corpus(cfg: &RigConfig) -> Result<CorpusReport> {
             None => cfg.sizes.clone(),
         };
         for &(cols, rows) in &script_sizes {
+            // One plan per (script, size) for the WHOLE invocation (a
+            // miss keeps every run of this invocation a live capture —
+            // the plan is decided before anything stores). Replay is
+            // safe at ANY --runs: replayed steps are exactly the
+            // cross-run-CONFIRMED ones, where the live ref produces
+            // the same grids anyway — the deterministic-vs-timing
+            // split only lives on the flaky steps, which stay live.
+            // `capture_only` (measurement mode) forces live captures
+            // that store fresh observations. Sweep scripts never
+            // interact with the cache at all.
+            let sweepy = script.steps.iter().any(|step| step.sweep.is_some());
+            let ref_plan = match &ref_cache {
+                Some(cache) if !sweepy && cfg.capture_only => {
+                    match cache.fingerprint(script, cols, rows) {
+                        Ok(fingerprint) => {
+                            RefPlan::Capture { cache: Arc::clone(cache), fingerprint }
+                        }
+                        Err(_) => RefPlan::Live,
+                    }
+                }
+                Some(cache) if !sweepy => cache.plan(script, cols, rows),
+                _ => RefPlan::Live,
+            };
             for run in 0..cfg.runs {
-                eprintln!("[tui-diff] {} @ {cols}x{rows} run {run}", script.id);
+                eprintln!(
+                    "[tui-diff] {} @ {cols}x{rows} run {run}{}",
+                    script.id,
+                    match &ref_plan {
+                        RefPlan::Replay { steps } => format!(
+                            " (ref: replay, {}/{} steps cached)",
+                            steps.iter().filter(|step| step.is_some()).count(),
+                            steps.len()
+                        ),
+                        RefPlan::Capture { .. } => " (ref: live, capturing)".to_owned(),
+                        RefPlan::Live => String::new(),
+                    }
+                );
                 let started = Instant::now();
                 let outcome =
-                    run_script_once(script, cols, rows, run, &stub, cfg, &bun, &cli).await;
+                    run_script_once(script, cols, rows, run, &stub, cfg, &bun, &cli, &ref_plan)
+                        .await;
                 eprintln!(
                     "[tui-diff]   done in {:.1}s — {} steps, {} mismatch, {} text-only ({})",
                     started.elapsed().as_secs_f32(),
@@ -2865,5 +3554,223 @@ mod tests {
         let escaped_agent = format!("\\\"{}\\\"", flow_markers::TOOL_AGENT);
         assert!(flow.main.contains(&escaped_agent));
         assert!(!flow.main.contains("researcher"));
+    }
+
+    // --- ref-capture cache (lane/accel) ---------------------------------
+
+    fn synthetic_grid(cols: usize, rows: usize) -> Grid {
+        let mut cells = Vec::with_capacity(cols * rows);
+        for y in 0..rows {
+            for x in 0..cols {
+                cells.push(VtCell {
+                    ch: if (x * y) % 5 == 0 { '▀' } else { 'x' },
+                    style: ((x + y) % 3) as u64,
+                });
+            }
+        }
+        Grid { cols, rows, cells }
+    }
+
+    #[test]
+    fn ref_cache_rle_round_trips_grids() {
+        let grid = synthetic_grid(80, 24);
+        let rle = grid_to_rle(&grid);
+        // The fixture alternates cell values, so the RLE is a real
+        // exercise (runs of 1) — also verify a long-run grid.
+        assert_eq!(rle_to_grid(&rle, grid.cols, grid.rows).as_ref(), Some(&grid));
+        let flat = Grid { cols: 10, rows: 5, cells: vec![VtCell { ch: ' ', style: 7 }; 50] };
+        let flat_rle = grid_to_rle(&flat);
+        assert_eq!(flat_rle.len(), 1, "uniform grid compresses to one run");
+        assert_eq!(flat_rle[0].n, 50);
+        assert_eq!(rle_to_grid(&flat_rle, 10, 5).as_ref(), Some(&flat));
+        // Wrong dimensions must never decode (guard against replaying
+        // a grid onto a mismatched size).
+        assert!(rle_to_grid(&flat_rle, 11, 5).is_none());
+    }
+
+    fn cache_with_temp_dir(tag: &str) -> (Arc<RefCaptureCache>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = Arc::new(RefCaptureCache::with_base(
+            &dir.path().join(tag),
+            "synthetic-base\n".to_owned(),
+        ));
+        (cache, dir)
+    }
+
+    fn script_with_path(dir: &Path, bytes: &str) -> Script {
+        let path = dir.join("script.json");
+        std::fs::write(&path, bytes).expect("write script");
+        Script {
+            id: "fixture".to_owned(),
+            description: String::new(),
+            stub: "text".to_owned(),
+            mode: "exact".to_owned(),
+            size: None,
+            path: Some(path),
+            steps: vec![ScriptStep {
+                label: Some("boot".to_owned()),
+                wait_ms: 10,
+                ..Default::default()
+            }],
+        }
+    }
+
+    #[test]
+    fn ref_cache_fingerprint_tracks_script_bytes_and_size() {
+        let (cache, dir) = cache_with_temp_dir("fp");
+        let script = script_with_path(dir.path(), r#"{"id":"fixture","steps":[]}"#);
+        let a = cache.fingerprint(&script, 80, 24).expect("fp a");
+        let b = cache.fingerprint(&script, 80, 24).expect("fp b");
+        assert_eq!(a, b, "fingerprint is deterministic");
+        let wide = cache.fingerprint(&script, 120, 30).expect("fp wide");
+        assert_ne!(a, wide, "size is part of the key");
+        let script2 = script_with_path(dir.path(), r#"{"id":"fixture","steps":[] }"#);
+        assert_ne!(
+            cache.fingerprint(&script2, 80, 24).expect("fp edited"),
+            a,
+            "script byte changes invalidate"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // a table test: each block is one plan outcome
+    fn ref_cache_confirmed_plan_replays_stable_steps_only() {
+        let (cache, dir) = cache_with_temp_dir("plan");
+        let script = script_with_path(dir.path(), r#"{"id":"fixture","steps":[]}"#);
+        let fp = cache.fingerprint(&script, 80, 24).expect("fp");
+        let store_all_stable = |confirmed: bool| {
+            let grid = synthetic_grid(80, 24);
+            cache.store(
+                &script,
+                80,
+                24,
+                &fp,
+                vec![CachedStep {
+                    label: "boot".to_owned(),
+                    settled: true,
+                    stable: true,
+                    grid: Some(grid_to_rle(&grid)),
+                    cols: grid.cols,
+                    rows: grid.rows,
+                }],
+                confirmed,
+            );
+        };
+        // No entry yet → capture.
+        assert!(matches!(cache.plan(&script, 80, 24), RefPlan::Capture { .. }));
+        // An UNCONFIRMED all-stable observation is NOT replayable (the
+        // double-capture bar alone is insufficient — the placeholder
+        // coin is fixed within a run, random across runs).
+        store_all_stable(false);
+        assert!(
+            matches!(cache.plan(&script, 80, 24), RefPlan::Capture { .. }),
+            "unconfirmed entry must not replay"
+        );
+        // Confirming with agreeing digests promotes it → full replay.
+        let digest = grid_digest(&synthetic_grid(80, 24));
+        cache.confirm("fixture", 80, 24, &[vec![digest], vec![digest], vec![digest]]);
+        match cache.plan(&script, 80, 24) {
+            RefPlan::Replay { steps } => {
+                assert_eq!(steps.len(), 1);
+                assert!(steps[0].is_some());
+            }
+            other => panic!("expected Replay after confirm, got {other:?}"),
+        }
+        // A CONFIRMED entry whose steps disagreed across runs replays
+        // nothing and runs plain live.
+        cache.confirm("fixture", 80, 24, &[vec![digest], vec![digest + 1], vec![digest]]);
+        assert!(
+            matches!(cache.plan(&script, 80, 24), RefPlan::Live),
+            "confirmed all-unstable entry must run live"
+        );
+        // Hybrid: a confirmed entry with one stable + one unstable step
+        // replays exactly the stable one.
+        let script2_steps = vec![
+            ScriptStep { label: Some("boot".to_owned()), wait_ms: 10, ..Default::default() },
+            ScriptStep { label: Some("type".to_owned()), wait_ms: 10, ..Default::default() },
+        ];
+        let script2 = Script { steps: script2_steps, ..script.clone() };
+        let fp2 = cache.fingerprint(&script2, 80, 24).expect("fp2");
+        let grid2 = synthetic_grid(80, 24);
+        cache.store(
+            &script2,
+            80,
+            24,
+            &fp2,
+            vec![
+                CachedStep {
+                    label: "boot".to_owned(),
+                    settled: true,
+                    stable: false, // unstable boot (the ref's random placeholder)
+                    grid: None,
+                    cols: 80,
+                    rows: 24,
+                },
+                CachedStep {
+                    label: "type".to_owned(),
+                    settled: true,
+                    stable: true,
+                    grid: Some(grid_to_rle(&grid2)),
+                    cols: grid2.cols,
+                    rows: grid2.rows,
+                },
+            ],
+            true,
+        );
+        let digest2 = grid_digest(&grid2);
+        cache.confirm("fixture", 80, 24, &[vec![0, digest2], vec![9, digest2], vec![7, digest2]]);
+        match cache.plan(&script2, 80, 24) {
+            RefPlan::Replay { steps } => {
+                assert_eq!(steps.len(), 2);
+                assert!(steps[0].is_none(), "unstable step stays live");
+                assert!(steps[1].is_some(), "stable step replays");
+            }
+            other => panic!("expected hybrid Replay, got {other:?}"),
+        }
+        // A fingerprint mismatch (stale entry) never replays.
+        let stale = "a-different-fingerprint".to_owned();
+        cache.store(
+            &script,
+            80,
+            24,
+            &stale,
+            vec![CachedStep {
+                label: "boot".to_owned(),
+                settled: true,
+                stable: true,
+                grid: Some(grid_to_rle(&synthetic_grid(80, 24))),
+                cols: 80,
+                rows: 24,
+            }],
+            true,
+        );
+        assert!(matches!(cache.plan(&script, 80, 24), RefPlan::Capture { .. }));
+        // Sweep scripts are never cached at all.
+        let sweep_script = Script {
+            id: "sweepy".to_owned(),
+            steps: vec![ScriptStep {
+                sweep: Some(SweepOp {
+                    action: "motion".to_owned(),
+                    cells: Vec::new(),
+                    gap_ms: 15,
+                    settle_ms: 400,
+                }),
+                ..Default::default()
+            }],
+            ..script
+        };
+        assert!(matches!(cache.plan(&sweep_script, 80, 24), RefPlan::Live));
+    }
+
+    #[test]
+    fn grid_digest_distinguishes_style_and_chars() {
+        let mut a = synthetic_grid(20, 4);
+        let b = synthetic_grid(20, 4);
+        assert_eq!(grid_digest(&a), grid_digest(&b));
+        a.cells[7].style += 1;
+        assert_ne!(grid_digest(&a), grid_digest(&b));
+        a.cells[7].style = b.cells[7].style;
+        a.cells[7].ch = '?';
+        assert_ne!(grid_digest(&a), grid_digest(&b));
     }
 }
