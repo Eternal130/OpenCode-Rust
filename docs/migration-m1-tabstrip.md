@@ -404,3 +404,123 @@ small tree (the M2 content-height rule).
   (**+72,352 B ≈ +70.7 KiB, +0.11%**) — the composer tree + the
   footer-plan extraction; the opentui graph was already linked, so
   this lane's marginal cost is the smallest of the three.
+
+## Lane M4 — the transcript: the biggest tree, the flattest one
+
+> Status: **done** (lane/m4). The session route's transcript region —
+> the message list the store's snapshots reduce to (user boxes,
+> exploration/tool rows, thought blocks, markdown text parts, stats
+> rows, error rows, the image strip) — ported as one builder tree in
+> `crates/oc-tui/src/components/transcript_solid.rs`, selected by
+> `OC_TRANSCRIPT_OPENTUI` (default ON after this lane's proof; the
+> hand-rolled region walk stays one release as the `=0` fallback).
+> The old walk was EXTRACTED to `Transcript::region_frame` (the
+> session route's paint semantics, drop-above-the-window units) so
+> both painters consume the ONE shared `render_transcript` solver
+> output; the hit rows (E1 #29/#34), the scroll metrics and the
+> image overlays are computed upstream of the flag and are
+> painter-agnostic.
+
+## What this surface ADDED to the template
+
+* **A flat keyed `For` of ABSOLUTE units beats a nested row tree.**
+  The transcript's rows are coordinate frames, not layout
+  participants: every placed line and fill rect is an
+  absolutely-positioned element (`left`/`top` points) keyed
+  `{row.key}#{unit}` — one `For`, no row carriers, no nesting. The
+  scroll offset is applied INSIDE the reactive `top` maps (never
+  baked, never a mount key — sticky streaming moves it every chunk),
+  and the `For`'s source is WINDOWED to the viewport (units enter/
+  leave as the offset moves — the Wave-B visible-rows shape arrived
+  free: the tree cost is bounded by the viewport, not the
+  transcript).
+* **The For's DOM order is the PAINT order — fills first.** Sibling
+  rects overwrite: a row's fill boxes must precede its text units in
+  the items list or the opaque fills cover the glyphs (the first
+  matrix run failed with exactly-blank user boxes over a painted
+  raised background — the raster z-orders siblings, last wins). The
+  old painter stamps all fills before any text; per-row fills-first
+  mirrors it because rows never share screen rows.
+* **The strikethrough bit is the one attribute asymmetry.** opentui
+  packs SGR 9 at attribute bit 7, the cell grid at bit 8 — the
+  bridge remaps after the copy (`~~del~~` markdown). Every other
+  modifier maps 1:1 (`ecma_attributes` inverts
+  `paint::modifier_bits` exactly).
+* **The old painter's wide-char trailing cells were REF-divergent.**
+  `paint_run` left a multi-cell grapheme's continuation cells at the
+  base fill; the ref's opentui raster plants `'\0'` continuations
+  carrying the run's style (the composer's `paint_text` already
+  matched). Fixed at the shared painter (continuation planting) —
+  no golden or rig corpus carries wide clusters, and the solid path
+  plants them natively. The same class: `thought_entry_row` ran
+  `\n` through as a GLYPH (the F6 bug user messages already fixed)
+  — now hard-breaks per line, matching v2's ThoughtEntry and the
+  solid path's native breaks.
+* **SSE-broadcast replies are the FLAKY test seam; the open-time
+  message fetch is the reliable one.** The PTY thought-cycle test
+  serves its turn through the session-open `message.list` fetch
+  (DESC wire order! `fetch_session_messages` reverses the page) —
+  and the stub's fixture ids must be DISTINCT from the live-streamed
+  pair (the snapshot merge drops local rows whose ids it carries —
+  shared ids silently un-runs the session and eats the interrupt
+  hint). State asserts read FORCED FULL REPAINTS (the SIGWINCH
+  toggle): the diff writer splits a row's styled runs and skips
+  unchanged gap cells, so even full-repaint strip_ansi text is the
+  only contiguous surface.
+* **The scroll driver IS the ported ScrollBar math — keep it at the
+  store.** oc-tui-core's `ScrollDriver` implements
+  `round(clamp(v, 0, scrollSize - viewportSize))` (the js_round
+  halves-toward-+∞ behavior the long-reply-scroll corpus pins);
+  `scroll_driver_matches_the_ported_scrollbar_math` proves the
+  equivalence against `opentui-core::renderables::scrollbar::
+  clamp_scroll_position` over a viewport × content × start × command
+  matrix. Porting the viewport onto the ScrollBox renderable would
+  move identical integers INTO the tree and force the hit rows,
+  metrics and jump indicator to be re-derived from it — decision:
+  the store driver stays; the solid tree is a pure paint of its
+  window (the rig's long-reply-scroll steps are flag-symmetric).
+* **Markdown: ONE solver, deferred re-homing.** The old path's
+  markdown bytes come from `message/markdown.rs` (the C1 port of
+  `@opentui/core MarkdownRenderable`'s text behavior) INSIDE the
+  shared `render_transcript` walk; the solid bridge consumes its
+  runs as chunks. opentui-core's own `MarkdownRenderable` block
+  pipeline is a SEPARATE port of the same upstream — wiring the
+  transcript to it now would fork the fallback contract's bytes.
+  Re-home when the old path retires (then the C1 module's goldens
+  move to the core pipeline's output in one lane).
+
+## Instruments (this lane's record)
+
+* **Unit gate**: `solid_transcript_frame_equals_the_old_renderer` —
+  11 scenarios (the groups fixture, running tools × 2 clock phases,
+  the disclosure expansion, a running Thinking header, markdown-rich
+  CJK + model display names, the error part, multiline user text +
+  the image strip, the 10-turn vscroll fixture) × widths 80/120/40 ×
+  heights 16/23 × 4 scroll positions (top / a row-cutting mid /
+  bottom−1 / sticky) — cell for cell. Plus streaming+scroll+expand
+  patch-in-place churn and resize-rebuild gates.
+* **Rig A/B** (`docs/m4-rig-ab.log`, 28 invocations = 7 scripts × 2
+  sizes × 2 runs × both flags): 11/14 (script,size) pairs IDENTICAL
+  mismatch-step unions; the 3 others differ only in the
+  placeholder-carrying steps (boot/dismiss/variant-dismiss) — the
+  documented (b)-class home-placeholder coin, proven by the coin
+  flipping run-to-run within the SAME flag (type-edit-submit 120x30
+  solid: run0 clean, run1 carries them).
+* **PTY**: `pty_scroll_keys_move_the_transcript` parametrized over
+  both paths; the new
+  `pty_transcript_cycle_thought_expand_solid_path` (open → the
+  thought turn renders → SGR click the disclosure header → the
+  guttered body expands → second click collapses — the hit-row
+  bridge through the solid geometry).
+* **Budget** (release, 200×50 session route, 300-message transcript,
+  both paths pinned): old idle 7423 µs / churn 7538 µs worst; solid
+  idle 8845 µs / churn 9781 µs worst — ≈1.2–1.3× the old path
+  (both measured under the gate's CPU cap; the shared solver walk
+  dominates), vs the 40 ms gate. All other budget gates re-checked
+  green post-flip.
+* **Flag protocol**: default flipped ON after the proof; 645 oc-tui
+  tests + 2808 workspace tests + the 121-test pty-profile run green
+  through the solid default.
+* **Release size**: 66,120,736 → 66,115,648 B (**−5088 B, −0.008%**
+  — the transcript tree + bridge ride the already-linked opentui
+  graph; the delta is linker noise, effectively zero).

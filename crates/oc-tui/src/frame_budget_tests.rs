@@ -318,6 +318,112 @@ fn composer_frame_budget_body() {
     );
 }
 
+/// Lane M4: the transcript region's per-frame cost on the LIVE
+/// session route (`render_session` paints it via the dual-path
+/// region seam), measured over a transcript-heavy store (150 turns —
+/// the large-transcript scale) under an IDLE phase (identical
+/// sticky frames) and a SCROLL-CHURN phase (alternating page
+/// commands — the offset moves every frame, the solid path re-windows
+/// its `For` instead of rebuilding). Both transcript renderer paths
+/// get their own test process (the flag is read once at boot;
+/// nextest isolates the fns); the OTHER solid surfaces (strip,
+/// dialogs, composer) are pinned to the old path on both sides so
+/// the numbers isolate the transcript path.
+#[test]
+fn frame_budget_transcript_old_path() {
+    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "0");
+    std::env::set_var("OC_TABS_OPENTUI", "0");
+    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
+    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
+    transcript_frame_budget_body();
+}
+
+/// The opentui-solid transcript path (`OC_TRANSCRIPT_OPENTUI=1`).
+#[test]
+fn frame_budget_transcript_solid_path() {
+    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "1");
+    std::env::set_var("OC_TABS_OPENTUI", "0");
+    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
+    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
+    transcript_frame_budget_body();
+}
+
+#[allow(clippy::items_after_statements)] // a local metric helper below the warmup
+fn transcript_frame_budget_body() {
+    use crate::components::session::render_session;
+    use crate::reactive::Runtime;
+    use crate::store::Store;
+    let theme = theme();
+    let store = Store::new(Runtime::new());
+    store.open_tab("s1", Some("Transcript budget".to_owned()));
+    store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+    store.set_messages("s1", large_transcript(150));
+
+    let render = || render_session(&store, "s1", &theme.styles(), (200, 50));
+
+    // Warmup (mount + caches).
+    for _ in 0..3 {
+        let _ = render();
+    }
+
+    fn measure(
+        frames: u128,
+        mut advance: impl FnMut(u128),
+        mut render: impl FnMut() -> crate::render::Frame,
+    ) -> (u128, u128, u128) {
+        let mut worst = 0u128;
+        let mut worst_micros = 0u128;
+        let mut total_micros = 0u128;
+        for frame in 0..frames {
+            advance(frame);
+            let start = std::time::Instant::now();
+            let painted = render();
+            let elapsed = start.elapsed();
+            worst = worst.max(elapsed.as_millis());
+            worst_micros = worst_micros.max(elapsed.as_micros());
+            total_micros += elapsed.as_micros();
+            assert_eq!(painted.height, 50);
+        }
+        (worst, worst_micros, total_micros / frames)
+    }
+
+    // The idle phase: identical sticky frames.
+    let (idle_worst, idle_worst_us, idle_avg) = measure(10, |_| {}, render);
+    // The scroll-churn phase: alternate page-up/page-down (the
+    // offset moves every frame; sticky releases and re-sticks).
+    let churn = |frame: u128| {
+        let command = if frame.is_multiple_of(2) {
+            oc_tui_core::scroll::ScrollCommand::PageUp
+        } else {
+            oc_tui_core::scroll::ScrollCommand::PageDown
+        };
+        store.scroll_command("s1", command);
+    };
+    let (churn_worst, churn_worst_us, churn_avg) = measure(10, churn, render);
+
+    let _ = (idle_worst, churn_worst); // debug builds: assert is release-gated
+    eprintln!(
+        "[frame-budget] 200x50 session route, 300-message transcript ({}): idle worst {} µs / \
+         avg {} µs; scroll churn worst {} µs / avg {} µs ({} build)",
+        if crate::components::transcript_solid::opentui_transcript_enabled() {
+            "solid"
+        } else {
+            "old"
+        },
+        idle_worst_us,
+        idle_avg,
+        churn_worst_us,
+        churn_avg,
+        if cfg!(debug_assertions) { "debug" } else { "release" },
+    );
+    #[cfg(not(debug_assertions))]
+    assert!(
+        idle_worst <= FRAME_BUDGET_MS && churn_worst <= FRAME_BUDGET_MS,
+        "frame budget exceeded with the transcript mounted: idle {idle_worst} ms, churn \
+         {churn_worst} ms > {FRAME_BUDGET_MS} ms"
+    );
+}
+
 /// Lane M2: the dialog family's per-frame cost on the LIVE app frame
 /// (`render_app` composites the top dialog through
 /// `render_overlay`), measured over the command palette open with its
