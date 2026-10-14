@@ -183,10 +183,23 @@ pub fn thought_entry_row(text: &str, theme: &ThemeStyles, width: usize) -> RowRe
     let border_x = 3;
     let body_x = border_x + 2;
     let body_width = width.saturating_sub(body_x).max(1);
+    // Hard line breaks (lane M4, the F6 rule): the thought body
+    // renders every `\n` line independently — v2's ThoughtEntry text
+    // treats newlines as breaks. The old single-stream `wrap_label`
+    // ran `\n` through as a glyph (the same latent bug the user
+    // message's `wrap_lines` fixed); nothing golden or rig-side pins
+    // the old bytes (the rig's reasoning corpus is single-line), and
+    // the solid path's opentui text breaks lines natively — one more
+    // old-vs-ref divergence closed at the shared walk.
     let lines: Vec<String> = if text.trim().is_empty() {
         Vec::new()
     } else {
-        crate::wrap::wrap_label(text.trim(), body_width)
+        let normalized = text.trim().replace("\r\n", "\n").replace('\r', "\n");
+        let mut lines = Vec::new();
+        for line in normalized.split('\n') {
+            lines.extend(crate::wrap::wrap_label(line, body_width));
+        }
+        lines
     };
     let mut placed = Vec::new();
     for (index, line) in lines.iter().enumerate() {
