@@ -9,6 +9,11 @@
 
 pub mod command_palette;
 pub mod composer;
+/// Lane M3: the composer + footer on opentui-solid (the
+/// `OC_COMPOSER_OPENTUI` flag selects it; the hand-rolled renderer
+/// stays the fallback — see the module doc + the M3 section of
+/// `docs/migration-m1-tabstrip.md`).
+pub mod composer_solid;
 pub mod dialog;
 pub mod dialog_select;
 /// Lane M2: the dialog family on opentui-solid — the DEFAULT
