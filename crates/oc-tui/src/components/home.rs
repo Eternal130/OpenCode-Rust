@@ -78,13 +78,13 @@ pub fn random_placeholder_index(count: usize) -> usize {
 /// The wordmark art (`logo.ts`) — 19-cell halves joined by a 1-cell
 /// gap (`gap={1}`): `_` renders as a space over the shadow, `^` as `▀`
 /// over the shadow, `~` as `▀` IN the shadow, `,` as `▄` in the shadow.
-const LOGO_LEFT: [&str; 4] =
+pub(crate) const LOGO_LEFT: [&str; 4] =
     ["                   ", "█▀▀█ █▀▀█ █▀▀█ █▀▀▄", "█__█ █__█ █^^^ █__█", "▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀~~▀"];
-const LOGO_RIGHT: [&str; 4] =
+pub(crate) const LOGO_RIGHT: [&str; 4] =
     ["             ▄     ", "█▀▀▀ █▀▀█ █▀▀█ █▀▀█", "█___ █__█ █__█ █^^^", "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"];
 
 /// The logo's full width: left 19 + gap 1 + right 19.
-const LOGO_WIDTH: usize = 19 + 1 + 19;
+pub(crate) const LOGO_WIDTH: usize = 19 + 1 + 19;
 
 /// The prompt box's `maxWidth` (`routes/home.tsx`).
 const PROMPT_MAX_WIDTH: usize = 75;
@@ -137,27 +137,43 @@ pub struct HomeView<'a> {
     pub caret: Option<usize>,
 }
 
-/// Render the home route at `size` (the golden-pinned layout).
-// One flat, order-explicit renderer: the layout is golden-pinned
-// (byte-exact frames), so extracting sections would reorder/churn the
-// pinned surface for a 8-line overage — not worth it.
-#[allow(clippy::too_many_lines)]
-#[must_use]
-pub fn render_home_view(
-    view: &HomeView,
-    theme: &ThemeState,
-    size: (u16, u16),
-) -> (Frame, Option<(usize, usize)>) {
-    let (width, height) = (usize::from(size.0), usize::from(size.1));
-    let tokens = &theme.resolved.tokens;
-    let base = cell(tokens.background.base);
-    let default_fg = CellColor::Rgb(255, 255, 255);
-    let mut frame = Frame {
-        cells: vec![vec![Cell { ch: ' ', attrs: 0, fg: default_fg, bg: base }; width]; height],
-        width,
-        height,
-    };
+/// The home route's geometry plan — ONE resolution shared by the old
+/// painter ([`render_home_view`]'s body) and the solid bridge (lane
+/// M5's [`crate::components::home_solid`]), the M3 "extract the
+/// geometry, don't mirror it" rule: the footer's collapse ladder and
+/// the centering half-up rule live here exactly once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HomePlan {
+    /// The outer column's horizontal padding (1 below 44 cols).
+    pub padding: usize,
+    /// The footer slot renders (height ≥ 12 && width ≥ 44).
+    pub show_footer: bool,
+    /// The footer content row's absolute row.
+    pub footer_row: usize,
+    /// The version renders (width ≥ 64 — `homeFooterVisibility`).
+    pub version_visible: bool,
+    /// The version's right-aligned x (padding-adjusted).
+    pub version_x: usize,
+    /// The pre-truncated plugin-actions label ("" = none).
+    pub actions: String,
+    /// The prompt box's clamped width (`maxWidth 75`).
+    pub prompt_width: usize,
+    /// The prompt mount's height (paddingTop 1 + the composer).
+    pub mount: usize,
+    /// The popup's reserved rows above the mount.
+    pub popup_rows: usize,
+    /// The logo block's top-left (absent ⇒ hidden).
+    pub logo: Option<(usize, usize)>,
+    /// The prompt frame's paste origin.
+    pub paste: (usize, usize),
+}
 
+/// Resolve the plan — the exact walk `render_home_view` performed
+/// inline (golden-pinned): the vertical centering rounds the free
+/// space HALF UP (`free.div_ceil(2)` — taffy's half-pixel rule, the
+/// D finding), the footer collapses its content row when the version
+/// is width-gated off and no plugin action claims it.
+pub(crate) fn plan_home(view: &HomeView, width: usize, height: usize) -> HomePlan {
     let padding = if width < 44 { 1 } else { 2 };
     let content = width.saturating_sub(padding * 2);
     // Centered offset (taffy rounds the half pixel up — golden-pinned).
@@ -192,17 +208,17 @@ pub fn render_home_view(
     let free = height.saturating_sub(footer_rows + fixed);
     let spacer_top = free.div_ceil(2);
     let mut y = spacer_top;
-    if show_logo {
+    let logo = show_logo.then(|| {
         y += 3; // the fixed 3-row spacer (`height={3}`)
-        paint_logo(&mut frame, centered(LOGO_WIDTH), y, theme);
+        let origin = (centered(LOGO_WIDTH), y);
         y += 4 + 1; // logo + the 1-row spacer
-    }
-    // The prompt mount (the composer's own frame, pinned at `top` 1
-    // for the wrapper's paddingTop). The slash-palette popup floats
-    // ABOVE it: the prompt frame grows by `popup_rows` rows (the
-    // composer at `top = 1 + popup_rows`), pasted at
-    // `y - popup_rows` so the composer itself never moves (no popup ⇒
-    // the golden single-mount geometry).
+        origin
+    });
+    // The slash-palette popup floats ABOVE the mount: the prompt
+    // frame grows by `popup_rows` rows (the composer at
+    // `top = 1 + popup_rows`), pasted at `y - popup_rows` so the
+    // composer itself never moves (no popup ⇒ the golden
+    // single-mount geometry).
     let popup_rows = match view.autocomplete.as_ref() {
         Some(popup) => crate::components::composer::autocomplete::popup_height(
             popup.options.len(),
@@ -211,6 +227,85 @@ pub fn render_home_view(
         .min(y),
         None => 0,
     };
+
+    // The footer content row: pad·row·pad at h≥16, else the last row.
+    let footer_padded = height >= 16;
+    let footer_row =
+        if footer_padded { height.saturating_sub(2) } else { height.saturating_sub(1) };
+    let version_visible = width >= 64;
+    let version_width = if version_visible { display_width(&view.version) } else { 0 };
+    let version_x = width.saturating_sub(padding + version_width);
+    let actions = if view.plugin_actions.is_empty() {
+        String::new()
+    } else {
+        let joined = view.plugin_actions.join(" · ");
+        let budget = width.saturating_sub(padding * 2 + version_width + 2);
+        crate::wrap::take_width(&joined, budget)
+    };
+
+    HomePlan {
+        padding,
+        show_footer,
+        footer_row,
+        version_visible,
+        version_x,
+        actions,
+        prompt_width,
+        mount,
+        popup_rows,
+        logo,
+        paste: (centered(prompt_width), y - popup_rows),
+    }
+}
+
+/// Render the home route at `size` (the golden-pinned layout).
+/// Lane M5: dispatches on `OC_HOME_OPENTUI` — the solid tree
+/// ([`crate::components::home_solid::paint_solid_home_view`], default
+/// after the lane's proof) or the hand-rolled painter below (the
+/// `=0` fallback, one release). Both consume the ONE [`plan_home`]
+/// geometry; the parity gate pins them cell for cell.
+// One flat, order-explicit renderer: the layout is golden-pinned
+// (byte-exact frames), so extracting sections would reorder/churn the
+// pinned surface for a 8-line overage — not worth it.
+#[allow(clippy::too_many_lines)]
+#[must_use]
+pub fn render_home_view(
+    view: &HomeView,
+    theme: &ThemeState,
+    size: (u16, u16),
+) -> (Frame, Option<(usize, usize)>) {
+    if crate::components::home_solid::opentui_home_enabled() {
+        return crate::components::home_solid::paint_solid_home_view(view, theme, size);
+    }
+    paint_home_view_old(view, theme, size)
+}
+
+/// The hand-rolled home painter (the `OC_HOME_OPENTUI=0` fallback):
+/// the same cell-walk this surface always painted, now consuming the
+/// shared [`plan_home`] geometry.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn paint_home_view_old(
+    view: &HomeView,
+    theme: &ThemeState,
+    size: (u16, u16),
+) -> (Frame, Option<(usize, usize)>) {
+    let (width, height) = (usize::from(size.0), usize::from(size.1));
+    let plan = plan_home(view, width, height);
+    let tokens = &theme.resolved.tokens;
+    let base = cell(tokens.background.base);
+    let default_fg = CellColor::Rgb(255, 255, 255);
+    let mut frame = Frame {
+        cells: vec![vec![Cell { ch: ' ', attrs: 0, fg: default_fg, bg: base }; width]; height],
+        width,
+        height,
+    };
+
+    if let Some((logo_x, logo_y)) = plan.logo {
+        paint_logo(&mut frame, logo_x, logo_y, theme);
+    }
+    // The prompt mount (the composer's own frame, pinned at `top` 1
+    // for the wrapper's paddingTop); the popup rows float above it
+    // through the paste origin (`plan.paste`).
     let prompt_view = PromptView {
         draft: view.draft,
         placeholder: view.placeholder.clone(),
@@ -226,7 +321,7 @@ pub fn render_home_view(
         },
         metadata: view.metadata.clone(),
         terminal_width: width,
-        top: 1 + popup_rows,
+        top: 1 + plan.popup_rows,
         rail: view.rail,
         // NEW-S1a: no software block — the live caret is the terminal
         // cursor (see `caret_screen` above).
@@ -234,11 +329,11 @@ pub fn render_home_view(
     };
     let prompt_frame = crate::components::composer_solid::render_prompt_frame_dispatch(
         &prompt_view,
-        prompt_width,
-        mount + popup_rows,
+        plan.prompt_width,
+        plan.mount + plan.popup_rows,
         theme,
     );
-    paste(&mut frame, &prompt_frame, centered(prompt_width), y - popup_rows);
+    paste(&mut frame, &prompt_frame, plan.paste.0, plan.paste.1);
     // NEW-S1a: the caret's screen cell (the terminal cursor's
     // position) — the paste origin plus the frame-relative cell.
     // None while the caret sits outside the visible textarea rows.
@@ -247,30 +342,26 @@ pub fn render_home_view(
         .and_then(|offset| {
             crate::components::composer::render::prompt_caret_screen_cell(
                 view.draft,
-                prompt_width,
-                1 + popup_rows,
+                plan.prompt_width,
+                1 + plan.popup_rows,
                 height,
                 offset,
             )
         })
-        .map(|(x, row)| (centered(prompt_width) + x, y - popup_rows + row))
+        .map(|(x, row)| (plan.paste.0 + x, plan.paste.1 + row))
         .filter(|(_, row_y)| *row_y < height);
 
     // The home.footer slot: pad · version · pad at h≥16, else one row.
-    if show_footer {
-        let padded = height >= 16;
-        let row = if padded { height - 2 } else { height - 1 };
+    if plan.show_footer {
+        let row = plan.footer_row;
         let muted = cell(tokens.text.muted);
         // The version renders only at ≥64 cols (homeFooterVisibility,
         // footer.tsx:6-11 — rig-pinned: the 60-col footer shows no
         // version and its content row collapses).
-        let version_visible = width >= 64;
-        let version_width = if version_visible { display_width(&view.version) } else { 0 };
-        let x = width.saturating_sub(padding + version_width);
-        if version_width > 0 {
+        if plan.version_visible {
             for (index, ch) in view.version.chars().enumerate() {
                 if let Some(slot) =
-                    frame.cells.get_mut(row).and_then(|line| line.get_mut(x + index))
+                    frame.cells.get_mut(row).and_then(|line| line.get_mut(plan.version_x + index))
                 {
                     *slot = Cell { ch, attrs: 0, fg: muted, bg: base };
                 }
@@ -279,13 +370,10 @@ pub fn render_home_view(
         // Wave 3's home slot: plugin quick actions on the same row's
         // left (muted, ` · `-joined) — empty by default, so the
         // golden bytes never move.
-        if !view.plugin_actions.is_empty() {
-            let joined = view.plugin_actions.join(" · ");
-            let budget = width.saturating_sub(padding * 2 + version_width + 2);
-            let text = crate::wrap::take_width(&joined, budget);
-            for (index, ch) in text.chars().enumerate() {
+        if !plan.actions.is_empty() {
+            for (index, ch) in plan.actions.chars().enumerate() {
                 if let Some(slot) =
-                    frame.cells.get_mut(row).and_then(|line| line.get_mut(padding + index))
+                    frame.cells.get_mut(row).and_then(|line| line.get_mut(plan.padding + index))
                 {
                     *slot = Cell { ch, attrs: 0, fg: muted, bg: base };
                 }
@@ -377,7 +465,7 @@ fn cell(color: Rgba) -> CellColor {
 }
 
 /// Paste `region`'s cells at (`x`, `y`); anything left keeps the fill.
-fn paste(target: &mut Frame, region: &Frame, x: usize, y: usize) {
+pub(crate) fn paste(target: &mut Frame, region: &Frame, x: usize, y: usize) {
     for (row, cells) in region.cells.iter().enumerate() {
         let Some(slot) = target.cells.get_mut(y + row) else { break };
         let count = cells.len().min(slot.len().saturating_sub(x));

@@ -94,6 +94,15 @@ fn wait_transition(h: &HarnessHandle, timeout: Duration, predicate: fn(usize) ->
     false
 }
 
+/// The M5 flag pair, pinned per test process (nextest isolates each
+/// test): `old` keeps both hand-rolled renderers, `solid` boots the
+/// opentui-solid sidebar pane + home chrome.
+fn set_m5_path(solid: bool) {
+    let value = if solid { "1" } else { "0" };
+    std::env::set_var("OC_SIDEBAR_OPENTUI", value);
+    std::env::set_var("OC_HOME_OPENTUI", value);
+}
+
 /// Phase driver: boot, open the first session, assert the pane
 /// geometry, cycle the `<leader>b` toggle, exit cleanly.
 fn drive_sidebar_cycle(h: &mut HarnessHandle) -> Result<(), String> {
@@ -135,8 +144,23 @@ fn drive_sidebar_cycle(h: &mut HarnessHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// The docked-pane toggle cycle at 160 — parametrized over the M5
+/// renderer paths (lane M5: the pane tree + the home wordmark the
+/// boot passes through).
 #[test]
-fn pty_sidebar_toggles_and_carries_plugin_sections() {
+fn pty_sidebar_toggles_and_carries_plugin_sections_old_path() {
+    set_m5_path(false);
+    pty_sidebar_toggle_body();
+}
+
+/// The opentui-solid paths (`OC_SIDEBAR_OPENTUI=1`, `OC_HOME_OPENTUI=1`).
+#[test]
+fn pty_sidebar_toggles_and_carries_plugin_sections_solid_path() {
+    set_m5_path(true);
+    pty_sidebar_toggle_body();
+}
+
+fn pty_sidebar_toggle_body() {
     // ---- phase A: the auto pane + the <leader>b cycle at 160 -------
     let _lock = pty_lock();
     let _sandbox = sandbox_env("sidebar-a");
@@ -155,8 +179,21 @@ fn pty_sidebar_toggles_and_carries_plugin_sections() {
     drop(harness);
 }
 
+/// The plugin-host section bridge — parametrized over the M5 paths.
 #[test]
-fn pty_sidebar_plugin_section_renders_through_the_host() {
+fn pty_sidebar_plugin_section_renders_through_the_host_old_path() {
+    set_m5_path(false);
+    pty_sidebar_plugin_section_body();
+}
+
+/// The opentui-solid paths (`OC_SIDEBAR_OPENTUI=1`, `OC_HOME_OPENTUI=1`).
+#[test]
+fn pty_sidebar_plugin_section_renders_through_the_host_solid_path() {
+    set_m5_path(true);
+    pty_sidebar_plugin_section_body();
+}
+
+fn pty_sidebar_plugin_section_body() {
     if !oc_plugin_host::PluginHost::detect().enabled() {
         eprintln!("bun unavailable; skipping the plugin phase");
         return;
@@ -202,4 +239,87 @@ fn pty_sidebar_plugin_section_renders_through_the_host() {
     std::env::remove_var("OPENCODE_CONFIG");
     drop(harness);
     result.expect("phase B");
+}
+
+/// The M5 new-path cycle: dock → overlay → dismiss. At 80 cols the
+/// manual `<leader>b` open floats the pane over the opaque-black
+/// scrim (session-frame.tsx:385-397) at the frame's right edge, and
+/// the overlay-close keymap layer (routes/session/index.tsx:243-245,
+/// already ported) makes ESC dismiss it back to the composer. Runs
+/// on the SOLID paths (the pane tree's every mount shape in one
+/// choreography; the old path's twin is the 160-wide toggle body).
+#[test]
+fn pty_sidebar_overlay_cycle_solid_path() {
+    set_m5_path(true);
+    let _lock = pty_lock();
+    let _sandbox = sandbox_env("sidebar-overlay");
+    let fake = FakeLlm::spawn(standard_sessions());
+    let harness = LiveHarness::attach(80, 26);
+    let mut driver = harness.handle();
+    let span = std::thread::spawn(move || -> Result<(), String> {
+        if !driver.wait_for(WORDMARK, Duration::from_secs(8)) {
+            return Err("the home wordmark never rendered".to_owned());
+        }
+        open_first_session(&mut driver, b"Alpha")?;
+        // (a) At 80 the pane is auto-HIDDEN (≤120): no card anywhere.
+        std::thread::sleep(Duration::from_millis(400));
+        let grid = driver.grid_now();
+        if (0..grid.rows).any(|row| grid.row_text(row).contains("Getting started")) {
+            return Err("the pane must stay hidden at 80 cols".to_owned());
+        }
+        // (b) <leader>b: the manual OVERLAY — the pane floats at
+        // cols 38..80 over the scrim (the opaque black stand-in).
+        driver.write(b"\x18b");
+        let overlay_x = 80 - 42;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut card_row = None;
+        while std::time::Instant::now() < deadline {
+            let grid = driver.grid_now();
+            if let Some(row) = (0..grid.rows)
+                .find(|row| grid.content_rect(overlay_x, *row, 42, 1).contains("Getting started"))
+            {
+                card_row = Some(row);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        card_row.ok_or_else(|| "the overlay pane's card never rendered".to_owned())?;
+        // The title rides above the card inside the same pane.
+        let grid = driver.grid_now();
+        let title_row =
+            (0..grid.rows).find(|row| grid.content_rect(overlay_x, *row, 42, 1).contains("Alpha"));
+        let title_row = title_row.ok_or("the overlay pane's title never rendered")?;
+        if title_row >= card_row.unwrap_or(usize::MAX) {
+            return Err("the overlay title must sit above the card".to_owned());
+        }
+        // (c) ESC: the overlay-close layer dismisses the pane (the
+        // composer's column reclaims the full width).
+        driver.write(b"\x1b");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            let grid = driver.grid_now();
+            let present = (0..grid.rows)
+                .any(|row| grid.content_rect(overlay_x, row, 42, 1).contains("Getting started"));
+            if !present {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let grid = driver.grid_now();
+        if (0..grid.rows)
+            .any(|row| grid.content_rect(overlay_x, row, 42, 1).contains("Getting started"))
+        {
+            return Err("escape did not dismiss the overlay pane".to_owned());
+        }
+        // Teardown proof: the exit chord leaves the alternate screen.
+        let from = driver.raw_len();
+        assert_exit_ack(&mut driver, from).map_err(|error| format!("teardown: {error}"))?;
+        Ok(())
+    });
+    let url = fake.url.clone();
+    let teardown = std::thread::spawn(move || run_tui(&url, 80, 26, Duration::from_secs(45)));
+    let result = span.join().expect("driver thread");
+    teardown.join().expect("run thread");
+    drop(harness);
+    result.expect("the overlay cycle");
 }
