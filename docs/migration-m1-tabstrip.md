@@ -524,3 +524,118 @@ small tree (the M2 content-height rule).
 * **Release size**: 66,120,736 → 66,115,648 B (**−5088 B, −0.008%**
   — the transcript tree + bridge ride the already-linked opentui
   graph; the delta is linker noise, effectively zero).
+
+---
+
+# Lane M5 — the sidebar + home: two surfaces, one lane
+
+> Status: **done** (lane/m5). The session route's right-hand pane
+> (`routes/session/sidebar.tsx` + the `sidebar.content`/
+> `sidebar.footer` slots) and the home route's chrome
+> (`routes/home.tsx` + `feature-plugins/home/footer.tsx`) ported as
+> `crates/oc-tui/src/components/sidebar_solid.rs` +
+> `home_solid.rs`, selected by `OC_SIDEBAR_OPENTUI` /
+> `OC_HOME_OPENTUI` (both default ON after this lane's proof; the
+> hand-rolled renderers stay one release as the `=0` fallbacks — two
+> flags because the surfaces differ in the rig matrix). The store's
+> sidebar state (`SidebarView`/`SidebarSections`), the visibility
+> and overlay-close keymaps, and the route assembly are untouched.
+
+The sidebar is the M4 flat-units shape verbatim: `render_sidebar`
+(the old walk) stays the ONE solver, and the tree is a keyed `For`
+of ABSOLUTE units — the card's fill rect first, then every placed
+line (`wrapMode none` + `flexShrink 0`, explicit-bg chunks). The
+home surface took the M3 route instead: the geometry was EXTRACTED
+(`home::plan_home` — the footer ladder, the div_ceil-2 centering,
+the paste origin) so the old painter and the solid chrome tree
+consume the same integers; the wordmark is eight STATIC text rows
+(two per art row — the halves never touch, the `gap={1}` cell keeps
+the page fill), and the sessionless composer stays lane M3's own
+mount PASTED at the plan's origin through the same
+`render_prompt_frame_dispatch` chain (the flags compose: either
+home path paints either composer path's frame).
+
+## What these surfaces ADDED to the template
+
+* **ratatui's `set_style` MERGES; the raster overwrites.** The old
+  pane painter writes through `Cell::set_style`, which patches
+  fg/bg and ORs modifiers into the EXISTING cell — a unit painted
+  over an earlier unit's bold cells inherits the bold bit (a short
+  pane stacks the card/footer over the section text; the golden
+  corpus never overlapped so this never showed). The bridge bakes
+  the merge at shape time: one attrs-accumulation grid (every text
+  unit ORs its ECMA word onto its cells, in paint order, through
+  the same atom walk `paint_run` uses), then chunks split per cell
+  on (fg, bg, merged-attrs). Symptom class: "attrs 1 vs 0 on the
+  glyph that overlaps an earlier bold row."
+* **For keys must be POSITION-STABLE, not index-stable.** Keying
+  placed units by their vector INDEX churns every key when content
+  inserts above (a plugin section landing shifted every card key),
+  and the solid keyed diff mishandled the full-churn frame — an
+  inserted-then-removed element left a hole (the location line
+  vanished). The fix keys by CONTENT POSITION (`t:{tag}@{y}` /
+  `u@{y}`, index only as a collision suffix): the pane's chrome is
+  bottom-anchored, so a section landing inserts two clean keys and
+  everything else patches in place.
+* **The mount key must cover every BAKED prop.** The home tree
+  bakes the version's `left` at build time; a version-length change
+  moved the label without tripping the (width, height, bg, row)
+  key, and the label overflowed the right edge. Fix: key on the
+  WHOLE plan (it's `PartialEq`) — any geometry field moving rebuilds
+  the small tree.
+* **The wordmark's per-cell shadow art is run-split chunks.** Each
+  art row's cells alternate fg/bg by glyph class (`_` space-over-
+  shadow, `^` `▀`-over-shadow, `~` `▀`-IN-shadow); adjacent cells
+  with the same (fg, bg, attrs) merge into one explicit-bg chunk,
+  two text elements per row (the gap cell stays OUTSIDE both).
+* **The resting shimmer IS the base renderable.** The tsx's
+  `title_shimmer` subclasses `TextRenderable`; its animated phases
+  (rename-pending pulse, arrival wipe — scratch buffer +
+  colorMatrix) only run while `animating`, which needs rename
+  state the store doesn't carry. At rest it renders as plain
+  BOLD `text.base` over `raised.base` — exactly what both painters
+  paint. The animated phases are the registered seam: O2's
+  `tab_pulse` covers the sustain math; the envelopes would land in
+  a core renderable when a later lane carries rename-pending into
+  the store.
+* **The scrim stays at the route compositor** (M2's backdrop rule
+  again): the ≤120 manual-open overlay pastes an opaque-black
+  stand-in under the floating pane — painter-agnostic; the
+  alpha-blend seam stays registered in `session.rs`.
+
+## Instruments (this lane's record)
+
+* **Unit gates**: `solid_sidebar_pane_equals_the_old_renderer`
+  (fixture/live/plugin-sections/dismissed/long-title/many-sections
+  × heights 30/24/22/16/8, cell for cell) +
+  `solid_home_frame_equals_the_old_renderer` (idle/typing/
+  multiline/popup/plugin-actions/version-gate/carets × widths
+  40/60/80/120/160 × heights 20/24/30) + churn/resize gates on
+  both surfaces.
+* **Rig A/B** (`docs/m5-rig-ab.log`, 12 invocations = 6 scripts ×
+  2 flags × 2 runs): FLAG-SYMMETRIC — identical mismatch-step
+  unions on every (script,size) pair; the only cell deltas are the
+  ref-side LIVE "Context / N tokens" meter (the documented
+  `SidebarSections.context` seam — the ref's sidebar context widget
+  was never modeled on our side; pre-existing on BOTH paths).
+  boot-home/resize/click-coverage-home flip ok↔mm on the
+  (b)-class home-placeholder coin WITHIN each flag; help-dialog
+  (regression) carries its deterministic mm2 (submit/help-open
+  style backlog) on both.
+* **PTY**: `pty_sidebar_toggles_*` + `pty_sidebar_plugin_section_*`
+  parametrized over both paths; the new
+  `pty_sidebar_overlay_cycle_solid_path` (hidden at 80 →
+  `<leader>b` overlay over the scrim → ESC dismiss through the
+  already-ported close-keymap layer).
+* **Budget** (release, per-process): home old 43/55 µs worst →
+  solid 112/111 µs (≈2–2.5×, ~0.11 ms); sidebar pane old 66/69 µs
+  → solid 141/227 µs (≈2.1–3.3×, ~0.23 ms) — vs the 40 ms gate;
+  all 13 release budget tests green.
+* **Flag protocol**: defaults flipped ON after the proof; 661
+  oc-tui tests + 2824 workspace tests + the serialized pty profile
+  green through the solid defaults (the home goldens now pin the
+  SOLID path's bytes — `render_home_view` dispatches).
+* **Release size**: 66,120,736 → 66,231,424 B
+  (**+110,688 B ≈ +108 KiB, +0.17%**) — the pane's unit For + the
+  home chrome tree + the shared `plan_home` extraction ride the
+  graph opentui already occupies.

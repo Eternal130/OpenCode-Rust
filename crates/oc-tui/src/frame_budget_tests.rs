@@ -502,3 +502,204 @@ fn dialog_frame_budget_body() {
         "frame budget exceeded with a dialog open: worst {worst} ms > {FRAME_BUDGET_MS} ms"
     );
 }
+
+/// Lane M5: the sidebar pane's per-frame cost on the LIVE session
+/// route at a WIDE size (`render_session` docks the pane at 160+,
+/// the only geometry where it mounts), measured over an IDLE phase
+/// (identical frames) and a SECTION-CHURN phase (a plugin section's
+/// rows refreshing each frame — the pane's reactive worst case).
+/// Both sidebar renderer paths get their own test process; the OTHER
+/// solid surfaces are pinned to the old path on both sides so the
+/// numbers isolate the pane path.
+#[test]
+fn frame_budget_sidebar_pane_old_path() {
+    std::env::set_var("OC_SIDEBAR_OPENTUI", "0");
+    std::env::set_var("OC_HOME_OPENTUI", "0");
+    std::env::set_var("OC_TABS_OPENTUI", "0");
+    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
+    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
+    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "0");
+    sidebar_pane_budget_body();
+}
+
+/// The opentui-solid sidebar path (`OC_SIDEBAR_OPENTUI=1`).
+#[test]
+fn frame_budget_sidebar_pane_solid_path() {
+    std::env::set_var("OC_SIDEBAR_OPENTUI", "1");
+    std::env::set_var("OC_HOME_OPENTUI", "0");
+    std::env::set_var("OC_TABS_OPENTUI", "0");
+    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
+    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
+    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "0");
+    sidebar_pane_budget_body();
+}
+
+fn sidebar_pane_budget_body() {
+    use crate::components::sidebar::{SidebarSection, SidebarSections, SidebarView};
+    use crate::reactive::Runtime;
+    use crate::store::Store;
+
+    let theme = theme();
+    let store = Store::new(Runtime::new());
+    store.open_tab("s1", Some("Sidebar budget".to_owned()));
+    store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+
+    let view = || SidebarView {
+        title: "Sidebar budget".to_owned(),
+        sections: SidebarSections {
+            context: Vec::new(),
+            mcp: Vec::new(),
+            plugins: store.plugin_sidebar_sections(),
+        },
+        onboarding: true,
+        location: Some("/tmp/opencode/budget:main".to_owned()),
+    };
+    let _ = view();
+    let render = || {
+        let pane =
+            crate::components::sidebar_solid::sidebar_pane_frame(&view(), &theme.styles(), 50);
+        assert_eq!(pane.height, 50);
+        pane
+    };
+
+    // Warmup (mount + caches).
+    for _ in 0..3 {
+        let _ = render();
+    }
+    let mut worst = 0u128;
+    let mut total = 0u128;
+    for _ in 0..10 {
+        let start = std::time::Instant::now();
+        let _ = render();
+        let elapsed = start.elapsed();
+        worst = worst.max(elapsed.as_micros());
+        total += elapsed.as_micros();
+    }
+    let idle_worst = worst;
+    let idle_avg = total / 10;
+
+    // The section-churn phase: the section's rows change every frame
+    // (the pane's reactive worst case — content keys re-render).
+    worst = 0;
+    total = 0;
+    for frame in 0..10 {
+        store.set_plugin_sidebar_section(&SidebarSection {
+            plugin_id: "budget".into(),
+            title: "Preset".into(),
+            rows: vec![format!("zhipuai · own/glm-5.3 · turn {frame}"), "openai · gpt-5.6".into()],
+        });
+        let start = std::time::Instant::now();
+        let _ = render();
+        let elapsed = start.elapsed();
+        worst = worst.max(elapsed.as_micros());
+        total += elapsed.as_micros();
+    }
+    let churn_worst = worst;
+    let churn_avg = total / 10;
+
+    eprintln!(
+        "[frame-budget] 42x50 sidebar pane ({}): idle worst {} µs / avg {} µs; section churn \
+         worst {} µs / avg {} µs ({} build)",
+        if crate::components::sidebar_solid::opentui_sidebar_enabled() { "solid" } else { "old" },
+        idle_worst,
+        idle_avg,
+        churn_worst,
+        churn_avg,
+        if cfg!(debug_assertions) { "debug" } else { "release" },
+    );
+    #[cfg(not(debug_assertions))]
+    assert!(
+        idle_worst <= FRAME_BUDGET_MS * 1000 && churn_worst <= FRAME_BUDGET_MS * 1000,
+        "frame budget exceeded on the sidebar pane: idle {idle_worst} µs, churn {churn_worst} µs"
+    );
+}
+
+/// Lane M5: the home route's per-frame cost — the wordmark chrome +
+/// the footer slot (the composer mount rides its own M3 budget
+/// test), measured over an IDLE phase and a PLACEHOLDER-CHURN phase
+/// (the rotation label re-rendering). Both home renderer paths get
+/// their own test process; the composer stays pinned to the OLD path
+/// on both sides so the numbers isolate the home chrome path.
+#[test]
+fn frame_budget_home_old_path() {
+    std::env::set_var("OC_HOME_OPENTUI", "0");
+    std::env::set_var("OC_SIDEBAR_OPENTUI", "0");
+    std::env::set_var("OC_TABS_OPENTUI", "0");
+    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
+    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
+    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "0");
+    home_frame_budget_body();
+}
+
+/// The opentui-solid home path (`OC_HOME_OPENTUI=1`).
+#[test]
+fn frame_budget_home_solid_path() {
+    std::env::set_var("OC_HOME_OPENTUI", "1");
+    std::env::set_var("OC_SIDEBAR_OPENTUI", "0");
+    std::env::set_var("OC_TABS_OPENTUI", "0");
+    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
+    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
+    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "0");
+    home_frame_budget_body();
+}
+
+fn home_frame_budget_body() {
+    use crate::components::home::render_home;
+    use crate::reactive::Runtime;
+    use crate::store::Store;
+
+    let theme = theme();
+    let store = Store::new(Runtime::new());
+
+    let render = || render_home(&store, &theme.styles(), (200, 50));
+
+    // Warmup (mount + caches).
+    for _ in 0..3 {
+        let _ = render();
+    }
+    let mut worst = 0u128;
+    let mut total = 0u128;
+    for _ in 0..10 {
+        let start = std::time::Instant::now();
+        let frame = render();
+        let elapsed = start.elapsed();
+        worst = worst.max(elapsed.as_micros());
+        total += elapsed.as_micros();
+        assert_eq!(frame.height, 50);
+    }
+    let idle_worst = worst;
+    let idle_avg = total / 10;
+
+    // The placeholder-churn phase: the rotation label + caret move
+    // every frame (the home chrome's reactive worst case).
+    worst = 0;
+    total = 0;
+    for frame in 0..10 {
+        let mut composer = store.composer(crate::app::HOME_PROMPT_KEY);
+        composer.draft.text = format!("home budget turn {frame}");
+        store.set_composer(crate::app::HOME_PROMPT_KEY, &composer);
+        let start = std::time::Instant::now();
+        let _ = render();
+        let elapsed = start.elapsed();
+        worst = worst.max(elapsed.as_micros());
+        total += elapsed.as_micros();
+    }
+    let churn_worst = worst;
+    let churn_avg = total / 10;
+
+    eprintln!(
+        "[frame-budget] 200x50 home route ({}): idle worst {} µs / avg {} µs; placeholder churn \
+         worst {} µs / avg {} µs ({} build)",
+        if crate::components::home_solid::opentui_home_enabled() { "solid" } else { "old" },
+        idle_worst,
+        idle_avg,
+        churn_worst,
+        churn_avg,
+        if cfg!(debug_assertions) { "debug" } else { "release" },
+    );
+    #[cfg(not(debug_assertions))]
+    assert!(
+        idle_worst <= FRAME_BUDGET_MS * 1000 && churn_worst <= FRAME_BUDGET_MS * 1000,
+        "frame budget exceeded on the home route: idle {idle_worst} µs, churn {churn_worst} µs"
+    );
+}
