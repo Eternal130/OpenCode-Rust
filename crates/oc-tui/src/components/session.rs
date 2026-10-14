@@ -12,9 +12,7 @@
 //! over the composer.
 
 use crate::components::composer::autocomplete;
-use crate::components::composer::render::{
-    render_prompt_frame, AutocompleteView, FooterHints, PromptView,
-};
+use crate::components::composer::render::{AutocompleteView, FooterHints, PromptView};
 use crate::components::message::list::{render_transcript, TranscriptOptions};
 use crate::components::session_tabs::{self, Attention, TabStatus, TabView};
 use crate::components::sidebar::{
@@ -612,7 +610,12 @@ fn composer_mount_frame(
             width: label_width,
         });
     store.set_footer_location_hit(location_hit);
-    let frame = render_prompt_frame(&view, width, prompt_height, theme);
+    let frame = crate::components::composer_solid::render_prompt_frame_dispatch(
+        &view,
+        width,
+        prompt_height,
+        theme,
+    );
     // NEW-S1a: the caret's screen cell — the mount pastes at
     // (inset, height - prompt_height); the helper's y already includes
     // the composer's `top` inside the mount frame.
