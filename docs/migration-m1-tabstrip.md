@@ -134,6 +134,28 @@ StripInputs ──set()──► Signal ──map() chains──► dyn props / 
   release graph links opentui (core's renderer/buffer/text +
   solid's reconciler). Every later surface rides the same cost.
 
+## The accelerated protocol (added by lane/accel — copy this too)
+
+The rig inner loop is tiered now; every later lane verifies like this:
+
+* **Iterate**: `tools/parity/tui-diff/verify-lane.sh iterate <your
+  scripts>` — fmt + nextest for oc-tui/oc-tui-core/parity + the rig in
+  `--quick` mode (`--runs 1`, single size 80x24) with the ref-capture
+  cache ON (the bun side's settled grids replay from
+  `tui-diff/cache/ref/`; our side always boots fresh). Minutes, not
+  tens of minutes.
+* **Final**: `verify-lane.sh final` — CI-equivalent fmt+clippy, full
+  workspace nextest + the serialized pty profile, the release budget
+  gate, and the rig at BOTH sizes × `--runs 2` **with the cache
+  disabled** — final mismatch verdicts are live verdicts.
+* The A/B discipline is unchanged: flag-on vs flag-off must produce
+  IDENTICAL mismatch-step unions; the cache/`--quick` only accelerate
+  reaching those unions, they must never alter them (the cache
+  replays only settled grids confirmed byte-identical across N
+  independent runs — `--measure-stability` warms AND confirms — with
+  unconfirmed or flippy steps staying live, fingerprint-keyed so any
+  ref/bun/script change invalidates).
+
 ## What M2..Mn should copy verbatim
 
 * `StripInputs`-shaped snapshot signal + `map` chains + dyn props.
@@ -144,6 +166,8 @@ StripInputs ──set()──► Signal ──map() chains──► dyn props / 
 * The unit parity gate against the old renderer BEFORE any rig run.
 * The PTY parametrization (both paths) + one interaction-cycle test
   on the new path.
+* The accelerated protocol above: iterate via `verify-lane.sh
+  iterate`, final via `verify-lane.sh final` (full matrix, cache off).
 
 ---
 
