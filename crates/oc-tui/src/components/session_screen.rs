@@ -235,7 +235,7 @@ pub fn session_composer_frame(
     theme: &ThemeState,
     location: &str,
 ) -> Frame {
-    use crate::components::composer::render::{render_prompt_frame, FooterHints, PromptView};
+    use crate::components::composer::render::{FooterHints, PromptView};
     let view = PromptView {
         draft,
         placeholder: String::new(),
@@ -253,7 +253,12 @@ pub fn session_composer_frame(
         rail: None,
         caret: None,
     };
-    render_prompt_frame(&view, usize::from(width), 7, theme)
+    crate::components::composer_solid::render_prompt_frame_dispatch(
+        &view,
+        usize::from(width),
+        7,
+        theme,
+    )
 }
 
 /// The horizontal tabs bar row (height 1): the active tab's pill in
