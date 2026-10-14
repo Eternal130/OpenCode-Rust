@@ -268,3 +268,139 @@ cell-for-cell AND rect-for-rect identical.
 * **Release size**: 64,659,904 → 66,048,256 B
   (**+1,388,352 B ≈ +1.32 MiB, +2.15%**) — the dialog family's trees
   + the shared bridge ride the graph opentui already occupies.
+
+## Lane M3 — composer + footer (the largest single surface)
+
+Scope: prompt mount chrome (rail/insets), metadata row ladder, footer row
+(location budget/truncateFilePath, hints block, usage arm, interrupt hint,
+hover lift), placeholder presentation, hardware-cursor bridge
+(`CursorOutputState`). Editor ENGINE deliberately NOT migrated (subsystem
+lane later). Numbers: rig 24 invocations flag-symmetric (only the (b)-class
+home-placeholder coin differs — run-to-run within the SAME flag too);
+release budget old 340µs / solid 375µs worst (1.2×, bridge reuses the old
+solver walk); unit parity matrix + PTY both paths in the WIP series.
+
+**Operational lessons (the real M3 cost — three session deaths):**
+1. Long background verification runs inside a lane session die with the
+   session (host restarts / quota windows). Countermeasure: run heavy
+   verification as FOREGROUND CHUNKS (one invocation per command), append
+   results to a log file, and WIP-commit every ~6 invocations — resume =
+   read the log tail. A dead lane then loses minutes, not hours.
+2. Watchdogs must detect liveness by DISK ACTIVITY (file mtimes under the
+   worktree), not process names (`pgrep` self-matches; a watcher counting
+   itself keeps a dead lane "alive"). Done-criterion must be a structural
+   marker (final commit subject not `wip(`), not a commit count (progress
+   WIPs trip counts).
+3. When a child session proves flaky, ORCHESTRATOR TAKEOVER of the
+   mechanical tail is cheaper than revive roulette: the remaining steps
+   (rig invocations, gates, flag flip, squash) are deterministic and the
+   orchestrator can run them chunked with the same durability rules.
+   Beware takeover overlap: a revived child may wake mid-takeover —
+   append-only logs make interleaving non-corrupting; check the board and
+   prefer ONE worker per worktree.
+
+---
+
+# Lane M3 — the composer + footer: the pattern on the hot path
+
+> Status: **done** (lane/m3). The largest single v2 surface — the
+> prompt mount (`component/prompt/index.tsx`, 2011 LOC: the `┃` rail
+> box, placeholder presentation, the metadata row, the `╹▀` transition,
+> the footer status row, the autocomplete popup above) — ported as one
+> builder tree in `crates/oc-tui/src/components/composer_solid.rs`,
+> selected by `OC_COMPOSER_OPENTUI` (default ON after this lane's
+> proof). The text EDITING stays on the store's `oc_tui_core`
+> `text_edit` engine (the editor-engine swap is a later subsystem
+> lane): this lane renders the composer AROUND it.
+
+The M1/M2 shape held — one inputs-snapshot signal, the SAME solver
+walk (`layout_draft_lines`, `MetadataLine::layout`, the popup rows)
+collected as pre-shaped chunks, the `frame_from_buffer` cell copy, the
+OnceLock flag. The mount keys on GEOMETRY (width, top, popup height,
+content height, frame height, colors): height-stable frames (typing
+within the last row, caret moves, hover) patch content dyn-props in
+place; a wrap landing a new row or the popup opening rebuilds the
+small tree (the M2 content-height rule).
+
+## What this family ADDED to the template
+
+* **Extract the geometry, don't mirror it.** The old renderer's
+  footer math (`#4`/`#20`'s hints-vs-location budget, `#33`'s hover
+  extent) existed TWICE already (`paint_footer_row` +
+  `footer_location_extent` "keep in sync"). The lane extracted
+  `render::footer_plan` — ONE resolution shared by the old painter,
+  the hit-rect helper, AND the solid bridge. A third copy would have
+  been drift-on-arrival; when the old path encodes fixed findings,
+  factor the fix, then consume it from both paths.
+* **Separator/gap cells must stay fill-painted.** The metadata row's
+  inter-segment spaces and the footer's 2-gaps between arms carry the
+  FILL's white fg in the old bytes. A space inside a styled chunk
+  paints the chunk's fg on that cell — a cell-for-cell divergence the
+  matrix catches. The shape: SEPARATE absolutely positioned text
+  elements per segment (x from the same walk), never separator spaces
+  inside chunks. (M2's footer-overwrites-title was the same class from
+  the other side.)
+* **A fixed-count segment farm beats a shape-varying For.** The
+  metadata ladder renders at most 7 segments (agent auto · model
+  provider · variant) — the tree mounts seven fixed absolute texts,
+  each reading `segments.get(i)` (absent ⇒ empty chunks). No For, no
+  keyed churn; a dropped field just empties its slot in place.
+* **The software caret is a BRIDGE recolor.** The golden-only block
+  (`PromptView::caret` + the blink phase) inverts one cell's colors
+  over the copied buffer — char preserved — exactly the old painter's
+  write. The LIVE caret never touches the tree: it is the TERMINAL
+  cursor (NEW-S1a), still emitted by the untouched
+  `prompt_caret_screen_cell` → `Store::set_caret_cell` →
+  `set_cursor_position` seam. opentui-core's `CursorOutputState`
+  (renderer.rs:105) is driven by a focused textarea renderable — the
+  editor-engine lane moves the emission there (`set_position` on the
+  buffer-relative cell) and retires the store seam.
+* **Degenerate frames guard at the bridge.** width/height 0 returns
+  the old renderer's empty-row shape directly; a frame shorter than
+  the mount clips by buffer bounds (children laid out past the edge
+  raster nothing) — same visible bytes as the old painter's
+  row-bounds skips, no special cases in the tree.
+* **Stub-harness traps for composer-cycle PTY tests.** (1) The
+  scripted server's inbox echo had a FIXED id — a second submission
+  dedups invisibly; give each POST its own id. (2) Its mid-session
+  SSE pushes are unreliable (the event-stream drain dies on read
+  hiccups) — drive assertions off the inbox echo and the
+  message-list fetch, never off pushed frames. (3) `wait_for_after`
+  marks: two paints landing in one output burst make the second
+  assert miss — take ONE mark before the burst and share it. (4) A
+  keystroke per diff frame paints one changed cell — never grep for a
+  contiguous word the composer is still echoing.
+
+## Instruments (this lane's record)
+
+* **Unit gate**: `solid_composer_frame_equals_the_old_renderer` —
+  ~25 scenarios (idle, typing, multiline 3+ rows incl. the CJK and
+  extmark-chip wrap fixtures, interrupt armed/unarmed, usage arm +
+  the narrow gate, plugin hints, hover lift, bound shortcuts, the
+  metadata drop ladder ×4 budgets, agent rail, caret block
+  empty/mid/end, popup open + top-clamped, the golden top-2 shape,
+  frame-shorter-than-mount) × widths 40/60/80/120/160 — cell for
+  cell. Plus typing-churn patch-in-place and resize-rebuild gates.
+* **Rig A/B** (`docs/m3-rig-ab.log`, 24 invocations = 6 scripts × 2
+  sizes × 2 runs × both flags, run under the generalized `OC_*_OPENTUI`
+  forwarding seam): 10/12 pairs have IDENTICAL mismatch-step unions;
+  the other 2 differ only in placeholder-carrying steps — the
+  documented (b)-class home-placeholder coin (row 13 alone; the old
+  path flips the same steps run-to-run within itself).
+* **PTY**: `pty_escape_interrupt_*` + `pty_leader_return_queue_*`
+  parametrized over both paths; the new
+  `pty_composer_cycle_type_edit_submit_reply_stats_solid_path`
+  (type → edit → submit → reply admission → `18 (1%)` stats row).
+* **Budget** (release, 200×50 session route): old idle 209/199 µs,
+  churn 217/206 µs worst/avg; solid idle 225/219 µs, churn 256/248 µs
+  — ≈1.1–1.2× the old path (the bridge SHARES the old path's solver
+  walk, so the delta is only taffy + raster), vs the 40 ms gate. All
+  other budget gates re-checked green post-flip.
+* **Flag protocol**: default flipped ON after the proof; the
+  `OC_COMPOSER_OPENTUI=0` fallback keeps the hand-rolled renderer for
+  one release (638 oc-tui tests + 2801 workspace tests green through
+  the solid default — the goldens now pin the SOLID path's bytes).
+* **Release size**: 66,048,256 → 66,120,608 B
+  (**+72,352 B ≈ +70.7 KiB, +0.11%**) — the composer tree + the
+  footer-plan extraction; the opentui graph was already linked, so
+  this lane's marginal cost is the smallest of the three.

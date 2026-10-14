@@ -215,6 +215,109 @@ fn strip_frame_budget_body() {
     );
 }
 
+/// Lane M3: the composer frame's per-frame cost on the LIVE session
+/// route (`render_session` docks the composer mount via
+/// `composer_mount_frame`), measured over an IDLE phase (identical
+/// frames — the reconciler's no-op skip) and a TYPING-CHURN phase
+/// (a word per frame growing the draft; height-stable frames patch
+/// in place, the occasional wrap rebuilds — the realistic edit mix).
+/// Both composer renderer paths get their own test process (the flag
+/// is read once at boot; nextest isolates the fns); the OTHER solid
+/// surfaces (tabs strip, dialogs) are pinned to the OLD path on both
+/// sides so the numbers isolate the composer path.
+#[test]
+fn frame_budget_composer_frame_old_path() {
+    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
+    std::env::set_var("OC_TABS_OPENTUI", "0");
+    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
+    composer_frame_budget_body();
+}
+
+/// The opentui-solid composer path (`OC_COMPOSER_OPENTUI=1`).
+#[test]
+fn frame_budget_composer_frame_solid_path() {
+    std::env::set_var("OC_COMPOSER_OPENTUI", "1");
+    std::env::set_var("OC_TABS_OPENTUI", "0");
+    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
+    composer_frame_budget_body();
+}
+
+#[allow(clippy::items_after_statements)] // a local metric helper below the warmup
+fn composer_frame_budget_body() {
+    use crate::components::composer::ComposerKey;
+    use crate::components::session::render_session;
+    use crate::reactive::Runtime;
+    use crate::store::Store;
+
+    let theme = theme();
+    let store = Store::new(Runtime::new());
+    store.open_tab("s1", Some("Composer budget".to_owned()));
+    store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+    // Seed a footer location + metadata so the composer paints its
+    // full frame (rail, metadata row, footer hints).
+    let mut composer = store.composer("s1");
+    composer.handle_key(&ComposerKey::Char('h'));
+    store.set_composer("s1", &composer);
+
+    let render = || render_session(&store, "s1", &theme.styles(), (200, 50));
+
+    // Warmup (mount + caches).
+    for _ in 0..3 {
+        let _ = render();
+    }
+
+    fn measure(
+        frames: u128,
+        mut advance: impl FnMut(u128),
+        mut render: impl FnMut() -> crate::render::Frame,
+    ) -> (u128, u128, u128) {
+        let mut worst = 0u128;
+        let mut worst_micros = 0u128;
+        let mut total_micros = 0u128;
+        for frame in 0..frames {
+            advance(frame);
+            let start = std::time::Instant::now();
+            let painted = render();
+            let elapsed = start.elapsed();
+            worst = worst.max(elapsed.as_millis());
+            worst_micros = worst_micros.max(elapsed.as_micros());
+            total_micros += elapsed.as_micros();
+            assert_eq!(painted.height, 50);
+        }
+        (worst, worst_micros, total_micros / frames)
+    }
+
+    // The idle phase: identical frames (no composer writes).
+    let (idle_worst, idle_worst_us, idle_avg) = measure(10, |_| {}, render);
+    // The typing-churn phase: a word per frame into the draft.
+    let churn = |frame: u128| {
+        let mut composer = store.composer("s1");
+        for key in format!("word{frame} ").chars() {
+            composer.handle_key(&ComposerKey::Char(key));
+        }
+        store.set_composer("s1", &composer);
+    };
+    let (churn_worst, churn_worst_us, churn_avg) = measure(10, churn, render);
+
+    let _ = (idle_worst, churn_worst); // debug builds: assert is release-gated
+    eprintln!(
+        "[frame-budget] 200x50 session route, composer ({}): idle worst {} µs / avg {} µs; \
+         typing churn worst {} µs / avg {} µs ({} build)",
+        if crate::components::composer_solid::opentui_composer_enabled() { "solid" } else { "old" },
+        idle_worst_us,
+        idle_avg,
+        churn_worst_us,
+        churn_avg,
+        if cfg!(debug_assertions) { "debug" } else { "release" },
+    );
+    #[cfg(not(debug_assertions))]
+    assert!(
+        idle_worst <= FRAME_BUDGET_MS && churn_worst <= FRAME_BUDGET_MS,
+        "frame budget exceeded with the composer mounted: idle {idle_worst} ms, churn \
+         {churn_worst} ms > {FRAME_BUDGET_MS} ms"
+    );
+}
+
 /// Lane M2: the dialog family's per-frame cost on the LIVE app frame
 /// (`render_app` composites the top dialog through
 /// `render_overlay`), measured over the command palette open with its
