@@ -1,0 +1,77 @@
+# Lane M5 rig + gates log (sidebar + home → opentui-solid)
+# Protocol: foreground chunks, append-only, resume from tail.
+20:16:24 unit parity gates: solid_sidebar_pane_equals_the_old_renderer PASS (6 scenarios x h{30,24,22,16,8}); solid_home_frame_equals_the_old_renderer PASS (8 scenarios x w{40,60,80,120,160} x h{20,24,30})
+20:18:15 fixes: For-key collision (t:{tag}@{index}), attrs OR-merge grid (ratatui set_style merge semantics baked into chunks), home mount keyed on whole HomePlan (version_x churn); full oc-tui suite re-run
+20:24:35 sidebar keys switched to position-stable tag@{y} (the solid For diff mishandled full index churn: inserted-then-removed). FULL oc-tui: 654 passed, 1 skipped
+20:27:00 RIG A/B begin: 6 scripts (sidebar-wide, subagent-sidebar, boot-home, resize, click-coverage-home, help-dialog) x sizes x 2 runs x both flags; others at defaults
+old	boot-home	80x24	run0	ok
+old	boot-home	80x24	run1	ok
+old	boot-home	120x30	run0	mm3/3
+old	boot-home	120x30	run1	mm3/3
+solid	boot-home	80x24	run0	mm3/3
+solid	boot-home	80x24	run1	mm3/3
+solid	boot-home	120x30	run0	mm3/3
+solid	boot-home	120x30	run1	ok
+old	resize	80x24	run0	mm1/6
+old	resize	80x24	run1	mm6/6
+old	resize	120x30	run0	mm6/6
+old	resize	120x30	run1	mm6/6
+solid	resize	80x24	run0	mm6/6
+solid	resize	80x24	run1	mm1/6
+solid	resize	120x30	run0	mm6/6
+solid	resize	120x30	run1	ok
+21:01:08 click-coverage-home old: first attempt timed out at 20min (click settle waits); retrying
+old	click-coverage-home	80x24	run0	mm4/5
+old	click-coverage-home	80x24	run1	mm4/5
+old	click-coverage-home	80x24	run0	ok
+old	click-coverage-home	80x24	run1	ok
+22:20:44 note: click-coverage-home pins size 80x24 in its json (per-script override beats --sizes); old flips ok<->mm4/5 across runs (the b-class coin on boot/dismiss/click steps, same class as m3/m4 logs); leaked ref TUIs from the timed-out attempt killed
+solid	click-coverage-home	80x24	run0	mm4/5
+solid	click-coverage-home	80x24	run1	ok
+old	help-dialog	80x24	run0	mm2/8
+old	help-dialog	80x24	run1	mm2/8
+old	help-dialog	120x30	run0	mm2/8
+old	help-dialog	120x30	run1	mm5/8
+solid	help-dialog	80x24	run0	mm2/8
+solid	help-dialog	80x24	run1	mm2/8
+solid	help-dialog	120x30	run0	mm5/8
+solid	help-dialog	120x30	run1	mm5/8
+old	help-dialog	80x24	run0	mm5/8
+old	help-dialog	80x24	run1	mm5/8
+old	help-dialog	120x30	run0	mm5/8
+old	help-dialog	120x30	run1	mm2/8
+old	sidebar-wide	160x36	run0	mm14/16
+old	sidebar-wide	160x36	run1	mm14/16
+solid	sidebar-wide	160x36	run0	mm14/16
+solid	sidebar-wide	160x36	run1	mm14/16
+old	subagent-sidebar	160x36	run0	mm17/19
+old	subagent-sidebar	160x36	run1	mm17/19
+solid	subagent-sidebar	160x36	run0	mm17/19
+solid	subagent-sidebar	160x36	run1	mm17/19
+# RIG A/B SUMMARY (12 invocations, 2026-10-14):
+#   boot-home: old {80 ok,ok; 120 mm3,mm3} solid {80 mm3,mm3; 120 mm3,ok} — every mismatch row is the
+#     placeholder row ALONE (ref/our random per-boot pick); composer frame byte-identical. (b)-class coin,
+#     flips run-to-run within the SAME flag.
+#   resize: old {80 mm1,mm6; 120 mm6,mm6} solid {80 mm6,mm1; 120 mm6,ok} — coin-inclusive steps
+#     (boot/dismiss/grow/restore/exit) + the deterministic shrink backlog; unions coincide modulo the coin.
+#   click-coverage-home (pinned 80x24): old {ok,ok | mm4,mm4} solid {mm4,ok} — the coin on
+#     boot/dismiss/click steps, both flags.
+#   help-dialog (regression): deterministic mm2 (submit+help-open, 4 style cells — the pre-existing
+#     indexed-color backlog) + coin steps to mm5 — IDENTICAL classes both flags at both sizes.
+#   sidebar-wide (pinned 160x36): mm14/16 IDENTICAL step unions both flags both runs. The ref-vs-our
+#     gap is the documented `SidebarSections.context` seam (the ref renders the live "Context / N tokens"
+#     widget; our store never modeled it — pre-existing, sidebar.rs's doc). Cell counts old 525 vs solid
+#     528 (char 400 vs 403, style 515 IDENTICAL): the ref-side live token meter ticking between captures.
+#   subagent-sidebar (pinned 160x36): mm17/19 IDENTICAL step unions both flags both runs — the child
+#     suppression (child-no-sidebar) mismatches identically (the same Context seam on the main sidebar).
+# VERDICT: FLAG-SYMMETRIC. All (script,size) pairs carry identical mismatch-step unions across
+#   OC_SIDEBAR_OPENTUI/OC_HOME_OPENTUI 0/1; the only cell deltas are the ref-side live Context meter.
+# RELEASE BUDGET (nextest per-process, release build, M5 flags isolated; others pinned old):
+#   home route 200x50:  old idle worst 43 µs / avg 40 µs, churn worst 55 µs / avg 41 µs;
+#                      solid idle worst 112 µs / avg 106 µs, churn worst 111 µs / avg 103 µs
+#                      → ≈2.0–2.5× the old path (~0.11 ms absolute) — the chrome tree + the composer paste.
+#   sidebar pane 42x50: old idle worst 66 µs / avg 60 µs, churn worst 69 µs / avg 65 µs;
+#                      solid idle worst 141 µs / avg 136 µs, churn worst 227 µs / avg 198 µs
+#                      → ≈2.1–3.3× the old path (~0.23 ms absolute) — taffy + raster of the unit For.
+#   Both vs the 40 ms TEMP gate; all 13 release budget tests green.
+23:47:05 GATES: fmt clean; clippy -D clean; oc-tui 661 passed (1 skipped); workspace 2824 passed; pty profile (serialized) 2824 passed; release budgets 13/13 green (home old 43/55us vs solid 112/111us; sidebar old 66/69us vs solid 141/227us worst); release size main 66,120,736 -> lane 66,231,424 B (+110,688 B = +108.1 KiB, +0.17%). Flags documented default ON (=0 fallbacks kept one release). DONE.

@@ -15,9 +15,7 @@ use crate::components::composer::autocomplete;
 use crate::components::composer::render::{AutocompleteView, FooterHints, PromptView};
 use crate::components::message::list::{render_transcript, TranscriptOptions};
 use crate::components::session_tabs::{self, Attention, TabStatus, TabView};
-use crate::components::sidebar::{
-    render_sidebar, SidebarSections, SidebarView, SIDEBAR_AUTO_BREAKPOINT,
-};
+use crate::components::sidebar::{SidebarSections, SidebarView, SIDEBAR_AUTO_BREAKPOINT};
 use crate::render::{paint_placed_with_fills, Fill, Frame};
 use crate::store::{SessionTab, Store};
 use ratatui::style::Style;
@@ -378,19 +376,11 @@ pub fn render_session(
     if sidebar_shown {
         let pane_height = height - content_top;
         let view = live_sidebar_view(store, session_id, height);
-        let paint = render_sidebar(&view, styles, pane_height);
-        let pane = paint_placed_with_fills(
-            &paint.placed,
-            &paint.fills,
-            (
-                u16::try_from(crate::components::session_tabs::SESSION_SIDEBAR_WIDTH)
-                    .unwrap_or(u16::MAX),
-                u16::try_from(pane_height).unwrap_or(u16::MAX),
-            ),
-            Style::new()
-                .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
-                .bg(styles.background_raised),
-        );
+        // Lane M5 dual-path — the flag selects the opentui-solid pane
+        // tree (`sidebar_solid`) or the hand-rolled placed-runs walk
+        // (the `OC_SIDEBAR_OPENTUI=0` fallback, one release); BOTH
+        // consume the same `render_sidebar` geometry.
+        let pane = crate::components::sidebar_solid::sidebar_pane_frame(&view, styles, pane_height);
         if sidebar_docked {
             paste(&mut frame, &pane, column, content_top);
         } else if sidebar_overlay {
