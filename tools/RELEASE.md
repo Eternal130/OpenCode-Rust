@@ -261,6 +261,31 @@ leave exactly the drift CI then rejects (the lane/lint lesson — ~45
 pedantic warnings accumulated in `tools/parity` because local muscle
 memory ran bare `cargo clippy`).
 
+### Accelerated verification protocol (lane/accel — the lane gate tiering)
+
+Renderer-migration lanes iterate the tui-diff rig dozens of times a
+day; the full matrix (both sizes × `--runs 2`, live bun per
+invocation) is the FINAL bar, not the inner loop. The tiered protocol
+is scripted by **`tools/parity/tui-diff/verify-lane.sh`** (see
+`tui-diff/README.md` for the full contract):
+
+* **`iterate`** (minutes): fmt + nextest for the affected crates
+  (oc-tui, oc-tui-core, parity) + the rig's `--quick` mode (`--runs 1`,
+  single default size 80x24) on the lane's scripts, with the
+  **ref-capture cache** ON — the ref (bun) side is identical across our
+  flag changes, so its fingerprint-keyed settled grids are replayed
+  (per step, multi-run-confirmed stable only; unstable steps stay
+  live) instead of re-settling bun every invocation. Cache at
+  `tui-diff/cache/ref/` (gitignored), warmed once per fingerprint by
+  `--measure-stability 5` — the cache must never change verdicts.
+* **`final`** (the merge gate): CI-equivalent fmt+clippy, full
+  workspace nextest, the serialized pty profile, the release budget
+  gate, and the rig at BOTH sizes × `--runs 2` with the cache
+  DISABLED — final verdicts are live verdicts.
+
+Rule: **iterate with `--quick`, FINAL verification runs the full
+matrix (both sizes × `--runs 2`)** — never merge off `--quick` alone.
+
 ### PTY invariant fuzz (`crates/oc-cli/tests/pty_fuzz.rs`)
 
 A seeded, human-plausible key driver over the real TUI binary (pty +

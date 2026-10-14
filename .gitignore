@@ -12,3 +12,7 @@
 .idea/
 .vscode/
 .worktrees/
+
+# tui-diff ref-capture cache (lane/accel): fingerprint-keyed settled
+# ref grids — machine-local, never committed
+tools/parity/tui-diff/cache/

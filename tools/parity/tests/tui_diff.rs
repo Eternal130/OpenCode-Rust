@@ -47,6 +47,10 @@ async fn tui_diff_side_by_side() -> anyhow::Result<()> {
         cfg.script_filter = Some("boot-home".to_owned());
         cfg.sizes = vec![(80, 24)];
     }
+    // This gate asserts the rig REALLY ran (both sides booted) — the
+    // ref-capture cache must never turn it into a replay. The cache is
+    // the standalone runner's acceleration, not this test's.
+    cfg.ref_cache = None;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());

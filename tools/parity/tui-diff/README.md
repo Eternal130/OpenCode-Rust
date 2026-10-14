@@ -9,13 +9,18 @@ step**. This is the differential that produced the mismatch backlog in
 ## Layout
 
 ```text
-tools/parity/src/tui_diff.rs      the rig (PTY pairs, stub, diffs, report)
-tools/parity/src/bin/tui-diff.rs  standalone runner (prints the report)
+tools/parity/src/tui_diff.rs      the rig (PTY pairs, stub, diffs, report,
+                                  ref-capture cache)
+tools/parity/src/bin/tui-diff.rs  standalone runner (prints the report;
+                                  --quick / --no-ref-cache / --measure-stability)
 tools/parity/tests/tui_diff.rs    OC_TUI_DIFF=1 gated test (rig-execution
                                   assertions only; content mismatches are
                                   the report's subject, not test failures)
 tools/parity/tui-diff/scripts/    the JSON operation corpus
 tools/parity/tui-diff/REPORT.md   the latest full-corpus mismatch report
+tools/parity/tui-diff/verify-lane.sh  lane verification tiering
+                                  (iterate / final — the pattern entrypoint)
+tools/parity/tui-diff/cache/ref/  ref-capture cache (gitignored)
 ```
 
 ## How it runs
@@ -129,6 +134,94 @@ each kind gets its own SSE payload; the recorded `kind` column makes
 per-flow-stage request-count drift visible. See the corpus3 addendum
 in `REPORT.md` for the design and the #38-#47 findings.
 
+## The accelerated protocol (lane/accel: `--quick` + ref-capture cache)
+
+Lanes iterate renderer changes against the rig dozens of times a day;
+the full matrix (2 sizes × `--runs 2`, live bun on every invocation)
+is the FINAL bar, not the inner loop. Two accelerations, both
+verdict-preserving:
+
+1. **`--quick`** — iteration mode: `--runs 1` + the single default
+   size 80x24 (per-script `size` overrides still win). The lane
+   pattern: **iterate with `--quick`; FINAL verification runs the full
+   matrix (both sizes × `--runs 2`)** — never merge off `--quick`
+   alone. Explicit `--runs`/`--sizes` flags after `--quick` still
+   override it.
+2. **Ref-capture cache** (default ON at `tui-diff/cache/ref/`,
+   gitignored; `--no-ref-cache` or `OC_TUI_DIFF_REF_CACHE=0` disables)
+   — the ref (bun) side is identical across OUR flag changes, so its
+   settled per-step grids are cached and replayed instead of spawning
+   the bun PTY + ref server (our side always boots fresh). The sandbox
+   project + homes live at a FIXED work root
+   (`OC_TUI_DIFF_WORK_ROOT`, default `/tmp/opencode/tui-diff-work`)
+   — both TUIs render the cwd in the home footer, so a per-run path
+   would make every capture unique (the lane's first measurement
+   found exactly that: 5 distinct ref grids per step, all differing
+   only in the footer path). One rig per work root at a time.
+   Discipline:
+   * One cache file per (script id, size), keyed by a fingerprint of:
+     the capture protocol version, the PARITY_BUN identity (path +
+     `--version` + byte length), the ref checkout revision (rebuild
+     source git HEAD + a manifest hash of the live ref root), the ref
+     spawn defines, the script JSON bytes, the stub's SSE payload, and
+     the size. Any component change misses the cache (live re-capture).
+   * **Only SETTLED grids are cached** — mid-run transient frames are
+     never captured, let alone cached.
+   * A step passes the capture-time bar only when **two consecutive
+     captures 250 ms apart are byte-identical** — necessary but NOT
+     sufficient: the ref's home placeholder is random per BOOT yet
+     fixed within a run, so the within-run bar passes while the grid
+     flips across runs. Replay therefore requires **multi-run
+     CONFIRMATION**: `--measure-stability N` runs N independent live
+     captures and confirms each entry from the per-step digest
+     agreement across all N runs (that same invocation IS the warmer
+     and prints the cacheability table). Unconfirmed entries never
+     replay.
+   * Replay is **per-step (hybrid)**: confirmed-stable steps compare
+     against their cached grid and skip the ref settle probe;
+     unstable steps stay live. The ref side (server + bun PTY) is
+     skipped entirely only when EVERY step is cached — and past the
+     last live step of a hybrid run the ref side is retired early.
+   * Scripts with `sweep` steps are never cached (the click/hover
+     reaction matrix measures the live ref side).
+   * Replay at any `--runs` is safe by the same bar (replayed steps
+     are the cross-run-confirmed ones); `verify-lane.sh final` still
+     pins `--no-ref-cache` — final verdicts are live verdicts.
+   * Warming protocol: once per fingerprint (the fingerprint covers
+     only ref-side identity + script + stub — it is INVARIANT across
+     our flag changes, which is the whole premise), run
+     `--measure-stability 5 --sizes 80x24,120x30 [--filter …]`; the
+     cache then serves every later iteration.
+   The report's `ref` column shows `cache` vs `live` per run. The
+   cache must NEVER change verdicts — `--measure-stability` (below) is
+   the instrument that proves which steps are safe, and the lane/accel
+   A/B protocol (5 repeated cached-vs-uncached comparisons, identical
+   mismatch-step unions) is the acceptance record.
+
+**`--measure-stability N`** — the determinism instrument AND the
+cache warmer: runs the corpus N times as independent live captures
+(no replay) and reports, per (script × size × step), whether the ref
+grid was byte-identical across all N runs (the cacheability bar),
+then CONFIRMS the cache entries from that agreement (only
+confirmed-stable steps ever replay). Steps that flip run-to-run
+(spinner cadence, blink phase, the ref's per-boot placeholder, the
+reply stats row's real durations) are never cached.
+
+## Lane verification tiering: `verify-lane.sh`
+
+`tools/parity/tui-diff/verify-lane.sh` is THE lane verification
+entrypoint (referenced by the migration pattern doc):
+
+* **`iterate [script …]`** (minutes): fmt check + nextest for the
+  affected crates (oc-tui, oc-tui-core, parity) + the rig in `--quick`
+  mode on the lane's scripts (default the representative trio
+  boot-home / type-edit-submit / long-reply-scroll), ref-cache ON.
+* **`final`** (the merge gate, ~1–2 h): fmt --all + clippy
+  `--workspace --all-targets -D warnings --locked` (CI-byte-equivalent)
+  + full-workspace nextest + the serialized `pty` profile + the
+  release build budget gate + the rig at BOTH sizes × `--runs 2` with
+  the cache DISABLED (final verdicts are live verdicts).
+
 ## Running
 
 The gate user cannot read bun under `/root` (0700), and
@@ -146,6 +239,19 @@ PARITY_BUN=/tmp/opencode/bun/bin/bun tools/dev-gate.sh \
 # one script, one size:
 PARITY_BUN=/tmp/opencode/bun/bin/bun tools/dev-gate.sh \
   'cargo run -p parity --bin tui-diff -- --filter palette --sizes 120x30'
+
+# iteration mode (lane/accel): 1 run, 80x24 only, ref-cache ON:
+PARITY_BUN=/tmp/opencode/bun/bin/bun tools/dev-gate.sh \
+  'cargo run -p parity --bin tui-diff -- --quick --filter boot-home'
+
+# ref-capture cacheability measurement + cache warming/confirmation
+# (N independent live runs; only confirmed-stable steps ever replay):
+PARITY_BUN=/tmp/opencode/bun/bin/bun tools/dev-gate.sh \
+  'cargo run -p parity --bin tui-diff -- --measure-stability 5 --filter boot-home'
+
+# lane verification tiering (the migration-pattern entrypoint):
+tools/parity/tui-diff/verify-lane.sh iterate            # fast inner loop
+tools/parity/tui-diff/verify-lane.sh final              # full merge gate
 
 # gated test (boot-home only; OC_TUI_DIFF_FULL=1 for everything):
 PARITY_BUN=/tmp/opencode/bun/bin/bun OC_TUI_DIFF=1 cargo nextest run \
