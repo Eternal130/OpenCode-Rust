@@ -38,6 +38,11 @@ pub mod syntax;
 pub mod tab_pulse;
 pub mod toast;
 pub mod tool_rows;
+/// Lane M4: the transcript (message list) on opentui-solid — the
+/// DEFAULT renderer (the hand-rolled region walk is the
+/// `OC_TRANSCRIPT_OPENTUI=0` fallback for one release; see the
+/// module doc + `docs/migration-m1-tabstrip.md`).
+pub mod transcript_solid;
 
 pub use session_screen::{
     composer_bottom_chrome, paint_session_screen, paint_tabs_bar, ComposerSlot, ScreenTab,

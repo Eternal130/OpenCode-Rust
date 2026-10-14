@@ -86,11 +86,28 @@ fn paint_run(buffer: &mut Buffer, item: &Placed, width: u16, height: u16) {
                 if x >= width {
                     break;
                 }
+                let atom_width = atom.width.max(1) as u16;
                 if let Some(cell) = buffer.cell_mut((x, y)) {
                     cell.set_symbol(&atom.text);
                     cell.set_style(run.style);
                 }
-                x += atom.width.max(1) as u16;
+                // Wide clusters plant `'\0'` continuation cells under
+                // their span (lane M4): the ref binary's opentui
+                // raster does exactly this (buffer.rs's continuation
+                // planting — the composer's `paint_text` already
+                // matched it), carrying the run's style; the previous
+                // leave-the-fill behavior diverged from the reference
+                // on every multi-cell grapheme. No golden or rig
+                // corpus carried wide clusters, so nothing pinned the
+                // old bytes.
+                let span_end = (x + atom_width).min(width);
+                for continuation in (x + 1)..span_end {
+                    if let Some(cell) = buffer.cell_mut((continuation, y)) {
+                        cell.set_symbol("\u{0}");
+                        cell.set_style(run.style);
+                    }
+                }
+                x += atom_width;
             }
         }
     }

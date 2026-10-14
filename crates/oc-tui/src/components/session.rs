@@ -336,41 +336,29 @@ pub fn render_session(
         })
         .collect::<Vec<_>>();
     store.set_frame_images(frame_images);
-    let mut placed = Vec::new();
-    let mut fills = Vec::new();
-    for row in &transcript.rows {
-        // Content coordinates: the viewport shows
-        // `[scroll_offset, scroll_offset + transcript_height)` of the
-        // transcript (sticky sits at the bottom). The rows' placed
-        // lines/fills carry ABSOLUTE transcript coordinates.
-        if row.y + row.height <= scroll_offset {
-            continue;
-        }
-        if row.y.saturating_sub(scroll_offset) >= transcript_height {
-            break;
-        }
-        for line in &row.placed {
-            if line.y < scroll_offset {
-                continue; // the line sits above the viewport window
-            }
-            let mut shifted = line.clone();
-            shifted.y = (line.y + content_top).saturating_sub(scroll_offset);
-            placed.push(shifted);
-        }
-        fills.extend(row.fills.iter().filter(|fill| usize::from(fill.y) >= scroll_offset).map(
-            |fill| {
-                crate::render::Fill {
-                    x: fill.x,
-                    y: (u16::try_from(content_top).unwrap_or(0).saturating_add(fill.y))
-                        .saturating_sub(u16::try_from(scroll_offset).unwrap_or(0)),
-                    width: fill.width,
-                    height: fill.height,
-                    style: fill.style,
-                }
-            },
-        ));
-    }
-    let mut frame = paint_placed_with_fills(&placed, &fills, size, fill);
+    // The transcript region: rows `[scroll_offset, scroll_offset +
+    // transcript_height)` of the column, pasted under the strip.
+    // Lane M4 dual-path — the flag selects the opentui-solid tree
+    // (`transcript_solid`) or the hand-rolled region walk (the
+    // `OC_TRANSCRIPT_OPENTUI=0` fallback, one release); BOTH consume
+    // the same `Transcript` geometry above (the hit rows, metrics
+    // and image placements are painter-agnostic).
+    let region_size = (
+        u16::try_from(column).unwrap_or(u16::MAX),
+        u16::try_from(transcript_height).unwrap_or(u16::MAX),
+    );
+    let region = if crate::components::transcript_solid::opentui_transcript_enabled() {
+        crate::components::transcript_solid::paint_transcript_region(
+            &transcript,
+            styles,
+            region_size,
+            scroll_offset,
+        )
+    } else {
+        transcript.region_frame(scroll_offset, region_size, fill)
+    };
+    let mut frame = paint_placed_with_fills(&[], &[], size, fill);
+    paste(&mut frame, &region, 0, content_top);
     if let Some(strip) = strip {
         paste(&mut frame, &strip, 0, 0);
     }

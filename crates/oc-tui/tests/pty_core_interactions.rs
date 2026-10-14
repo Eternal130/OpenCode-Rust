@@ -451,7 +451,21 @@ fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
     } else if shared.long_transcript && path.starts_with("/api/session/ses_live/message") {
         long_message_list_body()
     } else if path.starts_with("/api/session/ses_live/message") {
-        r#"{"cursor":{},"data":[]}"#.to_owned()
+        // Lane M4: the default session carries the THOUGHT-CYCLE turn
+        // (a titled reasoning part — the disclosure header + the
+        // expandable `┃`-guttered body — plus a settled text reply),
+        // served through the OPEN-time fetch (the reliable seam; the
+        // SSE push is the documented-flaky one) in the wire's DESC
+        // order — newest first, like the long fixture (the client
+        // reverses the page into chronological order). The
+        // interrupt/queue tests submit their own streaming turn on
+        // top — extra transcript rows don't disturb their
+        // composer-surface asserts.
+        // (The turn's ids are DISTINCT from the live-streamed pair —
+        // the snapshot merge drops local rows whose ids it already
+        // carries, and the streaming turn's m_user/m_assistant must
+        // survive it to keep the session RUNNING.)
+        r#"{"cursor":{},"data":[{"id":"th_assistant","type":"assistant","agent":"build","model":{"providerID":"pfix","id":"m-alpha"},"finish":"stop","time":{"created":2,"completed":6},"tokens":{"cache":{"read":0,"write":0},"input":4,"output":9,"read":0,"write":0,"reasoning":3},"content":[{"type":"reasoning","text":"**Planning**\n\nline one of the plan\nline two of the plan"},{"type":"text","text":"the settled thought reply"}]},{"id":"th_user","type":"user","text":"expand the thought please","time":{"created":1}}]}"#.to_owned()
     } else if path.starts_with("/api/session") {
         session_list_body()
     } else {
@@ -701,8 +715,22 @@ fn pty_shift_tab_and_f2_cycle_the_footer_hints() {
 
 /// PTY: the scroll keys move the long transcript — sticky starts at
 /// the bottom, pageup releases (the head), end re-sticks (the tail).
+/// Parametrized over the transcript renderer paths (lane M4: the
+/// scroll surface is the solid transcript's viewport).
 #[test]
-fn pty_scroll_keys_move_the_transcript() {
+fn pty_scroll_keys_move_the_transcript_old_path() {
+    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "0");
+    pty_scroll_keys_body();
+}
+
+/// The opentui-solid transcript path (`OC_TRANSCRIPT_OPENTUI=1`).
+#[test]
+fn pty_scroll_keys_move_the_transcript_solid_path() {
+    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "1");
+    pty_scroll_keys_body();
+}
+
+fn pty_scroll_keys_body() {
     let _sandbox = sandbox_env("scroll");
     let (url, _shared) = spawn_scripted_server(true);
     drive(&url, move |boot, mut writer| {
@@ -841,6 +869,97 @@ fn pty_composer_cycle_type_edit_submit_reply_stats_solid_path() {
         assert!(
             wait_for_after(&probe(), b"18 (1%)", len(&probe()), Duration::from_secs(8)),
             "the usage arm rendered on the completed turn"
+        );
+        // Exit.
+        let _ = writer.write_all(b"\x03");
+        std::thread::sleep(Duration::from_millis(200));
+        let _ = writer.write_all(b"\x03");
+    });
+}
+
+/// PTY (lane M4, the solid transcript path): the transcript's own
+/// interaction cycle — open the session carrying the thought turn
+/// (user box, the `+ Thought: Planning` disclosure header, the text
+/// reply, the stats row) → an SGR CLICK on the header expands the
+/// thought (the `┃`-guttered body lines) → a second click collapses
+/// — the hit-row bridge (E1 #29/#34) driving the store's disclosure
+/// through the solid path's geometry. The turn serves through the
+/// session-OPEN fetch (the reliable seam — the SSE push is the
+/// documented-flaky one). The header sits at screen row 6 (strip row
+/// 0, the user box rows 2–4, the marginTop gap row 5), its hit rect
+/// from x=5 — the click lands at col 7.
+#[test]
+fn pty_transcript_cycle_thought_expand_solid_path() {
+    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "1");
+    let _sandbox = sandbox_env("thought-cycle");
+    let (url, _shared) = spawn_scripted_server(false);
+    drive(&url, move |boot, mut writer| {
+        let probe = || Boot { output: Arc::clone(&boot.output) };
+        assert!(
+            wait_for_after(&probe(), "█▀▀█".as_bytes(), 0, Duration::from_secs(5)),
+            "the home wordmark rendered"
+        );
+        std::thread::sleep(Duration::from_millis(700));
+        // OPEN the session (leader+l → the list → enter): the boot
+        // hydration fetch paints the thought turn.
+        let _ = writer.write_all(b"\x18l");
+        assert!(
+            wait_for_after(&probe(), b"Live turn", len(&probe()), Duration::from_secs(5)),
+            "the session list"
+        );
+        let _ = writer.write_all(b"\r");
+        // The turn's surfaces — ONE shared mark: the hydration paints
+        // the whole turn in one output burst (M3's stub-harness trap:
+        // a re-marked assert misses content that landed in the same
+        // burst). The header assert stays INSIDE one styled run
+        // ("Thought: …"; the `+ `/`- ` icon is a separate tint — the
+        // M2 diff-serializer gotcha).
+        let opened = len(&probe());
+        assert!(
+            wait_for_after(&probe(), b"Thought: Planning", opened, Duration::from_secs(8)),
+            "the collapsed disclosure header rendered"
+        );
+        assert!(
+            wait_for_after(&probe(), b"the settled thought reply", opened, Duration::from_secs(8)),
+            "the assistant text part rendered"
+        );
+        assert!(
+            !wait_for_after(&probe(), b"line one of the plan", opened, Duration::from_millis(300)),
+            "the thought body stays collapsed before the click"
+        );
+        // CLICK the disclosure header (press + release at the row's
+        // hit rect — the release drives `ToggleGroup`).
+        let _ = writer.write_all(b"\x1b[<0;8;7M");
+        let _ = writer.write_all(b"\x1b[<0;8;7m");
+        // EXPANDED: the guttered body lines mount. The diff writer
+        // splits a row's styled runs (and skips unchanged gap cells),
+        // so the state asserts read a FORCED FULL REPAINT (the SIGWINCH
+        // toggle) instead of the byte stream.
+        std::thread::sleep(Duration::from_millis(400));
+        let mut rows: u16 = 24;
+        let expanded =
+            strip_ansi(&screen_after_toggle(&writer, &probe(), len(&probe()), &mut rows));
+        assert!(
+            expanded.contains("line one of the plan"),
+            "the guttered thought body rendered: {expanded:?}"
+        );
+        assert!(
+            expanded.contains("Thought: Planning"),
+            "the header survived the expansion: {expanded:?}"
+        );
+        // A second click collapses again (the toggle is a cycle).
+        let _ = writer.write_all(b"\x1b[<0;8;7M");
+        let _ = writer.write_all(b"\x1b[<0;8;7m");
+        std::thread::sleep(Duration::from_millis(400));
+        let collapsed =
+            strip_ansi(&screen_after_toggle(&writer, &probe(), len(&probe()), &mut rows));
+        assert!(
+            collapsed.contains("Thought: Planning"),
+            "the header survived the second click: {collapsed:?}"
+        );
+        assert!(
+            !collapsed.contains("line one of the plan"),
+            "the second click collapsed the group: {collapsed:?}"
         );
         // Exit.
         let _ = writer.write_all(b"\x03");
