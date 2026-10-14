@@ -246,8 +246,24 @@ fn long_message_list_body() -> String {
         messages.push(format!(
             r#"{{"id":"u{index}","type":"user","text":"turn {index} of the long fixture","time":{{"created":{index}}}}}"#
         ));
+        // The newest assistant (a19 — the scroll test pins the
+        // sticky tail at "answer 19") carries tokens — the composer
+        // footer's usage arm (`18 (1%)` at the catalog's 1000-token
+        // context limit) for the cycle test's stats-row step.
+        let tokens = if index == 19 {
+            r#","tokens":{"cache":{"read":0,"write":0},"input":10,"output":8,"read":0,"write":0,"reasoning":0}"#
+        } else {
+            ""
+        };
         messages.push(format!(
-            r#"{{"id":"a{index}","type":"assistant","agent":"build","model":{{"providerID":"pfix","id":"m-alpha"}},"finish":"stop","time":{{"created":{index},"completed":{index}}},"content":[{{"type":"text","text":"answer {index}"}}]}}"#
+            concat!(
+                r#"{{"id":"a{index}","type":"assistant","agent":"build","#,
+                r#""model":{{"providerID":"pfix","id":"m-alpha"}},"finish":"stop","#,
+                r#""time":{{"created":{index},"completed":{index}}},"#,
+                r#""content":[{{"type":"text","text":"answer {index}"}}]{tokens}}}"#
+            ),
+            index = index,
+            tokens = tokens,
         ));
     }
     format!(r#"{{"cursor":{{}},"data":[{}]}}"#, messages.join(","))
@@ -417,9 +433,12 @@ fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
         );
         let _ = count;
         // The wire's `Session.Inbox.User` echo.
-        let _ = socket.write_all(json(
-            r#"{"data":{"id":"inbox_1","delivery":"steer","type":"user","sessionID":"ses_live","time":{"created":3},"payload":{"text":"please stream"}}}"#.to_owned(),
-        ).as_bytes());
+        // The wire's `Session.Inbox.User` echo — one inbox id per
+        // POST (the cycle test's second submission must paint as a
+        // NEW admission, not dedup against the first).
+        let _ = socket.write_all(json(format!(
+            r#"{{"data":{{"id":"inbox_{count}","delivery":"steer","type":"user","sessionID":"ses_live","time":{{"created":3}},"payload":{{"text":"please stream"}}}}}}"#
+        )).as_bytes());
         return;
     }
 
@@ -528,9 +547,23 @@ fn start_streaming_turn(boot: &Boot, writer: &mut std::fs::File) {
 }
 
 /// PTY: the 2-press escape interrupt — armed hint flip + the
-/// interrupt POST.
+/// interrupt POST. Parametrized over the composer renderer paths
+/// (lane M3: the interrupt hint + the footer row are the solid
+/// composer's surfaces).
 #[test]
-fn pty_escape_interrupt_fires_on_a_streaming_turn() {
+fn pty_escape_interrupt_fires_on_a_streaming_turn_old_path() {
+    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
+    pty_escape_interrupt_body();
+}
+
+/// The opentui-solid composer path (`OC_COMPOSER_OPENTUI=1`).
+#[test]
+fn pty_escape_interrupt_fires_on_a_streaming_turn_solid_path() {
+    std::env::set_var("OC_COMPOSER_OPENTUI", "1");
+    pty_escape_interrupt_body();
+}
+
+fn pty_escape_interrupt_body() {
     let _sandbox = sandbox_env("interrupt");
     let (url, shared) = spawn_scripted_server(false);
     let in_test = Arc::clone(&shared);
@@ -558,9 +591,22 @@ fn pty_escape_interrupt_fires_on_a_streaming_turn() {
 }
 
 /// PTY: `<leader>return` queues behind the streaming turn — the dock
-/// row appears and only ONE prompt POST exists.
+/// row appears and only ONE prompt POST exists. Parametrized over
+/// the composer renderer paths (lane M3).
 #[test]
-fn pty_leader_return_queues_behind_the_turn() {
+fn pty_leader_return_queues_behind_the_turn_old_path() {
+    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
+    pty_leader_return_queue_body();
+}
+
+/// The opentui-solid composer path (`OC_COMPOSER_OPENTUI=1`).
+#[test]
+fn pty_leader_return_queues_behind_the_turn_solid_path() {
+    std::env::set_var("OC_COMPOSER_OPENTUI", "1");
+    pty_leader_return_queue_body();
+}
+
+fn pty_leader_return_queue_body() {
     let _sandbox = sandbox_env("queue");
     let (url, shared) = spawn_scripted_server(false);
     let in_test = Arc::clone(&shared);
@@ -737,6 +783,66 @@ fn pty_undo_redo_restores_the_draft() {
             "redo re-deleted the word: {redone:?}"
         );
         // Exit: clear (ctrl+c), exit (ctrl+c).
+        let _ = writer.write_all(b"\x03");
+        std::thread::sleep(Duration::from_millis(200));
+        let _ = writer.write_all(b"\x03");
+    });
+}
+
+/// PTY (lane M3, the solid composer path): the composer cycle —
+/// type → edit (backspace + retype) → submit → the reply-side
+/// admission → the stats row (the footer's usage arm `18 (1%)` once
+/// the long fixture's completed turns hydrate the session). The
+/// queue arm of the cycle is covered by the parametrized
+/// [`pty_leader_return_queue_body`] pair (both renderer paths); this
+/// stub's second submission is not observable (the fixture fetch
+/// replaces the inbox echo within a frame — verified identical on
+/// BOTH composer paths, a harness limitation, not a path delta).
+#[test]
+fn pty_composer_cycle_type_edit_submit_reply_stats_solid_path() {
+    std::env::set_var("OC_COMPOSER_OPENTUI", "1");
+    let _sandbox = sandbox_env("cycle");
+    let (url, _shared) = spawn_scripted_server(true);
+    drive(&url, move |boot, mut writer| {
+        let probe = || Boot { output: Arc::clone(&boot.output) };
+        assert!(
+            wait_for_after(&probe(), "█▀▀█".as_bytes(), 0, Duration::from_secs(5)),
+            "the home wordmark rendered"
+        );
+        std::thread::sleep(Duration::from_millis(700));
+        // TYPE.
+        for key in b"composer cycl" {
+            let _ = writer.write_all(&[*key]);
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        // EDIT: drop the dangling "l", retype "e" (the caret seam).
+        let _ = writer.write_all(b"\x7f");
+        let _ = writer.write_all(b"e");
+        std::thread::sleep(Duration::from_millis(300));
+        // SUBMIT: creates ses_live, admits the prompt, navigates.
+        let after_submit = len(&probe());
+        let _ = writer.write_all(b"\r");
+        // REPLY: the stub's reply-side admission — the fixed user
+        // echo renders and the turn runs (the interrupt arm). ONE
+        // shared mark: both paints can land in the same output
+        // burst, so the second assert must not re-mark after the
+        // first.
+        assert!(
+            wait_for_after(&probe(), b"please stream", after_submit, Duration::from_secs(8)),
+            "the reply-side admission rendered"
+        );
+        assert!(
+            wait_for_after(&probe(), b"interrupt", after_submit, Duration::from_secs(8)),
+            "the running footer arm rendered"
+        );
+        // STATS ROW: the long fixture's messages hydrate the session
+        // (the newest assistant carries tokens) — the footer's usage
+        // arm lights while no turn runs.
+        assert!(
+            wait_for_after(&probe(), b"18 (1%)", len(&probe()), Duration::from_secs(8)),
+            "the usage arm rendered on the completed turn"
+        );
+        // Exit.
         let _ = writer.write_all(b"\x03");
         std::thread::sleep(Duration::from_millis(200));
         let _ = writer.write_all(b"\x03");

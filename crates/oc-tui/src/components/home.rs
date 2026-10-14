@@ -30,9 +30,7 @@
 //! * the whole footer hides below 44 cols or 12 rows, the logo below
 //!   12 rows (`homeFooterVisibility` / `Logo`).
 
-use crate::components::composer::render::{
-    render_prompt_frame, AutocompleteView, FooterHints, PromptView,
-};
+use crate::components::composer::render::{AutocompleteView, FooterHints, PromptView};
 use crate::components::composer::PromptDraft;
 use crate::render::{Cell, CellColor, Frame};
 use crate::theme::ThemeState;
@@ -234,7 +232,12 @@ pub fn render_home_view(
         // cursor (see `caret_screen` above).
         caret: None,
     };
-    let prompt_frame = render_prompt_frame(&prompt_view, prompt_width, mount + popup_rows, theme);
+    let prompt_frame = crate::components::composer_solid::render_prompt_frame_dispatch(
+        &prompt_view,
+        prompt_width,
+        mount + popup_rows,
+        theme,
+    );
     paste(&mut frame, &prompt_frame, centered(prompt_width), y - popup_rows);
     // NEW-S1a: the caret's screen cell (the terminal cursor's
     // position) — the paste origin plus the frame-relative cell.
