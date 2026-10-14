@@ -513,6 +513,52 @@ impl Transcript {
         &self.rows[start..stop]
     }
 
+    /// The live route's transcript REGION frame (the session route's
+    /// paint walk, extracted for lane M4's dual-path): the visible
+    /// rows' placed runs + fills over a `size`-sized frame, scrolled
+    /// to `offset` — region-local y (no `content_top` shift; the
+    /// route pastes it under the strip).
+    ///
+    /// Window semantics (the session walk's pinned behavior, distinct
+    /// from [`Transcript::paint`]'s golden harness): items and fills
+    /// STARTING above the offset drop WHOLE (a row cut mid-way at the
+    /// top loses its starting-above units — no partial cut), the
+    /// frame bounds clip the bottom. The solid twin
+    /// (`transcript_solid::paint_transcript_region`) mirrors these
+    /// drop rules exactly — the unit parity gate pins them cell for
+    /// cell.
+    #[must_use]
+    pub fn region_frame(
+        &self,
+        offset: usize,
+        size: (u16, u16),
+        background: ratatui::style::Style,
+    ) -> crate::render::Frame {
+        let region_height = usize::from(size.1);
+        let mut placed: Vec<Placed> = Vec::new();
+        let mut fills: Vec<Fill> = Vec::new();
+        for row in &self.rows {
+            if row.y + row.height <= offset {
+                continue;
+            }
+            if row.y.saturating_sub(offset) >= region_height {
+                break;
+            }
+            for item in &row.placed {
+                if item.y < offset {
+                    continue; // the unit starts above the viewport window
+                }
+                let mut shifted = item.clone();
+                shifted.y = item.y - offset;
+                placed.push(shifted);
+            }
+            fills.extend(row.fills.iter().filter(|fill| usize::from(fill.y) >= offset).map(
+                |fill| Fill { y: fill.y - u16::try_from(offset).unwrap_or(u16::MAX), ..*fill },
+            ));
+        }
+        crate::render::paint_placed_with_fills(&placed, &fills, size, background)
+    }
+
     /// Paint the transcript column over `size` — the session route's
     /// transcript area, everything above the composer:
     ///
