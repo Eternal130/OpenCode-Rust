@@ -287,8 +287,8 @@ pub fn prompt_caret_screen_cell(
 /// mention rendered as an extmark).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Span {
-    text: String,
-    chip: bool,
+    pub(crate) text: String,
+    pub(crate) chip: bool,
 }
 
 /// The textarea's wrap model. Units: spaces (kept on the line they fit
@@ -576,21 +576,21 @@ pub fn mount_height(draft: &PromptDraft, width: usize, height: usize) -> usize {
 #[must_use]
 /// The theme's resolved painter palette (one place per color the
 /// composer surfaces consume).
-struct Palette {
-    base: CellColor,
-    prompt_bg: CellColor,
-    border: CellColor,
-    rail: CellColor,
-    text_base: CellColor,
-    muted: CellColor,
-    default_fg: CellColor,
-    raised_high: CellColor,
-    popup_selected_bg: CellColor,
-    popup_selected_text: CellColor,
-    chip_color: CellColor,
+pub(crate) struct Palette {
+    pub(crate) base: CellColor,
+    pub(crate) prompt_bg: CellColor,
+    pub(crate) border: CellColor,
+    pub(crate) rail: CellColor,
+    pub(crate) text_base: CellColor,
+    pub(crate) muted: CellColor,
+    pub(crate) default_fg: CellColor,
+    pub(crate) raised_high: CellColor,
+    pub(crate) popup_selected_bg: CellColor,
+    pub(crate) popup_selected_text: CellColor,
+    pub(crate) chip_color: CellColor,
 }
 
-fn palette(theme: &ThemeState) -> Palette {
+pub(crate) fn palette(theme: &ThemeState) -> Palette {
     let tokens = &theme.resolved.tokens;
     let border = cell_color(tokens.border.base);
     Palette {
@@ -765,97 +765,43 @@ fn paint_composer_box(
     let _ = width;
 }
 
-/// The location label's column extent on the footer row
-/// (`prompt.footer.status`, prompt/index.tsx:1925-1937): the label
-/// truncates into the space left of the right-aligned hints — the
-/// hover/click surface (`useWorkingDirectoryActions`). None when the
-/// label is empty. `(x, width)` in frame columns. MIRRORS the footer
-/// row's inline budget math (keep the two in sync — the hover-sweep
-/// rig pins them together).
+/// The footer row's resolved paint plan — ONE source of truth for
+/// the #4/#20/#33 geometry, shared by [`paint_footer_row`] (the old
+/// renderer), [`footer_location_extent`] (the hover hit rect), and
+/// the opentui-solid bridge (`composer_solid.rs`): the truncated
+/// location label, the interrupt hint's slot, the right-aligned
+/// shortcut block (`{key} agents`/usage + `{key} commands` with the
+/// key/label split `paint_hint` performs), and the plugin segment.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FooterPlan {
+    /// The truncated location label ("" when nothing fits).
+    pub location: String,
+    /// The interrupt run's x (`esc ` first) — `None` when absent.
+    pub interrupt_x: Option<usize>,
+    /// The interrupt label after `esc `.
+    pub interrupt_label: String,
+    /// The right block's first segment x — `None` when width-gated
+    /// off (usage arm or `{key} agents`).
+    pub block_x: Option<usize>,
+    /// The block's second segment x (`{key} commands`).
+    pub command_x: Option<usize>,
+    /// The block starts with the usage arm (the agents hint drops).
+    pub usage_first: bool,
+    /// The usage segment (only painted when `usage_first`).
+    pub usage: String,
+    /// The agents hint's `{key}` run (before the fixed `agents` label).
+    pub agent_key: String,
+    /// The commands hint's `{key}` run.
+    pub command_key: String,
+    /// The plugin segment's x + truncated text — `None` when absent.
+    pub plugin: Option<(usize, String)>,
+}
+
+/// Resolve the footer row's plan at `width` (see [`FooterPlan`]).
 #[must_use]
-pub fn footer_location_extent(view: &PromptView, width: usize) -> Option<(usize, usize)> {
-    if view.footer.location.is_empty() {
-        return None;
-    }
-    // The right block per the footer row's own math (usage arm
-    // included, footer.tsx:65-94).
+pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
     let agent_hint = format!("{} agents", view.footer.agent_shortcut);
     let command_hint = format!("{} commands", view.footer.command_shortcut);
-    let usage_width = display_width(&view.footer.usage);
-    let hints_shown = if usage_width > 0 {
-        let budget_width = view.terminal_width.saturating_sub(8);
-        let available = budget_width.saturating_sub(28.min(budget_width / 2));
-        display_width(&format!("{} · {}", view.footer.usage, command_hint)) <= available
-    } else {
-        view.terminal_width >= 44
-    };
-    let command_width = display_width(&command_hint);
-    let block_width = if usage_width > 0 {
-        usage_width + 2 + command_width
-    } else {
-        display_width(&agent_hint) + 2 + command_width
-    };
-    let plugin_width = display_width(&view.footer.plugin_hints.join(" · "));
-    let right_block = if hints_shown {
-        block_width + if plugin_width > 0 { plugin_width + 2 } else { 0 }
-    } else {
-        plugin_width
-    };
-    let interrupt_width = display_width(&view.footer.interrupt);
-    let budget = width.saturating_sub(right_block + 2).saturating_sub(if interrupt_width > 0 {
-        interrupt_width + 2
-    } else {
-        0
-    });
-    if budget == 0 {
-        return None;
-    }
-    let location = truncate_file_path(&view.footer.location, budget);
-    let painted = display_width(&location);
-    (painted > 0).then_some((0, painted))
-}
-
-/// One `{key} label` hint pair at `x`; returns the end column.
-fn paint_hint(
-    frame: &mut Frame,
-    x: usize,
-    y: usize,
-    hint: &str,
-    label: &str,
-    colors: &Palette,
-) -> usize {
-    let key_len = hint.len().saturating_sub(label.len());
-    let (key, _) = hint.split_at(key_len);
-    paint_text(frame, x, y, key, colors.text_base, colors.base, 0);
-    let after = x + display_width(key);
-    paint_text(frame, after, y, label, colors.muted, colors.base, 0);
-    after + display_width(label)
-}
-
-/// The footer row (#4/#20, prompt/index.tsx:1875-1959): the
-/// `{directory}:{branch}` location label muted in the flexible LEFT
-/// slot (`truncateFilePath`, minWidth 0 — never collides with the
-/// hints), the interrupt hint left while a turn runs, and the plugin
-/// hints + `{key} agents` / `{key} commands` shortcut block
-/// right-aligned (keys `text.base`, labels muted, gated at ≥ 44 cols).
-/// The context-usage arm swaps [agents] for [usage] once a turn
-/// completed (footer.tsx:65-94). No model statusline — that lives in
-/// the composer's metadata row.
-fn paint_footer_row(
-    frame: &mut Frame,
-    view: &PromptView,
-    colors: &Palette,
-    row_index: usize,
-    width: usize,
-    height: usize,
-) {
-    if row_index >= height {
-        return;
-    }
-    let agent_hint = format!("{} agents", view.footer.agent_shortcut);
-    let command_hint = format!("{} commands", view.footer.command_shortcut);
-    // The usage arm (footer.tsx:65-94): usage + the command hint, the
-    // agents hint DROPPED (the `Switch`'s first Match owns the row).
     let usage = &view.footer.usage;
     let usage_width = display_width(usage);
     // `promptFooterLayout` (footer.tsx:50-60 + 131-143): with usage
@@ -900,40 +846,117 @@ fn paint_footer_row(
     } else {
         truncate_file_path(&view.footer.location, location_budget)
     };
+    // `paint_hint`'s key/label split: the fixed label off the tail.
+    let key_of = |hint: &str, label: &str| {
+        let key_len = hint.len().saturating_sub(label.len());
+        hint[..key_len].to_owned()
+    };
+    let interrupt_x = (interrupt_width > 0)
+        .then(|| display_width(&location) + usize::from(!location.is_empty()) * 2);
+    let block_x = hints_shown.then(|| width.saturating_sub(block_width));
+    let command_x = hints_shown.then(|| {
+        if usage_width > 0 {
+            width.saturating_sub(block_width) + usage_width + 2
+        } else {
+            width.saturating_sub(block_width) + display_width(&agent_hint) + 2
+        }
+    });
+    FooterPlan {
+        location,
+        interrupt_x,
+        interrupt_label: view.footer.interrupt.strip_prefix("esc ").unwrap_or("").to_owned(),
+        block_x,
+        command_x,
+        usage_first: usage_width > 0,
+        usage: usage.clone(),
+        agent_key: key_of(&agent_hint, "agents"),
+        command_key: key_of(&command_hint, "commands"),
+        plugin: (plugin_width > 0).then(|| {
+            let x = width.saturating_sub(right_block);
+            let budget = width.saturating_sub(x);
+            (x, truncate_width(&plugin_text, budget))
+        }),
+    }
+}
+
+/// The location label's column extent on the footer row
+/// (`prompt.footer.status`, prompt/index.tsx:1925-1937): the label
+/// truncates into the space left of the right-aligned hints — the
+/// hover/click surface (`useWorkingDirectoryActions`). None when the
+/// label is empty. `(x, width)` in frame columns. Derived from the
+/// SAME [`footer_plan`] math the row paints with (one source of
+/// truth; the hover-sweep rig pins them together).
+#[must_use]
+pub fn footer_location_extent(view: &PromptView, width: usize) -> Option<(usize, usize)> {
+    if view.footer.location.is_empty() {
+        return None;
+    }
+    let painted = display_width(&footer_plan(view, width).location);
+    (painted > 0).then_some((0, painted))
+}
+
+/// One `{key} label` hint pair at `x`; returns the end column.
+fn paint_hint(
+    frame: &mut Frame,
+    x: usize,
+    y: usize,
+    key: &str,
+    label: &str,
+    colors: &Palette,
+) -> usize {
+    paint_text(frame, x, y, key, colors.text_base, colors.base, 0);
+    let after = x + display_width(key);
+    paint_text(frame, after, y, label, colors.muted, colors.base, 0);
+    after + display_width(label)
+}
+
+/// The footer row (#4/#20, prompt/index.tsx:1875-1959): the
+/// `{directory}:{branch}` location label muted in the flexible LEFT
+/// slot (`truncateFilePath`, minWidth 0 — never collides with the
+/// hints), the interrupt hint left while a turn runs, and the plugin
+/// hints + `{key} agents` / `{key} commands` shortcut block
+/// right-aligned (keys `text.base`, labels muted, gated at ≥ 44 cols).
+/// The context-usage arm swaps [agents] for [usage] once a turn
+/// completed (footer.tsx:65-94). No model statusline — that lives in
+/// the composer's metadata row. All geometry comes from
+/// [`footer_plan`] (shared with the solid bridge).
+fn paint_footer_row(
+    frame: &mut Frame,
+    view: &PromptView,
+    colors: &Palette,
+    row_index: usize,
+    width: usize,
+    height: usize,
+) {
+    if row_index >= height {
+        return;
+    }
+    let plan = footer_plan(view, width);
     // The hover lift (`locationActions.hovered()` → text.base,
     // prompt/index.tsx:1927) — #33's machinery rides on #4's paint.
     let location_fg = if view.footer.location_hovered { colors.text_base } else { colors.muted };
-    paint_text(frame, 0, row_index, &location, location_fg, colors.base, 0);
-    if interrupt_width > 0 {
-        let mut x = display_width(&location);
-        if !location.is_empty() {
-            x += 2;
-        }
+    paint_text(frame, 0, row_index, &plan.location, location_fg, colors.base, 0);
+    if let Some(x) = plan.interrupt_x {
         // v2's shape: `esc ` in text.base, the label muted
         // (prompt/index.tsx:138-143).
-        let label = view.footer.interrupt.strip_prefix("esc ").unwrap_or("");
         paint_text(frame, x, row_index, "esc ", colors.text_base, colors.base, 0);
-        paint_text(frame, x + 4, row_index, label, colors.muted, colors.base, 0);
+        paint_text(frame, x + 4, row_index, &plan.interrupt_label, colors.muted, colors.base, 0);
     }
-    if hints_shown {
-        let x = width - block_width;
-        if usage_width > 0 {
-            paint_text(frame, x, row_index, usage, colors.muted, colors.base, 0);
-            let after = x + usage_width + 2;
-            paint_hint(frame, after, row_index, &command_hint, "commands", colors);
+    if let Some(x) = plan.block_x {
+        if plan.usage_first {
+            paint_text(frame, x, row_index, &plan.usage, colors.muted, colors.base, 0);
         } else {
-            let after = paint_hint(frame, x, row_index, &agent_hint, "agents", colors);
-            paint_hint(frame, after + 2, row_index, &command_hint, "commands", colors);
+            paint_hint(frame, x, row_index, &plan.agent_key, "agents", colors);
         }
+    }
+    if let Some(x) = plan.command_x {
+        paint_hint(frame, x, row_index, &plan.command_key, "commands", colors);
     }
     // The plugin hint segment sits left of the shortcut hints (or at
     // the right edge when the hints are width-gated off).
-    if plugin_width > 0 {
-        let x = width.saturating_sub(right_block);
-        let budget = width.saturating_sub(x);
-        let segment = truncate_width(&plugin_text, budget);
+    if let Some((x, segment)) = &plan.plugin {
         if !segment.is_empty() {
-            paint_text(frame, x, row_index, &segment, colors.muted, colors.base, 0);
+            paint_text(frame, *x, row_index, segment, colors.muted, colors.base, 0);
         }
     }
 }
@@ -1086,7 +1109,7 @@ fn paint_text(
 
 /// Truncate by display width (chars kept while the width budget lasts).
 #[must_use]
-fn truncate_width(text: &str, limit: usize) -> String {
+pub(crate) fn truncate_width(text: &str, limit: usize) -> String {
     let mut budget = limit;
     let mut out = String::new();
     for ch in text.chars() {
