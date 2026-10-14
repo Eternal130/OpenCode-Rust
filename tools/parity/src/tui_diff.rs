@@ -2221,9 +2221,16 @@ pub async fn run_script_once(
         // is our default; run the rig with `OC_TABS_OPENTUI=0` in the
         // environment to measure the hand-rolled fallback instead.
         // The flag is read once at our TUI's boot.
+        //
+        // Lane M2: the dialog family's flag rides the same seam
+        // (`OC_DIALOGS_OPENTUI=1` selects the solid dialog path;
+        // unset keeps the hand-rolled renderer).
         let mut env = home_env(&our_home, server.password(), &config_path);
         if let Ok(value) = std::env::var("OC_TABS_OPENTUI") {
             env.push(("OC_TABS_OPENTUI".to_owned(), value));
+        }
+        if let Ok(value) = std::env::var("OC_DIALOGS_OPENTUI") {
+            env.push(("OC_DIALOGS_OPENTUI".to_owned(), value));
         }
         PtyChild::spawn(cli, &["--server".to_owned(), our_url], &project, &env, cols, rows).ok()
     });
