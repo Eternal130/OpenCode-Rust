@@ -59,3 +59,32 @@ Baseline nextest: 2887 workspace (oc-tui 621, oc-tui-core 77, parity 84). Releas
   render_overlay) + pty palette/help cycles + rig help-dialog/palette/session-list-dialog.
 
 ## PHASE 3 — M3 composer+footer (in progress)
+
+## PHASE 3 — M3 composer+footer retired
+- composer_solid.rs: flag accessor + dispatch -> always solid; parity matrix + Scenario scaffolding DELETED;
+  churn/reshape tests rewritten as absolute self-checks. Module docs updated.
+- composer/render.rs: DELETED render_prompt_frame + paint_composer_box + paint_hint + paint_footer_row +
+  paint_autocomplete_popup + paint_text + dead Palette fields (rail/default_fg). KEPT all shared solvers
+  (layout_draft_lines, mount_height, footer_plan, footer_location_extent, truncate_file_path/basename,
+  prompt_caret_screen_cell, caret_cell, palette, truncate_width). Internal behavior tests (cursor block,
+  rail color, metadata row) PROMOTED to render_prompt_frame_dispatch.
+- composer/mod.rs: render_prompt_frame dropped from re-export. golden_tests.rs: PROMOTED to dispatch (bytes identical).
+- pty_core_interactions.rs: escape-interrupt + leader-return =0 variants deleted (single tests now);
+  solid-only cycle tests dropped their env pins.
+
+## PHASE 4 — M4 transcript retired
+- session.rs: region dispatch -> always paint_transcript_region.
+- message/list.rs: Transcript::region_frame (the =0 fallback painter, 58 LOC) DELETED; Transcript::paint KEPT
+  (the session_screen golden harness's full-frame walk — test-only, not a flag path).
+- transcript_solid.rs: flag + parity matrix DELETED; churn/resize tests absolute.
+- pty_core_interactions.rs: scroll-keys =0 variant deleted.
+
+## PHASE 5 — M5 sidebar+home retired
+- sidebar_solid.rs: flag + else-branch (paint_placed_with_fills walk) + old_pane twin + parity gate DELETED;
+  churn/reshape absolute. KEPT render_sidebar (the ONE solver in sidebar.rs).
+- home.rs: paint_home_view_old (102 LOC) + dead logo painters (paint_logo/paint_logo_half/tint_channel/
+  base_rgb_as/cell, 79 LOC) DELETED; render_home_view -> always solid. KEPT plan_home/paste/LOGO_*.
+- home_solid.rs: flag + parity matrix DELETED; churn/reshape/wordmark tests absolute (wordmark test was
+  already chunk-level absolute).
+- pty_sidebar.rs: set_m5_path + both =0 variants deleted; overlay cycle env pin dropped.
+- Coverage migration: M5 parity matrices -> home_golden_tests (solid-pinned since M5) + pty cycles + rig.
