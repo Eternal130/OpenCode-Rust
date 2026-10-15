@@ -319,8 +319,7 @@ pub fn palette_props(store: &Store) -> SelectProps {
 pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
     match kind {
         DialogKind::CommandPalette => palette_props(store),
-        DialogKind::ThemeList => theme_list_props(store),
-        DialogKind::Help | DialogKind::SessionRename { .. } | DialogKind::WorktreeName => {
+        DialogKind::ThemeList => theme_list_props(store),        DialogKind::Help | DialogKind::SessionRename { .. } | DialogKind::WorktreeName => {
             SelectProps::new("", Vec::new())
         }
         DialogKind::Plugin { id } => {
@@ -444,6 +443,22 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                     .described("to another working directory"),
             ],
         ),
+    }
+}
+
+/// The entry-aware props table: the theme dialog's `current` keys on
+/// the ENTRY's captured initial (the mount-time theme), everything
+/// else falls through to [`select_props_for`]. Every site that holds
+/// the open [`crate::store::DialogEntry`] (the key layer, the render
+/// overlay, the store's focus/preview helpers) must go through here —
+/// a live-theme `current` re-marks the previewed theme under a filter.
+#[must_use]
+pub fn select_props_for_entry(entry: &crate::store::DialogEntry, store: &Store) -> SelectProps {
+    match &entry.kind {
+        DialogKind::ThemeList => {
+            theme_list_props_with_current(store, entry.theme_initial.as_deref())
+        }
+        kind => select_props_for(kind, store),
     }
 }
 
@@ -734,8 +749,20 @@ pub fn copy_message_to_clipboard(store: &Store) {
 /// header), unlike the palette's categorized sections.
 #[must_use]
 pub fn theme_list_props(store: &Store) -> SelectProps {
+    theme_list_props_with_current(store, None)
+}
+
+/// The themes dialog's `current` is the MOUNT-TIME capture
+/// (`current={initial}`), not the live preview: while the dialog is
+/// open, the `●` marker and the filter-clear re-focus key on the
+/// captured initial, so a previewed theme never re-marks itself
+/// (under `filter: "nord"` the initial `opencode` is filtered OUT and
+/// the marker disappears — the ref's exact shape).
+#[must_use]
+pub fn theme_list_props_with_current(store: &Store, current: Option<&str>) -> SelectProps {
     let registry = store.registry();
-    let current = store.theme().name;
+    let current =
+        current.map(str::to_owned).unwrap_or_else(|| store.theme().name.clone());
     let options: Vec<SelectOption> =
         registry.names().into_iter().map(|name| SelectOption::titled(name.clone(), name)).collect();
     SelectProps::new("Themes", options).with_current(Some(current))

@@ -447,8 +447,8 @@ impl SelectState {
         // scrollBy clamps through the scrollbar math; i64 to allow the
         // un-clamped negative side before saturating at 0.
         let target = i64::try_from(row).unwrap_or(0) - i64::try_from(center_offset).unwrap_or(0);
-        self.scroll = usize::try_from(target.max(0)).unwrap_or(0)
-            .min(rows.saturating_sub(viewport));
+        self.scroll =
+            usize::try_from(target.max(0)).unwrap_or(0).min(rows.saturating_sub(viewport));
     }
 
     /// The selected option, if any (`selected()`).
