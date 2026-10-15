@@ -107,3 +107,33 @@
   * resize @120x30 (probe): 6/6 identical (final sweep: 0/6) — clean.
   NOTE: chunk A hit the 40-min tool-call cap mid-corpus (the sweep
   scripts run ~13 min each); resumed per-script per the TTL rules.
+
+## Phase 5 — full corpus verdict table (ours vs final-sweep baseline)
+| script | mode | ours | final sweep (both runs) | verdict |
+|---|---|---|---|---|
+| themes-nord | FULL live | 6/2,1/7,1/7,6/2 | 1/7,1/7,1/7?,6/2 | step4 1920->5 cells; coin pattern identical |
+| boot-home | FULL live | 3/0,0/3,0/3,0/3 | 0/3,3/3,0/3,0/3 | same classes (coin + 120 placeholder) |
+| click-coverage-dialog | FULL live | 2/7,6/3 | 2/7,6/3 | IDENTICAL |
+| click-coverage-home | FULL live | 1/4,1/4 | 5/0,1/4 | same reaction lists, coin |
+| click-coverage-session | FULL live | 3/12,3/12 | 3/12,3/12 | IDENTICAL (idx216 family unchanged — mini surface) |
+| composer-clear | FULL live | 5/5 x4 | 10/0,5/5,5/5,5/5 | same classes |
+| palette | FULL live | 4/2,0/6,0/6,0/6 | 4/2,0/6,4/2,4/2 | same classes (coin + content backlog) |
+| help-dialog | FULL live | 3/5,3/5,6/2,6/2 | 3/5,3/5,6/2,3/5 | same-or-better |
+| session-list-dialog | FULL live | 2/12 x4 | 2/12,2/12,2/12,5/9 | same-or-better |
+| rename-dialog | FULL live | 2/13,5/10,5/10,2/13 | 2/13,5/10,2/13,5/10 | same classes |
+| resize | FULL live | 6/0,5/1,0/6,6/0 | 5/1,5/1,0/6,6/0 | same-or-better |
+| hover-sweep | quick | 2/15 | 6/11,2/15 | matches run1 |
+| long-reply-scroll | quick | 5/11 | 2/14,5/11 | matches run1 |
+| mouse-hover-tabstrip | quick | 2/15 | 2/15,2/15 | IDENTICAL |
+| multi-session | quick | 2/23 | 2/23,5/20 | matches run0 |
+| multi-turn | quick | 4/1text/19 | 4/20,4/20 | same |
+| sidebar-wide | quick | 5/11 | 2/14,2/14 | BETTER |
+| subagent-basic | quick | 5/1text/8 | 5/9,5/9 | BETTER |
+| subagent-browser | quick | 5/1text/15 | 5/16,2/19 | same-or-better |
+| subagent-sidebar | quick | 2/1text/16 | 2/17,5/14 | same |
+| tabs-keyboard | quick | 0/8 | 8/8,8/8,8/8,0/8 | sweep's own run1 (coin) |
+| tabs-live-session | quick | 2/22 | 2/22 x4 | IDENTICAL |
+| thought-expand(-struct) | quick | 2/12, 5/12+2/15 | 5/9,2/12 / 2/15,2/15 | same-or-better |
+| thought-render | quick | 2/9 | 2/9,2/9 | IDENTICAL |
+| type-edit-submit | quick | 4/9 | 4/9,4/9 | IDENTICAL |
+NO new divergence class anywhere. Release binary: 66,382,432 B.
