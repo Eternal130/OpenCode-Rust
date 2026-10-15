@@ -211,20 +211,11 @@ fn sgr_left_up(col: u16, row: u16) -> Vec<u8> {
     format!("\x1b[<0;{};{}m", col + 1, row + 1).into_bytes()
 }
 
-/// Lane M2: the dialog family's renderer flag is read once at the
-/// first dialog paint — the parametrized tests below set it before
-/// the TUI boots (nextest's per-test process isolation makes the
-/// once-per-process flag testable; the same pattern `pty_tabs` uses).
-#[test]
-fn pty_help_dialog_old_path() {
-    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
-    pty_help_dialog_body();
-}
-
-/// The opentui-solid dialog path (`OC_DIALOGS_OPENTUI=1`).
+/// Lane M2 (retired): the dialog family renders through its
+/// opentui-solid tree — the only renderer since the retirement lane
+/// deleted the `OC_DIALOGS_OPENTUI` flag pair.
 #[test]
 fn pty_help_dialog_solid_path() {
-    std::env::set_var("OC_DIALOGS_OPENTUI", "1");
     pty_help_dialog_body();
 }
 
@@ -478,20 +469,11 @@ fn pty_mouse_closes_a_tab_and_add_opens_home() {
 /// The palette cycle through the REAL app loop: ctrl+p opens the
 /// palette (`Commands`), arrow keys browse, typing filters, enter
 /// APPLIES the selected command (`Switch theme` → the Themes list
-/// opens), escape unwinds. Parametrized over both dialog renderer
-/// paths — the choreography is renderer-agnostic (the store's dialog
-/// machinery), the FLAG selects the painter.
-#[test]
-fn pty_dialog_palette_cycle_old_path() {
-    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
-    pty_dialog_palette_cycle_body();
-}
-
-/// The opentui-solid dialog path (`OC_DIALOGS_OPENTUI=1`) — the new
-/// path's first live interaction-cycle proof.
+/// opens), escape unwinds. The choreography is renderer-agnostic (the
+/// store's dialog machinery); the dialog family renders through its
+/// opentui-solid tree (the only renderer since the retirement lane).
 #[test]
 fn pty_dialog_palette_cycle_solid_path() {
-    std::env::set_var("OC_DIALOGS_OPENTUI", "1");
     pty_dialog_palette_cycle_body();
 }
 
