@@ -103,3 +103,24 @@ Baseline nextest: 2887 workspace (oc-tui 621, oc-tui-core 77, parity 84). Releas
 - oc-tui + oc-tui-core: 739 passed / 1 skipped (pre-retirement oc-tui 621 + oc-tui-core 77 = 698 in-list;
   run-level totals compared at the final workspace pass).
 - Remaining OC_*_OPENTUI references: OC_ENGINE_OPENTUI ONLY (stays one release per M-engine plan).
+
+## PHASE 7 — markdown re-homed onto opentui-core's MarkdownRenderable pipeline
+- message/markdown.rs REWRITTEN (~470 LOC total vs 1030): parse_blocks/parse_inline (the hand-rolled marked
+  subset) + per-block renderers DELETED; the module now drives `build_markdown_blocks` (the settled block tree:
+  top-level coalescing, inter-block margins, list marker/column geometry, blockquote border, hr) with every
+  text-bearing spec rendered through `markdown_code_styled` (the markdown-text CodeRenderable path: conceal,
+  markup.* capture styling, detectLinks) — chunks convert to StyledSpan rows through the SAME wrap seam
+  (hard break per source line + word wrap; styled runs keep style across boundaries).
+- SyntaxStyle built from the SAME generated rules (oc-theme generate_syntax -> one map; oc-syntax gains iter()).
+- The fence seam is hybrid BY REGISTRATION SET: opentui parses markdown/ts/js/tsx/zig family; the R-01
+  oc-syntax grammars (rust/python/typescript/diff/...) stay on oc-syntax — rust/diff fence goldens PASS
+  BYTE-IDENTICAL to main. Unknown filetypes render the pipeline's plain path (fg=markdown.text, upstream shape).
+- Disposition: markdown was NOT already opentui-fed (M4 left it on the shared C1 walk) -> this lane SWAPPED it.
+  Evidence: markdown-frame goldens re-pinned; text-grid delta = ONE class (list items now conceal inline
+  markers - upstream renders item children through the markdown-text renderable); ansi delta = markers styled
+  markup.list (orange) + item text through the markdown tokens; everything else byte-identical (paragraphs,
+  wrap points, headings, inline marks, fences). ECMA attr bits fixed per ansi.ts (bold=1 dim=2 italic=4
+  underline=8 strikethrough=128).
+- message-groups goldens: byte-identical (no lists in fixture) — re-pin ran, git shows no change.
+- Internal test suite rewritten: 6 absolute tests pinning the pipeline (fixture layout, bold-crossing-wrap,
+  margins, inline conceal+style, blockquote border, hr).
