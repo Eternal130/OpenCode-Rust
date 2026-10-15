@@ -132,3 +132,63 @@ Baseline nextest: 2887 workspace (oc-tui 621, oc-tui-core 77, parity 84). Releas
   home Scenario name/placeholder], format-string cleanups in the budget eprintlns after the label constants).
 - Dep sweep: oc-tui's DIRECT opentui-keymap dep moved to dev-dependencies (the smoke test is its only consumer;
   oc-tui-core owns the real engine dep). No other unused deps.
+
+## PHASE 9 — rig spot-checks (FULL, cache OFF, both sizes x 2 runs) — post-retirement vs main baseline
+Method: same script/size/run/step OUR-side grids diffed byte-for-byte against the pre-retirement baseline
+(mretire-base-* vs mretire-post-*; post2 = after the markdown memo, byte-identical to post modulo coins).
+| script | surface | our-grid deltas vs main | class of every delta |
+|---|---|---|---|
+| mouse-hover-tabstrip | M1 tabs | 9/51 steps fully identical; deltas ONLY rows 8/13/16 | stats ms/tok-s digits + home-placeholder coin |
+| help-dialog | M2 dialogs | 14/17 identical; deltas row 16 only | placeholder coin |
+| composer-clear | M3 composer | 5/10 identical; deltas row 16 only | placeholder coin |
+| long-reply-scroll | M4 transcript | 22/50 identical; rows 6/11/13/15/16/21 | Thought Nms + stats digits + placeholder coin + ONE transient mid-stream fragment ("fixture.." at one step of one run; settles identical) |
+| sidebar-wide | M5 sidebar | 2/25 identical; rows 8/19 | stats + placeholder |
+| boot-home | M5 home | 6/9 identical; row 16 | placeholder (one post run even matched the ref's pick: 3/3 identical steps) |
+| subagent-basic | M6 picker/farewell | 7/36 identical; rows 6/10/13/16 | farewell session-id chars + stats + placeholder |
+| type-edit-submit | markdown | 11/30 identical; rows 8/13/16 | stats + placeholder (swap invisible: prose reply) |
+| multi-turn | markdown | 14/74 identical; rows 5/6/7/8/13/15/16/21 | stats + farewell ids + placeholder |
+| thought-render | markdown | 6/24 identical; rows 6/10/13/16 | Thought Nms + stats + placeholder |
+VERDICT: retirement is pure deletion on every migrated surface — every non-coin cell byte-identical to main.
+Markdown swap: no corpus script carries list-bearing replies, so the swap's visible class (list concealment +
+markup.list marker styling) shows only in the re-pinned goldens; NO rig script regressed (thought-render 120x30
+mismatch count even dropped 9->6).
+
+## PHASE 10 — phased verify-lane final (each phase run individually)
+- fmt --all --check: GREEN.
+- clippy --workspace --all-targets --locked -D warnings: GREEN.
+- workspace nextest: 2856/2856 GREEN (13 skipped; 1 load-flake on m1_scenario_prompt_fake_llm passes 3/3 standalone).
+- pty profile (serialized): 2856/2856 GREEN.
+- release build + frame_budget gate: 11/11 GREEN (800-message transcript worst 24 ms after the markdown memo;
+  was 60 ms uncached — the memo is content+options+syntax keyed, bounded 512, overflow clears).
+- The full 26-script rig matrix was NOT run (out of lane scope); the 10-script FULL cache-off spot matrix above
+  is the retirement evidence.
+NOTE: verify-lane's rig phase pins --runs 2 --no-ref-cache — every spot run here used exactly that.
+
+## Binary size delta (release, oc-cli)
+- main baseline:            66,727,072 B
+- retirements only (2f02d84, pre-markdown): 66,320,000 B  (-407,072 B / -0.61% — the deletion dividend)
+- + markdown re-home (HEAD): 68,144,160 B  (net +1,417,088 B / +2.12% vs main)
+Decomposition: the deletions SHRANK the binary as expected; the mandated markdown re-home links opentui-core's
+tree_sitter module into the release graph for the first time (vendored markdown/markdown_inline/js/ts/zig C
+grammars + the marked lexer + the code pipeline = +1.82 MiB), more than offsetting the deletion dividend.
+
+## Test counts (workspace nextest list: 2887 -> 2856, net -31)
+- oc-tui 621 -> 599 (-22): deleted old-path pty variants (12) + parity matrices/twins (~10, incl. farewell
+  oracles) minus added absolute self-checks; budget old_path pairs -8 (+ renamed solid ones).
+- pty_core_interactions 12->9, pty_interactions 5->3, pty_sidebar 5->3, pty_subagent 6->5, pty_tabs 3->2.
+- oc-tui-core 77 (engine pair untouched), oc-syntax 31 (+0; iter() accessor).
+
+## Coverage migration table (deleted parity test -> surviving coverage)
+- M1 27-scenario strip matrix -> session-tabs-horizontal goldens w80/w160 (solid-pinned, byte-identical)
+  + resize/churn self-checks + pty hover/add/close cycle + rig mouse-hover-tabstrip.
+- M1 vertical-rail goldens (4 pairs) -> NO successor (golden-only legacy shape, zero production reach; retired with the rail).
+- M2 ~30-scenario dialog matrix -> dialog.rs store-driven geometry tests (solid via render_overlay) + pty
+  palette/help cycles + rig help-dialog/palette/session-list-dialog.
+- M3 composer matrix -> composer goldens (promoted to dispatch, byte-identical) + render.rs behavior tests
+  (cursor block/rail color/metadata row, promoted) + pty interrupt/queue/cycle + rig composer-clear/type-edit-submit.
+- M4 transcript matrix -> pty scroll-keys + thought-expand cycle + rig long-reply-scroll/thought-render +
+  message-groups goldens (unchanged bytes).
+- M5 sidebar/home matrices -> home_golden_tests (solid since M5) + pty toggles/plugin/overlay + rig sidebar-wide/boot-home.
+- M6 picker matrix -> picker walk tests (dispatch) + pty keymap cycle + surfaces walk + rig subagent trio.
+- M6 farewell builder-oracle tests -> presentation byte-shape test PROMOTED to solid_session_epilogue
+  (absolute) + pty farewell step + rig subagent exit steps.
