@@ -35,13 +35,11 @@
 //! agnostically, the same M2 backdrop rule. The alpha-blend seam
 //! stays registered there.
 //!
-//! **Selection flag.** Default ON (flipped after this lane's
-//! proof — the parity matrices, the flag-symmetric 12-invocation rig
-//! A/B, both PTY paths, the sub-millisecond frames):
-//! `OC_SIDEBAR_OPENTUI=0` (or `false`/`off`) keeps the hand-rolled
-//! renderer for one release. Read once at the first sidebar paint
-//! ("at boot") via `OnceLock` — a running session never switches
-//! painters.
+//! **Selection flag (retired).** The lane-M5 dual-path flag
+//! (`OC_SIDEBAR_OPENTUI`) is gone: this module's opentui-solid tree
+//! is the pane's ONLY renderer — the hand-rolled placed-runs
+//! fallback was deleted after the one-release probation (the
+//! retirement lane).
 
 // Terminal dimensions/colors are bounded usize→f32 casts (taffy
 // points), the same allowance the other solid surfaces carry.
@@ -63,28 +61,9 @@ use opentui_solid::{box_, for_list, map, text, Element, Signal, SolidRenderer};
 use crate::components::session_tabs::SESSION_SIDEBAR_WIDTH;
 use crate::components::session_tabs_solid::frame_from_buffer;
 use crate::components::sidebar::{render_sidebar, SidebarView};
-use crate::components::tool_rows::DEFAULT_FOREGROUND;
 use crate::layout::{Placed, PlacedLine};
 use crate::render::Frame;
 use crate::theme::ThemeStyles;
-
-/// The renderer selection flag (lane M5, default FLIPPED ON after the
-/// proof — the unit parity matrix, the flag-symmetric rig A/B, both
-/// PTY paths, the sub-millisecond frames): every value except
-/// `0`/`false`/`off` — including unset — boots the pane on this
-/// module's opentui-solid path; the hand-rolled renderer stays
-/// compiled for one release as the escape hatch. Read once (first
-/// sidebar paint — the TUI's boot) and cached for the process
-/// lifetime, so a running session never switches renderers
-/// mid-flight.
-#[must_use]
-pub fn opentui_sidebar_enabled() -> bool {
-    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLAG.get_or_init(|| {
-        !std::env::var("OC_SIDEBAR_OPENTUI")
-            .is_ok_and(|value| value == "0" || value == "false" || value == "off")
-    })
-}
 
 // ---------------------------------------------------------------------------
 // colors + chunk helpers (the M1..M4 shape)
@@ -572,181 +551,66 @@ pub fn paint_solid_sidebar_pane(view: &SidebarView, theme: &ThemeStyles, height:
 /// or floating over the scrim in the ≤120 manual-open overlay).
 #[must_use]
 pub fn sidebar_pane_frame(view: &SidebarView, theme: &ThemeStyles, height: usize) -> Frame {
-    if opentui_sidebar_enabled() {
-        paint_solid_sidebar_pane(view, theme, height)
-    } else {
-        let paint = render_sidebar(view, theme, height);
-        let size = (
-            u16::try_from(SESSION_SIDEBAR_WIDTH).unwrap_or(u16::MAX),
-            u16::try_from(height).unwrap_or(u16::MAX),
-        );
-        crate::render::paint_placed_with_fills(
-            &paint.placed,
-            &paint.fills,
-            size,
-            ratatui::style::Style::new().fg(DEFAULT_FOREGROUND).bg(theme.background_raised),
-        )
-    }
+    // Lane M5 (retired): the pane renders through its opentui-solid
+    // tree — the only renderer since the retirement lane deleted the
+    // hand-rolled placed-runs fallback.
+    paint_solid_sidebar_pane(view, theme, height)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::sidebar::{SidebarMode, SidebarSection, SidebarSections};
+    use crate::components::sidebar::{SidebarMode, SidebarSection};
     use crate::theme::ThemeState;
 
-    /// The old-path pane twin (the parity gate's reference): the same
-    /// `render_sidebar` + `paint_placed_with_fills` the `=0` fallback
-    /// runs.
-    fn old_pane(view: &SidebarView, theme: &ThemeStyles, height: usize) -> Frame {
-        let paint = render_sidebar(view, theme, height);
-        crate::render::paint_placed_with_fills(
-            &paint.placed,
-            &paint.fills,
-            (
-                u16::try_from(SESSION_SIDEBAR_WIDTH).unwrap_or(u16::MAX),
-                u16::try_from(height).unwrap_or(u16::MAX),
-            ),
-            ratatui::style::Style::new().fg(DEFAULT_FOREGROUND).bg(theme.background_raised),
-        )
-    }
-
-    /// The lane gate: the solid pane frame must equal the old pane
-    /// painter's frame CELL FOR CELL (char + attrs + fg + bg) over
-    /// the sidebar matrix — the golden fixture (title + onboarding
-    /// card + location), the plugin-section stack, the dismissed
-    /// card, long titles, absent location, short panes — × heights
-    /// (30 the golden, 22 the onboarding gate, 16 the card-clip,
-    /// 8 the cramped pane) — the docked 42-col pane's every state.
-    #[test]
-    #[allow(clippy::too_many_lines, clippy::items_after_statements)] // a data matrix, not logic
-    fn solid_sidebar_pane_equals_the_old_renderer() {
-        let theme = ThemeState::v2_dark().styles();
-        let mut scenarios: Vec<(String, SidebarView)> = Vec::new();
-
-        // -- the golden fixture ----------------------------------------
-        scenarios.push((
-            "fixture".into(),
-            SidebarView::fixture("Sidebar fixture", "/tmp/opencode/packages/tui:main"),
-        ));
-        // -- the live route's shape (no location, untitled fallback) ----
-        scenarios.push((
-            "live-untitled".into(),
-            SidebarView {
-                title: "Untitled session".into(),
-                sections: SidebarSections::empty(),
-                onboarding: true,
-                location: None,
-            },
-        ));
-        // -- the plugin-section stack (the sidebar.content seam) --------
-        let mut plugins = SidebarView::fixture("With sections", "/w:main");
-        plugins.sections.plugins = vec![
-            SidebarSection {
-                plugin_id: "omos".into(),
-                title: "Preset".into(),
-                rows: vec!["zhipuai · own/glm-5.3".into(), "openai · gpt-5.6".into()],
-            },
-            SidebarSection { plugin_id: "e".into(), title: String::new(), rows: vec![] },
-            SidebarSection {
-                plugin_id: "mcp".into(),
-                title: "MCP".into(),
-                rows: vec!["context7".into()],
-            },
-        ];
-        scenarios.push(("plugin-sections".into(), plugins));
-        // -- the card dismissed / hidden --------------------------------
-        let mut dismissed = SidebarView::fixture("No card", "/w:main");
-        dismissed.onboarding = false;
-        scenarios.push(("card-dismissed".into(), dismissed));
-        // -- long title (overflows the pane's 38-col text column) -------
-        scenarios.push((
-            "long-title".into(),
-            SidebarView::fixture(
-                "A very long session title that runs past the pane's text column",
-                "/w:main",
-            ),
-        ));
-        // -- many sections (the scroll area's content stack) ------------
-        let mut many = SidebarView::fixture("Many", "/w:main");
-        many.sections.plugins = (0..8)
-            .map(|index| SidebarSection {
-                plugin_id: format!("p{index}"),
-                title: format!("Section {index}"),
-                rows: vec![format!("row {index}.1"), format!("row {index}.2")],
-            })
-            .collect();
-        scenarios.push(("many-sections".into(), many));
-
-        let mut mismatches = Vec::new();
-        for (name, view) in &scenarios {
-            for height in [30usize, 24, 22, 16, 8] {
-                let old = old_pane(view, &theme, height);
-                let new = paint_solid_sidebar_pane(view, &theme, height);
-                if old != new {
-                    let mut cells = Vec::new();
-                    'outer: for y in 0..old.height.min(new.height) {
-                        for x in 0..old.width.min(new.width) {
-                            let (a, b) = (old.cell(y, x), new.cell(y, x));
-                            if a != b {
-                                cells.push(format!(
-                                    "({x},{y}): old {a:?} new {b:?} | old row {:?} new row {:?}",
-                                    old.text_grid()[y],
-                                    new.text_grid()[y]
-                                ));
-                                if cells.len() >= 4 {
-                                    break 'outer;
-                                }
-                            }
-                        }
-                    }
-                    mismatches.push(format!("{name}-h{height}: {}", cells.join("; ")));
-                }
-            }
-        }
-        assert!(
-            mismatches.is_empty(),
-            "solid pane diverged from the old renderer:\n  {}",
-            mismatches.join("\n  ")
-        );
-    }
 
     /// The reactive path patches in place: a title change + a plugin
-    /// section landing re-render the SAME mount (same pane geometry).
+    /// section landing re-render the SAME mount (same pane geometry) —
+    /// an absolute self-check since the retirement.
     #[test]
     fn content_churn_patches_the_mounted_pane() {
         let theme = ThemeState::v2_dark().styles();
         let mut view = SidebarView::fixture("First title", "/w:main");
+        let mut seen: Vec<(String, Frame)> = Vec::new();
         for title in ["First title", "Renamed", "First title"] {
             view.title = title.to_owned();
-            let old = old_pane(&view, &theme, 30);
-            let new = paint_solid_sidebar_pane(&view, &theme, 30);
-            assert_eq!(old, new, "parity while retitling to {title:?}");
+            let frame = paint_solid_sidebar_pane(&view, &theme, 30);
+            if let Some((_, prior)) = seen.iter().find(|(t, _)| *t == view.title) {
+                assert_eq!(&frame, prior, "same inputs paint the same pane: {title:?}");
+            }
+            seen.push((view.title.clone(), frame));
         }
         view.sections.plugins = vec![SidebarSection {
             plugin_id: "omos".into(),
             title: "Preset".into(),
             rows: vec!["zhipuai · own/glm-5.3".into()],
         }];
-        let old = old_pane(&view, &theme, 30);
-        let new = paint_solid_sidebar_pane(&view, &theme, 30);
-        assert_eq!(old, new, "parity after a plugin section lands");
+        let with_plugin = paint_solid_sidebar_pane(&view, &theme, 30);
+        let grid = with_plugin.text_grid().join("\n");
+        assert!(grid.contains("Preset"), "the plugin section paints: {grid}");
         SIDEBAR.with_borrow(|slot| {
             let mount = slot.as_ref().expect("pane mounted");
             assert!(!mount.renderer.ops_log().is_empty(), "the reconciler recorded its ops");
         });
     }
 
-    /// A resize rebuilds cleanly and stays at parity — the mount-key
-    /// rule (the pane's height keys the mount).
+    /// A resize rebuilds cleanly — the mount-key rule (the pane's
+    /// height keys the mount; absolute self-check since the
+    /// retirement).
     #[test]
-    fn reshape_rebuilds_and_stays_at_parity() {
+    fn reshape_rebuilds_cleanly() {
         let theme = ThemeState::v2_dark().styles();
         let view = SidebarView::fixture("Resize", "/w:main");
+        let mut first: Option<Frame> = None;
         for height in [30usize, 24, 40, 30] {
-            let old = old_pane(&view, &theme, height);
-            let new = paint_solid_sidebar_pane(&view, &theme, height);
-            assert_eq!(new, old, "parity at height {height}");
+            let frame = paint_solid_sidebar_pane(&view, &theme, height);
+            assert_eq!(frame.height, height, "full-height pane at height {height}");
+            if height == 30 {
+                match &first {
+                    None => first = Some(frame),
+                    Some(p) => assert_eq!(&frame, p, "same inputs paint the same pane"),
+                }
+            }
         }
     }
 

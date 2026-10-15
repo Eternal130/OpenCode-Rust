@@ -35,9 +35,9 @@
 //! the caret renders as v2's visible resting glyph, which in a golden
 //! frame is nothing.
 
-use crate::components::composer::autocomplete::{popup_height, AutocompleteOption};
+use crate::components::composer::autocomplete::AutocompleteOption;
 use crate::components::composer::PromptDraft;
-use crate::render::{Cell, CellColor, Frame};
+use crate::render::CellColor;
 use crate::theme::ThemeState;
 use crate::wrap::display_width;
 use oc_theme::Rgba;
@@ -217,7 +217,7 @@ fn truncate_ellipsis(value: &str, width: usize) -> String {
     format!("{kept}…")
 }
 
-/// Everything [`render_prompt_frame`] paints.
+/// Everything the prompt mount paints.
 #[derive(Debug, Clone)]
 pub struct PromptView<'a> {
     pub draft: &'a PromptDraft,
@@ -591,10 +591,8 @@ pub(crate) struct Palette {
     pub(crate) base: CellColor,
     pub(crate) prompt_bg: CellColor,
     pub(crate) border: CellColor,
-    pub(crate) rail: CellColor,
     pub(crate) text_base: CellColor,
     pub(crate) muted: CellColor,
-    pub(crate) default_fg: CellColor,
     pub(crate) raised_high: CellColor,
     pub(crate) popup_selected_bg: CellColor,
     pub(crate) popup_selected_text: CellColor,
@@ -603,15 +601,12 @@ pub(crate) struct Palette {
 
 pub(crate) fn palette(theme: &ThemeState) -> Palette {
     let tokens = &theme.resolved.tokens;
-    let border = cell_color(tokens.border.base);
     Palette {
         base: cell_color(tokens.background.base),
         prompt_bg: cell_color(tokens.decrease(tokens.background.raised.base, 1.0)),
-        rail: border,
-        border,
+        border: cell_color(tokens.border.base),
         text_base: cell_color(tokens.text.base),
         muted: cell_color(tokens.text.muted),
-        default_fg: cell_color(Rgba { r: 255, g: 255, b: 255, a: 255 }),
         raised_high: cell_color(tokens.background.raised.high),
         popup_selected_bg: cell_color(tokens.background.action.primary.focused),
         popup_selected_text: cell_color(tokens.text.action.primary.focused),
@@ -620,169 +615,13 @@ pub(crate) fn palette(theme: &ThemeState) -> Palette {
 }
 
 #[must_use]
-pub fn render_prompt_frame(
-    view: &PromptView,
-    width: usize,
-    height: usize,
-    theme: &ThemeState,
-) -> Frame {
-    let colors = palette(theme);
-    let colors = Palette { rail: view.rail.unwrap_or(colors.border), ..colors };
-    let mut frame = Frame { cells: vec![vec![Cell::default(); width]; height], width, height };
-    // Page fill: the renderer's default foreground over background.base.
-    for row in &mut frame.cells {
-        for cell in row.iter_mut() {
-            cell.fg = colors.default_fg;
-            cell.bg = colors.base;
-        }
-    }
-
-    let pad = if width >= 44 { 2 } else { 1 };
-    let inner = width.saturating_sub(1 + pad * 2).max(1);
-    let lines = layout_draft_lines(view.draft, inner);
-    let max_height = (height / 3).max(6);
-    let textarea_rows = (lines.len().max(1) + 1).min(max_height);
-    let content_h = 1 + textarea_rows + 1;
-    let top = view.top;
-
-    paint_composer_box(
-        &mut frame,
-        view,
-        &lines,
-        &colors,
-        pad,
-        textarea_rows,
-        content_h,
-        inner,
-        width,
-        height,
-    );
-    // The blinking block cursor (`cursorColor = theme.text.base`):
-    // painted only when the caller resolved BOTH a caret offset and
-    // the visible blink phase.
-    if let Some(offset) = view.caret {
-        let (row, col) = caret_cell(view.draft, inner, offset);
-        if row < textarea_rows {
-            let (x, y) = (1 + pad + col, top + 1 + row);
-            if let Some(cell) = frame.cells.get_mut(y).and_then(|line| line.get_mut(x)) {
-                cell.bg = colors.text_base;
-                cell.fg = colors.prompt_bg;
-            }
-        }
-    }
-    paint_footer_row(&mut frame, view, &colors, top + content_h + 1, width, height);
-    if let Some(popup) = &view.autocomplete {
-        paint_autocomplete_popup(&mut frame, popup, &colors, top, width, height);
-    }
-    frame
-}
-
-/// The composer body: left border, prompt-bg fill, the textarea's
-/// placeholder/lines, and the ╹▀ transition row.
-#[allow(clippy::too_many_arguments)]
-fn paint_composer_box(
-    frame: &mut Frame,
-    view: &PromptView,
-    lines: &[Vec<Span>],
-    colors: &Palette,
-    pad: usize,
-    textarea_rows: usize,
-    content_h: usize,
-    inner: usize,
-    width: usize,
-    height: usize,
-) {
-    let top = view.top;
-    for row in top..(top + content_h).min(height) {
-        let line = &mut frame.cells[row];
-        // The left border in `borderHighlight()` (the agent color at
-        // fade alpha 1; `border.base` while no agent resolved).
-        line[0] = Cell { ch: '┃', attrs: 0, fg: colors.rail, bg: colors.base };
-        for cell in &mut line[1..] {
-            cell.fg = colors.default_fg;
-            cell.bg = colors.prompt_bg;
-        }
-    }
-    // Textarea row 1: the placeholder (truncated to inner − 2, muted)
-    // or the wrapped lines with their extmark chips.
-    let text_x = 1 + pad;
-    let text_y = top + 1;
-    if view.draft.is_empty() {
-        // The placeholder truncates to inner − 2 (the caret column
-        // reserve) — `composer-placeholder-empty.w40` pins 35 of 37.
-        let placeholder = truncate_width(&view.placeholder, inner.saturating_sub(2));
-        paint_text(frame, text_x, text_y, &placeholder, colors.muted, colors.prompt_bg, 0);
-    } else {
-        for (index, spans) in lines.iter().enumerate().take(textarea_rows) {
-            let mut x = text_x;
-            for span in spans {
-                let (fg, attrs) =
-                    if span.chip { (colors.chip_color, 1u16) } else { (colors.text_base, 0) };
-                paint_text(frame, x, text_y + index, &span.text, fg, colors.prompt_bg, attrs);
-                x += display_width(&span.text);
-            }
-        }
-    }
-    // Bottom transition: ╹ + ▀ row (the corner in the rail color —
-    // the transition box's left border is `borderHighlight()` — and
-    // upper-half blocks in promptBg).
-    if top + content_h < height {
-        let row = &mut frame.cells[top + content_h];
-        row[0] = Cell { ch: '╹', attrs: 0, fg: colors.rail, bg: colors.base };
-        for cell in &mut row[1..] {
-            *cell = Cell { ch: '▀', attrs: 0, fg: colors.prompt_bg, bg: colors.base };
-        }
-    }
-    // The metadata row (#5, `PromptMetadataRow`): the box's last
-    // content row — `agent · model provider · variant` with the agent
-    // in the rail color, separators/provider muted, model in
-    // text.base, variant in warning bold (metadata.tsx:36-87). Blank
-    // (promptBg fill) while no agent/model resolved — the golden
-    // shape's empty row.
-    let meta_y = top + content_h - 1;
-    if meta_y < height {
-        let layout = view.metadata.layout(view.terminal_width);
-        // `Show when={(mode === "shell" || props.agent) && (layout().agent || layout().model)}`.
-        let shell_or_agent = !view.metadata.agent.is_empty();
-        if (shell_or_agent || !layout.model.is_empty())
-            && (!layout.agent.is_empty() || !layout.model.is_empty())
-        {
-            let mut x = 1 + pad;
-            let mut paint = |x: &mut usize, text: &str, fg: CellColor, attrs: u16| {
-                paint_text(frame, *x, meta_y, text, fg, colors.prompt_bg, attrs);
-                *x += display_width(text) + 1; // gap 1 between spans
-            };
-            if !layout.agent.is_empty() {
-                paint(&mut x, &layout.agent, colors.rail, 0);
-            }
-            if layout.auto {
-                paint(&mut x, "auto", colors.muted, 0);
-            }
-            if !layout.model.is_empty() {
-                if !layout.agent.is_empty() {
-                    paint(&mut x, "·", colors.muted, 0);
-                }
-                paint(&mut x, &layout.model, colors.text_base, 0);
-            }
-            if !layout.provider.is_empty() {
-                paint(&mut x, &layout.provider, colors.muted, 0);
-            }
-            if !layout.variant.is_empty() {
-                paint(&mut x, "·", colors.muted, 0);
-                paint(&mut x, &layout.variant, colors.chip_color, 1);
-            }
-        }
-    }
-    let _ = width;
-}
-
 /// The footer row's resolved paint plan — ONE source of truth for
-/// the #4/#20/#33 geometry, shared by [`paint_footer_row`] (the old
-/// renderer), [`footer_location_extent`] (the hover hit rect), and
-/// the opentui-solid bridge (`composer_solid.rs`): the truncated
+/// the #4/#20/#33 geometry, shared by [`footer_location_extent`]
+/// (the hover hit rect) and the opentui-solid bridge
+/// (`composer_solid.rs`): the truncated
 /// location label, the interrupt hint's slot, the right-aligned
 /// shortcut block (`{key} agents`/usage + `{key} commands` with the
-/// key/label split `paint_hint` performs), and the plugin segment.
+/// key/label split), and the plugin segment.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FooterPlan {
     /// The truncated location label ("" when nothing fits).
@@ -857,7 +696,7 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
     } else {
         truncate_file_path(&view.footer.location, location_budget)
     };
-    // `paint_hint`'s key/label split: the fixed label off the tail.
+    // The hint pair's key/label split: the fixed label off the tail.
     let key_of = |hint: &str, label: &str| {
         let key_len = hint.len().saturating_sub(label.len());
         hint[..key_len].to_owned()
@@ -906,76 +745,6 @@ pub fn footer_location_extent(view: &PromptView, width: usize) -> Option<(usize,
     (painted > 0).then_some((0, painted))
 }
 
-/// One `{key} label` hint pair at `x`; returns the end column.
-fn paint_hint(
-    frame: &mut Frame,
-    x: usize,
-    y: usize,
-    key: &str,
-    label: &str,
-    colors: &Palette,
-) -> usize {
-    paint_text(frame, x, y, key, colors.text_base, colors.base, 0);
-    let after = x + display_width(key);
-    paint_text(frame, after, y, label, colors.muted, colors.base, 0);
-    after + display_width(label)
-}
-
-/// The footer row (#4/#20, prompt/index.tsx:1875-1959): the
-/// `{directory}:{branch}` location label muted in the flexible LEFT
-/// slot (`truncateFilePath`, minWidth 0 — never collides with the
-/// hints), the interrupt hint left while a turn runs, and the plugin
-/// hints + `{key} agents` / `{key} commands` shortcut block
-/// right-aligned (keys `text.base`, labels muted, gated at ≥ 44 cols).
-/// The context-usage arm swaps [agents] for [usage] once a turn
-/// completed (footer.tsx:65-94). No model statusline — that lives in
-/// the composer's metadata row. All geometry comes from
-/// [`footer_plan`] (shared with the solid bridge).
-fn paint_footer_row(
-    frame: &mut Frame,
-    view: &PromptView,
-    colors: &Palette,
-    row_index: usize,
-    width: usize,
-    height: usize,
-) {
-    if row_index >= height {
-        return;
-    }
-    let plan = footer_plan(view, width);
-    // The hover lift (`locationActions.hovered()` → text.base,
-    // prompt/index.tsx:1927) — #33's machinery rides on #4's paint.
-    let location_fg = if view.footer.location_hovered { colors.text_base } else { colors.muted };
-    paint_text(frame, 0, row_index, &plan.location, location_fg, colors.base, 0);
-    if let Some(x) = plan.interrupt_x {
-        // v2's shape: `esc ` in text.base, the label muted
-        // (prompt/index.tsx:138-143).
-        paint_text(frame, x, row_index, "esc ", colors.text_base, colors.base, 0);
-        paint_text(frame, x + 4, row_index, &plan.interrupt_label, colors.muted, colors.base, 0);
-    }
-    if let Some(x) = plan.block_x {
-        if plan.usage_first {
-            paint_text(frame, x, row_index, &plan.usage, colors.muted, colors.base, 0);
-        } else {
-            paint_hint(frame, x, row_index, &plan.agent_key, "agents", colors);
-        }
-    }
-    if let Some(x) = plan.command_x {
-        paint_hint(frame, x, row_index, &plan.command_key, "commands", colors);
-    }
-    // The plugin hint segment sits left of the shortcut hints (or at
-    // the right edge when the hints are width-gated off).
-    if let Some((x, segment)) = &plan.plugin {
-        if !segment.is_empty() {
-            paint_text(frame, *x, row_index, segment, colors.muted, colors.base, 0);
-        }
-    }
-}
-
-/// `truncateFilePath` (ui/file-path.tsx:23-77) — the footer location's
-/// middle-ellipsis path truncation: keep the basename and as many
-/// trailing parent segments as fit, prefixing `/…/`.
-#[must_use]
 pub fn truncate_file_path(value: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
@@ -1047,79 +816,6 @@ fn truncate_basename(value: &str, max_width: usize) -> String {
     let kept = crate::wrap::take_width(stem, max_width - extension_width - 1);
     format!("{kept}…{extension}")
 }
-
-/// The autocomplete popup above the box: bordered rows, the selected
-/// row filled `action.primary.focused`, title column padded, the
-/// description one space ahead.
-fn paint_autocomplete_popup(
-    frame: &mut Frame,
-    popup: &AutocompleteView,
-    colors: &Palette,
-    top: usize,
-    width: usize,
-    height: usize,
-) {
-    let count = popup.options.len();
-    let popup_h = popup_height(count, top);
-    for (row_index, option) in popup.options.iter().take(popup_h).enumerate() {
-        let y = top - popup_h + row_index;
-        if y >= height {
-            continue;
-        }
-        let selected = row_index == popup.selected;
-        let row = &mut frame.cells[y];
-        row[0] = Cell { ch: '┃', attrs: 0, fg: colors.border, bg: colors.base };
-        let last = width - 1;
-        row[last] = Cell { ch: '┃', attrs: 0, fg: colors.border, bg: colors.base };
-        let row_bg = if selected { colors.popup_selected_bg } else { colors.raised_high };
-        for cell in &mut row[1..last] {
-            cell.fg = colors.default_fg;
-            cell.bg = row_bg;
-        }
-        let title_color = if selected { colors.popup_selected_text } else { colors.text_base };
-        let desc_color = if selected { colors.popup_selected_text } else { colors.muted };
-        let title = format!("{:width$}", option.display, width = popup.title_width);
-        paint_text(frame, 2, y, &title, title_color, row_bg, 0);
-        let mut x = 2 + popup.title_width;
-        if let Some(description) = &option.description {
-            let desc = format!(" {description}");
-            paint_text(frame, x, y, &desc, desc_color, row_bg, 0);
-            x += display_width(&desc);
-        }
-        let _ = x;
-    }
-}
-
-/// Paint `text` starting at (`x`, `y`) with one style; wide clusters
-/// mark their continuation cells with `'\0'` (skipped by the text grid
-/// and the canonical serializer, matching the exporter's cell walk).
-fn paint_text(
-    frame: &mut Frame,
-    x: usize,
-    y: usize,
-    text: &str,
-    fg: CellColor,
-    bg: CellColor,
-    attrs: u16,
-) {
-    let Some(row) = frame.cells.get_mut(y) else { return };
-    let mut x = x;
-    for atom in crate::wrap::flatten(text, ratatui::style::Style::new()) {
-        let width = atom.width.max(1);
-        if x >= row.len() {
-            break;
-        }
-        row[x] = Cell { ch: atom.text.chars().next().unwrap_or(' '), attrs, fg, bg };
-        let span_end = (x + width).min(row.len());
-        for continuation in &mut row[(x + 1)..span_end] {
-            *continuation = Cell { ch: '\u{0}', attrs, fg, bg };
-        }
-        x += width;
-    }
-}
-
-/// Truncate by display width (chars kept while the width budget lasts).
-#[must_use]
 pub(crate) fn truncate_width(text: &str, limit: usize) -> String {
     let mut budget = limit;
     let mut out = String::new();
@@ -1196,12 +892,12 @@ mod tests {
             rail: None,
             caret,
         };
-        let with = render_prompt_frame(&view(Some(2)), 40, 8, &theme);
+        let with = crate::components::composer_solid::render_prompt_frame_dispatch(&view(Some(2)), 40, 8, &theme);
         // text_x = 1 + pad(1 <44) = 2, text_y = top + 1 = 1.
         let cell = with.cell(1, 4);
         assert_eq!(cell.bg, CellColor::Rgb(238, 238, 238), "text.base block");
         assert_eq!(cell.fg, CellColor::Rgb(30, 30, 30), "prompt-bg fg over the block");
-        let without = render_prompt_frame(&view(None), 40, 8, &theme);
+        let without = crate::components::composer_solid::render_prompt_frame_dispatch(&view(None), 40, 8, &theme);
         assert_ne!(
             without.cell(1, 4).bg,
             CellColor::Rgb(238, 238, 238),
@@ -1227,9 +923,9 @@ mod tests {
             rail,
             caret: None,
         };
-        let gray = render_prompt_frame(&view(None), 40, 8, &theme);
+        let gray = crate::components::composer_solid::render_prompt_frame_dispatch(&view(None), 40, 8, &theme);
         assert_eq!(gray.cell(1, 0).fg, CellColor::Rgb(72, 72, 72), "border.base fallback");
-        let blue = render_prompt_frame(&view(Some(CellColor::Rgb(92, 156, 245))), 40, 8, &theme);
+        let blue = crate::components::composer_solid::render_prompt_frame_dispatch(&view(Some(CellColor::Rgb(92, 156, 245))), 40, 8, &theme);
         assert_eq!(blue.cell(1, 0).fg, CellColor::Rgb(92, 156, 245), "categorical[0] rail");
         // The ╹ corner carries the same rail color.
         let corner_y = blue.cells.iter().rposition(|row| row[0].ch == '╹').expect("corner");
@@ -1288,7 +984,7 @@ mod tests {
     // Lane/chrome (#4/#5/#20/NEW-S1a, metadata.tsx + file-path.tsx)
     // -----------------------------------------------------------------
 
-    fn meta_view(meta: MetadataLine, location: &str, width: usize) -> Frame {
+    fn meta_view(meta: MetadataLine, location: &str, width: usize) -> crate::render::Frame {
         let owned = draft("");
         let view = PromptView {
             draft: &owned,
@@ -1308,7 +1004,7 @@ mod tests {
             rail: Some(CellColor::from(ThemeState::v2_dark().styles().agent_colors[0])),
             caret: None,
         };
-        render_prompt_frame(&view, width, 8, &ThemeState::v2_dark())
+        crate::components::composer_solid::render_prompt_frame_dispatch(&view, width, 8, &ThemeState::v2_dark())
     }
 
     /// #5: the metadata row renders `Build · Fake Model parityfake`
@@ -1471,7 +1167,7 @@ mod tests {
             rail: None,
             caret: None,
         };
-        let frame = render_prompt_frame(&view, 40, 8, &ThemeState::v2_dark());
+        let frame = crate::components::composer_solid::render_prompt_frame_dispatch(&view, 40, 8, &ThemeState::v2_dark());
         for cell in &frame.cells[1] {
             assert_ne!(cell.bg, CellColor::Rgb(238, 238, 238), "no block caret bg");
         }

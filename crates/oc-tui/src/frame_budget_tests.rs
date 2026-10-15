@@ -342,11 +342,7 @@ fn transcript_frame_budget_body() {
     eprintln!(
         "[frame-budget] 200x50 session route, 300-message transcript ({}): idle worst {} µs / \
          avg {} µs; scroll churn worst {} µs / avg {} µs ({} build)",
-        if crate::components::transcript_solid::opentui_transcript_enabled() {
-            "solid"
-        } else {
-            "old"
-        },
+        "solid",
         idle_worst_us,
         idle_avg,
         churn_worst_us,
