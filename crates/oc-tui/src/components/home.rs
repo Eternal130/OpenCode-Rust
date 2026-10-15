@@ -275,7 +275,6 @@ pub fn render_home_view(
     crate::components::home_solid::paint_solid_home_view(view, theme, size)
 }
 
-
 /// Paste `region` into `target` at `(x, y)` (the shared paste the
 /// solid bridge reuses for the prompt mount).
 pub(crate) fn paste(target: &mut Frame, region: &Frame, x: usize, y: usize) {

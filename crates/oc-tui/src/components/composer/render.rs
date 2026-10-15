@@ -648,7 +648,6 @@ pub(crate) struct FooterPlan {
 }
 
 /// Resolve the footer row's plan at `width` (see [`FooterPlan`]).
-#[must_use]
 pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
     let agent_hint = format!("{} agents", view.footer.agent_shortcut);
     let command_hint = format!("{} commands", view.footer.command_shortcut);
@@ -745,6 +744,7 @@ pub fn footer_location_extent(view: &PromptView, width: usize) -> Option<(usize,
     (painted > 0).then_some((0, painted))
 }
 
+#[must_use]
 pub fn truncate_file_path(value: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
@@ -892,12 +892,22 @@ mod tests {
             rail: None,
             caret,
         };
-        let with = crate::components::composer_solid::render_prompt_frame_dispatch(&view(Some(2)), 40, 8, &theme);
+        let with = crate::components::composer_solid::render_prompt_frame_dispatch(
+            &view(Some(2)),
+            40,
+            8,
+            &theme,
+        );
         // text_x = 1 + pad(1 <44) = 2, text_y = top + 1 = 1.
         let cell = with.cell(1, 4);
         assert_eq!(cell.bg, CellColor::Rgb(238, 238, 238), "text.base block");
         assert_eq!(cell.fg, CellColor::Rgb(30, 30, 30), "prompt-bg fg over the block");
-        let without = crate::components::composer_solid::render_prompt_frame_dispatch(&view(None), 40, 8, &theme);
+        let without = crate::components::composer_solid::render_prompt_frame_dispatch(
+            &view(None),
+            40,
+            8,
+            &theme,
+        );
         assert_ne!(
             without.cell(1, 4).bg,
             CellColor::Rgb(238, 238, 238),
@@ -923,9 +933,19 @@ mod tests {
             rail,
             caret: None,
         };
-        let gray = crate::components::composer_solid::render_prompt_frame_dispatch(&view(None), 40, 8, &theme);
+        let gray = crate::components::composer_solid::render_prompt_frame_dispatch(
+            &view(None),
+            40,
+            8,
+            &theme,
+        );
         assert_eq!(gray.cell(1, 0).fg, CellColor::Rgb(72, 72, 72), "border.base fallback");
-        let blue = crate::components::composer_solid::render_prompt_frame_dispatch(&view(Some(CellColor::Rgb(92, 156, 245))), 40, 8, &theme);
+        let blue = crate::components::composer_solid::render_prompt_frame_dispatch(
+            &view(Some(CellColor::Rgb(92, 156, 245))),
+            40,
+            8,
+            &theme,
+        );
         assert_eq!(blue.cell(1, 0).fg, CellColor::Rgb(92, 156, 245), "categorical[0] rail");
         // The ╹ corner carries the same rail color.
         let corner_y = blue.cells.iter().rposition(|row| row[0].ch == '╹').expect("corner");
@@ -1004,7 +1024,12 @@ mod tests {
             rail: Some(CellColor::from(ThemeState::v2_dark().styles().agent_colors[0])),
             caret: None,
         };
-        crate::components::composer_solid::render_prompt_frame_dispatch(&view, width, 8, &ThemeState::v2_dark())
+        crate::components::composer_solid::render_prompt_frame_dispatch(
+            &view,
+            width,
+            8,
+            &ThemeState::v2_dark(),
+        )
     }
 
     /// #5: the metadata row renders `Build · Fake Model parityfake`
@@ -1167,7 +1192,12 @@ mod tests {
             rail: None,
             caret: None,
         };
-        let frame = crate::components::composer_solid::render_prompt_frame_dispatch(&view, 40, 8, &ThemeState::v2_dark());
+        let frame = crate::components::composer_solid::render_prompt_frame_dispatch(
+            &view,
+            40,
+            8,
+            &ThemeState::v2_dark(),
+        );
         for cell in &frame.cells[1] {
             assert_ne!(cell.bg, CellColor::Rgb(238, 238, 238), "no block caret bg");
         }
