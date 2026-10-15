@@ -29,7 +29,7 @@ use crate::components::composer::{
 };
 use crate::components::dialog_select::SelectState;
 use crate::components::footer::{FooterMachine, PromptRoute};
-use crate::components::message::model::{Message, Part, PartTime};
+use crate::components::message::model::{Message, Part, PartTime, ToolStatus};
 use crate::components::toast::{ToastOptions, ToastQueue};
 use crate::data::{BusEvent, ConnectionState, Ingest};
 use crate::keymap::KeybindOverride;
@@ -872,6 +872,10 @@ pub struct Store {
     queue: Signal<QueueState>,
     interrupts: Signal<HashMap<String, InterruptArm>>,
     model_ring: Signal<ModelRing>,
+    /// The composer's subagent picker (#44): v2's `composer` store
+    /// (routes/session/index.tsx:217-220) + the Subagents tab's
+    /// memory-scoped filter and selection (subagents-tab.tsx:35-37).
+    picker: Signal<PickerState>,
     /// The interrupt API seam.
     interrupt_sink: std::cell::RefCell<Rc<dyn InterruptSink>>,
     /// The model-ring persistence flag (the run loop drains it).
@@ -886,6 +890,90 @@ pub struct Store {
     /// hardware cursor, never a cell-painted block). Set during the
     /// route render; `None` hides it.
     caret_cell: Cell<Option<(u16, u16)>>,
+}
+
+/// The composer panel's tab (`ComposerTab` — registration order:
+/// subagents, shell, terminals).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PickerTab {
+    #[default]
+    Subagents,
+    Shell,
+    Terminals,
+}
+
+impl PickerTab {
+    /// The tab's strip label (`register({ label })`).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Subagents => "Subagents",
+            Self::Shell => "Shell",
+            Self::Terminals => "Terminals",
+        }
+    }
+
+    /// The registration order's next/previous tab
+    /// (`switchTab`, composer/index.tsx:65-70): the three-tab ring in
+    /// mount order (subagents → shell → terminals → …).
+    #[must_use]
+    pub const fn cycle(self, forward: bool) -> Self {
+        let ring = [Self::Subagents, Self::Shell, Self::Terminals];
+        let index = match self {
+            Self::Subagents => 0,
+            Self::Shell => 1,
+            Self::Terminals => 2,
+        };
+        let step = if forward { 1 } else { 2 };
+        ring[(index + step) % ring.len()]
+    }
+}
+
+/// The picker's open/tab/filter/selection state (v2: the Session
+/// component's `composer` store survives navigation because the
+/// session-frame mount keys on the FAMILY root's tab, and the
+/// Subagents tab's filter lives in app-lifetime memory storage —
+/// subagents-tab.tsx:36-37).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PickerState {
+    pub open: bool,
+    pub tab: PickerTab,
+    /// `subagents-filter` (memory): `active` shows RUNNING entries.
+    pub filter_active: bool,
+    /// The selected entry index (resets when the tab deactivates or
+    /// the route changes — anchored to the route's current entry).
+    pub selected: usize,
+    /// The route session the selection was anchored against
+    /// (`selectedSessionID`, subagents-tab.tsx:65-91).
+    pub anchored_to: Option<String>,
+}
+
+impl Default for PickerState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            tab: PickerTab::Subagents,
+            filter_active: true,
+            selected: 0,
+            anchored_to: None,
+        }
+    }
+}
+
+/// One subagent picker entry (`SubagentEntry`, subagents-tab.tsx:16-23):
+/// the family walk's session with its display label + tree prefix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PickerEntry {
+    pub session_id: String,
+    /// `Locale.titlecase(session.agent)` (or "Subagent").
+    pub agent: String,
+    /// `withTimestampedFallback(session)` — the title or the
+    /// `Child session - <ISO>` fallback.
+    pub title: String,
+    pub running: bool,
+    pub current: bool,
+    /// The tree prefix (`├─ `/`└─ ` at depth ≥ 1; "" at depth 0).
+    pub prefix: String,
 }
 
 /// What a transcript hit does when released (`onMouseUp`).
@@ -1088,6 +1176,7 @@ struct StoreSignals {
     queue: Signal<QueueState>,
     interrupts: Signal<HashMap<String, InterruptArm>>,
     model_ring: Signal<ModelRing>,
+    picker: Signal<PickerState>,
 }
 
 impl Store {
@@ -1175,6 +1264,7 @@ impl Store {
             queue,
             interrupts,
             model_ring,
+            picker,
         } = signals;
         Self {
             runtime,
@@ -1240,6 +1330,7 @@ impl Store {
             queue,
             interrupts,
             model_ring,
+            picker,
             interrupt_sink: std::cell::RefCell::new(Rc::new(RecordingInterruptSink::default())),
             model_ring_dirty: Cell::new(false),
             footer_location: std::cell::RefCell::new(String::new()),
@@ -1286,6 +1377,7 @@ impl Store {
         let queue = Signal::new(&runtime, QueueState::default());
         let interrupts = Signal::new(&runtime, HashMap::<String, InterruptArm>::new());
         let model_ring = Signal::new(&runtime, ModelRing::default());
+        let picker = Signal::new(&runtime, PickerState::default());
         Self::build(
             runtime,
             StoreSignals {
@@ -1318,6 +1410,7 @@ impl Store {
                 queue,
                 interrupts,
                 model_ring,
+                picker,
             },
         )
     }
@@ -1598,6 +1691,21 @@ impl Store {
         let selected = self.selection_for(session_key).agent;
         let index =
             selected.and_then(|id| visible.iter().position(|agent| agent.id == id)).unwrap_or(0);
+        Some(self.theme().styles().agent_color(index))
+    }
+
+    /// The user-message block's rail color — the SESSION's agent
+    /// categorical hue (`local.agent.color(data.session.get(
+    /// sessionID)?.agent ?? "build")`, session/index.tsx:2200): the
+    /// registry's agent id resolved through the visible agent list,
+    /// falling back to the first hue (the "build" default).
+    #[must_use]
+    pub fn session_agent_rail_color(&self, session_id: &str) -> Option<ratatui::style::Color> {
+        let agent = self.session_info(session_id).and_then(|info| info.agent)?;
+        let lists = self.server_lists();
+        let rows = lists.agents.rows()?;
+        let visible: Vec<&ServerAgent> = rows.iter().filter(|agent| !agent.hidden).collect();
+        let index = visible.iter().position(|candidate| candidate.id == agent).unwrap_or(0);
         Some(self.theme().styles().agent_color(index))
     }
 
@@ -2814,10 +2922,15 @@ impl Store {
 
     pub fn navigate(&self, route: Route) {
         if let Route::Session { session_id } = &route {
+            // v2's session-tabs context roots every routed session
+            // (context/session-tabs.tsx:138, 188): navigating into a
+            // CHILD session routes the family ROOT for tab purposes —
+            // no new tab opens, the root's pill stays active (#45).
+            let root = self.session_root(session_id);
             self.tabs.update(|state| {
-                state.history = model::record_tab_history(&state.history, session_id);
+                state.history = model::record_tab_history(&state.history, &root);
                 // Viewing clears unread.
-                state.unread.remove(session_id);
+                state.unread.remove(&root);
             });
             // The route effect (`session-tabs.tsx:180-203`): routing to
             // a session ADDS its tab when it is not open — this is the
@@ -2828,18 +2941,18 @@ impl Store {
             // `data.session.get(id)?.title ?? persisted ?? fallback`);
             // `session.updated` refreshes open tabs in place later.
             if self.tabs_enabled.get() {
-                let title = self.session_title(session_id).or_else(|| {
+                let title = self.session_title(&root).or_else(|| {
                     self.session_history
                         .get()
                         .iter()
-                        .find(|session| &session.id == session_id)
+                        .find(|session| session.id == root)
                         .and_then(|session| session.title.clone())
                 });
                 self.tabs.update(|state| {
-                    if !state.tabs.iter().any(|tab| &tab.session_id == session_id) {
+                    if !state.tabs.iter().any(|tab| tab.session_id == root) {
                         state.tabs = model::open_session_tab(
                             std::mem::take(&mut state.tabs),
-                            SessionTab { session_id: session_id.clone(), title },
+                            SessionTab { session_id: root, title },
                         );
                     }
                 });
@@ -3154,6 +3267,247 @@ impl Store {
         self.sidebar_open.set(!visible);
     }
 
+    // -- the composer's subagent picker (#44) ------------------------------
+
+    /// The picker state (v2's Session `composer` store + the tab's
+    /// memory filter).
+    #[must_use]
+    pub fn picker(&self) -> PickerState {
+        self.picker.get()
+    }
+
+    /// Replace the picker state wholesale (tests; the commands go
+    /// through the semantic methods above).
+    pub fn set_picker(&self, state: PickerState) {
+        self.picker.set(state);
+    }
+
+    /// The session registry's view of one session (`data.session.get`).
+    #[must_use]
+    pub fn session_info(
+        &self,
+        session_id: &str,
+    ) -> Option<crate::notifications_plugin::SessionInfo> {
+        self.session_index.borrow().get(session_id).cloned()
+    }
+
+    /// The live child-session statuses for the transcript's subagent
+    /// cards (`data.session.status` — the `isRunning` second clause).
+    #[must_use]
+    pub fn subagent_running_map(&self) -> std::collections::HashMap<String, bool> {
+        self.session_index.borrow().running_ids().into_iter().map(|id| (id, true)).collect()
+    }
+
+    /// `isSubagent` — the route's session has a known parent.
+    #[must_use]
+    pub fn session_is_subagent(&self, session_id: &str) -> bool {
+        self.session_index.borrow().is_subagent(session_id)
+    }
+
+    /// The family root of the routed session (`session-tabs.tsx`'s
+    /// `root()` — tab bookkeeping and the strip's active pill key on
+    /// it, never the child id itself).
+    #[must_use]
+    pub fn session_root(&self, session_id: &str) -> String {
+        self.session_index.borrow().root_of(session_id)
+    }
+
+    /// The picker panel's mount condition (v2
+    /// routes/session/index.tsx:1451): explicitly open, OR the session
+    /// is a subagent (`parentID`) with no blocking forms — children
+    /// REPLACE the prompt with the panel.
+    #[must_use]
+    pub fn picker_live(&self, session_id: &str) -> bool {
+        self.picker.get().open || self.session_is_subagent(session_id)
+    }
+
+    /// `session.child.first` (index.tsx:1255-1263): on the session
+    /// route — open when closed (subagents tab), close when open; on
+    /// a CHILD session the parentID clause keeps it mounted (the
+    /// explicit `open` flag merely resets).
+    pub fn toggle_picker(&self) {
+        if !matches!(self.route.get(), Route::Session { .. }) {
+            return;
+        }
+        let is_child = matches!(self.route.get(), Route::Session { ref session_id } if self.session_is_subagent(session_id));
+        let mut picker = self.picker.get();
+        if picker.open || is_child {
+            picker.open = false;
+        } else {
+            picker.open = true;
+            picker.tab = PickerTab::Subagents;
+        }
+        self.picker.set(picker);
+    }
+
+    /// The Composer's `close()` (index.tsx:1453-1460): on a child
+    /// session closing NAVIGATES TO THE PARENT; otherwise the panel
+    /// folds back to the prompt. Either way the explicit open flag
+    /// clears — v2's session-frame is keyed by sessionID, so the
+    /// parent's remount starts with a fresh (closed) composer store.
+    pub fn picker_close(&self) {
+        if let Route::Session { session_id } = self.route.get() {
+            let parent = self
+                .session_index
+                .borrow()
+                .get(&session_id)
+                .and_then(|info| info.parent_id.clone());
+            self.picker.update(|picker| picker.open = false);
+            if let Some(parent) = parent {
+                self.navigate(Route::Session { session_id: parent });
+            }
+        } else {
+            self.picker.update(|picker| picker.open = false);
+        }
+    }
+
+    /// The picker's tab cycle (`switchTab`, composer/index.tsx:65-70).
+    pub fn picker_switch_tab(&self, forward: bool) {
+        let mut picker = self.picker.get();
+        picker.tab = picker.tab.cycle(forward);
+        picker.selected = 0;
+        picker.anchored_to = None;
+        self.picker.set(picker);
+    }
+
+    /// `composer.subagent.toggle-activity` (subagents-tab.tsx:173-181):
+    /// flip the running/inactive filter, reset the selection.
+    pub fn picker_toggle_filter(&self) {
+        let mut picker = self.picker.get();
+        picker.filter_active = !picker.filter_active;
+        picker.selected = 0;
+        self.picker.set(picker);
+    }
+
+    /// The picker's family entries for the routed session
+    /// (`sessionFamily`, util/session.ts:9-35: the ROOT's descendant
+    /// tree in registry order with `├─ `/`└─ ` prefixes), filtered by
+    /// the tab's activity filter (subagents-tab.tsx:39-63).
+    #[must_use]
+    pub fn picker_entries(&self, session_id: &str) -> Vec<PickerEntry> {
+        let index = self.session_index.borrow();
+        // Registry order: insertion (first-seen) order like the client
+        // cache — `ids()` is sorted, a stable deterministic stand-in.
+        let ids = index.ids();
+        let mut children: std::collections::HashMap<&str, Vec<&str>> =
+            std::collections::HashMap::new();
+        for id in &ids {
+            if let Some(parent) = index.get(id).and_then(|info| info.parent_id.as_deref()) {
+                children.entry(parent).or_default().push(id);
+            }
+        }
+        let mut entries: Vec<PickerEntry> = Vec::new();
+        picker_family_walk(
+            &index,
+            &children,
+            &index.root_of(session_id),
+            &[],
+            session_id,
+            &mut entries,
+        );
+        let filter_active = self.picker.get().filter_active;
+        entries.retain(|entry| entry.running == filter_active);
+        entries
+    }
+
+    /// The selection with the anchor/clamp discipline applied
+    /// (subagents-tab.tsx:71-94): anchoring to the route's entry on
+    /// tab activation or route change, clamping when the filtered
+    /// list shrinks. Returns the effective selected index.
+    #[must_use]
+    pub fn picker_selection(&self, session_id: &str, entries_len: usize) -> usize {
+        let mut picker = self.picker.get();
+        if picker.anchored_to.as_deref() != Some(session_id) {
+            picker.anchored_to = Some(session_id.to_owned());
+            picker.selected = 0;
+            let entries = self.picker_entries(session_id);
+            if let Some(index) = entries.iter().position(|entry| entry.current) {
+                picker.selected = index;
+            }
+            self.picker.set(picker.clone());
+        }
+        if entries_len == 0 {
+            picker.selected = 0;
+        } else {
+            picker.selected = picker.selected.min(entries_len - 1);
+        }
+        picker.selected
+    }
+
+    /// `composer.subagent.up/down` (subagents-tab.tsx:140-162): the
+    /// wrap-around move (`up` at 0 CLOSES the composer — even with
+    /// an empty filtered list, the tsx's close check precedes the
+    /// move; `down` on an empty list is inert).
+    pub fn picker_move(&self, forward: bool) {
+        let route = match self.route.get() {
+            Route::Session { session_id } => session_id,
+            Route::Home => return,
+        };
+        let len = self.picker_entries(&route).len();
+        if forward && len == 0 {
+            return;
+        }
+        let mut picker = self.picker.get();
+        if forward {
+            picker.selected = (picker.selected + 1) % len;
+        } else if picker.selected == 0 {
+            drop(picker);
+            self.picker_close();
+            return;
+        } else {
+            picker.selected -= 1;
+        }
+        self.picker.set(picker);
+    }
+
+    /// `composer.subagent.select` (subagents-tab.tsx:164-170):
+    /// navigate into the selected child session (the route keeps the
+    /// ROOT's tab — `navigate` roots the tab bookkeeping).
+    pub fn picker_navigate(&self) {
+        let route = match self.route.get() {
+            Route::Session { session_id } => session_id,
+            Route::Home => return,
+        };
+        let entries = self.picker_entries(&route);
+        let selected = self.picker_selection(&route, entries.len());
+        if let Some(entry) = entries.get(selected) {
+            let target = entry.session_id.clone();
+            self.navigate(Route::Session { session_id: target });
+        }
+    }
+
+    /// `composer.subagent.interrupt` — the selected RUNNING entry's
+    /// interrupt POST.
+    pub fn picker_interrupt(&self) {
+        let route = match self.route.get() {
+            Route::Session { session_id } => session_id,
+            Route::Home => return,
+        };
+        let entries = self.picker_entries(&route);
+        let selected = self.picker_selection(&route, entries.len());
+        if entries.get(selected).is_some_and(|entry| entry.running) {
+            self.interrupt_sink.borrow().interrupt(&entries[selected].session_id);
+        }
+    }
+
+    /// The exit epilogue (#46): v2's session route sets
+    /// `sessionEpilogue({title, sessionID})` while mounted
+    /// (index.tsx:185-189) and app.tsx:443-450 writes it to stdout
+    /// after teardown. `None` off the session route.
+    #[must_use]
+    pub fn exit_epilogue(&self) -> Option<String> {
+        let Route::Session { session_id } = self.route.get() else {
+            return None;
+        };
+        let index = self.session_index.borrow();
+        let title = index.title(&session_id).unwrap_or_default().to_owned();
+        // Lane M6 dual-path: the flag selects the opentui-solid
+        // farewell tree (farewell_solid) or presentation.rs's string
+        // builder (the OC_SUBAGENT_OPENTUI=0 fallback); the unit gate
+        // pins both byte-identical.
+        Some(crate::farewell_solid::session_epilogue_dispatch(&title, &session_id))
+    }
+
     /// The onboarding card's dismissal (v2 storage
     /// `getting-started.dismissed`, footer.tsx:11-23) — the card's
     /// only writer until mouse selection lands.
@@ -3336,6 +3690,18 @@ impl Store {
                 // session-list dialog's source, like v2's
                 // `data.session.list()`).
                 self.session_history.set(sessions.clone());
+                // The session registry (#44/#46): the snapshot seeds
+                // titles like v2's `session.sync` cache fill (events
+                // refine parent/agent/status later).
+                {
+                    let mut index = self.session_index.borrow_mut();
+                    for session in &sessions {
+                        let info = index.registry_entry_mut(&session.id);
+                        if let Some(title) = &session.title {
+                            info.title = Some(title.clone());
+                        }
+                    }
+                }
                 self.tabs.update(|state| {
                     let open: Vec<&crate::data::SessionSnapshot> = sessions
                         .iter()
@@ -3639,9 +4005,76 @@ impl Store {
                 let created = event.created;
                 self.update_messages(&session, |messages| {
                     with_tool_part(messages, &assistant, &part_id, |part| {
-                        if let Part::Tool { name: slot, time, .. } = part {
+                        if let Part::Tool { name: slot, time, state, .. } = part {
                             *slot = name;
                             *time = PartTime { created, completed: None };
+                            // v2 pushes `{status: "streaming", input: ""}`
+                            // (data.ts:919-929).
+                            *state = crate::components::message::model::ToolState::default();
+                        }
+                    });
+                });
+            }
+            // The live tool-state reducers (v2 client data.ts:930-980):
+            // called → running with the parsed input; progress replaces
+            // a running tool's metadata (the subagent tool's child
+            // `sessionID` arrives this way); success/failed settle it.
+            // (`session.tool.input.delta/ended` only advance the raw
+            // arg STRING while streaming — display-inert: the card
+            // reads the parsed map after `called`, so no reducer.)
+            "session.tool.called" => {
+                let Some((session, assistant)) = session_and_assistant(event) else { return };
+                let Some(part_id) = event.string("id") else { return };
+                let input = event.data.get("input").cloned();
+                let created = event.created;
+                self.update_messages(&session, |messages| {
+                    with_tool_part(messages, &assistant, &part_id, |part| {
+                        if let Part::Tool { time, state, .. } = part {
+                            *state = crate::components::message::model::ToolState {
+                                status: ToolStatus::Running,
+                                input: crate::data::stringify_map(input.as_ref()),
+                                metadata: std::collections::BTreeMap::new(),
+                            };
+                            if time.created.is_none() {
+                                time.created = created;
+                            }
+                        }
+                    });
+                });
+            }
+            "session.tool.progress" => {
+                let Some((session, assistant)) = session_and_assistant(event) else { return };
+                let Some(part_id) = event.string("id") else { return };
+                let metadata = event.data.get("metadata").cloned();
+                self.update_messages(&session, |messages| {
+                    with_tool_part(messages, &assistant, &part_id, |part| {
+                        if let Part::Tool { state, .. } = part {
+                            if state.status == ToolStatus::Running {
+                                state.metadata = crate::data::stringify_map(metadata.as_ref());
+                            }
+                        }
+                    });
+                });
+            }
+            "session.tool.success" | "session.tool.failed" => {
+                let Some((session, assistant)) = session_and_assistant(event) else { return };
+                let Some(part_id) = event.string("id") else { return };
+                let metadata = event.data.get("metadata").cloned();
+                let completed = event.created;
+                self.update_messages(&session, |messages| {
+                    with_tool_part(messages, &assistant, &part_id, |part| {
+                        if let Part::Tool { time, state, .. } = part {
+                            if !state.status.settled() {
+                                state.status = if event.type_ == "session.tool.success" {
+                                    ToolStatus::Completed
+                                } else {
+                                    ToolStatus::Error
+                                };
+                                if !metadata_is_empty(metadata.as_ref()) {
+                                    state.metadata = crate::data::stringify_map(metadata.as_ref());
+                                }
+                                time.completed = time.completed.or(completed);
+                            }
                         }
                     });
                 });
@@ -3878,6 +4311,97 @@ fn with_part(
     }
 }
 
+/// `metadata` absent/empty check (v2 keeps the previous metadata when
+/// the terminal event carries none — `data.ts:953-965` only replaces
+/// from `event.data.metadata` which may be undefined).
+fn metadata_is_empty(metadata: Option<&Value>) -> bool {
+    match metadata {
+        None | Some(Value::Null) => true,
+        Some(Value::Object(map)) => map.is_empty(),
+        Some(_) => false,
+    }
+}
+
+/// The family walk (`sessionFamily`, util/session.ts:25-45): the
+/// root's descendant tree in registry order, each entry carrying its
+/// `├─ `/`└─ ` tree prefix (empty at depth 0).
+fn picker_family_walk(
+    index: &crate::notifications_plugin::SessionIndex,
+    children: &std::collections::HashMap<&str, Vec<&str>>,
+    parent: &str,
+    ancestors: &[bool],
+    route: &str,
+    out: &mut Vec<PickerEntry>,
+) {
+    let Some(group) = children.get(parent) else { return };
+    for (position, id) in group.iter().enumerate() {
+        let last = position + 1 == group.len();
+        let prefix = if ancestors.is_empty() {
+            String::new()
+        } else {
+            ancestors[1..]
+                .iter()
+                .map(|ancestor| if *ancestor { "   " } else { "│  " })
+                .collect::<String>()
+                + if last { "└─ " } else { "├─ " }
+        };
+        let info = index.get(id).cloned().unwrap_or_default();
+        out.push(PickerEntry {
+            session_id: (*id).to_owned(),
+            agent: info.agent.as_deref().map_or_else(|| "Subagent".to_owned(), picker_titlecase),
+            title: info.title.clone().unwrap_or_else(|| picker_fallback_title(&info)),
+            running: index.is_running(id),
+            current: *id == route,
+            prefix,
+        });
+        let mut next = ancestors.to_vec();
+        next.push(last);
+        picker_family_walk(index, children, id, &next, route, out);
+    }
+}
+
+/// `Locale.titlecase` for the entry's agent label.
+fn picker_titlecase(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// `withTimestampedFallback` (session-title-fallback.ts:18-21): the
+/// `Child session - <ISO>` shape when the registry knows no title.
+fn picker_fallback_title(info: &crate::notifications_plugin::SessionInfo) -> String {
+    match info.created {
+        Some(created) => format!("Child session - {}", iso_timestamp(created)),
+        None => "Child session".to_owned(),
+    }
+}
+
+/// `new Date(ms).toISOString()` — UTC `YYYY-MM-DDTHH:MM:SS.mmmZ`
+/// (the session-title fallback's timestamp; days-from-civil inverse,
+/// Howard Hinnant's `civil_from_days`).
+fn iso_timestamp(epoch_ms: u64) -> String {
+    #[allow(clippy::cast_possible_wrap)] // epoch days fit i64 by construction
+    let days = (epoch_ms / 86_400_000) as i64;
+    let millis_of_day = epoch_ms % 86_400_000;
+    let time_of_day = epoch_ms % 1_000;
+    let secs_of_day = millis_of_day / 1_000;
+    let (hour, minute, second) = (secs_of_day / 3600, (secs_of_day / 60) % 60, secs_of_day % 60);
+    // civil_from_days
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{time_of_day:03}Z")
+}
+
 /// Find or create a tool part by id on the assistant message.
 fn with_tool_part(
     messages: &mut Vec<Message>,
@@ -3911,6 +4435,7 @@ fn with_tool_part(
                 id: part_id.to_owned(),
                 name: String::new(),
                 time: PartTime::default(),
+                state: crate::components::message::model::ToolState::default(),
             });
             parts.len() - 1
         });
@@ -3981,6 +4506,11 @@ fn message_from_event(event: &BusEvent) -> Option<Message> {
                             .unwrap_or_default()
                             .to_owned(),
                         time: part_time,
+                        state: crate::data::tool_state_from_json(
+                            part.pointer("/state/status").and_then(Value::as_str).unwrap_or(""),
+                            part.pointer("/state/input"),
+                            part.pointer("/state/metadata"),
+                        ),
                     }),
                     _ => {}
                 }
@@ -5497,6 +6027,268 @@ mod tests {
         store.navigate(Route::Home);
         store.toggle_sidebar();
         assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Auto);
+    }
+
+    // -- fix-wave E2: the subagent surfaces (#40/#44/#45/#46) -------------
+
+    /// The live tool-state reducers (v2 client data.ts:919-980): the
+    /// part moves streaming → running (parsed input) → completed
+    /// (metadata from the progress snapshot) off the `session.tool.*`
+    /// events.
+    #[test]
+    fn tool_events_drive_the_part_state_machine() {
+        let store = Store::new(Runtime::new());
+        store.ingest_all([
+            Ingest::Event(BusEvent::new(
+                "session.step.started",
+                serde_json::json!({
+                    "sessionID": "s1", "assistantMessageID": "a1",
+                    "agent": "build", "model": {"providerID": "p", "id": "m"}
+                }),
+            )),
+            Ingest::Event(BusEvent::new(
+                "session.tool.input.started",
+                serde_json::json!({ "sessionID": "s1", "assistantMessageID": "a1", "id": "t1", "name": "subagent" }),
+            )),
+        ]);
+        let part = |store: &Store| {
+            let messages = store.messages("s1");
+            let Some(Message::Assistant { parts, .. }) =
+                messages.iter().find(|message| message.id() == "a1")
+            else {
+                panic!("assistant missing");
+            };
+            let Some(Part::Tool { state, .. }) =
+                parts.iter().find(|p| matches!(p, Part::Tool { .. }))
+            else {
+                panic!("tool part missing");
+            };
+            state.clone()
+        };
+        assert_eq!(part(&store).status, ToolStatus::Streaming);
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.tool.called",
+            serde_json::json!({
+                "sessionID": "s1", "assistantMessageID": "a1", "id": "t1",
+                "input": {"agent": "general", "description": "Check the fixture", "prompt": "do it"},
+                "executed": false
+            }),
+        ))]);
+        let state = part(&store);
+        assert_eq!(state.status, ToolStatus::Running);
+        assert_eq!(state.input.get("description").map(String::as_str), Some("Check the fixture"));
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.tool.progress",
+            serde_json::json!({
+                "sessionID": "s1", "assistantMessageID": "a1", "id": "t1",
+                "metadata": {"sessionID": "ses_child", "status": "running"}
+            }),
+        ))]);
+        assert_eq!(part(&store).metadata.get("sessionID").map(String::as_str), Some("ses_child"));
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.tool.success",
+            serde_json::json!({
+                "sessionID": "s1", "assistantMessageID": "a1", "id": "t1",
+                "content": [{"type": "text", "text": "done"}],
+                "metadata": {"sessionID": "ses_child"},
+                "executed": false
+            }),
+        ))]);
+        let state = part(&store);
+        assert_eq!(state.status, ToolStatus::Completed);
+        assert_eq!(
+            state.metadata.get("sessionID").map(String::as_str),
+            Some("ses_child"),
+            "the success snapshot keeps the progress metadata"
+        );
+    }
+
+    /// The registry's family/index state off the lifecycle events
+    /// (#44/#45): the child session lands with its agent + title, the
+    /// execution events drive the running filter, and `root_of`
+    /// resolves the parent.
+    #[test]
+    fn session_registry_tracks_family_agent_and_status() {
+        let store = Store::new(Runtime::new());
+        store.ingest_all([
+            Ingest::Event(BusEvent::new(
+                "session.created",
+                serde_json::json!({ "sessionID": "s1", "title": "Root flow" }),
+            )),
+            Ingest::Event(BusEvent::new(
+                "session.created",
+                serde_json::json!({
+                    "sessionID": "ses_child", "parentID": "s1",
+                    "agent": "general", "title": "Check the fixture"
+                }),
+            )),
+        ]);
+        assert!(store.session_is_subagent("ses_child"));
+        assert!(!store.session_is_subagent("s1"));
+        assert_eq!(store.session_root("ses_child"), "s1");
+        assert_eq!(store.session_root("s1"), "s1");
+        // Running set: started inserts, the terminal events remove.
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.execution.started",
+            serde_json::json!({ "sessionID": "ses_child" }),
+        ))]);
+        assert!(store.session_info("ses_child").is_some());
+        assert!(store.subagent_running_map().get("ses_child").copied().unwrap_or(false));
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.execution.succeeded",
+            serde_json::json!({ "sessionID": "ses_child" }),
+        ))]);
+        assert!(!store.subagent_running_map().contains_key("ses_child"));
+    }
+
+    /// #44 — the picker walk: `session.child.first` opens the
+    /// subagents tab, the filter flips with `toggle-activity`, the
+    /// entry list follows, `select` navigates into the child WITHOUT
+    /// opening a tab (the route roots the family), and the child route
+    /// always mounts the panel — `close` navigates back to the parent.
+    #[test]
+    fn picker_opens_filters_navigates_and_closes_to_the_parent() {
+        use crate::components::command_palette::CommandDispatcher as _;
+        let mut dispatcher = crate::components::command_palette::StoreDispatcher;
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Root flow".to_owned()));
+        store.navigate(Route::Session { session_id: "s1".to_owned() });
+        store.ingest_all([
+            Ingest::Event(BusEvent::new(
+                "session.created",
+                serde_json::json!({
+                    "sessionID": "ses_child", "parentID": "s1",
+                    "agent": "general", "title": "Check the fixture"
+                }),
+            )),
+            Ingest::Event(BusEvent::new(
+                "session.execution.succeeded",
+                serde_json::json!({ "sessionID": "ses_child" }),
+            )),
+        ]);
+
+        // Off the session route the toggle is inert.
+        store.navigate(Route::Home);
+        dispatcher.dispatch(&store, "session.child.first", None);
+        assert!(!store.picker().open);
+        store.navigate(Route::Session { session_id: "s1".to_owned() });
+
+        // Open: the subagents tab, active filter (nothing running).
+        dispatcher.dispatch(&store, "session.child.first", None);
+        assert!(store.picker().open);
+        assert_eq!(store.picker().tab, PickerTab::Subagents);
+        assert_eq!(store.picker_entries("s1"), Vec::new(), "nothing running yet");
+        assert!(store.picker_live("s1"));
+
+        // toggle-activity: the completed run appears.
+        dispatcher.dispatch(&store, "composer.subagent.toggle-activity", None);
+        let entries = store.picker_entries("s1");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].session_id, "ses_child");
+        assert_eq!(entries[0].agent, "General");
+        assert_eq!(entries[0].title, "Check the fixture");
+        assert!(!entries[0].running);
+        assert!(!entries[0].current);
+
+        // select: navigate into the child — one tab stays, the route
+        // is the child, and the panel stays live (the parentID mount).
+        dispatcher.dispatch(&store, "composer.subagent.select", None);
+        assert!(
+            matches!(store.route(), Route::Session { ref session_id } if session_id == "ses_child")
+        );
+        assert_eq!(store.tabs().tabs.len(), 1, "no tab opened for the child");
+        assert!(store.picker_live("ses_child"), "the child route keeps the panel");
+        let child_entries = store.picker_entries("ses_child");
+        assert!(child_entries.iter().any(|entry| entry.current), "the child is `current`");
+
+        // `session.child.first` on the child does not unmount it.
+        dispatcher.dispatch(&store, "session.child.first", None);
+        assert!(store.picker_live("ses_child"));
+
+        // close: back to the parent, the explicit open flag folds.
+        dispatcher.dispatch(&store, "composer.close", None);
+        assert!(matches!(store.route(), Route::Session { ref session_id } if session_id == "s1"));
+        assert!(!store.picker().open);
+    }
+
+    /// The picker's navigation keys (`composer.subagent.up/down`) wrap
+    /// and `up` at the top closes (subagents-tab.tsx:140-151).
+    #[test]
+    fn picker_move_wraps_and_up_at_top_closes() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Root".to_owned()));
+        store.navigate(Route::Session { session_id: "s1".to_owned() });
+        store.ingest_all([
+            Ingest::Event(BusEvent::new(
+                "session.created",
+                serde_json::json!({ "sessionID": "s1", "title": "Root" }),
+            )),
+            Ingest::Event(BusEvent::new(
+                "session.created",
+                serde_json::json!({
+                    "sessionID": "c1", "parentID": "s1",
+                    "agent": "general", "title": "First"
+                }),
+            )),
+            Ingest::Event(BusEvent::new(
+                "session.created",
+                serde_json::json!({
+                    "sessionID": "c2", "parentID": "s1",
+                    "agent": "general", "title": "Second"
+                }),
+            )),
+        ]);
+        let mut picker = store.picker();
+        picker.open = true;
+        picker.filter_active = false;
+        store.set_picker(picker);
+        assert_eq!(store.picker_entries("s1").len(), 2);
+        assert_eq!(store.picker_selection("s1", 2), 0);
+        store.picker_move(true);
+        assert_eq!(store.picker().selected, 1);
+        store.picker_move(true);
+        assert_eq!(store.picker().selected, 0, "down wraps");
+        store.picker_move(false);
+        assert!(!store.picker().open, "up at the top closes the composer");
+    }
+
+    /// #46 — the exit epilogue tracks the session route (title from
+    /// the registry, truncated to 50) and is absent from home.
+    #[test]
+    fn exit_epilogue_tracks_the_session_route() {
+        let store = Store::new(Runtime::new());
+        assert!(store.exit_epilogue().is_none(), "home has no epilogue");
+        store.open_tab("s1", Some("Root".to_owned()));
+        store.navigate(Route::Session { session_id: "s1".to_owned() });
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.created",
+            serde_json::json!({ "sessionID": "s1", "title": "Parity Subagent Flow" }),
+        ))]);
+        let epilogue = store.exit_epilogue().expect("the session stages an epilogue");
+        assert!(
+            epilogue
+                .contains("\u{1b}[90mSession   \u{1b}[0m\u{1b}[1mParity Subagent Flow\u{1b}[0m"),
+            "{epilogue:?}"
+        );
+        assert!(
+            epilogue.contains("\u{1b}[90mContinue  \u{1b}[0m\u{1b}[1mopencode -s s1\u{1b}[0m"),
+            "{epilogue:?}"
+        );
+        // Long titles truncate to 50 (Locale.truncate).
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.renamed",
+            serde_json::json!({ "sessionID": "s1", "title": "x".repeat(80) }),
+        ))]);
+        let epilogue = store.exit_epilogue().expect("still staged");
+        assert!(
+            epilogue.contains(&format!(
+                "\u{1b}[90mSession   \u{1b}[0m\u{1b}[1m{}…\u{1b}[0m",
+                "x".repeat(49)
+            )),
+            "{epilogue:?}"
+        );
+        store.navigate(Route::Home);
+        assert!(store.exit_epilogue().is_none(), "leaving the session clears it");
     }
 
     /// The `<leader>b` chord dispatches through the palette arm.

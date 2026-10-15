@@ -355,6 +355,110 @@ pub fn files_from_wire(
     crate::components::message::model::deduplicate_visible_files(&mapped)
 }
 
+/// `stringValue` (v2 semantics): `null`/absent → `None`; strings
+/// pass through; other JSON coerces like JS `String(v)` (numbers and
+/// bools textualize, objects become `[object Object]`).
+#[must_use]
+pub fn stringify_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Bool(flag) => Some(flag.to_string()),
+        serde_json::Value::Number(number) => Some(number.to_string()),
+        serde_json::Value::Array(_) => Some(String::new()),
+        serde_json::Value::Object(_) => Some("[object Object]".to_owned()),
+    }
+}
+
+/// Stringify a JSON object's entries into the card-readable map
+/// (`null` values drop — `stringValue` returns undefined).
+#[must_use]
+pub fn stringify_map(
+    value: Option<&serde_json::Value>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    if let Some(serde_json::Value::Object(map)) = value {
+        for (key, value) in map {
+            if let Some(text) = stringify_value(value) {
+                out.insert(key.clone(), text);
+            }
+        }
+    }
+    out
+}
+
+/// Build a [`ToolState`] from raw event JSON (`/state/status`,
+/// `/state/input`, `/state/metadata` — the live reducers' shape).
+#[must_use]
+pub fn tool_state_from_json(
+    status: &str,
+    input: Option<&serde_json::Value>,
+    metadata: Option<&serde_json::Value>,
+) -> crate::components::message::model::ToolState {
+    crate::components::message::model::ToolState {
+        status: crate::components::message::model::ToolStatus::parse(status),
+        input: stringify_map(input),
+        metadata: stringify_map(metadata),
+    }
+}
+
+/// Build a [`ToolState`] from the typed wire union (message.list
+/// snapshots — `SessionMessageAssistantTool.state`).
+#[must_use]
+pub fn tool_state_from_wire(
+    state: &oc_client::types::SessionMessageAssistantToolState,
+) -> crate::components::message::model::ToolState {
+    use oc_client::types::SessionMessageAssistantToolState as Wire;
+    let fields =
+        |input: &std::collections::BTreeMap<String, serde_json::Value>,
+         metadata: Option<&std::collections::BTreeMap<String, serde_json::Value>>| {
+            (
+                input
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        stringify_value(value).map(|text| (key.clone(), text))
+                    })
+                    .collect::<std::collections::BTreeMap<String, String>>(),
+                metadata
+                    .map(|map| {
+                        map.iter()
+                            .filter_map(|(key, value)| {
+                                stringify_value(value).map(|text| (key.clone(), text))
+                            })
+                            .collect::<std::collections::BTreeMap<String, String>>()
+                    })
+                    .unwrap_or_default(),
+            )
+        };
+    match state {
+        Wire::Streaming(_) => crate::components::message::model::ToolState::default(),
+        Wire::Running(running) => {
+            let (input, metadata) = fields(&running.input, Some(&running.metadata));
+            crate::components::message::model::ToolState {
+                status: crate::components::message::model::ToolStatus::Running,
+                input,
+                metadata,
+            }
+        }
+        Wire::Completed(completed) => {
+            let (input, metadata) = fields(&completed.input, completed.metadata.as_ref());
+            crate::components::message::model::ToolState {
+                status: crate::components::message::model::ToolStatus::Completed,
+                input,
+                metadata,
+            }
+        }
+        Wire::Error(error) => {
+            let (input, metadata) = fields(&error.input, error.metadata.as_ref());
+            crate::components::message::model::ToolState {
+                status: crate::components::message::model::ToolStatus::Error,
+                input,
+                metadata,
+            }
+        }
+    }
+}
+
 /// The snapshot's terminal-step projection (lane/chrome #13): the
 /// `finish` label, the tok/s numerator (`tokens.output+reasoning`),
 /// and the context-usage total — the wire snapshot REPLACES the
@@ -441,6 +545,7 @@ pub fn message_from_info(
                                 created: epoch(Some(tool.time.created)),
                                 completed: epoch(tool.time.completed),
                             },
+                            state: tool_state_from_wire(&tool.state),
                         });
                     }
                 }

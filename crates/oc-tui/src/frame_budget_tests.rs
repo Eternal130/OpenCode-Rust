@@ -55,6 +55,7 @@ fn large_transcript(groups: usize) -> Vec<Message> {
                     id: format!("bench-tool-{index}"),
                     name: "read".into(),
                     time: PartTime { created: Some(index as u64), completed: Some(index as u64) },
+                    state: crate::components::message::model::ToolState::default(),
                 },
                 Part::Text {
                     text,
@@ -701,5 +702,103 @@ fn home_frame_budget_body() {
     assert!(
         idle_worst <= FRAME_BUDGET_MS * 1000 && churn_worst <= FRAME_BUDGET_MS * 1000,
         "frame budget exceeded on the home route: idle {idle_worst} µs, churn {churn_worst} µs"
+    );
+}
+
+/// Lane M6: the subagent picker panel's per-frame cost — the full
+/// 5-entry panel at 200 cols, measured over an IDLE phase (re-paint
+/// with unchanged inputs) and a SELECTION-CHURN phase (the focus
+/// moving between rows — the panel's reactive worst case). Both
+/// picker renderer paths get their own test process.
+#[test]
+fn frame_budget_picker_panel_old_path() {
+    std::env::set_var("OC_SUBAGENT_OPENTUI", "0");
+    picker_panel_budget_body();
+}
+
+/// The opentui-solid picker path (`OC_SUBAGENT_OPENTUI=1`).
+#[test]
+fn frame_budget_picker_panel_solid_path() {
+    std::env::set_var("OC_SUBAGENT_OPENTUI", "1");
+    picker_panel_budget_body();
+}
+
+fn picker_panel_budget_body() {
+    use crate::components::picker_solid::picker_panel_frame_dispatch;
+    use crate::reactive::Runtime;
+    use crate::store::{PickerEntry, PickerState, PickerTab, Store};
+
+    let theme = theme();
+    let store = Store::new(Runtime::new());
+    store.open_tab("s1", Some("Picker budget".to_owned()));
+    store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+    let entries: Vec<PickerEntry> = (0..5)
+        .map(|index| PickerEntry {
+            session_id: format!("ses_{index}"),
+            agent: "General".into(),
+            title: format!("Task number {index} with a description of the delegated work"),
+            running: index % 2 == 0,
+            current: index == 1,
+            prefix: if index == 0 { String::new() } else { "├─ ".into() },
+        })
+        .collect();
+    let mut state = PickerState {
+        open: true,
+        tab: PickerTab::Subagents,
+        filter_active: false,
+        selected: 0,
+        anchored_to: None,
+    };
+    let _ = &store;
+    let render = |state: &PickerState| {
+        let frame = picker_panel_frame_dispatch(state, &entries, state.selected, &theme, 200);
+        assert_eq!(frame.height, crate::components::subagent_picker::PANEL_ROWS);
+        frame
+    };
+
+    // Warmup (mount + caches).
+    for _ in 0..3 {
+        let _ = render(&state);
+    }
+    let mut worst = 0u128;
+    let mut total = 0u128;
+    for _ in 0..10 {
+        let start = std::time::Instant::now();
+        let _ = render(&state);
+        let elapsed = start.elapsed();
+        worst = worst.max(elapsed.as_micros());
+        total += elapsed.as_micros();
+    }
+    let idle_worst = worst;
+    let idle_avg = total / 10;
+
+    // The selection-churn phase: the focused row moves every frame.
+    worst = 0;
+    total = 0;
+    for frame in 0..10 {
+        state.selected = frame % entries.len();
+        let start = std::time::Instant::now();
+        let _ = render(&state);
+        let elapsed = start.elapsed();
+        worst = worst.max(elapsed.as_micros());
+        total += elapsed.as_micros();
+    }
+    let churn_worst = worst;
+    let churn_avg = total / 10;
+
+    eprintln!(
+        "[frame-budget] 200x11 picker panel ({}): idle worst {} µs / avg {} µs; selection churn \
+         worst {} µs / avg {} µs ({} build)",
+        if crate::components::picker_solid::opentui_picker_enabled() { "solid" } else { "old" },
+        idle_worst,
+        idle_avg,
+        churn_worst,
+        churn_avg,
+        if cfg!(debug_assertions) { "debug" } else { "release" },
+    );
+    #[cfg(not(debug_assertions))]
+    assert!(
+        idle_worst <= FRAME_BUDGET_MS * 1000 && churn_worst <= FRAME_BUDGET_MS * 1000,
+        "frame budget exceeded on the picker panel: idle {idle_worst} µs, churn {churn_worst} µs"
     );
 }
