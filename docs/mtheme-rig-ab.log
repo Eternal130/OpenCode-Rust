@@ -52,3 +52,27 @@
   submit-keeps, style-signal reaches render_app); pty palette-cycle
   asserts updated to the centered window (nightowl first, ref shape).
 - RESULT: oc-tui 686/686 green (1 skip pre-existing), oc-theme 25/25.
+
+## Phase 2 — rig evidence (--quick, 80x24, run0, cache where settled)
+- themes-nord: 6 identical / 2 mismatch (WAS 1/7 in final sweep).
+  * step 3 (dialog open): window now EXACTLY ref's centered shape
+    (one-dark/● opencode/orng at rows 13-15; was off by the category
+    header + viewport/center math). 1 residual cell (9,13) =
+    backdrop-fg family (pre-existing, see below).
+  * step 4 (filter "nord"): 1920-cell FULL-GRID divergence COLLAPSED
+    to 5 style-only cells — all in the two pre-existing families:
+      - backdrop-fg: ref fg=idx15 on dialog-covered cells, ours keeps
+        content fg (same signatures at click-coverage-dialog#3/#4 and
+        hover-sweep#4 in the FINAL SWEEP on the DEFAULT theme);
+      - input-caret cell (18,9): ref fg15/bg238 vs our focused pair
+        (same family at hover-sweep#4 models-filter, default theme).
+  * Fixed after q1: the ● current-marker now keys on the CAPTURED
+    initial (opencode filtered out → no marker; ref shape) —
+    select_props_for_entry threads entry.theme_initial.
+- boot-home: 3/3 identical (coin landed clean).
+- palette: 0/6 — mismatch-step set + first-diff byte-identical to the
+  final sweep's OWN run-1 (all-6), incl. the 64-cell palette-open
+  first diff (palette CONTENT backlog = another lane's debt; no drift).
+- session-list-dialog: 2/12 — counts identical to final-sweep run0.
+- help-dialog: 6/2 — the M5-documented deterministic mm2 (improved
+  from the final sweep's 3/5).
