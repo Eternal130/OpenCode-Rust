@@ -41,6 +41,7 @@
 use std::collections::HashMap;
 
 use crate::components::command_palette::{CommandDispatcher as _, Dispatch, StoreDispatcher};
+use crate::components::composer::render::prompt_text_width;
 use crate::components::composer::{ComposerEditCommand, ComposerKey, KeyOutcome};
 use crate::components::dialog::{execute_submission, handle_dialog_key, render_app};
 use crate::components::footer::permission::{
@@ -113,6 +114,9 @@ impl App {
         // The sidebar toggle's visibility input (session-frame.tsx's
         // `rightPane()` reads the live dimensions).
         store.set_terminal_size(size);
+        // The editing engines' wrap viewport matches the composer's
+        // display wrap from boot (lane M-engine's opentui path).
+        store.set_prompt_viewport_width(prompt_text_width(usize::from(size.0)));
         Self {
             store,
             keymap: Keymap::new(),
@@ -244,6 +248,7 @@ impl App {
     pub fn resize(&mut self, size: (u16, u16)) {
         self.size = size;
         self.store.set_terminal_size(size);
+        self.store.set_prompt_viewport_width(prompt_text_width(usize::from(size.0)));
         self.store.request_redraw();
     }
 

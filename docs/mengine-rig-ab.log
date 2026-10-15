@@ -74,3 +74,44 @@ both subsystems onto the opentui-rust ports (`opentui-keymap` engine,
    covered by the parity walk's alias branch.
 4. `expire()` order matters: the pending getters lazily expire at the
    ENGINE's clock — `had` must be read before the clock sync.
+
+## Phase 2 — editor engine swap (COMPLETE, 688/688 oc-tui both paths)
+
+* `crates/oc-tui-core/src/text_edit_opentui.rs` (NEW, ~900 LOC):
+  `TextAreaOpentui` (EditBuffer + EditorView, WrapMode::Word, the
+  composer inner width as the wrap viewport) + the `EditCore`
+  flag-selected facade. Composer seam: `Composer.edit: EditCore`;
+  store's edits map + the resync mirror; app boot/resize feed
+  `prompt_text_width` (extracted from mount_height — ONE shared
+  formula) into the engines' viewport.
+* Editor parity suite (oc-tui-core): motion/selection/edit/undo/
+  wide-cluster parity + four upstream-faithful DELTA tests.
+* oc-tui 688/688 on the legacy path AND 688/688 under
+  `OC_ENGINE_OPENTUI=1` (nextest per-test processes latch the flag).
+
+### Engine-behavior deltas (upstream/v2-faithful, each pinned by a test)
+
+1. **Plain moves over a selection collapse WITHOUT stepping**
+   (`collapseSelectionToEdge`) — legacy cleared + moved.
+2. **Word boundaries** are the buffer's script-transition rules:
+   "fn foo()" alt+f hops [3,7,8] vs legacy [3,6,8].
+3. **Line home/end readline jumps**: home at col 0 → previous line's
+   end; end at EOL → next line's start (gotoLineHome/End 791-825).
+4. **Visual motions follow the WRAP model** (vlines at the composer
+   width; boundary affinity keeps the cursor on the last grapheme,
+   not past the break's trailing space) — legacy aliased logical.
+5. **deleteForward's phantom snapshot** (the ported upstream
+   double-snapshot): a no-op delete still stores an undo point.
+6. **Undo after an external setText**: history clears (v2 rope.clear_
+   history) — legacy kept orphaned snapshots (undo-after-submit).
+7. **Pending display**: "<leader>" token form (upstream) vs "ctrl+x".
+
+### Bugs found in MY adapter while pinning parity (fixed)
+
+* `offset_to_char` off-by-one on rows > 0 (the row-break walk).
+* `mirror_text` must be a no-op on matching text (the per-keystroke
+  bridge was resetting caret+history every op).
+* Caret placement after range deletes must rebase in char space.
+* The donor key grammar: no ">" separator — `<leader>e` tokens +
+  concatenated parts ("gg"); alias expander revive of diff.toggle's
+  "enter" spec (it was DEAD on legacy — the pump speaks "return").

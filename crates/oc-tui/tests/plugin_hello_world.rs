@@ -124,11 +124,20 @@ fn plugin_registers_palette_keymap_theme_and_receives_events() {
     assert_eq!(row.category.as_deref(), Some("Plugin"));
     assert_eq!(row.title, "Say hello from the helloworld plugin");
 
-    // (b) The owned keymap entry resolves (after static).
-    assert_eq!(
-        keymap.lookup(KeyStroke::ctrl("x"), &clock),
-        Outcome::Pending { display: "ctrl+x".to_owned() }
-    );
+    // (b) The owned keymap entry resolves (after static). The pending
+    // display is engine-path dependent: the opentui engine shows the
+    // `<leader>` TOKEN form (upstream getPendingSequence — v2's own
+    // display), the legacy engine the raw stroke.
+    let pending = keymap.lookup(KeyStroke::ctrl("x"), &clock);
+    match pending {
+        Outcome::Pending { display } => {
+            assert!(
+                display == "ctrl+x" || display == "<leader>",
+                "the leader arm's display form ({display})"
+            );
+        }
+        other => panic!("the leader arms: {other:?}"),
+    }
     assert_eq!(
         keymap.lookup(KeyStroke::new("h"), &clock),
         Outcome::Command { command: "hw.hello".to_owned(), args: None }

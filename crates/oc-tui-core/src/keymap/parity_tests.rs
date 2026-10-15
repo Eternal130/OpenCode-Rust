@@ -10,7 +10,6 @@
 //! variant under the parity lock (the flag's OnceLock makes env-based
 //! A/B impossible inside one libtest process).
 
-use super::opentui::stroke_input_for_test;
 use super::*;
 use opentui_keymap::types::KeyStrokeInput;
 use std::sync::{Mutex, MutexGuard, OnceLock};
