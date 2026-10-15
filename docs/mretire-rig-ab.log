@@ -1,0 +1,17 @@
+# M-retire — the retirement lane log (deleting the legacy renderer paths)
+
+Worktree: /opt/opencode-rust/.worktrees/lane-retire (branch lane/retire, base = main b254c2b)
+Scope: delete old paths for M1-M6 surfaces (keep OC_ENGINE_OPENTUI one release),
+re-home transcript markdown onto opentui-core's MarkdownRenderable pipeline, dead-code sweep.
+
+## Flag inventory (from main)
+- RETIRE: OC_TABS_OPENTUI (M1), OC_DIALOGS_OPENTUI (M2), OC_COMPOSER_OPENTUI (M3),
+  OC_TRANSCRIPT_OPENTUI (M4), OC_SIDEBAR_OPENTUI + OC_HOME_OPENTUI (M5), OC_SUBAGENT_OPENTUI (M6)
+- KEEP (one release, M-engine plan): OC_ENGINE_OPENTUI (oc-tui-core lib.rs / text_edit_opentui.rs / keymap/*)
+
+## Rig script → surface mapping (spot-check corpus)
+- tabs: mouse-hover-tabstrip | dialogs: help-dialog | composer: composer-clear
+- transcript: long-reply-scroll | sidebar: sidebar-wide (pins 160x36) | home: boot-home
+- subagent: subagent-basic | markdown: type-edit-submit, multi-turn, thought-render
+
+## Phase log
