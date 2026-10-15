@@ -47,9 +47,12 @@ use std::collections::HashMap;
 /// at facade construction by [`crate::opentui_engine_enabled`]
 /// (`OC_ENGINE_OPENTUI`). Both variants expose the same internal
 /// surface; the facade's code path is identical modulo the hop.
+#[allow(clippy::large_enum_variant)] // one engine per process; the donor carries its registration sets
 enum EngineSel {
     Legacy(engine::KeymapEngine),
-    Opentui(opentui::OpentuiKeymap),
+    /// Boxed: the donor engine carries its registration sets (the
+    /// size-difference lint) — one per process, never hot.
+    Opentui(Box<opentui::OpentuiKeymap>),
 }
 
 impl EngineSel {
@@ -57,7 +60,7 @@ impl EngineSel {
     #[must_use]
     fn active() -> Self {
         if crate::opentui_engine_enabled() {
-            Self::Opentui(opentui::OpentuiKeymap::new())
+            Self::Opentui(Box::default())
         } else {
             Self::Legacy(engine::KeymapEngine::new())
         }
@@ -67,7 +70,7 @@ impl EngineSel {
     /// the legacy path constructs a new engine; the opentui path drops
     /// the installed layers but keeps the addon set, the disable gate,
     /// and the mode stack (the timed leader re-registers on
-    /// set_leader/set_timeout).
+    /// `set_leader`/`set_timeout`).
     fn fresh(&mut self) {
         match self {
             Self::Legacy(_) => *self = Self::Legacy(engine::KeymapEngine::new()),
@@ -117,9 +120,9 @@ impl EngineSel {
         }
     }
 
-    fn register_layer(&mut self, layer: Layer) -> String {
+    fn register_layer(&mut self, layer: &Layer) -> String {
         match self {
-            Self::Legacy(engine) => engine.register_layer(layer),
+            Self::Legacy(engine) => engine.register_layer(layer.clone()),
             Self::Opentui(engine) => engine.register_layer(layer),
         }
     }
@@ -182,24 +185,23 @@ impl EngineSel {
 
     fn dispatch_base_only(
         &mut self,
-        stroke: KeyStroke,
+        stroke: &KeyStroke,
         clock: &dyn Clock,
         runner: &mut dyn FnMut(&str, Option<&str>) -> bool,
     ) -> DispatchOutcome {
         match self {
-            Self::Legacy(engine) => engine.dispatch_base_only(stroke, clock, runner),
+            Self::Legacy(engine) => engine.dispatch_base_only(stroke.clone(), clock, runner),
             Self::Opentui(engine) => engine.dispatch_base_only(stroke, clock, runner),
         }
     }
 
-    fn dispatch(&mut self, stroke: KeyStroke, clock: &dyn Clock) -> DispatchOutcome {
+    fn dispatch(&mut self, stroke: &KeyStroke, clock: &dyn Clock) -> DispatchOutcome {
         match self {
-            Self::Legacy(engine) => engine.dispatch(stroke, clock),
+            Self::Legacy(engine) => engine.dispatch(stroke.clone(), clock),
             Self::Opentui(engine) => engine.dispatch(stroke, clock),
         }
     }
 }
-
 
 /// Assert a leader-arm outcome, accepting either display form: the
 /// legacy engine shows the raw stroke ("ctrl+x"), the opentui engine
@@ -208,10 +210,12 @@ impl EngineSel {
 #[cfg(test)]
 pub(crate) fn assert_pending_leader(outcome: &Outcome) {
     match outcome {
-        Outcome::Pending { display } => assert!(
-            display == "ctrl+x" || display == "<leader>",
-            "leader display form ({display})"
-        ),
+        Outcome::Pending { display } => {
+            assert!(
+                display == "ctrl+x" || display == "<leader>",
+                "leader display form ({display})"
+            );
+        }
         other => panic!("expected the leader to arm, got {other:?}"),
     }
 }
@@ -350,7 +354,7 @@ impl Keymap {
                     fallthrough: false,
                 });
             }
-            self.engine.register_layer(engine::Layer {
+            self.engine.register_layer(&engine::Layer {
                 name: format!("table:{name}"),
                 target: None,
                 target_mode: engine::TargetMode::Path,
@@ -376,7 +380,7 @@ impl Keymap {
                     fallthrough: false,
                 })
                 .collect();
-            self.engine.register_layer(engine::Layer {
+            self.engine.register_layer(&engine::Layer {
                 name: format!("owned:{name}"),
                 target: None,
                 target_mode: engine::TargetMode::Path,
@@ -602,8 +606,9 @@ impl Keymap {
     /// conditional `app.exit` layer sits above the managed textarea
     /// layer, so its chords must resolve before any input-mode
     /// shadowing) — same pending/leader machinery as [`Keymap::lookup`].
+    #[allow(clippy::needless_pass_by_value)] // the facade's public shape (oc-tui passes owned strokes)
     pub fn lookup_base(&mut self, stroke: KeyStroke, clock: &dyn Clock) -> Outcome {
-        let outcome = self.engine.dispatch_base_only(stroke, clock, &mut |_, _| true);
+        let outcome = self.engine.dispatch_base_only(&stroke, clock, &mut |_, _| true);
         if let Some((command, args)) = outcome.command {
             return Outcome::Command { command, args };
         }
@@ -636,8 +641,9 @@ impl Keymap {
 
     /// Resolve one stroke. See the module docs for the escape and leader
     /// special-cases.
+    #[allow(clippy::needless_pass_by_value)] // the facade's public shape (oc-tui passes owned strokes)
     pub fn lookup(&mut self, stroke: KeyStroke, clock: &dyn Clock) -> Outcome {
-        let outcome = self.engine.dispatch(stroke, clock);
+        let outcome = self.engine.dispatch(&stroke, clock);
         if let Some((command, args)) = outcome.command {
             return Outcome::Command { command, args };
         }

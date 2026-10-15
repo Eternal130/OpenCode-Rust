@@ -34,31 +34,33 @@
 //!
 //! ## The v2 Provider wiring this mirrors (context/keymap.tsx:80-150)
 //!
-//! `createDefaultOpenTuiKeymap` + `registerCommaBindings` + the
-//! enter/esc/pgdown/pgup alias expander + `registerBaseLayoutFallback`
-//! + `registerEscapeClearsPendingSequence` +
-//! `registerBackspacePopsPendingSequence` + `registerTimedLeader`
-//! (timeout `config.leader?.timeout ?? leader_timeout ?? 2000`). The
-//! managed textarea layer stays the oc-tui pump's own rung (the
-//! renderer input lane has not landed); the table's `input` layer
-//! carries the same `input.*` bindings v2 feeds it.
+//! `createDefaultOpenTuiKeymap`, `registerCommaBindings`, the
+//! enter/esc/pgdown/pgup alias expander,
+//! `registerBaseLayoutFallback`,
+//! `registerEscapeClearsPendingSequence`,
+//! `registerBackspacePopsPendingSequence`, and
+//! `registerTimedLeader` (timeout
+//! `config.leader?.timeout ?? leader_timeout ?? 2000`). The managed
+//! textarea layer stays the oc-tui pump's own rung (the renderer
+//! input lane has not landed); the table's `input` layer carries the
+//! same `input.*` bindings v2 feeds it.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+use super::engine;
+use super::table::{Clock, KeyStroke, LEADER_TIMEOUT_MS};
 use opentui_keymap::addons::{
     register_backspace_pops_pending_sequence, register_base_layout_fallback,
     register_comma_bindings, register_escape_clears_pending_sequence, register_timed_leader,
     TimedLeaderOptions,
 };
-use opentui_keymap::opentui::{OpenTuiHost};
+use opentui_keymap::opentui::OpenTuiHost;
 use opentui_keymap::types::{
     Binding, BindingCommand, BindingEvent, Command, CommandResult, HostPlatform, KeyStrokeInput,
     Layer as DonorLayer, TargetMode as DonorTargetMode,
 };
 use opentui_keymap::{KeyAfterReason, KeymapEvent, Registration};
-use super::engine;
-use super::table::{Clock, KeyStroke, LEADER_TIMEOUT_MS};
 
 /// The v2 mode data key (`MODE = { key: "opencode.mode", base:
 /// "base" }`, context/keymap.tsx:49) + the base mode name.
@@ -133,8 +135,7 @@ impl OpentuiKeymap {
         // The shared clock rides the with_clock constructor.
         let host = Box::new(OpenTuiHost::new(HostPlatform::Linux, false));
         let now = Arc::new(SharedNow::default());
-        let mut keymap =
-            opentui_keymap::Keymap::with_clock(host, Arc::clone(&now) as Arc<_>);
+        let mut keymap = opentui_keymap::Keymap::with_clock(host, Arc::clone(&now) as Arc<_>);
         // createDefaultOpenTuiKeymap's registration set (default
         // parser/matcher + enabled/metadata fields) — the with_clock
         // constructor skips it, so install here (idempotent resources).
@@ -167,11 +168,12 @@ impl OpentuiKeymap {
         input: &str,
         displays: Option<&[String]>,
     ) -> Option<Vec<opentui_keymap::parser::BindingExpansion>> {
-        let key = [("enter", "return"), ("esc", "escape"), ("pgdown", "pagedown"), ("pgup", "pageup")]
-            .into_iter()
-            .fold(input.to_owned(), |result, (alias, value)| {
-                alias_replace(&result, alias, value)
-            });
+        let key =
+            [("enter", "return"), ("esc", "escape"), ("pgdown", "pagedown"), ("pgup", "pageup")]
+                .into_iter()
+                .fold(input.to_owned(), |result, (alias, value)| {
+                    alias_replace(&result, alias, value)
+                });
         if key == input {
             return None;
         }
@@ -190,13 +192,10 @@ fn alias_replace(input: &str, alias: &str, value: &str) -> String {
     let mut at = 0usize;
     while let Some(offset) = input[at..].find(alias) {
         let start = at + offset;
-        let before_ok = start == 0
-            || input[..start].chars().next_back().is_some_and(is_alias_delim);
+        let before_ok =
+            start == 0 || input[..start].chars().next_back().is_some_and(is_alias_delim);
         let end = start + alias.len();
-        let after_ok = input[end..]
-            .chars()
-            .next()
-            .is_none_or(|ch| is_alias_delim(ch) || ch == '<');
+        let after_ok = input[end..].chars().next().is_none_or(|ch| is_alias_delim(ch) || ch == '<');
         out.push_str(&input[at..start]);
         if before_ok && after_ok {
             out.push_str(value);
@@ -217,17 +216,16 @@ fn is_alias_delim(ch: char) -> bool {
 /// runner (the legacy compat path — every matched command "runs")
 /// behind the shared disable gate; a disabled command REJECTS
 /// (`run() → false`) and dispatch continues to the next binding.
-fn gate_handler(
-    gate: DisableGate,
-    name: String,
-) -> opentui_keymap::types::CommandHandler {
-    Box::new(move |_context: &opentui_keymap::types::CommandContext| {
-        if gate.enabled(&name) {
-            CommandResult::Handled
-        } else {
-            CommandResult::Rejected
-        }
-    })
+fn gate_handler(gate: DisableGate, name: String) -> opentui_keymap::types::CommandHandler {
+    Box::new(
+        move |_context: &opentui_keymap::types::CommandContext| {
+            if gate.enabled(&name) {
+                CommandResult::Handled
+            } else {
+                CommandResult::Rejected
+            }
+        },
+    )
 }
 
 /// Convert one table [`KeyStroke`] into the donor's input stroke
@@ -346,7 +344,7 @@ impl OpentuiKeymap {
     /// named mode → `Some(name)` gated by the `opencode.mode` data key
     /// — exactly the donor's `require("opencode.mode", value)`.
     /// Returns the layer name (the legacy register shape).
-    pub fn register_layer(&mut self, layer: engine::Layer) -> String {
+    pub fn register_layer(&mut self, layer: &engine::Layer) -> String {
         let name = layer.name.clone();
         let mut bindings = Vec::new();
         let mut commands = Vec::new();
@@ -358,7 +356,7 @@ impl OpentuiKeymap {
                 event: BindingEvent::Press,
                 prevent_default: Some(binding.prevent_default),
                 fallthrough: binding.fallthrough,
-                attrs: Default::default(),
+                attrs: std::collections::BTreeMap::default(),
             });
             if seen_commands.insert(binding.command.clone()) {
                 commands.push(Command::new(
@@ -426,9 +424,8 @@ impl OpentuiKeymap {
     #[must_use]
     pub fn pending_display(&mut self) -> Option<String> {
         let parts = self.keymap.get_pending_sequence();
-        (!parts.is_empty()).then(|| {
-            parts.iter().map(|part| part.display.clone()).collect::<Vec<_>>().join(" ")
-        })
+        (!parts.is_empty())
+            .then(|| parts.iter().map(|part| part.display.clone()).collect::<Vec<_>>().join(" "))
     }
 
     /// Expire a stale pending sequence (the timed leader's lazy
@@ -456,7 +453,7 @@ impl OpentuiKeymap {
     }
 
     /// Dispatch one stroke through the REAL engine.
-    fn dispatch_event(&mut self, stroke: KeyStroke, clock: &dyn Clock) -> engine::DispatchOutcome {
+    fn dispatch_event(&mut self, stroke: &KeyStroke, clock: &dyn Clock) -> engine::DispatchOutcome {
         self.now.set(clock.now_ms());
         let mut event = KeymapEvent::new(&stroke.key).with_modifiers(
             stroke.ctrl,
@@ -491,7 +488,7 @@ impl OpentuiKeymap {
     /// a mode change; the leader chord completes through base).
     pub fn dispatch_base_only(
         &mut self,
-        stroke: KeyStroke,
+        stroke: &KeyStroke,
         clock: &dyn Clock,
         _runner: &mut dyn FnMut(&str, Option<&str>) -> bool,
     ) -> engine::DispatchOutcome {
@@ -502,7 +499,7 @@ impl OpentuiKeymap {
         outcome
     }
 
-    pub fn dispatch(&mut self, stroke: KeyStroke, clock: &dyn Clock) -> engine::DispatchOutcome {
+    pub fn dispatch(&mut self, stroke: &KeyStroke, clock: &dyn Clock) -> engine::DispatchOutcome {
         self.dispatch_event(stroke, clock)
     }
 
