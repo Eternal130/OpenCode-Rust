@@ -184,9 +184,8 @@ fn strip_frame_budget_body() {
         assert_eq!(painted.height, 50);
     }
     eprintln!(
-        "[frame-budget] 200x50 session route, 12 tabs strip ({}): worst {} µs, avg {} µs \
+        "[frame-budget] 200x50 session route, 12 tabs strip (): worst {} µs, avg {} µs \
          ({} build)",
-        "solid",
         worst_micros,
         (total_micros / frames),
         if cfg!(debug_assertions) { "debug" } else { "release" },
@@ -263,9 +262,8 @@ fn composer_frame_budget_body() {
 
     let _ = (idle_worst, churn_worst); // debug builds: assert is release-gated
     eprintln!(
-        "[frame-budget] 200x50 session route, composer ({}): idle worst {} µs / avg {} µs; \
+        "[frame-budget] 200x50 session route, composer: idle worst {} µs / avg {} µs; \
          typing churn worst {} µs / avg {} µs ({} build)",
-        "solid",
         idle_worst_us,
         idle_avg,
         churn_worst_us,
@@ -340,9 +338,8 @@ fn transcript_frame_budget_body() {
 
     let _ = (idle_worst, churn_worst); // debug builds: assert is release-gated
     eprintln!(
-        "[frame-budget] 200x50 session route, 300-message transcript ({}): idle worst {} µs / \
+        "[frame-budget] 200x50 session route, 300-message transcript: idle worst {} µs / \
          avg {} µs; scroll churn worst {} µs / avg {} µs ({} build)",
-        "solid",
         idle_worst_us,
         idle_avg,
         churn_worst_us,
@@ -403,9 +400,8 @@ fn theme_switch_frame_budget_body() {
         assert_eq!(painted.height, 50);
     }
     eprintln!(
-        "[frame-budget] 200x50 session route, theme dialog LIVE SWITCH ({}): worst {} µs, avg {} \
+        "[frame-budget] 200x50 session route, theme dialog LIVE SWITCH (): worst {} µs, avg {} \
          µs ({})",
-        "solid",
         worst_micros,
         total_micros / frames,
         if cfg!(debug_assertions) { "debug" } else { "release" },
@@ -459,9 +455,8 @@ fn dialog_frame_budget_body() {
         assert_eq!(painted.height, 50);
     }
     eprintln!(
-        "[frame-budget] 200x50 session route, palette dialog open ({}): worst {} µs, avg {} µs \
+        "[frame-budget] 200x50 session route, palette dialog open (): worst {} µs, avg {} µs \
          ({} build)",
-        "solid",
         worst_micros,
         total_micros / frames,
         if cfg!(debug_assertions) { "debug" } else { "release" },
@@ -542,9 +537,8 @@ fn sidebar_pane_budget_body() {
     let churn_avg = total / 10;
 
     eprintln!(
-        "[frame-budget] 42x50 sidebar pane ({}): idle worst {} µs / avg {} µs; section churn \
+        "[frame-budget] 42x50 sidebar pane: idle worst {} µs / avg {} µs; section churn \
          worst {} µs / avg {} µs ({} build)",
-        "solid",
         idle_worst,
         idle_avg,
         churn_worst,
@@ -608,9 +602,8 @@ fn home_frame_budget_body() {
     let churn_avg = total / 10;
 
     eprintln!(
-        "[frame-budget] 200x50 home route ({}): idle worst {} µs / avg {} µs; placeholder churn \
+        "[frame-budget] 200x50 home route: idle worst {} µs / avg {} µs; placeholder churn \
          worst {} µs / avg {} µs ({} build)",
-        "solid",
         idle_worst,
         idle_avg,
         churn_worst,
@@ -693,9 +686,8 @@ fn picker_panel_budget_body() {
     let churn_avg = total / 10;
 
     eprintln!(
-        "[frame-budget] 200x11 picker panel ({}): idle worst {} µs / avg {} µs; selection churn \
+        "[frame-budget] 200x11 picker panel: idle worst {} µs / avg {} µs; selection churn \
          worst {} µs / avg {} µs ({} build)",
-        "solid",
         idle_worst,
         idle_avg,
         churn_worst,

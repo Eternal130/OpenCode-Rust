@@ -6,7 +6,7 @@
 //!
 //! The bytes are the port's contract: the rig's final-grid capture
 //! compares them EXACT (SGR digests included). The string builder
-//! was retired with the OC_SUBAGENT flag — the opentui-solid tree
+//! was retired with the `OC_SUBAGENT` flag — the opentui-solid tree
 //! (`farewell_solid.rs`) emits the bytes now, consuming these art
 //! tables; the byte-shape test pins them through the tree.
 
@@ -24,7 +24,6 @@ pub(crate) const LOGO_LEFT: [&str; 4] =
     ["                   ", "█▀▀█ █▀▀█ █▀▀█ █▀▀▄", "█__█ █__█ █^^^ █__█", "▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀~~▀"];
 pub(crate) const LOGO_RIGHT: [&str; 4] =
     ["             ▄     ", "█▀▀▀ █▀▀█ █▀▀█ █▀▀█", "█___ █__█ █__█ █^^^", "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"];
-
 
 /// `draw` (presentation.ts:8-17): one wordmark row's glyph cells —
 /// `_` paints the background-colored gap, `^` the fg+bg upper-half
@@ -55,7 +54,8 @@ mod tests {
     /// the expectations are presentation.ts's own shape.
     #[test]
     fn session_epilogue_bytes_match_presentation_ts() {
-        let text = crate::farewell_solid::solid_session_epilogue("Parity Subagent Flow", "ses_abc123");
+        let text =
+            crate::farewell_solid::solid_session_epilogue("Parity Subagent Flow", "ses_abc123");
         let lines: Vec<&str> = text.split('\n').collect();
         assert_eq!(lines.len(), 8, "{lines:?}");
         // Row 0: 2 pad + 19 left + 1 gap + 13 spaces = col 35 `▄`.

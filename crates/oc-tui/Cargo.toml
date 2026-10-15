@@ -33,13 +33,13 @@ uuid = { version = "1", features = ["v4"] }
 # release graph links opentui: release size delta measured in the lane
 # report (M0's dev-only baseline was 64,659,904 B).
 opentui-core = { workspace = true }
-opentui-keymap = { workspace = true }
 opentui-solid = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
+opentui-keymap = { workspace = true }
 parity = { path = "../../tools/parity" }
 tokio = { workspace = true }
 oc-plugin-host = { workspace = true }

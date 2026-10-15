@@ -563,7 +563,6 @@ mod tests {
     use crate::components::sidebar::{SidebarMode, SidebarSection};
     use crate::theme::ThemeState;
 
-
     /// The reactive path patches in place: a title change + a plugin
     /// section landing re-render the SAME mount (same pane geometry) —
     /// an absolute self-check since the retirement.

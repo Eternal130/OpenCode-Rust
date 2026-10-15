@@ -145,7 +145,7 @@ impl MarkdownStyles {
 #[must_use]
 pub fn render_markdown(source: &str, width: usize, styles: &MarkdownStyles) -> Vec<MarkdownLine> {
     let mut options = styles.options();
-    options.content = source.to_owned();
+    source.clone_into(&mut options.content);
     let blocks = build_markdown_blocks(&options, &styles.syntax);
     let mut lines = Vec::new();
     for spec in &blocks {
@@ -165,8 +165,8 @@ fn render_spec(
     let content_width = width.saturating_sub(indent).max(1);
     match spec {
         BlockSpec::MarkdownText { options, margin_bottom } => {
-            let styled = markdown_code_styled(options, &styles.syntax);
-            push_wrapped(&styled, content_width, styles, lines);
+            let text = markdown_code_styled(options, &styles.syntax);
+            push_wrapped(&text, content_width, styles, lines);
             push_margins(*margin_bottom, lines);
         }
         BlockSpec::CodeBlock { options, margin_bottom } => {
@@ -188,28 +188,25 @@ fn render_spec(
             let fallback = (!pipeline_handles
                 && filetype.is_some_and(|ft| oc_syntax::highlight(content, ft).is_some()))
             .then(|| filetype.map(|ft| oc_syntax::highlight(content, ft).expect("checked")));
-            match fallback.flatten() {
-                Some(block) => {
-                    for (index, line) in content.split('\n').enumerate() {
-                        let mut spans: Vec<StyledSpan> = block
-                            .line_spans(index, styles.code_block, &styles.syntax_defs)
-                            .into_iter()
-                            .map(|span| StyledSpan { text: span.text, style: span.style })
-                            .collect();
-                        if spans.is_empty() {
-                            spans.push(StyledSpan {
-                                text: crate::wrap::take_width(line, content_width),
-                                style: styles.code_block,
-                            });
-                        }
-                        clip_spans(&mut spans, content_width);
-                        lines.push(MarkdownLine(spans));
+            if let Some(block) = fallback.flatten() {
+                for (index, line) in content.split('\n').enumerate() {
+                    let mut spans: Vec<StyledSpan> = block
+                        .line_spans(index, styles.code_block, &styles.syntax_defs)
+                        .into_iter()
+                        .map(|span| StyledSpan { text: span.text, style: span.style })
+                        .collect();
+                    if spans.is_empty() {
+                        spans.push(StyledSpan {
+                            text: crate::wrap::take_width(line, content_width),
+                            style: styles.code_block,
+                        });
                     }
+                    clip_spans(&mut spans, content_width);
+                    lines.push(MarkdownLine(spans));
                 }
-                None => {
-                    let styled = markdown_code_styled(options, &styles.syntax);
-                    push_clipped(&styled, content_width, styles, lines);
-                }
+            } else {
+                let text = markdown_code_styled(options, &styles.syntax);
+                push_clipped(&text, content_width, styles, lines);
             }
             push_margins(*margin_bottom, lines);
         }
@@ -217,7 +214,7 @@ fn render_spec(
             let mut body = Vec::new();
             render_spec(content, content_width.saturating_sub(2), 0, styles, &mut body);
             let border = border_color
-                .and_then(|rgba| ratatui_color(rgba))
+                .and_then(ratatui_color)
                 .map_or(styles.quote_border, |color| styles.quote_border.fg(color));
             for line in body {
                 let mut runs = vec![
@@ -246,9 +243,9 @@ fn render_spec(
     }
 }
 
-/// `createListRenderable` rows: the marker column (`padStart(width)
-/// + " "` styled `markup.list`), the item's children in the content
-/// column, nested lists indenting under the parent's content column.
+/// `createListRenderable` rows: the marker column (padStart(width)
+/// plus one space, styled `markup.list`), the item's children in the
+/// content column, nested lists indenting under the parent's column.
 fn render_list(
     items: &[ListItemSpec],
     width: usize,
@@ -291,14 +288,14 @@ fn push_margins(count: usize, lines: &mut Vec<MarkdownLine>) {
 /// One styled text → wrapped rows: hard break per source line (the
 /// chunk stream carries `\n`), then the shared word-wrap seam.
 fn push_wrapped(
-    styled: &StyledText,
+    text: &StyledText,
     width: usize,
-    styles: &MarkdownStyles,
+    theme: &MarkdownStyles,
     lines: &mut Vec<MarkdownLine>,
 ) {
-    for line_chunks in split_chunks_on_newlines(styled) {
+    for line_chunks in split_chunks_on_newlines(text) {
         let spans: Vec<StyledSpan> =
-            line_chunks.iter().map(|chunk| chunk_span(chunk, styles)).collect();
+            line_chunks.iter().map(|chunk| chunk_span(chunk, theme)).collect();
         if spans.is_empty() {
             lines.push(MarkdownLine(Vec::new()));
             continue;
@@ -317,14 +314,14 @@ fn push_wrapped(
 /// in the tree); the row walk clips at the content width like
 /// `wrapMode=none`.
 fn push_clipped(
-    styled: &StyledText,
+    text: &StyledText,
     width: usize,
-    styles: &MarkdownStyles,
+    theme: &MarkdownStyles,
     lines: &mut Vec<MarkdownLine>,
 ) {
-    for line_chunks in split_chunks_on_newlines(styled) {
+    for line_chunks in split_chunks_on_newlines(text) {
         let mut spans: Vec<StyledSpan> =
-            line_chunks.iter().map(|chunk| chunk_span(chunk, styles)).collect();
+            line_chunks.iter().map(|chunk| chunk_span(chunk, theme)).collect();
         clip_spans(&mut spans, width);
         lines.push(MarkdownLine(spans));
     }
@@ -342,7 +339,7 @@ fn split_chunks_on_newlines(styled: &StyledText) -> Vec<Vec<opentui_core::styled
             }
             if !part.is_empty() {
                 let mut piece = chunk.clone();
-                piece.text = part.to_owned();
+                part.clone_into(&mut piece.text);
                 out.last_mut().expect("a line buffer").push(piece);
             }
             first = false;
@@ -436,8 +433,6 @@ pub fn markdown_frame_fixture() -> String {
     .join("\n")
 }
 
-
-
 // -- tests: the pipeline's pinned shape (absolute, post-re-home) ----------------
 
 #[cfg(test)]
@@ -481,7 +476,8 @@ mod tests {
     /// BOTH fragments (the shared wrap seam over pipeline chunks).
     #[test]
     fn bold_span_crossing_the_wrap_keeps_style_on_both_fragments() {
-        let source = "words and then **bold-run-deliberately-longer-than-the-wrap-boundary-at-eighty** tail";
+        let source =
+            "words and then **bold-run-deliberately-longer-than-the-wrap-boundary-at-eighty** tail";
         let lines = render_markdown(source, 37, &styles());
         let bold = Style::new()
             .fg(Color::Rgb(245, 167, 66))
@@ -496,7 +492,10 @@ mod tests {
         assert!(bold_rows.len() >= 2, "the run crosses a wrap boundary: {bold_rows:?}");
         for index in bold_rows {
             assert!(
-                lines[index].0.iter().any(|span| span.style == bold && !span.text.trim().is_empty()),
+                lines[index]
+                    .0
+                    .iter()
+                    .any(|span| span.style == bold && !span.text.trim().is_empty()),
                 "row {index} keeps the strong style on its fragment"
             );
         }
@@ -525,7 +524,7 @@ mod tests {
         let lines = render_markdown("## Head\n\n**b** *i* `c`", 40, &styles());
         assert_eq!(lines[0].text(), "Head");
         let head = &lines[0].0[0];
-        assert!(head.style.add_modifier == head.style.add_modifier | Modifier::BOLD);
+        assert!(head.style.add_modifier.contains(Modifier::BOLD));
         let row = &lines[2];
         assert_eq!(row.text(), "b i c");
         let styles_of: Vec<String> = row
@@ -534,12 +533,21 @@ mod tests {
             .map(|span| {
                 let m = span.style.add_modifier;
                 let mut tag = String::new();
-                if m.contains(Modifier::BOLD) { tag.push('B'); }
-                if m.contains(Modifier::ITALIC) { tag.push('I'); }
+                if m.contains(Modifier::BOLD) {
+                    tag.push('B');
+                }
+                if m.contains(Modifier::ITALIC) {
+                    tag.push('I');
+                }
                 tag
             })
             .collect();
-        assert_eq!(styles_of, vec!["B", "", "I", "", ""], "bold/sep/italic/sep/code spans: {:?}", row.0);
+        assert_eq!(
+            styles_of,
+            vec!["B", "", "I", "", ""],
+            "bold/sep/italic/sep/code spans: {:?}",
+            row.0
+        );
         assert_ne!(row.0[2].style.fg, row.0[0].style.fg, "the code span carries its token color");
     }
 

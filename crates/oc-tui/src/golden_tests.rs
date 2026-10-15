@@ -40,8 +40,8 @@
 use parity::tui_frame as pf;
 use ratatui::style::{Modifier, Style};
 
-use crate::components::session_tabs_solid::paint_solid_bar;
 use crate::components::session_tabs::{TabStatus, TabView, ADD_TAB_WIDTH};
+use crate::components::session_tabs_solid::paint_solid_bar;
 use crate::components::tool_rows::render_tool_wrap;
 use crate::layout::{BoxSpec, LayoutTree, StyledSpan};
 use crate::render::{paint_placed, serialize_canonical, Frame};
@@ -99,6 +99,18 @@ fn assert_text_grid_match(id: &str, width: usize, frame: &AnsiFrameRender) {
 /// Canonical ANSI bytes at the manifest's comparison depth — since the
 /// 7.2 glow upgrade this is exact for the session-tabs scenarios (the
 /// resting-glow tint math closes the last style divergence).
+fn assert_ansi_match(id: &str, width: usize, frame: &AnsiFrameRender) {
+    let scenario = scenario(id);
+    let depth = manifest().comparison_depth_for(&scenario);
+    let golden_ansi = std::fs::read_to_string(goldens().join(format!("{id}.w{width}.ansi")))
+        .expect("golden ansi");
+    let diff = pf::compare_ansi_bytes_at(&golden_ansi, &frame.ansi, depth).expect("ansi parses");
+    assert!(
+        diff.equal,
+        "{id}@{width} ansi differs at manifest depth {depth}: first divergence {:?}",
+        diff.first_divergent_offset
+    );
+}
 
 /// The retired `paint_bar` sized a FULL frame (height rows) with the
 /// base fill and painted the strip at row 0 — the shape the
@@ -112,15 +124,7 @@ fn paint_solid_bar_sized(
     height: u16,
     styles: &crate::theme::ThemeStyles,
 ) -> crate::render::Frame {
-    let strip = paint_solid_bar(
-        tabs,
-        active,
-        true,
-        usize::from(width),
-        styles,
-        None,
-        false,
-    );
+    let strip = paint_solid_bar(tabs, active, true, usize::from(width), styles, None, false);
     let base = crate::render::Cell {
         ch: ' ',
         attrs: 0,
@@ -132,19 +136,6 @@ fn paint_solid_bar_sized(
         cells[0][x] = *cell;
     }
     crate::render::Frame { cells, width: usize::from(width), height: usize::from(height) }
-}
-
-fn assert_ansi_match(id: &str, width: usize, frame: &AnsiFrameRender) {
-    let scenario = scenario(id);
-    let depth = manifest().comparison_depth_for(&scenario);
-    let golden_ansi = std::fs::read_to_string(goldens().join(format!("{id}.w{width}.ansi")))
-        .expect("golden ansi");
-    let diff = pf::compare_ansi_bytes_at(&golden_ansi, &frame.ansi, depth).expect("ansi parses");
-    assert!(
-        diff.equal,
-        "{id}@{width} ansi differs at manifest depth {depth}: first divergence {:?}",
-        diff.first_divergent_offset
-    );
 }
 
 /// Adapter so tests can talk about one rendered thing.
@@ -174,7 +165,8 @@ fn session_tabs_horizontal_matches_golden_at_80() {
 #[test]
 fn session_tabs_horizontal_matches_golden_at_160() {
     let theme = ThemeState::v2_dark();
-    let frame = paint_solid_bar_sized(&golden_tab_views(), Some("second"), 160, 10, &theme.styles());
+    let frame =
+        paint_solid_bar_sized(&golden_tab_views(), Some("second"), 160, 10, &theme.styles());
     let render = AnsiFrameRender::from_frame(&frame);
     assert_text_grid_match("session-tabs-horizontal", 160, &render);
     assert_ansi_match("session-tabs-horizontal", 160, &render);
@@ -634,4 +626,3 @@ fn command_palette_matches_text_grid_and_ansi_at_160() {
         diff.first_divergent_offset
     );
 }
-

@@ -548,48 +548,13 @@ mod tests {
     use crate::components::message::list::{
         message_groups_fixture, render_transcript, vscroll_messages_fixture, TranscriptOptions,
     };
-    use crate::components::message::model::{Message, Part, PartTime};
-    use crate::components::tool_rows::DEFAULT_FOREGROUND;
+    use crate::components::message::model::{Message, Part};
     use crate::theme::ThemeState;
 
     fn theme() -> ThemeStyles {
         ThemeState::v2_dark().styles()
     }
 
-    /// The old region painter's base fill (the route's `fill`).
-    fn base_fill() -> ratatui::style::Style {
-        ratatui::style::Style::new().fg(DEFAULT_FOREGROUND).bg(theme().background)
-    }
-
-    /// One parity-matrix scenario: the fixture messages + the render
-    /// options (clock, disclosure, model names) + a label.
-    struct Scenario {
-        name: &'static str,
-        messages: Vec<Message>,
-        options: TranscriptOptions,
-    }
-
-    fn assistant_markdown(text: &str) -> Message {
-        Message::Assistant {
-            id: "md-answer".into(),
-            agent: "build".into(),
-            model: "fixture/fixture".into(),
-            parts: vec![Part::Text { text: text.into(), time: PartTime::default() }],
-            finish: Some("stop".into()),
-            error: None,
-            time: PartTime { created: Some(1), completed: Some(2) },
-            tokens: Some(700),
-            usage_total: None,
-        }
-    }
-
-    /// The lane gate: the solid region frame must equal the old
-    /// region painter's frame CELL FOR CELL (char + attrs + fg + bg)
-    /// over the message-kind × state matrix — user boxes, exploration
-    /// headers (running/completed), markdown (headings, emphasis,
-    /// code, lists, blockquotes, hr, `~~del~~`, links, CJK), thought
-    /// blocks (collapsed/expanded gutter), stats rows (tok/s), error
-    /// parts, the image strip, long wrapped turns — × widths
     /// Streaming churn + scroll re-windowing patch the mounted tree
     /// WITHOUT a rebuild (the mount key is geometry-only): append
     /// text to the tail turn, scroll away and back, expand the

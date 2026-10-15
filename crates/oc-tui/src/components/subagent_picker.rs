@@ -34,7 +34,6 @@ use crate::store::{PickerEntry, PickerState, PickerTab};
 use crate::theme::ThemeState;
 use ratatui::style::{Color, Modifier, Style};
 
-
 /// The body's fixed height (`maxHeight={5}` on the scrollbox — the
 /// corpus grids pin 5 body rows whether the list is empty or short).
 pub const BODY_ROWS: usize = 5;
