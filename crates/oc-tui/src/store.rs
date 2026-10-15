@@ -142,6 +142,12 @@ pub struct DialogEntry {
     pub select: SelectState,
     /// Prompt input value for prompt-style kinds (rename).
     pub value: String,
+    /// The live-preview contract of `dialog-theme-list.tsx`: the theme
+    /// name captured when the ThemeList dialog opened (`const initial =
+    /// themes.selected`). `Some` while the dialog is open and
+    /// UNCONFIRMED — moves/filters preview through it, an unconfirmed
+    /// close reverts to it, a submit clears it (`confirmed = true`).
+    pub theme_initial: Option<String>,
 }
 
 /// One open session tab (`SessionTab`).
@@ -2962,27 +2968,36 @@ impl Store {
     }
 
     pub fn push_dialog(&self, kind: DialogKind) {
+        let theme_initial = self.theme_dialog_initial(&kind);
         let entry = DialogEntry {
             kind,
             size: DialogSize::default(),
             select: SelectState::default(),
             value: String::new(),
+            theme_initial,
         };
         self.dialogs.update(|stack| stack.push(entry));
     }
 
     pub fn pop_dialog(&self) {
-        self.dialogs.update(|stack| {
-            stack.pop();
-        });
+        let removed = self.dialogs.update(|stack| stack.pop());
+        if let Some(entry) = removed {
+            self.revert_unconfirmed_theme_dialog(&entry);
+        }
     }
 
     // -- dialog framework (`ui/dialog.tsx` stack semantics) --------------------
 
     /// Push a dialog entry (kind + size + fresh content state).
     pub fn open_dialog(&self, kind: DialogKind, size: DialogSize) {
-        let entry =
-            DialogEntry { kind, size, select: SelectState::default(), value: String::new() };
+        let theme_initial = self.theme_dialog_initial(&kind);
+        let entry = DialogEntry {
+            kind,
+            size,
+            select: SelectState::default(),
+            value: String::new(),
+            theme_initial,
+        };
         self.dialogs.update(|stack| stack.push(entry));
         self.focus_dialog_current();
     }
@@ -2991,42 +3006,85 @@ impl Store {
     /// every open dialog's close semantics run, then the new entry
     /// becomes the only one.
     pub fn replace_dialog(&self, kind: DialogKind, size: DialogSize) {
-        let entry =
-            DialogEntry { kind, size, select: SelectState::default(), value: String::new() };
-        self.dialogs.update(|stack| {
-            stack.clear();
-            stack.push(entry);
-        });
+        let theme_initial = self.theme_dialog_initial(&kind);
+        let entry = DialogEntry {
+            kind,
+            size,
+            select: SelectState::default(),
+            value: String::new(),
+            theme_initial,
+        };
+        let removed = self.dialogs.update(|stack| std::mem::replace(stack, vec![entry]));
+        for entry in &removed {
+            self.revert_unconfirmed_theme_dialog(entry);
+        }
         self.focus_dialog_current();
     }
 
+    /// The captured initial theme for a theme dialog (`const initial =
+    /// themes.selected` at `DialogThemeList` mount).
+    fn theme_dialog_initial(&self, kind: &DialogKind) -> Option<String> {
+        match kind {
+            DialogKind::ThemeList => Some(self.theme.get().name.clone()),
+            _ => None,
+        }
+    }
+
+    /// An unconfirmed theme dialog closing reverts the live preview to
+    /// its captured initial (`onCleanup: if (!confirmed) themes.set(
+    /// initial)` — dialog-theme-list.tsx:19-21).
+    fn revert_unconfirmed_theme_dialog(&self, entry: &DialogEntry) {
+        if let (DialogKind::ThemeList, Some(initial)) = (&entry.kind, entry.theme_initial.as_ref())
+        {
+            if self.theme.get().name != *initial {
+                self.set_theme_by_name(initial);
+            }
+        }
+    }
+
+    /// Confirm the top theme dialog (a submit landed: `confirmed = true`
+    /// before `dialog.clear()` — the close must NOT revert).
+    pub fn confirm_theme_dialog(&self) {
+        self.dialogs.update(|stack| {
+            if let Some(top) = stack.last_mut() {
+                top.theme_initial = None;
+            }
+        });
+    }
+
     /// A freshly-opened select dialog focuses its `current` option
-    /// (`DialogSelect` mount: `focus(current)` + the edge-follow reveal
-    /// — the theme list opens scrolled to the active theme).
+    /// (`DialogSelect` mount: `focus(current)` + `scrollAfterLayout(
+    /// true)` — the CENTER reveal in the real viewport, not the
+    /// edge-follow) — the theme list opens centered on the active theme.
     fn focus_dialog_current(&self) {
         let Some(entry) = self.top_dialog() else { return };
         if matches!(entry.kind, DialogKind::SessionRename { .. }) {
             return;
         }
         let props = crate::components::command_palette::select_props_for(&entry.kind, self);
+        let height = usize::from(self.terminal_size.get().1);
         self.update_dialog(|top| {
             top.select.focus_current(&props);
-            top.select.reveal(&props, 30);
+            top.select.center_on_selection(&props, height);
         });
     }
 
     /// Close the top dialog (`escape` in the modal layer — the entry's
     /// close semantics, then the pop).
     pub fn close_dialog(&self) {
-        self.dialogs.update(|stack| {
-            stack.pop();
-        });
+        let removed = self.dialogs.update(|stack| stack.pop());
+        if let Some(entry) = removed {
+            self.revert_unconfirmed_theme_dialog(&entry);
+        }
         self.set_dialog_frame_rect(None);
     }
 
     /// Close every dialog (`dialog.clear`).
     pub fn clear_dialogs(&self) {
-        self.dialogs.update(std::vec::Vec::clear);
+        let removed = self.dialogs.update(std::mem::take);
+        for entry in &removed {
+            self.revert_unconfirmed_theme_dialog(entry);
+        }
         self.set_dialog_frame_rect(None);
     }
 
@@ -3087,6 +3145,44 @@ impl Store {
                 true
             }
             None => false,
+        }
+    }
+
+    /// The theme dialog's LIVE PREVIEW after a selection move
+    /// (`onMove: (opt) => themes.set(opt.value)` — dialog-theme-list.
+    /// tsx:28-30). No-op unless the top dialog is the theme list.
+    pub fn preview_theme_move(&self) {
+        let Some(entry) = self.top_dialog() else { return };
+        if !matches!(entry.kind, DialogKind::ThemeList) {
+            return;
+        }
+        let props = crate::components::command_palette::select_props_for(&entry.kind, self);
+        if let Some(option) = entry.select.selected_option(&props) {
+            self.set_theme_by_name(&option.value.clone());
+        }
+    }
+
+    /// The theme dialog's LIVE PREVIEW after a filter change
+    /// (`onFilter`: empty query resets to the captured `initial`, else
+    /// the FIRST filtered entry — dialog-theme-list.tsx:39-47).
+    pub fn preview_theme_filter(&self) {
+        let Some(entry) = self.top_dialog() else { return };
+        if !matches!(entry.kind, DialogKind::ThemeList) {
+            return;
+        }
+        let props = crate::components::command_palette::select_props_for(&entry.kind, self);
+        if entry.select.filter.is_empty() {
+            if let Some(initial) = entry.theme_initial.clone() {
+                self.set_theme_by_name(&initial);
+            }
+            return;
+        }
+        let groups = crate::components::dialog_select::grouped(&props, &entry.select.filter);
+        let first = crate::components::dialog_select::flat_indices(&groups)
+            .first()
+            .map(|index| props.options[*index].value.clone());
+        if let Some(value) = first {
+            self.set_theme_by_name(&value);
         }
     }
 
@@ -4899,7 +4995,11 @@ mod tests {
         assert_eq!(store.focus(), Focus::Route, "focus returns to the route");
         // update_dialog mutates only the top entry.
         store.open_dialog(DialogKind::ThemeList, DialogSize::Medium);
-        store.update_dialog(|entry| entry.select.set_filter("gru"));
+        let props = crate::components::command_palette::select_props_for(
+            &DialogKind::ThemeList,
+            &store,
+        );
+        store.update_dialog(|entry| entry.select.set_filter("gru", &props, 24));
         assert_eq!(store.top_dialog().unwrap().select.filter, "gru");
     }
 
@@ -6306,3 +6406,103 @@ mod tests {
         assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Hide);
     }
 }
+
+    // -- lane M-theme: the theme dialog's live-preview apply path ----------------
+
+    /// The captured initial, the centered open window, the
+    /// move/filter previews, and the unconfirmed-close revert — the
+    /// `dialog-theme-list.tsx` contract end to end at the store level.
+    #[test]
+    fn theme_dialog_live_preview_applies_and_reverts() {
+        let store = Store::new(Runtime::new());
+        store.set_terminal_size((80, 24));
+        assert_eq!(store.theme().name, "opencode");
+
+        store.open_dialog(DialogKind::ThemeList, DialogSize::Medium);
+        let entry = store.top_dialog().expect("dialog open");
+        assert_eq!(entry.theme_initial.as_deref(), Some("opencode"), "initial captured");
+
+        // The open window centers the current theme (scrollAfterLayout
+        // true): 34 sorted entries, opencode at flat index 22, viewport
+        // min(34, 24/2-6) = 6 → scroll = 22 - 3 = 19 (nightowl first).
+        let props = crate::components::command_palette::theme_list_props(&store);
+        assert!(props.options.iter().all(|option| option.category.is_none()), "flat list");
+        assert_eq!(props.options.len(), 34, "33 + the system slot");
+        assert_eq!(entry.select.selected, 22, "selection = the active theme");
+        assert_eq!(entry.select.scroll, 19, "centered on the active theme");
+
+        // A selection move previews (`onMove`): opencode → orng.
+        store.update_dialog(|top| top.select.move_selection(&props, 1));
+        store.preview_theme_move();
+        assert_eq!(store.theme().name, "orng", "onMove previews live");
+
+        // A filter previews the FIRST match (`onFilter`): "nord" → nord.
+        store.update_dialog(|top| top.select.set_filter("nord", &props, 24));
+        store.preview_theme_filter();
+        assert_eq!(store.theme().name, "nord", "onFilter previews the first match");
+
+        // Clearing the filter resets to the captured initial.
+        store.update_dialog(|top| top.select.set_filter("", &props, 24));
+        store.preview_theme_filter();
+        assert_eq!(store.theme().name, "opencode", "empty filter resets to initial");
+
+        // An unconfirmed close REVERTS (`onCleanup`).
+        store.update_dialog(|top| top.select.set_filter("matrix", &props, 24));
+        store.preview_theme_filter();
+        assert_eq!(store.theme().name, "matrix");
+        store.close_dialog();
+        assert_eq!(store.theme().name, "opencode", "unconfirmed close reverts");
+        assert!(store.top_dialog().is_none());
+    }
+
+    /// A submit CONFIRMS: the preview becomes permanent and no later
+    /// close reverts (`confirmed = true` before `dialog.clear()`).
+    #[test]
+    fn theme_dialog_submit_confirms_and_keeps_the_theme() {
+        let store = Store::new(Runtime::new());
+        store.set_terminal_size((80, 24));
+        store.open_dialog(DialogKind::ThemeList, DialogSize::Medium);
+        let props = crate::components::command_palette::theme_list_props(&store);
+
+        // Filter "nord" (preview), then submit it.
+        store.update_dialog(|top| top.select.set_filter("nord", &props, 24));
+        store.preview_theme_filter();
+        assert_eq!(store.theme().name, "nord");
+        let dispatch = crate::components::dialog::execute_submission(
+            &store,
+            &mut crate::components::command_palette::StoreDispatcher,
+            "nord",
+        );
+        assert_eq!(dispatch, crate::components::command_palette::Dispatch::Handled);
+        assert_eq!(store.theme().name, "nord", "submit applies");
+        assert!(store.top_dialog().is_none(), "submit clears the dialog stack");
+        // Nothing left to revert: later dialog churn must not rewind.
+        store.open_dialog(DialogKind::CommandPalette, DialogSize::Medium);
+        store.close_dialog();
+        assert_eq!(store.theme().name, "nord", "confirmed theme survives closes");
+    }
+
+    /// The applied palette flows to the painters: every styles-derived
+    /// color the surfaces read changes with the theme signal (the
+    /// full-chain smoke — dialog apply → store theme → ThemeStyles).
+    #[test]
+    fn theme_apply_signal_reaches_every_surface_style() {
+        let store = Store::new(Runtime::new());
+        let before = store.theme().styles();
+        store.set_theme_by_name("nord");
+        let after = store.theme().styles();
+        assert_ne!(before.background, after.background, "page fill restyles");
+        assert_ne!(before.background_raised, after.background_raised, "dialog chrome restyles");
+        assert_ne!(before.base, after.base, "whole-frame fill restyles");
+        assert_ne!(before.text, after.text, "text restyles");
+        // The frame renderers consume the store's theme each redraw
+        // (render_app(store, theme, size)) — assert the seam directly.
+        let frame = crate::components::dialog::render_app(&store, &store.theme(), (80, 24));
+        let bg = after.background;
+        let paints_bg = frame
+            .cells
+            .iter()
+            .flat_map(|row| row.iter())
+            .any(|cell| cell.bg == bg.into());
+        assert!(paints_bg, "the rendered frame carries the new palette");
+    }

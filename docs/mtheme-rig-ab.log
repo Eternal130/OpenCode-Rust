@@ -27,3 +27,28 @@
 
 ## Implementation
 (see commits; phases logged below)
+
+## Phase 1 — code (commit wip after this)
+- dialog_select.rs: set_filter(filter, props, height) — clearing to empty
+  re-focuses `current` + CENTERS it (ref filter effect); new
+  center_on_selection (scrollAfterLayout(true) math).
+- store.rs: DialogEntry.theme_initial (capture at open); close/pop/clear/
+  replace revert unconfirmed previews (onCleanup); confirm_theme_dialog;
+  preview_theme_move / preview_theme_filter (onMove/onFilter);
+  focus_dialog_current now centers on `current` at the REAL terminal
+  size (was edge-reveal with hardcoded height 30).
+- dialog.rs: typing/backspace/ctrl+c fire preview_theme_filter;
+  move arm fires preview_theme_move; execute_submission ThemeList arm
+  confirms before clear.
+- app.rs: pointer-motion selection moves preview too.
+- theme.rs: registry gains the always-present `system` slot (headless
+  fallback == opencode doc); tests 33→34 (+system asserts).
+- command_palette.rs: theme_list_props is FLAT (no "Themes" category
+  header — ref options carry no category).
+- oc-theme builtins.rs: GENERATED ref-asset digest table (34 sha256s
+  from /opt/opencode-ref .../assets) + parity test — full byte parity
+  verified (0 mismatches).
+- oc-tui tests: +3 store-level apply-path tests (preview/revert/confirm,
+  submit-keeps, style-signal reaches render_app); pty palette-cycle
+  asserts updated to the centered window (nightowl first, ref shape).
+- RESULT: oc-tui 686/686 green (1 skip pre-existing), oc-theme 25/25.
