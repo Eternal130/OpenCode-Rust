@@ -124,3 +124,11 @@ Baseline nextest: 2887 workspace (oc-tui 621, oc-tui-core 77, parity 84). Releas
 - message-groups goldens: byte-identical (no lists in fixture) — re-pin ran, git shows no change.
 - Internal test suite rewritten: 6 absolute tests pinning the pipeline (fixture layout, bold-crossing-wrap,
   margins, inline conceal+style, blockquote border, hr).
+
+## PHASE 8 — dead-code sweep
+- cargo fmt --all clean; clippy --workspace --all-targets --locked -D warnings CLEAN (fixed: markdown binding
+  shadows, must_use candidates on now-public solvers [truncate_file_path, Transcript::paint], assigning_clones,
+  unbalanced doc backticks, dead test scaffolding [transcript Scenario/base_fill/assistant_markdown,
+  home Scenario name/placeholder], format-string cleanups in the budget eprintlns after the label constants).
+- Dep sweep: oc-tui's DIRECT opentui-keymap dep moved to dev-dependencies (the smoke test is its only consumer;
+  oc-tui-core owns the real engine dep). No other unused deps.

@@ -452,5 +452,4 @@ mod tests {
             "the cell right of the ✕ selects"
         );
     }
-
 }

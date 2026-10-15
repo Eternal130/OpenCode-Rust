@@ -872,7 +872,6 @@ mod tests {
         PromptDraft { text: text.to_owned(), ..PromptDraft::default() }
     }
 
-
     /// The reactive path patches in place: typing churn on the last
     /// row re-renders WITHOUT a rebuild (same mount — content-height
     /// frames only rebuild when a wrap lands a new row). The
