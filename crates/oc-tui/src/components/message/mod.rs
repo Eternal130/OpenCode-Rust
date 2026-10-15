@@ -21,7 +21,7 @@ pub use list::{
     render_transcript, resolve_part, vscroll_appended_turn, vscroll_messages_fixture, FollowState,
     MeasuredRow, ThinkingMode, Transcript, TranscriptOptions,
 };
-pub use markdown::{parse_blocks, parse_inline, render_markdown, MarkdownLine, MarkdownStyles};
+pub use markdown::{render_markdown, MarkdownLine, MarkdownStyles};
 pub use model::{
     canonical_tool_name, exploration_label, locale_duration, reasoning_summary, reduce_rows,
     titlecase, turn_duration, Entry, GroupKind, Message, Part, PartTime, Row,
