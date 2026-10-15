@@ -44,7 +44,6 @@ use opentui_core::Rgba;
 use opentui_solid::element::PropValue;
 use opentui_solid::{box_, text, Element, SolidRenderer};
 
-
 /// The presentation palette (presentation.ts:3-24) — the EXACT
 /// xterm-256 RGB values the SGR indices resolve to, so the raster →
 /// ANSI walk round-trips closed: SGR 90 (bright black) is xterm's
@@ -429,6 +428,4 @@ pub fn session_epilogue_dispatch(title: &str, session_id: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-
-}
+mod tests {}

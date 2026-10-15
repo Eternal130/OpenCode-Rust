@@ -585,7 +585,11 @@ mod tests {
         for selected in 0..4 {
             state.selected = selected;
             let solid = paint_solid_picker_panel(&state, &list, selected, &theme(), 80);
-            assert_eq!(solid.height, usize::from(crate::components::subagent_picker::PANEL_ROWS), "rows at selection {selected}");
+            assert_eq!(
+                solid.height,
+                crate::components::subagent_picker::PANEL_ROWS,
+                "rows at selection {selected}"
+            );
             let mount_count = usize::from(PICKER.with_borrow(Option::is_some));
             previous_mount = Some(mount_count);
         }
