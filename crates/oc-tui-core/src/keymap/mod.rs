@@ -200,6 +200,22 @@ impl EngineSel {
     }
 }
 
+
+/// Assert a leader-arm outcome, accepting either display form: the
+/// legacy engine shows the raw stroke ("ctrl+x"), the opentui engine
+/// the `<leader>` token (upstream getPendingSequence's display —
+/// v2's own form). The pinned semantic is the PENDING itself.
+#[cfg(test)]
+pub(crate) fn assert_pending_leader(outcome: &Outcome) {
+    match outcome {
+        Outcome::Pending { display } => assert!(
+            display == "ctrl+x" || display == "<leader>",
+            "leader display form ({display})"
+        ),
+        other => panic!("expected the leader to arm, got {other:?}"),
+    }
+}
+
 /// Result of feeding one stroke to the keymap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
@@ -778,10 +794,7 @@ mod tests {
         let clock = ManualClock::default();
         // <leader>q decollided (Wave A): the chord belongs to
         // session.queued_prompts, never app.exit.
-        assert_eq!(
-            keymap.lookup(stroke("ctrl+x"), &clock),
-            Outcome::Pending { display: "ctrl+x".to_owned() }
-        );
+        assert_pending_leader(&keymap.lookup(stroke("ctrl+x"), &clock));
         assert_eq!(
             keymap.lookup(stroke("q"), &clock),
             Outcome::Command { command: "session.queued_prompts".to_owned(), args: None }
@@ -793,10 +806,7 @@ mod tests {
             ("m", "model.list"),
             ("w", "session.tab.close"),
         ] {
-            assert_eq!(
-                keymap.lookup(stroke("ctrl+x"), &clock),
-                Outcome::Pending { display: "ctrl+x".into() }
-            );
+            assert_pending_leader(&keymap.lookup(stroke("ctrl+x"), &clock));
             assert_eq!(
                 keymap.lookup(stroke(chord_tail), &clock),
                 Outcome::Command { command: command.to_owned(), args: None },
@@ -804,10 +814,7 @@ mod tests {
             );
         }
         // The pending display extends for multi-stroke prefixes.
-        assert_eq!(
-            keymap.lookup(stroke("ctrl+x"), &clock),
-            Outcome::Pending { display: "ctrl+x".into() }
-        );
+        assert_pending_leader(&keymap.lookup(stroke("ctrl+x"), &clock));
     }
 
     #[test]
@@ -1188,10 +1195,7 @@ mod override_tests {
         keymap.register_owned(owned("hw.hello", &["ctrl+x h"]));
 
         // The plugin chord resolves (leader sequence).
-        assert_eq!(
-            keymap.lookup(stroke("ctrl+x"), &clock),
-            Outcome::Pending { display: "ctrl+x".to_owned() }
-        );
+        assert_pending_leader(&keymap.lookup(stroke("ctrl+x"), &clock));
         assert_eq!(
             keymap.lookup(stroke("h"), &clock),
             Outcome::Command { command: "hw.hello".to_owned(), args: None }
