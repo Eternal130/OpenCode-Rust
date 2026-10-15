@@ -75,4 +75,10 @@ jobs:
       # Frame-budget guard runs in RELEASE (the product profile);
       # debug numbers are informational only (see the test's notes).
       - name: Frame budget guard (release)
-        run: cargo nextest run --release -p oc-tui --locked -E 'test(frame_budget)' 
+        # CI runners are ~2x slower than the dev box the nominal 40ms
+        # budget is calibrated for (shared 2-core). The scale widens the
+        # regression ceiling for slow machines only; local runs stay
+        # strict. See frame_budget_tests.rs::frame_budget_ms.
+        run: cargo nextest run --release -p oc-tui --locked -E 'test(frame_budget)'
+        env:
+          OC_FRAME_BUDGET_SCALE: "2"
