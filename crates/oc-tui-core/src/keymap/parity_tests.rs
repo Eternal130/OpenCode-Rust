@@ -7,7 +7,7 @@
 //!
 //! The engine path latches at `Keymap` construction; the in-process
 //! override ([`crate::__set_test_engine_override`]) selects the
-//! variant under the parity lock (the flag's OnceLock makes env-based
+//! variant under the parity lock (the flag's `OnceLock` makes env-based
 //! A/B impossible inside one libtest process).
 
 use super::*;
@@ -18,28 +18,6 @@ static PARITY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn parity_lock() -> MutexGuard<'static, ()> {
     PARITY_LOCK.get_or_init(|| Mutex::new(())).lock().expect("parity lock")
-}
-
-/// Sets the engine-path override for the guard's scope (resets on
-/// drop — panics must not leak the override into other tests).
-struct OverrideGuard(bool);
-
-impl OverrideGuard {
-    fn new(opentui: bool) -> Self {
-        crate::__set_test_engine_override(Some(opentui));
-        Self(opentui)
-    }
-
-    fn flip(&mut self, opentui: bool) {
-        self.0 = opentui;
-        crate::__set_test_engine_override(Some(opentui));
-    }
-}
-
-impl Drop for OverrideGuard {
-    fn drop(&mut self) {
-        crate::__set_test_engine_override(None);
-    }
 }
 
 /// Build a keymap on the given engine path (call sites hold the
@@ -66,9 +44,9 @@ fn feed(keymap: &mut Keymap, chord: &Chord, clock: &dyn Clock) -> Vec<Outcome> {
 }
 
 /// The parity key: kind + command, with Pending displays normalized —
-/// the opentui engine shows the `<leader>` TOKEN form (upstream's
+/// the opentui engine shows the `<leader>` token form (upstream's
 /// `getPendingSequence` display, the v2-faithful form), the legacy
-/// engine the raw stroke; resolution parity is about WHICH command
+/// engine the raw stroke. Resolution parity is about WHICH command
 /// fires, never the display string.
 fn parity_key(outcomes: Vec<Outcome>) -> Vec<(&'static str, Option<String>)> {
     outcomes
@@ -107,8 +85,7 @@ fn resolution_parity_table_both_engines() {
                 continue;
             }
             let Some(chord) = Chord::parse(spec, &leader) else { continue };
-            let modes: Vec<&str> =
-                if def.layer == "base" { Vec::new() } else { vec![def.layer] };
+            let modes: Vec<&str> = if def.layer == "base" { Vec::new() } else { vec![def.layer] };
             let legacy_outcomes = {
                 legacy.set_modes(&modes);
                 let out = feed(&mut legacy, &chord, &clock);
@@ -200,10 +177,7 @@ fn conflicting_strokes_resolve_identically() {
         opentui.set_modes(&modes);
         let opentui_outcome = opentui.lookup(stroke(spec), &clock);
         opentui.set_modes(&[]);
-        assert_eq!(
-            legacy_outcome, opentui_outcome,
-            "{spec} in mode {mode:?} diverged"
-        );
+        assert_eq!(legacy_outcome, opentui_outcome, "{spec} in mode {mode:?} diverged");
     }
 }
 
@@ -238,7 +212,11 @@ fn k1_nonleader_sequences_arm_on_the_opentui_engine_only() {
 
     let mut legacy = keymap_on(false);
     legacy.apply_overrides(&overrides);
-    assert_eq!(legacy.lookup(stroke("g"), &clock), Outcome::Unhandled, "K-1 on legacy: g never arms");
+    assert_eq!(
+        legacy.lookup(stroke("g"), &clock),
+        Outcome::Unhandled,
+        "K-1 on legacy: g never arms"
+    );
     assert_eq!(legacy.lookup(stroke("g"), &clock), Outcome::Unhandled);
 
     let mut opentui = keymap_on(true);
@@ -262,8 +240,9 @@ fn k1_nonleader_sequences_arm_on_the_opentui_engine_only() {
 #[test]
 fn k2_sequence_miss_does_not_redispatch_on_the_opentui_engine() {
     let _guard = parity_lock();
-    let overrides =
-        parse_keybind_overrides(&serde_json::json!({ "session.rename": "z", "app.exit": "ctrl+c" }));
+    let overrides = parse_keybind_overrides(
+        &serde_json::json!({ "session.rename": "z", "app.exit": "ctrl+c" }),
+    );
     let clock = ManualClock::default();
 
     let mut legacy = keymap_on(false);
@@ -334,13 +313,15 @@ fn k3_continuation_shadows_exact_across_layers() {
 #[test]
 fn k5_hyper_modifier_stays_distinct() {
     let _guard = parity_lock();
-    let super_stroke = KeyStroke { key: "a".into(), ctrl: false, shift: false, alt: false, super_key: true };
+    let super_stroke =
+        KeyStroke { key: "a".into(), ctrl: false, shift: false, alt: false, super_key: true };
     let input = opentui::stroke_input_for_test(&super_stroke);
     // The donor's normalizer: super and hyper produce DIFFERENT
     // normal forms (never folded into a super+meta alias).
     let super_only = opentui_keymap::stringify::normalize_key_stroke(&input).expect("normalizes");
     let hyper_input = KeyStrokeInput { hyper: Some(true), super_key: Some(false), ..input.clone() };
-    let hyper_only = opentui_keymap::stringify::normalize_key_stroke(&hyper_input).expect("normalizes");
+    let hyper_only =
+        opentui_keymap::stringify::normalize_key_stroke(&hyper_input).expect("normalizes");
     assert_ne!(super_only, hyper_only, "K-5 dissolved: hyper stays a distinct modifier");
 }
 
@@ -398,8 +379,7 @@ fn k7_backspace_pops_and_comma_expands() {
     );
 
     // Comma parity on both engines.
-    let overrides =
-        parse_keybind_overrides(&serde_json::json!({ "session.rename": "j,k" }));
+    let overrides = parse_keybind_overrides(&serde_json::json!({ "session.rename": "j,k" }));
     let mut legacy = keymap_on(false);
     legacy.apply_overrides(&overrides);
     let mut opentui = keymap_on(true);

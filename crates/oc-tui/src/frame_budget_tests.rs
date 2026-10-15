@@ -914,11 +914,7 @@ fn engine_keystroke_budget_body() {
     let mut total_micros = 0u128;
     let keystrokes = 200u128;
     for frame in 0..keystrokes {
-        let key = if frame % 4 == 3 {
-            ComposerKey::Backspace
-        } else {
-            ComposerKey::Char('x')
-        };
+        let key = if frame % 4 == 3 { ComposerKey::Backspace } else { ComposerKey::Char('x') };
         let start = std::time::Instant::now();
         let mut composer = store.composer("s1");
         let _ = composer.handle_key(&key);
@@ -928,12 +924,8 @@ fn engine_keystroke_budget_body() {
         total_micros += elapsed.as_micros();
     }
     // The motion/undo churn (the engine's heavy ops on the long draft).
-    for command in [
-        ComposerKey::CtrlA,
-        ComposerKey::CtrlE,
-        ComposerKey::CtrlK,
-        ComposerKey::CtrlU,
-    ] {
+    for command in [ComposerKey::CtrlA, ComposerKey::CtrlE, ComposerKey::CtrlK, ComposerKey::CtrlU]
+    {
         let start = std::time::Instant::now();
         let mut composer = store.composer("s1");
         let _ = composer.handle_key(&command);

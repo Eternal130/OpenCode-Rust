@@ -1636,7 +1636,7 @@ impl Store {
     pub fn set_prompt_viewport_width(&self, width: usize) {
         self.prompt.update(|state| {
             for edit in state.edits.values_mut() {
-                edit.set_viewport_width(width.max(1) as u32);
+                edit.set_viewport_width(u32::try_from(width.max(1)).unwrap_or(u32::MAX));
             }
         });
     }
