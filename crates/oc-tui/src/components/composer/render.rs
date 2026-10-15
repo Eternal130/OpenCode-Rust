@@ -559,12 +559,23 @@ fn cell_color(color: Rgba) -> CellColor {
     CellColor::Rgb(color.r, color.g, color.b)
 }
 
+/// The composer textarea's INNER width (the text column count the
+/// wrap solver AND the editing engine's visual-line model use — the
+/// rail 1 + the mount's pads). One resolution shared by the height
+/// walk, the frame renderers, and the engine's viewport (lane
+/// M-engine: the opentui editor's wrap width must match the DISPLAY
+/// wrap so visual motions follow the painted rows).
+#[must_use]
+pub fn prompt_text_width(width: usize) -> usize {
+    let pad = if width >= 44 { 2 } else { 1 };
+    width.saturating_sub(1 + pad * 2).max(1)
+}
+
 /// The composer mount's intrinsic height: the box (1 pad + textarea
 /// rows + 1 metadata pad) + the ╹▀ transition + the footer row.
 #[must_use]
 pub fn mount_height(draft: &PromptDraft, width: usize, height: usize) -> usize {
-    let pad = if width >= 44 { 2 } else { 1 };
-    let inner = width.saturating_sub(1 + pad * 2).max(1);
+    let inner = prompt_text_width(width);
     let lines = layout_draft_lines(draft, inner);
     let max_height = (height / 3).max(6);
     let textarea_rows = (lines.len().max(1) + 1).min(max_height);

@@ -633,7 +633,7 @@ pub struct PromptState {
         std::collections::HashMap<String, crate::components::composer::AutocompleteState>,
     /// The editing state keyed by session (Wave A: the text-edit
     /// core's caret/selection/undo stacks survive the round-trip).
-    pub edits: std::collections::HashMap<String, oc_tui_core::text_edit::TextArea>,
+    pub edits: std::collections::HashMap<String, oc_tui_core::text_edit_opentui::EditCore>,
     pub history: PromptHistory,
     /// The rotated placeholder pick (lane/chrome #6 — the per-boot
     /// `randomIndex` roll; the pool itself is the route's constant).
@@ -1622,12 +1622,23 @@ impl Store {
         };
         // The text mirror resyncs on the way in (the draft is the
         // store-facing source; the caret/selection persist in `edit`).
-        if composer.edit.text != composer.draft.text {
-            composer.edit.text = composer.draft.text.clone();
-            let caret = composer.edit.caret.min(composer.draft.text.chars().count());
-            composer.edit.caret = caret;
+        if composer.edit.text() != composer.draft.text {
+            let caret = composer.edit.caret().min(composer.draft.text.chars().count());
+            composer.edit.mirror_text(&composer.draft.text);
+            composer.edit.set_caret_keep_anchor(caret);
         }
         composer
+    }
+
+    /// Update every composer engine's wrap width (the opentui editing
+    /// engine's visual-line viewport — the display wrap's inner width,
+    /// kept fresh on resize; a no-op on the legacy path).
+    pub fn set_prompt_viewport_width(&self, width: usize) {
+        self.prompt.update(|state| {
+            for edit in state.edits.values_mut() {
+                edit.set_viewport_width(width.max(1) as u32);
+            }
+        });
     }
 
     /// Store a composer edit (draft + history + autocomplete advance
