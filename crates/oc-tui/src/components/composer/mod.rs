@@ -29,7 +29,8 @@ pub use attachment::{
 pub use autocomplete::{AutocompleteState, SlashEntry, SlashRegistry};
 pub use oc_tui_core::text_edit::EditCommand as ComposerEditCommand;
 pub use oc_tui_core::text_edit::{EditOutcome, SnapshotKind};
-pub use render::{render_prompt_frame, AutocompleteView, FooterHints, PromptView};
+pub use oc_tui_core::text_edit_opentui::EditCore;
+pub use render::{prompt_text_width, render_prompt_frame, AutocompleteView, FooterHints, PromptView};
 
 use std::rc::Rc;
 
@@ -219,8 +220,10 @@ impl ClusterBounds for WrapClusters {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Composer {
     pub draft: PromptDraft,
-    /// The editing state (caret + selection anchor + undo/redo).
-    pub edit: TextArea,
+    /// The editing state (caret + selection anchor + undo/redo) — the
+    /// flag-selected engine (legacy `TextArea` or the opentui-core
+    /// textarea line behind [`EditCore`]).
+    pub edit: EditCore,
     /// The mention snapshots parallel to the area's undo stack
     /// (an undo restores chips with their text).
     pub(crate) files_undo: Vec<Vec<FileMention>>,
@@ -248,10 +251,15 @@ impl Default for Composer {
 
 impl Composer {
     /// A fresh editing state with the composer's cluster model (the
-    /// store round-trip's default entry).
+    /// legacy engine's wrap-derived clusters; the opentui engine has
+    /// its own grapheme model). Flag-selected once per process.
     #[must_use]
-    pub fn fresh_edit() -> TextArea {
-        TextArea::with_clusters(Rc::new(WrapClusters))
+    pub fn fresh_edit() -> EditCore {
+        if oc_tui_core::opentui_engine_enabled() {
+            EditCore::fresh()
+        } else {
+            EditCore::Legacy(TextArea::with_clusters(Rc::new(WrapClusters)))
+        }
     }
 }
 
@@ -339,14 +347,13 @@ impl Composer {
     /// Caret offset in chars (the editing state's caret).
     #[must_use]
     pub fn caret(&self) -> usize {
-        self.edit.caret
+        self.edit.caret()
     }
 
     /// Place the caret (tests + the history/paste paths that anchor
     /// it at an edge).
     pub fn set_caret(&mut self, caret: usize) {
-        self.edit.caret = caret.min(self.edit.text.chars().count());
-        self.edit.anchor = None;
+        self.edit.set_caret(caret);
     }
 
     /// The caret/selection accessor core (tests + the render seam).
@@ -437,13 +444,13 @@ impl Composer {
     /// refreshed on content changes (v2's `onContentChange`).
     fn run_tracked(
         &mut self,
-        run: impl FnOnce(&mut TextArea) -> EditOutcome,
+        run: impl FnOnce(&mut EditCore) -> EditOutcome,
         refresh_autocomplete: bool,
     ) -> EditOutcome {
-        self.edit.text = std::mem::take(&mut self.draft.text);
+        self.edit.mirror_text(&self.draft.text);
         let files_before = self.draft.files.clone();
         let outcome = run(&mut self.edit);
-        self.draft.text = std::mem::take(&mut self.edit.text);
+        self.draft.text = self.edit.text();
         let text_changed = match &outcome {
             EditOutcome::Rejected => false,
             EditOutcome::Applied { replaced, inserted, snapshot } => {
@@ -455,7 +462,7 @@ impl Composer {
             }
         };
         if refresh_autocomplete && text_changed {
-            self.autocomplete.on_input(&self.draft.text, self.edit.caret);
+            self.autocomplete.on_input(&self.draft.text, self.edit.caret());
         }
         outcome
     }
@@ -490,7 +497,7 @@ impl Composer {
     /// The mention chip the caret sits at the END of (backspace
     /// deletes it atomically).
     fn chip_before_caret(&self) -> Option<std::ops::Range<usize>> {
-        let caret = self.edit.caret;
+        let caret = self.edit.caret();
         self.draft
             .files
             .iter()
@@ -501,7 +508,7 @@ impl Composer {
     /// The mention chip the caret sits at the START of (delete
     /// forward).
     fn chip_after_caret(&self) -> Option<std::ops::Range<usize>> {
-        let caret = self.edit.caret;
+        let caret = self.edit.caret();
         self.draft
             .files
             .iter()
@@ -562,7 +569,7 @@ impl Composer {
 
     fn line_start_offset(&self) -> usize {
         let text = &self.draft.text;
-        let byte = char_to_byte(text, self.edit.caret.min(text.chars().count()));
+        let byte = char_to_byte(text, self.edit.caret().min(text.chars().count()));
         let start = text[..byte].rfind('\n').map_or(0, |pos| pos + 1);
         text[..start].chars().count()
     }
@@ -627,7 +634,7 @@ impl Composer {
     pub fn paste_attachment(&mut self, filename: Option<&str>, uri: &str) {
         let payload = AttachmentPayload::from_data_uri(uri);
         let label = attachment::prompt_attachment_label(&self.draft.files, &payload, filename);
-        let start = self.edit.caret;
+        let start = self.edit.caret();
         self.insert_text(&format!("{label} "));
         let end = start + label.chars().count();
         self.draft.files.push(FileMention {
@@ -703,7 +710,7 @@ impl Composer {
             return KeyOutcome::Edited;
         }
         let text = self.draft.text.clone();
-        let byte = char_to_byte(&text, self.edit.caret);
+        let byte = char_to_byte(&text, self.edit.caret());
         if text[byte..].find('\n').is_none() {
             return self.history_next();
         }
@@ -797,7 +804,7 @@ impl Composer {
         match key {
             ComposerKey::Char(ch) => {
                 self.insert_text(&ch.to_string());
-                self.autocomplete.on_input(&self.draft.text, self.edit.caret);
+                self.autocomplete.on_input(&self.draft.text, self.edit.caret());
                 KeyOutcome::Edited
             }
             ComposerKey::Enter => match self.take_submit() {
@@ -840,12 +847,12 @@ impl Composer {
             }
             ComposerKey::Backspace => {
                 self.backspace();
-                self.autocomplete.on_input(&self.draft.text, self.edit.caret);
+                self.autocomplete.on_input(&self.draft.text, self.edit.caret());
                 KeyOutcome::Edited
             }
             ComposerKey::Delete => {
                 self.delete_forward();
-                self.autocomplete.on_input(&self.draft.text, self.edit.caret);
+                self.autocomplete.on_input(&self.draft.text, self.edit.caret());
                 KeyOutcome::Edited
             }
             ComposerKey::CtrlK => {
@@ -890,7 +897,7 @@ impl Composer {
                 // `hide(true)`: the trigger token is removed first.
                 let index = self.autocomplete.trigger_index;
                 self.autocomplete.close();
-                let end = self.edit.caret;
+                let end = self.edit.caret();
                 if index <= end {
                     self.delete_range(index..end);
                 }
