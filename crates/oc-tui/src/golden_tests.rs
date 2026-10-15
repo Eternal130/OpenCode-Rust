@@ -568,6 +568,7 @@ fn command_palette_frame(width: u16, height: u16) -> Frame {
         size: DialogSize::Medium,
         select: SelectState::default(),
         value: String::new(),
+        theme_initial: None,
     };
     // Empty app base: renderer default fg over the theme base bg.
     let base_bg = theme.resolved.tokens.background.base;

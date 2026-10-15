@@ -455,6 +455,16 @@ impl App {
         let before = self.store.dialogs().last().map_or(usize::MAX, |top| top.select.selected);
         self.store.update_dialog(|top| top.select.selected = index);
         if before != index {
+            // Pointer motion runs the same `moveTo` → `onMove` path as
+            // the keyboard — the theme list previews on it too.
+            if self
+                .store
+                .dialogs()
+                .last()
+                .is_some_and(|top| matches!(top.kind, crate::store::DialogKind::ThemeList))
+            {
+                self.store.preview_theme_move();
+            }
             self.store.request_redraw();
         }
     }
