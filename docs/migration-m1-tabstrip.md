@@ -663,3 +663,22 @@ home path paints either composer path's frame).
   (**+110,688 B ≈ +108 KiB, +0.17%**) — the pane's unit For + the
   home chrome tree + the shared `plan_home` extraction ride the
   graph opentui already occupies.
+
+## Operational addendum — the host location-TTL reaper (do not fix, route around)
+
+opencode core (v2.0.25) evicts idle LOCATIONS: 60 minutes with zero
+session events in a directory → `execution.interrupt({reason:
+"inactivity"})` on every session owned by that location → the subagent
+job turns `cancelled` and its background tool processes are reaped with
+it (`awaitSettlement: true`). A lane worktree is a SOLO location — the
+orchestrator's activity in the main checkout does NOT refresh it.
+Therefore: **any lane that parks on a background shell for >60 min dies
+silently**. Rules (mandatory for every lane):
+1. Long verification runs as FOREGROUND CHUNKS — every chunk is a tool
+   call that refreshes the location TTL. This includes
+   `verify-lane.sh final`: invoke its phases piecewise, never the
+   hours-long wrapper in one background shot.
+2. Watchdog armed at DISPATCH time (disk-activity + non-wip terminal
+   subject), so a reaped lane is found in minutes, not hours.
+3. On revive: reload from WIP commits + logs; kill any orphaned shells
+   from the previous generation before starting new ones.
