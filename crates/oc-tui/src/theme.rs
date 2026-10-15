@@ -713,10 +713,7 @@ mod tests {
         let names = registry.names();
         assert_eq!(names[0], "aura", "sorted, case-insensitive");
         assert!(names.contains(&"opencode".to_owned()));
-        assert!(
-            names.contains(&"system".to_owned()),
-            "listThemes always exposes a system slot"
-        );
+        assert!(names.contains(&"system".to_owned()), "listThemes always exposes a system slot");
         // The headless system slot resolves to the opencode document
         // (`systemTheme ?? themes.system ?? themes.opencode` with no
         // detected/generated palette).

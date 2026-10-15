@@ -28,7 +28,7 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 
-use crate::components::command_palette::{select_props_for, CommandDispatcher, StoreDispatcher};
+use crate::components::command_palette::{select_props_for_entry, CommandDispatcher, StoreDispatcher};
 use crate::components::dialog_select::{render_select, DialogStyles, SelectView};
 use crate::keymap::{Clock, KeyStroke, Keymap, Outcome};
 use crate::render::Frame;
@@ -68,7 +68,7 @@ pub fn handle_dialog_key(
     terminal: (u16, u16),
 ) -> DialogKeyOutcome {
     let Some(entry) = store.top_dialog() else { return DialogKeyOutcome::Unhandled };
-    let props = select_props_for(&entry.kind, store);
+    let props = select_props_for_entry(&entry, store);
     let is_select = match &entry.kind {
         // The rename + worktree-name dialogs are the prompt-style
         // inputs (not selects).
@@ -299,7 +299,7 @@ pub fn render_overlay(
         store.set_dialog_frame_rect(None);
         return;
     }
-    let props = select_props_for(&entry.kind, store);
+    let props = select_props_for_entry(&entry, store);
     let plugin = match &entry.kind {
         DialogKind::Plugin { id } => store.plugin_dialog_content(id),
         _ => None,
