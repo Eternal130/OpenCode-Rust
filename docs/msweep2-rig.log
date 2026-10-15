@@ -1,0 +1,114 @@
+# M-sweep2 — FINAL full-corpus differential rig log (lane/sweep2)
+
+Acceptance evidence sweep for tagging **v2.0.24.beta.12**, run post-M-retire
+(opentui is the only renderer). Full corpus, FULL live (`--no-ref-cache`),
+both sizes × `--runs 2`, one script per invocation, against the pinned
+v2.0.24 reference. Baseline: the FIRST final sweep at
+`/tmp/opencode/final-sweep/` (report.md + per-step data).
+
+Worktree: `/opt/opencode-rust/.worktrees/lane-sweep2` (branch `lane/sweep2`,
+base a7a71b1). Artifacts: `/tmp/opencode/final-sweep-2/` (per-script report
+snapshots under `reports/`). Stale-binary rule honored: `target/debug/
+opencode-rust` + `target/debug/oc-server` are removed before every rig
+invocation (rig rebuilds them).
+
+Registered mismatch classes (adjudication whitelist):
+- **(b)-coin** — per-run random: stats-row digits, `Thought Nms` suffix,
+  farewell session-id chars, home-placeholder rotation, per-run random text
+  lengths (structural mode).
+- **style: backdrop-fg idx15** — pre-existing style family.
+- **style: input-caret cell** — pre-existing style family.
+- **style: mini-footer idx216↔232/233** — pre-existing family (future
+  mini-footer lane, registered).
+- **markdown list-marker/inline-concealment** — new, upstream-faithful,
+  goldened in M-retire.
+
+Acceptance bar: every script identical-or-better vs sweep 1; every mismatch
+step decomposes into the classes above; any NEW divergence class = STOP.
+
+## Per-script verdict table
+
+| # | script | sweep-2 rows (identical/text-only/mismatch per size×run) | vs sweep-1 | mismatch classes seen | verdict |
+|---|---|---|---|---|---|
+| 1 | boot-home | 80x24: 0/0/3, 0/0/3 · 120x30: 0/0/3, 0/0/3 | 3 rows IDENTICAL; r1@80x24 Δmism+3 (coin flipped: sweep-1 landed same-placeholder, sweep-2 opposite; ref/our placeholders swap between r0/r1 — per-boot random on both sides) | (b)-coin home-placeholder only (sweep-1's r1@80x24 fully identical proves zero fixed-position style diffs when coin matches) | PASS — no new class |
+| 2 | click-coverage-dialog | 80x24: 2/0/7, 6/0/3 | both rows IDENTICAL | (b)-coin home-placeholder; style: backdrop-fg idx15 | PASS — no new class |
+| 3 | click-coverage-home | 80x24: 5/0/0, 5/0/0 | r0 IDENTICAL; r1 BETTER (Δident+4, coin landed matching — sweep-1's gone steps 0-3 verified placeholder-class row 13) | none (zero mismatches both runs) | PASS — better than sweep-1 |
+| 4 | click-coverage-session | 80x24: 6/0/9, 6/0/9 | both rows BETTER (Δmism-3); gone steps [0,1,6]/run = home coin; all 18 remaining mismatch steps have byte-identical first-diff signatures vs sweep-1 (same registered classes: models-row text coin, backdrop-fg idx15, mini-footer idx242↔8/251↔255 family cells) | (b)-coin; backdrop-fg idx15; mini-footer family | PASS — better, no new class |
+| 5 | composer-clear | 80x24: 5/0/5, 10/0/0 · 120x30: 5/0/5, 5/0/5 | 120x30 both rows IDENTICAL; 80x24 coin swapped runs (sweep-1 r1 missed / sweep-2 r0 missed, same step set {0,1,7,8,9}; sweep-2 r0 signatures byte-identical to sweep-1 r1 — placeholder row 13, 21/20/10 composition) | (b)-coin home-placeholder only | PASS — no new class |
+| 6 | help-dialog | 80x24: 6/0/2, 3/0/5 · 120x30: 3/0/5, 3/0/5 | 2 rows IDENTICAL; coin migrated {0,1,5} between 80x24-r0 (now matching) and 120x30-r0 (now missing) — composition identical 21/20/10 'a'→'b' placeholder row (pos shifts with size geometry) | (b)-coin home-placeholder; backdrop-fg idx15 | PASS — no new class |
+| 7 | hover-sweep | 80x24: 2/0/15, 2/0/15 · 120x30: 2/0/15, 2/0/15 | r1 rows IDENTICAL; r0 rows Δmism+4, new steps {0,1,2,7} = home-placeholder coin (39/38/13 composition byte-identical to sweep-1's r1 coin steps, coin sides swapped); all 52 doubly-mismatched steps signature-identical | (b)-coin; backdrop-fg idx15; tab-title fg251↔255 [bold] family; mini-footer family | PASS — coin-only delta, no new class |
+| 8 | long-reply-scroll | 80x24: 2/0/14, 2/0/14 · 120x30: 5/0/11, 5/0/11 | 3 rows IDENTICAL; 80x24-r1 Δmism+3, new steps {0,1,6} = placeholder coin (21/20/10 'b'↔'a' row 13 — different drawn pair than r0's 39/38/13, same class); all 47 doubly-mismatched steps signature-identical | (b)-coin; backdrop-fg idx15; mini-footer family | PASS — coin-only delta, no new class |
+| 9 | mouse-hover-tabstrip | 80x24: 2/0/15, 5/0/12 · 120x30: 5/0/12, 5/0/12 | 2 rows IDENTICAL, 2 rows BETTER (120x30 Δmism-3 each; gone {0,1,6} = early coin steps); all 51 doubly-mismatched steps signature-identical; zero new steps | (b)-coin; backdrop-fg idx15; tab-title fg251↔255 family; mini-footer family | PASS — better, no new class |
+| 10 | multi-session | 80x24: 5/0/20, 2/0/23 · 120x30: 2/0/23, 2/0/23 | 1 row IDENTICAL; coin migrated {0,1,6} out of 80x24-r0 (Δmism-3) into 80x24-r1 and 120x30-r0 (Δmism+3 each) — all six new steps verified 'W'↔'F' placeholder-row coin; 83 doubly-mismatched steps signature-identical | (b)-coin; backdrop-fg idx15; tab-title/mini-footer families | PASS — coin-only delta, no new class |
+| 11 | multi-turn | 80x24: 4/1/19, 7/1/16 · 120x30: 7/1/16, 4/1/19 | ALL rows better-or-equal (Δmism -1..-4); gone: coin steps {0,1,6} + exit step 23 which is now text-only = farewell session-id chars (`ses_ebef1a369ffe…`↔`ses_ebef1a374ffe…`, char-only, style 0) — registered (b)-class; 70 doubly-mismatched steps signature-identical; zero new steps | (b)-coin; farewell session-id; backdrop-fg idx15; mini-footer family | PASS — better, no new class |
+| 12 | palette | 80x24: 0/0/6, 0/0/6 · 120x30: 0/0/6, 0/0/6 | NUMERICALLY WORSE (all rows Δmism+4, identical 4→0/2→0/4→0/2→0) but 100% coin: new steps {0,1,4,5}×3 rows all placeholder coin at (25,13) 'b'↔'a', byte-identical composition (settled+structure) to sweep-1's coin run r1@80x24; palette keeps home visible through 4 steps → all-or-nothing coin swing (4 coin-exposed steps/run); 12 doubly-mismatched steps signature-identical | (b)-coin home-placeholder only | PASS — coin-only delta, no new class (flag: numerically worse) |
+| 13 | rename-dialog | 80x24: 5/0/10, 2/0/13 · 120x30: 2/0/13, 2/0/13 | 1 row IDENTICAL; coin migrated {0,1,6} 80x24-r0→r1 and into 120x30-r1, all verified placeholder coin ('W'↔'F'/(45,16)'a'↔'b'); 43 doubly-mismatched steps signature-identical | (b)-coin; backdrop-fg idx15; mini-footer family | PASS — coin-only delta, no new class |
+| 14 | resize | 80x24: 5/0/1, 0/0/6 · 120x30: 0/0/6, 0/0/6 | 2 rows IDENTICAL; 2 rows NUMERICALLY WORSE (80x24-r1 Δmism+5, 120x30-r1 Δmism+6) but all 11 new steps = placeholder coin ('W'↔'F'/'a'↔'b', position tracks each resize geometry — (21,13)→(31,15)→(24,12)…); home persists across all resize steps → all-or-nothing coin; 8 doubly-mismatched steps signature-identical | (b)-coin home-placeholder only | PASS — coin-only delta, no new class (flag: numerically worse) |
+| 15 | session-list-dialog | 80x24: 2/0/12, 2/0/12 · 120x30: 2/0/12, 2/0/12 | 3 rows IDENTICAL; 120x30-r1 coin-miss Δmism+3, new steps {0,1,6} all 'F'↔'W' placeholder coin at (41,16); 45 doubly-mismatched steps signature-identical | (b)-coin; backdrop-fg idx15; mini-footer family | PASS — coin-only delta, no new class |
+| 16 | sidebar-wide | 160x36: 2/0/14, 2/0/14 | both rows IDENTICAL; all 28 mismatch steps signature-identical to sweep-1 | tab-title/mini-footer families; markdown class (as sweep-1) | PASS — exact reproduction |
+| 17 | subagent-basic | 80x24: 2/1/11, 5/1/8 · 120x30: 2/1/11, 5/1/8 | 2 rows better-or-equal; 80x24-r0 coin-miss (new {0,1,6} = placeholder coin); exit step 13 improved in ALL rows: sweep-1's farewell half-row mismatch ('▄' vs blank at (35,0)) now text-only session-id chars (`ses_ebedad2b…`↔`ses_ebedad2c…`) — registered (b)-class; 35 doubly-mismatched steps signature-identical | (b)-coin; farewell session-id; tab-title/mini-footer families | PASS — better, no new class |
+| 18 | subagent-browser | 80x24: 2/1/18, 2/1/18 | r1 better-or-equal; r0 coin-miss (new {0,1,6} = coin) + exit step 20 improved to text-only session-id (sweep-1 had farewell half-row '▄' mismatch); 33 doubly-mismatched steps signature-identical | (b)-coin; farewell session-id; tab-title/mini-footer families | PASS — better, no new class |
+| 19 | subagent-sidebar | 160x36: 5/1/13, 5/1/13 | both rows better-or-equal (r0 Δmism-4 incl. coin {0,1,6} gone); exit step 18 → text-only session-id both runs; 26 doubly-mismatched steps signature-identical; zero new steps | (b)-coin; farewell session-id; tab-title/mini-footer families | PASS — better, no new class |
+| 20 | tabs-keyboard | 80x24: 0/0/8, 0/0/8 · 120x30: 8/0/0, 8/0/0 | 120x30-r0 IDENTICAL; 120x30-r1 BETTER (8→0); 80x24 both runs NUMERICALLY WORSE (8→0 identical) but pure coin: home persists through all 8 steps → all-or-nothing; sweep-2's 'W'↔'F' pair + composition (40/37/23 vs 39/38/13 — pair-length variance, same model as boot-home) match sweep-1's sole coin run 120x30-r1 | (b)-coin home-placeholder only | PASS — coin-only delta, no new class (flag: numerically worse) |
+| 21 | tabs-live-session | 80x24: 5/0/19, 5/0/19 · 120x30: 2/0/22, 5/0/19 | ALL rows better-or-equal (3× Δmism-3, 1 IDENTICAL); gone = coin {0,1,6}; 79 doubly-mismatched steps signature-identical; zero new steps | (b)-coin; backdrop-fg idx15; tab-title/mini-footer families | PASS — better, no new class |
+| 22 | themes-nord | 80x24: 1/0/7, 1/0/7 · 120x30: 1/0/7, 1/0/7 | 3 rows IDENTICAL; 120x30-r1 coin-miss Δmism+5, new steps {0,1,5,6,7} all 'F'↔'W' at (41,16), composition 40/37/23, nord theme styles equal both sides (idx103/idx239); 23 doubly-mismatched steps signature-identical | (b)-coin home-placeholder; theme-row style families (as sweep-1) | PASS — coin-only delta, no new class (flag: one row numerically worse) |
+| 23 | thought-expand (+structural via prefix) | expand 80x24: 2/0/12, 2/0/12 · 120x30: 2/0/12, 2/0/12 · structural 80x24: 2/0/15, 2/0/15 · 120x30: 5/0/12, 2/0/15 | `--filter thought-expand` matched both scripts (prefix) — one invocation, both adjudicated: expand 2 rows IDENTICAL + 2 rows coin-miss Δmism+3 (new {0,1,6} coin); structural 2 rows IDENTICAL + coin migrated r0→r1@120x30; 96 doubly-mismatched steps signature-identical across both | (b)-coin; Thought-Nms suffix (as sweep-1); backdrop-fg idx15; tab-title/mini-footer families | PASS — coin-only delta, no new class (flag: expand@80x24 numerically worse) |
+| 24 | thought-render | 80x24: 2/0/9, 2/0/9 · 120x30: 5/0/6, 5/0/6 | 3 rows IDENTICAL, 1 row BETTER (120x30-r1 Δmism-3, gone = coin {0,1,6}); 30 doubly-mismatched steps signature-identical; zero new steps | (b)-coin; Thought-Nms; backdrop-fg idx15; mini-footer family | PASS — better, no new class |
+| 25 | type-edit-submit | 80x24: 4/0/9, 4/0/9 · 120x30: 4/0/9, 4/0/9 | 3 rows IDENTICAL; 120x30-r1 coin-miss Δmism+3, new steps {0,1,6} all 'W'↔'F' coin at (41,16); 33 doubly-mismatched steps signature-identical | (b)-coin; stats-row digits; backdrop-fg idx15; mini-footer family | PASS — coin-only delta, no new class (flag: one row numerically worse) |
+
+All 26 corpus scripts executed (script 23's invocation covered both thought-expand scripts via
+prefix matching). Full live, `--no-ref-cache`, both sizes × 2 runs, stale-binary rule honored.
+
+## Aggregate vs sweep-1 (per script: identical/text-only/mismatch, totals over all size×run rows)
+
+| script | sweep-2 i/t/m | sweep-1 i/t/m | Δmism | attribution |
+|---|---|---|---|---|
+| boot-home | 0/0/12 | 3/0/9 | +3 | coin (r1@80x24 flip) |
+| click-coverage-dialog | 8/0/10 | 8/0/10 | 0 | exact |
+| click-coverage-home | 10/0/0 | 6/0/4 | -4 | coin matched |
+| click-coverage-session | 12/0/18 | 6/0/24 | -6 | coin matched ×2 rows |
+| composer-clear | 25/0/15 | 25/0/15 | 0 | exact (coin swapped runs) |
+| help-dialog | 15/0/17 | 15/0/17 | 0 | exact (coin migrated) |
+| hover-sweep | 8/0/60 | 16/0/52 | +8 | coin (r0 rows both sizes) |
+| long-reply-scroll | 14/0/50 | 17/0/47 | +3 | coin (r1@80x24) |
+| mouse-hover-tabstrip | 17/0/51 | 11/0/57 | -6 | coin matched ×2 rows |
+| multi-session | 11/0/89 | 14/0/86 | +3 | coin (net 1 row worse, 1 better) |
+| multi-turn | 22/4/70 | 16/0/80 | -10 | coin matched + exit → text-only |
+| palette | 0/0/24 | 12/0/12 | +12 | coin (all 4 runs missed; 4 coin-steps/run) |
+| rename-dialog | 11/0/49 | 14/0/46 | +3 | coin |
+| resize | 5/0/19 | 16/0/8 | +11 | coin (home persists all 6 steps) |
+| session-list-dialog | 8/0/48 | 11/0/45 | +3 | coin (r1@120x30) |
+| sidebar-wide | 4/0/28 | 4/0/28 | 0 | exact |
+| subagent-basic | 14/4/38 | 14/0/42 | -4 | coin matched + exit → text-only |
+| subagent-browser | 4/2/36 | 7/0/35 | +1 | coin (r0) + exit → text-only |
+| subagent-sidebar | 10/2/26 | 7/0/31 | -5 | coin matched + exit → text-only |
+| tabs-keyboard | 16/0/16 | 24/0/8 | +8 | coin (80x24 both runs missed, 8 coin-steps/run) |
+| tabs-live-session | 17/0/79 | 8/0/88 | -9 | coin matched ×3 rows |
+| themes-nord | 4/0/28 | 9/0/23 | +5 | coin (r1@120x30, 5 coin-steps) |
+| thought-expand | 8/0/48 | 14/0/42 | +6 | coin (80x24 both runs) |
+| thought-expand-structural | 11/0/57 | 11/0/57 | 0 | exact (coin migrated rows) |
+| thought-render | 14/0/30 | 11/0/33 | -3 | coin matched |
+| type-edit-submit | 16/0/36 | 19/0/33 | +3 | coin (r1@120x30) |
+| **TOTAL** | **284/12/954** | **318/0/932** | **+22** | 100% coin-attributed |
+
+## Class census (every distinct first-diff signature, all 26 scripts, 96 signatures → all registered)
+
+* **(b)-coin home-placeholder** — `Ask anything… "…"` row, fg idx8/idx103 bg idx234/idx239,
+  drawn pair among {Fix a TODO in the codebase / Fix broken tests / What is the tech stack…};
+  count varies with pair lengths (21/20/10 … 40/37/23). All sweep-2-only mismatch steps.
+* **(b)-coin stats-row digits** — `Build · Fake Model · NNms · NNN.N tok/s` fg idx8 bg idx232.
+* **(b)-coin Thought Nms** — `+ Thought · Nms` fg idx94 bg idx232 (subagent child-view).
+* **(b)-coin farewell session-id** — `Continue opencode -s ses_…` (now text-only in 12 rows;
+  sweep-1's farewell half-row '▄' mismatches are GONE).
+* **style: backdrop-fg idx15** — incl. bg idx0↔idx232 form, `Ask` row idx15↔idx8 form,
+  theme-swatch idx15/idx238↔idx238/idx110 form (themes-nord, pre-existing).
+* **style: input-caret cell** — idx15 bg idx232 ↔ idx255 bg idx232 [bold] (hover/rename-open).
+* **style: tab-title/mini-footer fg cluster** — tab strip fg idx251/246/241/236↔idx255 [bold]
+  bg idx234; composer `C` hint idx255↔idx15 bg idx233; tab ✕ idx7↔idx15; new-tab padding.
+* **text: models-dialog title** — `Select model`↔`Switch model` (deterministic, pre-existing,
+  signature-identical to sweep-1).
+* **markdown list-marker/inline-concealment** — `(15,6) '·'→' ' idx94↔idx15` (registered,
+  upstream-faithful, goldened in M-retire).
+
+Zero signatures outside the registered set. Zero signature differences on all
+doubly-mismatched steps (100% byte-identical first-diff/settled/structure lines vs sweep-1).
