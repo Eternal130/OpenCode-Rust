@@ -35,7 +35,7 @@ pub mod text_edit_opentui;
 /// hand-rolled oc-tui-core implementations stay compiled as the `=0`
 /// fallback for one release.
 ///
-/// The M-lane OnceLock pattern: read once at first use ("at boot") —
+/// The lane `OnceLock` pattern: read once at first use ("at boot") —
 /// a running session never switches engines mid-flight. DEFAULT ON
 /// after the lane's proof (the unit parity table over the whole
 /// binding table, 2883 workspace tests green on both paths, the rig

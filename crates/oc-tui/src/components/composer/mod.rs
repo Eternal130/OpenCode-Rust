@@ -30,7 +30,9 @@ pub use autocomplete::{AutocompleteState, SlashEntry, SlashRegistry};
 pub use oc_tui_core::text_edit::EditCommand as ComposerEditCommand;
 pub use oc_tui_core::text_edit::{EditOutcome, SnapshotKind};
 pub use oc_tui_core::text_edit_opentui::EditCore;
-pub use render::{prompt_text_width, render_prompt_frame, AutocompleteView, FooterHints, PromptView};
+pub use render::{
+    prompt_text_width, render_prompt_frame, AutocompleteView, FooterHints, PromptView,
+};
 
 use std::rc::Rc;
 
