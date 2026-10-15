@@ -28,7 +28,9 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 
-use crate::components::command_palette::{select_props_for_entry, CommandDispatcher, StoreDispatcher};
+use crate::components::command_palette::{
+    select_props_for_entry, CommandDispatcher, StoreDispatcher,
+};
 use crate::components::dialog_select::{render_select, DialogStyles, SelectView};
 use crate::keymap::{Clock, KeyStroke, Keymap, Outcome};
 use crate::render::Frame;
