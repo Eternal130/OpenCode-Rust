@@ -3608,10 +3608,9 @@ impl Store {
         };
         let index = self.session_index.borrow();
         let title = index.title(&session_id).unwrap_or_default().to_owned();
-        // Lane M6 dual-path: the flag selects the opentui-solid
-        // farewell tree (farewell_solid) or presentation.rs's string
-        // builder (the OC_SUBAGENT_OPENTUI=0 fallback); the unit gate
-        // pins both byte-identical.
+        // Lane M6 (retired): the farewell renders through the
+        // opentui-solid tree — the only renderer since the
+        // retirement lane deleted the flag pair.
         Some(crate::farewell_solid::session_epilogue_dispatch(&title, &session_id))
     }
 

@@ -159,10 +159,10 @@ pub fn render_session(
     // picker panel REPLACES the whole prompt mount (v2's Composer:
     // `open={composer.open || parentID}` at index.tsx:1451 — the
     // ╹▀ transition and status row belong to the prompt, not the
-    // panel). Lane M6 dual-path: the flag selects the opentui-solid
-    // tree (`picker_solid`) or the hand-rolled painter (the
-    // `OC_SUBAGENT_OPENTUI=0` fallback); BOTH consume the same
-    // `picker_panel_paint` walk. The panel spans the FULL column
+    // panel). Lane M6 (retired): the panel renders through the
+    // opentui-solid tree (`picker_solid`) — the only renderer since
+    // the retirement lane; it consumes the same `picker_panel_paint`
+    // walk. The panel spans the FULL column
     // (its own geometry carries the border col 2), so it pastes at
     // x=0, unlike the prompt mount's inset.
     let picker_live = store.picker_live(session_id);

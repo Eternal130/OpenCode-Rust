@@ -44,7 +44,6 @@ use opentui_core::Rgba;
 use opentui_solid::element::PropValue;
 use opentui_solid::{box_, text, Element, SolidRenderer};
 
-use crate::components::picker_solid::opentui_picker_enabled;
 
 /// The presentation palette (presentation.ts:3-24) — the EXACT
 /// xterm-256 RGB values the SGR indices resolve to, so the raster →
@@ -420,135 +419,16 @@ pub fn solid_session_epilogue(title: &str, session_id: &str) -> String {
     serialize_farewell(&renderer.renderer.current_render_buffer)
 }
 
-/// The epilogue's renderer seam: the flag (shared with the picker
-/// panel) selects the opentui-solid tree or presentation.rs's string
-/// builder. Both emit the same bytes — the unit gate pins it.
+/// The epilogue's ONLY renderer (lane M6, retired): the
+/// opentui-solid tree, raster → ANSI bytes — presentation.ts's byte
+/// stream reproduced by the tree (the string builder was deleted
+/// with the flag; the rig's subagent exit steps pin the live bytes).
 #[must_use]
 pub fn session_epilogue_dispatch(title: &str, session_id: &str) -> String {
-    if opentui_picker_enabled() {
-        solid_session_epilogue(title, session_id)
-    } else {
-        crate::presentation::session_epilogue(title, session_id)
-    }
+    solid_session_epilogue(title, session_id)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
-    /// The lane gate: the solid path's bytes must equal the string
-    /// builder's bytes CHARACTER FOR CHARACTER across the title
-    /// matrix (short, exactly-50, over-50 truncation, empty, CJK,
-    /// the resume-hint id shapes).
-    #[test]
-    fn solid_farewell_bytes_equal_presentation_ts() {
-        let titles = [
-            "Parity Subagent Flow",
-            "",
-            &"x".repeat(50),
-            &"y".repeat(60),
-            "会话标题 parity 混合",
-            "Trailing space ",
-        ];
-        for title in &titles {
-            for id in ["ses_abc123", "s1", "ses_with_a_rather_long_identifier_attached"] {
-                let expected = crate::presentation::session_epilogue(title, id);
-                let solid = solid_session_epilogue(title, id);
-                assert_eq!(solid, expected, "title {title:?} id {id}: the solid farewell diverged");
-            }
-        }
-    }
-
-    /// The rasterized grid check: the tree's buffer cells match the
-    /// string builder's own parse (glyph + bold + the fg/bg classes)
-    /// — the tree paints the farewell, the serializer only re-emits
-    /// it.
-    #[test]
-    fn farewell_tree_grid_matches_the_string_builder_parse() {
-        let title = "Parity Subagent Flow";
-        let id = "ses_abc123";
-        let expected = crate::presentation::session_epilogue(title, id);
-        // Parse the builder's bytes into (glyph, fg, bg, bold) cells.
-        let parse = |line: &str| -> Vec<(char, Option<&'static str>, Option<&'static str>, bool)> {
-            let mut cells = Vec::new();
-            let mut fg: Option<&'static str> = None;
-            let mut bg: Option<&'static str> = None;
-            let mut bold = false;
-            let mut chars = line.chars().peekable();
-            while let Some(ch) = chars.next() {
-                if ch == '\x1b' {
-                    let mut seq = String::from(ch);
-                    for pending in chars.by_ref() {
-                        seq.push(pending);
-                        if pending.is_ascii_alphabetic() {
-                            break;
-                        }
-                    }
-                    match seq.as_str() {
-                        "\x1b[0m" => {
-                            fg = None;
-                            bg = None;
-                            bold = false;
-                        }
-                        "\x1b[1m" => bold = true,
-                        "\x1b[90m" => fg = Some("\x1b[90m"),
-                        "\x1b[38;5;235m" => fg = Some("\x1b[38;5;235m"),
-                        "\x1b[38;5;238m" => fg = Some("\x1b[38;5;238m"),
-                        "\x1b[48;5;235m" => bg = Some("\x1b[48;5;235m"),
-                        "\x1b[48;5;238m" => bg = Some("\x1b[48;5;238m"),
-                        other => panic!("unexpected SGR {other:?} in {line:?}"),
-                    }
-                } else {
-                    let cell_fg = if bold { None } else { fg };
-                    cells.push((ch, cell_fg, bg, bold && fg.is_none()));
-                    if fg.is_none() && !bold {
-                        // a bare glyph resets nothing, but the reset
-                        // sequences below will; nothing to do
-                    }
-                }
-            }
-            cells
-        };
-        let expected_rows: Vec<&str> = expected.split('\n').collect();
-        assert_eq!(expected_rows.len(), EPILOGUE_ROWS);
-
-        let width = u32::try_from(epilogue_width(title, id).max(1)).unwrap();
-        let mut renderer = SolidRenderer::new(CliRendererConfig {
-            width,
-            height: EPILOGUE_ROWS as u32,
-            background_color: Rgba::rgb(0, 0, 0),
-            ..CliRendererConfig::default()
-        });
-        renderer.render_root(farewell_element(title, id));
-        renderer.flush();
-        let buffer = &renderer.renderer.current_render_buffer;
-        for (y, expected_line) in expected_rows.iter().enumerate() {
-            let mut parsed = parse(expected_line);
-            while parsed
-                .last()
-                .is_some_and(|(ch, fg, bg, _)| *ch == ' ' && fg.is_none() && bg.is_none())
-            {
-                parsed.pop();
-            }
-            for (x, want) in parsed.iter().enumerate() {
-                let cell = buffer
-                    .get(x as u32, y as u32)
-                    .unwrap_or_else(|| panic!("row {y} col {x} missing from the tree's raster"));
-                let ch = if opentui_core::buffer::is_grapheme_char(cell.char) {
-                    buffer
-                        .grapheme_bytes(opentui_core::buffer::grapheme_id_from_char(cell.char))
-                        .chars()
-                        .next()
-                        .unwrap_or(' ')
-                } else {
-                    char::from_u32(cell.char).unwrap_or(' ')
-                };
-                assert_eq!(ch, want.0, "row {y} col {x} glyph");
-                assert_eq!(fg_prefix(cell.fg), want.1, "row {y} col {x} fg");
-                assert_eq!(bg_prefix(cell.bg), want.2, "row {y} col {x} bg");
-                let bold = cell.attributes & 0x1 != 0;
-                assert_eq!(bold, want.3, "row {y} col {x} bold");
-            }
-        }
-    }
 }

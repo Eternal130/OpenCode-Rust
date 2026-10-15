@@ -29,14 +29,6 @@ use vt_harness::{
     FakeLlm, HarnessHandle, ALT_SCREEN_LEAVE, WORDMARK,
 };
 
-/// The M6 flag pair, pinned per test process (nextest isolates each
-/// test): `old` keeps the hand-rolled picker painter + the string
-/// builder farewell, `solid` boots the opentui-solid picker tree +
-/// the farewell tree. Read once at the first paint ("at boot").
-fn set_m6_path(solid: bool) {
-    std::env::set_var("OC_SUBAGENT_OPENTUI", if solid { "1" } else { "0" });
-}
-
 /// The scripted subagent flow: the parent's turn calls the `subagent`
 /// tool, the child session runs and completes, the tool settles, and
 /// the parent's continuation replies (the corpus3 flow stub's event
@@ -368,18 +360,11 @@ fn drive_child_sidebar_suppression(h: &mut HarnessHandle) -> Result<(), String> 
     Ok(())
 }
 
+/// Lane M6 (retired): the picker panel + farewell render through
+/// their opentui-solid trees — the only renderers since the
+/// retirement lane deleted the `OC_SUBAGENT_OPENTUI` flag pair.
 #[test]
 fn pty_subagent_surfaces_card_picker_child_farewell() {
-    set_m6_path(false);
-    pty_subagent_surfaces_walk();
-}
-
-/// The same walk on the M6 solid path (the opentui-solid picker
-/// panel + the farewell tree; nextest's per-test process isolation
-/// pins the once-per-process flag).
-#[test]
-fn pty_subagent_surfaces_card_picker_child_farewell_solid_path() {
-    set_m6_path(true);
     pty_subagent_surfaces_walk();
 }
 
@@ -415,7 +400,6 @@ fn pty_subagent_surfaces_walk() {
 /// closes back to the prompt.
 #[test]
 fn pty_picker_keymap_cycle_solid_path() {
-    set_m6_path(true);
     let _lock = pty_lock();
     let _sandbox = sandbox_env("subagent-m6-cycle");
     let fake = FakeLlm::spawn(standard_sessions());

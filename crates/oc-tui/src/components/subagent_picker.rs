@@ -22,17 +22,18 @@
 //! Entry rows fill `background.action.primary.*` with
 //! `text.action.primary.*` glyphs (focused = selected+bold).
 //!
-//! Lane M6: [`picker_panel_paint`] is the ONE solver — the
-//! hand-rolled path ([`picker_panel_frame`], the
-//! `OC_SUBAGENT_OPENTUI=0` fallback) consumes its placed runs, and
-//! the opentui-solid tree (`picker_solid.rs`) consumes the same
-//! units as absolute elements — the M4/M5 shared-walk shape.
+//! Lane M6 (retired): [`picker_panel_paint`] is the ONE solver —
+//! the opentui-solid tree (`picker_solid.rs`) consumes its units as
+//! absolute elements — the M4/M5 shared-walk shape. The hand-rolled
+//! painter was deleted with the `OC_SUBAGENT_OPENTUI` flag (the
+//! retirement lane).
 
 use crate::layout::{Placed, PlacedLine};
-use crate::render::{Fill, Frame};
+use crate::render::Fill;
 use crate::store::{PickerEntry, PickerState, PickerTab};
 use crate::theme::ThemeState;
 use ratatui::style::{Color, Modifier, Style};
+
 
 /// The body's fixed height (`maxHeight={5}` on the scrollbox — the
 /// corpus grids pin 5 body rows whether the list is empty or short).
@@ -162,27 +163,6 @@ pub fn picker_panel_paint(
     paint_hints(&mut placed, state, base, muted, left);
 
     PickerPaint { placed, fills, content: (left, right), raised: colors.raised }
-}
-
-/// The hand-rolled painter over the shared walk (the
-/// `OC_SUBAGENT_OPENTUI=0` fallback).
-#[must_use]
-pub fn picker_panel_frame(
-    state: &PickerState,
-    entries: &[PickerEntry],
-    selected: usize,
-    theme: &ThemeState,
-    width: u16,
-) -> Frame {
-    let paint = picker_panel_paint(state, entries, selected, theme, width);
-    crate::render::paint_placed_with_fills(
-        &paint.placed,
-        &paint.fills,
-        (u16::try_from(usize::from(width)).unwrap_or(u16::MAX), panel_height()),
-        ratatui::style::Style::new()
-            .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
-            .bg(paint.raised),
-    )
 }
 
 /// The body rows (3..8): the ` No {active|inactive} subagents`
@@ -366,7 +346,13 @@ mod tests {
         let selected = store.picker_selection("parent", entries.len());
         assert_eq!(selected, 0);
         let theme = ThemeState::v2_dark();
-        let frame = picker_panel_frame(&store.picker(), &entries, selected, &theme, 80);
+        let frame = crate::components::picker_solid::picker_panel_frame_dispatch(
+            &store.picker(),
+            &entries,
+            selected,
+            &theme,
+            80,
+        );
         let grid = frame.text_grid();
         assert_eq!(grid.len(), PANEL_ROWS);
         assert_eq!(
@@ -392,7 +378,13 @@ mod tests {
         let entries = store.picker_entries("parent");
         assert!(entries.is_empty(), "nothing running under the active filter");
         let theme = ThemeState::v2_dark();
-        let frame = picker_panel_frame(&store.picker(), &entries, 0, &theme, 80);
+        let frame = crate::components::picker_solid::picker_panel_frame_dispatch(
+            &store.picker(),
+            &entries,
+            0,
+            &theme,
+            80,
+        );
         let grid = frame.text_grid();
         assert_eq!(grid[3].trim_end(), "  ┃  No active subagents");
         assert_eq!(grid[9].trim_end(), "  ┃  show inactive ctrl+a  tabs ←/→");
