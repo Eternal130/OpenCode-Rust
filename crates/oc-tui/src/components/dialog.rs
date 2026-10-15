@@ -31,11 +31,9 @@
 use crate::components::command_palette::{
     select_props_for_entry, CommandDispatcher, StoreDispatcher,
 };
-use crate::components::dialog_select::DialogStyles;
 use crate::keymap::{Clock, KeyStroke, Keymap, Outcome};
 use crate::render::Frame;
 use crate::store::{DialogEntry, DialogKind, DialogSize, Focus, Route, Store};
-use ratatui::style::Color;
 
 /// The backdrop's alpha (RGBA.fromInts(0, 0, 0, 150)).
 const BACKDROP_ALPHA: f64 = 150.0 / 255.0;
@@ -617,6 +615,8 @@ pub fn store_dispatcher() -> StoreDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::dialog_select::DialogStyles;
+    use ratatui::style::Color;
     use crate::reactive::Runtime;
     use crate::render::CellColor;
     use crate::store::DialogSize;

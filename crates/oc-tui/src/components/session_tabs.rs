@@ -19,7 +19,6 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 use crate::store::{SessionTab, Unread};
-use crate::theme::ThemeStyles;
 
 /// `SESSION_TAB_WIDTH` / `SESSION_TAB_MAX_WIDTH` / `SESSION_TAB_MIN_WIDTH`.
 pub const SESSION_TAB_WIDTH: usize = 22;

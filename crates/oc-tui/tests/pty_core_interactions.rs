@@ -561,19 +561,10 @@ fn start_streaming_turn(boot: &Boot, writer: &mut std::fs::File) {
 }
 
 /// PTY: the 2-press escape interrupt — armed hint flip + the
-/// interrupt POST. Parametrized over the composer renderer paths
-/// (lane M3: the interrupt hint + the footer row are the solid
-/// composer's surfaces).
+/// interrupt POST. The composer renders through its opentui-solid
+/// tree (the only renderer since the retirement lane).
 #[test]
-fn pty_escape_interrupt_fires_on_a_streaming_turn_old_path() {
-    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
-    pty_escape_interrupt_body();
-}
-
-/// The opentui-solid composer path (`OC_COMPOSER_OPENTUI=1`).
-#[test]
-fn pty_escape_interrupt_fires_on_a_streaming_turn_solid_path() {
-    std::env::set_var("OC_COMPOSER_OPENTUI", "1");
+fn pty_escape_interrupt_fires_on_a_streaming_turn() {
     pty_escape_interrupt_body();
 }
 
@@ -605,18 +596,9 @@ fn pty_escape_interrupt_body() {
 }
 
 /// PTY: `<leader>return` queues behind the streaming turn — the dock
-/// row appears and only ONE prompt POST exists. Parametrized over
-/// the composer renderer paths (lane M3).
+/// row appears and only ONE prompt POST exists.
 #[test]
-fn pty_leader_return_queues_behind_the_turn_old_path() {
-    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
-    pty_leader_return_queue_body();
-}
-
-/// The opentui-solid composer path (`OC_COMPOSER_OPENTUI=1`).
-#[test]
-fn pty_leader_return_queues_behind_the_turn_solid_path() {
-    std::env::set_var("OC_COMPOSER_OPENTUI", "1");
+fn pty_leader_return_queues_behind_the_turn() {
     pty_leader_return_queue_body();
 }
 
@@ -715,18 +697,10 @@ fn pty_shift_tab_and_f2_cycle_the_footer_hints() {
 
 /// PTY: the scroll keys move the long transcript — sticky starts at
 /// the bottom, pageup releases (the head), end re-sticks (the tail).
-/// Parametrized over the transcript renderer paths (lane M4: the
-/// scroll surface is the solid transcript's viewport).
+/// The transcript renders through its opentui-solid tree (the only
+/// renderer since the retirement lane).
 #[test]
-fn pty_scroll_keys_move_the_transcript_old_path() {
-    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "0");
-    pty_scroll_keys_body();
-}
-
-/// The opentui-solid transcript path (`OC_TRANSCRIPT_OPENTUI=1`).
-#[test]
-fn pty_scroll_keys_move_the_transcript_solid_path() {
-    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "1");
+fn pty_scroll_keys_move_the_transcript() {
     pty_scroll_keys_body();
 }
 
@@ -828,7 +802,6 @@ fn pty_undo_redo_restores_the_draft() {
 /// BOTH composer paths, a harness limitation, not a path delta).
 #[test]
 fn pty_composer_cycle_type_edit_submit_reply_stats_solid_path() {
-    std::env::set_var("OC_COMPOSER_OPENTUI", "1");
     let _sandbox = sandbox_env("cycle");
     let (url, _shared) = spawn_scripted_server(true);
     drive(&url, move |boot, mut writer| {
@@ -890,7 +863,6 @@ fn pty_composer_cycle_type_edit_submit_reply_stats_solid_path() {
 /// from x=5 — the click lands at col 7.
 #[test]
 fn pty_transcript_cycle_thought_expand_solid_path() {
-    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "1");
     let _sandbox = sandbox_env("thought-cycle");
     let (url, _shared) = spawn_scripted_server(false);
     drive(&url, move |boot, mut writer| {
