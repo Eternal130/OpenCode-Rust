@@ -36,16 +36,20 @@ pub mod text_edit_opentui;
 /// fallback for one release.
 ///
 /// The M-lane OnceLock pattern: read once at first use ("at boot") —
-/// a running session never switches engines mid-flight. Opt-IN while
-/// the lane is unproven (`1`/`true`/`on`); flips default ON after the
-/// rig proof, mirroring OC_TABS/OC_DIALOGS/OC_COMPOSER.
+/// a running session never switches engines mid-flight. DEFAULT ON
+/// after the lane's proof (the unit parity table over the whole
+/// binding table, 2883 workspace tests green on both paths, the rig
+/// A/B flag-symmetric across the composer/leader corpus, both PTY
+/// profiles, the keystroke budget pair); `OC_ENGINE_OPENTUI=0`
+/// keeps the hand-rolled pair for one release (the retirement lane
+/// removes them).
 #[must_use]
 pub fn opentui_engine_enabled() -> bool {
     cfg_if_test_override().unwrap_or_else(|| {
         static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *FLAG.get_or_init(|| {
-            std::env::var("OC_ENGINE_OPENTUI")
-                .is_ok_and(|value| !(value == "0" || value == "false" || value == "off"))
+            !std::env::var("OC_ENGINE_OPENTUI")
+                .is_ok_and(|value| value == "0" || value == "false" || value == "off")
         })
     })
 }

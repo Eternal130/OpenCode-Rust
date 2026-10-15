@@ -967,3 +967,75 @@ fn pty_transcript_cycle_thought_expand_solid_path() {
         let _ = writer.write_all(b"\x03");
     });
 }
+
+/// PTY (lane M-engine): the editing-engine + keymap cycle — type →
+/// word-delete → undo/redo → leader arm + escape-clear (the K-6
+/// semantic, identical on both engines) → prompt.clear. Parametrized
+/// over the ENGINE paths (the editing core + the keymap dispatch
+/// beneath the composer): the legacy hand-rolled pair and the
+/// opentui-core/opentui-keymap pair must drive the SAME observable
+/// cycle. (The K-delta behaviors that DIFFER by engine —
+/// backspace-pop on a pending sequence, non-leader sequence arming —
+/// are pinned by the oc-tui-core suites, never here.)
+#[test]
+fn pty_engine_cycle_type_worddelete_undo_leader_escape_legacy_path() {
+    std::env::set_var("OC_ENGINE_OPENTUI", "0");
+    pty_engine_cycle_body();
+}
+
+/// The opentui engine path (`OC_ENGINE_OPENTUI=1`).
+#[test]
+fn pty_engine_cycle_type_worddelete_undo_leader_escape_opentui_path() {
+    std::env::set_var("OC_ENGINE_OPENTUI", "1");
+    pty_engine_cycle_body();
+}
+
+fn pty_engine_cycle_body() {
+    let _sandbox = sandbox_env("engine-cycle");
+    let (url, _shared) = spawn_scripted_server(false);
+    drive(&url, move |boot, mut writer| {
+        let probe = || Boot { output: Arc::clone(&boot.output) };
+        assert!(
+            wait_for_after(&probe(), "█▀▀█".as_bytes(), 0, Duration::from_secs(5)),
+            "the home wordmark rendered"
+        );
+        std::thread::sleep(Duration::from_millis(700));
+        for key in "engine draft".bytes() {
+            let _ = writer.write_all(&[key]);
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        let mut rows: u16 = 24;
+        let typed = strip_ansi(&screen_after_toggle(&writer, &probe(), len(&probe()), &mut rows));
+        assert!(typed.contains("engine draft"), "the draft typed: {typed:?}");
+        // ctrl+w deletes the trailing word.
+        let _ = writer.write_all(b"\x17");
+        let deleted = strip_ansi(&screen_after_toggle(&writer, &probe(), len(&probe()), &mut rows));
+        assert!(
+            deleted.contains("engine") && !deleted.contains("engine draft"),
+            "ctrl+w deleted the word: {deleted:?}"
+        );
+        // undo restores it.
+        let _ = writer.write_all(b"\x1b[45;5u");
+        let undone = strip_ansi(&screen_after_toggle(&writer, &probe(), len(&probe()), &mut rows));
+        assert!(undone.contains("engine draft"), "undo restored the word: {undone:?}");
+        // The leader arms and escape CLEARS it without interrupting
+        // (no dialog, no navigation, the draft intact).
+        let _ = writer.write_all(b"\x18");
+        std::thread::sleep(Duration::from_millis(150));
+        let _ = writer.write_all(b"\x1b");
+        std::thread::sleep(Duration::from_millis(250));
+        let cleared =
+            strip_ansi(&screen_after_toggle(&writer, &probe(), len(&probe()), &mut rows));
+        assert!(
+            cleared.contains("engine draft"),
+            "escape cleared the pending sequence, the draft intact: {cleared:?}"
+        );
+        // prompt.clear (ctrl+c on a NON-empty draft) — then exit.
+        let _ = writer.write_all(b"\x03");
+        let empty = strip_ansi(&screen_after_toggle(&writer, &probe(), len(&probe()), &mut rows));
+        assert!(!empty.contains("engine draft"), "ctrl+c cleared the draft: {empty:?}");
+        let _ = writer.write_all(b"\x03");
+        std::thread::sleep(Duration::from_millis(200));
+        let _ = writer.write_all(b"\x03");
+    });
+}
