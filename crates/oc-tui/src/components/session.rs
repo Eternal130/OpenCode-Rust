@@ -82,36 +82,17 @@ pub fn paint_live_tabs_bar(
             detail: None,
         })
         .collect();
-    let render = if crate::components::session_tabs_solid::opentui_tabs_enabled() {
-        // Lane M1 (换血 pilot, default ON after the rig proof): the
-        // same store inputs, the opentui-solid view path
-        // (`OC_TABS_OPENTUI=0` selects the hand-rolled fallback below
-        // for one release).
-        return crate::components::session_tabs_solid::paint_solid_bar(
-            &views,
-            active,
-            true,
-            width,
-            styles,
-            tabs.hover.as_deref(),
-            tabs.add_hovered,
-        );
-    } else {
-        session_tabs::render_bar(
-            &views,
-            active,
-            true,
-            width,
-            styles,
-            tabs.hover.as_deref(),
-            tabs.add_hovered,
-        )
-    };
-    paint_placed_with_fills(
-        &render.placed,
-        &render.fills,
-        (u16::try_from(width).unwrap_or(u16::MAX), 1),
-        Style::new().fg(crate::components::tool_rows::DEFAULT_FOREGROUND).bg(styles.background),
+    // Lane M1 (retired): the strip renders through the opentui-solid
+    // tree — the only renderer since the retirement lane deleted the
+    // hand-rolled bar walk.
+    crate::components::session_tabs_solid::paint_solid_bar(
+        &views,
+        active,
+        true,
+        width,
+        styles,
+        tabs.hover.as_deref(),
+        tabs.add_hovered,
     )
 }
 

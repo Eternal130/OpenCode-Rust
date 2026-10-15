@@ -40,7 +40,8 @@
 use parity::tui_frame as pf;
 use ratatui::style::{Modifier, Style};
 
-use crate::components::session_tabs::{paint_bar, paint_rail, TabStatus, TabView, ADD_TAB_WIDTH};
+use crate::components::session_tabs_solid::paint_solid_bar;
+use crate::components::session_tabs::{TabStatus, TabView, ADD_TAB_WIDTH};
 use crate::components::tool_rows::render_tool_wrap;
 use crate::layout::{BoxSpec, LayoutTree, StyledSpan};
 use crate::render::{paint_placed, serialize_canonical, Frame};
@@ -98,6 +99,41 @@ fn assert_text_grid_match(id: &str, width: usize, frame: &AnsiFrameRender) {
 /// Canonical ANSI bytes at the manifest's comparison depth — since the
 /// 7.2 glow upgrade this is exact for the session-tabs scenarios (the
 /// resting-glow tint math closes the last style divergence).
+
+/// The retired `paint_bar` sized a FULL frame (height rows) with the
+/// base fill and painted the strip at row 0 — the shape the
+/// session-tabs goldens pin. The solid strip paints its own 1-row
+/// frame; this helper rebuilds the sized golden shape around it (the
+/// goldens now pin the opentui-solid path's bytes).
+fn paint_solid_bar_sized(
+    tabs: &[TabView],
+    active: Option<&str>,
+    width: u16,
+    height: u16,
+    styles: &crate::theme::ThemeStyles,
+) -> crate::render::Frame {
+    let strip = paint_solid_bar(
+        tabs,
+        active,
+        true,
+        usize::from(width),
+        styles,
+        None,
+        false,
+    );
+    let base = crate::render::Cell {
+        ch: ' ',
+        attrs: 0,
+        fg: crate::render::CellColor::from(crate::components::tool_rows::DEFAULT_FOREGROUND),
+        bg: crate::render::CellColor::from(styles.background),
+    };
+    let mut cells = vec![vec![base; usize::from(width)]; usize::from(height)];
+    for (x, cell) in strip.cells[0].iter().enumerate() {
+        cells[0][x] = *cell;
+    }
+    crate::render::Frame { cells, width: usize::from(width), height: usize::from(height) }
+}
+
 fn assert_ansi_match(id: &str, width: usize, frame: &AnsiFrameRender) {
     let scenario = scenario(id);
     let depth = manifest().comparison_depth_for(&scenario);
@@ -129,7 +165,7 @@ impl AnsiFrameRender {
 #[test]
 fn session_tabs_horizontal_matches_golden_at_80() {
     let theme = ThemeState::v2_dark();
-    let frame = paint_bar(&golden_tab_views(), Some("second"), true, (80, 10), &theme.styles());
+    let frame = paint_solid_bar_sized(&golden_tab_views(), Some("second"), 80, 10, &theme.styles());
     let render = AnsiFrameRender::from_frame(&frame);
     assert_text_grid_match("session-tabs-horizontal", 80, &render);
     assert_ansi_match("session-tabs-horizontal", 80, &render);
@@ -138,28 +174,10 @@ fn session_tabs_horizontal_matches_golden_at_80() {
 #[test]
 fn session_tabs_horizontal_matches_golden_at_160() {
     let theme = ThemeState::v2_dark();
-    let frame = paint_bar(&golden_tab_views(), Some("second"), true, (160, 10), &theme.styles());
+    let frame = paint_solid_bar_sized(&golden_tab_views(), Some("second"), 160, 10, &theme.styles());
     let render = AnsiFrameRender::from_frame(&frame);
     assert_text_grid_match("session-tabs-horizontal", 160, &render);
     assert_ansi_match("session-tabs-horizontal", 160, &render);
-}
-
-#[test]
-fn session_tabs_vertical_matches_golden_at_80() {
-    let theme = ThemeState::v2_dark();
-    let frame = paint_rail(&golden_tab_views(), Some("second"), true, (80, 16), &theme.styles());
-    let render = AnsiFrameRender::from_frame(&frame);
-    assert_text_grid_match("session-tabs-vertical", 80, &render);
-    assert_ansi_match("session-tabs-vertical", 80, &render);
-}
-
-#[test]
-fn session_tabs_vertical_matches_golden_at_160() {
-    let theme = ThemeState::v2_dark();
-    let frame = paint_rail(&golden_tab_views(), Some("second"), true, (160, 16), &theme.styles());
-    let render = AnsiFrameRender::from_frame(&frame);
-    assert_text_grid_match("session-tabs-vertical", 160, &render);
-    assert_ansi_match("session-tabs-vertical", 160, &render);
 }
 
 #[test]
@@ -256,29 +274,22 @@ fn tool_wrap_error_expanded_matches_text_grid_and_ansi_at_160() {
 /// instrument now pins that nothing regresses to style-only parity.
 #[test]
 fn session_tabs_ansi_full_fidelity_at_manifest_depth() {
-    for id in ["session-tabs-horizontal", "session-tabs-vertical"] {
+    // The vertical rail was retired with the old tab renderer (a
+    // golden-only legacy shape); the horizontal goldens now pin the
+    // opentui-solid path's bytes.
+    for id in ["session-tabs-horizontal"] {
         let scenario = scenario(id);
         let depth = manifest().comparison_depth_for(&scenario);
         for variant in &scenario.variants {
             let golden = pf::load_ansi_frame(&goldens(), id, variant.width).expect("ansi golden");
             let theme = ThemeState::v2_dark();
-            let frame = if id == "session-tabs-horizontal" {
-                paint_bar(
-                    &golden_tab_views(),
-                    Some("second"),
-                    true,
-                    (variant.width as u16, variant.height as u16),
-                    &theme.styles(),
-                )
-            } else {
-                paint_rail(
-                    &golden_tab_views(),
-                    Some("second"),
-                    true,
-                    (variant.width as u16, variant.height as u16),
-                    &theme.styles(),
-                )
-            };
+            let frame = paint_solid_bar_sized(
+                &golden_tab_views(),
+                Some("second"),
+                variant.width as u16,
+                variant.height as u16,
+                &theme.styles(),
+            );
             let render = pf::parse_ansi(
                 &crate::render::serialize_canonical(&frame),
                 Some((variant.height, variant.width)),
@@ -306,7 +317,7 @@ fn session_tabs_ansi_full_fidelity_at_manifest_depth() {
 #[test]
 fn bar_plus_affordance_alignment() {
     let theme = ThemeState::v2_dark();
-    let frame = paint_bar(&golden_tab_views(), Some("second"), true, (80, 1), &theme.styles());
+    let frame = paint_solid_bar_sized(&golden_tab_views(), Some("second"), 80, 10, &theme.styles());
     let row = &frame.text_grid()[0];
     // Tabs occupy [0, 64); the plus glyph sits at 65 inside " + ".
     assert_eq!(row.chars().nth(65), Some('+'), "row: {row:?}");
@@ -623,3 +634,4 @@ fn command_palette_matches_text_grid_and_ansi_at_160() {
         diff.first_divergent_offset
     );
 }
+
