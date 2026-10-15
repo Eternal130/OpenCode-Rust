@@ -1,0 +1,29 @@
+# Lane M-theme — theme system port: A/B + verification log
+# Worktree: .worktrees/lane-theme (branch lane/theme, base 059429f)
+
+## Findings (analysis phase, pre-code)
+1. THEME TABLE: our embedded assets are ALREADY byte-identical to the ref
+   (33 v1 assets + v2 opencode.json; cmp across the board, 0 diffs).
+   The table debt is NOT values — it is:
+   a. missing `system` registry entry (ref listThemes always exposes one;
+      headless rig => falls back to the opencode doc => 34 dialog rows).
+   b. our themes dialog options carry a "Themes" category header; ref
+      dialog-theme-list.tsx options have NO category (flat list).
+   c. our open-focus is edge-reveal with a hardcoded height 30; ref
+      centers `current` in the REAL viewport (min(rows, H/2-6)).
+2. APPLY PATH: ref = LIVE PREVIEW dialog (dialog-theme-list.tsx):
+   onMove/onFilter call themes.set() immediately; onFilter empty resets
+   to initial; close-without-confirm (onCleanup) REVERTS to initial;
+   submit confirms. Our side applied only at submit (execute_submission).
+   The step-4 full-grid divergence (1920 cells, ref bg=idx233 vs our
+   bg=idx0) is the missing live preview while filtering "nord".
+3. idx216<->233 family (click-coverage-session/hover-sweep models-open):
+   NOT theme values. idx216 = background.action.primary.focused (tan) —
+   both sides already paint that exact token. The ref surface is the
+   mini footer panel ("Select model", mini/footer.command.tsx), ours the
+   main ServerList dialog ("Switch model"). Needs the mini-footer lane.
+4. Step-5+ (apply) styles already MATCH (fg=idx103 bg=idx233/239 rows) —
+   the submit apply chain (store.theme signal -> all painters) is sound.
+
+## Implementation
+(see commits; phases logged below)
