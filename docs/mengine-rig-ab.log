@@ -115,3 +115,20 @@ both subsystems onto the opentui-rust ports (`opentui-keymap` engine,
 * The donor key grammar: no ">" separator — `<leader>e` tokens +
   concatenated parts ("gg"); alias expander revive of diff.toggle's
   "enter" spec (it was DEAD on legacy — the pump speaks "return").
+
+## Phase 3 — rig A/B (composer/editor/keymap-heavy corpus)
+
+The rig's OC_*_OPENTUI forwarding seam carries OC_ENGINE_OPENTUI to our
+side only. Mismatch-step UNIONS compared per (script, flag):
+
+| script | sizes × runs | ON (a) | OFF (b) | verdict |
+|---|---|---|---|---|
+| type-edit-submit | 80x24 quick + both×2 | 9 steps {boot,dismiss,models-*,variant-dismiss,submit,settled-reply,exit} | same 9 steps | SYMMETRIC — submit-family counts 356 vs 347 = per-run stats-row digit widths (the documented family; row 8 "· 144ms · 280.0 tok/s" timing digits) |
+| composer-clear | both × 2 | {boot,dismiss,clear,cleared,exit}; 80x24 run1 CLEAN | same set; 4/4 runs | SYMMETRIC — the (b)-class home-placeholder coin flipped WITHIN the ON flag |
+| palette | both × 2 | {boot,dismiss,palette-open,palette-down,palette-close,exit} | same union (coin flipped within OFF) | SYMMETRIC — the two M-theme pre-existing style families |
+| tabs-keyboard (LEADER-heavy: ctrl+x chords) | both × 2 | {boot,dismiss,tab-next,tab-prev,tab-close,exit}; coin 80x24 r0 clean / r1 mm | same union; coin mirrored at 120x30 r1 | SYMMETRIC — leader sequencing byte-identical through the new engine |
+| rename-dialog | both × 2 | 13 steps | IDENTICAL 13 steps | SYMMETRIC |
+| multi-session | both × 2 | 18 steps, 20/25 or 23/25 | IDENTICAL 18 steps, 23/25 ×4 | SYMMETRIC |
+
+No new divergence class; every delta between flags is the documented
+coin/stats-row run-to-run variance that also flips WITHIN one flag.
