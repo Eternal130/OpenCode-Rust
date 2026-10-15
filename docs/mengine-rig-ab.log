@@ -132,3 +132,22 @@ side only. Mismatch-step UNIONS compared per (script, flag):
 
 No new divergence class; every delta between flags is the documented
 coin/stats-row run-to-run variance that also flips WITHIN one flag.
+
+## Phase 4 — PTY + budgets + the flip
+
+* New `pty_engine_cycle_type_worddelete_undo_leader_escape_{legacy,opentui}_path`:
+  the shared observable cycle (type → ctrl+w → undo → leader-arm +
+  escape-clear → prompt.clear) passes on BOTH engine paths. The
+  K-delta behaviors that DIFFER by engine live in the oc-tui-core
+  suites (never in a shared-assert test).
+* pty profile (serialized, 2885 tests): green on BOTH paths (the
+  m1_scenario_prompt_fake_llm flaky is pre-existing, passes retry).
+* Engine-op frame budget pair (added to frame_budget_tests.rs, the
+  40 ms gate): debug worst 743 µs (legacy) vs 2803 µs (opentui),
+  avg 328 vs 1140 µs — ~3.5× the old path, ~2.8 ms absolute in
+  DEBUG on a 2 KB CJK-mixed draft's round-trip (release numbers in
+  the final gate's run below).
+* **FLAG FLIPPED default ON** (the M1-M6 protocol: unit parity, rig
+  symmetry, both PTY paths, budget pair). `OC_ENGINE_OPENTUI=0`
+  keeps the hand-rolled pair one release; the `=0` workspace run is
+  green (2887).
