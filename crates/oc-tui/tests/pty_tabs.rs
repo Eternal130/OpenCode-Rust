@@ -187,22 +187,10 @@ fn sandbox_env(tag: &str) -> std::path::PathBuf {
     root
 }
 
-/// Lane M1 (换血 pilot): the strip's renderer flag is read once at
-/// the first strip paint (`session_tabs_solid::opentui_tabs_enabled`)
-/// — solid is the DEFAULT; `0` selects the hand-rolled fallback for
-/// one release. The helpers pin each test process's choice before
-/// the TUI boots (nextest isolates them per test).
-fn select_solid_tabs_renderer() {
-    std::env::set_var("OC_TABS_OPENTUI", "1");
-}
-
-/// The escape hatch: the hand-rolled renderer (`OC_TABS_OPENTUI=0`).
-fn select_fallback_tabs_renderer() {
-    std::env::set_var("OC_TABS_OPENTUI", "0");
-}
-
-/// The shared boot/open/close choreography (both renderer paths run
-/// it — lane M1's PTY parametrization over the strip flag).
+/// The shared boot/open/close choreography. The strip renders through
+/// the opentui-solid tree — the only renderer since the M1 retirement
+/// (the `OC_TABS_OPENTUI` flag and its hand-rolled fallback are
+/// gone).
 fn pty_boot_open_close_body() {
     let _sandbox = sandbox_env("live");
     let (url, shutdown) = spawn_scripted_server();
@@ -290,15 +278,6 @@ fn pty_boot_open_close_body() {
 
 #[test]
 fn pty_boot_home_then_one_tab_open_then_close() {
-    select_fallback_tabs_renderer();
-    pty_boot_open_close_body();
-}
-
-/// Lane M1: the same boot/open/close choreography on the (default)
-/// opentui-solid strip path — pinned explicitly for documentation.
-#[test]
-fn pty_boot_home_then_one_tab_open_then_close_solid_path() {
-    select_solid_tabs_renderer();
     pty_boot_open_close_body();
 }
 
@@ -315,7 +294,6 @@ fn pty_boot_home_then_one_tab_open_then_close_solid_path() {
 /// in from its right edge (x30, `session-tabs.tsx:264`).
 #[test]
 fn pty_solid_strip_hover_add_close_cycle() {
-    select_solid_tabs_renderer();
     let _sandbox = sandbox_env("solid-mouse");
     let (url, shutdown) = spawn_scripted_server();
     let guard = attach_pty();
