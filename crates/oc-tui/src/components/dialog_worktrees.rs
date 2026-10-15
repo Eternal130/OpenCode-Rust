@@ -631,6 +631,7 @@ mod golden_tests {
             size: DialogSize::Xlarge,
             select: crate::components::dialog_select::SelectState::default(),
             value: String::new(),
+            theme_initial: None,
         };
         entry.select.focus_current(&props);
         let mut base = empty_base(width, height, &theme);
@@ -645,6 +646,7 @@ mod golden_tests {
             size: DialogSize::Medium,
             select: crate::components::dialog_select::SelectState::default(),
             value: "feat".to_owned(),
+            theme_initial: None,
         };
         let props = crate::components::dialog_select::SelectProps::new("", Vec::new());
         let mut base = empty_base(width, height, &theme);

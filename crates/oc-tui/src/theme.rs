@@ -308,7 +308,14 @@ pub struct ThemeRegistry {
 
 impl ThemeRegistry {
     /// The full builtin registry (v2 `opencode` + the 32 non-shadowed
-    /// v1 assets — `DEFAULT_THEMES` + the v2 default).
+    /// v1 assets — `DEFAULT_THEMES` + the v2 default), plus the
+    /// always-present `system` slot (`listThemes`'s final spread:
+    /// `system: systemTheme ?? themes.system ?? themes.opencode`).
+    /// Without a detected/generated system theme (headless: no cached
+    /// palette, no OSC probe answer) the slot resolves to the v2
+    /// `opencode` document — exactly the rig environment's ref
+    /// behavior. A discovered custom `system` theme overrides it
+    /// (`themes.system` in the chain sees customs; Builtin origin).
     #[must_use]
     pub fn builtins() -> Self {
         let mut registry = Self::default();
@@ -319,6 +326,7 @@ impl ThemeRegistry {
             }
             registry.insert_parsed(name, source, ThemeOrigin::Builtin);
         }
+        registry.insert_parsed("system", BUILTIN_V2_OPENCODE, ThemeOrigin::Builtin);
         registry
     }
 
@@ -691,15 +699,40 @@ mod tests {
         assert_ne!(styles.agent_color(0), styles.border);
     }
 
-    /// The builtin registry: 33 entries (v2 opencode + 32 v1), every
-    /// one resolvable in dark mode, names sorted.
+    /// The builtin registry: 34 entries (v2 opencode + 32 v1 + the
+    /// always-present `system` slot), every one resolvable in dark
+    /// mode, names sorted.
     #[test]
     fn builtin_registry_resolves_every_theme() {
         let registry = ThemeRegistry::builtins();
-        assert_eq!(registry.len(), 33, "v2 opencode + 32 v1 (the v1 opencode is shadowed)");
+        assert_eq!(
+            registry.len(),
+            34,
+            "v2 opencode + 32 v1 (the v1 opencode is shadowed) + the system slot"
+        );
         let names = registry.names();
         assert_eq!(names[0], "aura", "sorted, case-insensitive");
         assert!(names.contains(&"opencode".to_owned()));
+        assert!(
+            names.contains(&"system".to_owned()),
+            "listThemes always exposes a system slot"
+        );
+        // The headless system slot resolves to the opencode document
+        // (`systemTheme ?? themes.system ?? themes.opencode` with no
+        // detected/generated palette).
+        let system = registry.resolve("system", Mode::Dark).expect("system resolves");
+        assert_eq!(system.name, "system");
+        assert_eq!(
+            system.resolved.tokens.background.base,
+            registry
+                .resolve("opencode", Mode::Dark)
+                .expect("opencode resolves")
+                .resolved
+                .tokens
+                .background
+                .base,
+            "headless system == the opencode document"
+        );
         for name in &names {
             let state =
                 registry.resolve(name, Mode::Dark).unwrap_or_else(|| panic!("{name} resolves"));
@@ -742,7 +775,7 @@ mod tests {
         assert!(registry.get("broken").is_none(), "broken theme skipped");
         assert!(registry.get("zeta").is_none(), "schema-only source filtered (isThemeSource)");
         let names = registry.names();
-        assert_eq!(names.len(), 34);
+        assert_eq!(names.len(), 35, "34 builtins + the custom theme");
         assert!(registry.resolve("mytheme", Mode::Dark).is_some());
         // Precedence: a custom theme shadowing a builtin name replaces
         // it (custom > builtin).

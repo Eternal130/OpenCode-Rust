@@ -114,9 +114,10 @@ pub fn handle_dialog_key(
                 if matches!(top.kind, DialogKind::SessionRename { .. }) {
                     top.value.clear();
                 } else {
-                    top.select.set_filter("");
+                    top.select.set_filter("", &props, usize::from(terminal.1));
                 }
             });
+            store.preview_theme_filter();
             return DialogKeyOutcome::Consumed;
         }
         store.close_dialog();
@@ -133,9 +134,10 @@ pub fn handle_dialog_key(
                 } else {
                     let mut filter = std::mem::take(&mut top.select.filter);
                     filter.push(text);
-                    top.select.set_filter(&filter);
+                    top.select.set_filter(&filter, &props, usize::from(terminal.1));
                 }
             });
+            store.preview_theme_filter();
             return DialogKeyOutcome::Consumed;
         }
     }
@@ -146,9 +148,10 @@ pub fn handle_dialog_key(
             } else if !top.select.filter.is_empty() {
                 let mut filter = std::mem::take(&mut top.select.filter);
                 filter.pop();
-                top.select.set_filter(&filter);
+                top.select.set_filter(&filter, &props, usize::from(terminal.1));
             }
         });
+        store.preview_theme_filter();
         return DialogKeyOutcome::Consumed;
     }
 
@@ -271,6 +274,11 @@ pub fn handle_dialog_key(
     // selection move (`onMove: () => setToDelete(undefined)`).
     if matches!(entry.kind, DialogKind::Worktrees) {
         store.clear_worktree_delete();
+    }
+    // The theme list PREVIEWS on every move (`onMove: (opt) =>
+    // themes.set(opt.value)` — dialog-theme-list.tsx:28-30).
+    if matches!(entry.kind, DialogKind::ThemeList) {
+        store.preview_theme_move();
     }
     DialogKeyOutcome::Consumed
 }
@@ -772,6 +780,10 @@ pub fn execute_submission(
     match store.top_dialog().map(|entry| entry.kind) {
         Some(DialogKind::ThemeList) => {
             store.set_theme_by_name(command);
+            // `confirmed = true` before `dialog.clear()` — the clear's
+            // unmount must NOT revert the preview (dialog-theme-list.
+            // tsx:31-35).
+            store.confirm_theme_dialog();
             store.clear_dialogs();
             return crate::components::command_palette::Dispatch::Handled;
         }
