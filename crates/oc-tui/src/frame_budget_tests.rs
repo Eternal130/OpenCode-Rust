@@ -27,6 +27,9 @@ const FRAME_BUDGET_MS: u128 = 40; // TEMP: 19ms local-release, CI runners measur
 // 2-core). The scale is deliberately opt-in per environment and clamped —
 // it widens the REGRESSION ceiling for slow machines only; it never
 // tightens, and local runs stay at the strict nominal budget.
+// The gates assert in release builds only, so debug clippy sees this
+// helper as unused — allow exactly that case.
+#[cfg_attr(debug_assertions, allow(dead_code))]
 fn frame_budget_ms() -> u128 {
     let scale: u128 = std::env::var("OC_FRAME_BUDGET_SCALE")
         .ok()
