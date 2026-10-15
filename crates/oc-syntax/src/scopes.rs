@@ -37,6 +37,15 @@ impl SyntaxStyles {
         Self(Arc::new(BTreeMap::new()))
     }
 
+    /// Iterate the flattened (scope → definition) map — the bridge
+    /// the opentui-core markdown pipeline consumes (the retirement
+    /// lane re-homes transcript markdown onto opentui's
+    /// `MarkdownRenderable`, which resolves captures through its own
+    /// `SyntaxStyle` built from the SAME generated rules).
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &SyntaxStyleDef)> {
+        self.0.iter()
+    }
+
     fn get(&self, scope: &str) -> Option<&SyntaxStyleDef> {
         self.0.get(scope)
     }
