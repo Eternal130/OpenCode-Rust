@@ -76,3 +76,13 @@
 - session-list-dialog: 2/12 — counts identical to final-sweep run0.
 - help-dialog: 6/2 — the M5-documented deterministic mm2 (improved
   from the final sweep's 3/5).
+
+## Phase 3 — full verdicts + budget
+- themes-nord FULL (both sizes x 2 runs, cache OFF): 6/2, 1/7, 1/7, 6/2
+  — the 1/7 runs are the home-placeholder coin (same counts as the
+  final sweep's own 1/7 runs); the nord steps' residuals are ONLY the
+  backdrop-fg + input-caret pre-existing families (verified at
+  120x30 too: caret cell + fg=idx15 cells + coin text).
+- NEW budget pair: frame_budget_theme_switch_{old,solid}_path (200x50
+  session route, theme dialog open, LIVE palette switch every frame).
+  Debug: pass (report-only). Release numbers land in the final phase.
