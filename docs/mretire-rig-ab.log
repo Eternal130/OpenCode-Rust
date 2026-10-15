@@ -15,3 +15,18 @@ re-home transcript markdown onto opentui-core's MarkdownRenderable pipeline, dea
 - subagent: subagent-basic | markdown: type-edit-submit, multi-turn, thought-render
 
 ## Phase log
+
+## BASELINE (pre-retirement HEAD = main b254c2b; FULL, cache OFF, --runs 2)
+Baselines live in /tmp/opencode/tui-diff/mretire-base-<script>/ (report.md + per-run sNN.our.txt grids).
+Baseline nextest: 2887 workspace (oc-tui 621, oc-tui-core 77, parity 84). Release: 66,727,072 B (== M-engine record).
+
+- mouse-hover-tabstrip: DONE. Mismatch unions dominated by known classes (stats-row digits, exit-session ids); 80x24+120x30 x r0,r1.
+- help-dialog: 80x24 r0 2mm/r1 5mm; 120x30 3/5 (mm2 submit/help-open backlog + coins, as M5 recorded)
+- composer-clear: 80x24 5mm/r1 0mm; 120x30 5/0 (placeholder coin flips run-to-run within flag — matches M3)
+- long-reply-scroll: 14mm all runs both sizes (known live-meter/stats class, flag-symmetric in M4)
+- sidebar-wide: 160x36 r0 14mm / r1 11mm (context-meter seam, both paths, M5)
+- boot-home: 3mm all runs (home placeholder coin, (b)-class)
+- subagent-basic: 80/120 r0 11mm r1 8mm (stats digits + session-id chars, M6)
+- type-edit-submit: 9/6, 6/9 (coin + stats)
+- multi-turn: 80 19/19; 120 16/16 (stats digits)
+- thought-render: 80 9/6; 120 9/9 (placeholder coin + stats)
