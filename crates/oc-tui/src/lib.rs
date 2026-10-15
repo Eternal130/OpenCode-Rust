@@ -33,6 +33,12 @@ pub mod config;
 pub mod data;
 pub mod diff_viewer_golden_tests;
 pub mod editor;
+/// Lane M6: the exit farewell (sessionEpilogue) on the opentui-solid
+/// builder tree (the `OC_SUBAGENT_OPENTUI` flag selects it, shared
+/// with the picker panel; presentation.rs's string builder stays the
+/// fallback — see the module doc + the M6 section of
+/// `docs/migration-m1-tabstrip.md`).
+pub mod farewell_solid;
 /// R-07: the fake-terminal image display tests (captured-output
 /// chain — no PTY needed).
 #[cfg(test)]
@@ -51,6 +57,7 @@ pub mod notifications_plugin;
 pub mod os_notify;
 pub mod plugin_boot;
 pub mod plugin_ui;
+pub mod presentation;
 pub mod reactive;
 pub mod render;
 pub mod replay;

@@ -79,6 +79,15 @@ pub struct TranscriptOptions {
     /// (`providerID/modelID` → catalog `name`) for the assistant
     /// footer row — empty leaves the fallback labels.
     pub model_names: Vec<(String, String)>,
+    /// Live child-session statuses (#40): `metadata.sessionID` →
+    /// running — the subagent card's `isRunning` second clause
+    /// (`data.session.status(id) === "running"`). Empty in fixtures.
+    pub subagent_running: std::collections::HashMap<String, bool>,
+    /// The user-message block's rail color — the SESSION's agent
+    /// categorical hue (`local.agent.color(session.agent)`,
+    /// session/index.tsx:2200; `None` → the walk's first-hue default
+    /// for fixtures). Set by `render_session` from the registry.
+    pub user_rail: Option<ratatui::style::Color>,
 }
 
 impl Default for TranscriptOptions {
@@ -91,6 +100,8 @@ impl Default for TranscriptOptions {
             group_rules: crate::components::message::model::GroupRules::empty(),
             image_strip: crate::components::message::rows::ImageStripOptions::default(),
             model_names: Vec::new(),
+            subagent_running: std::collections::HashMap::new(),
+            user_rail: None,
         }
     }
 }
@@ -232,7 +243,7 @@ fn render_row(
                 Message::User { text, files, .. } => user_message_row(
                     text,
                     files,
-                    theme.agent_color(0),
+                    options.user_rail.unwrap_or_else(|| theme.agent_color(0)),
                     theme,
                     width,
                     &options.image_strip,
@@ -253,6 +264,23 @@ fn render_row(
             };
             match part {
                 Part::Text { text, .. } => text_part_row(text, markdown, width),
+                // The subagent tool renders its InlineTool card (#40 —
+                // `Subagent`, session/index.tsx:3087-3120); other
+                // ungrouped tools stay wave-2 surfaces (exploration
+                // tools render through their group header).
+                Part::Tool { name, state, .. } if canonical_tool_name(name) == "subagent" => {
+                    let session_running = state
+                        .metadata
+                        .get("sessionID")
+                        .and_then(|id| options.subagent_running.get(id).copied());
+                    crate::components::message::rows::subagent_tool_row(
+                        state,
+                        session_running,
+                        options.clock_ms,
+                        theme,
+                        width,
+                    )
+                }
                 // Ungrouped tool parts (non-exploration tools) render via
                 // the tool_rows component (wave 2 integration surface);
                 // the golden transcript only carries grouped exploration
@@ -660,7 +688,7 @@ fn shift_fill(fill: &Fill, offset: usize) -> Option<Fill> {
 /// `GROUP_MESSAGES`) — byte-for-byte.
 #[must_use]
 pub fn message_groups_fixture() -> Vec<Message> {
-    use crate::components::message::model::PartTime;
+    use crate::components::message::model::{PartTime, ToolState};
     vec![
         Message::User {
             id: "grp-user-0".into(),
@@ -677,6 +705,7 @@ pub fn message_groups_fixture() -> Vec<Message> {
                     id: "grp-tool-read".into(),
                     name: "read".into(),
                     time: PartTime { created: Some(1), completed: Some(1) },
+                    state: ToolState::default(),
                 },
                 Part::Text {
                     text: "It reads the configuration and produces a build plan.".into(),
@@ -886,12 +915,17 @@ mod tests {
 
     #[test]
     fn resolve_part_ords_and_tool_ids() {
-        use crate::components::message::model::PartTime;
+        use crate::components::message::model::{PartTime, ToolState};
         let parts = vec![
             Part::Text { text: "a".into(), time: PartTime::default() },
             Part::Reasoning { text: "r".into(), time: PartTime::default() },
             Part::Text { text: "b".into(), time: PartTime::default() },
-            Part::Tool { id: "t9".into(), name: "read".into(), time: PartTime::default() },
+            Part::Tool {
+                id: "t9".into(),
+                name: "read".into(),
+                time: PartTime::default(),
+                state: ToolState::default(),
+            },
         ];
         assert!(matches!(resolve_part(&parts, "text:0"), Some(Part::Text { .. })));
         assert!(

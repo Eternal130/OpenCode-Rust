@@ -664,21 +664,103 @@ home path paints either composer path's frame).
   home chrome tree + the shared `plan_home` extraction ride the
   graph opentui already occupies.
 
-## Operational addendum — the host location-TTL reaper (do not fix, route around)
+---
 
-opencode core (v2.0.25) evicts idle LOCATIONS: 60 minutes with zero
-session events in a directory → `execution.interrupt({reason:
-"inactivity"})` on every session owned by that location → the subagent
-job turns `cancelled` and its background tool processes are reaped with
-it (`awaitSettlement: true`). A lane worktree is a SOLO location — the
-orchestrator's activity in the main checkout does NOT refresh it.
-Therefore: **any lane that parks on a background shell for >60 min dies
-silently**. Rules (mandatory for every lane):
-1. Long verification runs as FOREGROUND CHUNKS — every chunk is a tool
-   call that refreshes the location TTL. This includes
-   `verify-lane.sh final`: invoke its phases piecewise, never the
-   hours-long wrapper in one background shot.
-2. Watchdog armed at DISPATCH time (disk-activity + non-wip terminal
-   subject), so a reaped lane is found in minutes, not hours.
-3. On revive: reload from WIP commits + logs; kill any orphaned shells
-   from the previous generation before starting new ones.
+# Lane M6 — the subagent surfaces: the restore + the solid port
+
+> Status: **done** (lane/m6). The composer's subagent picker panel
+> (v2's `Composer` + `subagents-tab.tsx` at the corpus3 geometry)
+> and the exit farewell (`sessionEpilogue`) ported as
+> `crates/oc-tui/src/components/picker_solid.rs` +
+> `farewell_solid.rs`, selected by `OC_SUBAGENT_OPENTUI` (default
+> ON after this lane's proof; the hand-rolled painters stay one
+> release as the `=0` fallback). The store's picker state
+> (`PickerState`/`PickerTab`/`PickerEntry`), the `session.child.*` /
+> `composer.*` keymap family, the family walk, the child-view
+> navigation rooting, and the dispatcher are painter-agnostic.
+
+## The lane's precondition was a REVERT (read this before trusting any lane's "current state")
+
+The E2 subagent surfaces (2b7ae6d — picker, farewell, tool card,
+child view, pty suite) had been ACCIDENTALLY REVERTED by lane/
+chrome's merge (967a216 deleted `subagent_picker.rs`,
+`presentation.rs`, `pty_subagent.rs` and rewound the store/keymap/
+transcript seams); M0-M5 built on the wounded tree. The lane began
+by RESTORING E2's surfaces onto the current architecture (the
+`=0` fallback path), then ported. Lesson: a lane spec that says
+"the current implementation lives at X" must be verified against
+the TREE, not the roadmap — `git log --all -S "<symbol>"` first.
+
+## What this family ADDED to the template
+
+* **A stdout surface ports as tree + raster→ANSI serializer.** The
+  farewell is not a frame — v2 writes it to stdout after teardown,
+  and the rig compares the BYTES. The solid path mounts the
+  epilogue grid as STATIC tree rows (the M5 wordmark shape over
+  presentation.rs's own art tables), renders through a real
+  `SolidRenderer`, then walks the raster back to presentation.ts's
+  byte stream: wordmark rows emit PER GLYPH (the right half's
+  default-fg is the literal `${reset}`-as-fg prefix — a cell class,
+  not a color), label rows merge into RUNS (`weak()` + bold), and
+  an EMPTY bold value still emits `\x1b[1m\x1b[0m`. The unit gate
+  pins the bytes equal to the string builder AND the raster cells
+  equal to the string builder's own parse.
+* **The mount budget vs the paste row.** The picker mount is 12
+  rows but the transcript's height BUDGET is the panel's 11 — the
+  12th row is a pad BELOW the panel (the prompt mount analog pastes
+  its pad differently). Symptom class: "the whole panel is one row
+  too high and the transcript one row too short." Rig-pinned.
+* **Per-session chrome inputs ride TranscriptOptions.** The
+  user-block rail keys on the SESSION's agent
+  (`session_agent_rail_color` — the registry's agent through the
+  visible-agent list), and the subagent card's running oracle rides
+  `subagent_running` — both painter-agnostic, both defaulted for
+  fixtures (`None`/empty).
+* **`up` at the top closes even when the filtered list is EMPTY**
+  (the tsx's close check precedes the move guard; `down` stays
+  inert on empty). Found by the new PTY keymap cycle, not the
+  corpus.
+* **The rig reuses any existing binary.** `rust_server::
+  build_binary` returns early when `target/debug/opencode-rust`
+  exists — after source edits the rig keeps spawing the STALE
+  binary and the A/B chases ghosts. `rm` it before every rig run.
+
+## Instruments (this lane's record)
+
+* **Unit gates**: `solid_picker_panel_equals_the_old_renderer`
+  (open/browse/show-inactive/child-mounted/shell-tab × widths
+  40/80/120/160, cell for cell — including the `Running`-over-bold-
+  label attrs merge, the M5 gotcha again) +
+  `selection_churn_patches_in_place` +
+  `solid_farewell_bytes_equal_presentation_ts` (6 titles × 3 ids,
+  byte-for-byte) + `farewell_tree_grid_matches_the_string_builder_parse`
+  + the restored E2 store/picker/presentation suites (the state
+  machine, the family registry, the dispatcher walk, the epilogue
+  truncation).
+* **Rig A/B** (`docs/m6-rig-ab.log`): subagent-basic/browser/
+  sidebar × `--quick` × both flags — IDENTICAL mismatch-step unions
+  (browser/sidebar exactly; basic modulo the documented (b)-class
+  home-placeholder coin, proven flipping within each flag). After
+  the lane's geometry fixes the picker/card/child/farewell steps'
+  remaining deltas live ONLY inside the per-run stats rows and the
+  exit step's session-id characters.
+* **PTY**: `pty_subagent_surfaces_card_picker_child_farewell`
+  parametrized over both paths (the full walk: card → picker →
+  ctrl+a → child → esc → farewell stdout) + the new
+  `pty_picker_keymap_cycle_solid_path` (down opens → up-at-top
+  closes → reopens → ctrl+a → arrows → tab cycle → esc) + the 160
+  col sidebar suppression + the home-exit negative.
+* **Budget** (release, 200×11 panel, 5 entries): old 75/67 µs,
+  solid 505/489 µs worst/avg (selection churn 74/505 µs) — ~6.7×
+  the old path, 0.5 ms absolute, vs the 40 ms gate; all 15 release
+  budget tests green post-flip.
+* **Flag protocol**: default flipped ON after the proof; 733
+  oc-tui tests + 2850 workspace tests + the serialized pty profile
+  + all 15 release budget gates green through the solid default.
+* **Closing gate**: `verify-lane.sh final` — fmt/clippy/pty/budget
+  green; the rig full matrix (every script × sizes × `--runs 2`,
+  cache OFF) completed as chunked per-script runs after a session
+  glitch killed the monolithic invocation mid-corpus
+  (`docs/m6-rig-ab.log`). Two script fixes landed with it: the
+  clippy line's missing `--` before `-D warnings`, and the release
+  budget line's bogus `--run-ignored only` (0 tests matched).

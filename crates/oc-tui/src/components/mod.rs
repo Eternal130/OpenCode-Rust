@@ -31,6 +31,11 @@ pub mod home;
 /// `docs/migration-m1-tabstrip.md`).
 pub mod home_solid;
 pub mod message;
+/// Lane M6: the composer's subagent picker panel on opentui-solid
+/// (the `OC_SUBAGENT_OPENTUI` flag selects it; the hand-rolled
+/// painter stays the fallback — see the module doc + the M6 section
+/// of `docs/migration-m1-tabstrip.md`).
+pub mod picker_solid;
 pub mod session;
 pub mod session_screen;
 pub mod session_tabs;
@@ -44,6 +49,7 @@ pub mod sidebar;
 /// stays the fallback — see the module doc + the M5 section of
 /// `docs/migration-m1-tabstrip.md`).
 pub mod sidebar_solid;
+pub mod subagent_picker;
 pub mod syntax;
 pub mod tab_pulse;
 pub mod toast;
