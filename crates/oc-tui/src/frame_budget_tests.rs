@@ -872,3 +872,86 @@ fn picker_panel_budget_body() {
         "frame budget exceeded on the picker panel: idle {idle_worst} µs, churn {churn_worst} µs"
     );
 }
+
+/// Lane M-engine: the worst-case KEYSTROKE path through the editing
+/// engine — the full pump round-trip (`store.composer` →
+/// `Composer::handle_key` → `store.set_composer`) over a long draft
+/// (2 KB, CJK + latin mix), then a motion/undo churn phase
+/// (select-all, word-forward, backspace, undo — the heaviest ops).
+/// Both ENGINE paths get their own test process (the flag is read
+/// once at boot; nextest isolates the fns): the legacy hand-rolled
+/// pair and the opentui-core EditBuffer/EditorView pair. The op must
+/// stay a negligible fraction of the frame budget (the 40 ms gate);
+/// the numbers print for the lane's old-vs-new record.
+#[test]
+fn frame_budget_engine_keystroke_legacy_path() {
+    std::env::set_var("OC_ENGINE_OPENTUI", "0");
+    engine_keystroke_budget_body();
+}
+
+/// The opentui engine path (`OC_ENGINE_OPENTUI=1`).
+#[test]
+fn frame_budget_engine_keystroke_opentui_path() {
+    std::env::set_var("OC_ENGINE_OPENTUI", "1");
+    engine_keystroke_budget_body();
+}
+
+fn engine_keystroke_budget_body() {
+    use crate::components::composer::ComposerKey;
+    use crate::reactive::Runtime;
+    use crate::store::Store;
+
+    let store = Store::new(Runtime::new());
+    store.open_tab("s1", Some("bench".to_owned()));
+    // Seed a long mixed draft (the worst case: wide clusters + wraps).
+    let seed = "混合 text with 中文 clusters and latin words ".repeat(48);
+    {
+        let mut composer = store.composer("s1");
+        composer.insert_text(&seed);
+        store.set_composer("s1", &composer);
+    }
+    let mut worst_micros = 0u128;
+    let mut total_micros = 0u128;
+    let keystrokes = 200u128;
+    for frame in 0..keystrokes {
+        let key = if frame % 4 == 3 {
+            ComposerKey::Backspace
+        } else {
+            ComposerKey::Char('x')
+        };
+        let start = std::time::Instant::now();
+        let mut composer = store.composer("s1");
+        let _ = composer.handle_key(&key);
+        store.set_composer("s1", &composer);
+        let elapsed = start.elapsed();
+        worst_micros = worst_micros.max(elapsed.as_micros());
+        total_micros += elapsed.as_micros();
+    }
+    // The motion/undo churn (the engine's heavy ops on the long draft).
+    for command in [
+        ComposerKey::CtrlA,
+        ComposerKey::CtrlE,
+        ComposerKey::CtrlK,
+        ComposerKey::CtrlU,
+    ] {
+        let start = std::time::Instant::now();
+        let mut composer = store.composer("s1");
+        let _ = composer.handle_key(&command);
+        store.set_composer("s1", &composer);
+        worst_micros = worst_micros.max(start.elapsed().as_micros());
+    }
+    eprintln!(
+        "[engine-budget] keystroke round-trip on a 2KB draft ({}): worst {} µs, avg {} µs \
+         ({} build)",
+        if oc_tui_core::opentui_engine_enabled() { "opentui" } else { "legacy" },
+        worst_micros,
+        (total_micros / keystrokes),
+        if cfg!(debug_assertions) { "debug" } else { "release" },
+    );
+    #[cfg(not(debug_assertions))]
+    assert!(
+        worst_micros <= u128::from(FRAME_BUDGET_MS) * 1000,
+        "engine keystroke budget exceeded: worst {worst_micros} µs > {} ms",
+        FRAME_BUDGET_MS
+    );
+}
