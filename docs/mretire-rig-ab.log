@@ -47,3 +47,15 @@ Baseline nextest: 2887 workspace (oc-tui 621, oc-tui-core 77, parity 84). Releas
   stripped from the solid ones, label conditionals -> "solid", solid_path suffix dropped. ENGINE pair untouched (stays).
 - Coverage migration: 27-scenario parity matrix -> golden w80/w160 bytes (solid-pinned) + pty hover/add/close cycle
   + rig mouse-hover-tabstrip. Vertical rail (4 golden pairs) -> NO successor (shape retired; noted).
+
+## PHASE 2 — M2 dialogs retired
+- dialog.rs: render_overlay_with -> unconditional render_overlay_solid; DELETED render_overlay_with_old +
+  the four old content builders (render_plugin_rows/render_rename_prompt/render_worktree_name_prompt/
+  render_help_content) + cell helpers (blank_row/crate_render_cell/to_cell_color/put_text/put_text_end).
+  KEPT: blend_backdrop (bridge-side, shared), spec_display (solid uses), DialogStyles/render_select (dialog_select solver).
+- dialog_solid.rs: flag accessor + whole parity tests mod (~30-scenario matrix x3 widths) DELETED (-484 LOC total).
+- pty_interactions.rs: =0 variants of help-dialog + palette-cycle deleted; solid paths kept.
+- Coverage migration: parity matrix -> dialog.rs's own store-driven geometry tests (now solid-pinned via
+  render_overlay) + pty palette/help cycles + rig help-dialog/palette/session-list-dialog.
+
+## PHASE 3 — M3 composer+footer (in progress)
