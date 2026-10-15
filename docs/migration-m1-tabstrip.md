@@ -861,3 +861,109 @@ port (its own lane), not with any theme-table change.
   script JSON (`--sizes` cannot override — a mid-chunk discovery);
   sweep-class scripts cost ~13 min/run live — chunk per script, the
   40-min tool-call cap bites mid-corpus otherwise.
+
+---
+
+# Lane M-engine — the subsystem swap: the editing ENGINE + the keymap ENGINE
+
+> Status: **done** (lane/engine). The first NON-surface lane: not a
+> painter but the two state machines beneath the composer — the
+> editing engine (`oc-tui-core::text_edit::TextArea`, hand-rolled)
+> and the keymap dispatch engine (`oc-tui-core::keymap::engine`,
+> hand-rolled interpretation) — replaced by the opentui-rust ports
+> AS LIBRARIES (`opentui-core`'s `EditBuffer`/`EditorView` textarea
+> line; `opentui-keymap`'s engine), behind `OC_ENGINE_OPENTUI`
+> (default ON after this lane's proof; `=0` keeps the hand-rolled
+> pair one release). The K-1..K-9 registered keymap deltas dissolved
+> here — the dispatch semantics now ARE upstream 0.5.14's (v2's
+> engine), no case special-cased.
+
+## The subsystem pattern (what differs from the surface lanes)
+
+* **The facade stays; the engine beneath swaps.** The `Keymap`
+  facade's public surface (mod.rs) and the DATA table (table.rs — v2's
+  `config/keybind.ts`) are untouched; the facade's `engine` field
+  became an `EngineSel::{Legacy, Opentui}` enum both variants answer.
+  Same for the composer: `Composer.edit` became `EditCore` with the
+  legacy `TextArea` and `TextAreaOpentui` behind one internal
+  surface. oc-tui's pump code changed ZERO dispatch calls — only the
+  ~25 direct field reads (`edit.caret`, `edit.text = …`) became
+  method calls.
+* **Translate at the boundary, never inside the port.** The donor
+  keymap's binding grammar is `<leader>e` TOKENS + CONCATENATED
+  sequence parts ("gg") — there is NO `>` separator (our table's
+  internal form). The adapter's `chord_spec` renders donor grammar;
+  strokes map `alt`↔`meta`, `hyper` stays distinct (K-5). The editor
+  adapter converts char offsets (the composer's model) ↔ the buffer's
+  display-width offsets through the buffer's own cluster table —
+  wide/CJK clusters move exactly like upstream's editor.
+* **Register EXACTLY v2's Provider set** (context/keymap.tsx:86-150):
+  comma bindings, the enter/esc/pgdown/pgup alias expander,
+  base-layout fallback, escape-clears (any escape), backspace-pops,
+  timed leader at v2's explicit 2000 ms. `lookup_base` = the mode
+  data key set to a sentinel no layer names (named-mode layers go
+  inert); the pending sequence survives.
+* **Commands as sink closures**: every dot command registers a
+  `Command` whose run closure checks the shared disable gate and
+  returns Handled — the legacy always-accept runner with rejection
+  fall-through intact, and `set_command_enabled` needs no rebuild.
+* **The engine owns wrap**: `EditorView` runs WrapMode::Word
+  (TextareaRenderable's default) at the composer's INNER width —
+  `prompt_text_width` was extracted from `mount_height` so the
+  display solver, the height walk, and the engine's visual motions
+  share ONE integer (the app feeds it at boot + resize).
+* **The observable-only bridge**: the opentui engine's per-op bridge
+  (`run_tracked`) mirrors text in/out but `mirror_text` is a NO-OP on
+  matching text — the first draft reset the caret+history on EVERY
+  keystroke (the per-op bridge must be inert when already in sync).
+
+## Engine-behavior deltas the swap MADE (upstream-faithful, each pinned)
+
+1. Plain moves over a selection COLLAPSE to the edge without
+   stepping (`collapseSelectionToEdge`); legacy cleared + moved.
+2. Word boundaries: script-transition rules ("fn foo()" alt+f hops
+   3,7,8 vs legacy 3,6,8).
+3. Line home/end readline jumps at the row edges (home at col 0 →
+   previous line's end; end at EOL → next line's start).
+4. Visual motions follow the WRAP model (vlines + boundary affinity
+   — the cursor stays on the last grapheme, not past the break's
+   trailing space).
+5. `deleteForward`'s phantom undo snapshot (the ported upstream
+   double-snapshot — one extra undo press walks a same-state restore).
+6. Undo never restores across an external `setText` (rope history
+   clears — no undo-after-submit).
+7. The pending display is the `<leader>` token form; the alias
+   expander revived diff.toggle's "enter" spec (dead on legacy — the
+   pump speaks "return").
+
+## Instruments (this lane's record)
+
+* **Unit**: the resolution parity table — EVERY default-table spec
+  (~202) resolves identically on both engines in its layer's mode
+  context (kind+command; displays normalized); the K-1..K-9 suite
+  (before/after per delta); conflict parity; lookup_base parity;
+  overrides/leader-rebind/owned rebuilds; the editor parity +
+  delta suites. oc-tui-core 77/77 both paths; oc-tui 688/688 both
+  paths; workspace 2887/2887 both paths.
+* **Rig A/B** (`docs/mengine-rig-ab.log`): type-edit-submit,
+  composer-clear, palette, tabs-keyboard (LEADER-heavy), rename-
+  dialog, multi-session × both sizes × 2 runs × both flags —
+  IDENTICAL mismatch-step unions; the only count deltas are the
+  per-run stats-row digit widths and the (b)-class home-placeholder
+  coin (proven flipping WITHIN one flag). FULL live re-runs (cache
+  OFF) of the same corpus through the default engine: same
+  distributions, NO new divergence class.
+* **PTY**: the serialized profile 2885/2885 on BOTH paths + the new
+  `pty_engine_cycle_type_worddelete_undo_leader_escape_{legacy,
+  opentui}_path` (the shared observable cycle: type → ctrl+w → undo
+  → leader-arm + escape-clear → prompt.clear).
+* **Budget** (release, 200×50, the full pump round-trip on a 2 KB
+  CJK-mixed draft): legacy worst 225 µs / avg 67 µs; opentui worst
+  1270 µs / avg 399 µs — ~5.6×, 1.27 ms absolute vs the 40 ms gate;
+  all 19 release budget tests green.
+* **Release size**: 66,231,424 → 66,727,072 B (**+495,648 B ≈
+  +484 KiB, +0.75%**).
+* **Flag protocol**: default flipped ON after the proof;
+  `OC_ENGINE_OPENTUI=0` keeps the hand-rolled pair one release (the
+  retirement lane removes text_edit.rs + keymap/engine.rs and the
+  enum hops).
