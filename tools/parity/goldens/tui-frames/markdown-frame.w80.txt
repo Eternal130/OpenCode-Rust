@@ -8,7 +8,7 @@
                                                                                 
    Ordinary paragraph with inline.code and emphasis mixed into prose.           
                                                                                 
-   - item one with `inline.code`                                                
+   - item one with inline.code                                                  
    - item two follows the first                                                 
    - item three closes the list                                                 
                                                                                 

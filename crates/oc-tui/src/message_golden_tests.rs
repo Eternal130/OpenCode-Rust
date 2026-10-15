@@ -42,6 +42,15 @@ fn theme() -> ThemeState {
 }
 
 fn assert_text_grid_match(id: &str, width: usize, frame: &Frame) {
+    if std::env::var("PARITY_UPDATE").is_ok_and(|value| value == "1") {
+        let rows: Vec<String> = frame.text_grid();
+        std::fs::write(
+            goldens().join(format!("{id}.w{width}.txt")),
+            format!("{}\n", rows.join("\n")),
+        )
+        .expect("write golden txt");
+        return;
+    }
     let golden = pf::load_text_grid(&goldens(), id, width).expect("golden text grid");
     let rendered =
         pf::TextGrid { rows: frame.text_grid(), height: frame.height, width: frame.width };
@@ -109,6 +118,20 @@ fn markdown_frame_matches_text_grid_at_40() {
 fn markdown_frame_ansi_matches_outside_the_code_fence() {
     let theme = theme();
     for width in [80usize, 40] {
+        let frame = markdown_frame(
+            width as u16,
+            30,
+            &MarkdownStyles::from_theme(&theme.styles()),
+            &theme.styles(),
+        );
+        if std::env::var("PARITY_UPDATE").is_ok_and(|value| value == "1") {
+            std::fs::write(
+                goldens().join(format!("markdown-frame.w{width}.ansi")),
+                serialize_canonical(&frame),
+            )
+            .expect("write golden ansi");
+            continue;
+        }
         let frame = markdown_frame(
             width as u16,
             30,
