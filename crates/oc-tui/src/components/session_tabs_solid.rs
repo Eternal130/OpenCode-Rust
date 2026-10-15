@@ -13,13 +13,10 @@
 //! only the view layer. The bridging pattern (and its gotchas) is
 //! documented in `docs/migration-m1-tabstrip.md`.
 //!
-//! **Selection flag.** Default ON (flipped after the rig proof —
-//! cell-for-cell parity with the old renderer and zero new findings
-//! on the tui-diff corpus): the strip renders through this module.
-//! `OC_TABS_OPENTUI=0` (or `false`/`off`) selects the hand-rolled
-//! fallback renderer for one release. The flag is read once at the
-//! first strip paint ("at boot") — a running session never switches
-//! renderers mid-flight.
+//! **Selection flag (retired).** The lane-M1 dual-path flag
+//! (`OC_TABS_OPENTUI`) is gone: this module's opentui-solid tree is
+//! the strip's ONLY renderer — the hand-rolled bar/rail walk was
+//! deleted after the one-release probation (the retirement lane).
 //!
 //! **The bridge shape** (what M2..Mn will copy):
 //!
@@ -77,29 +74,10 @@ use crate::components::session_tabs::{
     ADD_TAB_WIDTH,
 };
 use crate::components::tab_pulse::{glow_text_color, resting_glow_bg, tint, Rgb, GLOW_TAIL};
-#[cfg(test)]
-use crate::render::paint_placed_with_fills;
 use crate::render::{Cell, CellColor, Frame, CONTINUATION};
 use crate::store::Unread;
 use crate::theme::ThemeStyles;
 use crate::wrap::take_width;
-
-/// The renderer selection flag (lane M1, default FLIPPED ON after
-/// the rig proof): `OC_TABS_OPENTUI=0` (or `false`/`off`) boots the
-/// strip on the hand-rolled fallback renderer; every other value —
-/// including unset — uses this module's opentui-solid path. Read once
-/// (first strip paint — the TUI's boot) and cached for the process
-/// lifetime, so a running session never switches renderers
-/// mid-flight. The old renderer stays compiled for one release as
-/// the escape hatch.
-#[must_use]
-pub fn opentui_tabs_enabled() -> bool {
-    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLAG.get_or_init(|| {
-        !std::env::var("OC_TABS_OPENTUI")
-            .is_ok_and(|value| value == "0" || value == "false" || value == "off")
-    })
-}
 
 // ---------------------------------------------------------------------------
 // inputs (the store → view bridge)
@@ -848,31 +826,6 @@ thread_local! {
 /// twin of the old `render_bar` + `paint_placed_with_fills` pair,
 /// fused: sync inputs → flush patches → render → copy the cells.
 ///
-/// The old-path twin (hover-aware frame paint, for the parity gate):
-/// the same `render_bar` call the golden [`paint_bar`] makes, with
-/// the pointer state the live mount passes.
-#[cfg(test)]
-fn old_path_frame(
-    tabs: &[TabView],
-    active: Option<&str>,
-    show_plus: bool,
-    width: usize,
-    theme: &ThemeStyles,
-    hover: Option<&str>,
-    add_hovered: bool,
-) -> Frame {
-    use crate::components::session_tabs::render_bar;
-    use ratatui::style::Style;
-
-    let render = render_bar(tabs, active, show_plus, width, theme, hover, add_hovered);
-    paint_placed_with_fills(
-        &render.placed,
-        &render.fills,
-        (u16::try_from(width).unwrap_or(u16::MAX), 1),
-        Style::new().fg(crate::components::tool_rows::DEFAULT_FOREGROUND).bg(theme.background),
-    )
-}
-
 /// Paint the strip through the opentui-solid path (see the module
 /// doc for the bridge shape and the flag).
 #[must_use]
@@ -905,7 +858,7 @@ pub fn paint_solid_bar(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::session_tabs::{Attention, TabStatus};
+    use crate::components::session_tabs::TabStatus;
     use crate::store::SessionTab;
 
     fn view(id: &str, title: &str, status: TabStatus) -> TabView {
@@ -918,195 +871,6 @@ mod tests {
 
     fn theme() -> ThemeStyles {
         crate::theme::ThemeState::v2_dark().styles()
-    }
-
-    /// The lane gate: the solid path's frame must equal the old
-    /// path's frame CELL FOR CELL (char + attrs + fg + bg) across
-    /// the rig-relevant scenario matrix.
-    ///
-    /// Scenarios: resting, unread glow, error glow, attention, busy
-    /// spinner, hover lift (title shrink + ✕), add-hover, untitled
-    /// fallback, truncation, overflow windowing — each at both rig
-    /// sizes plus the narrow squeeze.
-    #[test]
-    #[allow(clippy::too_many_lines, clippy::items_after_statements)] // a data matrix, not logic
-    fn solid_strip_frame_equals_the_old_renderer() {
-        // (name, tabs, active, hover, add_hovered)
-        type Scenario =
-            (&'static str, Vec<TabView>, Option<&'static str>, Option<&'static str>, bool);
-        let scenarios: Vec<Scenario> = vec![
-            (
-                "golden-resting",
-                vec![
-                    view(
-                        "first",
-                        "First",
-                        TabStatus { unread: Some(Unread::Activity), ..TabStatus::EMPTY },
-                    ),
-                    view("second", "Second", TabStatus::EMPTY),
-                ],
-                Some("second"),
-                None,
-                false,
-            ),
-            (
-                "hover-lift-close-mark",
-                vec![
-                    view("first", "First", TabStatus::EMPTY),
-                    view(
-                        "second",
-                        "Second",
-                        TabStatus { unread: Some(Unread::Activity), ..TabStatus::EMPTY },
-                    ),
-                ],
-                Some("first"),
-                Some("second"),
-                false,
-            ),
-            (
-                "hover-selected-tab",
-                vec![view("only", "Only tab here", TabStatus::EMPTY)],
-                Some("only"),
-                Some("only"),
-                true,
-            ),
-            (
-                "error-unread-glow",
-                vec![
-                    view(
-                        "bad",
-                        "Bad tab",
-                        TabStatus { unread: Some(Unread::Error), ..TabStatus::EMPTY },
-                    ),
-                    view("busy", "Busy", TabStatus { busy: true, ..TabStatus::EMPTY }),
-                ],
-                Some("busy"),
-                None,
-                false,
-            ),
-            (
-                "attention-permission",
-                vec![
-                    view(
-                        "ask",
-                        "Asking",
-                        TabStatus {
-                            attention: Some(Attention::Permission),
-                            busy: true,
-                            ..TabStatus::EMPTY
-                        },
-                    ),
-                    view("idle", "Idle", TabStatus::EMPTY),
-                ],
-                Some("ask"),
-                None,
-                false,
-            ),
-            ("add-hovered", vec![view("solo", "Solo", TabStatus::EMPTY)], Some("solo"), None, true),
-            (
-                "untitled-fallback",
-                vec![view("x", "Untitled session", TabStatus::EMPTY)],
-                None,
-                None,
-                false,
-            ),
-            (
-                "long-title-truncation",
-                vec![view(
-                    "long",
-                    "A considerably longer session title than the slot",
-                    TabStatus::EMPTY,
-                )],
-                Some("long"),
-                None,
-                false,
-            ),
-        ];
-        // Narrow squeeze forces overflow markers; 160 is the rig's
-        // wide size; many tabs exercise the windowing solver.
-        let many: Vec<TabView> = (0..12)
-            .map(|index| {
-                view(
-                    &format!("t{index}"),
-                    &format!("Title {index}"),
-                    if index % 3 == 0 {
-                        TabStatus { unread: Some(Unread::Activity), ..TabStatus::EMPTY }
-                    } else {
-                        TabStatus::EMPTY
-                    },
-                )
-            })
-            .collect();
-        // (name, tabs, active, hover, add_hovered, width)
-        type MatrixRow = (String, Vec<TabView>, Option<String>, Option<String>, bool, usize);
-        let mut matrix: Vec<MatrixRow> = scenarios
-            .into_iter()
-            .flat_map(|(name, tabs, active, hover, add)| {
-                [(80usize, "w80"), (160, "w160"), (40, "w40")].map(|(width, tag)| {
-                    (
-                        format!("{name}-{tag}"),
-                        tabs.clone(),
-                        active.map(str::to_owned),
-                        hover.map(str::to_owned),
-                        add,
-                        width,
-                    )
-                })
-            })
-            .collect();
-        for (width, active_index) in [(80usize, Some(10usize)), (120, Some(0)), (160, Some(11))] {
-            matrix.push((
-                format!("many-tabs-w{width}"),
-                many.clone(),
-                active_index.map(|index| format!("t{index}")),
-                Some("t3".to_string()),
-                false,
-                width,
-            ));
-        }
-
-        let styles = theme();
-        let mut mismatches = Vec::new();
-        for (name, tabs, active, hover, add, width) in matrix {
-            let old = old_path_frame(
-                &tabs,
-                active.as_deref(),
-                true,
-                width,
-                &styles,
-                hover.as_deref(),
-                add,
-            );
-            let new = paint_solid_bar(
-                &tabs,
-                active.as_deref(),
-                true,
-                width,
-                &styles,
-                hover.as_deref(),
-                add,
-            );
-            if old != new {
-                let mut cells = Vec::new();
-                'outer: for y in 0..old.height.min(new.height) {
-                    for x in 0..old.width.min(new.width) {
-                        let (a, b) = (old.cell(y, x), new.cell(y, x));
-                        if a != b {
-                            cells.push(format!("({x},{y}): old {a:?} new {b:?}"));
-                            if cells.len() >= 8 {
-                                break 'outer;
-                            }
-                        }
-                    }
-                }
-                mismatches.push(format!("{name}: {}", cells.join("; ")));
-            }
-        }
-        assert!(
-            mismatches.is_empty(),
-            "solid path diverged from the old renderer:\n  {}",
-            mismatches.join("\n  ")
-        );
     }
 
     /// The reactive path actually patches in place: a hover change on
@@ -1158,8 +922,12 @@ mod tests {
 
     /// A width change rebuilds cleanly (resize seam) and re-renders
     /// the same scenario the old path renders at that width.
+    /// Resize rebuilds the mount (the M1 gotcha: a width change is a
+    /// fresh taffy tree) and the rebuilt strip still paints a full
+    /// row — the retirement-era residue of the old parity gate, now
+    /// an absolute self-check.
     #[test]
-    fn resize_rebuilds_and_stays_at_parity() {
+    fn resize_rebuilds_and_paints_full_rows() {
         let styles = theme();
         let tabs = vec![
             view("first", "First", TabStatus::EMPTY),
@@ -1170,28 +938,18 @@ mod tests {
             ),
         ];
         // Mount at 80, then squeeze to 40, then widen to 160.
+        let mut first_at_80: Option<String> = None;
         for width in [80usize, 40, 160, 80] {
-            let new = paint_solid_bar(&tabs, Some("second"), true, width, &styles, None, false);
-            let old = old_path_frame(&tabs, Some("second"), true, width, &styles, None, false);
-            if std::env::var("OC_TABS_DEBUG").is_ok() {
-                eprintln!("w{width} new: {}", new.text_grid()[0]);
-                eprintln!("w{width} old: {}", old.text_grid()[0]);
-                STRIP.with_borrow(|slot| {
-                    if let Some(strip) = slot.as_ref() {
-                        let ids: Vec<String> = (0..width)
-                            .map(|x| {
-                                strip
-                                    .renderer
-                                    .renderer
-                                    .hit_test(i32::try_from(x).unwrap_or(i32::MAX), 0)
-                                    .unwrap_or_default()
-                            })
-                            .collect();
-                        eprintln!("w{width} hits: {ids:?}");
-                    }
-                });
+            let frame = paint_solid_bar(&tabs, Some("second"), true, width, &styles, None, false);
+            assert_eq!(frame.text_grid().len(), 1, "one strip row at width {width}");
+            let row = frame.text_grid()[0].clone();
+            assert_eq!(row.chars().count(), width, "full row at width {width}");
+            if width == 80 {
+                match &first_at_80 {
+                    None => first_at_80 = Some(row),
+                    Some(prev) => assert_eq!(&row, prev, "same inputs paint the same row"),
+                }
             }
-            assert_eq!(new, old, "parity at width {width}");
         }
     }
 }

@@ -72,12 +72,11 @@
 //! equivalence evidence); the solid tree is a pure paint of the
 //! driver's window.
 //!
-//! **Selection flag.** `OC_TRANSCRIPT_OPENTUI` — default ON after
-//! this lane's proof (the unit parity matrix, the flag-symmetric
-//! 28-invocation rig A/B, both PTY paths, the budget gates);
-//! `OC_TRANSCRIPT_OPENTUI=0` keeps the hand-rolled region walk for
-//! one release. Read once at the first transcript paint ("at boot")
-//! via `OnceLock` — a running session never switches painters.
+//! **Selection flag (retired).** The lane-M4 dual-path flag
+//! (`OC_TRANSCRIPT_OPENTUI`) is gone: this module's opentui-solid
+//! tree is the transcript region's ONLY renderer — the hand-rolled
+//! region walk was deleted after the one-release probation (the
+//! retirement lane).
 
 // Terminal dimensions/colors are bounded usize→f32 casts (taffy
 // points), the same allowance the other solid surfaces carry.
@@ -100,24 +99,6 @@ use crate::components::session_tabs_solid::frame_from_buffer;
 use crate::layout::StyledSpan;
 use crate::render::Frame;
 use crate::theme::ThemeStyles;
-
-/// The renderer selection flag (lane M4, default FLIPPED ON after
-/// the rig proof — the unit parity matrix, the flag-symmetric
-/// 28-invocation rig A/B, both PTY paths, the budget gates): every
-/// value except `0`/`false`/`off` — including unset — boots the
-/// transcript on this module's opentui-solid path; the hand-rolled
-/// region walk stays compiled for one release as the escape hatch.
-/// Read once (first transcript paint — the TUI's boot) and cached
-/// for the process lifetime, so a running session never switches
-/// painters mid-flight.
-#[must_use]
-pub fn opentui_transcript_enabled() -> bool {
-    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLAG.get_or_init(|| {
-        !std::env::var("OC_TRANSCRIPT_OPENTUI")
-            .is_ok_and(|value| value == "0" || value == "false" || value == "off")
-    })
-}
 
 // ---------------------------------------------------------------------------
 // colors + chunk helpers (the M1/M2/M3 shape)
@@ -509,12 +490,12 @@ thread_local! {
     static TRANSCRIPT: RefCell<Option<SolidTranscript>> = const { RefCell::new(None) };
 }
 
-/// Paint the transcript region through the opentui-solid path — the
-/// new-path twin of [`Transcript::region_frame`]: shape the visible
+/// Paint the transcript region through the opentui-solid tree — the
+/// ONLY renderer since the retirement lane: shape the visible
 /// window from the SHARED walk, sync + flush the mount, copy the
 /// cells, then apply the ONE bridge-level fixup (the strikethrough
 /// bit: opentui packs SGR 9 at bit 7, the cell grid at bit 8 —
-/// `~~del~~` markdown must land on the old path's bit).
+/// `~~del~~` markdown must land on the grid's bit).
 #[must_use]
 pub fn paint_transcript_region(
     transcript: &Transcript,
@@ -567,293 +548,18 @@ mod tests {
     use crate::components::message::list::{
         message_groups_fixture, render_transcript, vscroll_messages_fixture, TranscriptOptions,
     };
-    use crate::components::message::model::{Message, Part, PartTime, ToolState};
-    use crate::components::tool_rows::DEFAULT_FOREGROUND;
+    use crate::components::message::model::{Message, Part};
     use crate::theme::ThemeState;
 
     fn theme() -> ThemeStyles {
         ThemeState::v2_dark().styles()
     }
 
-    /// The old region painter's base fill (the route's `fill`).
-    fn base_fill() -> ratatui::style::Style {
-        ratatui::style::Style::new().fg(DEFAULT_FOREGROUND).bg(theme().background)
-    }
-
-    /// One parity-matrix scenario: the fixture messages + the render
-    /// options (clock, disclosure, model names) + a label.
-    struct Scenario {
-        name: &'static str,
-        messages: Vec<Message>,
-        options: TranscriptOptions,
-    }
-
-    fn assistant_markdown(text: &str) -> Message {
-        Message::Assistant {
-            id: "md-answer".into(),
-            agent: "build".into(),
-            model: "fixture/fixture".into(),
-            parts: vec![Part::Text { text: text.into(), time: PartTime::default() }],
-            finish: Some("stop".into()),
-            error: None,
-            time: PartTime { created: Some(1), completed: Some(2) },
-            tokens: Some(700),
-            usage_total: None,
-        }
-    }
-
-    /// The lane gate: the solid region frame must equal the old
-    /// region painter's frame CELL FOR CELL (char + attrs + fg + bg)
-    /// over the message-kind × state matrix — user boxes, exploration
-    /// headers (running/completed), markdown (headings, emphasis,
-    /// code, lists, blockquotes, hr, `~~del~~`, links, CJK), thought
-    /// blocks (collapsed/expanded gutter), stats rows (tok/s), error
-    /// parts, the image strip, long wrapped turns — × widths
-    /// 80/120/40 × scroll positions (top, mid cuts, sticky bottom).
-    #[test]
-    #[allow(clippy::too_many_lines, clippy::items_after_statements)] // a data matrix, not logic
-    fn solid_transcript_frame_equals_the_old_renderer() {
-        let theme = theme();
-        let groups = message_groups_fixture();
-        let reasoning_key = {
-            let transcript = render_transcript(&groups, &TranscriptOptions::default(), &theme, 80);
-            transcript
-                .rows
-                .iter()
-                .find(|row| row.key.starts_with("group:Reasoning:"))
-                .map(|row| row.key.clone())
-                .expect("the fixture carries a reasoning group")
-        };
-
-        let mut scenarios: Vec<Scenario> = Vec::new();
-
-        // -- the golden fixture (user box / exploration / text / footer)
-        scenarios.push(Scenario {
-            name: "groups-fixture",
-            messages: groups.clone(),
-            options: TranscriptOptions::default(),
-        });
-        // -- the running clock (spinner frames) + a mid-stream turn
-        let mut running = groups.clone();
-        running.push(Message::User {
-            id: "run-user".into(),
-            text: "keep going".into(),
-            created: 20,
-            files: Vec::new(),
-        });
-        running.push(Message::Assistant {
-            id: "run-answer".into(),
-            agent: "build".into(),
-            model: "fixture/fixture".into(),
-            parts: vec![Part::Tool {
-                id: "run-tool".into(),
-                name: "grep".into(),
-                time: PartTime { created: Some(30), completed: None },
-                state: ToolState::default(),
-            }],
-            finish: None,
-            error: None,
-            time: PartTime { created: Some(30), completed: None },
-            tokens: None,
-            usage_total: None,
-        });
-        for (name, clock) in [("running-clock-0", 0u64), ("running-clock-240", 240)] {
-            scenarios.push(Scenario {
-                name: Box::leak(name.to_owned().into_boxed_str()),
-                messages: running.clone(),
-                options: TranscriptOptions { clock_ms: clock, ..TranscriptOptions::default() },
-            });
-        }
-        // -- the disclosure expansion (header + ┃-guttered children)
-        scenarios.push(Scenario {
-            name: "thought-expanded",
-            messages: groups.clone(),
-            options: TranscriptOptions {
-                expanded_groups: vec![reasoning_key.clone()],
-                ..TranscriptOptions::default()
-            },
-        });
-        // -- a running reasoning turn (Thinking header)
-        let mut thinking = vec![Message::User {
-            id: "th-user".into(),
-            text: "why?".into(),
-            created: 0,
-            files: Vec::new(),
-        }];
-        thinking.push(Message::Assistant {
-            id: "th-answer".into(),
-            agent: "build".into(),
-            model: "fixture/fixture".into(),
-            parts: vec![Part::Reasoning {
-                text: "**Deliberating**\n\nstep one then step two".into(),
-                time: PartTime { created: Some(1), completed: None },
-            }],
-            finish: None,
-            error: None,
-            time: PartTime { created: Some(1), completed: None },
-            tokens: None,
-            usage_total: None,
-        });
-        scenarios.push(Scenario {
-            name: "thinking-running",
-            messages: thinking,
-            options: TranscriptOptions { clock_ms: 160, ..TranscriptOptions::default() },
-        });
-        // -- markdown-rich reply + stats (tok/s) + model display names
-        let markdown = "# Heading one\n\nA paragraph with **bold**, *emphasis*, `code` and \
-                        ~~struck~~ spans, plus a [link](https://example.com/very/long/url) to \
-                        check the label run.\n\n- item one with `inline.code`\n- item two\n\n\
-                        > quoted line one\n> quoted line two\n\n---\n\n```rust\nfn main() {\n    \
-                        println!(\"hello\");\n}\n```\n\n検証：日本語の返信（English まじり）\
-                        とワイドグリフの追跡。";
-        let md_turn = vec![
-            Message::User {
-                id: "md-user".into(),
-                text: "explain, with markdown 検証".into(),
-                created: 0,
-                files: Vec::new(),
-            },
-            assistant_markdown(markdown),
-        ];
-        scenarios.push(Scenario {
-            name: "markdown-rich-cjk",
-            messages: md_turn.clone(),
-            options: TranscriptOptions::default(),
-        });
-        scenarios.push(Scenario {
-            name: "markdown-model-names",
-            messages: md_turn,
-            options: TranscriptOptions {
-                model_names: vec![("fixture/fixture".to_owned(), "Fixture Model".to_owned())],
-                ..TranscriptOptions::default()
-            },
-        });
-        // -- the error part (Error row + muted agent label)
-        let errored = vec![Message::User {
-            id: "err-user".into(),
-            text: "try this".into(),
-            created: 0,
-            files: Vec::new(),
-        }];
-        scenarios.push(Scenario {
-            name: "error-part",
-            messages: vec![
-                errored.into_iter().next().expect("user"),
-                Message::Assistant {
-                    id: "err-answer".into(),
-                    agent: "build".into(),
-                    model: "fixture/fixture".into(),
-                    parts: vec![Part::Text {
-                        text: "partial reply before the failure".into(),
-                        time: PartTime::default(),
-                    }],
-                    finish: Some("error".into()),
-                    error: Some("unexpected status 500 from upstream".into()),
-                    time: PartTime { created: Some(1), completed: Some(9) },
-                    tokens: None,
-                    usage_total: None,
-                },
-            ],
-            options: TranscriptOptions::default(),
-        });
-        // -- multi-line user text (hard breaks + wraps) + the image strip
-        let payload = crate::clipboard::base64_encode::encode(b"\x89PNG-tiny");
-        scenarios.push(Scenario {
-            name: "multiline-user-and-image-strip",
-            messages: vec![Message::User {
-                id: "multi-user".into(),
-                text: "alpha line that is long enough to wrap at forty columns for sure\n\
-                       beta\nfinal short"
-                    .into(),
-                created: 0,
-                files: vec![crate::components::message::model::UserFile {
-                    mime: "image/png".into(),
-                    data: payload.clone(),
-                    name: Some("shot.png".into()),
-                }],
-            }],
-            options: TranscriptOptions {
-                image_strip: crate::components::message::rows::ImageStripOptions {
-                    enabled: true,
-                    protocol: crate::image::GraphicsProtocol::Kitty,
-                    terminal_rows: 24,
-                },
-                ..TranscriptOptions::default()
-            },
-        });
-        // -- the long fixture (10 turns — scroll positions bite)
-        scenarios.push(Scenario {
-            name: "vscroll-fixture",
-            messages: vscroll_messages_fixture(),
-            options: TranscriptOptions::default(),
-        });
-
-        let mut mismatches = Vec::new();
-        for scenario in &scenarios {
-            for width in [80usize, 120, 40] {
-                let transcript =
-                    render_transcript(&scenario.messages, &scenario.options, &theme, width);
-                for height in [16usize, 23] {
-                    let content = transcript.content_height;
-                    let maximum = content.saturating_sub(height);
-                    // Top, a mid cut that slices rows in half, near
-                    // bottom, and the sticky bottom.
-                    for (offset, tag) in [
-                        (0, "top"),
-                        (maximum / 3, "mid"),
-                        (maximum.saturating_sub(1), "bottom-1"),
-                        (maximum, "sticky"),
-                    ] {
-                        let old = transcript.region_frame(
-                            offset,
-                            (width as u16, height as u16),
-                            base_fill(),
-                        );
-                        let new = paint_transcript_region(
-                            &transcript,
-                            &theme,
-                            (width as u16, height as u16),
-                            offset,
-                        );
-                        if old != new {
-                            let mut cells = Vec::new();
-                            'outer: for y in 0..old.height.min(new.height) {
-                                for x in 0..old.width.min(new.width) {
-                                    let (a, b) = (old.cell(y, x), new.cell(y, x));
-                                    if a != b {
-                                        cells.push(format!(
-                                            "({x},{y}): old {a:?} new {b:?} | old {:?} new {:?}",
-                                            old.text_grid()[y],
-                                            new.text_grid()[y]
-                                        ));
-                                        if cells.len() >= 4 {
-                                            break 'outer;
-                                        }
-                                    }
-                                }
-                            }
-                            mismatches.push(format!(
-                                "{}-w{width}-h{height}-{tag} (off {offset}, content {content}): {}",
-                                scenario.name,
-                                cells.join("; ")
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-        assert!(
-            mismatches.is_empty(),
-            "solid path diverged from the old renderer:\n  {}",
-            mismatches.join("\n  ")
-        );
-    }
-
     /// Streaming churn + scroll re-windowing patch the mounted tree
     /// WITHOUT a rebuild (the mount key is geometry-only): append
     /// text to the tail turn, scroll away and back, expand the
-    /// disclosure — every frame stays at parity and the reconciler
-    /// records its ops.
+    /// disclosure — every frame paints its region and the reconciler
+    /// records its ops (absolute since the retirement).
     #[test]
     fn streaming_and_scroll_patch_the_mounted_transcript() {
         let theme = theme();
@@ -886,10 +592,9 @@ mod tests {
                 1 => 0,
                 _ => maximum / 2,
             };
-            let old = transcript.region_frame(offset, (width as u16, height as u16), base_fill());
-            let new =
+            let frame =
                 paint_transcript_region(&transcript, &theme, (width as u16, height as u16), offset);
-            assert_eq!(old, new, "parity at step {step} (offset {offset})");
+            assert_eq!(frame.height, height, "region height at step {step}");
             if step == 2 {
                 // Stream one more chunk into the tail assistant.
                 if let Some(Message::Assistant { parts, .. }) = messages
@@ -912,19 +617,19 @@ mod tests {
     }
 
     /// A resize (the composer's height ladder shrinking the region)
-    /// rebuilds cleanly and stays at parity — the mount-key rule.
+    /// rebuilds cleanly — the mount-key rule (absolute self-check
+    /// since the retirement).
     #[test]
-    fn resize_rebuilds_and_stays_at_parity() {
+    fn resize_rebuilds_cleanly() {
         let theme = theme();
         let messages = vscroll_messages_fixture();
         for (width, height) in [(80usize, 16usize), (40, 16), (120, 23), (80, 14)] {
             let transcript =
                 render_transcript(&messages, &TranscriptOptions::default(), &theme, width);
             let offset = transcript.content_height.saturating_sub(height);
-            let old = transcript.region_frame(offset, (width as u16, height as u16), base_fill());
-            let new =
+            let frame =
                 paint_transcript_region(&transcript, &theme, (width as u16, height as u16), offset);
-            assert_eq!(new, old, "parity at {width}x{height}");
+            assert_eq!(frame.width, width, "full-width region at {width}x{height}");
         }
     }
 

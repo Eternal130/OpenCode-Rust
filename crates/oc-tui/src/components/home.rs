@@ -30,12 +30,11 @@
 //! * the whole footer hides below 44 cols or 12 rows, the logo below
 //!   12 rows (`homeFooterVisibility` / `Logo`).
 
-use crate::components::composer::render::{AutocompleteView, FooterHints, PromptView};
+use crate::components::composer::render::AutocompleteView;
 use crate::components::composer::PromptDraft;
-use crate::render::{Cell, CellColor, Frame};
+use crate::render::{CellColor, Frame};
 use crate::theme::ThemeState;
 use crate::wrap::display_width;
-use oc_theme::Rgba;
 
 /// The home placeholder rotation (`routes/home.tsx` `placeholder.normal`)
 /// — the reference picks its entry at RANDOM per boot (`randomIndex`,
@@ -259,212 +258,25 @@ pub(crate) fn plan_home(view: &HomeView, width: usize, height: usize) -> HomePla
 }
 
 /// Render the home route at `size` (the golden-pinned layout).
-/// Lane M5: dispatches on `OC_HOME_OPENTUI` — the solid tree
-/// ([`crate::components::home_solid::paint_solid_home_view`], default
-/// after the lane's proof) or the hand-rolled painter below (the
-/// `=0` fallback, one release). Both consume the ONE [`plan_home`]
-/// geometry; the parity gate pins them cell for cell.
-// One flat, order-explicit renderer: the layout is golden-pinned
-// (byte-exact frames), so extracting sections would reorder/churn the
-// pinned surface for a 8-line overage — not worth it.
-#[allow(clippy::too_many_lines)]
+/// Lane M5 (retired): the opentui-solid tree is the ONLY renderer —
+/// the goldens pin its bytes (byte-identical to the retired painter's
+/// since the lane's parity proof); both consumed the ONE [`plan_home`]
+/// geometry, which stays.
 #[must_use]
 pub fn render_home_view(
     view: &HomeView,
     theme: &ThemeState,
     size: (u16, u16),
 ) -> (Frame, Option<(usize, usize)>) {
-    if crate::components::home_solid::opentui_home_enabled() {
-        return crate::components::home_solid::paint_solid_home_view(view, theme, size);
-    }
-    paint_home_view_old(view, theme, size)
+    // Lane M5 (retired): the home route renders through its
+    // opentui-solid tree — the only renderer since the retirement
+    // lane deleted the hand-rolled painter (both consumed the ONE
+    // `plan_home` geometry, which stays).
+    crate::components::home_solid::paint_solid_home_view(view, theme, size)
 }
 
-/// The hand-rolled home painter (the `OC_HOME_OPENTUI=0` fallback):
-/// the same cell-walk this surface always painted, now consuming the
-/// shared [`plan_home`] geometry.
-#[allow(clippy::too_many_lines)]
-pub(crate) fn paint_home_view_old(
-    view: &HomeView,
-    theme: &ThemeState,
-    size: (u16, u16),
-) -> (Frame, Option<(usize, usize)>) {
-    let (width, height) = (usize::from(size.0), usize::from(size.1));
-    let plan = plan_home(view, width, height);
-    let tokens = &theme.resolved.tokens;
-    let base = cell(tokens.background.base);
-    let default_fg = CellColor::Rgb(255, 255, 255);
-    let mut frame = Frame {
-        cells: vec![vec![Cell { ch: ' ', attrs: 0, fg: default_fg, bg: base }; width]; height],
-        width,
-        height,
-    };
-
-    if let Some((logo_x, logo_y)) = plan.logo {
-        paint_logo(&mut frame, logo_x, logo_y, theme);
-    }
-    // The prompt mount (the composer's own frame, pinned at `top` 1
-    // for the wrapper's paddingTop); the popup rows float above it
-    // through the paste origin (`plan.paste`).
-    let prompt_view = PromptView {
-        draft: view.draft,
-        placeholder: view.placeholder.clone(),
-        autocomplete: view.autocomplete.clone(),
-        footer: FooterHints {
-            location: view.location.clone(),
-            agent_shortcut: "shift+tab".into(),
-            command_shortcut: "ctrl+p".into(),
-            plugin_hints: view.plugin_hints.clone(),
-            interrupt: String::new(),
-            usage: String::new(),
-            location_hovered: view.location_hovered,
-        },
-        metadata: view.metadata.clone(),
-        terminal_width: width,
-        top: 1 + plan.popup_rows,
-        rail: view.rail,
-        // NEW-S1a: no software block — the live caret is the terminal
-        // cursor (see `caret_screen` above).
-        caret: None,
-    };
-    let prompt_frame = crate::components::composer_solid::render_prompt_frame_dispatch(
-        &prompt_view,
-        plan.prompt_width,
-        plan.mount + plan.popup_rows,
-        theme,
-    );
-    paste(&mut frame, &prompt_frame, plan.paste.0, plan.paste.1);
-    // NEW-S1a: the caret's screen cell (the terminal cursor's
-    // position) — the paste origin plus the frame-relative cell.
-    // None while the caret sits outside the visible textarea rows.
-    let caret_screen = view
-        .caret
-        .and_then(|offset| {
-            crate::components::composer::render::prompt_caret_screen_cell(
-                view.draft,
-                plan.prompt_width,
-                1 + plan.popup_rows,
-                height,
-                offset,
-            )
-        })
-        .map(|(x, row)| (plan.paste.0 + x, plan.paste.1 + row))
-        .filter(|(_, row_y)| *row_y < height);
-
-    // The home.footer slot: pad · version · pad at h≥16, else one row.
-    if plan.show_footer {
-        let row = plan.footer_row;
-        let muted = cell(tokens.text.muted);
-        // The version renders only at ≥64 cols (homeFooterVisibility,
-        // footer.tsx:6-11 — rig-pinned: the 60-col footer shows no
-        // version and its content row collapses).
-        if plan.version_visible {
-            for (index, ch) in view.version.chars().enumerate() {
-                if let Some(slot) =
-                    frame.cells.get_mut(row).and_then(|line| line.get_mut(plan.version_x + index))
-                {
-                    *slot = Cell { ch, attrs: 0, fg: muted, bg: base };
-                }
-            }
-        }
-        // Wave 3's home slot: plugin quick actions on the same row's
-        // left (muted, ` · `-joined) — empty by default, so the
-        // golden bytes never move.
-        if !plan.actions.is_empty() {
-            for (index, ch) in plan.actions.chars().enumerate() {
-                if let Some(slot) =
-                    frame.cells.get_mut(row).and_then(|line| line.get_mut(plan.padding + index))
-                {
-                    *slot = Cell { ch, attrs: 0, fg: muted, bg: base };
-                }
-            }
-        }
-    }
-    (frame, caret_screen)
-}
-
-/// One logo cell: `_`/`^` paint over the shadow, `~`/`,` paint IN the
-/// shadow (`Logo.renderLine`); everything else is the half's color
-/// over the base. The shadow = `tint(background.base, fg, 0.25)`
-/// (theme/color.ts — 0.25·fg + 0.75·base per channel, rounded).
-fn paint_logo(frame: &mut Frame, origin_x: usize, origin_y: usize, theme: &ThemeState) {
-    let tokens = &theme.resolved.tokens;
-    let base = cell(tokens.background.base);
-    let base_rgb = base_rgb_as(base);
-    let muted = cell(tokens.text.muted);
-    let text_base = cell(tokens.text.base);
-    let shadow = |fg: CellColor| -> CellColor {
-        let (red, green, blue) = base_rgb_as(fg);
-        CellColor::Rgb(
-            tint_channel(red, base_rgb.0),
-            tint_channel(green, base_rgb.1),
-            tint_channel(blue, base_rgb.2),
-        )
-    };
-    let shadow_muted = shadow(muted);
-    let shadow_base = shadow(text_base);
-    for (row, (left, right)) in LOGO_LEFT.iter().zip(&LOGO_RIGHT).enumerate() {
-        paint_logo_half(frame, origin_x, origin_y + row, left, muted, shadow_muted, false, base);
-        // The gap cell stays untouched (the `gap={1}` box paints
-        // nothing — the golden pins the frame fill there).
-        paint_logo_half(
-            frame,
-            origin_x + 20,
-            origin_y + row,
-            right,
-            text_base,
-            shadow_base,
-            true,
-            base,
-        );
-    }
-}
-
-fn base_rgb_as(color: CellColor) -> (u8, u8, u8) {
-    match color {
-        CellColor::Rgb(r, g, b) => (r, g, b),
-        _ => (10, 10, 10),
-    }
-}
-
-fn tint_channel(channel: u8, base: u8) -> u8 {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    {
-        (f32::from(channel) * 0.25 + f32::from(base) * 0.75).round() as u8
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn paint_logo_half(
-    frame: &mut Frame,
-    x: usize,
-    y: usize,
-    line: &str,
-    fg: CellColor,
-    shadow: CellColor,
-    bold: bool,
-    base: CellColor,
-) {
-    let attrs = u16::from(bold);
-    for (index, ch) in line.chars().enumerate() {
-        let cell = match ch {
-            '_' => Cell { ch: ' ', attrs, fg, bg: shadow },
-            '^' => Cell { ch: '▀', attrs, fg, bg: shadow },
-            '~' => Cell { ch: '▀', attrs, fg: shadow, bg: base },
-            ',' => Cell { ch: '▄', attrs, fg: shadow, bg: base },
-            other => Cell { ch: other, attrs, fg, bg: base },
-        };
-        if let Some(slot) = frame.cells.get_mut(y).and_then(|row| row.get_mut(x + index)) {
-            *slot = cell;
-        }
-    }
-}
-
-fn cell(color: Rgba) -> CellColor {
-    CellColor::Rgb(color.r, color.g, color.b)
-}
-
-/// Paste `region`'s cells at (`x`, `y`); anything left keeps the fill.
+/// Paste `region` into `target` at `(x, y)` (the shared paste the
+/// solid bridge reuses for the prompt mount).
 pub(crate) fn paste(target: &mut Frame, region: &Frame, x: usize, y: usize) {
     for (row, cells) in region.cells.iter().enumerate() {
         let Some(slot) = target.cells.get_mut(y + row) else { break };
