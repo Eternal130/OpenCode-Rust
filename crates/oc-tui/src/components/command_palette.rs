@@ -728,17 +728,16 @@ pub fn copy_message_to_clipboard(store: &Store) {
 
 /// The theme registry listing (`dialog-theme-list.tsx`):
 /// `Object.keys(themes.all()).sort(localeCompare base)` — the store's
-/// registry (builtins + discovered customs), value = the name,
-/// `current` = the active theme.
+/// registry (builtins + the `system` slot + discovered customs),
+/// value = the name, `current` = the active theme. The options carry
+/// NO category — the ref's dialog renders a FLAT list (no group
+/// header), unlike the palette's categorized sections.
 #[must_use]
 pub fn theme_list_props(store: &Store) -> SelectProps {
     let registry = store.registry();
     let current = store.theme().name;
-    let options: Vec<SelectOption> = registry
-        .names()
-        .into_iter()
-        .map(|name| SelectOption::titled(name.clone(), name).categorized("Themes"))
-        .collect();
+    let options: Vec<SelectOption> =
+        registry.names().into_iter().map(|name| SelectOption::titled(name.clone(), name)).collect();
     SelectProps::new("Themes", options).with_current(Some(current))
 }
 

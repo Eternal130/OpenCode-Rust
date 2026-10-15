@@ -364,8 +364,21 @@ impl SelectState {
 
     /// Type into the filter: replace, select the first result, scroll
     /// to the top (`setFilter` + the filter effect's `moveTo(0)`).
-    pub fn set_filter(&mut self, filter: &str) {
+    /// Clearing back to empty re-focuses the `current` option and
+    /// centers it (the filter effect's empty branch: `moveTo(
+    /// currentIndex, true)` + center scroll — dialog-select.tsx:342-358);
+    /// with no `current` the selection stays put (the effect returns
+    /// before any move).
+    pub fn set_filter(&mut self, filter: &str, props: &SelectProps, terminal_height: usize) {
+        let was_empty = self.filter.is_empty();
         filter.clone_into(&mut self.filter);
+        if self.filter.is_empty() {
+            if !was_empty && props.current.is_some() {
+                self.focus_current(props);
+                self.center_on_selection(props, terminal_height);
+            }
+            return;
+        }
         self.selected = 0;
         self.scroll = 0;
     }
@@ -412,6 +425,30 @@ impl SelectState {
         if viewport > 0 && row >= self.scroll + viewport {
             self.scroll = row + 1 - viewport;
         }
+    }
+
+    /// Center the selection in the scroll window (`scrollToSelection(
+    /// true)`: `scrollBy(y - floor(height / 2))`, clamped by the
+    /// scrollbar's `round(clamp(…))` at the ends) — the mount/focus
+    /// scroll of `scrollAfterLayout(true, …)` (dialog-select.tsx:123-150).
+    pub fn center_on_selection(&mut self, props: &SelectProps, terminal_height: usize) {
+        let groups = grouped(props, &self.filter);
+        let indices = flat_indices(&groups);
+        if indices.is_empty() || self.selected >= indices.len() {
+            return;
+        }
+        let rows = content_rows(&groups);
+        let viewport = viewport_height(rows, terminal_height);
+        if viewport == 0 {
+            return;
+        }
+        let row = row_of_index(&groups, self.selected);
+        let center_offset = viewport / 2;
+        // scrollBy clamps through the scrollbar math; i64 to allow the
+        // un-clamped negative side before saturating at 0.
+        let target = i64::try_from(row).unwrap_or(0) - i64::try_from(center_offset).unwrap_or(0);
+        self.scroll = usize::try_from(target.max(0)).unwrap_or(0)
+            .min(rows.saturating_sub(viewport));
     }
 
     /// The selected option, if any (`selected()`).
@@ -914,7 +951,7 @@ mod tests {
         );
         assert!(view.rows.iter().any(|row| row_text(row).contains("No items available")));
         let mut state = SelectState::default();
-        state.set_filter("zzz");
+        state.set_filter("zzz", &props, 24);
         let view = render_select(&props, &state, &styles, Color::Rgb(10, 10, 10), 40, 20, Some(20));
         assert!(view.rows.iter().any(|row| row_text(row).contains("No results found")));
     }
@@ -980,7 +1017,7 @@ mod tests {
         let props = SelectProps::new("Items", options);
         let mut state = SelectState::default();
         state.move_selection(&props, 2);
-        state.set_filter("alpha");
+        state.set_filter("alpha", &props, 24);
         assert_eq!(state.selected, 0, "typing resets to the first result");
         state.filter.clear();
         state.selected = 2;

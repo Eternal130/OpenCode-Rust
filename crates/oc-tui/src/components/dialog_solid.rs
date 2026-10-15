@@ -1451,6 +1451,7 @@ mod tests {
             size: DialogSize::Medium,
             select: SelectState::default(),
             value: String::new(),
+            theme_initial: None,
         }
     }
 
@@ -1490,12 +1491,12 @@ mod tests {
             cases.push(case("palette-browse", browse, props));
 
             let (mut filtered, mut props) = dialog(&store, &DialogKind::CommandPalette);
-            filtered.select.set_filter("session");
+            filtered.select.set_filter("session", &props, 24);
             props = SelectProps::new(props.title, props.options).flat(true).threshold(0.7);
             cases.push(case("palette-filter", filtered, props));
 
             let (mut no_match, props) = dialog(&store, &DialogKind::CommandPalette);
-            no_match.select.set_filter("zzzz-nothing");
+            no_match.select.set_filter("zzzz-nothing", &props, 24);
             cases.push(case("palette-no-match", no_match, props));
         }
 
@@ -1659,7 +1660,7 @@ mod tests {
             let empty_state = WorktreeDialogState { list: ListState::Loaded(Vec::new()), ..state };
             let props = worktree_props(&empty_state, false, "/home/u");
             let mut empty = entry(DialogKind::Worktrees);
-            empty.select.set_filter("nope");
+            empty.select.set_filter("nope", &props, 24);
             cases.push(case("worktrees-no-match", empty, props));
         }
 
@@ -1737,7 +1738,7 @@ mod tests {
             .with_empty_texts("No worktrees available", "No worktrees found");
         cases.push(case("empty-copy", entry(DialogKind::Worktrees), props.clone()));
         let mut no_match = entry(DialogKind::Worktrees);
-        no_match.select.set_filter("zz");
+        no_match.select.set_filter("zz", &props, 24);
         cases.push(case("no-match-copy", no_match, props));
 
         // A long flat list, end-pinned (the scroll window) and
