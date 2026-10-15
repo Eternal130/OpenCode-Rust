@@ -548,10 +548,13 @@ fn pty_dialog_palette_cycle_body() {
             // list dialog REPLACES the palette. (The assert targets a
             // full NEW row: the frame DIFF serializer patches changed
             // cells only, so the "Themes" title over "Commands"
-            // arrives as sparse runs, never the contiguous word.)
+            // arrives as sparse runs, never the contiguous word.) The
+            // window is CENTERED on the active theme (lane M-theme:
+            // opencode at flat 22, viewport 6 → nightowl first — the
+            // ref's open shape).
             let _ = writer.write_all(b"\r");
             assert!(
-                wait_for_after(&probe(), b"lucent-orng", len(&probe()), Duration::from_secs(5)),
+                wait_for_after(&probe(), b"nightowl", len(&probe()), Duration::from_secs(5)),
                 "enter applied the selection: the theme list opened"
             );
             std::thread::sleep(Duration::from_millis(300));
@@ -582,7 +585,7 @@ fn pty_dialog_palette_cycle_body() {
     let captured = String::from_utf8_lossy(&boot.output.lock().expect("lock").clone()).into_owned();
     assert!(captured.contains("Commands"), "the palette title painted");
     assert!(captured.contains("Switch theme"), "the filtered row painted");
-    assert!(captured.contains("lucent-orng"), "the applied dialog painted");
+    assert!(captured.contains("nightowl"), "the applied dialog painted (centered window)");
     // The apply navigated the dialog stack, not the prompt: no
     // session.prompt POSTs.
     assert_eq!(prompt_posts.load(Ordering::SeqCst), 0, "the cycle is fully local");
