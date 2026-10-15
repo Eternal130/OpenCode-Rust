@@ -602,7 +602,7 @@ fn char_to_byte(text: &str, chars: usize) -> usize {
 
 /// Prefix/suffix diff of two texts, in CHAR units: the replaced range
 /// of `before` and how many chars `after` put there.
-fn diff_range(before: &str, after: &str) -> (Range<usize>, usize) {
+pub(crate) fn diff_range(before: &str, after: &str) -> (Range<usize>, usize) {
     let before_chars: Vec<char> = before.chars().collect();
     let after_chars: Vec<char> = after.chars().collect();
     let mut prefix = 0usize;
