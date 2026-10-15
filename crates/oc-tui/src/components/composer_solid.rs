@@ -6,9 +6,8 @@
 //! **What this module is.** A 1:1 structural port of the composer's
 //! VISIBLE mount as an opentui-solid builder tree (`box_`/`text`/
 //! `for_list`/dyn props — the JSX-equivalent surface), driven by the
-//! SAME oc-tui store data the hand-rolled renderer
-//! ([`crate::components::composer::render::render_prompt_frame`])
-//! consumes. The text EDITING stays on the store's
+//! SAME oc-tui store data the shared solvers
+//! (`composer::render`) consume. The text EDITING stays on the store's
 //! `oc_tui_core::text_edit` engine (the editor-engine swap is a later
 //! subsystem lane): this lane renders the composer AROUND it — the
 //! `┃` rail chrome, the prompt-bg box + insets, the placeholder
@@ -57,12 +56,10 @@
 //! golden harness pins) renders as a bridge-level cell recolor over
 //! the copied buffer, byte-identical to the old painter.
 //!
-//! **Selection flag.** Default ON (flipped after the lane's rig
-//! proof — the unit matrix, the flag-symmetric rig sets, both PTY
-//! paths, the sub-millisecond frames): `OC_COMPOSER_OPENTUI=0` (or
-//! `false`/`off`) keeps the hand-rolled renderer for one release.
-//! Read once at the first composer paint ("at boot") via `OnceLock` —
-//! a running session never switches renderers mid-flight.
+//! **Selection flag (retired).** The lane-M3 dual-path flag
+//! (`OC_COMPOSER_OPENTUI`) is gone: this module's opentui-solid tree
+//! is the composer's ONLY renderer — the hand-rolled painter was
+//! deleted after the one-release probation (the retirement lane).
 
 // Terminal dimensions/colors are bounded usize→f32 casts (taffy
 // points), the same allowance the other solid surfaces carry.
@@ -90,29 +87,9 @@ use crate::render::{CellColor, Frame};
 use crate::theme::ThemeState;
 use crate::wrap::display_width;
 
-/// The renderer selection flag (lane M3, default FLIPPED ON after the
-/// rig proof — the unit matrix, the flag-symmetric 24-invocation rig
-/// A/B, both PTY paths, the sub-millisecond frames): every value
-/// except `0`/`false`/`off` — including unset — boots the composer on
-/// this module's opentui-solid path; the hand-rolled renderer stays
-/// compiled for one release as the escape hatch. Read once (first
-/// composer paint — the TUI's boot) and cached for the process
-/// lifetime, so a running session never switches renderers mid-flight.
-#[must_use]
-pub fn opentui_composer_enabled() -> bool {
-    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLAG.get_or_init(|| {
-        !std::env::var("OC_COMPOSER_OPENTUI")
-            .is_ok_and(|value| value == "0" || value == "false" || value == "off")
-    })
-}
-
-/// The composer frame's renderer seam: the flag selects the
-/// opentui-solid path (this module) or the hand-rolled
-/// [`render_prompt_frame`] fallback. Every live mount (the session
+/// The composer frame's ONLY renderer: every live mount (the session
 /// route's `composer_mount_frame`, the home route, the session-screen
-/// harness) paints through here; the golden harnesses keep calling
-/// the old renderer directly (they pin the fallback's bytes).
+/// harness, the golden harnesses) paints through here.
 #[must_use]
 pub fn render_prompt_frame_dispatch(
     view: &PromptView,
@@ -120,11 +97,7 @@ pub fn render_prompt_frame_dispatch(
     height: usize,
     theme: &ThemeState,
 ) -> Frame {
-    if opentui_composer_enabled() {
-        paint_solid_prompt_frame(view, width, height, theme)
-    } else {
-        crate::components::composer::render::render_prompt_frame(view, width, height, theme)
-    }
+    paint_solid_prompt_frame(view, width, height, theme)
 }
 
 // ---------------------------------------------------------------------------
@@ -345,11 +318,10 @@ fn hint_chunks(key: &str, label: &str, colors: &ComposerColors) -> StyledText {
     styled(chunks)
 }
 
-/// Shape one frame's [`ComposerInputs`] — the SAME walk the old
-/// renderer performs (geometry verbatim from `render_prompt_frame`'s
-/// prologue + [`footer_plan`]), collected as pre-painted strings and
-/// chunks instead of cell writes.
-#[allow(clippy::too_many_lines)] // the old renderer's prologue, mirrored span for span
+/// Shape one frame's [`ComposerInputs`] — the shared solver walk
+/// (the composer geometry + [`footer_plan`]), collected as pre-painted
+/// strings and chunks.
+#[allow(clippy::too_many_lines)] // the full mount geometry, mirrored span for span
 fn shape(view: &PromptView, width: usize, height: usize, theme: &ThemeState) -> ComposerInputs {
     let colors = ComposerColors::of(theme, view);
     let pad = if width >= 44 { 2 } else { 1 };
@@ -892,313 +864,19 @@ pub fn paint_solid_prompt_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::composer::autocomplete::AutocompleteOption;
-    use crate::components::composer::render::{
-        render_prompt_frame, AutocompleteView, FooterHints, MetadataLine,
-    };
-    use crate::components::composer::{FileMention, PromptDraft};
+    use crate::components::composer::render::{FooterHints, MetadataLine};
+    use crate::components::composer::PromptDraft;
     use crate::theme::ThemeState;
 
     fn draft(text: &str) -> PromptDraft {
         PromptDraft { text: text.to_owned(), ..PromptDraft::default() }
     }
 
-    fn chip_draft() -> PromptDraft {
-        let text = "Compare [Image 1] with the current design";
-        let start = text.find("[Image").unwrap_or_default();
-        let end = start + "[Image 1]".len();
-        PromptDraft {
-            text: text.to_owned(),
-            files: vec![FileMention {
-                name: "screenshot.png".into(),
-                start: text[..start].chars().count(),
-                end: text[..end].chars().count(),
-                payload: None,
-                mention: Some("[Image 1]".into()),
-            }],
-            ..PromptDraft::default()
-        }
-    }
-
-    /// One parity-matrix scenario: everything [`PromptView`] borrows,
-    /// owned. `height` `None` ⇒ derived (`top + mount_height` at
-    /// terminal 24).
-    struct Scenario {
-        name: &'static str,
-        draft: PromptDraft,
-        placeholder: String,
-        popup: Option<(Vec<AutocompleteOption>, usize, usize)>,
-        footer: FooterHints,
-        metadata: MetadataLine,
-        terminal_width: Option<usize>,
-        top: usize,
-        rail: Option<CellColor>,
-        caret: Option<usize>,
-        height: Option<usize>,
-    }
-
-    impl Scenario {
-        fn new(name: &'static str) -> Self {
-            Scenario {
-                name,
-                draft: draft(""),
-                placeholder: String::new(),
-                popup: None,
-                footer: FooterHints::default(),
-                metadata: MetadataLine::default(),
-                terminal_width: None,
-                top: 0,
-                rail: None,
-                caret: None,
-                height: None,
-            }
-        }
-    }
-
-    /// The lane gate: the solid path's frame must equal the old
-    /// renderer's frame CELL FOR CELL (char + attrs + fg + bg) over
-    /// the composer+footer matrix — idle/typing/multiline/interrupt
-    /// (armed + unarmed)/usage/placeholder rotation/long-location
-    /// truncation/metadata ladder/hover/popup/CJK+chips/caret — at
-    /// the protocol's width set (40/60/80/120/160).
-    #[test]
-    #[allow(clippy::too_many_lines, clippy::items_after_statements)] // a data matrix, not logic
-    fn solid_composer_frame_equals_the_old_renderer() {
-        let theme = ThemeState::v2_dark();
-        let agent_colors = theme.styles().agent_colors;
-        let rail_color = Some(CellColor::from(agent_colors[0]));
-        let long_path =
-            "/tmp/opencode/tui-diff/type-edit-submit-80x24-r0/project:master".to_owned();
-        let mut scenarios: Vec<Scenario> = Vec::new();
-
-        // -- idle + placeholder rotation --------------------------------
-        let mut idle = Scenario::new("idle-placeholder");
-        idle.placeholder = "Ask anything… \"Fix a TODO in the codebase\"".into();
-        idle.footer.location = long_path.clone();
-        idle.top = 0;
-        scenarios.push(idle);
-        let mut rotated = Scenario::new("placeholder-rotation");
-        rotated.placeholder = "Ask anything… \"Ask about a repo\"".into();
-        rotated.footer.location = long_path.clone();
-        rotated.top = 2; // the golden harness shape
-        scenarios.push(rotated);
-
-        // -- typing + multiline (wraps + explicit newlines) -------------
-        let mut typing = Scenario::new("typing");
-        typing.draft = draft("hello world");
-        typing.placeholder = "Ask anything… \"Fix a TODO\"".into();
-        typing.footer.location = long_path.clone();
-        scenarios.push(typing);
-        let mut multiline = Scenario::new("multiline-newlines");
-        multiline.draft = draft("one\ntwo\nthree");
-        multiline.footer.location = long_path.clone();
-        scenarios.push(multiline);
-        let mut wrapped = Scenario::new("multiline-wrapped-3-plus");
-        wrapped.draft = draft(
-            "the parser walks the token stream, folds the resulting spans into line groups, \
-             and projects them onto the grid — deliberately long enough to wrap several times",
-        );
-        wrapped.footer.location = long_path.clone();
-        scenarios.push(wrapped);
-        let mut tall = Scenario::new("tall-draft-clamped");
-        tall.draft = draft(&"very long wrap line ".repeat(30));
-        tall.height = Some(8); // maxHeight clamps the textarea rows
-        tall.footer.location = long_path.clone();
-        scenarios.push(tall);
-
-        // -- the CJK + chip wrap fixtures -------------------------------
-        let mut cjk = Scenario::new("cjk-break-anywhere");
-        cjk.draft = draft("検証：日本語プロンプトの入力（English まじり）");
-        scenarios.push(cjk);
-        let mut chips = Scenario::new("extmark-chips-atomic");
-        chips.draft = chip_draft();
-        scenarios.push(chips);
-
-        // -- the footer arms ---------------------------------------------
-        let mut interrupt = Scenario::new("interrupt-unarmed");
-        interrupt.footer =
-            FooterHints { interrupt: "esc interrupt".into(), ..FooterHints::default() };
-        scenarios.push(interrupt);
-        let mut armed = Scenario::new("interrupt-armed");
-        armed.footer =
-            FooterHints { interrupt: "esc again to interrupt".into(), ..FooterHints::default() };
-        scenarios.push(armed);
-        let mut usage = Scenario::new("usage-present");
-        usage.footer = FooterHints {
-            usage: "18 (1%)".into(),
-            location: long_path.clone(),
-            ..FooterHints::default()
-        };
-        scenarios.push(usage);
-        let mut narrow_usage = Scenario::new("usage-narrow-gate");
-        narrow_usage.footer = FooterHints {
-            usage: "18 (1%)".into(),
-            location: long_path.clone(),
-            ..FooterHints::default()
-        };
-        narrow_usage.terminal_width = Some(40);
-        scenarios.push(narrow_usage);
-        let mut plugins = Scenario::new("plugin-hints");
-        plugins.footer = FooterHints {
-            location: long_path.clone(),
-            plugin_hints: vec!["btw: a tip".into(), "kneel".into()],
-            ..FooterHints::default()
-        };
-        scenarios.push(plugins);
-        let mut hover = Scenario::new("location-hover-lift");
-        hover.footer = FooterHints {
-            location: long_path.clone(),
-            location_hovered: true,
-            ..FooterHints::default()
-        };
-        scenarios.push(hover);
-        let mut shortcuts = Scenario::new("bound-shortcuts");
-        shortcuts.footer = FooterHints {
-            location: long_path.clone(),
-            agent_shortcut: "shift+tab".into(),
-            command_shortcut: "ctrl+p".into(),
-            ..FooterHints::default()
-        };
-        scenarios.push(shortcuts);
-
-        // -- the metadata ladder -----------------------------------------
-        let full_meta = MetadataLine {
-            agent: "Build".into(),
-            auto: true,
-            model: "Fake Model".into(),
-            provider: "NanoGPT / parityfake".into(),
-            variant: "speed".into(),
-        };
-        for (name, terminal_width) in [
-            ("full", None),
-            ("last-segment", Some(48)),
-            ("no-provider", Some(44)),
-            ("narrow", Some(40)),
-        ] {
-            let mut meta = Scenario::new(Box::leak(format!("metadata-{name}").into_boxed_str()));
-            meta.draft = draft("");
-            meta.metadata = full_meta.clone();
-            meta.terminal_width = terminal_width;
-            meta.rail = rail_color;
-            meta.footer.location = long_path.clone();
-            scenarios.push(meta);
-        }
-
-        // -- the rail override + caret block -----------------------------
-        let mut rail = Scenario::new("agent-rail");
-        rail.placeholder = "Ask".into();
-        rail.rail = rail_color;
-        scenarios.push(rail);
-        for (name, text, caret) in
-            [("caret-empty", "", 0), ("caret-mid", "hello", 2), ("caret-end", "hello", 5)]
-        {
-            let mut scenario = Scenario::new(Box::leak(format!("caret-{name}").into_boxed_str()));
-            scenario.draft = draft(text);
-            scenario.caret = Some(caret);
-            scenarios.push(scenario);
-        }
-
-        // -- the autocomplete popup --------------------------------------
-        let options = vec![
-            AutocompleteOption {
-                display: "/help".into(),
-                description: Some("Open the help dialog".into()),
-            },
-            AutocompleteOption { display: "/init".into(), description: None },
-            AutocompleteOption {
-                display: "/models".into(),
-                description: Some("Select the model".into()),
-            },
-        ];
-        let mut popup = Scenario::new("popup-open-selected-1");
-        popup.draft = draft("/");
-        popup.top = 3;
-        popup.popup = Some((options.clone(), 1, 8));
-        scenarios.push(popup);
-        let mut popup_top = Scenario::new("popup-clamped-to-top");
-        popup_top.draft = draft("/");
-        popup_top.top = 1; // popup_h clamps to 1 visible row
-        popup_top.height = Some(7);
-        popup_top.popup = Some((options, 0, 8));
-        scenarios.push(popup_top);
-
-        // -- the squeeze shapes -------------------------------------------
-        let mut golden = Scenario::new("golden-harness-top2");
-        golden.placeholder = "Ask anything… \"Fix a TODO in the codebase\"".into();
-        golden.top = 2;
-        golden.height = Some(8);
-        scenarios.push(golden);
-        let mut clipped = Scenario::new("frame-shorter-than-mount");
-        clipped.draft = draft("one\ntwo\nthree");
-        clipped.height = Some(5);
-        scenarios.push(clipped);
-
-        let mut mismatches = Vec::new();
-        for scenario in &scenarios {
-            for width in [40usize, 60, 80, 120, 160] {
-                let terminal_width = scenario.terminal_width.unwrap_or(width);
-                let height = scenario.height.unwrap_or_else(|| {
-                    scenario.top
-                        + crate::components::composer::render::mount_height(
-                            &scenario.draft,
-                            width,
-                            24,
-                        )
-                });
-                let view = PromptView {
-                    draft: &scenario.draft,
-                    placeholder: scenario.placeholder.clone(),
-                    autocomplete: scenario.popup.as_ref().map(
-                        |(options, selected, title_width)| AutocompleteView {
-                            options,
-                            selected: *selected,
-                            title_width: *title_width,
-                        },
-                    ),
-                    footer: scenario.footer.clone(),
-                    metadata: scenario.metadata.clone(),
-                    terminal_width,
-                    top: scenario.top,
-                    rail: scenario.rail,
-                    caret: scenario.caret,
-                };
-                let old = render_prompt_frame(&view, width, height, &theme);
-                let new = paint_solid_prompt_frame(&view, width, height, &theme);
-                if old != new {
-                    let mut cells = Vec::new();
-                    'outer: for y in 0..old.height.min(new.height) {
-                        for x in 0..old.width.min(new.width) {
-                            let (a, b) = (old.cell(y, x), new.cell(y, x));
-                            if a != b {
-                                cells.push(format!(
-                                    "({x},{y}): old {a:?} new {b:?} | old row {:?} new row {:?}",
-                                    old.text_grid()[y],
-                                    new.text_grid()[y]
-                                ));
-                                if cells.len() >= 4 {
-                                    break 'outer;
-                                }
-                            }
-                        }
-                    }
-                    mismatches.push(format!(
-                        "{}-w{width} (h{height}, term {terminal_width}): {}",
-                        scenario.name,
-                        cells.join("; ")
-                    ));
-                }
-            }
-        }
-        assert!(
-            mismatches.is_empty(),
-            "solid path diverged from the old renderer:\n  {}",
-            mismatches.join("\n  ")
-        );
-    }
 
     /// The reactive path patches in place: typing churn on the last
     /// row re-renders WITHOUT a rebuild (same mount — content-height
-    /// frames only rebuild when a wrap lands a new row).
+    /// frames only rebuild when a wrap lands a new row). The
+    /// retirement-era residue of the old parity gate, now absolute.
     #[test]
     fn typing_churn_patches_the_mounted_composer() {
         let theme = ThemeState::v2_dark();
@@ -1215,13 +893,16 @@ mod tests {
                 rail: None,
                 caret: None,
             };
-            let old = render_prompt_frame(&view, 80, 8, &theme);
-            let new = paint_solid_prompt_frame(&view, 80, 8, &theme);
-            (old, new)
+            paint_solid_prompt_frame(&view, 80, 8, &theme)
         };
+        let mut seen: Vec<(&str, Frame)> = Vec::new();
         for text in ["a", "ab", "abc", "ab"] {
-            let (old, new) = build(text);
-            assert_eq!(old, new, "parity while typing {text:?}");
+            let new = build(text);
+            // "ab" revisits earlier inputs -> the identical frame.
+            if let Some((_, prior)) = seen.iter().find(|(t, _)| *t == text) {
+                assert_eq!(&new, prior, "same inputs paint the same frame");
+            }
+            seen.push((text, new));
         }
         COMPOSER.with_borrow(|slot| {
             let mount = slot.as_ref().expect("composer mounted");
@@ -1229,10 +910,10 @@ mod tests {
         });
     }
 
-    /// A resize (or a wrap landing a new row) rebuilds cleanly and
-    /// stays at parity — the mount-key rule.
+    /// A resize (or a wrap landing a new row) rebuilds cleanly — the
+    /// mount-key rule (absolute self-check since the retirement).
     #[test]
-    fn reshape_rebuilds_and_stays_at_parity() {
+    fn reshape_rebuilds_cleanly() {
         let theme = ThemeState::v2_dark();
         let owned = draft("hello world this wraps at forty columns nicely");
         let view = PromptView {
@@ -1246,11 +927,17 @@ mod tests {
             rail: None,
             caret: None,
         };
+        let mut first: Option<Frame> = None;
         for width in [80usize, 40, 120, 80] {
             let height = crate::components::composer::render::mount_height(&owned, width, 24);
-            let old = render_prompt_frame(&view, width, height, &theme);
-            let new = paint_solid_prompt_frame(&view, width, height, &theme);
-            assert_eq!(new, old, "parity at width {width}");
+            let frame = paint_solid_prompt_frame(&view, width, height, &theme);
+            assert_eq!(frame.width, width, "full-width frame at width {width}");
+            if width == 80 {
+                match &first {
+                    None => first = Some(frame),
+                    Some(p) => assert_eq!(&frame, p, "same inputs paint the same frame"),
+                }
+            }
         }
     }
 }

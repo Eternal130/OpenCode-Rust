@@ -14,9 +14,8 @@
 use parity::tui_frame as pf;
 
 use crate::components::composer::autocomplete::{filter_commands, SlashRegistry};
-use crate::components::composer::render::{
-    render_prompt_frame, AutocompleteView, FooterHints, PromptView,
-};
+use crate::components::composer::render::{AutocompleteView, FooterHints, PromptView};
+use crate::components::composer_solid::render_prompt_frame_dispatch;
 use crate::components::composer::{Composer, ComposerKey, FileMention, PromptDraft};
 use crate::theme::ThemeState;
 
@@ -90,7 +89,7 @@ fn assert_matches_golden(id: &str, width: usize, height: usize, composer: &Compo
         Vec::new()
     };
     let frame =
-        render_prompt_frame(&harness_view(composer, &options, width), width, height, &theme);
+        render_prompt_frame_dispatch(&harness_view(composer, &options, width), width, height, &theme);
     let text_grid = frame.text_grid();
     let golden_grid = pf::load_text_grid(&goldens(), id, width).expect("golden text grid");
     let rendered = pf::TextGrid { rows: text_grid, height, width };

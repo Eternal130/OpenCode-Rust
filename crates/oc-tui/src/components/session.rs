@@ -14,7 +14,7 @@
 use crate::components::composer::autocomplete;
 use crate::components::composer::render::{AutocompleteView, FooterHints, PromptView};
 use crate::components::message::list::{render_transcript, TranscriptOptions};
-use crate::components::session_tabs::{self, Attention, TabStatus, TabView};
+use crate::components::session_tabs::{Attention, TabStatus, TabView};
 use crate::components::sidebar::{SidebarSections, SidebarView, SIDEBAR_AUTO_BREAKPOINT};
 use crate::render::{paint_placed_with_fills, Fill, Frame};
 use crate::store::{SessionTab, Store};
@@ -364,25 +364,20 @@ pub fn render_session(
     store.set_frame_images(frame_images);
     // The transcript region: rows `[scroll_offset, scroll_offset +
     // transcript_height)` of the column, pasted under the strip.
-    // Lane M4 dual-path — the flag selects the opentui-solid tree
-    // (`transcript_solid`) or the hand-rolled region walk (the
-    // `OC_TRANSCRIPT_OPENTUI=0` fallback, one release); BOTH consume
-    // the same `Transcript` geometry above (the hit rows, metrics
-    // and image placements are painter-agnostic).
+    // Lane M4 (retired): the region renders through the opentui-solid
+    // tree — the only renderer since the retirement lane deleted the
+    // hand-rolled region walk (the hit rows, metrics and image
+    // placements stay painter-agnostic, computed above).
     let region_size = (
         u16::try_from(column).unwrap_or(u16::MAX),
         u16::try_from(transcript_height).unwrap_or(u16::MAX),
     );
-    let region = if crate::components::transcript_solid::opentui_transcript_enabled() {
-        crate::components::transcript_solid::paint_transcript_region(
-            &transcript,
-            styles,
-            region_size,
-            scroll_offset,
-        )
-    } else {
-        transcript.region_frame(scroll_offset, region_size, fill)
-    };
+    let region = crate::components::transcript_solid::paint_transcript_region(
+        &transcript,
+        styles,
+        region_size,
+        scroll_offset,
+    );
     let mut frame = paint_placed_with_fills(&[], &[], size, fill);
     paste(&mut frame, &region, 0, content_top);
     if let Some(strip) = strip {
