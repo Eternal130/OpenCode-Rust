@@ -503,11 +503,47 @@ impl App {
             if (plain && stroke.key == "escape") || (stroke.ctrl && plain && stroke.key == "c") {
                 self.store.toast_dismiss();
             }
+        } else if self.picker_live() {
+            // The composer's subagent picker (#44): the panel REPLACES
+            // the prompt (v2's Switch mounts no prompt while
+            // `composer.open || parentID` — index.tsx:1464-1465), so
+            // the composer-mode layers own the keys: escape/ctrl+c
+            // close (navigating to the parent on a child session),
+            // arrows/enter/ctrl+a drive the list, tabs switch with
+            // left/right; leader chords still resolve through base.
+            self.stroke_in_picker(stroke);
         } else {
             self.stroke_on_route(&stroke);
         }
         self.sync_modes();
         self.store.runtime.run_effects();
+    }
+
+    /// The composer's subagent picker holds the session route (#44):
+    /// explicitly open or the route is a child session (which always
+    /// mounts the panel — v2 index.tsx:1451).
+    fn picker_live(&self) -> bool {
+        matches!(self.store.route(), crate::store::Route::Session { session_id }
+            if self.store.picker_live(&session_id))
+    }
+
+    /// One stroke while the picker panel is mounted: the composer
+    /// mode's bindings (`composer.*` — the table's `composer` layer,
+    /// pushed while live) resolve ABOVE base, so ctrl+c/escape close
+    /// the panel instead of exiting and the arrows/list keys drive
+    /// the entries. Unbound strokes are consumed — the prompt is
+    /// unmounted, nothing types.
+    fn stroke_in_picker(&mut self, stroke: KeyStroke) {
+        if let Outcome::Command { command, args } = self.keymap.lookup(stroke, &self.clock) {
+            let dispatch = self.dispatcher.dispatch(&self.store, &command, args.as_deref());
+            if let Dispatch::ServerPending(reason) = dispatch {
+                let _ = reason;
+            }
+            self.keymap.clear_pending();
+        }
+        // A pending leader sequence, its cancellation, or an unbound
+        // stroke: consumed — the prompt is unmounted while the panel
+        // shows, nothing types.
     }
 
     fn maybe_remerge_keybinds(&mut self) {
@@ -641,8 +677,15 @@ impl App {
         }
     }
 
+    /// Whether `stroke` matches one of `command`'s effective bindings
+    /// (user overrides respected — the engine's stroke matcher).
+    fn stroke_matches_command(&self, stroke: &KeyStroke, command: &str) -> bool {
+        self.keymap.stroke_triggers(stroke, command)
+    }
+
     /// Route-layer stroke: conditional exit layer → managed textarea →
     /// input/base keymap (see the module docs).
+    #[allow(clippy::too_many_lines)] // the layered dispatch ladder, one commented rung each
     fn stroke_on_route(&mut self, stroke: &KeyStroke) {
         // 0. The overlay-sidebar close layer (v2 routes/session/index.tsx:
         //    243-245 — `Keymap.createLayer({ priority: 10, enabled: () =>
@@ -733,6 +776,22 @@ impl App {
                 Outcome::Pending { .. } | Outcome::Cancelled => return,
                 Outcome::Command { .. } | Outcome::Unhandled => {}
             }
+        }
+
+        // 2b. `session.child.first` over an EMPTY draft (#44): the
+        //     subagent picker's toggle resolves ABOVE the textarea's
+        //     `input.move.down`/`history.next` when nothing is typed
+        //     (the corpus3 evidence: `down` opens the composer panel
+        //     on a settled session — keybind.ts:136). The picker-live
+        //     case never reaches here (press routes it to the
+        //     composer layers).
+        if draft_empty
+            && matches!(self.store.route(), Route::Session { .. })
+            && self.stroke_matches_command(stroke, "session.child.first")
+        {
+            self.store.toggle_picker();
+            self.keymap.clear_pending();
+            return;
         }
 
         // 2. The managed textarea layer: with text present, keys the
@@ -902,15 +961,21 @@ impl App {
 
     /// Keep the keymap's mode stack aligned: `dialog` while dialogs are
     /// open (the reference's `modal` mode), `input` below it while a
-    /// composer holds the route focus (the managed textarea layer).
+    /// composer holds the route focus (the managed textarea layer),
+    /// `composer` while the subagent picker replaces the prompt (v2's
+    /// `keymap.mode.push("composer")` — composer/index.tsx:59-63).
     /// The stack is recomputed whole each stroke (LIFO push/pop ordering
     /// hazards when a dialog opens over the input mode).
     fn sync_modes(&mut self) {
         let dialog = !self.store.dialogs().is_empty();
         let input = !dialog && !self.permission_live();
+        let picker = input && self.picker_live();
         let mut modes: Vec<&str> = Vec::new();
         if input {
             modes.push("input");
+        }
+        if picker {
+            modes.push("composer");
         }
         if dialog {
             modes.push("dialog");
@@ -2853,6 +2918,20 @@ pub async fn run_with_size(
         // alternate screen would discard them anyway, but an explicit
         // `a=d,d=a` keeps a same-screen exit clean.
     );
+    // #46 — the exit epilogue (v2 app.tsx:446-450: the renderer stops,
+    // then `process.stdout.write(epilogue + "\n")`): the wordmark +
+    // resume hint the session route staged while mounted
+    // (session/index.tsx:185-189). Absent from the home route — the
+    // corpus's identical post-exit blanks.
+    if result.is_ok() {
+        if let Some(epilogue) = app.store.exit_epilogue() {
+            use std::io::Write as _;
+            let mut out = std::io::stdout();
+            let _ = out.write_all(epilogue.as_bytes());
+            let _ = out.write_all(b"\n");
+            let _ = out.flush();
+        }
+    }
     result
 }
 

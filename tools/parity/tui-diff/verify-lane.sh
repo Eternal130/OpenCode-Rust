@@ -68,14 +68,14 @@ case "$mode" in
     echo "== [final] fmt --all --check =="
     gate 'cargo fmt --all --check'
     echo "== [final] clippy --workspace --all-targets -D warnings (CI-equivalent) =="
-    gate 'cargo clippy --workspace --all-targets -D warnings --locked'
+    gate 'cargo clippy --workspace --all-targets --locked -- -D warnings'
     echo "== [final] nextest: full workspace =="
     gate 'cargo nextest run --workspace'
     echo "== [final] nextest: serialized pty profile =="
     gate 'cargo nextest run --workspace --profile pty'
     echo "== [final] release budget gate (build + frame_budget) =="
     gate 'cargo build --release -p oc-cli --locked'
-    gate 'cargo nextest run -p oc-tui --release --run-ignored only -E "test(frame_budget)"'
+    gate 'cargo nextest run -p oc-tui --release -E "test(frame_budget)"'
     echo "== [final] rig FULL matrix: both sizes x --runs 2, cache DISABLED (live verdicts) =="
     run_rig "final-$$" --runs 2 --no-ref-cache
     echo "== [final] ALL GREEN =="

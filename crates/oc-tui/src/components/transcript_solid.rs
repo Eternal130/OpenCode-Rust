@@ -567,7 +567,7 @@ mod tests {
     use crate::components::message::list::{
         message_groups_fixture, render_transcript, vscroll_messages_fixture, TranscriptOptions,
     };
-    use crate::components::message::model::{Message, Part, PartTime};
+    use crate::components::message::model::{Message, Part, PartTime, ToolState};
     use crate::components::tool_rows::DEFAULT_FOREGROUND;
     use crate::theme::ThemeState;
 
@@ -649,6 +649,7 @@ mod tests {
                 id: "run-tool".into(),
                 name: "grep".into(),
                 time: PartTime { created: Some(30), completed: None },
+                state: ToolState::default(),
             }],
             finish: None,
             error: None,
