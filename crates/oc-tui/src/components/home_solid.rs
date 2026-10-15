@@ -450,12 +450,9 @@ mod tests {
         PromptDraft { text: text.to_owned(), ..PromptDraft::default() }
     }
 
-    /// One parity-matrix scenario: everything [`HomeView`] borrows,
-    /// owned + the size under test.
+    /// One scenario: everything [`HomeView`] borrows, owned.
     struct Scenario {
-        name: String,
         draft: PromptDraft,
-        placeholder: String,
         version: String,
         actions: Vec<String>,
         autocomplete: Option<AutocompleteView<'static>>,
@@ -464,10 +461,9 @@ mod tests {
 
     impl Scenario {
         fn new(name: &str) -> Self {
+            let _ = name;
             Scenario {
-                name: name.to_owned(),
                 draft: draft(""),
-                placeholder: String::new(),
                 version: "1.2.3-m5".into(),
                 actions: Vec::new(),
                 autocomplete: None,

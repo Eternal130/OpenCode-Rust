@@ -541,6 +541,7 @@ impl Transcript {
         &self.rows[start..stop]
     }
 
+    #[must_use]
     pub fn paint(
         &self,
         follow: FollowState,

@@ -371,7 +371,9 @@ pub fn render_overlay_with(
     // Lane M2 (retired): the dialog family renders through its
     // opentui-solid tree — the only renderer since the retirement
     // lane deleted the hand-rolled walk.
-    crate::components::dialog_solid::render_overlay_solid(base, entry, props, plugin, theme, terminal)
+    crate::components::dialog_solid::render_overlay_solid(
+        base, entry, props, plugin, theme, terminal,
+    )
 }
 
 /// Backdrop composite: `out = src·α + dst·(1-α)` with `src = black`,
@@ -616,10 +618,10 @@ pub fn store_dispatcher() -> StoreDispatcher {
 mod tests {
     use super::*;
     use crate::components::dialog_select::DialogStyles;
-    use ratatui::style::Color;
     use crate::reactive::Runtime;
     use crate::render::CellColor;
     use crate::store::DialogSize;
+    use ratatui::style::Color;
 
     fn rgb(color: CellColor) -> (u8, u8, u8) {
         match color {
