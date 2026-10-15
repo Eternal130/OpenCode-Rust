@@ -30,3 +30,20 @@ Baseline nextest: 2887 workspace (oc-tui 621, oc-tui-core 77, parity 84). Releas
 - type-edit-submit: 9/6, 6/9 (coin + stats)
 - multi-turn: 80 19/19; 120 16/16 (stats digits)
 - thought-render: 80 9/6; 120 9/9 (placeholder coin + stats)
+
+## PHASE 1 — M1 tabstrip retired
+- session.rs: flag dispatch -> direct paint_solid_bar (only renderer).
+- session_tabs.rs: deleted the old bar/rail renderer family (render_bar, render_rail, paint_bar, paint_rail,
+  fill_runs, rgb/color, glow_hue/glow_over, close_mark, bar_tab_fills, bar_tab_node, add_affordance,
+  rail_tab_block, rail_add_row, rail_pulse_fills, rail_separators, TabRender, old hover test) = 705+ LOC.
+  KEPT: adaptive_session_tab_layout solver + distribute/solve/fit_for, StripHit/strip_hit (app.rs mouse bridge), solver tests.
+- session_tabs_solid.rs: flag accessor + old_path_frame twin + 27-scenario parity matrix DELETED;
+  resize test rewritten as absolute self-check; module doc updated.
+- golden_tests.rs: horizontal goldens PROMOTED to the solid path via paint_solid_bar_sized (sized-frame wrapper
+  rebuilding the retired paint_bar's full-frame shape) — w80/w160 + full-fidelity all pass BYTE-IDENTICAL (no golden edits).
+  Vertical rail goldens DELETED (golden-only legacy shape, zero production reach since the horizontal strip).
+- pty_tabs.rs: flag helpers + =0 variant test deleted; solid cycle test kept.
+- frame_budget_tests.rs: comprehensive pass (all surfaces) — 8 old-path budget tests deleted, retired-flag env sets
+  stripped from the solid ones, label conditionals -> "solid", solid_path suffix dropped. ENGINE pair untouched (stays).
+- Coverage migration: 27-scenario parity matrix -> golden w80/w160 bytes (solid-pinned) + pty hover/add/close cycle
+  + rig mouse-hover-tabstrip. Vertical rail (4 golden pairs) -> NO successor (shape retired; noted).

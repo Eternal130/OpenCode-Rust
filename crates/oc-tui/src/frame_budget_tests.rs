@@ -142,25 +142,8 @@ fn frame_budget_large_transcript_200x50() {
     // stays 5ms regardless.
 }
 
-/// Lane M1 (换血 pilot): the tab strip's per-frame cost on the LIVE
-/// session route (`render_session` mounts the strip via
-/// `paint_live_tabs_bar`), measured over a 12-tab store with glowing
-/// tabs and alternating hover — the worst realistic strip workload at
-/// the budget harness's 200×50 scale. Both renderer paths get their
-/// own test process (the flag is read once at boot; nextest isolates
-/// the two fns), so the two numbers compare cleanly.
 #[test]
-fn frame_budget_session_with_tabs_strip_old_path() {
-    std::env::set_var("OC_TABS_OPENTUI", "0");
-    strip_frame_budget_body();
-}
-
-/// The opentui-solid strip path — the default (see
-/// [`frame_budget_session_with_tabs_strip_old_path`] for the
-/// `OC_TABS_OPENTUI=0` fallback).
-#[test]
-fn frame_budget_session_with_tabs_strip_solid_path() {
-    std::env::set_var("OC_TABS_OPENTUI", "1");
+fn frame_budget_session_with_tabs_strip() {
     strip_frame_budget_body();
 }
 
@@ -203,7 +186,7 @@ fn strip_frame_budget_body() {
     eprintln!(
         "[frame-budget] 200x50 session route, 12 tabs strip ({}): worst {} µs, avg {} µs \
          ({} build)",
-        if crate::components::session_tabs_solid::opentui_tabs_enabled() { "solid" } else { "old" },
+        "solid",
         worst_micros,
         (total_micros / frames),
         if cfg!(debug_assertions) { "debug" } else { "release" },
@@ -216,30 +199,8 @@ fn strip_frame_budget_body() {
     );
 }
 
-/// Lane M3: the composer frame's per-frame cost on the LIVE session
-/// route (`render_session` docks the composer mount via
-/// `composer_mount_frame`), measured over an IDLE phase (identical
-/// frames — the reconciler's no-op skip) and a TYPING-CHURN phase
-/// (a word per frame growing the draft; height-stable frames patch
-/// in place, the occasional wrap rebuilds — the realistic edit mix).
-/// Both composer renderer paths get their own test process (the flag
-/// is read once at boot; nextest isolates the fns); the OTHER solid
-/// surfaces (tabs strip, dialogs) are pinned to the OLD path on both
-/// sides so the numbers isolate the composer path.
 #[test]
-fn frame_budget_composer_frame_old_path() {
-    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
-    std::env::set_var("OC_TABS_OPENTUI", "0");
-    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
-    composer_frame_budget_body();
-}
-
-/// The opentui-solid composer path (`OC_COMPOSER_OPENTUI=1`).
-#[test]
-fn frame_budget_composer_frame_solid_path() {
-    std::env::set_var("OC_COMPOSER_OPENTUI", "1");
-    std::env::set_var("OC_TABS_OPENTUI", "0");
-    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
+fn frame_budget_composer_frame() {
     composer_frame_budget_body();
 }
 
@@ -304,7 +265,7 @@ fn composer_frame_budget_body() {
     eprintln!(
         "[frame-budget] 200x50 session route, composer ({}): idle worst {} µs / avg {} µs; \
          typing churn worst {} µs / avg {} µs ({} build)",
-        if crate::components::composer_solid::opentui_composer_enabled() { "solid" } else { "old" },
+        "solid",
         idle_worst_us,
         idle_avg,
         churn_worst_us,
@@ -319,33 +280,8 @@ fn composer_frame_budget_body() {
     );
 }
 
-/// Lane M4: the transcript region's per-frame cost on the LIVE
-/// session route (`render_session` paints it via the dual-path
-/// region seam), measured over a transcript-heavy store (150 turns —
-/// the large-transcript scale) under an IDLE phase (identical
-/// sticky frames) and a SCROLL-CHURN phase (alternating page
-/// commands — the offset moves every frame, the solid path re-windows
-/// its `For` instead of rebuilding). Both transcript renderer paths
-/// get their own test process (the flag is read once at boot;
-/// nextest isolates the fns); the OTHER solid surfaces (strip,
-/// dialogs, composer) are pinned to the old path on both sides so
-/// the numbers isolate the transcript path.
 #[test]
-fn frame_budget_transcript_old_path() {
-    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "0");
-    std::env::set_var("OC_TABS_OPENTUI", "0");
-    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
-    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
-    transcript_frame_budget_body();
-}
-
-/// The opentui-solid transcript path (`OC_TRANSCRIPT_OPENTUI=1`).
-#[test]
-fn frame_budget_transcript_solid_path() {
-    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "1");
-    std::env::set_var("OC_TABS_OPENTUI", "0");
-    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
-    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
+fn frame_budget_transcript() {
     transcript_frame_budget_body();
 }
 
@@ -425,46 +361,13 @@ fn transcript_frame_budget_body() {
     );
 }
 
-/// Lane M2: the dialog family's per-frame cost on the LIVE app frame
-/// (`render_app` composites the top dialog through
-/// `render_overlay`), measured over the command palette open with its
-/// full registry and alternating selection moves — the hot path
-/// (stable content height, in-place prop patches). Both dialog
-/// renderer paths get their own test process (the flag is read once
-/// at boot; nextest isolates the two fns); the tab strip is pinned to
-/// the OLD path on both sides so the numbers isolate the dialog path.
 #[test]
-fn frame_budget_dialog_open_old_path() {
-    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
-    std::env::set_var("OC_TABS_OPENTUI", "0");
+fn frame_budget_dialog_open() {
     dialog_frame_budget_body();
 }
 
-/// The opentui-solid dialog path (`OC_DIALOGS_OPENTUI=1`).
 #[test]
-fn frame_budget_dialog_open_solid_path() {
-    std::env::set_var("OC_DIALOGS_OPENTUI", "1");
-    std::env::set_var("OC_TABS_OPENTUI", "0");
-    dialog_frame_budget_body();
-}
-
-/// Lane M-theme: the theme-switch frame cost — the theme dialog's
-/// live preview (a selection move) applies a new palette mid-dialog
-/// and the SAME frame repaints the whole app in it (solid mounts
-/// rebuild: colors sit in every mount key). The old/solid dialog
-/// paths each get their own process; the tabs stay on the old path on
-/// both sides to isolate the dialog family.
-#[test]
-fn frame_budget_theme_switch_old_path() {
-    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
-    std::env::set_var("OC_TABS_OPENTUI", "0");
-    theme_switch_frame_budget_body();
-}
-
-#[test]
-fn frame_budget_theme_switch_solid_path() {
-    std::env::set_var("OC_DIALOGS_OPENTUI", "1");
-    std::env::set_var("OC_TABS_OPENTUI", "0");
+fn frame_budget_theme_switch() {
     theme_switch_frame_budget_body();
 }
 
@@ -506,7 +409,7 @@ fn theme_switch_frame_budget_body() {
     eprintln!(
         "[frame-budget] 200x50 session route, theme dialog LIVE SWITCH ({}): worst {} µs, avg {} \
          µs ({})",
-        if crate::components::dialog_solid::opentui_dialogs_enabled() { "solid" } else { "old" },
+        "solid",
         worst_micros,
         total_micros / frames,
         if cfg!(debug_assertions) { "debug" } else { "release" },
@@ -562,7 +465,7 @@ fn dialog_frame_budget_body() {
     eprintln!(
         "[frame-budget] 200x50 session route, palette dialog open ({}): worst {} µs, avg {} µs \
          ({} build)",
-        if crate::components::dialog_solid::opentui_dialogs_enabled() { "solid" } else { "old" },
+        "solid",
         worst_micros,
         total_micros / frames,
         if cfg!(debug_assertions) { "debug" } else { "release" },
@@ -574,34 +477,8 @@ fn dialog_frame_budget_body() {
     );
 }
 
-/// Lane M5: the sidebar pane's per-frame cost on the LIVE session
-/// route at a WIDE size (`render_session` docks the pane at 160+,
-/// the only geometry where it mounts), measured over an IDLE phase
-/// (identical frames) and a SECTION-CHURN phase (a plugin section's
-/// rows refreshing each frame — the pane's reactive worst case).
-/// Both sidebar renderer paths get their own test process; the OTHER
-/// solid surfaces are pinned to the old path on both sides so the
-/// numbers isolate the pane path.
 #[test]
-fn frame_budget_sidebar_pane_old_path() {
-    std::env::set_var("OC_SIDEBAR_OPENTUI", "0");
-    std::env::set_var("OC_HOME_OPENTUI", "0");
-    std::env::set_var("OC_TABS_OPENTUI", "0");
-    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
-    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
-    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "0");
-    sidebar_pane_budget_body();
-}
-
-/// The opentui-solid sidebar path (`OC_SIDEBAR_OPENTUI=1`).
-#[test]
-fn frame_budget_sidebar_pane_solid_path() {
-    std::env::set_var("OC_SIDEBAR_OPENTUI", "1");
-    std::env::set_var("OC_HOME_OPENTUI", "0");
-    std::env::set_var("OC_TABS_OPENTUI", "0");
-    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
-    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
-    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "0");
+fn frame_budget_sidebar_pane() {
     sidebar_pane_budget_body();
 }
 
@@ -671,7 +548,7 @@ fn sidebar_pane_budget_body() {
     eprintln!(
         "[frame-budget] 42x50 sidebar pane ({}): idle worst {} µs / avg {} µs; section churn \
          worst {} µs / avg {} µs ({} build)",
-        if crate::components::sidebar_solid::opentui_sidebar_enabled() { "solid" } else { "old" },
+        "solid",
         idle_worst,
         idle_avg,
         churn_worst,
@@ -685,32 +562,8 @@ fn sidebar_pane_budget_body() {
     );
 }
 
-/// Lane M5: the home route's per-frame cost — the wordmark chrome +
-/// the footer slot (the composer mount rides its own M3 budget
-/// test), measured over an IDLE phase and a PLACEHOLDER-CHURN phase
-/// (the rotation label re-rendering). Both home renderer paths get
-/// their own test process; the composer stays pinned to the OLD path
-/// on both sides so the numbers isolate the home chrome path.
 #[test]
-fn frame_budget_home_old_path() {
-    std::env::set_var("OC_HOME_OPENTUI", "0");
-    std::env::set_var("OC_SIDEBAR_OPENTUI", "0");
-    std::env::set_var("OC_TABS_OPENTUI", "0");
-    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
-    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
-    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "0");
-    home_frame_budget_body();
-}
-
-/// The opentui-solid home path (`OC_HOME_OPENTUI=1`).
-#[test]
-fn frame_budget_home_solid_path() {
-    std::env::set_var("OC_HOME_OPENTUI", "1");
-    std::env::set_var("OC_SIDEBAR_OPENTUI", "0");
-    std::env::set_var("OC_TABS_OPENTUI", "0");
-    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
-    std::env::set_var("OC_COMPOSER_OPENTUI", "0");
-    std::env::set_var("OC_TRANSCRIPT_OPENTUI", "0");
+fn frame_budget_home() {
     home_frame_budget_body();
 }
 
@@ -761,7 +614,7 @@ fn home_frame_budget_body() {
     eprintln!(
         "[frame-budget] 200x50 home route ({}): idle worst {} µs / avg {} µs; placeholder churn \
          worst {} µs / avg {} µs ({} build)",
-        if crate::components::home_solid::opentui_home_enabled() { "solid" } else { "old" },
+        "solid",
         idle_worst,
         idle_avg,
         churn_worst,
@@ -775,21 +628,8 @@ fn home_frame_budget_body() {
     );
 }
 
-/// Lane M6: the subagent picker panel's per-frame cost — the full
-/// 5-entry panel at 200 cols, measured over an IDLE phase (re-paint
-/// with unchanged inputs) and a SELECTION-CHURN phase (the focus
-/// moving between rows — the panel's reactive worst case). Both
-/// picker renderer paths get their own test process.
 #[test]
-fn frame_budget_picker_panel_old_path() {
-    std::env::set_var("OC_SUBAGENT_OPENTUI", "0");
-    picker_panel_budget_body();
-}
-
-/// The opentui-solid picker path (`OC_SUBAGENT_OPENTUI=1`).
-#[test]
-fn frame_budget_picker_panel_solid_path() {
-    std::env::set_var("OC_SUBAGENT_OPENTUI", "1");
+fn frame_budget_picker_panel() {
     picker_panel_budget_body();
 }
 
@@ -859,7 +699,7 @@ fn picker_panel_budget_body() {
     eprintln!(
         "[frame-budget] 200x11 picker panel ({}): idle worst {} µs / avg {} µs; selection churn \
          worst {} µs / avg {} µs ({} build)",
-        if crate::components::picker_solid::opentui_picker_enabled() { "solid" } else { "old" },
+        "solid",
         idle_worst,
         idle_avg,
         churn_worst,
