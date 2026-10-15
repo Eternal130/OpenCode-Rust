@@ -448,6 +448,76 @@ fn frame_budget_dialog_open_solid_path() {
     dialog_frame_budget_body();
 }
 
+/// Lane M-theme: the theme-switch frame cost — the theme dialog's
+/// live preview (a selection move) applies a new palette mid-dialog
+/// and the SAME frame repaints the whole app in it (solid mounts
+/// rebuild: colors sit in every mount key). The old/solid dialog
+/// paths each get their own process; the tabs stay on the old path on
+/// both sides to isolate the dialog family.
+#[test]
+fn frame_budget_theme_switch_old_path() {
+    std::env::set_var("OC_DIALOGS_OPENTUI", "0");
+    std::env::set_var("OC_TABS_OPENTUI", "0");
+    theme_switch_frame_budget_body();
+}
+
+#[test]
+fn frame_budget_theme_switch_solid_path() {
+    std::env::set_var("OC_DIALOGS_OPENTUI", "1");
+    std::env::set_var("OC_TABS_OPENTUI", "0");
+    theme_switch_frame_budget_body();
+}
+
+fn theme_switch_frame_budget_body() {
+    use crate::reactive::Runtime;
+    use crate::store::{Store, Unread};
+
+    let store = Store::new(Runtime::new());
+    for index in 0..4 {
+        store.open_tab(&format!("s{index}"), Some(format!("Session {index}")));
+        if index % 2 == 0 {
+            store.set_unread(&format!("s{index}"), Some(Unread::Activity));
+        }
+    }
+    store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+    store.set_terminal_size((200, 50));
+    store.open_dialog(crate::store::DialogKind::ThemeList, crate::store::DialogSize::Medium);
+    // Warmup: two full switches mount every surface under both
+    // palettes (the solid path builds its per-color mount trees).
+    for name in ["nord", "opencode"] {
+        store.set_theme_by_name(name);
+        let _ = crate::components::dialog::render_app(&store, &store.theme(), (200, 50));
+    }
+    let mut worst_micros = 0u128;
+    let mut total_micros = 0u128;
+    let frames = 20u128;
+    for frame in 0..frames {
+        // Alternate palettes every frame — every move is a preview
+        // (onMove → themes.set) followed by the full-app repaint.
+        let name = if frame % 2 == 0 { "nord" } else { "catppuccin" };
+        store.set_theme_by_name(name);
+        let start = std::time::Instant::now();
+        let painted = crate::components::dialog::render_app(&store, &store.theme(), (200, 50));
+        let elapsed = start.elapsed();
+        worst_micros = worst_micros.max(elapsed.as_micros());
+        total_micros += elapsed.as_micros();
+        assert_eq!(painted.height, 50);
+    }
+    eprintln!(
+        "[frame-budget] 200x50 session route, theme dialog LIVE SWITCH ({}): worst {} µs, avg {} \
+         µs ({})",
+        if crate::components::dialog_solid::opentui_dialogs_enabled() { "solid" } else { "old" },
+        worst_micros,
+        total_micros / frames,
+        if cfg!(debug_assertions) { "debug" } else { "release" },
+    );
+    #[cfg(not(debug_assertions))]
+    assert!(
+        worst_micros <= u128::from(FRAME_BUDGET_MS) * 1000,
+        "theme switch exceeded the frame budget: worst {worst_micros} µs"
+    );
+}
+
 fn dialog_frame_budget_body() {
     use crate::reactive::Runtime;
     use crate::store::{Store, Unread};
