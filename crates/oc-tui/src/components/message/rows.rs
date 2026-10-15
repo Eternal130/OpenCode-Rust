@@ -118,6 +118,71 @@ pub fn completed_tool_row(icon: char, label: &str, theme: &ThemeStyles, width: u
     RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() }
 }
 
+/// The subagent tool card (`Subagent`, routes/session/index.tsx:3087-3120
+/// over `InlineTool`/`InlineToolRow`, message-parts.tsx:198-275) — #40.
+///
+/// * completed: `✓ {Titlecase(agent)} Subagent — {description}` (the
+///   icon slot's 2-wide shape, muted);
+/// * running (a fresh, non-continuation call): the spinner + the SAME
+///   composed label (`spinner` arm renders `children`, never
+///   `pending`);
+/// * streaming (args still arriving — `complete` falsy, no spinner):
+///   the spinner + the `Delegating…` pending row;
+/// * continuation (`input.sessionID` present): the `↳` icon + the
+///   `Continue subagent — …` label, never a spinner.
+///
+/// `session_running` carries the child session's live status (the
+/// `metadata.sessionID` lookup — `isRunning`'s second clause); the
+/// `· {model}` suffix appends when the input names a model (the raw
+/// reference — the model-list name resolution is the store's to add).
+#[must_use]
+pub fn subagent_tool_row(
+    state: &crate::components::message::model::ToolState,
+    session_running: Option<bool>,
+    clock_ms: u64,
+    theme: &ThemeStyles,
+    width: usize,
+) -> RowRender {
+    use crate::components::message::model::ToolStatus;
+    let continuation = state.input.contains_key("sessionID");
+    let running = state.status == ToolStatus::Running
+        || (session_running.unwrap_or(false) && state.metadata.contains_key("sessionID"));
+    let description = state.input.get("description").map(String::as_str).filter(|d| !d.is_empty());
+    let agent = state
+        .input
+        .get("agent")
+        .or_else(|| state.input.get("subagent_type"))
+        .map_or("General", String::as_str);
+    let mut label = if continuation {
+        "Continue subagent".to_owned()
+    } else {
+        format!("{} Subagent", titlecase(agent))
+    };
+    label.push_str(" — ");
+    label.push_str(description.unwrap_or("Subagent"));
+    if let Some(model) = state.input.get("model") {
+        label.push_str(" · ");
+        label.push_str(model);
+    }
+    let spinner = !continuation && running;
+    if spinner {
+        running_tool_row(&label, clock_ms, theme, width)
+    } else if description.is_some() || state.status == ToolStatus::Error {
+        // `complete || failed` (InlineToolRow's Show gate): either a
+        // truthy description or the error state renders the icon row.
+        let icon = if continuation {
+            '↳'
+        } else if state.status == ToolStatus::Completed {
+            '✓'
+        } else {
+            '│'
+        };
+        completed_tool_row(icon, &label, theme, width)
+    } else {
+        running_tool_row("Delegating…", clock_ms, theme, width)
+    }
+}
+
 /// The reasoning-group header in hide mode: collapsed `+ Thought` /
 /// expanded `- Thought` (beta.8 bug 4 — the disclosure toggle flips
 /// the icon and lifts the 0.6-alpha tint to the full

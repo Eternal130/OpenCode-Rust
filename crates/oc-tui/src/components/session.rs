@@ -145,9 +145,14 @@ pub fn render_session(
     // The tabs strip (height 1) leads the column when the tabs config
     // is enabled (v2's session-frame renders the strip behind the
     // same `enabled()` gate); the transcript starts directly under
-    // it. With tabs off the frame starts at the transcript.
+    // it. With tabs off the frame starts at the transcript. The
+    // active pill keys on the routed session's family ROOT
+    // (session-tabs.tsx:138 — a child-session route keeps the root's
+    // pill active, #45).
     let show_strip = store.tabs_enabled();
-    let strip = show_strip.then(|| paint_live_tabs_bar(store, Some(session_id), width, styles));
+    let strip_active = show_strip.then(|| store.session_root(session_id));
+    let strip =
+        show_strip.then(|| paint_live_tabs_bar(store, strip_active.as_deref(), width, styles));
 
     // The session sidebar (session-frame.tsx:106-117): v2's right
     // pane — `auto` shows it above 120 cols, the manual toggle forces
@@ -168,12 +173,47 @@ pub fn render_session(
     };
 
     // The composer's docked mount (popup rows above it when the
-    // slash palette is open) + the transcript's height budget.
-    let (mount, prompt_height, mount_height, caret_screen) =
-        composer_mount_frame(store, session_id, &theme, column - inset, width, height);
+    // slash palette is open) + the transcript's height budget. With
+    // the subagent picker open (or on a child session — #44/#45) the
+    // picker panel REPLACES the whole prompt mount (v2's Composer:
+    // `open={composer.open || parentID}` at index.tsx:1451 — the
+    // ╹▀ transition and status row belong to the prompt, not the
+    // panel). Lane M6 dual-path: the flag selects the opentui-solid
+    // tree (`picker_solid`) or the hand-rolled painter (the
+    // `OC_SUBAGENT_OPENTUI=0` fallback); BOTH consume the same
+    // `picker_panel_paint` walk. The panel spans the FULL column
+    // (its own geometry carries the border col 2), so it pastes at
+    // x=0, unlike the prompt mount's inset.
+    let picker_live = store.picker_live(session_id);
+    let mount_x = if picker_live { 0 } else { inset };
+    let (mount, prompt_height, mount_height, caret_screen) = if picker_live {
+        let entries = store.picker_entries(session_id);
+        let selected = store.picker_selection(session_id, entries.len());
+        let panel = crate::components::picker_solid::picker_panel_frame_dispatch(
+            &store.picker(),
+            &entries,
+            selected,
+            &theme,
+            u16::try_from(column).unwrap_or(u16::MAX),
+        );
+        (
+            panel,
+            crate::components::subagent_picker::PICKER_MOUNT_ROWS,
+            // The height BUDGET is the panel alone (11 rows): the
+            // mount's 12th row is the pad BELOW the panel — the ref's
+            // transcript viewport runs one row longer than the prompt
+            // mount's arithmetic would give (rig-pinned: the parent
+            // view keeps `Main flow final reply.` visible).
+            crate::components::subagent_picker::PANEL_ROWS,
+            None,
+        )
+    } else {
+        composer_mount_frame(store, session_id, &theme, column - inset, width, height)
+    };
     // NEW-S1a: position the terminal cursor at the caret cell while
     // the composer owns the frame (cleared when a dialog overlays —
-    // v2 blurs the prompt while any dialog is open).
+    // v2 blurs the prompt while any dialog is open). The picker
+    // panel unmounts the prompt — no caret while it shows.
     store.set_caret_cell(
         caret_screen
             .filter(|_| store.top_dialog().is_none())
@@ -182,8 +222,9 @@ pub fn render_session(
     // The queued-prompt dock (v2's `QueuedPromptDock`,
     // index.tsx:2312-2342): one row above the composer —
     // `┃ {n} queued · {next}` — while prompts wait in the serial
-    // queue; absent (and byte-invisible) when the queue is empty.
-    let queued = store.queued_prompts(session_id);
+    // queue; absent (and byte-invisible) when the queue is empty or
+    // the composer panel is open (index.tsx:1445's `!composer.open`).
+    let queued = if picker_live { Vec::new() } else { store.queued_prompts(session_id) };
     let dock_height = usize::from(!queued.is_empty());
     let spacing = usize::from(mount_height + dock_height + 1 < height);
     // Without the strip the chrome is one row shorter (no title row
@@ -214,6 +255,12 @@ pub fn render_session(
             // #13: the footer row's model display names (the server
             // model catalog).
             model_names: model_display_names(store),
+            // #40: the live child-session statuses (the subagent
+            // card's running oracle).
+            subagent_running: store.subagent_running_map(),
+            // The user-block rail keys on the SESSION's agent (the
+            // child view's `general` hue, session/index.tsx:2200).
+            user_rail: store.session_agent_rail_color(session_id),
             ..TranscriptOptions::default()
         },
         styles,
@@ -365,7 +412,7 @@ pub fn render_session(
     {
         paste(&mut frame, &dock, inset, height - prompt_height - dock_height);
     }
-    paste(&mut frame, &mount, inset, height - prompt_height);
+    paste(&mut frame, &mount, mount_x, height - prompt_height);
     // The sidebar pane mounts under the strip across the frame's full
     // remaining height (session-frame.tsx:325-331 — `flexShrink 0`,
     // width 42): docked at the right edge beside the reflowed
@@ -1237,5 +1284,57 @@ mod tests {
             !frame.text_grid().iter().any(|row| row.contains("Getting started")),
             "no pane for subagent sessions"
         );
+    }
+
+    /// #44/#45 — the picker panel REPLACES the prompt mount when live
+    /// (open or a child route): the panel's border column paints at
+    /// the frame's col 2 (its own geometry carries the inset), the
+    /// `╹` prompt transition never renders, and the strip keeps the
+    /// family ROOT's title on a child route (no new tab).
+    #[test]
+    fn picker_live_replaces_the_prompt_and_roots_the_strip() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("root", Some("Root flow".to_owned()));
+        store.navigate(crate::store::Route::Session { session_id: "root".to_owned() });
+        store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "session.created",
+            serde_json::json!({
+                "sessionID": "ses_child", "parentID": "root",
+                "agent": "general", "title": "Check the fixture"
+            }),
+        ))]);
+        store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "session.execution.succeeded",
+            serde_json::json!({ "sessionID": "ses_child" }),
+        ))]);
+        let mut picker = store.picker();
+        picker.open = true;
+        picker.filter_active = false;
+        store.set_picker(picker);
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame = render_session(&store, "root", &theme.styles(), (80, 24));
+        let grid = frame.text_grid();
+        assert!(
+            grid.iter().any(|row| row.contains("Subagents  Shell  Terminals")),
+            "the panel's tabs row: {grid:?}"
+        );
+        assert!(
+            grid.iter().any(|row| row.contains("General: Check the fixture")),
+            "the entry row: {grid:?}"
+        );
+        assert!(
+            !grid.iter().any(|row| row.contains('╹')),
+            "the prompt's transition row must not render under the panel: {grid:?}"
+        );
+        // Navigate into the child: the strip keeps the ROOT's pill.
+        store.picker_navigate();
+        assert!(
+            matches!(store.route(), crate::store::Route::Session { ref session_id } if session_id == "ses_child")
+        );
+        assert!(store.picker_live("ses_child"), "the child always mounts the panel");
+        let child_frame = render_session(&store, "ses_child", &theme.styles(), (80, 24));
+        let strip = child_frame.text_grid()[0].clone();
+        assert!(strip.contains("Root flow"), "the root's pill stays active: {strip}");
+        assert!(!strip.contains("Check the fixture"), "no tab for the child: {strip}");
     }
 }
