@@ -31,10 +31,9 @@ pub mod home;
 /// `docs/migration-m1-tabstrip.md`).
 pub mod home_solid;
 pub mod message;
-/// Lane M6: the composer's subagent picker panel on opentui-solid
-/// (the `OC_SUBAGENT_OPENTUI` flag selects it; the hand-rolled
-/// painter stays the fallback — see the module doc + the M6 section
-/// of `docs/migration-m1-tabstrip.md`).
+/// Lane M6 (retired): the composer's subagent picker panel on
+/// opentui-solid — the ONLY renderer since the retirement lane
+/// deleted the `OC_SUBAGENT_OPENTUI` flag pair.
 pub mod picker_solid;
 pub mod session;
 pub mod session_screen;
