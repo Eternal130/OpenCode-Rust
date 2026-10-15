@@ -74,8 +74,6 @@ use crate::components::session_tabs::{
     ADD_TAB_WIDTH,
 };
 use crate::components::tab_pulse::{glow_text_color, resting_glow_bg, tint, Rgb, GLOW_TAIL};
-#[cfg(test)]
-use crate::render::paint_placed_with_fills;
 use crate::render::{Cell, CellColor, Frame, CONTINUATION};
 use crate::store::Unread;
 use crate::theme::ThemeStyles;
@@ -860,7 +858,7 @@ pub fn paint_solid_bar(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::session_tabs::{Attention, TabStatus};
+    use crate::components::session_tabs::TabStatus;
     use crate::store::SessionTab;
 
     fn view(id: &str, title: &str, status: TabStatus) -> TabView {
