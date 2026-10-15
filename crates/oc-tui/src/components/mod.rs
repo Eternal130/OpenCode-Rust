@@ -65,8 +65,7 @@ pub use session_screen::{
     SessionScreen,
 };
 pub use session_tabs::{
-    adaptive_session_tab_layout, render_bar, render_rail, AdaptiveLayout, Attention, TabStatus,
-    TabView,
+    adaptive_session_tab_layout, AdaptiveLayout, Attention, TabStatus, TabView,
 };
 pub use sidebar::{
     render_sidebar, sidebar_visible, SidebarMode, SidebarSections, SidebarView,

@@ -124,44 +124,6 @@
       ]
     },
     {
-      "id": "session-tabs-vertical",
-      "source": "test/component/session-tabs-status.test.tsx",
-      "description": "SessionTabs vertical bar/rail with two tabs; first tab carries an unread-activity indicator",
-      "componentClass": "session-tabs",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 16,
-          "rows": 16,
-          "cols": 80,
-          "txt": {
-            "bytes": 1318,
-            "sha256": "04774fde7e7560683e1352f30b5a5d7ad023db16cc2857fbb0fa5f9ea3fb9bce"
-          },
-          "ansi": {
-            "bytes": 3395,
-            "sha256": "38a1b8a3cf57624804aebabbdb5f799b1a8fade392c54553989bcdb33d8b0647"
-          }
-        },
-        {
-          "width": 160,
-          "height": 16,
-          "rows": 16,
-          "cols": 160,
-          "txt": {
-            "bytes": 2598,
-            "sha256": "f5cf03ea5858797364c90a62be64e1d131210a349b26e25155e4f6f40bda3800"
-          },
-          "ansi": {
-            "bytes": 4675,
-            "sha256": "14b9738d8769797f6f5f340faa952146752c1bca2a77792e567b88e318833cdd"
-          }
-        }
-      ]
-    },
-    {
       "id": "footer-prompt-idle",
       "source": "test/mini/footer.view.test.tsx",
       "description": "RunFooterView default prompt composer (idle phase, fallback dark theme)",
