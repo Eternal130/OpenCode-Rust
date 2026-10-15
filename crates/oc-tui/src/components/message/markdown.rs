@@ -129,8 +129,8 @@ impl MarkdownStyles {
             syntax: SyntaxStyle::from_styles(styles.clone()),
             syntax_defs: theme.syntax.clone(),
             syntax_hash: {
-                let mut hash = std::collections::hash_map::DefaultHasher::new();
                 use std::hash::{Hash, Hasher};
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
                 for (scope, def) in &styles {
                     scope.hash(&mut hash);
                     def.fg.hash(&mut hash);
@@ -197,28 +197,25 @@ fn render_spec(
             let content = &options.content;
             let filetype = options.filetype.as_deref();
             let fallback = filetype.and_then(|ft| oc_syntax::highlight(content, ft));
-            match fallback {
-                Some(block) => {
-                    for (index, line) in content.split('\n').enumerate() {
-                        let mut spans: Vec<StyledSpan> = block
-                            .line_spans(index, styles.code_block, &styles.syntax_defs)
-                            .into_iter()
-                            .map(|span| StyledSpan { text: span.text, style: span.style })
-                            .collect();
-                        if spans.is_empty() {
-                            spans.push(StyledSpan {
-                                text: crate::wrap::take_width(line, content_width),
-                                style: styles.code_block,
-                            });
-                        }
-                        clip_spans(&mut spans, content_width);
-                        lines.push(MarkdownLine(spans));
+            if let Some(block) = fallback {
+                for (index, line) in content.split('\n').enumerate() {
+                    let mut spans: Vec<StyledSpan> = block
+                        .line_spans(index, styles.code_block, &styles.syntax_defs)
+                        .into_iter()
+                        .map(|span| StyledSpan { text: span.text, style: span.style })
+                        .collect();
+                    if spans.is_empty() {
+                        spans.push(StyledSpan {
+                            text: crate::wrap::take_width(line, content_width),
+                            style: styles.code_block,
+                        });
                     }
+                    clip_spans(&mut spans, content_width);
+                    lines.push(MarkdownLine(spans));
                 }
-                None => {
-                    let text = styled_cached(options, styles);
-                    push_clipped(&text, content_width, styles, lines);
-                }
+            } else {
+                let text = styled_cached(options, styles);
+                push_clipped(&text, content_width, styles, lines);
             }
             push_margins(*margin_bottom, lines);
         }
@@ -442,14 +439,14 @@ fn styled_cached(options: &CodeOptions, styles: &MarkdownStyles) -> StyledText {
             return hit.clone();
         }
     }
-    let styled = markdown_code_styled(options, &styles.syntax);
+    let rendered = markdown_code_styled(options, &styles.syntax);
     if let Ok(mut guard) = cache.lock() {
         if guard.len() >= 512 {
             guard.clear();
         }
-        guard.insert(key, styled.clone());
+        guard.insert(key, rendered.clone());
     }
-    styled
+    rendered
 }
 
 fn ratatui_color(rgba: opentui_core::Rgba) -> Option<Color> {
