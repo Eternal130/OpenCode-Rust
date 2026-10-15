@@ -30,6 +30,7 @@
 //! this lane (the goldens were re-pinned to it — they now pin
 //! upstream 0.5.14's semantics, not the C1 reading).
 
+use opentui_core::renderables::code::CodeOptions;
 use opentui_core::renderables::markdown::{
     build_markdown_blocks, markdown_code_styled, BlockSpec, ListItemSpec, MarkdownOptions,
 };
@@ -76,6 +77,9 @@ pub struct MarkdownStyles {
     pub syntax: SyntaxStyle,
     /// The oc-syntax resolver (the R-01 fenced-code fallback line).
     pub syntax_defs: oc_syntax::SyntaxStyles,
+    /// Fingerprint of the syntax map (the styled cache's key salt —
+    /// a theme switch invalidates every cached pipeline render).
+    syntax_hash: u64,
 }
 
 fn ot_rgba(color: Color) -> Option<opentui_core::Rgba> {
@@ -122,8 +126,22 @@ impl MarkdownStyles {
             quote_border: base.fg(md.block_quote),
             rule: base.fg(md.horizontal_rule),
             code_block: base.fg(md.code_block),
-            syntax: SyntaxStyle::from_styles(styles),
+            syntax: SyntaxStyle::from_styles(styles.clone()),
             syntax_defs: theme.syntax.clone(),
+            syntax_hash: {
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                use std::hash::{Hash, Hasher};
+                for (scope, def) in &styles {
+                    scope.hash(&mut hash);
+                    def.fg.hash(&mut hash);
+                    def.bg.hash(&mut hash);
+                    def.bold.hash(&mut hash);
+                    def.italic.hash(&mut hash);
+                    def.underline.hash(&mut hash);
+                    def.dim.hash(&mut hash);
+                }
+                hash.finish()
+            },
         }
     }
 
@@ -165,48 +183,42 @@ fn render_spec(
     let content_width = width.saturating_sub(indent).max(1);
     match spec {
         BlockSpec::MarkdownText { options, margin_bottom } => {
-            let text = markdown_code_styled(options, &styles.syntax);
+            let text = styled_cached(options, styles);
             push_wrapped(&text, content_width, styles, lines);
             push_margins(*margin_bottom, lines);
         }
         BlockSpec::CodeBlock { options, margin_bottom } => {
-            // The fence seam: filetypes the opentui client parses
-            // (markdown/mdx/ts/js/zig family) render through the
-            // pipeline; the R-01 oc-syntax grammars (rust/python/
-            // typescript/diff/…) stay on oc-syntax — the registration
-            // sets differ and each is oracle-proven on its own line.
+            // The fence seam, by REGISTRATION SET: the R-01 oc-syntax
+            // grammars (rust/python/typescript/diff/…, content-cached
+            // engine) render through oc-syntax — byte-stable with the
+            // pre-swap renderer; everything else (the opentui
+            // markdown/ts/js/zig family, unknown filetypes) renders
+            // through the pipeline's code document.
             let content = &options.content;
             let filetype = options.filetype.as_deref();
-            let pipeline_handles = filetype.is_some_and(|ft| {
-                opentui_core::tree_sitter::get_tree_sitter_client()
-                    .lock()
-                    .expect("tree-sitter client")
-                    .highlight_once(content, ft)
-                    .highlights
-                    .is_some()
-            });
-            let fallback = (!pipeline_handles
-                && filetype.is_some_and(|ft| oc_syntax::highlight(content, ft).is_some()))
-            .then(|| filetype.map(|ft| oc_syntax::highlight(content, ft).expect("checked")));
-            if let Some(block) = fallback.flatten() {
-                for (index, line) in content.split('\n').enumerate() {
-                    let mut spans: Vec<StyledSpan> = block
-                        .line_spans(index, styles.code_block, &styles.syntax_defs)
-                        .into_iter()
-                        .map(|span| StyledSpan { text: span.text, style: span.style })
-                        .collect();
-                    if spans.is_empty() {
-                        spans.push(StyledSpan {
-                            text: crate::wrap::take_width(line, content_width),
-                            style: styles.code_block,
-                        });
+            let fallback = filetype.and_then(|ft| oc_syntax::highlight(content, ft));
+            match fallback {
+                Some(block) => {
+                    for (index, line) in content.split('\n').enumerate() {
+                        let mut spans: Vec<StyledSpan> = block
+                            .line_spans(index, styles.code_block, &styles.syntax_defs)
+                            .into_iter()
+                            .map(|span| StyledSpan { text: span.text, style: span.style })
+                            .collect();
+                        if spans.is_empty() {
+                            spans.push(StyledSpan {
+                                text: crate::wrap::take_width(line, content_width),
+                                style: styles.code_block,
+                            });
+                        }
+                        clip_spans(&mut spans, content_width);
+                        lines.push(MarkdownLine(spans));
                     }
-                    clip_spans(&mut spans, content_width);
-                    lines.push(MarkdownLine(spans));
                 }
-            } else {
-                let text = markdown_code_styled(options, &styles.syntax);
-                push_clipped(&text, content_width, styles, lines);
+                None => {
+                    let text = styled_cached(options, styles);
+                    push_clipped(&text, content_width, styles, lines);
+                }
             }
             push_margins(*margin_bottom, lines);
         }
@@ -398,6 +410,46 @@ fn chunk_span(chunk: &opentui_core::styled_text::TextChunk, styles: &MarkdownSty
         modifier |= Modifier::CROSSED_OUT;
     }
     StyledSpan { text: chunk.text.clone(), style: style.add_modifier(modifier) }
+}
+
+/// The pipeline's styled output, memoized by (content, options,
+/// syntax map): the transcript walk re-renders the same parts every
+/// frame while the content is settled — the tree-sitter markdown pass
+/// runs once per CONTENT, not once per frame. Bounded; overflow clears
+/// (streaming chats churn keys, stale entries never outlive a clear).
+fn styled_cached(options: &CodeOptions, styles: &MarkdownStyles) -> StyledText {
+    use std::collections::HashMap;
+    use std::hash::{Hash, Hasher};
+    use std::sync::{Mutex, OnceLock};
+
+    fn options_bits(options: &CodeOptions) -> u64 {
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        options.filetype.hash(&mut hash);
+        options.conceal.hash(&mut hash);
+        options.detect_links.hash(&mut hash);
+        options.markdown_link_highlights.hash(&mut hash);
+        options.hyperlinks_supported.hash(&mut hash);
+        options.base_highlight.hash(&mut hash);
+        options.content.hash(&mut hash);
+        hash.finish()
+    }
+
+    static CACHE: OnceLock<Mutex<HashMap<(u64, u64), StyledText>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (options_bits(options), styles.syntax_hash);
+    if let Ok(guard) = cache.lock() {
+        if let Some(hit) = guard.get(&key) {
+            return hit.clone();
+        }
+    }
+    let styled = markdown_code_styled(options, &styles.syntax);
+    if let Ok(mut guard) = cache.lock() {
+        if guard.len() >= 512 {
+            guard.clear();
+        }
+        guard.insert(key, styled.clone());
+    }
+    styled
 }
 
 fn ratatui_color(rgba: opentui_core::Rgba) -> Option<Color> {
