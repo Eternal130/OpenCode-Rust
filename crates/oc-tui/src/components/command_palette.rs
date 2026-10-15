@@ -319,7 +319,8 @@ pub fn palette_props(store: &Store) -> SelectProps {
 pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
     match kind {
         DialogKind::CommandPalette => palette_props(store),
-        DialogKind::ThemeList => theme_list_props(store),        DialogKind::Help | DialogKind::SessionRename { .. } | DialogKind::WorktreeName => {
+        DialogKind::ThemeList => theme_list_props(store),
+        DialogKind::Help | DialogKind::SessionRename { .. } | DialogKind::WorktreeName => {
             SelectProps::new("", Vec::new())
         }
         DialogKind::Plugin { id } => {
@@ -761,8 +762,7 @@ pub fn theme_list_props(store: &Store) -> SelectProps {
 #[must_use]
 pub fn theme_list_props_with_current(store: &Store, current: Option<&str>) -> SelectProps {
     let registry = store.registry();
-    let current =
-        current.map(str::to_owned).unwrap_or_else(|| store.theme().name.clone());
+    let current = current.map_or_else(|| store.theme().name.clone(), str::to_owned);
     let options: Vec<SelectOption> =
         registry.names().into_iter().map(|name| SelectOption::titled(name.clone(), name)).collect();
     SelectProps::new("Themes", options).with_current(Some(current))

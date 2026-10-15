@@ -86,3 +86,24 @@
 - NEW budget pair: frame_budget_theme_switch_{old,solid}_path (200x50
   session route, theme dialog open, LIVE palette switch every frame).
   Debug: pass (report-only). Release numbers land in the final phase.
+
+## Phase 4 — verify-lane.sh final, PHASE-BY-PHASE
+- Phase fmt: OK (after cargo fmt --all).
+- Phase clippy --workspace --all-targets -D warnings: OK.
+- Phase nextest full workspace: 2856/2856 PASS.
+- Phase pty profile (serialized): 2856/2856 PASS (987 s; one retry — a
+  pkill self-match killed the first attempt, no state lost).
+- Phase release build: 3m08s, binary 66,382,432 B.
+- Phase release budget: 17/17 PASS (incl. the NEW theme-switch pair:
+  old 2728/2153 µs, solid 5043/3665 µs worst/avg — ~5 ms absolute vs
+  the 40 ms gate, palette flipped EVERY frame).
+- Phase rig FULL matrix (cache OFF), chunked per script:
+  * boot-home: 3/0, 0/3, 0/3, 0/3 — the 120x30 runs are the final
+    sweep's own DETERMINISTIC placeholder-content mismatches
+    (boot-home@120x30#0-2 in its deterministic list); no new diffs.
+  * click-coverage-dialog (PINNED size 80x24 — the script JSON pins
+    size, --sizes cannot override; found mid-chunk): 2/7, 6/3 —
+    IDENTICAL counts to the final sweep's runs.
+  * resize @120x30 (probe): 6/6 identical (final sweep: 0/6) — clean.
+  NOTE: chunk A hit the 40-min tool-call cap mid-corpus (the sweep
+  scripts run ~13 min each); resumed per-script per the TTL rules.
