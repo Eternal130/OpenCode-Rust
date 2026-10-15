@@ -94,15 +94,6 @@ fn wait_transition(h: &HarnessHandle, timeout: Duration, predicate: fn(usize) ->
     false
 }
 
-/// The M5 flag pair, pinned per test process (nextest isolates each
-/// test): `old` keeps both hand-rolled renderers, `solid` boots the
-/// opentui-solid sidebar pane + home chrome.
-fn set_m5_path(solid: bool) {
-    let value = if solid { "1" } else { "0" };
-    std::env::set_var("OC_SIDEBAR_OPENTUI", value);
-    std::env::set_var("OC_HOME_OPENTUI", value);
-}
-
 /// Phase driver: boot, open the first session, assert the pane
 /// geometry, cycle the `<leader>b` toggle, exit cleanly.
 fn drive_sidebar_cycle(h: &mut HarnessHandle) -> Result<(), String> {
@@ -144,19 +135,11 @@ fn drive_sidebar_cycle(h: &mut HarnessHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// The docked-pane toggle cycle at 160 — parametrized over the M5
-/// renderer paths (lane M5: the pane tree + the home wordmark the
-/// boot passes through).
+/// The docked-pane toggle cycle at 160. Lane M5 (retired): the pane
+/// tree + the home wordmark render through opentui-solid — the only
+/// renderers since the retirement lane deleted the flag pair.
 #[test]
-fn pty_sidebar_toggles_and_carries_plugin_sections_old_path() {
-    set_m5_path(false);
-    pty_sidebar_toggle_body();
-}
-
-/// The opentui-solid paths (`OC_SIDEBAR_OPENTUI=1`, `OC_HOME_OPENTUI=1`).
-#[test]
-fn pty_sidebar_toggles_and_carries_plugin_sections_solid_path() {
-    set_m5_path(true);
+fn pty_sidebar_toggles_and_carries_plugin_sections() {
     pty_sidebar_toggle_body();
 }
 
@@ -179,17 +162,10 @@ fn pty_sidebar_toggle_body() {
     drop(harness);
 }
 
-/// The plugin-host section bridge — parametrized over the M5 paths.
+/// The plugin-host section bridge (the pane tree renders through
+/// opentui-solid — the only renderer since the retirement lane).
 #[test]
-fn pty_sidebar_plugin_section_renders_through_the_host_old_path() {
-    set_m5_path(false);
-    pty_sidebar_plugin_section_body();
-}
-
-/// The opentui-solid paths (`OC_SIDEBAR_OPENTUI=1`, `OC_HOME_OPENTUI=1`).
-#[test]
-fn pty_sidebar_plugin_section_renders_through_the_host_solid_path() {
-    set_m5_path(true);
+fn pty_sidebar_plugin_section_renders_through_the_host() {
     pty_sidebar_plugin_section_body();
 }
 
@@ -250,7 +226,6 @@ fn pty_sidebar_plugin_section_body() {
 /// choreography; the old path's twin is the 160-wide toggle body).
 #[test]
 fn pty_sidebar_overlay_cycle_solid_path() {
-    set_m5_path(true);
     let _lock = pty_lock();
     let _sandbox = sandbox_env("sidebar-overlay");
     let fake = FakeLlm::spawn(standard_sessions());

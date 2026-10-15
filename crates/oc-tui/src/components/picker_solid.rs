@@ -15,19 +15,16 @@
 //! **The tree.** A positioned root carrying the raised panel
 //! background; fills first, texts after (the For's DOM order is the
 //! paint order — the `Running` status overwrites the entry label's
-//! tail exactly like the old painter's later-placed run). The keys
+//! tail exactly like the painter's later-placed run). The keys
 //! are the walk's own tags (`picker:entry:{sessionID}`,
 //! `picker:border`, …), position-stable across selection moves and
 //! filter flips — a selection change patches one row's chunks in
 //! place, nothing remounts.
 //!
-//! **Selection flag.** Default ON (flipped after this lane's proof —
-//! the cell-for-cell unit matrix, the flag-symmetric rig A/B on the
-//! subagent trio, both PTY paths, the 0.5 ms worst frame):
-//! `OC_SUBAGENT_OPENTUI=0` (or `false`/`off`) keeps the hand-rolled
-//! painter for one release. Read once at the first panel paint ("at
-//! boot") via `OnceLock` — a running session never switches renderers
-//! mid-flight.
+//! **Selection flag (retired).** The lane-M6 dual-path flag
+//! (`OC_SUBAGENT_OPENTUI`) is gone: this module's opentui-solid tree
+//! is the picker panel's ONLY renderer — the hand-rolled painter was
+//! deleted after the one-release probation (the retirement lane).
 
 // Terminal dimensions/colors are bounded usize→f32 casts (taffy
 // points), the same allowance the other solid surfaces carry.
@@ -54,25 +51,6 @@ use crate::layout::{Placed, PlacedLine};
 use crate::render::Frame;
 use crate::store::{PickerEntry, PickerState};
 use crate::theme::ThemeState;
-
-/// The renderer selection flag (lane M6, default FLIPPED ON after
-/// the proof — the cell-for-cell unit matrix, the flag-symmetric
-/// rig A/B on the subagent trio, both PTY paths, the 0.5 ms worst
-/// frame): `OC_SUBAGENT_OPENTUI=0` (or `false`/`off`) boots the
-/// panel on the hand-rolled renderer; every other value — including
-/// unset — uses this module's opentui-solid path. Read once at the
-/// first panel paint ("at boot") and cached for the process
-/// lifetime, so a running session never switches renderers
-/// mid-flight. The hand-rolled painter stays compiled for one
-/// release as the escape hatch.
-#[must_use]
-pub fn opentui_picker_enabled() -> bool {
-    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLAG.get_or_init(|| {
-        !std::env::var("OC_SUBAGENT_OPENTUI")
-            .is_ok_and(|value| value == "0" || value == "false" || value == "off")
-    })
-}
 
 // ---------------------------------------------------------------------------
 // colors + chunk helpers (the M1..M5 shape)
@@ -548,11 +526,9 @@ fn paint_solid_picker_panel(
     })
 }
 
-/// The panel frame's renderer seam: the flag selects the
-/// opentui-solid path (this module) or the hand-rolled
-/// [`crate::components::subagent_picker::picker_panel_frame`]
-/// fallback. Both produce the same width × [`PANEL_ROWS`] frame the
-/// session route pastes in place of the prompt mount.
+/// The panel frame's ONLY renderer (lane M6, retired): the
+/// width × [`PANEL_ROWS`] frame the session route pastes in place of
+/// the prompt mount.
 #[must_use]
 pub fn picker_panel_frame_dispatch(
     state: &PickerState,
@@ -561,13 +537,7 @@ pub fn picker_panel_frame_dispatch(
     theme: &ThemeState,
     width: u16,
 ) -> Frame {
-    if opentui_picker_enabled() {
-        paint_solid_picker_panel(state, entries, selected, theme, width)
-    } else {
-        crate::components::subagent_picker::picker_panel_frame(
-            state, entries, selected, theme, width,
-        )
-    }
+    paint_solid_picker_panel(state, entries, selected, theme, width)
 }
 
 #[cfg(test)]
@@ -597,81 +567,6 @@ mod tests {
     /// The lane gate: the solid path's frame must equal the old
     /// path's frame CELL FOR CELL (char + attrs + fg + bg) across
     /// the picker state × width matrix — open/browse/show-inactive/
-    /// enter-target/child@80/child@160-no-sidebar shapes.
-    #[test]
-    #[allow(clippy::too_many_lines)] // a data matrix, not logic
-    fn solid_picker_panel_equals_the_old_renderer() {
-        struct Scenario {
-            name: &'static str,
-            state: PickerState,
-            entries: Vec<PickerEntry>,
-            selected: usize,
-        }
-        let base = PickerState {
-            open: true,
-            tab: PickerTab::Subagents,
-            filter_active: false,
-            selected: 0,
-            anchored_to: None,
-        };
-        let child = PickerState { open: false, ..base.clone() };
-        let scenarios = vec![
-            Scenario {
-                name: "open-one-entry",
-                state: base.clone(),
-                entries: entries(1),
-                selected: 0,
-            },
-            Scenario {
-                name: "browse-five-selected-2",
-                state: PickerState { selected: 2, ..base.clone() },
-                entries: entries(5),
-                selected: 2,
-            },
-            Scenario {
-                name: "show-inactive-empty",
-                state: PickerState { filter_active: true, ..base.clone() },
-                entries: Vec::new(),
-                selected: 0,
-            },
-            Scenario {
-                name: "child-mounted-current",
-                state: child,
-                entries: entries(3),
-                selected: 1,
-            },
-            Scenario {
-                name: "shell-tab",
-                state: PickerState { tab: PickerTab::Shell, ..base },
-                entries: entries(2),
-                selected: 0,
-            },
-        ];
-        for scenario in scenarios {
-            for width in [40u16, 80, 120, 160] {
-                let old = crate::components::subagent_picker::picker_panel_frame(
-                    &scenario.state,
-                    &scenario.entries,
-                    scenario.selected,
-                    &theme(),
-                    width,
-                );
-                let solid = paint_solid_picker_panel(
-                    &scenario.state,
-                    &scenario.entries,
-                    scenario.selected,
-                    &theme(),
-                    width,
-                );
-                assert_eq!(
-                    old.cells, solid.cells,
-                    "{} @{}: solid panel diverged from the old renderer",
-                    scenario.name, width
-                );
-            }
-        }
-    }
-
     /// The churn gate: a selection move / filter flip patches the
     /// mount in place (no rebuild) and keeps the frames equal.
     #[test]
@@ -689,15 +584,12 @@ mod tests {
         let mut previous_mount = None;
         for selected in 0..4 {
             state.selected = selected;
-            let old = crate::components::subagent_picker::picker_panel_frame(
-                &state,
-                &list,
-                selected,
-                &theme(),
-                80,
-            );
             let solid = paint_solid_picker_panel(&state, &list, selected, &theme(), 80);
-            assert_eq!(old.cells, solid.cells, "selection {selected}");
+            assert_eq!(
+                solid.height,
+                crate::components::subagent_picker::PANEL_ROWS,
+                "rows at selection {selected}"
+            );
             let mount_count = usize::from(PICKER.with_borrow(Option::is_some));
             previous_mount = Some(mount_count);
         }

@@ -1,0 +1,194 @@
+# M-retire — the retirement lane log (deleting the legacy renderer paths)
+
+Worktree: /opt/opencode-rust/.worktrees/lane-retire (branch lane/retire, base = main b254c2b)
+Scope: delete old paths for M1-M6 surfaces (keep OC_ENGINE_OPENTUI one release),
+re-home transcript markdown onto opentui-core's MarkdownRenderable pipeline, dead-code sweep.
+
+## Flag inventory (from main)
+- RETIRE: OC_TABS_OPENTUI (M1), OC_DIALOGS_OPENTUI (M2), OC_COMPOSER_OPENTUI (M3),
+  OC_TRANSCRIPT_OPENTUI (M4), OC_SIDEBAR_OPENTUI + OC_HOME_OPENTUI (M5), OC_SUBAGENT_OPENTUI (M6)
+- KEEP (one release, M-engine plan): OC_ENGINE_OPENTUI (oc-tui-core lib.rs / text_edit_opentui.rs / keymap/*)
+
+## Rig script → surface mapping (spot-check corpus)
+- tabs: mouse-hover-tabstrip | dialogs: help-dialog | composer: composer-clear
+- transcript: long-reply-scroll | sidebar: sidebar-wide (pins 160x36) | home: boot-home
+- subagent: subagent-basic | markdown: type-edit-submit, multi-turn, thought-render
+
+## Phase log
+
+## BASELINE (pre-retirement HEAD = main b254c2b; FULL, cache OFF, --runs 2)
+Baselines live in /tmp/opencode/tui-diff/mretire-base-<script>/ (report.md + per-run sNN.our.txt grids).
+Baseline nextest: 2887 workspace (oc-tui 621, oc-tui-core 77, parity 84). Release: 66,727,072 B (== M-engine record).
+
+- mouse-hover-tabstrip: DONE. Mismatch unions dominated by known classes (stats-row digits, exit-session ids); 80x24+120x30 x r0,r1.
+- help-dialog: 80x24 r0 2mm/r1 5mm; 120x30 3/5 (mm2 submit/help-open backlog + coins, as M5 recorded)
+- composer-clear: 80x24 5mm/r1 0mm; 120x30 5/0 (placeholder coin flips run-to-run within flag — matches M3)
+- long-reply-scroll: 14mm all runs both sizes (known live-meter/stats class, flag-symmetric in M4)
+- sidebar-wide: 160x36 r0 14mm / r1 11mm (context-meter seam, both paths, M5)
+- boot-home: 3mm all runs (home placeholder coin, (b)-class)
+- subagent-basic: 80/120 r0 11mm r1 8mm (stats digits + session-id chars, M6)
+- type-edit-submit: 9/6, 6/9 (coin + stats)
+- multi-turn: 80 19/19; 120 16/16 (stats digits)
+- thought-render: 80 9/6; 120 9/9 (placeholder coin + stats)
+
+## PHASE 1 — M1 tabstrip retired
+- session.rs: flag dispatch -> direct paint_solid_bar (only renderer).
+- session_tabs.rs: deleted the old bar/rail renderer family (render_bar, render_rail, paint_bar, paint_rail,
+  fill_runs, rgb/color, glow_hue/glow_over, close_mark, bar_tab_fills, bar_tab_node, add_affordance,
+  rail_tab_block, rail_add_row, rail_pulse_fills, rail_separators, TabRender, old hover test) = 705+ LOC.
+  KEPT: adaptive_session_tab_layout solver + distribute/solve/fit_for, StripHit/strip_hit (app.rs mouse bridge), solver tests.
+- session_tabs_solid.rs: flag accessor + old_path_frame twin + 27-scenario parity matrix DELETED;
+  resize test rewritten as absolute self-check; module doc updated.
+- golden_tests.rs: horizontal goldens PROMOTED to the solid path via paint_solid_bar_sized (sized-frame wrapper
+  rebuilding the retired paint_bar's full-frame shape) — w80/w160 + full-fidelity all pass BYTE-IDENTICAL (no golden edits).
+  Vertical rail goldens DELETED (golden-only legacy shape, zero production reach since the horizontal strip).
+- pty_tabs.rs: flag helpers + =0 variant test deleted; solid cycle test kept.
+- frame_budget_tests.rs: comprehensive pass (all surfaces) — 8 old-path budget tests deleted, retired-flag env sets
+  stripped from the solid ones, label conditionals -> "solid", solid_path suffix dropped. ENGINE pair untouched (stays).
+- Coverage migration: 27-scenario parity matrix -> golden w80/w160 bytes (solid-pinned) + pty hover/add/close cycle
+  + rig mouse-hover-tabstrip. Vertical rail (4 golden pairs) -> NO successor (shape retired; noted).
+
+## PHASE 2 — M2 dialogs retired
+- dialog.rs: render_overlay_with -> unconditional render_overlay_solid; DELETED render_overlay_with_old +
+  the four old content builders (render_plugin_rows/render_rename_prompt/render_worktree_name_prompt/
+  render_help_content) + cell helpers (blank_row/crate_render_cell/to_cell_color/put_text/put_text_end).
+  KEPT: blend_backdrop (bridge-side, shared), spec_display (solid uses), DialogStyles/render_select (dialog_select solver).
+- dialog_solid.rs: flag accessor + whole parity tests mod (~30-scenario matrix x3 widths) DELETED (-484 LOC total).
+- pty_interactions.rs: =0 variants of help-dialog + palette-cycle deleted; solid paths kept.
+- Coverage migration: parity matrix -> dialog.rs's own store-driven geometry tests (now solid-pinned via
+  render_overlay) + pty palette/help cycles + rig help-dialog/palette/session-list-dialog.
+
+## PHASE 3 — M3 composer+footer (in progress)
+
+## PHASE 3 — M3 composer+footer retired
+- composer_solid.rs: flag accessor + dispatch -> always solid; parity matrix + Scenario scaffolding DELETED;
+  churn/reshape tests rewritten as absolute self-checks. Module docs updated.
+- composer/render.rs: DELETED render_prompt_frame + paint_composer_box + paint_hint + paint_footer_row +
+  paint_autocomplete_popup + paint_text + dead Palette fields (rail/default_fg). KEPT all shared solvers
+  (layout_draft_lines, mount_height, footer_plan, footer_location_extent, truncate_file_path/basename,
+  prompt_caret_screen_cell, caret_cell, palette, truncate_width). Internal behavior tests (cursor block,
+  rail color, metadata row) PROMOTED to render_prompt_frame_dispatch.
+- composer/mod.rs: render_prompt_frame dropped from re-export. golden_tests.rs: PROMOTED to dispatch (bytes identical).
+- pty_core_interactions.rs: escape-interrupt + leader-return =0 variants deleted (single tests now);
+  solid-only cycle tests dropped their env pins.
+
+## PHASE 4 — M4 transcript retired
+- session.rs: region dispatch -> always paint_transcript_region.
+- message/list.rs: Transcript::region_frame (the =0 fallback painter, 58 LOC) DELETED; Transcript::paint KEPT
+  (the session_screen golden harness's full-frame walk — test-only, not a flag path).
+- transcript_solid.rs: flag + parity matrix DELETED; churn/resize tests absolute.
+- pty_core_interactions.rs: scroll-keys =0 variant deleted.
+
+## PHASE 5 — M5 sidebar+home retired
+- sidebar_solid.rs: flag + else-branch (paint_placed_with_fills walk) + old_pane twin + parity gate DELETED;
+  churn/reshape absolute. KEPT render_sidebar (the ONE solver in sidebar.rs).
+- home.rs: paint_home_view_old (102 LOC) + dead logo painters (paint_logo/paint_logo_half/tint_channel/
+  base_rgb_as/cell, 79 LOC) DELETED; render_home_view -> always solid. KEPT plan_home/paste/LOGO_*.
+- home_solid.rs: flag + parity matrix DELETED; churn/reshape/wordmark tests absolute (wordmark test was
+  already chunk-level absolute).
+- pty_sidebar.rs: set_m5_path + both =0 variants deleted; overlay cycle env pin dropped.
+- Coverage migration: M5 parity matrices -> home_golden_tests (solid-pinned since M5) + pty cycles + rig.
+
+## PHASE 6 — M6 subagent picker + farewell retired
+- picker_solid.rs: flag + dispatch else + parity matrix DELETED; churn test absolute.
+- subagent_picker.rs: picker_panel_frame (the =0 painter, 153 LOC) DELETED; picker_panel_paint + walk fns KEPT
+  (the ONE solver); walk tests promoted to picker_panel_frame_dispatch.
+- farewell_solid.rs: dispatch -> always solid tree; the two string-builder oracle tests DELETED (old-vs-new
+  parity class). presentation.rs: session_epilogue + draw/wordmark builder DELETED; LOGO_*/truncate_utf16 KEPT;
+  the presentation.ts BYTE-SHAPE test PROMOTED to solid_session_epilogue (absolute coverage kept).
+- pty_subagent.rs: set_m6_path + =0 variant + env pins deleted.
+- store.rs/lib.rs/components docs updated (English).
+
+## Post-deletion state (after P1-P6)
+- oc-tui + oc-tui-core: 739 passed / 1 skipped (pre-retirement oc-tui 621 + oc-tui-core 77 = 698 in-list;
+  run-level totals compared at the final workspace pass).
+- Remaining OC_*_OPENTUI references: OC_ENGINE_OPENTUI ONLY (stays one release per M-engine plan).
+
+## PHASE 7 — markdown re-homed onto opentui-core's MarkdownRenderable pipeline
+- message/markdown.rs REWRITTEN (~470 LOC total vs 1030): parse_blocks/parse_inline (the hand-rolled marked
+  subset) + per-block renderers DELETED; the module now drives `build_markdown_blocks` (the settled block tree:
+  top-level coalescing, inter-block margins, list marker/column geometry, blockquote border, hr) with every
+  text-bearing spec rendered through `markdown_code_styled` (the markdown-text CodeRenderable path: conceal,
+  markup.* capture styling, detectLinks) — chunks convert to StyledSpan rows through the SAME wrap seam
+  (hard break per source line + word wrap; styled runs keep style across boundaries).
+- SyntaxStyle built from the SAME generated rules (oc-theme generate_syntax -> one map; oc-syntax gains iter()).
+- The fence seam is hybrid BY REGISTRATION SET: opentui parses markdown/ts/js/tsx/zig family; the R-01
+  oc-syntax grammars (rust/python/typescript/diff/...) stay on oc-syntax — rust/diff fence goldens PASS
+  BYTE-IDENTICAL to main. Unknown filetypes render the pipeline's plain path (fg=markdown.text, upstream shape).
+- Disposition: markdown was NOT already opentui-fed (M4 left it on the shared C1 walk) -> this lane SWAPPED it.
+  Evidence: markdown-frame goldens re-pinned; text-grid delta = ONE class (list items now conceal inline
+  markers - upstream renders item children through the markdown-text renderable); ansi delta = markers styled
+  markup.list (orange) + item text through the markdown tokens; everything else byte-identical (paragraphs,
+  wrap points, headings, inline marks, fences). ECMA attr bits fixed per ansi.ts (bold=1 dim=2 italic=4
+  underline=8 strikethrough=128).
+- message-groups goldens: byte-identical (no lists in fixture) — re-pin ran, git shows no change.
+- Internal test suite rewritten: 6 absolute tests pinning the pipeline (fixture layout, bold-crossing-wrap,
+  margins, inline conceal+style, blockquote border, hr).
+
+## PHASE 8 — dead-code sweep
+- cargo fmt --all clean; clippy --workspace --all-targets --locked -D warnings CLEAN (fixed: markdown binding
+  shadows, must_use candidates on now-public solvers [truncate_file_path, Transcript::paint], assigning_clones,
+  unbalanced doc backticks, dead test scaffolding [transcript Scenario/base_fill/assistant_markdown,
+  home Scenario name/placeholder], format-string cleanups in the budget eprintlns after the label constants).
+- Dep sweep: oc-tui's DIRECT opentui-keymap dep moved to dev-dependencies (the smoke test is its only consumer;
+  oc-tui-core owns the real engine dep). No other unused deps.
+
+## PHASE 9 — rig spot-checks (FULL, cache OFF, both sizes x 2 runs) — post-retirement vs main baseline
+Method: same script/size/run/step OUR-side grids diffed byte-for-byte against the pre-retirement baseline
+(mretire-base-* vs mretire-post-*; post2 = after the markdown memo, byte-identical to post modulo coins).
+| script | surface | our-grid deltas vs main | class of every delta |
+|---|---|---|---|
+| mouse-hover-tabstrip | M1 tabs | 9/51 steps fully identical; deltas ONLY rows 8/13/16 | stats ms/tok-s digits + home-placeholder coin |
+| help-dialog | M2 dialogs | 14/17 identical; deltas row 16 only | placeholder coin |
+| composer-clear | M3 composer | 5/10 identical; deltas row 16 only | placeholder coin |
+| long-reply-scroll | M4 transcript | 22/50 identical; rows 6/11/13/15/16/21 | Thought Nms + stats digits + placeholder coin + ONE transient mid-stream fragment ("fixture.." at one step of one run; settles identical) |
+| sidebar-wide | M5 sidebar | 2/25 identical; rows 8/19 | stats + placeholder |
+| boot-home | M5 home | 6/9 identical; row 16 | placeholder (one post run even matched the ref's pick: 3/3 identical steps) |
+| subagent-basic | M6 picker/farewell | 7/36 identical; rows 6/10/13/16 | farewell session-id chars + stats + placeholder |
+| type-edit-submit | markdown | 11/30 identical; rows 8/13/16 | stats + placeholder (swap invisible: prose reply) |
+| multi-turn | markdown | 14/74 identical; rows 5/6/7/8/13/15/16/21 | stats + farewell ids + placeholder |
+| thought-render | markdown | 6/24 identical; rows 6/10/13/16 | Thought Nms + stats + placeholder |
+VERDICT: retirement is pure deletion on every migrated surface — every non-coin cell byte-identical to main.
+Markdown swap: no corpus script carries list-bearing replies, so the swap's visible class (list concealment +
+markup.list marker styling) shows only in the re-pinned goldens; NO rig script regressed (thought-render 120x30
+mismatch count even dropped 9->6).
+
+## PHASE 10 — phased verify-lane final (each phase run individually)
+- fmt --all --check: GREEN.
+- clippy --workspace --all-targets --locked -D warnings: GREEN.
+- workspace nextest: 2856/2856 GREEN (13 skipped; 1 load-flake on m1_scenario_prompt_fake_llm passes 3/3 standalone).
+- pty profile (serialized): 2856/2856 GREEN.
+- release build + frame_budget gate: 11/11 GREEN (800-message transcript worst 24 ms after the markdown memo;
+  was 60 ms uncached — the memo is content+options+syntax keyed, bounded 512, overflow clears).
+- The full 26-script rig matrix was NOT run (out of lane scope); the 10-script FULL cache-off spot matrix above
+  is the retirement evidence.
+NOTE: verify-lane's rig phase pins --runs 2 --no-ref-cache — every spot run here used exactly that.
+
+## Binary size delta (release, oc-cli)
+- main baseline:            66,727,072 B
+- retirements only (2f02d84, pre-markdown): 66,320,000 B  (-407,072 B / -0.61% — the deletion dividend)
+- + markdown re-home (HEAD): 68,144,160 B  (net +1,417,088 B / +2.12% vs main)
+Decomposition: the deletions SHRANK the binary as expected; the mandated markdown re-home links opentui-core's
+tree_sitter module into the release graph for the first time (vendored markdown/markdown_inline/js/ts/zig C
+grammars + the marked lexer + the code pipeline = +1.82 MiB), more than offsetting the deletion dividend.
+
+## Test counts (workspace nextest list: 2887 -> 2856, net -31)
+- oc-tui 621 -> 599 (-22): deleted old-path pty variants (12) + parity matrices/twins (~10, incl. farewell
+  oracles) minus added absolute self-checks; budget old_path pairs -8 (+ renamed solid ones).
+- pty_core_interactions 12->9, pty_interactions 5->3, pty_sidebar 5->3, pty_subagent 6->5, pty_tabs 3->2.
+- oc-tui-core 77 (engine pair untouched), oc-syntax 31 (+0; iter() accessor).
+
+## Coverage migration table (deleted parity test -> surviving coverage)
+- M1 27-scenario strip matrix -> session-tabs-horizontal goldens w80/w160 (solid-pinned, byte-identical)
+  + resize/churn self-checks + pty hover/add/close cycle + rig mouse-hover-tabstrip.
+- M1 vertical-rail goldens (4 pairs) -> NO successor (golden-only legacy shape, zero production reach; retired with the rail).
+- M2 ~30-scenario dialog matrix -> dialog.rs store-driven geometry tests (solid via render_overlay) + pty
+  palette/help cycles + rig help-dialog/palette/session-list-dialog.
+- M3 composer matrix -> composer goldens (promoted to dispatch, byte-identical) + render.rs behavior tests
+  (cursor block/rail color/metadata row, promoted) + pty interrupt/queue/cycle + rig composer-clear/type-edit-submit.
+- M4 transcript matrix -> pty scroll-keys + thought-expand cycle + rig long-reply-scroll/thought-render +
+  message-groups goldens (unchanged bytes).
+- M5 sidebar/home matrices -> home_golden_tests (solid since M5) + pty toggles/plugin/overlay + rig sidebar-wide/boot-home.
+- M6 picker matrix -> picker walk tests (dispatch) + pty keymap cycle + surfaces walk + rig subagent trio.
+- M6 farewell builder-oracle tests -> presentation byte-shape test PROMOTED to solid_session_epilogue
+  (absolute) + pty farewell step + rig subagent exit steps.
