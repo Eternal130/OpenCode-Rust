@@ -1,0 +1,122 @@
+# Lane M6 rig A/B — the subagent surfaces (picker + farewell)
+
+The accelerated protocol (lane/accel): iterate `--quick` (1 run,
+80x24 — the sidebar script keeps its 160x36 override) with the
+ref-capture cache ON; the cache only replays cross-run-CONFIRMED
+steps (the stability warmer ran `--measure-stability 5 --filter
+subagent` first: 0/4 scripts fully cacheable — spinner/blink/exit
+classes flip run-to-run — so every verdict below is effectively
+LIVE on the ref side; the `ref` column shows `cache(part)` because
+the handful of confirmed steps inside each script do replay).
+
+## The stale-binary trap (found the hard way)
+
+The rig's `build_binary` reuses ANY existing `target/debug/
+opencode-rust` — three A/B rounds ran a pre-fix binary while the
+source had moved (the mismatch set looked "unfixable"). Counter-
+measure baked into this lane's loop: `rm -f target/debug/
+opencode-rust` before EVERY rig invocation. This is the same
+"rig 陈旧二进制坑" the lane/C merge battles recorded (ROADMAP).
+
+## A/B record (our side: OC_SUBAGENT_OPENTUI, ref: live bun)
+
+| script          | size   | flag=0 mismatch union                                | flag=1 mismatch union                                | verdict |
+| --------------- | ------ | ---------------------------------------------------- | ---------------------------------------------------- | ------- |
+| subagent-basic  | 80x24  | 8 or 11 steps (run 1/2)                              | 11 steps (runs 1+2)                                  | identical modulo the (b)-coin |
+| subagent-browser| 80x24  | 15 steps                                             | 15 steps                                             | IDENTICAL |
+| subagent-sidebar| 160x36 | 16 steps                                             | 16 steps                                             | IDENTICAL |
+
+The basic/browser/sidebar mismatch unions decompose EXCLUSIVELY
+into the documented backlog classes — verified against the per-step
+dumps (`/tmp/opencode/tui-diff/<tag>/sNN.{ref,our}.txt`):
+
+* `(b)-class per-run values` — the reply stats row
+  (`Build · Fake Model · Nms · X.X tok/s`), the thought duration
+  (`+ Thought · Nms`), and the exit step's session-id characters
+  (`opencode -s ses_…`, text-only) — flip within the SAME flag
+  run-to-run;
+* `(b)-class home-placeholder coin` — `boot`/`dismiss`/
+  `variant-dismiss` on subagent-basic: absent in flag=0 run 1,
+  present in flag=0 run 2 AND both flag=1 runs (the coin proof
+  pair at the end of the lane ran 0/1 back-to-back: BOTH produced
+  the identical 11-step union);
+* the pre-existing `models-*` dialog backlog (mm2 class, both
+  paths, documented since lane/diff-rt);
+* the ref-side LIVE sidebar context meter (subagent-sidebar, the
+  `SidebarSections.context` seam — pre-existing on both paths).
+
+The PICKER/CARD/CHILD/FAREWELL cells themselves are byte-identical
+with the ref on both paths: after this lane's geometry fixes the
+per-step mismatch counts on the picker steps dropped to exactly the
+stats-row cell deltas (e.g. picker-open: 57 cells, ALL inside
+`row 10: Build · Fake Model · …`), and child-view's remaining
+deltas live inside the `+ Thought · Nms` row.
+
+## Lane geometry fixes this A/B drove (the =0 fallback path too)
+
+1. `picker mount budget`: the panel's height BUDGET must be
+   PANEL_ROWS (11), not PICKER_MOUNT_ROWS (12) — the mount's 12th
+   row is the pad BELOW the panel; the ref's transcript viewport
+   runs one row longer than the prompt mount's arithmetic
+   (session.rs).
+2. `user-block rail`: the user message's rail keys on the SESSION's
+   agent (`local.agent.color(session.agent)`, index.tsx:2200) —
+   `TranscriptOptions::user_rail` + `Store::session_agent_rail_color`
+   (the child view's `general` hue; fixtures keep the first hue).
+3. `up-at-top closes even on an empty list` (subagents-tab.tsx:
+   145-151 precedes the move guard) — `picker_move`'s `down` guard
+   stays.
+
+## Closing
+
+`verify-lane.sh final` (full matrix, both sizes x --runs 2, cache
+OFF, live verdicts) — see the lane's closing report in
+`docs/migration-m1-tabstrip.md` (the M6 section).
+
+## The closing full matrix (verify-lane final, chunked: live, cache off, default=solid)
+
+The final gate ran as foreground chunks (the M3 durability rule) —
+its non-rig stages from the original invocation (`verify-final.log`:
+fmt --all --check, clippy `-- -D warnings` (after fixing the
+script's missing `--`), full-workspace nextest 2850/2850, the
+serialized pty profile 2850/2850, the release budget gate 15/15),
+the rig matrix completed per-script (`final-a..f2.log`; a session
+glitch killed the monolithic run mid-corpus — the chunked reruns
+cover every (script, size, run) live):
+
+| script                    | size   | runs | mismatch per run            | notes |
+| ------------------------- | ------ | ---- | --------------------------- | ----- |
+| boot-home                 | both   | 2+2  | 0/3, 3/3                    | (b)-coin |
+| click-coverage-home       | 80x24  | 2    | 4/4                         | standing coverage backlog |
+| click-coverage-session    | 80x24  | 2    | 12/12                       | standing coverage backlog |
+| click-coverage-dialog     | 80x24  | 2    | 7/3                         | standing coverage backlog |
+| composer-clear            | both   | 2+2  | 0/0, 5/0                    | (b)-coin |
+| help-dialog               | both   | 2+2  | 5/5/5/5                     | the deterministic mm2 backlog |
+| hover-sweep               | both   | 2+2  | 11/15, 15/15                | (b)-coin |
+| long-reply-scroll         | both   | 2+2  | 11/14, 14/11                | (b)-coin |
+| mouse-hover-tabstrip      | both   | 2+2  | 12/15, 12/15                | (b)-coin |
+| multi-session             | both   | 2+2  | 23/23, 20/20                | standing |
+| multi-turn                | both   | 2+2  | 16/19, 19/19                | (b) stats + coin |
+| palette                   | both   | 2+2  | 6/6, 2/2                    | mm2 backlog |
+| rename-dialog             | both   | 2+2  | 10/13, 13/13                | (b)-coin |
+| resize                    | both   | 2+2  | 0/0, 6/6                    | (b)-coin |
+| session-list-dialog       | both   | 2+2  | 12/12, 9/12                 | (b)-coin |
+| sidebar-wide              | 160x36 | 2    | 14/14                       | ref LIVE context meter |
+| subagent-basic            | both   | 2+2  | 11/11/11/11                 | (b)+mm2 classes only |
+| subagent-browser          | 80x24  | 2    | 18/18                       | ditto |
+| subagent-sidebar          | 160x36 | 2    | 16/13                       | ref LIVE context meter |
+| tabs-keyboard             | both   | 2+2  | 0/8, 8/8                    | (b)-coin |
+| tabs-live-session         | both   | 2+2  | 22/19, 22/22                | standing |
+| themes-nord               | both   | 2+2  | 2/7, 2/7                    | (b)-coin |
+| thought-render            | both   | 2+2  | 6/9, 6/9                    | (b)-coin |
+| thought-expand            | both   | 2+2  | 12/12, 12/9                 | (b)-coin |
+| thought-expand-structural | both   | 2+2  | 15/12, 15/12                | (b)-coin |
+| type-edit-submit          | both   | 2+2  | 9/9, 9/9                    | standing |
+
+Every union decomposes into the documented backlog classes
+(REPORT.md): the (b)-class per-run values (stats durations, the
+home-placeholder coin), the mm2 dialog style backlog, the ref-side
+LIVE sidebar context meter, and the coverage/tabs-live standing
+findings. No M6-introduced divergence; the subagent surfaces'
+picker/card/child/farewell cells are byte-identical with the ref on
+both paths.

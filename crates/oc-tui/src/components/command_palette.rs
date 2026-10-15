@@ -813,6 +813,47 @@ impl CommandDispatcher for StoreDispatcher {
                 store.toggle_sidebar();
                 Dispatch::Handled
             }
+            // `session.child.first` (config/keybind.ts:136,
+            // index.tsx:1255-1263): toggle the composer's subagent
+            // picker (#44).
+            "session.child.first" => {
+                store.toggle_picker();
+                Dispatch::Handled
+            }
+            // The composer panel's keybind family (composer mode —
+            // pushed while the picker is open; #44).
+            "composer.close" => {
+                store.picker_close();
+                Dispatch::Handled
+            }
+            "composer.tab.prev" => {
+                store.picker_switch_tab(false);
+                Dispatch::Handled
+            }
+            "composer.tab.next" => {
+                store.picker_switch_tab(true);
+                Dispatch::Handled
+            }
+            "composer.subagent.up" => {
+                store.picker_move(false);
+                Dispatch::Handled
+            }
+            "composer.subagent.down" => {
+                store.picker_move(true);
+                Dispatch::Handled
+            }
+            "composer.subagent.select" => {
+                store.picker_navigate();
+                Dispatch::Handled
+            }
+            "composer.subagent.toggle-activity" => {
+                store.picker_toggle_filter();
+                Dispatch::Handled
+            }
+            "composer.subagent.interrupt" => {
+                store.picker_interrupt();
+                Dispatch::Handled
+            }
             "session.tab.next" | "session.tab.previous" => {
                 let direction = if command == "session.tab.next" { 1 } else { -1 };
                 let _ = store.cycle_tab(direction, false);
@@ -1486,6 +1527,7 @@ mod tests {
                             id: "t1".into(),
                             name: "read".into(),
                             time: PartTime::default(),
+                            state: crate::components::message::model::ToolState::default(),
                         },
                         crate::components::message::model::Part::Text {
                             text: "first ".into(),

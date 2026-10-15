@@ -88,7 +88,69 @@ pub enum Part {
         id: String,
         name: String,
         time: PartTime,
+        /// The tool part's live state (`part.state` on the wire —
+        /// `{status, input, metadata}` per the v2 client reducers,
+        /// data.ts:919-980). Drives the subagent card's running/
+        /// completed shape (#40).
+        state: ToolState,
     },
+}
+
+/// A tool part's state (the `SessionMessageAssistantTool.state`
+/// union's display-relevant projection): status + the stringified
+/// input/metadata maps the cards read (`stringValue` semantics —
+/// non-string JSON coerces, `null` drops).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ToolState {
+    pub status: ToolStatus,
+    /// `state.input` (parsed args; empty while streaming).
+    pub input: std::collections::BTreeMap<String, String>,
+    /// `state.metadata` (the subagent tool's progress payload carries
+    /// the child `sessionID`).
+    pub metadata: std::collections::BTreeMap<String, String>,
+}
+
+/// The tool part status (`state.status`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToolStatus {
+    /// `streaming` — args still arriving.
+    #[default]
+    Streaming,
+    /// `running` — executing.
+    Running,
+    /// `completed`.
+    Completed,
+    /// `error`.
+    Error,
+}
+
+impl ToolStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Streaming => "streaming",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Error => "error",
+        }
+    }
+
+    /// Parse the wire discriminator.
+    #[must_use]
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "running" => Self::Running,
+            "completed" => Self::Completed,
+            "error" => Self::Error,
+            _ => Self::Streaming,
+        }
+    }
+
+    /// The part is settled (`completed`/`error`).
+    #[must_use]
+    pub const fn settled(self) -> bool {
+        matches!(self, Self::Completed | Self::Error)
+    }
 }
 
 impl Part {
@@ -760,6 +822,7 @@ mod tests {
                         id: "grp-tool-read".into(),
                         name: "read".into(),
                         time: PartTime { created: Some(1), completed: Some(1) },
+                        state: ToolState::default(),
                     },
                     Part::Text {
                         text: "It reads the configuration and produces a build plan.".into(),
@@ -838,11 +901,13 @@ mod tests {
                         id: "t1".into(),
                         name: "grep".into(),
                         time: PartTime { created: Some(1), completed: None },
+                        state: ToolState::default(),
                     },
                     Part::Tool {
                         id: "t2".into(),
                         name: "read".into(),
                         time: PartTime { created: Some(2), completed: None },
+                        state: ToolState::default(),
                     },
                 ],
                 finish: None,
