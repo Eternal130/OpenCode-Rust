@@ -29,7 +29,7 @@
 //!
 //! ## Deviations from the legacy engine (upstream-faithful, logged)
 //!
-//! * Visual-line motions follow the WRAP model (EditorView vlines at
+//! * Visual-line motions follow the WRAP model (`EditorView` vlines at
 //!   the composer's inner width) — legacy aliased logical lines.
 //! * Word boundaries are the buffer's script-transition rules
 //!   (`getNextWordBoundary`, edit-buffer.zig:821-946) — legacy used
@@ -186,10 +186,10 @@ impl TextAreaOpentui {
                 let mut chars_seen = 0usize;
                 let mut width = 0u32;
                 for cluster in &line.clusters {
-                    let cluster_chars =
-                        line.text[cluster.byte_start as usize..cluster.byte_end() as usize]
-                            .chars()
-                            .count();
+                    let cluster_chars = line.text
+                        [cluster.byte_start as usize..cluster.byte_end() as usize]
+                        .chars()
+                        .count();
                     if chars_seen >= remaining {
                         break;
                     }
@@ -197,7 +197,8 @@ impl TextAreaOpentui {
                     width += cluster.width;
                 }
                 let _ = row;
-                return self.buffer.get_line_start_offset(row as u32) + width;
+                let row = u32::try_from(row).unwrap_or_default();
+                return self.buffer.get_line_start_offset(row) + width;
             }
             remaining -= line_chars + 1; // + the line break
         }
@@ -222,9 +223,8 @@ impl TextAreaOpentui {
                 break;
             }
             width += cluster.width;
-            chars += line.text[cluster.byte_start as usize..cluster.byte_end() as usize]
-                .chars()
-                .count();
+            chars +=
+                line.text[cluster.byte_start as usize..cluster.byte_end() as usize].chars().count();
         }
         chars
     }
@@ -246,9 +246,8 @@ impl TextAreaOpentui {
         let before_anchor = self.anchor;
         run(self);
         let after = self.buffer.get_text();
-        let observable = before != after
-            || self.caret() != before_caret
-            || self.anchor != before_anchor;
+        let observable =
+            before != after || self.caret() != before_caret || self.anchor != before_anchor;
         if !observable && !history_pop {
             return EditOutcome::Rejected;
         }
@@ -281,9 +280,9 @@ impl TextAreaOpentui {
     }
 
     /// The select-motion wrapper: keep/arms the anchor, run the move,
-    /// the focus lands on the new caret (`updateSelectionForMovement`
-    /// + the local selection delivery — the observable anchor/focus
-    /// model).
+    /// then the focus lands on the new caret — the observable
+    /// anchor/focus model of `updateSelectionForMovement` plus the
+    /// local selection delivery.
     fn select_motion(&mut self, run: impl FnOnce(&mut Self)) {
         let caret = self.caret();
         if self.anchor.is_none() {
@@ -375,6 +374,8 @@ impl TextAreaOpentui {
         self.tracked(kind, history_pop, |area| area.apply(command))
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per v2 `input.*` command (the EditBufferRenderable port)
+    #[allow(clippy::match_same_arms)] // faithful per-arm ports
     fn apply(&mut self, command: EditCommand) {
         match command {
             EditCommand::MoveLeft => {
@@ -588,9 +589,7 @@ impl TextAreaOpentui {
         if start >= end {
             return EditOutcome::Rejected;
         }
-        self.tracked(SnapshotKind::Pushed, false, |area| {
-            area.delete_char_range(start..end)
-        })
+        self.tracked(SnapshotKind::Pushed, false, |area| area.delete_char_range(start..end))
     }
 
     /// Offset of the next word start after `from` (char units — the
@@ -739,7 +738,7 @@ impl EditCore {
     /// naturally inert).
     pub fn mirror_text(&mut self, text: &str) {
         match self {
-            Self::Legacy(area) => area.text = text.to_owned(),
+            Self::Legacy(area) => area.text.clone_from(&text.to_owned()),
             Self::Opentui(area) => {
                 if area.text() != text {
                     area.set_text(text);
@@ -844,7 +843,9 @@ mod tests {
     }
 
     /// The observable triple both engines expose.
-    fn observe(area: &TextAreaOpentui) -> (String, usize, Option<Range<usize>>) {
+    type Observed = (String, usize, Option<Range<usize>>);
+
+    fn observe(area: &TextAreaOpentui) -> Observed {
         (area.text(), area.caret(), area.selection())
     }
 
@@ -857,7 +858,7 @@ mod tests {
         legacy: &mut TextArea,
         opentui: &mut TextAreaOpentui,
         command: Cmd,
-    ) -> ((String, usize, Option<Range<usize>>), (String, usize, Option<Range<usize>>)) {
+    ) -> (Observed, Observed) {
         let _ = legacy.apply(command);
         let _ = opentui.apply_tracked(command);
         (observe_legacy(legacy), observe(opentui))
@@ -868,7 +869,7 @@ mod tests {
         legacy: &mut TextArea,
         opentui: &mut TextAreaOpentui,
         text: &str,
-    ) -> ((String, usize, Option<Range<usize>>), (String, usize, Option<Range<usize>>)) {
+    ) -> (Observed, Observed) {
         let _ = legacy.insert(text);
         let _ = opentui.insert(text);
         (observe_legacy(legacy), observe(opentui))
@@ -970,7 +971,7 @@ mod tests {
     /// buffer's `getNextWordBoundary` (script-transition rules,
     /// edit-buffer.zig:821-946) vs the legacy run-class rule — the
     /// punctuation/whitespace stops differ; the opentui engine is
-    /// v2's behavior (the editor_tests suite pins it there).
+    /// v2's behavior (the `editor_tests` suite pins it there).
     #[test]
     fn delta_word_boundaries_follow_upstream() {
         let mut left = legacy("fn foo()");
@@ -1027,7 +1028,7 @@ mod tests {
 
     /// **Engine delta (upstream-faithful): visual motions follow the
     /// wrap model.** With a narrow viewport, up/down cross WRAPPED
-    /// rows (EditorView vlines) — the legacy engine aliased logical
+    /// rows (`EditorView` vlines) — the legacy engine aliased logical
     /// lines.
     #[test]
     fn delta_visual_motions_follow_wrap() {
@@ -1099,7 +1100,11 @@ mod tests {
         let _ = left.apply(Cmd::MoveLeft);
         let _ = right.apply_tracked(Cmd::MoveLeft);
         assert_eq!((left.caret, left.selection()), (10, None), "legacy: cleared AND moved");
-        assert_eq!((right.caret(), right.selection()), (0, None), "upstream: collapsed to the edge");
+        assert_eq!(
+            (right.caret(), right.selection()),
+            (0, None),
+            "upstream: collapsed to the edge"
+        );
     }
 
     #[test]

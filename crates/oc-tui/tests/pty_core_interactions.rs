@@ -1024,8 +1024,7 @@ fn pty_engine_cycle_body() {
         std::thread::sleep(Duration::from_millis(150));
         let _ = writer.write_all(b"\x1b");
         std::thread::sleep(Duration::from_millis(250));
-        let cleared =
-            strip_ansi(&screen_after_toggle(&writer, &probe(), len(&probe()), &mut rows));
+        let cleared = strip_ansi(&screen_after_toggle(&writer, &probe(), len(&probe()), &mut rows));
         assert!(
             cleared.contains("engine draft"),
             "escape cleared the pending sequence, the draft intact: {cleared:?}"
