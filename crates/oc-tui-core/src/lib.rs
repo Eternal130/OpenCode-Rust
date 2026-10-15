@@ -26,3 +26,58 @@
 pub mod keymap;
 pub mod scroll;
 pub mod text_edit;
+pub mod text_edit_opentui;
+
+/// Lane M-engine's subsystem flag (`OC_ENGINE_OPENTUI`): selects the
+/// opentui-rust ports for BOTH the keymap engine (opentui-keymap
+/// dispatch, dissolving the K-1..K-9 deltas) and the composer editing
+/// engine (opentui-core's EditBuffer/EditorView textarea line). The
+/// hand-rolled oc-tui-core implementations stay compiled as the `=0`
+/// fallback for one release.
+///
+/// The M-lane OnceLock pattern: read once at first use ("at boot") —
+/// a running session never switches engines mid-flight. Opt-IN while
+/// the lane is unproven (`1`/`true`/`on`); flips default ON after the
+/// rig proof, mirroring OC_TABS/OC_DIALOGS/OC_COMPOSER.
+#[must_use]
+pub fn opentui_engine_enabled() -> bool {
+    cfg_if_test_override().unwrap_or_else(|| {
+        static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *FLAG.get_or_init(|| {
+            std::env::var("OC_ENGINE_OPENTUI")
+                .is_ok_and(|value| !(value == "0" || value == "false" || value == "off"))
+        })
+    })
+}
+
+/// The in-process override for the engine-path parity tests: the flag
+/// latches once per process, so libtest's shared process cannot A/B
+/// through the env — the override wins until cleared. `None` in
+/// non-test builds.
+#[cfg(test)]
+static TEST_ENGINE_OVERRIDE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+#[cfg(test)]
+fn cfg_if_test_override() -> Option<bool> {
+    match TEST_ENGINE_OVERRIDE.load(std::sync::atomic::Ordering::SeqCst) {
+        1 => Some(false),
+        2 => Some(true),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+#[doc(hidden)]
+pub fn __set_test_engine_override(enabled: Option<bool>) {
+    let value = match enabled {
+        Some(false) => 1,
+        Some(true) => 2,
+        None => 0,
+    };
+    TEST_ENGINE_OVERRIDE.store(value, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(not(test))]
+const fn cfg_if_test_override() -> Option<bool> {
+    None
+}
