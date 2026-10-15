@@ -88,3 +88,18 @@ Baseline nextest: 2887 workspace (oc-tui 621, oc-tui-core 77, parity 84). Releas
   already chunk-level absolute).
 - pty_sidebar.rs: set_m5_path + both =0 variants deleted; overlay cycle env pin dropped.
 - Coverage migration: M5 parity matrices -> home_golden_tests (solid-pinned since M5) + pty cycles + rig.
+
+## PHASE 6 — M6 subagent picker + farewell retired
+- picker_solid.rs: flag + dispatch else + parity matrix DELETED; churn test absolute.
+- subagent_picker.rs: picker_panel_frame (the =0 painter, 153 LOC) DELETED; picker_panel_paint + walk fns KEPT
+  (the ONE solver); walk tests promoted to picker_panel_frame_dispatch.
+- farewell_solid.rs: dispatch -> always solid tree; the two string-builder oracle tests DELETED (old-vs-new
+  parity class). presentation.rs: session_epilogue + draw/wordmark builder DELETED; LOGO_*/truncate_utf16 KEPT;
+  the presentation.ts BYTE-SHAPE test PROMOTED to solid_session_epilogue (absolute coverage kept).
+- pty_subagent.rs: set_m6_path + =0 variant + env pins deleted.
+- store.rs/lib.rs/components docs updated (English).
+
+## Post-deletion state (after P1-P6)
+- oc-tui + oc-tui-core: 739 passed / 1 skipped (pre-retirement oc-tui 621 + oc-tui-core 77 = 698 in-list;
+  run-level totals compared at the final workspace pass).
+- Remaining OC_*_OPENTUI references: OC_ENGINE_OPENTUI ONLY (stays one release per M-engine plan).
