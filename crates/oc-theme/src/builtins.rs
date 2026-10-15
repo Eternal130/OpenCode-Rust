@@ -86,12 +86,19 @@ mod tests {
 /// failing here means the embedded table drifted from the reference
 /// SOURCE VALUES; regenerate only deliberately alongside a ref
 /// upgrade (lane M-theme's table-parity gate).
+#[cfg(test)]
 const REF_ASSET_DIGESTS: &[(&str, &str)] = &[
     ("v1/aura.json", "3877fc874509286f934bc99d053ed158279623fae8747f61e588a342fc1ffa59"),
     ("v1/ayu.json", "c6f22767ad334e1b1b071fb4027a707b869a36a13627dee28961b49ef7a379df"),
     ("v1/carbonfox.json", "e75eca27f53a2274f82fc6767883d8b67988e9788da26dc408f67f562df4d55c"),
-    ("v1/catppuccin-frappe.json", "f05740e3f637840caec38ed77368ee20e24d8c8e191c08f5c56eb04a627b58d8"),
-    ("v1/catppuccin-macchiato.json", "1f8ed24b6d5ce9ebee68f5af0bc0c3e62e0347f36958c3364703816802c1ecee"),
+    (
+        "v1/catppuccin-frappe.json",
+        "f05740e3f637840caec38ed77368ee20e24d8c8e191c08f5c56eb04a627b58d8",
+    ),
+    (
+        "v1/catppuccin-macchiato.json",
+        "1f8ed24b6d5ce9ebee68f5af0bc0c3e62e0347f36958c3364703816802c1ecee",
+    ),
     ("v1/catppuccin.json", "28c0a4c96604b480e7e041699f8fdd7e8a586c82a8fd903d674ed08ad44b39db"),
     ("v1/cobalt2.json", "08f33731f2d3434e874d8c431d6410bb8ebcc6c642dc890d0a0d3b21b5b1c607"),
     ("v1/cursor.json", "ba025a1cb28d1b510b5855a1bc8c14a03e09ddd849fade8d30477752c3b46441"),
