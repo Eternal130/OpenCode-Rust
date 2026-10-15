@@ -764,3 +764,100 @@ the TREE, not the roadmap — `git log --all -S "<symbol>"` first.
   (`docs/m6-rig-ab.log`). Two script fixes landed with it: the
   clippy line's missing `--` before `-D warnings`, and the release
   budget line's bogus `--run-ignored only` (0 tests matched).
+
+---
+
+# Lane M-theme — the theme system: a DATA+chain port, not a surface
+
+> Status: **done** (lane/theme). v2's theme system — the builtin
+> table, the registry's `system` slot, and the themes dialog's
+> LIVE-PREVIEW apply path — ported onto the solid stack. No new solid
+> tree: the palette already flows into every mount key (M2 colors /
+> M5 whole-plan), so a palette switch repaints everything through the
+> EXISTING reconciler rebuilds. The final sweep's largest (a)-class
+> residual — themes-nord's step-4 FULL-GRID divergence (1920 cells) —
+> dissolved here.
+
+## What the "nord debt" actually was (the table was already parity)
+
+`crates/oc-theme/assets/` is byte-identical to the ref's
+`packages/tui/src/theme/assets/` — all 33 v1 assets + the v2 default
+(sha256-verified by a GENERATED digest test,
+`builtins.rs::embedded_assets_match_the_reference_source_bytes`). The
+nord divergence was NEVER the values; it was the APPLY PATH:
+
+* **`dialog-theme-list.tsx` is a live-preview dialog.** `onMove` and
+  `onFilter` call `themes.set()` IMMEDIATELY (typing "nord" previews
+  nord across the whole app — that is the full-grid restyle the rig
+  saw at step 4); an empty filter resets to the captured initial; a
+  close without submit REVERTS (`onCleanup`); a submit confirms.
+  Ported as `DialogEntry.theme_initial` + `preview_theme_move` /
+  `preview_theme_filter` + the revert-on-close sweep + the submit's
+  confirm-before-clear.
+* **`current` is the MOUNT-TIME capture, not the live theme.** The `●`
+  marker and the filter-clear re-focus key on the entry's captured
+  initial — under `filter: "nord"` the initial (`opencode`) is
+  filtered out and the marker disappears. A live-theme `current`
+  re-marks the previewed theme (the rig caught exactly this).
+* **The registry always exposes a `system` slot**
+  (`listThemes`'s final spread: `systemTheme ?? themes.system ??
+  themes.opencode`). Headless (no cached palette, no OSC probe) it
+  resolves to the opencode document — 34 dialog entries, `system`
+  sorted between synthwave84 and tokyonight. The generated-from-
+  palette `systemTheme` (OSC 11 → `generateSystem`) is the registered
+  seam for a later system-theme lane.
+* **The open window CENTERS on the current option** (the mount
+  effect's `scrollAfterLayout(true)`), in the REAL viewport
+  (`min(rows, H/2-6)`) — not an edge-reveal at a hardcoded height.
+  Clearing a filter to empty re-focuses + re-centers `current` (the
+  filter effect's empty branch).
+
+## Rig verdicts (docs/mtheme-rig-ab.log has the full record)
+
+* themes-nord FULL (both sizes × 2 runs, cache OFF): step 4's
+  1920-cell full-grid collapse → 5 style-only cells at 80x24 (29 at
+  120x30 incl. the coin text), ALL in the two PRE-EXISTING families
+  (below); the run pattern (6/2, 1/7, 1/7, 6/2) matches the final
+  sweep's own coin distribution exactly.
+* Every other script ran FULL-LIVE (the dialog/touched set) or
+  --quick (the rest): same-or-better mismatch distributions vs the
+  final sweep everywhere; NO new divergence class.
+
+## The two pre-existing style families this lane DID NOT create
+
+1. **backdrop-fg**: ref paints fg=idx15 (default white) on
+   dialog-covered cells; ours keeps the underlying chunk fg. Same
+   signatures in the final sweep on the DEFAULT theme
+   (click-coverage-dialog#3/#4, palette#2).
+2. **input-caret cell**: after typing, our dialog search paints the
+   caret cell with the focused-formfield pair; ref paints it plain
+   (the terminal cursor is the caret). Same family at
+   hover-sweep#4 (default theme).
+
+Both need bridge/seam work in the dialog surface, not theme values.
+
+## The idx216↔233 family: NOT theme debt (measured)
+
+click-coverage-session/hover-sweep's `ref[bg=idx216] our[bg=idx233]`
+models-dialog rows: idx216 IS `background.action.primary.focused`
+(the tan) — BOTH stacks paint that exact token. The ref surface is
+the mini footer panel (`mini/footer.command.tsx` "Select model",
+`RunFooterTheme.actionFocusedBg`); ours is the main ServerList dialog
+("Switch model"). The family dissolves with the MINI-FOOTER surface
+port (its own lane), not with any theme-table change.
+
+## Instruments (this lane's record)
+
+* **Unit**: the generated ref-asset digest gate (34 sha256s); 3
+  store-level apply-path tests (preview/revert/confirm, submit-keeps,
+  the style signal reaches `render_app`); registry 34 with the system
+  slot resolving headless-identical to opencode. oc-theme 25/25,
+  oc-tui 687/687, workspace 2856/2856, pty profile 2856/2856.
+* **Budget** (release, 200×50, theme dialog open, palette flipped
+  EVERY frame — the worst-case preview churn): old 2728/2153 µs,
+  solid 5043/3665 µs worst/avg (~1.85×, ~5 ms absolute) vs the 40 ms
+  gate. All 17 release budget tests green.
+* **Operational**: the click-coverage scripts PIN their size in the
+  script JSON (`--sizes` cannot override — a mid-chunk discovery);
+  sweep-class scripts cost ~13 min/run live — chunk per script, the
+  40-min tool-call cap bites mid-corpus otherwise.
