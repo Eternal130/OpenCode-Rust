@@ -10,3 +10,9 @@ workspace = true
 
 [dependencies]
 serde_json = { workspace = true }
+# Lane M-engine: the opentui ports as LIBRARIES — the keymap engine
+# swap (opentui-keymap) and the composer editing engine swap
+# (opentui-core's EditBuffer/EditorView textarea line) sit behind
+# OC_ENGINE_OPENTUI. Same pinned trio the oc-tui surfaces consume.
+opentui-core = { workspace = true }
+opentui-keymap = { workspace = true }

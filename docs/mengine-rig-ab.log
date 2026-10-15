@@ -1,0 +1,76 @@
+# Lane M-engine — rig A/B + evidence log (editor + keymap subsystem swap)
+
+Worktree: `.worktrees/lane-engine` (branch `lane/engine`). Scope: dissolve
+the K-1..K-9 keymap deltas + swap the composer editing ENGINE by routing
+both subsystems onto the opentui-rust ports (`opentui-keymap` engine,
+`opentui-core` EditBuffer/EditorView textarea line) as LIBRARIES behind
+`OC_ENGINE_OPENTUI` (default OFF until proof; old paths stay one release).
+
+## Design (frozen before implementation)
+
+* **Keymap**: the oc-tui-core `Keymap` facade (mod.rs) + DATA table
+  (table.rs) stay byte-identical; the ENGINE beneath becomes an enum
+  `EngineSel::{Legacy, Opentui}`. `OpentuiKeymap` (keymap/opentui.rs)
+  owns an `opentui_keymap::Keymap` built with `create_default_opentui_
+  keymap(OpenTuiHost)` and registers EXACTLY v2's context/keymap.tsx
+  Provider set: comma bindings, the enter/esc/pgdown/pgup alias expander,
+  base-layout fallback, escape-clears-pending (any escape, K-6),
+  backspace-pops-pending (K-7), timed leader (explicit 2000ms — K-4).
+  Layers: base = global mode; input/dialog/autocomplete/diff = mode
+  gated via the `opencode.mode` data key (set from the facade's mode
+  stack top); owned/plugin layers at priority −1 like the legacy path.
+  Commands are registered per-layer with sink closures so dispatch
+  reports the fired name (the always-accept runner parity).
+  `lookup_base` = dispatch with the mode key set to a sentinel no layer
+  uses (named-mode layers inert → base-only resolution).
+* **Editor**: oc-tui-core gains `text_edit_opentui::TextAreaOpentui` —
+  the SAME observable contract as `text_edit::TextArea` (char-offset
+  text/caret/anchor mirror, EditCommand surface, EditOutcome deltas)
+  backed by `opentui_core::editor::{EditBuffer, EditorView}` with
+  WrapMode::Word (TextareaRenderable's default) + the composer inner
+  width as the viewport (the same `mount_height` formula, extracted
+  shared). Select motions mirror EditBufferRenderable's keyboard
+  selection (anchor kept in offset space across moves). Char-offset ↔
+  display-width-offset conversions walk the buffer's cluster table.
+* Flag: `OC_ENGINE_OPENTUI` (OnceLock at first read; opt-IN while
+  unproven — flips default ON after the A/B proof, `=0` keeps legacy
+  one release). In-process test override for nextest/libtest parity
+  runs of BOTH paths.
+
+## Phase log
+
+
+## Phase 1 — keymap subsystem swap (COMPLETE, 66/66 green)
+
+* `crates/oc-tui-core/src/keymap/opentui.rs` (NEW, ~560 LOC): the
+  `OpentuiKeymap` engine adapter over `opentui_keymap::Keymap`
+  (with_clock + createDefaultOpenTuiKeymap's registration set + v2's
+  exact Provider addons: comma bindings, the enter/esc/pgdown/pgup
+  alias expander, base-layout fallback, escape-clears (any escape),
+  backspace-pops, timed leader @ v2's explicit 2000ms).
+* `keymap/mod.rs`: facade's engine → `EngineSel::{Legacy, Opentui}`
+  (flag-latched at construction); ALL facade signatures unchanged
+  (pending_display &self→&mut self — oc-tui call sites all &mut).
+* `keymap/parity_tests.rs` (NEW): the resolution parity table — every
+  default-table spec (~202) resolves IDENTICALLY on both engines in
+  its layer's mode context (kind+command, displays normalized); the
+  K-1..K-9 before/after suite; conflict parity (ctrl+d/ctrl+p/down ×
+  modes); lookup_base parity; overrides/leader-rebind/owned on the
+  opentui rebuild path.
+
+### Findings so far (engine-behavior deltas surfaced BY the swap)
+
+1. **The donor's sequence grammar has NO `>` separator** — parts
+   concatenate ("gg") and leader chords are the `<leader>` token form
+   ("<leader>e"). The adapter's chord_spec emits the correct grammar.
+2. **Pending display**: the opentui engine shows the `<leader>` token
+   form (upstream getPendingSequence's display — v2-faithful); legacy
+   showed the raw stroke "ctrl+x". Not user-visible in our pump (only
+   `is_some()` checks) — parity_key normalizes it.
+3. **diff.toggle's "enter" spec was DEAD on legacy** (the pump's Enter
+   stroke is "return"; the table's alias spec only fired when fed the
+   literal alias). The v2 alias expander (K-7 family) makes it resolve
+   on the canonical "return" — a real binding revived by the swap,
+   covered by the parity walk's alias branch.
+4. `expire()` order matters: the pending getters lazily expire at the
+   ENGINE's clock — `had` must be read before the clock sync.
