@@ -12,29 +12,26 @@
 //! NOT mirrored — it comes from the ONE shared
 //! [`crate::components::home::plan_home`] walk (the M3 extract-the-
 //! geometry rule): the vertical centering's half-up rule, the footer
-//! ladder, and the paste origin are the same integers the old
-//! painter consumes.
+//! ladder, and the paste origin are the same integers the shared
+//! `plan_home` solver produces.
 //!
 //! **The prompt mount stays the composer's own seam.** The sessionless
 //! composer is the SAME `Prompt` component the session route docks;
 //! its frame comes through [`render_prompt_frame_dispatch`] (lane
-//! M3's flag chain — the `OC_COMPOSER_OPENTUI` OnceLock selects its
-//! painter independently of this module's `OC_HOME_OPENTUI`), built
+//! both routes now share the one opentui-solid composer), built
 //! over the same `oc_tui_core` text engine, and PASTES at the plan's
-//! origin exactly like the old path pastes it. The popup rows float
-//! above the mount through the same `top = 1 + popup_rows` shape.
+//! origin. The popup rows float above the mount through the same
+//! `top = 1 + popup_rows` shape.
 //!
 //! **The caret (NEW-S1a) is untouched:** the terminal-cursor cell is
 //! computed by the same `prompt_caret_screen_cell` walk and handed
 //! to `Store::set_caret_cell` — the hardware cursor is the caret,
 //! whichever painter drew the chrome.
 //!
-//! **Selection flag.** Default ON (flipped after this lane's
-//! proof — the parity matrix, the flag-symmetric rig A/B, both PTY
-//! paths, the sub-millisecond frames): `OC_HOME_OPENTUI=0` (or
-//! `false`/`off`) keeps the hand-rolled painter for one release.
-//! Read once at the first home paint ("at boot") via `OnceLock` — a
-//! running session never switches painters.
+//! **Selection flag (retired).** The lane-M5 dual-path flag
+//! (`OC_HOME_OPENTUI`) is gone: this module's opentui-solid tree is
+//! the home route's ONLY renderer — the hand-rolled painter was
+//! deleted after the one-release probation (the retirement lane).
 
 // Terminal dimensions/colors are bounded usize→f32 casts (taffy
 // points), the same allowance the other solid surfaces carry.
@@ -59,27 +56,6 @@ use crate::components::session_tabs_solid::frame_from_buffer;
 use crate::render::Frame;
 use crate::theme::ThemeState;
 use oc_theme::Rgba as ThemeRgba;
-
-/// The renderer selection flag (lane M5, default FLIPPED ON after the
-/// proof — the unit parity matrix, the flag-symmetric rig A/B, both
-/// PTY paths, the sub-millisecond frames): every value except
-/// `0`/`false`/`off` — including unset — boots the home route on
-/// this module's opentui-solid path; the hand-rolled painter stays
-/// compiled for one release as the escape hatch. Read once (first
-/// home paint — the TUI's boot) and cached for the process lifetime,
-/// so a running session never switches renderers mid-flight.
-#[must_use]
-pub fn opentui_home_enabled() -> bool {
-    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLAG.get_or_init(|| {
-        !std::env::var("OC_HOME_OPENTUI")
-            .is_ok_and(|value| value == "0" || value == "false" || value == "off")
-    })
-}
-
-// ---------------------------------------------------------------------------
-// colors + the wordmark chunk shaping
-// ---------------------------------------------------------------------------
 
 /// An RGB triple (the port's cell currency).
 type Rgb = (u8, u8, u8);
@@ -474,12 +450,9 @@ mod tests {
         PromptDraft { text: text.to_owned(), ..PromptDraft::default() }
     }
 
-    /// One parity-matrix scenario: everything [`HomeView`] borrows,
-    /// owned + the size under test.
+    /// One scenario: everything [`HomeView`] borrows, owned.
     struct Scenario {
-        name: String,
         draft: PromptDraft,
-        placeholder: String,
         version: String,
         actions: Vec<String>,
         autocomplete: Option<AutocompleteView<'static>>,
@@ -488,10 +461,9 @@ mod tests {
 
     impl Scenario {
         fn new(name: &str) -> Self {
+            let _ = name;
             Scenario {
-                name: name.to_owned(),
                 draft: draft(""),
-                placeholder: String::new(),
                 version: "1.2.3-m5".into(),
                 actions: Vec::new(),
                 autocomplete: None,
@@ -523,130 +495,20 @@ mod tests {
     /// popup open, plugin actions, the <64-col version gate + the
     /// content-row collapse, tiny frames (no logo/footer), the
     /// caret — × widths 40/60/80/120/160 × heights 20/24/30 (the
-    /// protocol's width set + the collapse rows).
-    #[test]
-    #[allow(clippy::too_many_lines, clippy::items_after_statements)] // a data matrix, not logic
-    fn solid_home_frame_equals_the_old_renderer() {
-        let theme = ThemeState::v2_dark();
-        let mut scenarios: Vec<Scenario> = Vec::new();
-
-        // -- idle + placeholder ----------------------------------------
-        let mut idle = Scenario::new("idle");
-        idle.placeholder = "Ask anything… \"Fix a TODO in the codebase\"".into();
-        scenarios.push(idle);
-        // -- typing + multiline -----------------------------------------
-        let mut typing = Scenario::new("typing");
-        typing.draft = draft("hello world");
-        scenarios.push(typing);
-        let mut multiline = Scenario::new("multiline");
-        multiline.draft = draft("one\ntwo\nthree");
-        scenarios.push(multiline);
-        // -- the popup open (floats above the mount) ---------------------
-        let options: &'static [crate::components::composer::autocomplete::AutocompleteOption] =
-            Box::leak(
-                vec![
-                    crate::components::composer::autocomplete::AutocompleteOption {
-                        display: "/help".into(),
-                        description: Some("Open the help dialog".into()),
-                    },
-                    crate::components::composer::autocomplete::AutocompleteOption {
-                        display: "/init".into(),
-                        description: None,
-                    },
-                ]
-                .into_boxed_slice(),
-            );
-        let mut popup = Scenario::new("popup-open");
-        popup.draft = draft("/");
-        popup.autocomplete = Some(AutocompleteView { options, selected: 0, title_width: 8 });
-        scenarios.push(popup);
-        // -- plugin quick actions (the footer row's left arm) ------------
-        let mut actions = Scenario::new("plugin-actions");
-        actions.actions = vec!["/preset".into(), "/killall".into()];
-        actions.placeholder = "Ask".into();
-        scenarios.push(actions);
-        // -- the version gate is width-only; the label itself is stable --
-        let mut long_version = Scenario::new("long-version");
-        long_version.version = "0.0.0-prototype-long-suffix".into();
-        scenarios.push(long_version);
-        // -- the caret phases -------------------------------------------
-        for (name, text, caret) in [("caret-mid", "hello", 2usize), ("caret-end", "hello", 5)] {
-            let mut scenario = Scenario::new(name);
-            scenario.draft = draft(text);
-            scenario.caret = Some(caret);
-            scenarios.push(scenario);
-        }
-
-        let mut mismatches = Vec::new();
-        for scenario in &scenarios {
-            for width in [40usize, 60, 80, 120, 160] {
-                for height in [20usize, 24, 30] {
-                    let view = owned_view(scenario, scenario.placeholder.clone());
-                    let old = crate::components::home::paint_home_view_old(
-                        &view,
-                        &theme,
-                        (
-                            u16::try_from(width).unwrap_or(u16::MAX),
-                            u16::try_from(height).unwrap_or(u16::MAX),
-                        ),
-                    );
-                    let new = paint_solid_home_view(
-                        &view,
-                        &theme,
-                        (
-                            u16::try_from(width).unwrap_or(u16::MAX),
-                            u16::try_from(height).unwrap_or(u16::MAX),
-                        ),
-                    );
-                    let (old_frame, old_caret) = old;
-                    let (new_frame, new_caret) = new;
-                    if old_frame != new_frame || old_caret != new_caret {
-                        let mut cells = Vec::new();
-                        'outer: for y in 0..old_frame.height.min(new_frame.height) {
-                            for x in 0..old_frame.width.min(new_frame.width) {
-                                let (a, b) = (old_frame.cell(y, x), new_frame.cell(y, x));
-                                if a != b {
-                                    cells.push(format!(
-                                        "({x},{y}): old {a:?} new {b:?} | old row {:?} new row {:?}",
-                                        old_frame.text_grid()[y],
-                                        new_frame.text_grid()[y]
-                                    ));
-                                    if cells.len() >= 4 {
-                                        break 'outer;
-                                    }
-                                }
-                            }
-                        }
-                        if old_caret != new_caret {
-                            cells.push(format!("caret: old {old_caret:?} new {new_caret:?}"));
-                        }
-                        mismatches.push(format!(
-                            "{}-w{width}xh{height}: {}",
-                            scenario.name,
-                            cells.join("; ")
-                        ));
-                    }
-                }
-            }
-        }
-        assert!(
-            mismatches.is_empty(),
-            "solid home diverged from the old painter:\n  {}",
-            mismatches.join("\n  ")
-        );
-    }
-
     /// The reactive path patches in place: a version-length change
     /// re-renders the SAME mount (same geometry).
     #[test]
     fn label_churn_patches_the_mounted_home() {
         let theme = ThemeState::v2_dark();
+        let mut seen: Vec<(String, crate::render::Frame)> = Vec::new();
         for version in ["1.0.0", "1.0.0-dev.1+m5", "1.0.0"] {
             let scenario = Scenario { version: version.into(), ..Scenario::new("churn") };
             let view = owned_view(&scenario, "Ask".into());
-            let old = crate::components::home::paint_home_view_old(&view, &theme, (80, 24));
-            let new = paint_solid_home_view(&view, &theme, (80, 24));
-            assert_eq!(old, new, "parity at version {version:?}");
+            let (frame, _) = paint_solid_home_view(&view, &theme, (80, 24));
+            if let Some((_, prior)) = seen.iter().find(|(v, _)| v == version) {
+                assert_eq!(&frame, prior, "same inputs paint the same home: {version:?}");
+            }
+            seen.push((version.to_owned(), frame));
         }
         HOME.with_borrow(|slot| {
             let mount = slot.as_ref().expect("home mounted");
@@ -654,23 +516,31 @@ mod tests {
         });
     }
 
-    /// A resize rebuilds cleanly and stays at parity — the mount-key
-    /// rule (the plan's footer row keys with the geometry).
+    /// A resize rebuilds cleanly — the mount-key rule (the plan's
+    /// footer row keys with the geometry; absolute self-check since
+    /// the retirement).
     #[test]
-    fn reshape_rebuilds_and_stays_at_parity() {
+    fn reshape_rebuilds_cleanly() {
         let theme = ThemeState::v2_dark();
         let scenario = Scenario::new("resize");
         let view = owned_view(&scenario, "Ask anything… \"Fix broken tests\"".into());
+        let mut first: Option<crate::render::Frame> = None;
         for size in [(80u16, 24u16), (60, 20), (120, 30), (80, 24)] {
-            let old = crate::components::home::paint_home_view_old(&view, &theme, size);
-            let new = paint_solid_home_view(&view, &theme, size);
-            assert_eq!(new, old, "parity at {size:?}");
+            let (frame, _) = paint_solid_home_view(&view, &theme, size);
+            assert_eq!(frame.height, usize::from(size.1), "full-height home at {size:?}");
+            if size == (80, 24) {
+                match &first {
+                    None => first = Some(frame),
+                    Some(p) => assert_eq!(&frame, p, "same inputs paint the same home"),
+                }
+            }
         }
     }
 
-    /// The wordmark chunks carry the exact per-cell colors the old
-    /// painter writes: the shadow tints round per channel, the bold
-    /// bit rides the right half only, and the gap cell stays out.
+    /// The wordmark chunks carry the exact per-cell colors: the
+    /// shadow tints round per channel, the bold bit rides the right
+    /// half only, and the gap cell stays out (absolute, goldens-pinned
+    /// shape).
     #[test]
     fn wordmark_chunks_match_the_old_paint_cells() {
         let colors = LogoColors::of(&ThemeState::v2_dark());
