@@ -343,6 +343,9 @@ pub const VCS_BRANCH_UPDATED: &str = "vcs.branch.updated";
 pub const CREDENTIAL_UPDATED: &str = "credential.updated";
 /// `credential.switched` `{integrationID, credentialID}` (`credential.ts:21-24`).
 pub const CREDENTIAL_SWITCHED: &str = "credential.switched";
+/// `integration.updated` `{}` (`schema/integration.ts:57-60`): the
+/// integration registry transform notify (BE-3).
+pub const INTEGRATION_UPDATED: &str = "integration.updated";
 /// `models-dev.refreshed` `{}` (`schema/models-dev.ts:5-8`).
 pub const MODELS_DEV_REFRESHED: &str = "models-dev.refreshed";
 /// `tui.prompt.append` `{text}` (`schema/tui-event.ts`).
@@ -402,6 +405,9 @@ static NON_SESSION: LazyLock<Vec<EventDefinition>> = LazyLock::new(|| {
         EventDefinition::ephemeral(TUI_SESSION_SELECT),
         EventDefinition::ephemeral(INSTALLATION_UPDATED),
         EventDefinition::ephemeral(INSTALLATION_UPDATE_AVAILABLE),
+        // The integration-host registry notify (BE-3; append-only — the
+        // positional accessors above are unaffected).
+        EventDefinition::ephemeral(INTEGRATION_UPDATED),
     ]
 });
 
