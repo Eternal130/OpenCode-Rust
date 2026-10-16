@@ -610,6 +610,14 @@ impl CliConfig {
         merge(&file_value.unwrap_or(Value::Null), &env_content().unwrap_or(Value::Null))
     }
 
+    /// The raw merged JSON document (file + env overlay), before
+    /// decode — consumers that need sections `Info` drops (or the
+    /// literal keybind map) read this.
+    #[must_use]
+    pub fn document(&self) -> Value {
+        self.load_value()
+    }
+
     /// The migration pass (`migrate.ts`): fix an existing cli.json's
     /// legacy keys in place (`terminal.copy_on_select`, v1 keybind
     /// names), or adopt v1 `tui.json` + `kv.json` when cli.json does

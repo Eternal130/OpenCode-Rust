@@ -2869,6 +2869,56 @@ async fn fetch_diff(
     Ok((base.map(|(name, _)| name), normalize(response.data)))
 }
 
+/// The config persistence sink's HTTP-less production impl: oc-core's
+/// `CliConfig` service (flock + JSONC-preserving write-through).
+struct HttpConfigSink {
+    service: oc_core::cli_config::CliConfig,
+}
+
+impl crate::store::ConfigSink for HttpConfigSink {
+    fn update_theme_name(&self, name: &str) {
+        let name = name.to_owned();
+        if let Err(error) = self.service.update(move |draft| {
+            draft
+                .as_object_mut()
+                .expect("config drafts are objects")
+                .insert("theme".to_owned(), serde_json::json!({ "name": name }));
+        }) {
+            eprintln!("opencode tui: theme name persist failed: {error}");
+        }
+    }
+
+    fn update_theme_mode(&self, mode: &str) {
+        let mode = mode.to_owned();
+        if let Err(error) = self.service.update(move |draft| {
+            let object = draft.as_object_mut().expect("config drafts are objects");
+            let mut theme = object
+                .get("theme")
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            theme.insert("mode".to_owned(), serde_json::json!(mode));
+            object.insert("theme".to_owned(), serde_json::Value::Object(theme));
+        }) {
+            eprintln!("opencode tui: theme mode persist failed: {error}");
+        }
+    }
+
+    fn update_session_sidebar(&self, hide: bool) {
+        let value = if hide { "hide" } else { "auto" };
+        if let Err(error) = self.service.update(move |draft| {
+            let object = draft.as_object_mut().expect("config drafts are objects");
+            let mut session = object
+                .get("session")
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            session.insert("sidebar".to_owned(), serde_json::json!(value));
+            object.insert("session".to_owned(), serde_json::Value::Object(session));
+        }) {
+            eprintln!("opencode tui: session.sidebar persist failed: {error}");
+        }
+    }
+}
+
 /// Spawn the SSE connection against a resolved server (the run loop's
 /// data side). Returns the ingest receiver + the open-sessions handle
 /// the render loop keeps current.
@@ -3039,7 +3089,17 @@ pub async fn run_with_size(
     // R-07: the terminal's graphics protocol (env probe — see
     // `crate::image` for why not a DA1 round-trip).
     app.store.set_graphics_protocol(crate::image::detect_protocol());
-    let config = crate::config::TuiConfig::load(&oc_util::global_roots::resolve().config);
+    let config = crate::config::TuiConfig::load(&oc_util::global_roots::resolve());
+    // SURF-2 (F-1): the config persistence sink — cli.json
+    // write-through for the theme name/mode pins and
+    // `session.sidebar` (oc-core's comment-preserving updater). The
+    // system-mode input refreshes once the terminal probe reports
+    // (below).
+    {
+        let service = oc_core::cli_config::CliConfig::open(&oc_util::global_roots::resolve());
+        app.store.set_config_sink(std::rc::Rc::new(HttpConfigSink { service }));
+        app.store.set_theme_mode_inputs(config.theme.mode.clone(), Mode::Dark);
+    }
 
     // The mouse-capture gate (v2 `useMouse: config.mouse`,
     // app.tsx:241): push EXACTLY v2's four-mode set when on, nothing
@@ -3318,6 +3378,9 @@ pub async fn run_with_size(
     });
     if let Ok(mode) = probe_rx.recv_timeout(std::time::Duration::from_millis(600)) {
         system_mode = mode;
+        // Refresh the store's system-mode input (the theme lock's
+        // unlock target — SURF-2).
+        app.store.set_theme_mode_inputs(config.theme.mode.clone(), system_mode);
     }
     // The probe toggles raw mode itself; the loop owns it from here.
     let _ = crossterm::terminal::enable_raw_mode();
@@ -3617,20 +3680,14 @@ pub async fn run_with_size(
                 }
             }
         }
-        // Sidebar persistence (v2's toggle writes `session.sidebar`
-        // through config.update; ours lands in the channel's
-        // "sidebar" key — same last-toggle-wins contract).
+        // Sidebar persistence (SURF-2, F-1): v2's toggle writes
+        // `session.sidebar` through config.update — the store's
+        // config sink owns the write now (the channel-storage
+        // diversion is retired; the legacy doc stays a READ fallback
+        // for pre-migration boots).
         let sidebar_now = app.store.sidebar_mode();
         if sidebar_now != persisted_sidebar {
             persisted_sidebar = sidebar_now;
-            if let Some(storage) = &tabs_storage {
-                if let Err(error) = storage.write_typed(
-                    crate::storage::KEY_SIDEBAR,
-                    &crate::storage::SidebarDoc { mode: sidebar_now },
-                ) {
-                    eprintln!("opencode tui: failed to persist sidebar mode: {error}");
-                }
-            }
         }
         // Onboarding persistence (footer.tsx:48-52 — the `✕` release
         // persists `dismissed = true`): save on the flip, v2's storage

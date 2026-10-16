@@ -10,7 +10,7 @@
 //!   un-ready, "Finishing startup…" once ready with a 3 s hold, at
 //!   `bottom=1` full-width centered, raised background, padding 1.
 
-use crate::render::{Cell, CellColor, Frame};
+use crate::render::{CellColor, Frame};
 use crate::store::Store;
 use crate::theme::ThemeStyles;
 
@@ -132,6 +132,7 @@ pub fn overlay_app_state(frame: &mut Frame, store: &Store, styles: &ThemeStyles)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::Cell;
     use crate::reactive::Runtime;
     use crate::store::Store;
 
