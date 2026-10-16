@@ -2212,7 +2212,7 @@ pub async fn run_with_size(
             notifier: std::cell::RefCell::new(crate::os_notify::OscNotifier::from_env(
                 std::io::stdout(),
             )),
-            sounds: crate::sound::ProcessSoundPlayer::default(),
+            sounds: crate::sound::SoundHalf::default(),
         }));
         app.store.set_attention_builtin_sounds(crate::sound::builtin_sound_resolver(roots.cache));
         app.store.set_attention_config(config.attention.clone());
