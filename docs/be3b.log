@@ -172,3 +172,38 @@ browser flows extend it directly.
   (`GET {baseURL}/models` → catalog overlay) — the binding serves the
   catalog's copilot models; remote model discovery belongs with item 4's
   console ingestion (same fetch-merge shape).
+
+## Phase 4 — console ingestion + status reporters (items 4+5, WIP, green)
+
+- `integration/console.rs` (new): `fetch_config` (GET `{server}/api/v2/config`
+  with `credentialHeaders` — bearer + x-org-id from metadata,
+  opencode.ts:472-520,535-545); 404 → no-config; 401 `_tag: Unauthorized` →
+  `SignedOut`; 403 `_tag: SsoRequired` → `SsoRequired` with the SSO start
+  URL `{server}/auth/sso/{connectionId}/start?redirectTo=` (opencode.ts:509-522).
+  `to_custom_providers` projects console providers (ConfigProvider.Info,
+  config/provider.ts:94-101) onto `CustomProvider` route material —
+  disabled models dropped, credentials stripped from settings
+  (`withoutCredentials`, opencode.ts:547-552).
+- `ConsoleProviders` snapshot + `IntegrationHost::refresh_console()`: fetch
+  with the ACTIVE opencode credential; healthy loads swap the provider
+  snapshot + CLEAR any status; `SsoRequired`/`SignedOut` report
+  `Connection.Status {needs_auth, message, url?}` via
+  `connection_status` (opencode.ts:181-207); transient HTTP/parse failures
+  never touch the status. Engine's credential-event loop refreshes both
+  copilot bindings and the console.
+- Resolver: `CatalogModelResolver::with_console(...)` — console providers
+  bind BEFORE the catalog path (config-custom semantics; console owns
+  these ids, opencode.ts:243-268).
+- MockOAuth harness fix (found by the x-org-id assert): single `read()`
+  split request heads — now reads to the header terminator + body.
+- Tests (4 new, 36 integration tests green): config fetch + projection
+  (baseURL/headers/names/disabled-drop, bearer + x-org-id request shape,
+  credential stripping), SsoRequired status (message + exact SSO URL),
+  SignedOut + clear-on-healthy (404 clears needs_auth), resolver binding
+  of a console provider through the snapshot.
+- fmt + clippy clean; oc-core + oc-server nextest 1021/1021.
+- Deferred within items 4+5: websearch/mcp/policies sections of the
+  RemoteResponse, per-model baseURL overlays + capability/cost/limit
+  merges (custom-provider material carries headers/body only), managed
+  policy statements, console models list cache. The provider-resolution
+  core (fetch → status → bind) is complete and event-driven.
