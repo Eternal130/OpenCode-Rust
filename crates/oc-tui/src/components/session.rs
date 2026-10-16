@@ -55,6 +55,13 @@ pub fn composer_statusline(store: &Store, session_id: &str) -> (String, String) 
 /// inactive tabs, permission `!` on the active tab, the ` + `
 /// affordance). `active` marks the active tab (None on the home
 /// route — no pill).
+///
+/// On the HOME route the strip appends the `New session` pseudo-tab
+/// and SELECTS it (`items = [...ordered, NEW_SESSION_TAB]` +
+/// `activeID = "new"` while `newTab()`, session-tabs.tsx:1339-1343),
+/// hiding the idle ` + ` affordance (`showPlus`, :1344) — the census
+/// "new-tab padding" family: after an add-release the strip reads
+/// `+ New session` (bold, `✕` on hover) instead of a bare ` + `.
 #[must_use]
 pub fn paint_live_tabs_bar(
     store: &Store,
@@ -65,7 +72,7 @@ pub fn paint_live_tabs_bar(
     let tabs = store.tabs();
     let permission_live =
         matches!(store.footer().view, crate::components::footer::FooterView::Permission { .. });
-    let views: Vec<TabView> = tabs
+    let mut views: Vec<TabView> = tabs
         .tabs
         .iter()
         .map(|tab| TabView {
@@ -82,16 +89,38 @@ pub fn paint_live_tabs_bar(
             detail: None,
         })
         .collect();
+    // The promoted new-session slot: home + at least one open tab
+    // (`tabsAvailable` gates the whole strip on tabs.length > 0).
+    let home_pseudo =
+        matches!(store.route(), crate::store::Route::Home) && !views.is_empty();
+    let (active, show_plus) = if home_pseudo {
+        views.push(TabView {
+            tab: SessionTab {
+                session_id: crate::components::session_tabs::NEW_SESSION_TAB_ID.to_owned(),
+                title: Some(crate::components::session_tabs::NEW_SESSION_TAB_TITLE.to_owned()),
+            },
+            status: TabStatus::EMPTY,
+            detail: None,
+        });
+        (
+            Some(crate::components::session_tabs::NEW_SESSION_TAB_ID),
+            false,
+        )
+    } else {
+        (active, true)
+    };
     // Lane M1 (retired): the strip renders through the opentui-solid
     // tree — the only renderer since the retirement lane deleted the
     // hand-rolled bar walk.
+    let close_hover = tabs.hover_close.then(|| tabs.hover.clone()).flatten();
     crate::components::session_tabs_solid::paint_solid_bar(
         &views,
         active,
-        true,
+        show_plus,
         width,
         styles,
         tabs.hover.as_deref(),
+        close_hover.as_deref(),
         tabs.add_hovered,
     )
 }
