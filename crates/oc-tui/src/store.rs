@@ -349,6 +349,10 @@ pub struct TabsState {
     /// `session-tabs.tsx:338-369`) — drives the hover lift, the
     /// `text.base` foreground, and the revealed `✕` close mark.
     pub hover: Option<String>,
+    /// The hovered tab's ✕ cell under the pointer (`closeHovered`,
+    /// `session-tabs.tsx:1091-1094` — the mark renders `text.base`
+    /// instead of `closeColor` while the pointer sits on it).
+    pub hover_close: bool,
     /// The ` + ` affordance under the pointer (`addHovered`,
     /// `session-tabs.tsx:1301`).
     pub add_hovered: bool,
@@ -447,6 +451,12 @@ pub struct ServerLists {
     pub models: ListState<ServerModel>,
     pub providers: Vec<ServerProvider>,
     pub agents: ListState<ServerAgent>,
+    /// `useConnected()` — any integration has connections
+    /// (`hasConnectedProvider` over `integration.list`,
+    /// use-connected.tsx). Gates the models dialog's categories +
+    /// grouped sort and the palette's suggested
+    /// "Connect an integration" row.
+    pub connected: bool,
 }
 
 /// A model selection (`providerID` + `modelID` + optional variant).
@@ -1772,6 +1782,11 @@ impl Store {
         self.server_lists.update(|lists| lists.agents = agents);
     }
 
+    /// Merge the integration-connected fold (`useConnected`).
+    pub fn set_integration_connected(&self, connected: bool) {
+        self.server_lists.update(|lists| lists.connected = connected);
+    }
+
     // -- the Worktrees dialog (R-05) ---------------------------------------
 
     /// The current worktree dialog state.
@@ -2414,13 +2429,19 @@ impl Store {
 
     /// Set the hovered strip tab (`marquee.enter/leave`); returns
     /// whether the state CHANGED (mouse-move events fire constantly —
-    /// only a real change may request a redraw).
-    pub fn set_tab_hover(&self, session_id: Option<&str>) -> bool {
+    /// only a real change may request a redraw). `close` marks the
+    /// pointer as sitting on that tab's ✕ cell.
+    pub fn set_tab_hover(&self, session_id: Option<&str>, close: bool) -> bool {
         let mut changed = false;
         self.tabs.update(|state| {
             let next = session_id.map(str::to_owned);
+            let next_close = close && next.is_some();
             if state.hover != next {
                 state.hover = next;
+                changed = true;
+            }
+            if state.hover_close != next_close {
+                state.hover_close = next_close;
                 changed = true;
             }
         });
@@ -3010,6 +3031,7 @@ impl Store {
             theme_initial,
         };
         self.dialogs.update(|stack| stack.push(entry));
+        self.dialog_opened_strip_hover_reset();
         self.focus_dialog_current();
     }
 
@@ -3029,6 +3051,7 @@ impl Store {
         for entry in &removed {
             self.revert_unconfirmed_theme_dialog(entry);
         }
+        self.dialog_opened_strip_hover_reset();
         self.focus_dialog_current();
     }
 
@@ -3038,6 +3061,24 @@ impl Store {
         match kind {
             DialogKind::ThemeList => Some(self.theme.get().name.clone()),
             _ => None,
+        }
+    }
+
+    /// A PROMPT-input dialog (rename / worktree name) drops the
+    /// strip's hover — v2's `DialogSessionRename` focuses its `<input>`
+    /// and the marquee hover resets (the census: the `✕` vanishes
+    /// while the rename dialog is open, returns after it closes).
+    /// Select-family dialogs keep the hover (the session-list steps
+    /// hold their `✕`).
+    fn dialog_opened_strip_hover_reset(&self) {
+        let prompt_dialog = self.top_dialog().is_some_and(|entry| {
+            matches!(entry.kind, DialogKind::SessionRename { .. } | DialogKind::WorktreeName)
+        });
+        if prompt_dialog {
+            self.tabs.update(|state| {
+                state.hover = None;
+                state.hover_close = false;
+            });
         }
     }
 
@@ -3067,9 +3108,15 @@ impl Store {
     /// (`DialogSelect` mount: `focus(current)` + `scrollAfterLayout(
     /// true)` — the CENTER reveal in the real viewport, not the
     /// edge-follow) — the theme list opens centered on the active theme.
+    /// EXCEPTION: the models dialog mounts `focusCurrent={false}`
+    /// (`dialog-model.tsx:171`) — the cursor rests on row 0 and the
+    /// current model only carries its `●` marker.
     fn focus_dialog_current(&self) {
         let Some(entry) = self.top_dialog() else { return };
         if matches!(entry.kind, DialogKind::SessionRename { .. }) {
+            return;
+        }
+        if matches!(entry.kind, DialogKind::ServerList { command: "model.list", .. }) {
             return;
         }
         let props = crate::components::command_palette::select_props_for_entry(&entry, self);

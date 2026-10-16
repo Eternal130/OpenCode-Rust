@@ -22,7 +22,7 @@
 //!   session route and `provider.connect` while disconnected), which
 //!   the replay corpus never distinguishes.
 
-use crate::components::dialog_select::{SelectOption, SelectProps, SelectState};
+use crate::components::dialog_select::{SelectAction, SelectOption, SelectProps, SelectState};
 use crate::store::{DialogKind, DialogSize, ListState, ModelSelection, Route, ServerAgent, Store};
 use oc_tui_core::scroll::ScrollCommand;
 
@@ -62,7 +62,13 @@ impl PaletteCommand {
         match self.command {
             "model.list" | "opencode.settings" => true,
             "session.new" => matches!(store.route(), Route::Session { .. }),
-            "provider.connect" => store.connection() != crate::data::ConnectionState::Connected,
+            // `suggested: !connected()` (app.tsx:948) — v2's
+            // `connected` is INTEGRATION-backed (`hasConnectedProvider`
+            // over `integration.list`, use-connected.tsx), not the
+            // server connection: with no connected integration the
+            // palette suggests "Connect an integration" between
+            // "Switch model" and "Open settings".
+            "provider.connect" => !store.server_lists().connected,
             _ => false,
         }
     }
@@ -472,14 +478,22 @@ fn home_directory() -> String {
 }
 
 /// The model picker's props from the store's `model.list` state
-/// (`component/dialog-model.tsx`): non-deprecated rows, provider-name
-/// categories, the "Free" footer (`cost.length > 0 && every input
-/// zero`), `providerID/modelID` values. Loading/error show a muted
-/// status row (the reference's empty state); an empty list renders
-/// the select's "No items available".
+/// (`component/dialog-model.tsx`): non-deprecated rows, the "Free"
+/// footer (`cost.length > 0 && every input zero`), `providerID/modelID`
+/// values. While UNCONNECTED the rows render FLAT — no provider
+/// categories (group headers) and no per-row description
+/// (`category: connected() ? provider?.name : undefined`,
+/// `description: favorite ? "(Favorite)" : undefined`,
+/// dialog-model.tsx:77-97) — and the footer action reads
+/// "View all integrations" (`:168-176`, the `ctrl+a` keybind at
+/// config/keybind.ts:162); connected flips both (categories +
+/// grouped sort + "Connect an integration"). Loading/error show a
+/// muted status row (the reference's empty state); an empty list
+/// renders the select's "No items available".
 #[must_use]
 pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
     let lists = store.server_lists();
+    let connected = lists.connected;
     let provider_name = |id: &str| -> String {
         lists
             .providers
@@ -495,15 +509,19 @@ pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
                 models.iter().filter(|model| !model.deprecated).collect();
             // The dialog's browse mode sorts its full option list with
             // `sortModelOptions(…, connected())` — connected → grouped.
-            sort_model_options(&mut rows, true, &provider_name);
+            sort_model_options(&mut rows, connected, &provider_name);
             rows.iter()
                 .map(|model| {
                     let title =
                         if model.name.is_empty() { model.id.clone() } else { model.name.clone() };
                     let value = format!("{}/{}", model.provider_id, model.id);
                     let mut option = SelectOption::titled(title, value)
-                        .categorized(provider_name(&model.provider_id))
                         .with_search(format!("{} {}", model.provider_id, model.id));
+                    // Categories exist only while connected — the
+                    // unconnected dialog renders one flat list.
+                    if connected {
+                        option = option.categorized(provider_name(&model.provider_id));
+                    }
                     if model.free {
                         option = option.with_footer("Free");
                     }
@@ -514,6 +532,15 @@ pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
     };
     let mut props = SelectProps::new(title, options);
     props = props.flat(true);
+    // The footer action (`actions[0]`, dialog-model.tsx:167-183):
+    // unconnected → "View all integrations", connected →
+    // "Connect an integration"; both ride `ctrl+a`
+    // (`model.dialog.provider`, keybind.ts:162).
+    props = props.with_actions(vec![SelectAction::new(
+        "model.dialog.provider",
+        if connected { "Connect an integration" } else { "View all integrations" },
+        "ctrl+a",
+    )]);
     props
 }
 
@@ -957,12 +984,21 @@ impl CommandDispatcher for StoreDispatcher {
             | "open.menu" | "provider.connect" | "opencode.settings" | "opencode.status"
             | "session.share" | "session.fork" | "server.pair" | "location.reload"
             | "opencode.debug" | "docs.open" => {
-                // DialogSessions mounts titled "Sessions"; every other
-                // listing takes the palette entry's title.
-                let title: &'static str = if command == "session.list" {
-                    "Sessions"
-                } else {
-                    palette_command(command).map_or("", |entry| entry.title)
+                // The mounted dialog's title is the COMPONENT mount's,
+                // not the palette row's (the models-dialog lane's #7):
+                // DialogModel "Select model" (dialog-model.tsx:122),
+                // DialogAgent "Select agent" (dialog-agent.tsx:22),
+                // DialogVariant "Select variant" (dialog-variant.tsx:35),
+                // DialogMcp "MCP servers" (dialog-mcp.tsx:140),
+                // DialogSessions "Sessions" (dialog-session-list.tsx:198).
+                // The PALETTE entries keep "Switch model"/"Switch agent"/
+                // "Switch model variant" (app.tsx:840/870/921).
+                let title: &'static str = match command {
+                    "model.list" => "Select model",
+                    "agent.list" => "Select agent",
+                    "variant.list" => "Select variant",
+                    "session.list" => "Sessions",
+                    _ => palette_command(command).map_or("", |entry| entry.title),
                 };
                 let size =
                     if command == "open.menu" { DialogSize::Large } else { DialogSize::Medium };
@@ -1163,6 +1199,94 @@ mod tests {
         assert_eq!(palette_command("theme.switch").unwrap().bindings.len(), 0);
     }
 
+    /// L1 — the palette's suggested set carries "Connect an
+    /// integration" while NO integration is connected
+    /// (`suggested: !connected()`, app.tsx:946-948), between
+    /// "Switch model" and "Open settings" (registration order); a
+    /// connected integration drops it again.
+    #[test]
+    fn palette_suggests_connect_an_integration_only_while_unconnected() {
+        let store = Store::new(Runtime::new());
+        let props = palette_props(&store);
+        let suggested: Vec<&str> = props
+            .options
+            .iter()
+            .filter(|option| option.category.as_deref() == Some("Suggested"))
+            .map(|option| option.title.as_str())
+            .collect();
+        assert_eq!(
+            suggested,
+            vec!["Switch model", "Connect an integration", "Open settings"],
+            "the unconnected suggested trio"
+        );
+
+        store.set_integration_connected(true);
+        let props = palette_props(&store);
+        let suggested: Vec<&str> = props
+            .options
+            .iter()
+            .filter(|option| option.category.as_deref() == Some("Suggested"))
+            .map(|option| option.title.as_str())
+            .collect();
+        assert_eq!(suggested, vec!["Switch model", "Open settings"], "connected drops it");
+    }
+
+    /// L1 — the agent/variant listings mount their component titles
+    /// ("Select agent" / "Select variant"), not the palette rows'.
+    #[test]
+    fn agent_and_variant_dialogs_mount_component_titles() {
+        let store = Store::new(Runtime::new());
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "agent.list", None), Dispatch::Handled);
+        match &store.top_dialog().unwrap().kind {
+            DialogKind::ServerList { command, title } => {
+                assert_eq!(*command, "agent.list");
+                assert_eq!(*title, "Select agent");
+            }
+            other => panic!("unexpected dialog {other:?}"),
+        }
+        assert_eq!(dispatcher.dispatch(&store, "variant.list", None), Dispatch::Handled);
+        match &store.top_dialog().unwrap().kind {
+            DialogKind::ServerList { command, title } => {
+                assert_eq!(*command, "variant.list");
+                assert_eq!(*title, "Select variant");
+            }
+            other => panic!("unexpected dialog {other:?}"),
+        }
+    }
+
+    /// L1 — the models dialog opens with the cursor on ROW 0
+    /// (`focusCurrent={false}`, dialog-model.tsx:171): the current
+    /// model only carries its `●` marker, never the selection.
+    #[test]
+    fn models_dialog_cursor_rests_on_row_zero() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", None);
+        store.set_models(
+            ListState::Loaded(vec![
+                model("opencode", "grok", "Grok", false, false),
+                model("anthropic", "claude", "Claude", false, false),
+            ]),
+            vec![ServerProvider { id: "anthropic".into(), name: "Anthropic".into() }],
+        );
+        store.set_integration_connected(true);
+        let _ = store.effective_model("s1");
+        store.stage_model(
+            "s1",
+            crate::store::ModelSelection {
+                provider_id: "anthropic".into(),
+                model_id: "claude".into(),
+                variant: None,
+            },
+        );
+        store.open_dialog(
+            DialogKind::ServerList { command: "model.list", title: "Select model" },
+            DialogSize::Medium,
+        );
+        let entry = store.top_dialog().unwrap();
+        assert_eq!(entry.select.selected, 0, "cursor on the first row, not the current model");
+    }
+
     #[test]
     fn palette_options_carry_both_footers_and_id_search() {
         let options = palette_options(PALETTE_COMMANDS);
@@ -1195,12 +1319,15 @@ mod tests {
         assert_eq!(store.top_dialog().unwrap().kind, DialogKind::CommandPalette);
         assert_eq!(dispatcher.dispatch(&store, "theme.switch", None), Dispatch::Handled);
         assert_eq!(store.top_dialog().unwrap().kind, DialogKind::ThemeList);
-        // Server-backed listings open the live-data surface.
+        // Server-backed listings open the live-data surface — the
+        // mounted DIALOG title is the component mount's
+        // (`DialogModel` → "Select model", dialog-model.tsx:122),
+        // NOT the palette row's "Switch model" (app.tsx:840).
         assert_eq!(dispatcher.dispatch(&store, "model.list", None), Dispatch::Handled);
         match &store.top_dialog().unwrap().kind {
             DialogKind::ServerList { command, title } => {
                 assert_eq!(*command, "model.list");
-                assert_eq!(*title, "Switch model");
+                assert_eq!(*title, "Select model");
             }
             other => panic!("unexpected dialog {other:?}"),
         }
@@ -1279,21 +1406,25 @@ mod tests {
         assert!(store.tabs().tabs.iter().any(|tab| tab.session_id == "s_hist"));
     }
 
-    /// The model picker renders loaded rows (provider categories, Free
-    /// footers, provider/model values), a muted loading row while the
-    /// fetch is in flight, and the error text when it failed.
+    /// The model picker renders loaded rows (Free footers,
+    /// provider/model values), a muted loading row while the fetch is
+    /// in flight, and the error text when it failed. While
+    /// UNCONNECTED (the rig + fresh boots) the rows carry NO
+    /// categories and the footer action reads "View all integrations"
+    /// (dialog-model.tsx:77-97/168-176); connected flips to provider
+    /// categories + "Connect an integration".
     #[test]
     fn model_list_props_cover_loaded_loading_and_error_states() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
 
         // Loading: one muted status row.
-        let props = model_list_props(&store, "Switch model");
+        let props = model_list_props(&store, "Select model");
         assert_eq!(props.options.len(), 1);
         assert!(props.options[0].title.contains("Loading models"));
 
-        // Loaded: deprecated filtered, Free footer, provider name as
-        // the category (falling back to the providerID).
+        // Loaded (UNCONNECTED default): deprecated filtered, Free
+        // footer, no categories, the integrations footer action.
         store.set_models(
             ListState::Loaded(vec![
                 model("anthropic", "claude", "Claude", true, false),
@@ -1302,18 +1433,33 @@ mod tests {
             ]),
             vec![ServerProvider { id: "anthropic".into(), name: "Anthropic".into() }],
         );
-        let props = model_list_props(&store, "Switch model");
+        let props = model_list_props(&store, "Select model");
         assert_eq!(props.options.len(), 2, "deprecated row filtered");
         assert_eq!(props.options[0].title, "Claude");
         assert_eq!(props.options[0].value, "anthropic/claude");
-        assert_eq!(props.options[0].category.as_deref(), Some("Anthropic"));
+        assert_eq!(props.options[0].category, None, "unconnected renders flat");
         assert_eq!(props.options[0].footer.as_deref(), Some("Free"));
-        assert_eq!(props.options[1].category.as_deref(), Some("custom"), "no provider row");
         assert_eq!(props.options[1].footer, None, "paid model has no footer");
+        assert_eq!(
+            props.actions,
+            vec![SelectAction::new("model.dialog.provider", "View all integrations", "ctrl+a")],
+            "the unconnected footer action (dialog-model.tsx:168-176)"
+        );
+
+        // Connected: provider-name categories (group headers return)
+        // and the "Connect an integration" wording.
+        store.set_integration_connected(true);
+        let props = model_list_props(&store, "Select model");
+        assert_eq!(props.options[0].category.as_deref(), Some("Anthropic"));
+        assert_eq!(props.options[1].category.as_deref(), Some("custom"), "no provider row");
+        assert_eq!(
+            props.actions,
+            vec![SelectAction::new("model.dialog.provider", "Connect an integration", "ctrl+a")]
+        );
 
         // Failed: the error surfaces in the row.
         store.set_models(ListState::Failed("503".into()), Vec::new());
-        let props = model_list_props(&store, "Switch model");
+        let props = model_list_props(&store, "Select model");
         assert!(props.options[0].title.contains("Models unavailable"));
         assert!(props.options[0].title.contains("503"));
     }
