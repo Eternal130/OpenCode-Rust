@@ -1,0 +1,23 @@
+# Lane SURF-1 — auditB #3 (sidebar live content) + #5 (transcript detail states)
+
+Worktree: .worktrees/lane-surf1 (branch lane/surf1, off main e868759).
+Plan (6 phases): A model/store data (tool output+error, compaction status
+fields, skill message, revert state, pending-compaction queue,
+history-loading flag) → B transcript rows (compaction message/queued,
+skill, revert banner, interrupted footer, loading label) → C expanded
+tool detail cells + inline expand + hit actions → D DialogExecute /
+DialogShellOutput viewers → E sidebar live wiring (context tokens/%/cost,
+MCP list, location row) → F verification (unit, goldens, PTY, rig --quick).
+
+Ref citations gathered:
+- CompactionMessage  index.tsx:2002-2068; CompactionQueued :2070-2081;
+  SessionSkillMessage :1993-1999; RevertMessage :2084-2158;
+  AssistantFooter interrupted :1872-1897; loading label :1425-1427;
+  rows.ts compaction-queued splice :72-79, boundary filter :63-66.
+- Tool detail: ToolPart dispatch index.tsx:2373-2446; Shell/ShellDisplay
+  :2790-2952 (maxLines 10); Execute :3197-3238 (DialogExecute :3207,
+  collapseToolOutput 4); Write :2954; Edit :3240; Read/Glob/Grep
+  :2990-3060; InlineTool :2600-2668 (error expand); BlockTool :2694-2790.
+- Sidebar: context.tsx (contextUsage util/session.ts:58-73, cost),
+  mcp.tsx (dot colors, collapse >2, click→DialogMcp), footer.tsx
+  (location FilePath maxWidth 38, onboarding).
