@@ -106,17 +106,18 @@ fn location_model_entries(
 /// wildcard to text, else some modality must start with `text`.
 fn supports_text(model: &Value) -> bool {
     let modality_has_text = |key: &str| {
-        model.get("capabilities").and_then(|caps| caps.get(key)).and_then(Value::as_array).map_or(
-            true,
-            |items| {
+        model
+            .get("capabilities")
+            .and_then(|caps| caps.get(key))
+            .and_then(Value::as_array)
+            .is_none_or(|items| {
                 // `length === 0 || some(startsWith "text")` — the empty
                 // array is the wildcard, exactly like the reference.
                 items.is_empty()
                     || items
                         .iter()
-                        .any(|item| item.as_str().map_or(false, |text| text.starts_with("text")))
-            },
-        )
+                        .any(|item| item.as_str().is_some_and(|text| text.starts_with("text")))
+            })
     };
     modality_has_text("input") && modality_has_text("output")
 }
@@ -269,7 +270,7 @@ mod tests {
         assert!(fallback.get("providerID").is_some_and(Value::is_string));
         assert!(fallback.get("id").is_some_and(Value::is_string));
         assert!(
-            fallback.get("capabilities").is_some_and(|caps| caps.is_object()),
+            fallback.get("capabilities").is_some_and(serde_json::Value::is_object),
             "the fallback keeps the full Model.Info shape"
         );
     }
