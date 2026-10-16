@@ -612,6 +612,24 @@ pub fn assistant_footer_row(
     theme: &ThemeStyles,
     width: usize,
 ) -> RowRender {
+    assistant_footer_row_ext(agent, model, duration_ms, tps, error, false, theme, width)
+}
+
+/// [`assistant_footer_row`] with the interrupted variant
+/// (`error.message === "Step interrupted"`, index.tsx:1872/1895-1897):
+/// NO error row, the agent label stays muted (an error is present),
+/// and a trailing ` · interrupted` span rides the label.
+#[must_use]
+pub fn assistant_footer_row_ext(
+    agent: &str,
+    model: &str,
+    duration_ms: u64,
+    tps: Option<f64>,
+    error: Option<&str>,
+    interrupted: bool,
+    theme: &ThemeStyles,
+    width: usize,
+) -> RowRender {
     let agent_color = theme.agent_color(0);
     let muted = theme.text_muted;
     let agent = titlecase(agent);
@@ -637,6 +655,9 @@ pub fn assistant_footer_row(
     if let Some(tps) = tps.filter(|tps| *tps > 0.0) {
         spans.push(StyledSpan { text: format!(" · {tps:.1} tok/s"), style: muted });
     }
+    if interrupted {
+        spans.push(StyledSpan { text: " · interrupted".to_owned(), style: muted });
+    }
     let label_width = width.saturating_sub(ROW_PADDING_LEFT);
     let placed = wrap_atoms(&crate::wrap::flatten_spans(&spans), label_width)
         .into_iter()
@@ -650,13 +671,16 @@ pub fn assistant_footer_row(
         })
         .collect();
     let footer = RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() };
+    // The error row renders only for NON-interrupted errors
+    // (`props.message.error && !interrupted() && !props.message.retry`,
+    // index.tsx:1875-1878).
     match error {
-        None => footer,
-        Some(message) => {
+        Some(message) if !interrupted => {
             // error row + the marginTop-1 blank + the (muted) footer.
             let error_row = assistant_error_row(message, theme, width);
             stack_rows(error_row, footer.offset_y(1))
         }
+        _ => footer,
     }
 }
 
@@ -679,6 +703,273 @@ pub fn assistant_error_row(message: &str, theme: &ThemeStyles, width: usize) -> 
         })
         .collect();
     RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() }
+}
+
+/// The compaction divider row (`CompactionMessage`,
+/// session/index.tsx:2032-2061): `─` fill, ` {[icon] label[ ·
+/// cancelled][ · N in · M out]} ` (gap-1 segments, padding 1 both
+/// sides), `─` fill — the label color is muted, or the error color on
+/// a non-cancelled failure; running shows the spinner glyph.
+///
+/// `summary_lines` (already-rendered markdown rows, `paddingTop 1
+/// paddingLeft 3`) stack under the divider when non-empty — the
+/// failed non-cancelled variant's error message rides there too.
+#[must_use]
+pub fn compaction_message_row(
+    running: bool,
+    failed: bool,
+    cancelled: bool,
+    label_provider_compaction: bool,
+    tokens_in: Option<u64>,
+    tokens_out: Option<u64>,
+    summary_lines: &[crate::components::message::markdown::MarkdownLine],
+    clock_ms: u64,
+    theme: &ThemeStyles,
+    width: usize,
+) -> RowRender {
+    let color = if failed && !cancelled {
+        theme.error
+    } else {
+        theme.text_muted.fg.unwrap_or(theme.background)
+    };
+    let style = Style::new().fg(color).bg(theme.background);
+    // The center segments (gap 1 between each, padding 1 each side —
+    // the labeled box's paddingLeft/Right and the row's gap).
+    let mut segments: Vec<String> = Vec::new();
+    if running {
+        segments.push(spinner_frame(clock_ms).to_string());
+    } else if failed && !cancelled {
+        segments.push("✗".to_owned());
+    }
+    segments.push(
+        if label_provider_compaction { "Provider compaction" } else { "Compaction" }.to_owned(),
+    );
+    if cancelled {
+        segments.push("· cancelled".to_owned());
+    }
+    // `usage()` (index.tsx:2021-2029): `N in · M out` once settled
+    // with a token payload.
+    if !running {
+        if let (Some(input), Some(output)) = (tokens_in, tokens_out) {
+            if input + output > 0 {
+                segments.push(format!("· {} in · {} out", locale_number(input), locale_number(output)));
+            }
+        }
+    }
+    let center = format!(" {} ", segments.join(" "));
+    let center_width = crate::wrap::display_width(&center);
+    let mut placed = Vec::new();
+    let mut fills = Vec::new();
+    let fill_width = width.saturating_sub(center_width) / 2;
+    let left_end = fill_width;
+    let right_start = left_end + center_width;
+    if left_end > 0 {
+        fills.push(Fill {
+            x: 0,
+            y: 0,
+            width: left_end as u16,
+            height: 1,
+            style: Style::new().fg(color).bg(theme.background),
+        });
+        placed.push(text_at(0, 0, "─".repeat(left_end), style));
+    }
+    placed.push(text_at(left_end, 0, center.clone(), style));
+    if let Some(right_len) = width.checked_sub(right_start) {
+        if right_len > 0 {
+            fills.push(Fill {
+                x: right_start as u16,
+                y: 0,
+                width: right_len as u16,
+                height: 1,
+                style: Style::new().fg(color).bg(theme.background),
+            });
+            placed.push(text_at(right_start, 0, "─".repeat(right_len), style));
+        }
+    }
+    let divider = RowRender { placed, fills, height: 1, images: Vec::new() };
+    if summary_lines.is_empty() {
+        return divider;
+    }
+    // paddingTop 1 + the markdown rows at paddingLeft 3 (the summary
+    // body, index.tsx:2062-2073).
+    let body_width = width.saturating_sub(3);
+    let mut body = Vec::new();
+    for (index, line) in summary_lines.iter().enumerate() {
+        body.push(Placed {
+            x: 3,
+            y: index,
+            width: body_width,
+            lines: vec![PlacedLine { runs: line.0.clone() }],
+            tag: None,
+        });
+    }
+    let summary =
+        RowRender { placed: body, fills: Vec::new(), height: summary_lines.len(), images: Vec::new() };
+    stack_rows(divider, summary.offset_y(1))
+}
+
+/// The queued-compaction divider (`CompactionQueued`,
+/// session/index.tsx:2070-2081): `─ ◇ Compaction queued ─` in
+/// `text.muted` over `border.base`.
+#[must_use]
+pub fn compaction_queued_row(theme: &ThemeStyles, width: usize) -> RowRender {
+    let muted = theme.text_muted.fg.unwrap_or(theme.background);
+    let style = Style::new().fg(muted).bg(theme.background);
+    let center = " ◇ Compaction queued ".to_owned();
+    let center_width = crate::wrap::display_width(&center);
+    let mut placed = Vec::new();
+    let mut fills = Vec::new();
+    let fill_width = width.saturating_sub(center_width) / 2;
+    let left_end = fill_width;
+    let right_start = left_end + center_width;
+    if left_end > 0 {
+        fills.push(Fill {
+            x: 0,
+            y: 0,
+            width: left_end as u16,
+            height: 1,
+            style,
+        });
+        placed.push(text_at(0, 0, "─".repeat(left_end), style));
+    }
+    placed.push(text_at(left_end, 0, center, style));
+    if let Some(right_len) = width.checked_sub(right_start) {
+        if right_len > 0 {
+            fills.push(Fill {
+                x: right_start as u16,
+                y: 0,
+                width: right_len as u16,
+                height: 1,
+                style,
+            });
+            placed.push(text_at(right_start, 0, "─".repeat(right_len), style));
+        }
+    }
+    RowRender { placed, fills, height: 1, images: Vec::new() }
+}
+
+/// The `→ Skill {name}` inline row (`SessionSkillMessage`,
+/// session/index.tsx:1993-1999): the completed InlineToolRow shape in
+/// `text.muted`.
+#[must_use]
+pub fn skill_message_row(name: &str, theme: &ThemeStyles, width: usize) -> RowRender {
+    completed_tool_row('→', &format!("Skill {name}"), theme, width)
+}
+
+/// One staged-revert file row (`A path.txt +3 -1`,
+/// index.tsx:2131-2148): status letter muted, the path in `text.base`
+/// (FilePath-contracted), `+A`/`−D` in the diff added/removed colors.
+fn revert_file_row(file: &crate::store::RevertFile, theme: &ThemeStyles, width: usize) -> Vec<Placed> {
+    let muted = theme.text_muted;
+    let base = theme.text.fg.unwrap_or(theme.background);
+    let additions = if file.additions > 0 {
+        Some(format!("+{}", file.additions))
+    } else {
+        None
+    };
+    let deletions = if file.deletions > 0 {
+        Some(format!("-{}", file.deletions))
+    } else {
+        None
+    };
+    let status = match file.status.as_str() {
+        "added" => "A",
+        "deleted" => "D",
+        _ => "M",
+    };
+    // `{status} {path} [+A] [-D]` joined by single spaces; the path
+    // truncates to what remains (FilePath maxWidth, ref geometry).
+    let mut used = status.len() + 1;
+    let mut placed = vec![text_at(0, 0, status, muted)];
+    for count in [additions.as_deref(), deletions.as_deref()] {
+        if let Some(count) = count {
+            used += count.len() + 1;
+        }
+    }
+    let path_budget = width.saturating_sub(used + 1).max(2);
+    let path = crate::wrap::take_width(&file.file, path_budget);
+    placed.push(text_at(2, 0, path, Style::new().fg(base).bg(theme.background)));
+    let mut x = 2 + crate::wrap::display_width(&file.file).min(path_budget) + 1;
+    for (text, color) in [(additions.as_deref(), theme.diff.text_added), (deletions.as_deref(), theme.diff.text_removed)] {
+        if let Some(count) = text {
+            if x + count.len() <= width {
+                placed.push(text_at(x, 0, count, Style::new().fg(color).bg(theme.background)));
+            }
+            x += count.len() + 1;
+        }
+    }
+    placed
+}
+
+/// The revert banner (`RevertMessage`, session/index.tsx:2084-2158):
+/// a `┃` left rail, raised background, paddingTop/Bottom 1
+/// paddingLeft 2 — "N message(s) reverted", the file rows (their own
+/// paddingTop/Bottom 1), and "{redo} or /redo to restore" (the key in
+/// `text.base`, the rest muted).
+#[must_use]
+pub fn revert_banner_row(
+    count: usize,
+    files: &[crate::store::RevertFile],
+    redo_key: &str,
+    theme: &ThemeStyles,
+    width: usize,
+) -> RowRender {
+    let raised = theme.background_raised;
+    let muted = theme.text_muted;
+    let base = theme.text.fg.unwrap_or(theme.background);
+    // Inner width: the rail (1) + paddingLeft 2; the ref's FilePath
+    // maxWidth derives from the box's content width.
+    let inner = width.saturating_sub(3);
+    let mut placed = Vec::new();
+    let mut rows: Vec<Vec<Placed>> = Vec::new();
+    rows.push(vec![text_at(
+        0,
+        0,
+        format!("{count} message{} reverted", if count == 1 { "" } else { "s" }),
+        muted,
+    )]);
+    if !files.is_empty() {
+        // paddingTop 1 + rows + paddingBottom 1 around the file list.
+        rows.push(Vec::new());
+        for file in files {
+            rows.push(revert_file_row(file, theme, inner));
+        }
+        rows.push(Vec::new());
+    }
+    rows.push(vec![
+        text_at(0, 0, redo_key, Style::new().fg(base).bg(raised)),
+        text_at(redo_key.len(), 0, " or /redo to restore", muted),
+    ]);
+    let height = rows.len() + 2; // + paddingTop/Bottom 1
+    for (index, row) in rows.iter().enumerate() {
+        for item in row {
+            let mut item = item.clone();
+            item.y += 1 + index;
+            item.x += 3;
+            placed.push(item);
+        }
+    }
+    let fills = vec![Fill { x: 0, y: 0, width: width as u16, height: height as u16, style: Style::new().bg(raised) }];
+    // The left rail (SplitBorder vertical `┃`).
+    for row in 0..height {
+        placed.push(text_at(0, row, "┃", Style::new().fg(raised).bg(theme.background)));
+    }
+    RowRender { placed, fills, height, images: Vec::new() }
+}
+
+/// Locale-grouped number (`Locale.number`, util/locale.ts) — the
+/// compaction usage + sidebar token rows share the format.
+#[must_use]
+pub fn locale_number(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::new();
+    for (index, digit) in digits.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped.chars().rev().collect()
 }
 
 /// Stack two rows vertically (the upper row keeps its height; the

@@ -268,6 +268,17 @@ pub fn render_session(
             // The user-block rail keys on the SESSION's agent (the
             // child view's `general` hue, session/index.tsx:2200).
             user_rail: store.session_agent_rail_color(session_id),
+            // SURF-1: the tool cells' inline disclosure keys.
+            expanded_tools: store
+                .expanded_tool_keys(),
+            // SURF-1: the staged revert (the boundary filter + the
+            // tail banner), the queued-compaction dividers and the
+            // redo shortcut label (index.tsx:1413-1418/2153 — the
+            // `session.redo` binding label, "R" until the keymap
+            // registry carries it).
+            revert: store.revert(session_id),
+            pending_compactions: store.pending_compactions(session_id),
+            redo_key: "R".to_owned(),
             ..TranscriptOptions::default()
         },
         styles,
@@ -383,6 +394,85 @@ pub fn render_session(
                         x,
                         width: end - x,
                     })
+                } else if let Some(rest) = row.key.strip_prefix("tool:") {
+                    // SURF-1: a tool detail cell's click surface. The
+                    // action keys on the tool: `execute` (and
+                    // background shells with a `shellID`) open the
+                    // detail dialog (`openDetails` → DialogExecute,
+                    // index.tsx:3207); the shell block / generic tool
+                    // toggle the INLINE expand (ShellDisplay:2897,
+                    // GenericTool:2548).
+                    let (message_id, part_id) = rest.split_once(':')?;
+                    let messages = store.messages(session_id);
+                    let tool = messages
+                        .iter()
+                        .find(|message| message.id() == message_id)
+                        .and_then(|message| {
+                            crate::components::message::resolve_part(message.parts(), part_id)
+                        })
+                        .and_then(|part| match part {
+                            crate::components::message::model::Part::Tool { name, state, .. } => {
+                                Some((name.clone(), state.clone()))
+                            }
+                            _ => None,
+                        })?;
+                    let canonical = crate::components::message::model::canonical_tool_name(
+                        &tool.0,
+                    )
+                    .to_owned();
+                    let background_shell =
+                        canonical == "shell" && tool.1.metadata.contains_key("shellID");
+                    let action = if canonical == "execute" || background_shell {
+                        crate::store::TranscriptHitAction::OpenToolDialog {
+                            message_id: message_id.to_owned(),
+                            part_id: part_id.to_owned(),
+                        }
+                    } else {
+                        crate::store::TranscriptHitAction::ToggleToolDetail {
+                            message_id: message_id.to_owned(),
+                            part_id: part_id.to_owned(),
+                        }
+                    };
+                    let heads = row.placed.iter().filter(|item| item.y == row.y);
+                    let x = heads.clone().map(|item| item.x).min().unwrap_or_default();
+                    let end = heads
+                        .map(|item| {
+                            item.x
+                                + item
+                                    .lines
+                                    .first()
+                                    .map(|line| {
+                                        line.runs
+                                            .iter()
+                                            .map(|run| crate::wrap::display_width(&run.text))
+                                            .sum::<usize>()
+                                    })
+                                    .unwrap_or_default()
+                        })
+                        .max()
+                        .unwrap_or_default();
+                    (end > x).then(|| crate::store::TranscriptHitRow {
+                        session_id: session_id.to_owned(),
+                        action,
+                        y: screen_y,
+                        height: row.height,
+                        x,
+                        width: end - x,
+                    })
+                } else if row.key == "revert:banner" {
+                    // The banner's dismiss surface: the raised block's
+                    // full width (`RevertMessage`'s onMouseUp,
+                    // index.tsx:2093-2113).
+                    Some(crate::store::TranscriptHitRow {
+                        session_id: session_id.to_owned(),
+                        action: crate::store::TranscriptHitAction::DismissRevert {
+                            session_id: session_id.to_owned(),
+                        },
+                        y: screen_y,
+                        height: row.height,
+                        x: transcript.inset,
+                        width: column.saturating_sub(transcript.inset * 2),
+                    })
                 } else if let Some(message_id) = row.key.strip_prefix("message:") {
                     // The user-message block (`UserMessage`'s inner
                     // content box, session/index.tsx:2219-2250):
@@ -451,6 +541,35 @@ pub fn render_session(
     );
     let mut frame = paint_placed_with_fills(&[], &[], size, fill);
     paste(&mut frame, &region, 0, content_top);
+    // SURF-1: the jump slot's loading state ("Loading session
+    // history…", index.tsx:1425-1427) — right-aligned over the slot
+    // row while the transcript fetch is in flight and no rows landed
+    // yet (v2's `firstJump()` hold suppresses the jump indicator).
+    if store.history_loading(session_id) && transcript.rows.is_empty() {
+        let slot_y = content_top + transcript_height.saturating_sub(1);
+        let label = "Loading session history…";
+        let label_width = crate::wrap::display_width(label);
+        let x = column.saturating_sub(inset + label_width);
+        let loading = crate::render::paint_placed(
+            &[crate::layout::Placed {
+                x,
+                y: 0,
+                width: label_width,
+                lines: vec![crate::layout::PlacedLine::plain(
+                    label,
+                    ratatui::style::Style::new()
+                        .fg(styles.text_muted.fg.unwrap_or_default())
+                        .bg(styles.background),
+                )],
+                tag: Some("session-loading-history".into()),
+            }],
+            (u16::try_from(column).unwrap_or(u16::MAX), 1),
+            ratatui::style::Style::new()
+                .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
+                .bg(styles.background),
+        );
+        paste(&mut frame, &loading, 0, slot_y);
+    }
     if let Some(strip) = strip {
         paste(&mut frame, &strip, 0, 0);
     }
