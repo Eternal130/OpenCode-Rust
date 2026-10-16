@@ -237,7 +237,11 @@ impl TuiConfig {
                     .and_then(|tabs| tabs.mode.clone())
                     .or_else(|| {
                         section.and_then(|tabs| tabs.enabled).map(|enabled| {
-                            if enabled { "on".to_owned() } else { "off".to_owned() }
+                            if enabled {
+                                "on".to_owned()
+                            } else {
+                                "off".to_owned()
+                            }
                         })
                     })
                     .unwrap_or_else(|| "auto".to_owned());
@@ -258,18 +262,11 @@ impl TuiConfig {
         // `input.mouse ?? true`).
         let mouse = info.mouse.unwrap_or(true);
         Self {
-            keybinds: info
-                .keybinds
-                .as_ref()
-                .map(|binds| {
-                    serde_json::Value::Object(
-                        binds
-                            .iter()
-                            .map(|(key, value)| (key.clone(), value.clone()))
-                            .collect(),
-                    )
-                })
-                .unwrap_or(serde_json::Value::Null),
+            keybinds: info.keybinds.as_ref().map_or(serde_json::Value::Null, |binds| {
+                serde_json::Value::Object(
+                    binds.iter().map(|(key, value)| (key.clone(), value.clone())).collect(),
+                )
+            }),
             theme,
             leader_timeout_ms,
             attention,
@@ -293,7 +290,7 @@ impl TuiConfig {
             // THAT document (same service semantics, different roots).
             let mut test_roots = roots;
             let fallback = test_roots.config.clone();
-            test_roots.config = path.parent().map(Path::to_path_buf).unwrap_or(fallback);
+            test_roots.config = path.parent().map_or(fallback, Path::to_path_buf);
             let service = oc_core::cli_config::CliConfig::open(&test_roots);
             if !service.path().exists() {
                 return None;
@@ -348,7 +345,6 @@ impl TuiConfig {
             path,
         }
     }
-
 }
 
 #[cfg(test)]
@@ -356,8 +352,8 @@ mod tests {
     use super::*;
 
     /// Test roots with an injected config dir (state/cache/tmp beside
-    /// it — hermetic; the CliConfig service only touches config +
-    /// state/locks).
+    /// it — hermetic; the `CliConfig` service only touches `config` +
+    /// `state/locks`).
     fn test_roots(config: &Path) -> oc_util::global_roots::Roots {
         oc_util::global_roots::Roots {
             home: config.to_path_buf(),

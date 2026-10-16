@@ -31,6 +31,7 @@ fn view(draft: &PromptDraft) -> HomeView<'_> {
         metadata: crate::components::composer::render::MetadataLine::default(),
         plugin_hints: Vec::new(),
         plugin_actions: Vec::new(),
+        mcp: None,
         autocomplete: None,
         rail: None,
         caret: None,
