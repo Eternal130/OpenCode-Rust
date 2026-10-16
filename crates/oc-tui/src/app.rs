@@ -71,6 +71,7 @@ const FOOTER_PANEL_MOUNT_HEIGHT: usize = 17;
 /// The headless/live application: the full keymap dispatch over the
 /// store, with the keymap's `dialog`/`input` modes kept in sync with
 /// the dialog stack and the focused composer.
+#[allow(clippy::struct_excessive_bools)] // the pump's mode flags grew one per lane
 pub struct App {
     pub store: Store,
     keymap: Keymap,
@@ -88,6 +89,13 @@ pub struct App {
     /// the `session.renamed` echo lands the new title through the
     /// event stream).
     pub rename_requests: Vec<(String, String)>,
+    /// `--auto` (v2 permission.tsx:14's `args.auto ? "autoaccept"`):
+    /// armed at boot, never flipped at runtime (v2's args are
+    /// boot-immutable too).
+    pub autoaccept: bool,
+    /// The asks autoaccept already answered (v2's `autoApproved` set,
+    /// session/index.tsx:252-254 — one `once` per request id).
+    auto_approved: std::collections::HashSet<String>,
     size: (u16, u16),
     /// The last pointer cell (motion/up events) — the strip's hover
     /// re-evaluation source after a re-layout moves controls under a
@@ -131,6 +139,8 @@ impl App {
             permission_states: HashMap::new(),
             permission_replies: Vec::new(),
             rename_requests: Vec::new(),
+            autoaccept: false,
+            auto_approved: std::collections::HashSet::new(),
             size,
             last_pointer: None,
             exit_requested: false,
@@ -406,6 +416,32 @@ impl App {
                     // re-hits the stationary pointer.
                     self.refresh_strip_hover(width);
                     return;
+                }
+                // The sidebar onboarding card's two pointer targets
+                // (footer.tsx:45-70): the `✕` release persists
+                // `dismissed = true` (the run loop writes the
+                // `getting-started` document), the "Connect provider"
+                // row dispatches `provider.connect` — the palette
+                // row's own handler (the server-list dialog). Only the
+                // session route paints the card; the rects clear with
+                // it (a hidden card must not zombie-click).
+                if !self.permission_live() && matches!(self.store.route(), Route::Session { .. }) {
+                    if let Some(hits) = self.store.sidebar_onboarding_hits() {
+                        if hits.dismiss.contains(col, row) {
+                            self.store.dismiss_sidebar_onboarding();
+                            self.store.request_redraw();
+                            return;
+                        }
+                        if hits.connect.contains(col, row) {
+                            let dispatch =
+                                self.dispatcher.dispatch(&self.store, "provider.connect", None);
+                            if let Dispatch::ServerPending(reason) = dispatch {
+                                let _ = reason;
+                            }
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
                 }
                 // #33 — the footer location label opens the Working
                 // directory select on release
@@ -697,6 +733,33 @@ impl App {
             .toasts()
             .current()
             .is_some_and(|toast| toast.variant == "error" && toast.title.is_some())
+    }
+
+    /// `--auto`'s autoaccept arm (v2 session/index.tsx:252-262): while
+    /// armed, a live permission ask replies `once` THROUGH the same
+    /// queue a keyboard allow uses (`permission_replies` + the local
+    /// `permission_replied` resolution — the ask footer falls back),
+    /// once per request id (`autoApproved`). Called after every SSE
+    /// ingest drain.
+    pub fn autoanswer_permissions(&mut self) {
+        if !self.autoaccept {
+            return;
+        }
+        let FooterView::Permission { request } = self.store.footer().view.clone() else {
+            return;
+        };
+        if !self.auto_approved.insert(request.id.clone()) {
+            return;
+        }
+        self.permission_replies.push(crate::components::footer::permission::PermissionReply {
+            session_id: request.session_id.clone(),
+            request_id: request.id.clone(),
+            decision: "once".to_owned(),
+            message: String::new(),
+        });
+        // The reply resolves the ask locally (the server echo lands
+        // through `permission.replied` — same as the keyboard path).
+        self.store.permission_replied(&request.id);
     }
 
     fn stroke_in_permission(&mut self, key: &str) {
@@ -2206,6 +2269,18 @@ pub struct BootArgs {
     pub continue_last: bool,
     /// `--session <id>` / `-s`: open this session.
     pub session: Option<String>,
+    /// `--prompt <text>` (v2 `input.args.prompt`): the startup prompt
+    /// — seeds the booted route's composer and auto-submits once on
+    /// boot (app.tsx:626's `startupPrompt`; home.tsx:52-80 and
+    /// routes/session/index.tsx:377-381+601-607 both submit it as the
+    /// first turn).
+    pub prompt: Option<String>,
+    /// `--auto` (with `--yolo`/`--dangerously-skip-permissions`, v2's
+    /// PermissionParams): arm autoaccept — every permission ask
+    /// auto-replies `once` (session/index.tsx:255-262), the ask UI
+    /// never mounts (permission.tsx:14's `args.auto ?
+    /// "autoaccept"`).
+    pub auto: bool,
 }
 
 /// Resolve the session `--continue` opens: the newest ROOT session in
@@ -2256,6 +2331,21 @@ pub async fn run(client: oc_client::Client, boot: BootArgs) -> Result<(), String
     run_with_size(client, size, boot).await
 }
 
+/// The live mouse flip's writer (v2 app.tsx:593 —
+/// `createEffect(() => renderer.useMouse = config.data.mouse)`):
+/// push or pop the v2 mode set the moment a config reload toggles
+/// `mouse`.
+fn write_mouse_flip(mouse: bool) {
+    use std::io::Write as _;
+    let mut out = std::io::stdout();
+    if mouse {
+        let _ = crate::mouse_modes::push(&mut out, true);
+    } else {
+        let _ = crate::mouse_modes::pop(&mut out, true);
+    }
+    let _ = out.flush();
+}
+
 /// [`run`] with an explicit terminal size (tests); `None` = the
 /// terminal query. The loop: SSE ingest drain → open-session sync →
 /// clock ticks (spinner/toast) → config-reload check → coalesced
@@ -2287,14 +2377,12 @@ pub async fn run_with_size(
         // the seam `pasteInputText`'s attachment resolution hangs off.
         crossterm::event::EnableBracketedPaste,
         // Mouse tracking (beta.8 bug 3/4): v2's renderer enables the
-        // terminal's mouse reporting (OpenTUI always runs it — the
-        // strip's hover/click and the reasoning rows' disclosure
-        // toggle are mouse-driven, `session-tabs.tsx:1652-1754` +
-        // `group-view.tsx:152-190`). Scope note: this port routes
-        // mouse events to the tab strip and the transcript's thought
-        // headers only — the broader mouse surface (drag reorder,
-        // context menus, scroll) stays keyboard-first.
-        crossterm::event::EnableMouseCapture
+        // terminal's mouse reporting CONFIG-GATED (the strip's
+        // hover/click and the reasoning rows' disclosure toggle are
+        // mouse-driven, `session-tabs.tsx:1652-1754` +
+        // `group-view.tsx:152-190`). The v2-parity mode set
+        // (`?1000 ?1002 ?1003 ?1006` — no crossterm `?1015`) pushes
+        // right after the config loads below (`crate::mouse_modes`).
     );
     // The alternate screen owns the display from here: route EVERY
     // stderr write to `<state>/tui.log` until teardown (subsystem
@@ -2318,6 +2406,20 @@ pub async fn run_with_size(
     // `crate::image` for why not a DA1 round-trip).
     app.store.set_graphics_protocol(crate::image::detect_protocol());
     let config = crate::config::TuiConfig::load(&oc_util::global_roots::resolve().config);
+
+    // The mouse-capture gate (v2 `useMouse: config.mouse`,
+    // app.tsx:241): push EXACTLY v2's four-mode set when on, nothing
+    // when off — `mouse: false` leaves the terminal's native text
+    // selection alone (auditC P1/P9). `applied_mouse` tracks the live
+    // state for the editor suspend/re-enter pair, the reload flip,
+    // and the teardown pop.
+    let mut applied_mouse = config.mouse;
+    {
+        use std::io::Write as _;
+        let mut out = std::io::stdout();
+        let _ = crate::mouse_modes::push(&mut out, applied_mouse);
+        let _ = out.flush();
+    }
 
     // R-06 — the attention channels (v2's sounds + OS notifications):
     // the production emitter writes OSC notification sequences to
@@ -2399,7 +2501,16 @@ pub async fn run_with_size(
         if doc.mode == crate::components::sidebar::SidebarMode::Hide {
             app.store.set_sidebar_mode(doc.mode);
         }
+        // Onboarding persistence (auditC S2): v2's
+        // `storage.store("getting-started", { initial: { dismissed:
+        // false } })` seeds the card's dismissal from
+        // `<state>/<ch>/tui/getting-started.json` — the `✕` release
+        // writes it back (the flip check below).
+        let doc: crate::storage::GettingStartedDoc =
+            storage.read_or_default(crate::storage::KEY_GETTING_STARTED);
+        app.store.restore_sidebar_onboarding(doc.dismissed);
     }
+    let mut persisted_onboarding = app.store.sidebar_onboarding_dismissed();
     let mut persisted_sidebar = app.store.sidebar_mode();
     let tabs_scope_cwd = directory.clone();
     if let Some(storage) = &tabs_storage {
@@ -2480,6 +2591,26 @@ pub async fn run_with_size(
         );
         app.store.set_composer(crate::app::HOME_PROMPT_KEY, &composer);
     }
+
+    // `--prompt` (v2 app.tsx:626's `startupPrompt` + home.tsx:52-80 /
+    // routes/session/index.tsx:377-381, 601-607): seed the BOOTED
+    // route's composer with the flag's text and submit it once — the
+    // first turn goes out on boot (home submissions create their
+    // session through the prompt sink; a `--session`/`--continue`
+    // boot submits into the routed session).
+    if let Some(prompt) = &boot.prompt {
+        let key = app.prompt_key();
+        let mut composer = app.store.composer(&key);
+        composer.draft.text.clone_from(prompt);
+        app.store.set_composer(&key, &composer);
+        let _ = app.store.submit_prompt(&key);
+    }
+    // `--auto` (v2 permission.tsx:14 `args.auto ? "autoaccept"`):
+    // arm the permission auto-answer (every ask replies `once`,
+    // session/index.tsx:255-262) + the composer metadata's `auto`
+    // marker.
+    app.autoaccept = boot.auto;
+    app.store.set_permission_autoaccept(boot.auto);
 
     // Config reload: mtime check per tick (the reference watches the dir).
     let mut config_mtime = config
@@ -2583,6 +2714,10 @@ pub async fn run_with_size(
             }
             app.store.ingest_all([message]);
         }
+        // `--auto`: the freshly-ingested ask (if any) auto-answers
+        // while autoaccept is armed — before the render, so the ask
+        // footer never flashes.
+        app.autoanswer_permissions();
         // Permission replies (D1): every once/always/reject the pump
         // recorded POSTs to the server — without this the parked tool
         // waits forever while the footer already looks resolved.
@@ -2726,18 +2861,28 @@ pub async fn run_with_size(
             let draft = app.store.prompt_draft(&key).text.clone();
             let cwd = std::env::current_dir().ok();
             let _ = disable_raw_mode();
-            let _ = crossterm::execute!(
-                std::io::stdout(),
-                crossterm::event::DisableMouseCapture,
-                crossterm::terminal::LeaveAlternateScreen
-            );
+            {
+                use std::io::Write as _;
+                let mut out = std::io::stdout();
+                let _ = crossterm::queue!(out, crossterm::terminal::LeaveAlternateScreen);
+                // Pop the mouse modes ONLY when they went on (the
+                // config gate — a `mouse: false` boot never pushed
+                // them, and popping unpushed modes is wire noise).
+                let _ = crate::mouse_modes::pop(&mut out, applied_mouse);
+                let _ = out.flush();
+            }
             let result = crate::editor::open_editor(&draft, cwd.as_deref(), || {}, || {});
             let _ = enable_raw_mode();
-            let _ = crossterm::execute!(
-                std::io::stdout(),
-                crossterm::terminal::EnterAlternateScreen,
-                crossterm::event::EnableMouseCapture
-            );
+            {
+                use std::io::Write as _;
+                let mut out = std::io::stdout();
+                let _ = crossterm::queue!(out, crossterm::terminal::EnterAlternateScreen);
+                // Re-arm the mouse modes under the SAME config gate
+                // (auditC P1 called out the old unconditional
+                // re-enable after $EDITOR).
+                let _ = crate::mouse_modes::push(&mut out, applied_mouse);
+                let _ = out.flush();
+            }
             let _ = terminal.clear();
             if editor_guard.is_some() {
                 stderr_guard = crate::stderr_redirect::install(&crate::stderr_redirect::log_path());
@@ -2803,6 +2948,21 @@ pub async fn run_with_size(
                     &crate::storage::SidebarDoc { mode: sidebar_now },
                 ) {
                     eprintln!("opencode tui: failed to persist sidebar mode: {error}");
+                }
+            }
+        }
+        // Onboarding persistence (footer.tsx:48-52 — the `✕` release
+        // persists `dismissed = true`): save on the flip, v2's storage
+        // draft shape.
+        let onboarding_now = app.store.sidebar_onboarding_dismissed();
+        if onboarding_now != persisted_onboarding {
+            persisted_onboarding = onboarding_now;
+            if let Some(storage) = &tabs_storage {
+                if let Err(error) = storage.write_typed(
+                    crate::storage::KEY_GETTING_STARTED,
+                    &crate::storage::GettingStartedDoc { dismissed: onboarding_now },
+                ) {
+                    eprintln!("opencode tui: failed to persist onboarding dismissal: {error}");
                 }
             }
         }
@@ -2889,6 +3049,15 @@ pub async fn run_with_size(
             config_mtime = mtime;
             if let Some(reloaded) = config.reload() {
                 app.apply_config(&reloaded, system_mode);
+                // The live mouse flip (v2 app.tsx:593 —
+                // `createEffect(() => renderer.useMouse =
+                // config.data.mouse)`): a config change that toggles
+                // `mouse` pushes/pops the v2 mode set immediately, no
+                // restart needed.
+                if reloaded.mouse != applied_mouse {
+                    applied_mouse = reloaded.mouse;
+                    write_mouse_flip(applied_mouse);
+                }
             }
         }
         // Render (coalesced; the clock tick keeps spinners/toasts live).
@@ -3045,16 +3214,24 @@ pub async fn run_with_size(
         guard.restore();
     }
     let _ = disable_raw_mode();
-    let _ = crossterm::execute!(
-        std::io::stdout(),
-        LeaveAlternateScreen,
-        crossterm::event::DisableFocusChange,
-        crossterm::event::DisableBracketedPaste,
-        crossterm::event::DisableMouseCapture,
-        // Clear any lingering graphics placements (R-07): the
-        // alternate screen would discard them anyway, but an explicit
-        // `a=d,d=a` keeps a same-screen exit clean.
-    );
+    {
+        use std::io::Write as _;
+        let mut out = std::io::stdout();
+        let _ = crossterm::queue!(
+            out,
+            LeaveAlternateScreen,
+            crossterm::event::DisableFocusChange,
+            crossterm::event::DisableBracketedPaste,
+            // Clear any lingering graphics placements (R-07): the
+            // alternate screen would discard them anyway, but an explicit
+            // `a=d,d=a` keeps a same-screen exit clean.
+        );
+        // Pop the mouse modes under the same gate they went on with
+        // (v2's teardown pops what the renderer pushed — a
+        // `mouse: false` run pushed nothing).
+        let _ = crate::mouse_modes::pop(&mut out, applied_mouse);
+        let _ = out.flush();
+    }
     // #46 — the exit epilogue (v2 app.tsx:446-450: the renderer stops,
     // then `process.stdout.write(epilogue + "\n")`): the wordmark +
     // resume hint the session route staged while mounted
@@ -3617,7 +3794,11 @@ mod tests {
         let store = Store::new(crate::reactive::Runtime::new());
         apply_boot_route(
             &store,
-            &BootArgs { continue_last: false, session: Some("ses_direct".into()) },
+            &BootArgs {
+                continue_last: false,
+                session: Some("ses_direct".into()),
+                ..BootArgs::default()
+            },
             None,
         );
         assert_eq!(
@@ -3628,7 +3809,11 @@ mod tests {
 
         // --continue: the resolved latest root session.
         let store = Store::new(crate::reactive::Runtime::new());
-        apply_boot_route(&store, &BootArgs { continue_last: true, session: None }, Some("ses_new"));
+        apply_boot_route(
+            &store,
+            &BootArgs { continue_last: true, session: None, ..BootArgs::default() },
+            Some("ses_new"),
+        );
         assert_eq!(
             store.route(),
             crate::store::Route::Session { session_id: "ses_new".to_owned() }
@@ -3637,7 +3822,11 @@ mod tests {
         // --continue with nothing to resume: stays home (v2 `if
         // (!match) return`).
         let store = Store::new(crate::reactive::Runtime::new());
-        apply_boot_route(&store, &BootArgs { continue_last: true, session: None }, None);
+        apply_boot_route(
+            &store,
+            &BootArgs { continue_last: true, session: None, ..BootArgs::default() },
+            None,
+        );
         assert_eq!(store.route(), crate::store::Route::Home);
     }
 }
@@ -4133,8 +4322,113 @@ fn user_message_release_opens_message_actions() {
     )));
 }
 
-/// The select dialog's pointer surface (`dialog-select.tsx:757-775`):
-/// pointer motion over an option row moves the selection, a release
+/// The sidebar onboarding card's pointer surface (footer.tsx:45-70):
+/// the `✕` release dismisses the card — the store flip the run loop's
+/// persistence check writes the `getting-started` doc from — and the
+/// "Connect provider" row dispatches `provider.connect` (the palette
+/// row's own handler opens the server-list dialog). The rects clear
+/// with the card (no zombie clicks on a dismissed card).
+#[test]
+fn onboarding_card_pointer_routes_dismiss_and_connect() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let mut app = App::new((160, 30));
+    app.store.open_tab("s1", Some("Bug hunt".to_owned()));
+    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+    let _ = app.frame(); // the render pass records the hit rects
+    let hits = app.store.sidebar_onboarding_hits().expect("the card painted");
+    // The dismiss rect IS the painted ✕ cell; the connect rect spans
+    // the action row (label + /connect hint).
+    let grid = app.frame().text_grid();
+    assert_eq!(
+        grid[hits.dismiss.y].chars().nth(hits.dismiss.x),
+        Some('✕'),
+        "the dismiss target is the ✕ glyph"
+    );
+    let connect_row: String =
+        grid[hits.connect.y].chars().skip(hits.connect.x).take(hits.connect.width).collect();
+    assert!(connect_row.contains("Connect provider"), "row: {connect_row}");
+    assert!(connect_row.contains("/connect"), "row: {connect_row}");
+    // Release on the ✕ dismisses; the re-render drops the rects.
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        u16::try_from(hits.dismiss.x).unwrap_or(u16::MAX),
+        u16::try_from(hits.dismiss.y).unwrap_or(u16::MAX),
+    ));
+    assert!(app.store.sidebar_onboarding_dismissed(), "the ✕ flipped the dismissal");
+    let _ = app.frame();
+    assert!(app.store.sidebar_onboarding_hits().is_none(), "the rects cleared");
+
+    // The connect row on a fresh card dispatches `provider.connect`.
+    let mut app = App::new((160, 30));
+    app.store.open_tab("s2", Some("Second".to_owned()));
+    app.store.navigate(Route::Session { session_id: "s2".to_owned() });
+    let _ = app.frame();
+    let hits = app.store.sidebar_onboarding_hits().expect("the card painted again");
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        u16::try_from(hits.connect.x).unwrap_or(u16::MAX),
+        u16::try_from(hits.connect.y).unwrap_or(u16::MAX),
+    ));
+    assert!(
+        matches!(
+            app.store.dialogs().last().map(|entry| &entry.kind),
+            Some(crate::store::DialogKind::ServerList { command: "provider.connect", .. })
+        ),
+        "provider.connect opened the server-list dialog: {:?}",
+        app.store.dialogs()
+    );
+}
+
+/// `--auto`'s autoaccept (v2 session/index.tsx:252-262): while armed,
+/// a live permission ask auto-replies `once` through the same queue
+/// a keyboard allow uses, resolves locally (the ask footer falls
+/// back), and never double-answers the same request id.
+#[test]
+fn autoaccept_auto_answers_permission_asks_once() {
+    let mut app = App::new((80, 24));
+    let ask = crate::data::Ingest::Event(crate::data::BusEvent::new(
+        "permission.asked",
+        serde_json::json!({
+            "id": "p1",
+            "sessionID": "ses",
+            "action": "read",
+            "resources": ["src/index.ts"],
+        }),
+    ));
+    // Unarmed: the ask surfaces (the keyboard path owns the reply).
+    app.store.ingest_all([ask.clone()]);
+    app.autoanswer_permissions();
+    assert!(app.permission_live(), "the ask footer holds the screen");
+    assert!(app.permission_replies.is_empty(), "no reply while disarmed");
+    // Armed (--auto): the SAME ask answers once — decision `once`,
+    // the footer falls back, and a second drain does not duplicate.
+    app.autoaccept = true;
+    app.autoanswer_permissions();
+    assert!(!app.permission_live(), "the ask resolved locally");
+    assert_eq!(app.permission_replies.len(), 1, "one reply");
+    assert_eq!(app.permission_replies[0].request_id, "p1");
+    assert_eq!(app.permission_replies[0].session_id, "ses");
+    assert_eq!(app.permission_replies[0].decision, "once");
+    app.autoanswer_permissions();
+    assert_eq!(app.permission_replies.len(), 1, "the autoApproved set dedupes");
+    // A NEW ask under the arm answers immediately (the pump's
+    // post-ingest call site).
+    app.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+        "permission.asked",
+        serde_json::json!({
+            "id": "p2",
+            "sessionID": "ses",
+            "action": "bash",
+            "resources": ["rm -rf /tmp/x"],
+        }),
+    ))]);
+    app.autoanswer_permissions();
+    assert_eq!(app.permission_replies.len(), 2, "each ask answered");
+    assert_eq!(app.permission_replies[1].request_id, "p2");
+}
+
+/// The select dialog's pointer surface (`dialog-select.tsx:757-775`):/// pointer motion over an option row moves the selection, a release
 /// submits it (the same path as enter), a release outside the frame
 /// dismisses.
 #[test]

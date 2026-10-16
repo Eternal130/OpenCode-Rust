@@ -826,6 +826,7 @@ pub struct Store {
     terminal_size: Signal<(u16, u16)>,
     /// The onboarding card's dismissal (storage `getting-started`).
     sidebar_onboarding: Signal<bool>,
+    permission_autoaccept: Signal<bool>,
     /// Plugin footer hint segments (one per plugin, latest wins).
     plugin_hints: Signal<Vec<(String, String)>>,
     /// Plugin home quick actions (registration-time).
@@ -877,6 +878,9 @@ pub struct Store {
     /// The footer location label's hit rect + directory from the last
     /// render (None when the label didn't paint — empty location).
     footer_location_hit: std::cell::RefCell<Option<FooterLocationHit>>,
+    /// The sidebar onboarding card's pointer targets (the render
+    /// pass's absolute rects; `None` while the card is hidden).
+    sidebar_onboarding_hits: std::cell::RefCell<Option<SidebarOnboardingHits>>,
     /// The location label's hover state (`hovered()`).
     location_hovered: std::cell::Cell<bool>,
     /// Per-session scroll state (Wave A's scroll driver over
@@ -1052,6 +1056,36 @@ pub struct FooterLocationHit {
     pub width: usize,
 }
 
+/// One pointer target's absolute screen rect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HitRect {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl HitRect {
+    /// Whether the pointer cell sits inside the rect.
+    #[must_use]
+    pub fn contains(&self, col: usize, row: usize) -> bool {
+        row >= self.y && row < self.y + self.height && col >= self.x && col < self.x + self.width
+    }
+}
+
+/// The sidebar onboarding card's pointer targets (v2's two `onMouseUp`
+/// boxes, footer.tsx:45-70): the `✕` dismiss cell
+/// (`sidebar.footer.getting-started.dismiss` persists
+/// `dismissed = true`) and the "Connect provider" row
+/// (`sidebar.footer.getting-started.connect` dispatches
+/// `provider.connect`). Recorded by the session render at the pane's
+/// paste origin; `None` while the card is hidden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SidebarOnboardingHits {
+    pub dismiss: HitRect,
+    pub connect: HitRect,
+}
+
 /// One queued prompt (`session.inbox` row with `delivery: "queue"`,
 /// the local serial-queue model lifted from mini/queue.rs — see
 /// `QueueState`).
@@ -1186,6 +1220,10 @@ struct StoreSignals {
     terminal_size: Signal<(u16, u16)>,
     /// The onboarding card's dismissal (storage `getting-started`).
     sidebar_onboarding: Signal<bool>,
+    /// `--auto`'s autoaccept arm (v2 `local.permission.mode ===
+    /// "autoaccept"`, permission.tsx:14 — boot-immutable, from the
+    /// CLI flag; the composer metadata's `auto` marker reads it).
+    permission_autoaccept: Signal<bool>,
     plugin_hints: Signal<Vec<(String, String)>>,
     plugin_home_actions: Signal<Vec<crate::components::home::PluginQuickAction>>,
     plugin_group_rules: Signal<crate::components::message::model::GroupRules>,
@@ -1274,6 +1312,7 @@ impl Store {
             sidebar_open,
             terminal_size,
             sidebar_onboarding,
+            permission_autoaccept,
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
@@ -1310,6 +1349,7 @@ impl Store {
             sidebar_open,
             terminal_size,
             sidebar_onboarding,
+            permission_autoaccept,
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
@@ -1340,6 +1380,7 @@ impl Store {
             dialog_frame_rect: std::cell::RefCell::new(None),
             dialog_option_rows: std::cell::RefCell::new(Vec::new()),
             footer_location_hit: std::cell::RefCell::new(None),
+            sidebar_onboarding_hits: std::cell::RefCell::new(None),
             location_hovered: std::cell::Cell::new(false),
             scroll: std::cell::RefCell::new(HashMap::new()),
             transcript_metrics: std::cell::RefCell::new(HashMap::new()),
@@ -1385,6 +1426,7 @@ impl Store {
         let sidebar_open = Signal::new(&runtime, false);
         let terminal_size = Signal::new(&runtime, (0u16, 0u16));
         let sidebar_onboarding = Signal::new(&runtime, false);
+        let permission_autoaccept = Signal::new(&runtime, false);
         let plugin_hints = Signal::new(&runtime, Vec::<(String, String)>::new());
         let plugin_home_actions =
             Signal::new(&runtime, Vec::<crate::components::home::PluginQuickAction>::new());
@@ -1420,6 +1462,7 @@ impl Store {
                 sidebar_open,
                 terminal_size,
                 sidebar_onboarding,
+                permission_autoaccept,
                 plugin_hints,
                 plugin_home_actions,
                 plugin_group_rules,
@@ -2537,6 +2580,20 @@ impl Store {
     #[must_use]
     pub fn footer_location_hit(&self) -> Option<FooterLocationHit> {
         self.footer_location_hit.borrow().clone()
+    }
+
+    /// The sidebar onboarding card's pointer targets, when the card
+    /// painted (the session render records them at the pane's paste
+    /// origin).
+    pub fn set_sidebar_onboarding_hits(&self, hits: Option<SidebarOnboardingHits>) {
+        *self.sidebar_onboarding_hits.borrow_mut() = hits;
+    }
+
+    /// The recorded onboarding targets (`None` while the card is
+    /// hidden — the render clears them every pass).
+    #[must_use]
+    pub fn sidebar_onboarding_hits(&self) -> Option<SidebarOnboardingHits> {
+        *self.sidebar_onboarding_hits.borrow()
     }
 
     /// The location label's hover transition (returns whether it
@@ -3662,16 +3719,40 @@ impl Store {
     }
 
     /// The onboarding card's dismissal (v2 storage
-    /// `getting-started.dismissed`, footer.tsx:11-23) — the card's
-    /// only writer until mouse selection lands.
+    /// `getting-started.dismissed`, footer.tsx:11-23): the `✕`
+    /// release path (`sidebar.footer.getting-started.dismiss`) —
+    /// sets the signal; the run loop observes the flip and persists
+    /// the document.
     pub fn dismiss_sidebar_onboarding(&self) {
         self.sidebar_onboarding.set(true);
+    }
+
+    /// The boot restore (the document's `dismissed` seeds the signal —
+    /// the run loop reads `<state>/<ch>/tui/getting-started.json`
+    /// before the first frame, mirroring v2's `storage.store(...)`
+    /// initial value).
+    pub fn restore_sidebar_onboarding(&self, dismissed: bool) {
+        self.sidebar_onboarding.set(dismissed);
     }
 
     /// Whether the getting-started card was dismissed.
     #[must_use]
     pub fn sidebar_onboarding_dismissed(&self) -> bool {
         self.sidebar_onboarding.get()
+    }
+
+    /// Arm/disarm permission autoaccept (`--auto`; boot-only in
+    /// practice — v2's args are boot-immutable).
+    pub fn set_permission_autoaccept(&self, armed: bool) {
+        self.permission_autoaccept.set(armed);
+    }
+
+    /// Whether permission autoaccept is armed (the composer
+    /// metadata's `auto` marker — v2 `local.permission.mode ===
+    /// "autoaccept"`).
+    #[must_use]
+    pub fn permission_autoaccept(&self) -> bool {
+        self.permission_autoaccept.get()
     }
 
     /// Upsert one plugin's footer hint segment (empty text removes).
