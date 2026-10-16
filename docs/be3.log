@@ -132,3 +132,40 @@ no IntegrationService in oc-core). This lane lands the host.
   (persisted), zen device round-trip against a local mock (request shapes
   asserted), loopback listener params/HTML, v2 wire serialization.
 - cargo fmt + clippy (pedantic) clean; oc-core nextest 795/795.
+
+## Phase 3 — server routes + CLI end-to-end (WIP, green)
+
+- `oc-server/handlers/integration.rs` (new): the 11 integration operations
+  over `engine.integration` with v2's exact error mapping — Authorization →
+  400 `integration_authorization`, CodeRequired → 400 `integration_code_required`,
+  wellknown failures → 400 `well_known_discovery`, Integration/Attempt/Method
+  404 tagged envelopes. Stubs removed from misc.rs (routes + handlers);
+  module merged in handlers/mod.rs (route table stays 141 — coverage test green).
+- `wellknown.add`: fetches `{url}/.well-known/opencode`, requires
+  `auth.command`, persists the origin union in kv `wellknown:sources`,
+  registers the integration (name = hostname, command method `login`) and
+  publishes `integration.updated` (wellknown.ts:113-148 + wellknown/plugin.ts).
+  Persisted sources re-register at first `integration.list`
+  (`AppState.wellknown_restore` OnceLock; the WellKnownPlugin boot transform).
+- `integration.get` is location-wrapped (v2 `Location.response`) — caught by
+  the client decode in tests.
+- Tests (`oc-server/tests/be3_lane.rs`, 5 green): list/get round-trip incl.
+  404 envelope; connect.key → stored connection + `credential.updated` /
+  `credential.switched` on the SSE stream; the zen device flow THROUGH the
+  real routes against a mock IdP (attempt shape, poll → complete, orgName
+  label, mock request-shape assertions: client_id/supports_org_scope/device
+  grant); wellknown add (400 no-auth → registered command integration →
+  sourced key credential); code-required 400 envelope (`kind` via spread fields).
+- CLI e2e (`oc-cli/tests/auth_e2e.rs`, green): spawns the real `opencode serve`
+  binary, `auth list` (empty) → `auth login opencode --method device --answer
+  server=<mock>` (auto flow → "Connected to OpenCode Console") → `auth list`
+  (credential `org_e2e`) → `auth logout opencode org_e2e` → empty again.
+- cargo fmt + clippy (pedantic) clean on oc-core/oc-server/oc-cli;
+  nextest 1184/1184 across the three crates.
+
+Divergences (deliberate, logged): v2 `Effect.die` paths (complete on an
+already-completing attempt, oauth connect with unknown method) surface as
+400 `integration_authorization` instead of 500 UnknownError — typed
+instead of defect; wellknown `config`/`remote_config` resolution into the
+provider config graph is the config lane's surface (route + registration land
+here; resolution deferred).
