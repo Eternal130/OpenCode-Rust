@@ -304,13 +304,22 @@ pub fn render_overlay(
         DialogKind::Plugin { id } => store.plugin_dialog_content(id),
         _ => None,
     };
-    let (rect, option_rows) =
+    let (rect, option_rows, button_hits) =
         render_overlay_with_options(base, &entry, &props, plugin.as_ref(), theme, terminal);
     // The backdrop's dismissal surface: mouseups outside this rect
     // close the dialog (`ui/dialog.tsx:34-63`).
     store.set_dialog_frame_rect(Some(rect));
     store.set_dialog_option_rows(option_rows);
+    // The chrome buttons (auditA #6): the header close label + the
+    // Help `ok` pill ride the same frame.
+    store.set_dialog_button_hits(button_hits);
 }
+
+/// The overlay render's mouse surface bundle: the chrome rect, the
+/// option-row map (flat index → absolute screen row) and the chrome
+/// button hits (auditA #6).
+pub type OverlayMouseSurface =
+    ((usize, usize, usize, usize), Vec<Option<usize>>, Vec<crate::store::DialogButtonHit>);
 
 /// [`render_overlay_with`] plus the option-row map (the mouse surface).
 pub fn render_overlay_with_options(
@@ -320,7 +329,7 @@ pub fn render_overlay_with_options(
     plugin: Option<&crate::store::PluginDialogContent>,
     theme: &crate::theme::ThemeState,
     terminal: (u16, u16),
-) -> ((usize, usize, usize, usize), Vec<Option<usize>>) {
+) -> OverlayMouseSurface {
     // Select dialogs record their option rows (absolute screen rows,
     // flat-index order); static content records none.
     let option_rows = if match &entry.kind {
@@ -347,11 +356,13 @@ pub fn render_overlay_with_options(
     } else {
         Vec::new()
     };
-    let rect = render_overlay_with(base, entry, props, plugin, theme, terminal);
+    let (rect, button_hits) = crate::components::dialog_solid::render_overlay_solid(
+        base, entry, props, plugin, theme, terminal,
+    );
     let (_box_x, box_y, _, _) = rect;
     let option_rows =
         option_rows.into_iter().map(|row| row.map(|content_row| box_y + 1 + content_row)).collect();
-    (rect, option_rows)
+    (rect, option_rows, button_hits)
 }
 
 /// The overlay compositor with explicit content props (the golden
@@ -374,6 +385,7 @@ pub fn render_overlay_with(
     crate::components::dialog_solid::render_overlay_solid(
         base, entry, props, plugin, theme, terminal,
     )
+    .0
 }
 
 /// Backdrop composite: `out = src·α + dst·(1-α)` with `src = black`,
