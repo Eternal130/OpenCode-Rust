@@ -1069,10 +1069,7 @@ impl HitRect {
     /// Whether the pointer cell sits inside the rect.
     #[must_use]
     pub fn contains(&self, col: usize, row: usize) -> bool {
-        row >= self.y
-            && row < self.y + self.height
-            && col >= self.x
-            && col < self.x + self.width
+        row >= self.y && row < self.y + self.height && col >= self.x && col < self.x + self.width
     }
 }
 

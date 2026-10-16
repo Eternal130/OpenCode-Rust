@@ -71,6 +71,7 @@ const FOOTER_PANEL_MOUNT_HEIGHT: usize = 17;
 /// The headless/live application: the full keymap dispatch over the
 /// store, with the keymap's `dialog`/`input` modes kept in sync with
 /// the dialog stack and the focused composer.
+#[allow(clippy::struct_excessive_bools)] // the pump's mode flags grew one per lane
 pub struct App {
     pub store: Store,
     keymap: Keymap,
@@ -764,7 +765,8 @@ impl App {
     fn stroke_in_permission(&mut self, key: &str) {
         let FooterView::Permission { request } = self.store.footer().view.clone() else {
             return;
-        };        let state = self
+        };
+        let state = self
             .permission_states
             .get(&request.id)
             .cloned()
@@ -2329,6 +2331,21 @@ pub async fn run(client: oc_client::Client, boot: BootArgs) -> Result<(), String
     run_with_size(client, size, boot).await
 }
 
+/// The live mouse flip's writer (v2 app.tsx:593 —
+/// `createEffect(() => renderer.useMouse = config.data.mouse)`):
+/// push or pop the v2 mode set the moment a config reload toggles
+/// `mouse`.
+fn write_mouse_flip(mouse: bool) {
+    use std::io::Write as _;
+    let mut out = std::io::stdout();
+    if mouse {
+        let _ = crate::mouse_modes::push(&mut out, true);
+    } else {
+        let _ = crate::mouse_modes::pop(&mut out, true);
+    }
+    let _ = out.flush();
+}
+
 /// [`run`] with an explicit terminal size (tests); `None` = the
 /// terminal query. The loop: SSE ingest drain → open-session sync →
 /// clock ticks (spinner/toast) → config-reload check → coalesced
@@ -2584,7 +2601,7 @@ pub async fn run_with_size(
     if let Some(prompt) = &boot.prompt {
         let key = app.prompt_key();
         let mut composer = app.store.composer(&key);
-        composer.draft.text = prompt.clone();
+        composer.draft.text.clone_from(prompt);
         app.store.set_composer(&key, &composer);
         let _ = app.store.submit_prompt(&key);
     }
@@ -2847,10 +2864,7 @@ pub async fn run_with_size(
             {
                 use std::io::Write as _;
                 let mut out = std::io::stdout();
-                let _ = crossterm::queue!(
-                    out,
-                    crossterm::terminal::LeaveAlternateScreen
-                );
+                let _ = crossterm::queue!(out, crossterm::terminal::LeaveAlternateScreen);
                 // Pop the mouse modes ONLY when they went on (the
                 // config gate — a `mouse: false` boot never pushed
                 // them, and popping unpushed modes is wire noise).
@@ -3042,14 +3056,7 @@ pub async fn run_with_size(
                 // restart needed.
                 if reloaded.mouse != applied_mouse {
                     applied_mouse = reloaded.mouse;
-                    use std::io::Write as _;
-                    let mut out = std::io::stdout();
-                    if applied_mouse {
-                        let _ = crate::mouse_modes::push(&mut out, true);
-                    } else {
-                        let _ = crate::mouse_modes::pop(&mut out, true);
-                    }
-                    let _ = out.flush();
+                    write_mouse_flip(applied_mouse);
                 }
             }
         }
@@ -3787,7 +3794,11 @@ mod tests {
         let store = Store::new(crate::reactive::Runtime::new());
         apply_boot_route(
             &store,
-            &BootArgs { continue_last: false, session: Some("ses_direct".into()), ..BootArgs::default() },
+            &BootArgs {
+                continue_last: false,
+                session: Some("ses_direct".into()),
+                ..BootArgs::default()
+            },
             None,
         );
         assert_eq!(
@@ -3798,7 +3809,11 @@ mod tests {
 
         // --continue: the resolved latest root session.
         let store = Store::new(crate::reactive::Runtime::new());
-        apply_boot_route(&store, &BootArgs { continue_last: true, session: None, ..BootArgs::default() }, Some("ses_new"));
+        apply_boot_route(
+            &store,
+            &BootArgs { continue_last: true, session: None, ..BootArgs::default() },
+            Some("ses_new"),
+        );
         assert_eq!(
             store.route(),
             crate::store::Route::Session { session_id: "ses_new".to_owned() }
@@ -3807,7 +3822,11 @@ mod tests {
         // --continue with nothing to resume: stays home (v2 `if
         // (!match) return`).
         let store = Store::new(crate::reactive::Runtime::new());
-        apply_boot_route(&store, &BootArgs { continue_last: true, session: None, ..BootArgs::default() }, None);
+        apply_boot_route(
+            &store,
+            &BootArgs { continue_last: true, session: None, ..BootArgs::default() },
+            None,
+        );
         assert_eq!(store.route(), crate::store::Route::Home);
     }
 }
@@ -4326,11 +4345,8 @@ fn onboarding_card_pointer_routes_dismiss_and_connect() {
         Some('✕'),
         "the dismiss target is the ✕ glyph"
     );
-    let connect_row: String = grid[hits.connect.y]
-        .chars()
-        .skip(hits.connect.x)
-        .take(hits.connect.width)
-        .collect();
+    let connect_row: String =
+        grid[hits.connect.y].chars().skip(hits.connect.x).take(hits.connect.width).collect();
     assert!(connect_row.contains("Connect provider"), "row: {connect_row}");
     assert!(connect_row.contains("/connect"), "row: {connect_row}");
     // Release on the ✕ dismisses; the re-render drops the rects.
