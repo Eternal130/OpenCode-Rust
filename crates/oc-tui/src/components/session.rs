@@ -264,6 +264,10 @@ pub fn render_session(
             // #13: the footer row's model display names (the server
             // model catalog).
             model_names: model_display_names(store),
+            // Lane KM (`session.toggle.exploration_grouping`,
+            // index.tsx:233 `config.session.grouping !== "none"`): the
+            // toggle the transcript walk consults.
+            group_exploration: store.exploration_grouping(),
             // #40: the live child-session statuses (the subagent
             // card's running oracle).
             subagent_running: store.subagent_running_map(),

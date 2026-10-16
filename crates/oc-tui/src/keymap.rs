@@ -34,6 +34,8 @@ pub fn config_error_toast(reason: &str) -> Option<crate::components::toast::Toas
             variant: "error",
             duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
             action_label: None,
+            action_command: None,
+            modal: false,
         });
     }
     let message = strip(reason);
@@ -46,6 +48,8 @@ pub fn config_error_toast(reason: &str) -> Option<crate::components::toast::Toas
         variant: "error",
         duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
         action_label: None,
+        action_command: None,
+        modal: false,
     })
 }
 
