@@ -46,6 +46,12 @@ pub enum WebSearchError {
 pub struct WebSearch {
     providers: Vec<Arc<dyn SearchProvider>>,
     db: crate::database::Database,
+    /// The config-seeded default selection (v2's in-memory
+    /// `data.selection`, set by `ConfigWebSearchPlugin` via
+    /// `editor.default.set` — config/plugin/websearch.ts). Takes
+    /// precedence over the stored KV choice, exactly like v2's
+    /// `selection()` (websearch.ts:119-131).
+    config_selection: Option<Selection>,
     cooldowns: Mutex<HashMap<String, (u64, WebSearchError)>>,
     preferred: Mutex<HashMap<String, Option<String>>>,
 }
@@ -55,9 +61,17 @@ impl WebSearch {
         Self {
             providers,
             db,
+            config_selection: None,
             cooldowns: Mutex::new(HashMap::new()),
             preferred: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Seed the config-default selection (`websearch: false | {provider}`).
+    #[must_use]
+    pub fn with_config_selection(mut self, selection: Option<Selection>) -> Self {
+        self.config_selection = selection;
+        self
     }
 
     /// `WebSearch.providers` — id/name pairs sorted by display name.
@@ -73,6 +87,18 @@ impl WebSearch {
     }
 
     async fn stored_selection(&self) -> Option<Selection> {
+        // v2 `selection()` (websearch.ts:119-131): the in-memory
+        // (config-seeded) selection wins when it is `false`, `"random"`,
+        // or a registered provider id; the stored KV choice is the
+        // fallback.
+        match &self.config_selection {
+            Some(Selection::Disabled) => return Some(Selection::Disabled),
+            Some(Selection::Random) => return Some(Selection::Random),
+            Some(Selection::Provider(id)) if self.provider(id).is_some() => {
+                return Some(Selection::Provider(id.clone()));
+            }
+            _ => {}
+        }
         let stored = self.db.kv_get(PROVIDER_KEY).await.ok().flatten()?;
         match stored {
             serde_json::Value::String(id) if id == "random" => Some(Selection::Random),
@@ -631,6 +657,91 @@ mod tests {
         assert_eq!(response.provider_id.0, "exa");
         // Explicit provider id bypasses the stored selection.
         let response = search.query("q", None, Some("tavily")).await.unwrap();
+        assert_eq!(response.provider_id.0, "tavily");
+    }
+
+    #[tokio::test]
+    async fn tool_websearch_without_providers_is_typed_provider_required() {
+        // auditE #4: zero eligible providers must surface the v2 typed
+        // error (`WebSearch.ProviderRequired`), not a hollow failure.
+        let db = crate::database::Database::open_in_memory().await.unwrap();
+        let search = WebSearch::new(db, Vec::new());
+        assert!(matches!(
+            search.query("q", None, None).await.unwrap_err(),
+            WebSearchError::ProviderRequired
+        ));
+        assert!(search.providers().is_empty());
+    }
+
+    #[tokio::test]
+    async fn tool_websearch_stub_provider_receives_query_and_maps_results() {
+        // The provider seam: the query text arrives verbatim and the
+        // results map straight into `WebSearch.Response`.
+        struct StubProvider {
+            queries: Mutex<Vec<String>>,
+        }
+
+        #[async_trait::async_trait]
+        impl SearchProvider for StubProvider {
+            fn id(&self) -> &'static str {
+                "stub"
+            }
+            fn name(&self) -> &'static str {
+                "Stub"
+            }
+            async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
+                self.queries.lock().push(query.to_string());
+                Ok(vec![WebSearchResult {
+                    url: "https://example.com/a".into(),
+                    title: Some("A".into()),
+                    content: None,
+                    time: oc_schema::misc::WebSearchResultTime { published: None },
+                }])
+            }
+        }
+
+        let stub = Arc::new(StubProvider { queries: Mutex::new(Vec::new()) });
+        let db = crate::database::Database::open_in_memory().await.unwrap();
+        let search =
+            WebSearch::new(db, vec![stub.clone() as Arc<dyn SearchProvider>]).with_config_selection(
+                Some(Selection::Provider("stub".into())),
+            );
+        let response = search.query("rust async io", None, None).await.unwrap();
+        assert_eq!(response.provider_id.0, "stub");
+        assert_eq!(response.results.len(), 1);
+        assert_eq!(response.results[0].url, "https://example.com/a");
+        assert_eq!(*stub.queries.lock(), vec!["rust async io".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn tool_websearch_config_selection_seeds_and_overrides() {
+        // v2 ConfigWebSearchPlugin: the config `websearch` selection is the
+        // in-memory default and wins over the stored KV choice
+        // (websearch.ts:119-131 checks `data.selection` first).
+        let search = service()
+            .await
+            .with_config_selection(Some(Selection::Provider("exa".into())));
+        let response = search.query("q", None, None).await.unwrap();
+        assert_eq!(response.provider_id.0, "exa");
+
+        let search = service()
+            .await
+            .with_config_selection(Some(Selection::Provider("exa".into())));
+        search.select(&Selection::Provider("tavily".into())).await;
+        let response = search.query("q", None, None).await.unwrap();
+        assert_eq!(response.provider_id.0, "exa", "config selection beats KV");
+
+        let search = service().await.with_config_selection(Some(Selection::Disabled));
+        search.select(&Selection::Provider("tavily".into())).await;
+        assert!(matches!(search.query("q", None, None).await.unwrap_err(), WebSearchError::Disabled));
+
+        // An unknown provider id in config does not own the selection —
+        // the stored choice applies (v2: `providers.has(id)` gate).
+        let search = service()
+            .await
+            .with_config_selection(Some(Selection::Provider("missing".into())));
+        search.select(&Selection::Provider("tavily".into())).await;
+        let response = search.query("q", None, None).await.unwrap();
         assert_eq!(response.provider_id.0, "tavily");
     }
 
