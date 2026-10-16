@@ -12,6 +12,7 @@ pub mod providers_enterprise;
 #[cfg(test)]
 mod tests;
 pub mod types;
+pub mod vertex;
 pub mod wellknown_config;
 
 use crate::bus::{registry, Bus, PublishOptions};

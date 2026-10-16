@@ -212,11 +212,18 @@ impl Recorder {
 #[test]
 fn bus_registry_manifest_complete() {
     let defs = super::definitions();
-    // 51 session events + worktree.resolved.
-    assert_eq!(defs.len(), 52, "inventory size");
+    // 51 session events in enum order + the ephemeral `session.diff`
+    // remainder + worktree.resolved.
+    assert_eq!(defs.len(), 53, "inventory size");
     let durable = defs.iter().filter(|def| def.durable.is_some()).count();
     // 45 durable session events + worktree.resolved.
     assert_eq!(durable, 46, "durable manifest size");
+    // The BE-2b remainder registers as ephemeral on the session aggregate.
+    let session_diff = super::definitions()
+        .iter()
+        .find(|def| def.type_ == "session.diff")
+        .expect("session.diff registered");
+    assert!(session_diff.durable.is_none(), "session.diff is ephemeral (v1/session.ts:633-639)");
 
     // Encoded types resolve and round-trip their versions.
     for def in defs.iter().filter(|def| def.durable.is_some()) {

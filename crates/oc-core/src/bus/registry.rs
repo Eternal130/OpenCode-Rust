@@ -3,7 +3,8 @@
 //! The manifest is `Event.durableMap([...SessionEvent.DurableDefinitions,
 //! Worktree.Event.Resolved])` keyed by the **versioned type**
 //! `"{type}.{version}"`. This port keeps the full session event inventory
-//! (51 definitions, durable + ephemeral) plus `worktree.resolved`, exposing:
+//! (52 definitions incl. the ephemeral `session.diff` remainder, durable +
+//! ephemeral) plus `worktree.resolved`, exposing:
 //!
 //! - [`definitions`] — the ordered inventory (enum order of
 //!   `oc_schema::session_event::Event`, then `worktree.resolved`).
@@ -146,6 +147,9 @@ const SESSION_EPHEMERAL: &[&str] = &[
     "session.tool.input.delta",
     "session.tool.progress",
     "session.compaction.delta",
+    // `session.diff` (schema/src/v1/session.ts:633-639): ephemeral
+    // `{sessionID, diff}` published alongside the session.diff service.
+    "session.diff",
 ];
 
 fn session_def(type_: &str, version: u64) -> EventDefinition {
@@ -156,7 +160,7 @@ fn session_def(type_: &str, version: u64) -> EventDefinition {
 }
 
 static DEFINITIONS: LazyLock<Vec<EventDefinition>> = LazyLock::new(|| {
-    let mut defs = Vec::with_capacity(52);
+    let mut defs = Vec::with_capacity(53);
     // Enum order of oc_schema::session_event::Event.
     let order: &[&str] = &[
         "session.created",
@@ -210,6 +214,10 @@ static DEFINITIONS: LazyLock<Vec<EventDefinition>> = LazyLock::new(|| {
         "session.revert.committed",
         "session.usage.recorded",
         "session.message.content.updated",
+        // BE-2b remainder: the ephemeral `session.diff` event
+        // (schema/src/v1/session.ts:633-639) joins the registry so the
+        // server can publish turn diffs on the session aggregate.
+        "session.diff",
     ];
     for type_ in order {
         if SESSION_V1.contains(type_) {
@@ -254,7 +262,7 @@ static BY_TYPE_LATEST: LazyLock<HashMap<String, usize>> = LazyLock::new(|| {
     latest.into_iter().map(|(type_, (_, index))| (type_, index)).collect()
 });
 
-/// `SessionEvent.All.cases` membership (all 51 session event types).
+/// `SessionEvent.All.cases` membership (all 52 session event types).
 static SESSION_TYPES: LazyLock<std::collections::HashSet<&'static str>> = LazyLock::new(|| {
     DEFINITIONS
         .iter()
@@ -263,7 +271,8 @@ static SESSION_TYPES: LazyLock<std::collections::HashSet<&'static str>> = LazyLo
         .collect()
 });
 
-/// The full event inventory (51 session events in enum order + `worktree.resolved`).
+/// The full event inventory (52 session events — 51 in enum order + the
+/// ephemeral `session.diff` remainder — + `worktree.resolved`).
 #[must_use]
 pub fn definitions() -> &'static [EventDefinition] {
     &DEFINITIONS
@@ -494,7 +503,7 @@ pub fn by_type_latest(type_: &str) -> Option<&'static EventDefinition> {
     BY_TYPE_LATEST.get(type_).map(|&index| &DEFINITIONS[index])
 }
 
-/// Whether `type_` is one of the 51 session event types (gates routing).
+/// Whether `type_` is one of the 52 session event types (gates routing).
 #[must_use]
 pub fn is_session_event(type_: &str) -> bool {
     SESSION_TYPES.contains(type_)
