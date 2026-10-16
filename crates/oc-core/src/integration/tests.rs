@@ -1639,10 +1639,18 @@ async fn copilot_resolver_binds_route_from_credential() {
         id: oc_schema::id::ModelId::parse(model_id),
         variant: None,
     });
-    match bound {
-        Ok(_) => {}
-        Err(error) => panic!("copilot route should bind from the credential: {error:?}"),
-    }
+    let (model, _info, _canonical) = bound.expect("copilot route should bind from the credential");
+    // BE-4: the binding now lands on the dedicated Copilot chat route with
+    // the credential token and client headers.
+    assert_eq!(model.route.id, "copilot-chat");
+    let route = std::sync::Arc::clone(&model.route);
+    let mut request = oc_ai::schema::LLMRequest::new(model);
+    request.messages = vec![oc_ai::schema::Message::user("hi")];
+    let prepared = route.prepare_request(&request);
+    let body = route.build_body(&prepared).expect("body");
+    let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
+    assert_eq!(transport_request.header("authorization"), Some("Bearer gho_route"));
+    assert_eq!(transport_request.header("X-GitHub-Api-Version"), Some("2026-08-01"));
 }
 
 // -- BE-3b: console ingestion + status reporters (items 4+5) -----------------------
@@ -1963,4 +1971,113 @@ async fn wellknown_documents_feed_the_config_loader() {
         providers.contains(&"acme"),
         "wellknown provider reached the config entries: {providers:?}"
     );
+}
+
+// -- BE-4: Vertex ADC credential binding → resolver route (item 2) --------
+
+#[tokio::test]
+async fn vertex_adc_binding_refreshes_and_binds_the_native_route() {
+    use crate::engine::resolver::CatalogModelResolver;
+    use crate::provider_catalog::facade::FacadeContext;
+
+    // 1. an authorized-user ADC file in a temp HOME + explicit
+    //    GOOGLE_APPLICATION_CREDENTIALS
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let adc_path = dir.path().join("adc.json");
+    std::fs::write(
+        &adc_path,
+        serde_json::json!({
+            "type": "authorized_user",
+            "client_id": "id.apps.googleusercontent.com",
+            "client_secret": "secret",
+            "refresh_token": "refresh-grant",
+        })
+        .to_string(),
+    )
+    .expect("write adc");
+    std::env::set_var("GOOGLE_APPLICATION_CREDENTIALS", &adc_path);
+
+    // 2. the token endpoint replayed through the mock
+    let mock = MockOAuth::start(vec![(
+        "/token",
+        vec![json!({ "access_token": "ya29 refreshed", "expires_in": 3600 })],
+    )])
+    .await;
+    let host = host().await;
+    let binding = host
+        .vertex_binding_with_token_url(&format!("{}/token", mock.base))
+        .await
+        .expect("ADC binding resolves");
+    assert_eq!(binding.api_key, "ya29 refreshed");
+    assert!(binding.base_url.is_none());
+
+    // 3. the binding rides the shared snapshot into the resolver and the
+    //    native vertex family binds with the token as the bearer
+    host.credential_bindings()
+        .swap(std::collections::BTreeMap::from([("google-vertex".to_owned(), binding)]));
+    let catalog_text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/provider_catalog/models-dev-snapshot.txt"
+    ))
+    .expect("snapshot");
+    let catalog = std::sync::Arc::new(
+        crate::provider_catalog::catalog::Catalog::parse(&catalog_text).expect("catalog"),
+    );
+    let native_model_id = {
+        let vertex = catalog.provider("google-vertex").expect("vertex in catalog");
+        let native = vertex
+            .models
+            .iter()
+            .find(|model| {
+                model.package.as_deref().unwrap_or(&vertex.info.package)
+                    == "@opencode/ai/providers/google-vertex"
+            })
+            .expect("a native-package vertex model");
+        native.id.0.clone()
+    };
+    let transport: oc_ai::route::SharedTransport =
+        std::sync::Arc::new(oc_ai::route::transport::reqwest_transport::ReqwestTransport::new());
+    let resolver = CatalogModelResolver::new(
+        FacadeContext::new(transport),
+        catalog,
+        BTreeMap::new(),
+        Vec::new(),
+        None,
+    )
+    .with_credentials(std::sync::Arc::clone(host.credential_bindings()));
+    let model_id = oc_schema::id::ModelId::parse(native_model_id);
+    let (model, _info, _canonical) = resolver
+        .bind(&oc_schema::model::Ref {
+            provider_id: oc_schema::id::ProviderId::parse("google-vertex".to_owned()),
+            id: model_id,
+            variant: None,
+        })
+        .expect("vertex native binds from the ADC credential");
+    assert_eq!(model.route.id, "google-vertex-gemini");
+    let route = std::sync::Arc::clone(&model.route);
+    let mut request = oc_ai::schema::LLMRequest::new(model);
+    request.messages = vec![oc_ai::schema::Message::user("hi")];
+    let prepared = route.prepare_request(&request);
+    let body = route.build_body(&prepared).expect("body");
+    let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
+    assert_eq!(transport_request.header("authorization"), Some("Bearer ya29 refreshed"));
+    assert!(transport_request.url.contains(":streamGenerateContent?alt=sse"));
+    std::env::remove_var("GOOGLE_APPLICATION_CREDENTIALS");
+}
+
+#[tokio::test]
+async fn vertex_service_account_adc_defers_to_env_adc() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let adc_path = dir.path().join("sa.json");
+    std::fs::write(
+        &adc_path,
+        serde_json::json!({ "type": "service_account", "private_key": "…" }).to_string(),
+    )
+    .expect("write sa");
+    std::env::set_var("GOOGLE_APPLICATION_CREDENTIALS", &adc_path);
+    let host = host().await;
+    // RS256 self-signed JWT grant is the registered remainder: no binding,
+    // request-time GOOGLE_OAUTH_ACCESS_TOKEN env ADC still applies.
+    assert!(host.vertex_binding().await.is_none());
+    std::env::remove_var("GOOGLE_APPLICATION_CREDENTIALS");
 }
