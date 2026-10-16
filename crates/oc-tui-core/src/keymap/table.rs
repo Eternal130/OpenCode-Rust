@@ -144,7 +144,7 @@ impl Chord {
             if segment.trim_matches(['<', '>']) == "leader" {
                 strokes.push(leader.clone());
             } else {
-                strokes.push(KeyStroke::parse(segment)?);
+                strokes.extend(parse_sequence_segment(segment)?);
             }
         }
         if strokes.is_empty() {
@@ -158,6 +158,44 @@ impl Chord {
     pub fn display(&self) -> String {
         self.strokes.iter().map(KeyStroke::display).collect::<Vec<_>>().join(" ")
     }
+}
+
+/// The multi-char key names a bare sequence segment may carry (the
+/// donor parser's vocabulary): matched GREEDILY at each position so
+/// `home` is one stroke while `gg` is the g,g sequence (upstream's
+/// "no separator between sequence parts" grammar — see
+/// `opentui.rs::chord_spec`).
+const SEQUENCE_KEY_NAMES: &[&str] = &[
+    "pagedown", "pageup", "escape", "return", "delete", "backspace", "insert", "space", "home",
+    "end", "tab", "up", "down", "left", "right", "esc", "enter", "pgdown", "pgup", "f1", "f2",
+    "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16",
+    "f17", "f18", "f19", "f20", "f21", "f22", "f23", "f24",
+];
+
+/// Parse one `>`-separated sequence segment into its strokes: a known
+/// key name (or a modifier `+` stroke) consumes its whole span, any
+/// other characters parse one stroke EACH (the concatenated-sequence
+/// grammar — `gg` ⇒ g then g, v2 config/keybind.ts:72).
+fn parse_sequence_segment(segment: &str) -> Option<Vec<KeyStroke>> {
+    if segment.contains('+') {
+        // A modifier stroke (`ctrl+d`, `shift+?`) — one stroke, whole
+        // segment (sequences mixing bare chars and modifier strokes
+        // arrive pre-split by `>` in the table corpus).
+        return Some(vec![KeyStroke::parse(segment)?]);
+    }
+    let names: Vec<&str> =
+        SEQUENCE_KEY_NAMES.to_vec().into_iter().filter(|name| segment.starts_with(name)).collect();
+    if let Some(name) = names.iter().max_by_key(|name| name.len()) {
+        if *name == segment {
+            return Some(vec![KeyStroke::parse(segment)?]);
+        }
+    }
+    // Bare characters: one stroke per char (`gg`, `gp`).
+    let mut strokes = Vec::new();
+    for ch in segment.chars() {
+        strokes.push(KeyStroke::parse(&ch.to_string())?);
+    }
+    if strokes.is_empty() { None } else { Some(strokes) }
 }
 
 /// Command palette group (`KeymapCommand.group` / `category`). The
@@ -439,20 +477,36 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "docs_open" => "docs.open", "none", "Open documentation", "base", palette Help;
     "diff_open" => "diff.open", "none", "Open diff viewer", "base", palette View;
     "diff_close" => "diff.close", "escape,q", "Close diff viewer", "diff";
-    "diff_toggle" => "diff.toggle", "enter,space", "Toggle diff viewer item", "diff";
-    "diff_expand" => "diff.expand", "right", "Expand diff viewer item", "diff";
-    "diff_expand_all" => "diff.expand_all", "E", "Expand all diff viewer folders", "diff";
-    "diff_collapse" => "diff.collapse", "left", "Collapse diff viewer item", "diff";
-    "diff_switch_focus" => "diff.switch_focus", "tab", "Switch diff viewer focus", "diff";
+    // The five v1-era tree bindings are deprecated in v2
+    // (config/keybind.ts:75-79 — "file tree is mouse-controlled"):
+    // default "none" so they cannot misfire once the viewer mounts.
+    "diff_toggle" => "diff.toggle", "none", "Deprecated: file tree is mouse-controlled", "diff";
+    "diff_expand" => "diff.expand", "none", "Deprecated: file tree is mouse-controlled", "diff";
+    "diff_expand_all" => "diff.expand_all", "none", "Deprecated: file tree is mouse-controlled", "diff";
+    "diff_collapse" => "diff.collapse", "none", "Deprecated: file tree is mouse-controlled", "diff";
+    "diff_switch_focus" => "diff.switch_focus", "none", "Deprecated: keyboard navigation always controls the diff", "diff";
+    "diff_down" => "diff.down", "j,down", "Move diff viewer down", "diff";
+    "diff_up" => "diff.up", "k,up", "Move diff viewer up", "diff";
+    "diff_page_down" => "diff.page.down", "pagedown,ctrl+f", "Page diff viewer down", "diff";
+    "diff_page_up" => "diff.page.up", "pageup,ctrl+b", "Page diff viewer up", "diff";
+    "diff_half_page_down" => "diff.half_page.down", "ctrl+d", "Scroll diff viewer down half a page", "diff";
+    "diff_half_page_up" => "diff.half_page.up", "ctrl+u", "Scroll diff viewer up half a page", "diff";
+    "diff_first" => "diff.first", "gg,home", "Go to the start of the diff", "diff";
+    "diff_last" => "diff.last", "shift+g,end", "Go to the end of the diff", "diff";
+    "diff_mark_reviewed" => "diff.mark_reviewed", "m", "Toggle selected diff file reviewed", "diff";
     "diff_next_hunk" => "diff.next_hunk", "]", "Jump to next diff hunk", "diff";
     "diff_previous_hunk" => "diff.previous_hunk", "[", "Jump to previous diff hunk", "diff";
-    "diff_next_file" => "diff.next_file", "n", "Jump to next diff file", "diff";
-    "diff_previous_file" => "diff.previous_file", "p", "Jump to previous diff file", "diff";
+    "diff_next_file" => "diff.next_file", "n,alt+down", "Jump to next diff file", "diff";
+    "diff_previous_file" => "diff.previous_file", "p,alt+up", "Jump to previous diff file", "diff";
     "diff_toggle_file_tree" => "diff.toggle_file_tree", "b", "Toggle diff viewer file tree", "diff";
     "diff_single_patch" => "diff.single_patch", "s", "Toggle single patch view", "diff";
     "diff_switch_source" => "diff.switch_source", "d", "Switch diff viewer source", "diff";
     "diff_toggle_view" => "diff.toggle_view", "v", "Toggle diff viewer split or unified view", "diff";
-    "diff_help" => "diff.help", "?", "Show more diff viewer shortcuts", "diff";
+    "diff_help" => "diff.help", "?,shift+?,shift+/", "Show more diff viewer shortcuts", "diff";
+    // diff-viewer.tsx:726-732: the viewer's layer re-binds app.exit so
+    // ctrl+d CLOSES the viewer instead of exiting while it is open
+    // ("Specific diff bindings take precedence over app.exit's Ctrl+D").
+    "diff_app_exit" => "app.exit", "ctrl+d", "Close diff viewer", "diff";
     "editor_open" => "prompt.editor", "<leader>e", "Open external editor", "base", palette Editor;
     // v2 default is "none" (config/keybind.ts:92) — `<leader>t` is the
     // terminal pane toggle there; the port previously drifted this to
@@ -678,5 +732,38 @@ impl ManualClock {
 impl Clock for ManualClock {
     fn now_ms(&self) -> u64 {
         self.now.get()
+    }
+}
+
+#[cfg(test)]
+mod sequence_tests {
+    use super::{Chord, KeyStroke};
+
+    fn leader() -> KeyStroke {
+        KeyStroke::parse("ctrl+x").expect("leader parses")
+    }
+
+    /// The donor grammar's concatenated sequences (`opentui.rs::
+    /// chord_spec`): `gg` is the two-stroke g,g sequence — v2's
+    /// `diff.first` default (config/keybind.ts:72) — while key NAMES
+    /// and function keys stay single strokes (`f2`, `home`).
+    #[test]
+    fn bare_segments_split_into_sequences_except_key_names() {
+        let gg = Chord::parse("gg", &leader()).expect("gg parses");
+        assert_eq!(gg.strokes.len(), 2, "gg is g then g");
+        assert_eq!(gg.strokes[0].key, "g");
+        assert_eq!(gg.strokes[1].key, "g");
+
+        let f2 = Chord::parse("f2", &leader()).expect("f2 parses");
+        assert_eq!(f2.strokes.len(), 1, "f2 is ONE function-key stroke");
+        assert_eq!(f2.strokes[0].key, "f2");
+
+        for name in ["home", "end", "pagedown", "return", "escape", "f12"] {
+            let chord = Chord::parse(name, &leader()).expect("name parses");
+            assert_eq!(chord.strokes.len(), 1, "{name} stays a single stroke");
+        }
+
+        let leader_spec = Chord::parse("<leader>gg", &leader()).expect("leader chord parses");
+        assert_eq!(leader_spec.strokes.len(), 3, "leader + gg");
     }
 }

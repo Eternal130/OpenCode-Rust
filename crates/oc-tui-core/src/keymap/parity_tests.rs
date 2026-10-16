@@ -200,36 +200,29 @@ fn k4_timed_leader_timeout_is_2000_on_both_engines() {
     }
 }
 
-/// **K-1 — non-leader multi-press sequences arm.** Legacy: a `g>g`
-/// binding never arms (`g` falls through, `g` again falls through) —
-/// the class that made v2's gg/dd sequences untriggerable. Opentui:
-/// `g` PENDS (the sequence holds), `g` completes.
+/// **K-1 — non-leader multi-press sequences arm.** The historical
+/// divergence (legacy never armed `gg`) is DISSOLVED: both engines arm
+/// the sequence now — required by `diff.first`'s `gg` default in the
+/// v2 table (config/keybind.ts:72).
 #[test]
-fn k1_nonleader_sequences_arm_on_the_opentui_engine_only() {
+fn k1_nonleader_sequences_arm_on_both_engines() {
     let _guard = parity_lock();
     let overrides = parse_keybind_overrides(&serde_json::json!({ "session.rename": "g>g" }));
     let clock = ManualClock::default();
 
-    let mut legacy = keymap_on(false);
-    legacy.apply_overrides(&overrides);
-    assert_eq!(
-        legacy.lookup(stroke("g"), &clock),
-        Outcome::Unhandled,
-        "K-1 on legacy: g never arms"
-    );
-    assert_eq!(legacy.lookup(stroke("g"), &clock), Outcome::Unhandled);
-
-    let mut opentui = keymap_on(true);
-    opentui.apply_overrides(&overrides);
-    assert!(
-        matches!(opentui.lookup(stroke("g"), &clock), Outcome::Pending { .. }),
-        "K-1 dissolved: g arms the sequence"
-    );
-    assert_eq!(
-        opentui.lookup(stroke("g"), &clock),
-        Outcome::Command { command: "session.rename".to_owned(), args: None },
-        "gg completes"
-    );
+    for opentui in [false, true] {
+        let mut keymap = keymap_on(opentui);
+        keymap.apply_overrides(&overrides);
+        assert!(
+            matches!(keymap.lookup(stroke("g"), &clock), Outcome::Pending { .. }),
+            "K-1 dissolved: g arms the sequence (opentui={opentui})"
+        );
+        assert_eq!(
+            keymap.lookup(stroke("g"), &clock),
+            Outcome::Command { command: "session.rename".to_owned(), args: None },
+            "gg completes (opentui={opentui})"
+        );
+    }
 }
 
 /// **K-2 — a sequence miss clears without redispatch.** With a root
