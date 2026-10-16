@@ -826,6 +826,7 @@ pub struct Store {
     terminal_size: Signal<(u16, u16)>,
     /// The onboarding card's dismissal (storage `getting-started`).
     sidebar_onboarding: Signal<bool>,
+    permission_autoaccept: Signal<bool>,
     /// Plugin footer hint segments (one per plugin, latest wins).
     plugin_hints: Signal<Vec<(String, String)>>,
     /// Plugin home quick actions (registration-time).
@@ -1222,6 +1223,10 @@ struct StoreSignals {
     terminal_size: Signal<(u16, u16)>,
     /// The onboarding card's dismissal (storage `getting-started`).
     sidebar_onboarding: Signal<bool>,
+    /// `--auto`'s autoaccept arm (v2 `local.permission.mode ===
+    /// "autoaccept"`, permission.tsx:14 — boot-immutable, from the
+    /// CLI flag; the composer metadata's `auto` marker reads it).
+    permission_autoaccept: Signal<bool>,
     plugin_hints: Signal<Vec<(String, String)>>,
     plugin_home_actions: Signal<Vec<crate::components::home::PluginQuickAction>>,
     plugin_group_rules: Signal<crate::components::message::model::GroupRules>,
@@ -1310,6 +1315,7 @@ impl Store {
             sidebar_open,
             terminal_size,
             sidebar_onboarding,
+            permission_autoaccept,
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
@@ -1346,6 +1352,7 @@ impl Store {
             sidebar_open,
             terminal_size,
             sidebar_onboarding,
+            permission_autoaccept,
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
@@ -1422,6 +1429,7 @@ impl Store {
         let sidebar_open = Signal::new(&runtime, false);
         let terminal_size = Signal::new(&runtime, (0u16, 0u16));
         let sidebar_onboarding = Signal::new(&runtime, false);
+        let permission_autoaccept = Signal::new(&runtime, false);
         let plugin_hints = Signal::new(&runtime, Vec::<(String, String)>::new());
         let plugin_home_actions =
             Signal::new(&runtime, Vec::<crate::components::home::PluginQuickAction>::new());
@@ -1457,6 +1465,7 @@ impl Store {
                 sidebar_open,
                 terminal_size,
                 sidebar_onboarding,
+                permission_autoaccept,
                 plugin_hints,
                 plugin_home_actions,
                 plugin_group_rules,
@@ -3733,6 +3742,20 @@ impl Store {
     #[must_use]
     pub fn sidebar_onboarding_dismissed(&self) -> bool {
         self.sidebar_onboarding.get()
+    }
+
+    /// Arm/disarm permission autoaccept (`--auto`; boot-only in
+    /// practice — v2's args are boot-immutable).
+    pub fn set_permission_autoaccept(&self, armed: bool) {
+        self.permission_autoaccept.set(armed);
+    }
+
+    /// Whether permission autoaccept is armed (the composer
+    /// metadata's `auto` marker — v2 `local.permission.mode ===
+    /// "autoaccept"`).
+    #[must_use]
+    pub fn permission_autoaccept(&self) -> bool {
+        self.permission_autoaccept.get()
     }
 
     /// Upsert one plugin's footer hint segment (empty text removes).
