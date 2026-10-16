@@ -78,3 +78,58 @@ engine → vendored miniaudio 0.11.22).
    non-Linux keeps the process-player fallback. Trigger matrix untouched.
 3. Tests: per-asset decode sanity, bogus-device graceful no-op, existing
    trigger tests stay green; fmt/clippy/nextest/release size delta.
+
+## 2026-10-16 — implementation + verification results
+
+### Deliverables
+
+- `third_party/miniaudio-sys/` — vendored miniaudio 0.11.22 (header copied
+  byte-identical from opentui's native vendor dir), shim with v2's Linux
+  backend selection (ALSA+Pulse only, runtime dlopen, no null backend),
+  pre-generated bindings.rs (bindgen 0.70, allow-listed surface), cc-only
+  build.rs linking just dl/pthread/m.
+- `crates/oc-tui/src/sound/inproc.rs` — the port of v2's engine:
+  no-device `ma_engine` mixer (created once per process), lazy
+  `ma_device_init`+`ma_device_start` retried per play (v2 latches
+  `playbackStarted` only on success), path-keyed decode cache
+  (`ma_decoder_config_init(f32, 0, 0)` → read-all), playback via
+  `ma_audio_buffer_ref_init` + sampleRate patch +
+  `ma_sound_init_from_data_source(NO_SPATIALIZATION|NO_PITCH)` +
+  `ma_sound_set_volume(clamp 0..4)` + `ma_sound_start`, voice reap on
+  `ma_sound_at_end`, MAX_VOICES=64 cap (v2's pool guard). Every failure =
+  `false` (silent no-op); no process spawn anywhere.
+- `crates/oc-tui/src/sound.rs` — `SoundHalf` alias: in-process player on
+  Linux, the spawn mirror (`ProcessSoundPlayer`/`PlayerKind`) kept for
+  other targets and its argv tests stay green everywhere.
+- `crates/oc-tui/src/app.rs` — the run loop installs
+  `sound::SoundHalf::default()`; trigger matrix untouched (store/
+  notifications_plugin trigger tests all green).
+- Kill-switch: none added — v2 has no env kill-switch for audio (cited in
+  the kickoff entry); the existing `config.attention.sound` +
+  per-request gates already mirror v2.
+
+### Dependency-size impact
+
+- Dep-tree delta: +1 path-only crate (`miniaudio-sys`); its only build
+  dep `cc` was already in Cargo.lock (tree-sitter). Cargo.lock unchanged.
+- Release binary: 68,145,760 B (main baseline) → 68,671,744 B =
+  **+525,984 B (+0.77%)** — the miniaudio engine + dr_mp3 decoder.
+- Build time: miniaudio-sys alone compiles in ~8.9 s (release, gated);
+  release `-p oc-cli` 1m43s incremental; no new system deps.
+- `ldd` on the release binary: no libasound/libpulse NEEDED entries —
+  ALSA/Pulse are dlopen'd at runtime exactly like v2's native lib.
+
+### Tests (all via dev-gate)
+
+- New: `decodes_every_builtin_asset` (5 assets × format/channels/rate/
+  duration sanity through the production decode path),
+  `assets_keep_mp3_magic` (embedding tripwire), `bogus_sink_is_a_silent_no_op`
+  (nonexistent playback sink → false ×2 incl. the retry path, no panic, no
+  spawn), `undecodable_input_is_none`, `candidate_loop_gives_up_gracefully`.
+- Existing sound tests: all green (argv mapping, extraction, trigger
+  matrix in store/notifications_plugin).
+- Gates: `cargo fmt --check` clean; `cargo clippy -p miniaudio-sys -p
+  oc-tui --all-targets` clean (0 warnings);
+  `cargo nextest -p oc-tui`: 666 passed / 1 skipped;
+  `cargo nextest -p oc-cli`: 184 passed / 1 skipped;
+  `cargo check --workspace --all-targets`: clean.
