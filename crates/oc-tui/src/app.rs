@@ -88,6 +88,13 @@ pub struct App {
     /// the `session.renamed` echo lands the new title through the
     /// event stream).
     pub rename_requests: Vec<(String, String)>,
+    /// `--auto` (v2 permission.tsx:14's `args.auto ? "autoaccept"`):
+    /// armed at boot, never flipped at runtime (v2's args are
+    /// boot-immutable too).
+    pub autoaccept: bool,
+    /// The asks autoaccept already answered (v2's `autoApproved` set,
+    /// session/index.tsx:252-254 — one `once` per request id).
+    auto_approved: std::collections::HashSet<String>,
     size: (u16, u16),
     /// The last pointer cell (motion/up events) — the strip's hover
     /// re-evaluation source after a re-layout moves controls under a
@@ -131,6 +138,8 @@ impl App {
             permission_states: HashMap::new(),
             permission_replies: Vec::new(),
             rename_requests: Vec::new(),
+            autoaccept: false,
+            auto_approved: std::collections::HashSet::new(),
             size,
             last_pointer: None,
             exit_requested: false,
@@ -725,11 +734,37 @@ impl App {
             .is_some_and(|toast| toast.variant == "error" && toast.title.is_some())
     }
 
-    fn stroke_in_permission(&mut self, key: &str) {
+    /// `--auto`'s autoaccept arm (v2 session/index.tsx:252-262): while
+    /// armed, a live permission ask replies `once` THROUGH the same
+    /// queue a keyboard allow uses (`permission_replies` + the local
+    /// `permission_replied` resolution — the ask footer falls back),
+    /// once per request id (`autoApproved`). Called after every SSE
+    /// ingest drain.
+    pub fn autoanswer_permissions(&mut self) {
+        if !self.autoaccept {
+            return;
+        }
         let FooterView::Permission { request } = self.store.footer().view.clone() else {
             return;
         };
-        let state = self
+        if !self.auto_approved.insert(request.id.clone()) {
+            return;
+        }
+        self.permission_replies.push(crate::components::footer::permission::PermissionReply {
+            session_id: request.session_id.clone(),
+            request_id: request.id.clone(),
+            decision: "once".to_owned(),
+            message: String::new(),
+        });
+        // The reply resolves the ask locally (the server echo lands
+        // through `permission.replied` — same as the keyboard path).
+        self.store.permission_replied(&request.id);
+    }
+
+    fn stroke_in_permission(&mut self, key: &str) {
+        let FooterView::Permission { request } = self.store.footer().view.clone() else {
+            return;
+        };        let state = self
             .permission_states
             .get(&request.id)
             .cloned()
@@ -2232,6 +2267,18 @@ pub struct BootArgs {
     pub continue_last: bool,
     /// `--session <id>` / `-s`: open this session.
     pub session: Option<String>,
+    /// `--prompt <text>` (v2 `input.args.prompt`): the startup prompt
+    /// — seeds the booted route's composer and auto-submits once on
+    /// boot (app.tsx:626's `startupPrompt`; home.tsx:52-80 and
+    /// routes/session/index.tsx:377-381+601-607 both submit it as the
+    /// first turn).
+    pub prompt: Option<String>,
+    /// `--auto` (with `--yolo`/`--dangerously-skip-permissions`, v2's
+    /// PermissionParams): arm autoaccept — every permission ask
+    /// auto-replies `once` (session/index.tsx:255-262), the ask UI
+    /// never mounts (permission.tsx:14's `args.auto ?
+    /// "autoaccept"`).
+    pub auto: bool,
 }
 
 /// Resolve the session `--continue` opens: the newest ROOT session in
@@ -2528,6 +2575,26 @@ pub async fn run_with_size(
         app.store.set_composer(crate::app::HOME_PROMPT_KEY, &composer);
     }
 
+    // `--prompt` (v2 app.tsx:626's `startupPrompt` + home.tsx:52-80 /
+    // routes/session/index.tsx:377-381, 601-607): seed the BOOTED
+    // route's composer with the flag's text and submit it once — the
+    // first turn goes out on boot (home submissions create their
+    // session through the prompt sink; a `--session`/`--continue`
+    // boot submits into the routed session).
+    if let Some(prompt) = &boot.prompt {
+        let key = app.prompt_key();
+        let mut composer = app.store.composer(&key);
+        composer.draft.text = prompt.clone();
+        app.store.set_composer(&key, &composer);
+        let _ = app.store.submit_prompt(&key);
+    }
+    // `--auto` (v2 permission.tsx:14 `args.auto ? "autoaccept"`):
+    // arm the permission auto-answer (every ask replies `once`,
+    // session/index.tsx:255-262) + the composer metadata's `auto`
+    // marker.
+    app.autoaccept = boot.auto;
+    app.store.set_permission_autoaccept(boot.auto);
+
     // Config reload: mtime check per tick (the reference watches the dir).
     let mut config_mtime = config
         .path
@@ -2630,6 +2697,10 @@ pub async fn run_with_size(
             }
             app.store.ingest_all([message]);
         }
+        // `--auto`: the freshly-ingested ask (if any) auto-answers
+        // while autoaccept is armed — before the render, so the ask
+        // footer never flashes.
+        app.autoanswer_permissions();
         // Permission replies (D1): every once/always/reject the pump
         // recorded POSTs to the server — without this the parked tool
         // waits forever while the footer already looks resolved.
@@ -3716,7 +3787,7 @@ mod tests {
         let store = Store::new(crate::reactive::Runtime::new());
         apply_boot_route(
             &store,
-            &BootArgs { continue_last: false, session: Some("ses_direct".into()) },
+            &BootArgs { continue_last: false, session: Some("ses_direct".into()), ..BootArgs::default() },
             None,
         );
         assert_eq!(
@@ -3727,7 +3798,7 @@ mod tests {
 
         // --continue: the resolved latest root session.
         let store = Store::new(crate::reactive::Runtime::new());
-        apply_boot_route(&store, &BootArgs { continue_last: true, session: None }, Some("ses_new"));
+        apply_boot_route(&store, &BootArgs { continue_last: true, session: None, ..BootArgs::default() }, Some("ses_new"));
         assert_eq!(
             store.route(),
             crate::store::Route::Session { session_id: "ses_new".to_owned() }
@@ -3736,7 +3807,7 @@ mod tests {
         // --continue with nothing to resume: stays home (v2 `if
         // (!match) return`).
         let store = Store::new(crate::reactive::Runtime::new());
-        apply_boot_route(&store, &BootArgs { continue_last: true, session: None }, None);
+        apply_boot_route(&store, &BootArgs { continue_last: true, session: None, ..BootArgs::default() }, None);
         assert_eq!(store.route(), crate::store::Route::Home);
     }
 }

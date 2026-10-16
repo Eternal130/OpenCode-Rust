@@ -731,10 +731,9 @@ pub fn composer_metadata(
     };
     crate::components::composer::render::MetadataLine {
         agent,
-        // `auto` rides `local.permission.mode === "autoaccept"` — the
-        // rig's config stays "prompt"; the permission-mode surface is
-        // the permissions lane's seam.
-        auto: false,
+        // `auto` rides `local.permission.mode === "autoaccept"` —
+        // `--auto`'s arm (the rig's config stays "prompt").
+        auto: store.permission_autoaccept(),
         model,
         provider,
         // The staged variant (`local.model.variant.current()`); the
