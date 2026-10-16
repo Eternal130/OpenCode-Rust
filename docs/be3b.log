@@ -1,0 +1,103 @@
+# Lane BE-3b work log (append-only) — integration/auth continuation
+
+Spec: docs/be3.log "Deferred remainder". Items: (1) chatgpt/azure/gitlab/
+snowflake/openai OAuth variants; (2) copilot transport binding; (3) wellknown
+config-graph resolution; (4) console provider-catalog ingestion; (5) runtime
+connection.status reporters.
+
+## Phase 1 — v2 variant inventory (citations)
+
+- **gitlab** (plugin/provider/gitlab.ts): method `pkce` "Login with GitLab
+  (OAuth)" with instanceUrl form (default `$GITLAB_INSTANCE_URL` or
+  https://gitlab.com, pattern `^https?://\S+$`); bundled client
+  `fd180700a8f9c5d5557aca231632dd0611a1135a3bb510a741d5a988a3394fa7`
+  (gitlab.com only; self-managed requires `GITLAB_OAUTH_CLIENT_ID` override,
+  gitlab.ts:22-33,167-182); redirect FIXED `http://127.0.0.1:8080/callback`
+  (port cannot be ephemeral, gitlab.ts:468-486); scope `api`; authorize URL
+  `{instance}/oauth/authorize` response_type=code + S256 (gitlab.ts:218-226);
+  exchange POST `{instance}/oauth/token` (authorization_code+verifier /
+  refresh_token grants, gitlab.ts:398-423); credential metadata
+  `{instanceUrl, clientID}` (gitlab.ts:425-436); label = instance host
+  (gitlab.ts:144); refresh single-flight 60s retention (gitlab.ts:440-460);
+  invalid_grant/invalid_client get the detailed hint builder
+  (gitlab.ts:372-396).
+- **azure** (plugin/provider/azure.ts:135-166): method `azure-cli` "Microsoft
+  Entra ID (Azure CLI)" registered ONLY when `az` is on PATH; key method has
+  resourceName form when unconfigured (azure.ts:125-134); authorize = mode
+  auto with empty url + instructions "Sign in with `az login` before
+  continuing."; callback runs `az account get-access-token --scope
+  https://cognitiveservices.azure.com/.default --output json` (10s timeout),
+  parses `{accessToken, expires_on|expiresOn}` (azure.ts:88-103); credential
+  refresh="azure-cli", metadata `{resourceName}`; refresh re-runs the CLI.
+- **snowflake** (plugin/provider/snowflake-cortex.ts:82-170): methods — key
+  "Paste PAT or bearer token" (account form), env
+  `[SNOWFLAKE_CORTEX_TOKEN, SNOWFLAKE_CORTEX_PAT]`, oauth `browser` "Login
+  with Snowflake (External Browser)" (form account + optional role); PKCE
+  verifier 48 bytes; loopback 127.0.0.1:0 path `/` ; authorize
+  `https://{account}.snowflakecomputing.com/oauth/authorize` scope
+  `refresh_token [session:role:R | session:role-encoded:...]`; token POST
+  `/oauth/token-request` with Basic `LOCAL_APPLICATION:LOCAL_APPLICATION`
+  (snowflake.ts:52-78); credential metadata `{account}`, label = account;
+  refresh grant; env-token override skips refresh (snowflake.ts:101);
+  normalizeAccount strips scheme/suffix (snowflake.ts:250-257).
+- **openai** (plugin/provider/openai.ts): TWO legacy codex methods on
+  integration `openai` — `chatgpt-browser` "Codex browser (legacy)" and
+  `chatgpt-headless` "Codex device code (legacy)" (openai.ts:22-24,252-253).
+  clientID `app_EMoamEEZ73f0CkXaXp7hrann`, issuer `https://auth.openai.com`.
+  Browser: loopback `localhost:1455` (fallback 1457; bind retries ×10 200ms;
+  `/cancel` probe to dismiss a stuck holder, openai.ts:119-153); redirect
+  `/auth/callback`; authorize w/ scope `openid profile email offline_access`,
+  `id_token_add_organizations=true`, `codex_cli_simplified_flow=true`,
+  `originator=opencode` (openai.ts:497-510); exchange/refresh POST
+  `/oauth/token` form-encoded; credential metadata `{accountID}` extracted
+  from id_token/access_token JWT claims (openai.ts:415-430). Headless: POST
+  `/api/accounts/deviceauth/usercode` `{client_id}` → `{device_auth_id,
+  user_code, interval}`; poll `/api/accounts/deviceauth/token` until 200 →
+  `{authorization_code, code_verifier}`; exchange against redirect
+  `{issuer}/deviceauth/callback` with the SERVER-provided verifier; url
+  `{issuer}/codex/device`, instructions "Enter code: {user_code}"
+  (openai.ts:161-201).
+- **chatgpt connector** (plugin/provider/chatgpt.ts): method
+  `chatgpt-token-sharing` "Sign in with ChatGPT" on integration `openai`;
+  dynamic client registration — first sign-in client_id
+  `dynamic_agent_client` + `agent_name_hint=OpenCode`; the callback query
+  carries `client_id` of the registered client which is then used for
+  exchange and stored in metadata (chatgpt.ts:18-27,88-92,164-171);
+  loopback 127.0.0.1:0 `/auth/callback`; authorize at
+  `/api/accounts/authorize` scope `openid profile email offline_access
+  resource.invoke chatgpt.tokens.use.direct` + resource
+  `https://api.openai.com/v1` + nonce + host id `ext_agent_host_id`
+  (chatgpt.ts:498-519); token URL `/api/accounts/oauth/token`; callback
+  checks: client mismatch → error, missing token-sharing scope → error,
+  missing id_token → error, verifyIDToken (JWKS RS256, issuer/aud/nonce,
+  chatgpt.ts:439-461); credential metadata `{clientID, scopes}`
+  (chatgpt.ts:472-478); refresh requires metadata.clientID
+  (chatgpt.ts:368-383). NOTE: no JWT/JWKS crate in this workspace — the
+  port validates claims (iss/aud/exp/nonce) from the decoded id_token and
+  registers RS256 signature verification as an explicit deferred gap.
+- **copilot transport** (item 2): v2 serves copilot through its own
+  openai-compatible binding with base URL `https://api.githubcopilot.com`
+  (`https://copilot-api.{domain}` enterprise; credential metadata
+  apiEndpoint overrides, github-copilot.ts:185,359-376), auth = the GitHub
+  token (credential.refresh) as Bearer, headers `X-GitHub-Api-Version:
+  2026-08-01`, `Openai-Intent: conversation-edits`, `x-initiator`
+  agent/user, `Copilot-Vision-Request` (github-copilot.ts:464-505); models
+  from `GET {baseURL}/models` (github-copilot/models.ts:81-96).
+- **console ingestion** (item 4): opencode.ts:29-45 RemoteResponse =
+  `{providers: Record<id, ConfigProvider.Info>, websearch?, mcp?,
+  experimental.policies?}` fetched with the console bearer; merged into the
+  provider graph (canonical-provider clone, settings/headers/body overlays
+  without credentials, model enable/cost/limit, opencode.ts:243-311).
+- **status reporters** (item 5): opencode.ts connectionStatus maps Console
+  `SsoRequired{orgId,connectionId}` / `Unauthorized` 401 shapes to
+  `Connection.Status{status:"needs_auth", message, url?}` via
+  `ctx.integration.connection.status` (opencode.ts:74-87,181-200).
+- **wellknown config** (item 3): config.ts:292-311 — wellknown.updated /
+  credential.switched(on wellknown integrations) / 10-min timer drive
+  `wellknown.resolve(entry, env)` (manifest.config + remote_config with
+  `{env:NAME}` substitution, wellknown.ts:70-95) into the config reload.
+
+Rust seam notes (from BE-3): `integration::flows` already provides PKCE S256
++ the loopback listener (ephemeral or pinned port) + device engine;
+`providers.rs` `install()` is the registration point; gitlab/snowflake/openai
+browser flows extend it directly.
