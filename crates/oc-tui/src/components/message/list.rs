@@ -221,31 +221,33 @@ pub fn render_transcript(
                     // ReasoningHeader) — the port's stand-in for v2's
                     // toggleable inline header, which the reducer's
                     // always-grouped reasoning never produces here.
-                    let entry =
-                        if options.collapsed_thoughts.contains(&format!("{message_id}:{part_id}")) {
-                            let (title, _) = reasoning_summary(text);
-                            let duration = match (time.created, time.completed) {
-                                (Some(created), Some(completed)) => {
-                                    Some(completed.saturating_sub(created))
-                                }
-                                _ => Some(0),
-                            };
-                            reasoning_header_row(
-                                title.as_deref(),
-                                duration,
-                                time.completed.is_some(),
-                                false,
-                                options.clock_ms,
-                                theme,
-                                content_width,
-                            )
-                        } else {
-                            crate::components::message::rows::thought_entry_row(
-                                text,
-                                theme,
-                                content_width,
-                            )
+                    let entry = if options
+                        .collapsed_thoughts
+                        .contains(&format!("{message_id}:{part_id}"))
+                    {
+                        let (title, _) = reasoning_summary(text);
+                        let duration = match (time.created, time.completed) {
+                            (Some(created), Some(completed)) => {
+                                Some(completed.saturating_sub(created))
+                            }
+                            _ => Some(0),
                         };
+                        reasoning_header_row(
+                            title.as_deref(),
+                            duration,
+                            time.completed.is_some(),
+                            false,
+                            options.clock_ms,
+                            theme,
+                            content_width,
+                        )
+                    } else {
+                        crate::components::message::rows::thought_entry_row(
+                            text,
+                            theme,
+                            content_width,
+                        )
+                    };
                     place(entry, format!("thought:{message_id}:{part_id}"), &mut measured, &mut y);
                 }
                 continue;
