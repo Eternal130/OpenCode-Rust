@@ -2313,14 +2313,12 @@ pub async fn run_with_size(
         // the seam `pasteInputText`'s attachment resolution hangs off.
         crossterm::event::EnableBracketedPaste,
         // Mouse tracking (beta.8 bug 3/4): v2's renderer enables the
-        // terminal's mouse reporting (OpenTUI always runs it — the
-        // strip's hover/click and the reasoning rows' disclosure
-        // toggle are mouse-driven, `session-tabs.tsx:1652-1754` +
-        // `group-view.tsx:152-190`). Scope note: this port routes
-        // mouse events to the tab strip and the transcript's thought
-        // headers only — the broader mouse surface (drag reorder,
-        // context menus, scroll) stays keyboard-first.
-        crossterm::event::EnableMouseCapture
+        // terminal's mouse reporting CONFIG-GATED (the strip's
+        // hover/click and the reasoning rows' disclosure toggle are
+        // mouse-driven, `session-tabs.tsx:1652-1754` +
+        // `group-view.tsx:152-190`). The v2-parity mode set
+        // (`?1000 ?1002 ?1003 ?1006` — no crossterm `?1015`) pushes
+        // right after the config loads below (`crate::mouse_modes`).
     );
     // The alternate screen owns the display from here: route EVERY
     // stderr write to `<state>/tui.log` until teardown (subsystem
@@ -2344,6 +2342,20 @@ pub async fn run_with_size(
     // `crate::image` for why not a DA1 round-trip).
     app.store.set_graphics_protocol(crate::image::detect_protocol());
     let config = crate::config::TuiConfig::load(&oc_util::global_roots::resolve().config);
+
+    // The mouse-capture gate (v2 `useMouse: config.mouse`,
+    // app.tsx:241): push EXACTLY v2's four-mode set when on, nothing
+    // when off — `mouse: false` leaves the terminal's native text
+    // selection alone (auditC P1/P9). `applied_mouse` tracks the live
+    // state for the editor suspend/re-enter pair, the reload flip,
+    // and the teardown pop.
+    let mut applied_mouse = config.mouse;
+    {
+        use std::io::Write as _;
+        let mut out = std::io::stdout();
+        let _ = crate::mouse_modes::push(&mut out, applied_mouse);
+        let _ = out.flush();
+    }
 
     // R-06 — the attention channels (v2's sounds + OS notifications):
     // the production emitter writes OSC notification sequences to
@@ -2761,18 +2773,31 @@ pub async fn run_with_size(
             let draft = app.store.prompt_draft(&key).text.clone();
             let cwd = std::env::current_dir().ok();
             let _ = disable_raw_mode();
-            let _ = crossterm::execute!(
-                std::io::stdout(),
-                crossterm::event::DisableMouseCapture,
-                crossterm::terminal::LeaveAlternateScreen
-            );
+            {
+                use std::io::Write as _;
+                let mut out = std::io::stdout();
+                let _ = crossterm::queue!(
+                    out,
+                    crossterm::terminal::LeaveAlternateScreen
+                );
+                // Pop the mouse modes ONLY when they went on (the
+                // config gate — a `mouse: false` boot never pushed
+                // them, and popping unpushed modes is wire noise).
+                let _ = crate::mouse_modes::pop(&mut out, applied_mouse);
+                let _ = out.flush();
+            }
             let result = crate::editor::open_editor(&draft, cwd.as_deref(), || {}, || {});
             let _ = enable_raw_mode();
-            let _ = crossterm::execute!(
-                std::io::stdout(),
-                crossterm::terminal::EnterAlternateScreen,
-                crossterm::event::EnableMouseCapture
-            );
+            {
+                use std::io::Write as _;
+                let mut out = std::io::stdout();
+                let _ = crossterm::queue!(out, crossterm::terminal::EnterAlternateScreen);
+                // Re-arm the mouse modes under the SAME config gate
+                // (auditC P1 called out the old unconditional
+                // re-enable after $EDITOR).
+                let _ = crate::mouse_modes::push(&mut out, applied_mouse);
+                let _ = out.flush();
+            }
             let _ = terminal.clear();
             if editor_guard.is_some() {
                 stderr_guard = crate::stderr_redirect::install(&crate::stderr_redirect::log_path());
@@ -2939,6 +2964,22 @@ pub async fn run_with_size(
             config_mtime = mtime;
             if let Some(reloaded) = config.reload() {
                 app.apply_config(&reloaded, system_mode);
+                // The live mouse flip (v2 app.tsx:593 —
+                // `createEffect(() => renderer.useMouse =
+                // config.data.mouse)`): a config change that toggles
+                // `mouse` pushes/pops the v2 mode set immediately, no
+                // restart needed.
+                if reloaded.mouse != applied_mouse {
+                    applied_mouse = reloaded.mouse;
+                    use std::io::Write as _;
+                    let mut out = std::io::stdout();
+                    if applied_mouse {
+                        let _ = crate::mouse_modes::push(&mut out, true);
+                    } else {
+                        let _ = crate::mouse_modes::pop(&mut out, true);
+                    }
+                    let _ = out.flush();
+                }
             }
         }
         // Render (coalesced; the clock tick keeps spinners/toasts live).
@@ -3095,16 +3136,24 @@ pub async fn run_with_size(
         guard.restore();
     }
     let _ = disable_raw_mode();
-    let _ = crossterm::execute!(
-        std::io::stdout(),
-        LeaveAlternateScreen,
-        crossterm::event::DisableFocusChange,
-        crossterm::event::DisableBracketedPaste,
-        crossterm::event::DisableMouseCapture,
-        // Clear any lingering graphics placements (R-07): the
-        // alternate screen would discard them anyway, but an explicit
-        // `a=d,d=a` keeps a same-screen exit clean.
-    );
+    {
+        use std::io::Write as _;
+        let mut out = std::io::stdout();
+        let _ = crossterm::queue!(
+            out,
+            LeaveAlternateScreen,
+            crossterm::event::DisableFocusChange,
+            crossterm::event::DisableBracketedPaste,
+            // Clear any lingering graphics placements (R-07): the
+            // alternate screen would discard them anyway, but an explicit
+            // `a=d,d=a` keeps a same-screen exit clean.
+        );
+        // Pop the mouse modes under the same gate they went on with
+        // (v2's teardown pops what the renderer pushed — a
+        // `mouse: false` run pushed nothing).
+        let _ = crate::mouse_modes::pop(&mut out, applied_mouse);
+        let _ = out.flush();
+    }
     // #46 — the exit epilogue (v2 app.tsx:446-450: the renderer stops,
     // then `process.stdout.write(epilogue + "\n")`): the wordmark +
     // resume hint the session route staged while mounted
