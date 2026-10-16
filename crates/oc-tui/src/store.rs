@@ -223,6 +223,9 @@ pub struct TabHistory {
     pub index: isize,
 }
 
+/// The open-url seam's callable (tests observe link clicks).
+pub type OpenUrlSink = Rc<dyn Fn(String)>;
+
 pub const CLOSED_TAB_LIMIT: usize = 25;
 pub const TAB_HISTORY_LIMIT: usize = 100;
 pub const NEW_SESSION_TAB_TITLE: &str = "New session";
@@ -1058,7 +1061,7 @@ pub struct Store {
     /// fetcher; tests record).
     diff_sink: std::cell::RefCell<Rc<dyn DiffSink>>,
     /// The open-url seam (lane KM — tests observe link clicks).
-    open_url_sink: std::cell::RefCell<Option<Rc<dyn Fn(String)>>>,
+    open_url_sink: std::cell::RefCell<Option<OpenUrlSink>>,
     /// SURF-2 `DialogPair`'s resource state (server.info + pair).
     pair: Signal<PairState>,
     /// SURF-2 the MCP toggle seam (mcp.connect/disconnect).
@@ -4051,7 +4054,7 @@ impl Store {
     }
 
     /// Swap the open-url seam (tests observe without spawning).
-    pub fn set_open_url_sink(&self, sink: Option<Rc<dyn Fn(String)>>) {
+    pub fn set_open_url_sink(&self, sink: Option<OpenUrlSink>) {
         *self.open_url_sink.borrow_mut() = sink;
     }
 
