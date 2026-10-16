@@ -20,3 +20,9 @@ Plan: A=websearch wiring, B=worktree.create git semantics, C=models-dev refresh 
 - boot.rs: production server opts into catalog_fetch + OPENCODE_MODELS_DEV_URL override.
 - model.rs: provider/model surface reads engine.catalog_service.get() live (v2 ModelsDev.get invalidation semantics).
 - Tests: oc-core provider_refresh 7/7 PASS (DbKV roundtrip + boot populate + corrupt removal + adopt; engine boot loop updates catalog + publishes models-dev.refreshed over a local api.json server; offline engine stays on the frozen snapshot 226 providers, version 0).
+
+== Verification ==
+- Affected-crate nextest (oc-core + oc-server): 968/968 PASS (3 slow, 2 pre-existing flaky retries, 0 failed).
+- Targeted per item: websearch oc-core 10/10 + oc-server 3/3; worktree oc-server 4/4 (incl. be1 fixture on a real git repo); models-dev oc-core 7/7.
+- cargo clippy -p oc-core -p oc-server --all-targets -- -D warnings: clean. cargo fmt --check: clean.
+- oc-ai untouched this lane.
