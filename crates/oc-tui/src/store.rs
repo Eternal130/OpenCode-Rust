@@ -144,6 +144,28 @@ pub enum DialogKind {
     /// SURF-2: the diff shortcuts dialog (`DiffViewerHelpDialog`,
     /// diff-viewer.tsx:1100-1192) — `diff.help`.
     DiffHelp,
+    /// SURF-2: `DialogMcp` (`/mcps`, mcp.list — dialog-mcp.tsx): the
+    /// per-server status rows with the toggle action.
+    Mcp,
+    /// SURF-2: the MCP error details (`MCP server: {name}` —
+    /// dialog-mcp.tsx's `DialogErrorDetails` role).
+    McpError { name: String },
+    /// SURF-2: `DialogStatus` (`/status`, opencode.status —
+    /// dialog-status.tsx): the MCP inventory summary.
+    Status,
+    /// SURF-2: `DialogVariant` (`/variants`, variant.list —
+    /// dialog-variant.tsx): the current model's variants.
+    Variant,
+    /// SURF-2: `DialogPair` (`/pair`, server.pair — dialog-pair.tsx):
+    /// the pairing links + code expiry.
+    Pair,
+    /// SURF-2: `DialogDebug` (`/debug`, opencode.debug —
+    /// dialog-debug.tsx): the env/config dump with the copy action.
+    Debug,
+    /// SURF-2: `DialogTimeline` (`session.timeline` —
+    /// routes/session/dialog-timeline.tsx): the user-message turn
+    /// list; enter opens the message actions.
+    Timeline { session_id: String },
 }
 
 /// One stack entry: the dialog kind, chrome size and content state.
@@ -985,6 +1007,12 @@ pub struct Store {
     /// The diff fetch seam (`vcs.base`/`vcs.diff` through the loop
     /// fetcher; tests record).
     diff_sink: std::cell::RefCell<Rc<dyn DiffSink>>,
+    /// SURF-2 `DialogPair`'s resource state (server.info + pair).
+    pair: Signal<PairState>,
+    /// SURF-2 the MCP toggle seam (mcp.connect/disconnect).
+    mcp_toggle_sink: std::cell::RefCell<Rc<dyn McpToggleSink>>,
+    /// SURF-2 `DialogPair`'s fetch seam (server.info + server.pair).
+    pair_refresh_sink: std::cell::RefCell<Option<Rc<dyn PairRefreshSink>>>,
 }
 
 /// One staged revert (`session.revert.staged`'s `revert` payload).
@@ -1223,6 +1251,56 @@ pub struct RecordingDiffSink {
 impl DiffSink for RecordingDiffSink {
     fn fetch(&self, mode: DiffSource, session_id: Option<String>, generation: u64) {
         self.calls.borrow_mut().push((mode, session_id, generation));
+    }
+}
+
+/// `DialogPair`'s resource state (`createResource` over
+/// `server.info` + `server.pair`, dialog-pair.tsx:21-38).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum PairState {
+    #[default]
+    Loading,
+    /// Both calls resolved: the auth links, the localhost link, the
+    /// expiry minutes, whether any URL is loopback.
+    Loaded {
+        links: Vec<String>,
+        localhost: Option<String>,
+        minutes: u64,
+        loopback: bool,
+    },
+    /// The fetch errored — the error body copy.
+    Failed(String),
+}
+
+/// The MCP connect/disconnect seam (`client.api.mcp.connect` /
+/// `.disconnect`, dialog-mcp.tsx:113-132): the run loop wires the
+/// HTTP worker; tests record.
+pub trait McpToggleSink {
+    fn toggle(&self, server: &str, connect: bool);
+}
+
+/// `DialogPair`'s fetch seam (`server.info` + `server.pair`,
+/// dialog-pair.tsx:21-38): the run loop wires the HTTP worker.
+pub trait PairRefreshSink {
+    fn refresh(&self);
+}
+
+/// The default no-op sink.
+pub struct NoMcpToggleSink;
+
+impl McpToggleSink for NoMcpToggleSink {
+    fn toggle(&self, _server: &str, _connect: bool) {}
+}
+
+/// The recording sink (tests).
+#[derive(Default)]
+pub struct RecordingMcpToggleSink {
+    pub calls: std::cell::RefCell<Vec<(String, bool)>>,
+}
+
+impl McpToggleSink for RecordingMcpToggleSink {
+    fn toggle(&self, server: &str, connect: bool) {
+        self.calls.borrow_mut().push((server.to_owned(), connect));
     }
 }
 
@@ -1654,6 +1732,8 @@ struct StoreSignals {
     mcp_servers: Signal<Vec<McpServerRow>>,
     sidebar_mcp_open: Signal<bool>,
     diff_viewer: Signal<DiffViewerLive>,
+    /// SURF-2 `DialogPair`'s resource state.
+    pair: Signal<PairState>,
 }
 
 impl Store {
@@ -1702,6 +1782,7 @@ impl Store {
                 watchers.mcp_servers.get(),
                 watchers.sidebar_mcp_open.get(),
                 watchers.diff_viewer.get(),
+                watchers.pair.get(),
                 watch_clock.get(),
             );
             bump.set(bump.get() + 1);
@@ -1757,6 +1838,7 @@ impl Store {
             mcp_servers,
             sidebar_mcp_open,
             diff_viewer,
+            pair,
         } = signals;
         Self {
             runtime,
@@ -1838,6 +1920,9 @@ impl Store {
             sidebar_mcp_open,
             diff_viewer,
             diff_sink: std::cell::RefCell::new(Rc::new(NoDiffSink)),
+            pair,
+            mcp_toggle_sink: std::cell::RefCell::new(Rc::new(NoMcpToggleSink)),
+            pair_refresh_sink: std::cell::RefCell::new(None),
             interrupt_sink: std::cell::RefCell::new(Rc::new(RecordingInterruptSink::default())),
             model_ring_dirty: Cell::new(false),
             revert_sink: std::cell::RefCell::new(Rc::new(RecordingRevertSink::default())),
@@ -1896,6 +1981,7 @@ impl Store {
         let mcp_servers = Signal::new(&runtime, Vec::<McpServerRow>::new());
         let sidebar_mcp_open = Signal::new(&runtime, true);
         let diff_viewer = Signal::new(&runtime, DiffViewerLive::default());
+        let pair = Signal::new(&runtime, PairState::default());
         Self::build(
             runtime,
             StoreSignals {
@@ -1937,6 +2023,7 @@ impl Store {
                 mcp_servers,
                 sidebar_mcp_open,
                 diff_viewer,
+                pair,
             },
         )
     }
@@ -3575,6 +3662,87 @@ impl Store {
     /// HTTP worker). The closure form accepts the loop-fetcher sender.
     pub fn set_diff_sink(&self, sink: Rc<dyn DiffSink>) {
         *self.diff_sink.borrow_mut() = sink;
+    }
+
+    // -- SURF-2: pair / mcp-toggle / variant ---------------------------------
+
+    /// `DialogPair`'s fetch result (the run loop's HTTP worker).
+    pub fn set_pair_state(&self, state: PairState) {
+        self.pair.set(state);
+    }
+
+    /// `DialogPair`'s live state.
+    #[must_use]
+    pub fn pair_state(&self) -> PairState {
+        self.pair.get()
+    }
+
+    /// The MCP toggle seam (`mcp.connect`/`mcp.disconnect`).
+    pub fn set_mcp_toggle_sink(&self, sink: Rc<dyn McpToggleSink>) {
+        *self.mcp_toggle_sink.borrow_mut() = sink;
+    }
+
+    /// `DialogPair`'s fetch seam (the run loop's HTTP worker).
+    pub fn set_pair_refresh_sink(&self, sink: Rc<dyn PairRefreshSink>) {
+        *self.pair_refresh_sink.borrow_mut() = Some(sink);
+    }
+
+    /// The installed pair fetch seam, if any.
+    #[must_use]
+    pub fn pair_refresh_sink(&self) -> Option<Rc<dyn PairRefreshSink>> {
+        self.pair_refresh_sink.borrow().clone()
+    }
+
+    /// `DialogMcp`'s toggle (`dialog-mcp.tsx:113-132`): connected →
+    /// disconnect; failed/pending-off → connect. Loading + pending
+    /// rows no-op.
+    pub fn mcp_toggle(&self, server: &str) {
+        let Some(row) = self.mcp_servers().into_iter().find(|row| row.name == server) else {
+            return;
+        };
+        if row.status == "pending" {
+            return;
+        }
+        let connect = row.status != "connected";
+        let sink = self.mcp_toggle_sink.borrow().clone();
+        sink.toggle(server, connect);
+    }
+
+    /// The current model's variant ids (`local.model.variant.list`,
+    /// local.tsx over the catalog row) — empty when the model has no
+    /// variants or the list is unavailable.
+    #[must_use]
+    pub fn current_model_variants(&self) -> Vec<String> {
+        let selection = match self.route() {
+            Route::Session { session_id } => self.selection_for(&session_id).model,
+            Route::Home => self.selection_for(crate::app::HOME_PROMPT_KEY).model,
+        };
+        let Some(selection) = selection else { return Vec::new() };
+        self.server_lists()
+            .models
+            .rows()
+            .map(|rows| {
+                rows.iter()
+                    .find(|row| row.provider_id == selection.provider_id && row.id == selection.model_id)
+                    .map(|row| row.variants.iter().filter(|v| v.as_str() != "default").cloned().collect())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    }
+
+    /// `local.model.variant.set` (dialog-variant.tsx:16/26): commit
+    /// the variant onto the route's selection ("default" clears it).
+    pub fn set_current_model_variant(&self, variant: Option<&str>) {
+        let key = match self.route() {
+            Route::Session { session_id } => session_id,
+            Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
+        };
+        let Some(mut model) = self.selection_for(&key).model else { return };
+        model.variant = variant.filter(|value| *value != "default").map(str::to_owned);
+        match self.route() {
+            Route::Session { session_id } => self.select_model(&session_id, &model),
+            Route::Home => self.stage_model(&key, model),
+        }
     }
 
     /// Closure-based sink install (the run loop's HTTP worker).

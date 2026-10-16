@@ -12,10 +12,10 @@
   ┃ /connect     Connect an integration                                        ┃
   ┃ /continue    Switch session                                                ┃
   ┃ /debug       View debug info                                               ┃
+  ┃ /diff        Open diff viewer                                              ┃
   ┃ /editor      Open editor                                                   ┃
   ┃ /effort      Switch model variant                                          ┃
   ┃ /exit        Exit the app                                                  ┃
-  ┃ /help        Help                                                          ┃
   ┃                                                                             
   ┃  /                                                                          
   ┃                                                                             

@@ -1,1515 +1,1515 @@
 {
-  "format": "tui-frame-golden/2",
-  "generator": "tui-dump (bun) @ opencode v2.0.24 reference",
-  "ansiFormat": "canonical span SGR: ESC[0;attrs;fg;bgm per style change, see frame.ts / tools/parity/src/tui_frame.rs",
-  "theme": {
-    "id": "opencode",
-    "label": "v2-dark",
-    "mode": "dark"
+ "format": "tui-frame-golden/2",
+ "generator": "tui-dump (bun) @ opencode v2.0.24 reference",
+ "ansiFormat": "canonical span SGR: ESC[0;attrs;fg;bgm per style change, see frame.ts / tools/parity/src/tui_frame.rs",
+ "theme": {
+  "id": "opencode",
+  "label": "v2-dark",
+  "mode": "dark"
+ },
+ "comparisonDepthDefault": "truecolor-canonical",
+ "scenarios": [
+  {
+   "id": "tool-wrap-rows",
+   "source": "test/cli/tui/inline-tool-wrap-snapshot.test.tsx",
+   "description": "Five consecutive grep/glob/read InlineToolRow summaries at width 72 (wrap behavior, v2-dark theme)",
+   "componentClass": "tool-row",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 12,
+     "rows": 12,
+     "cols": 80,
+     "txt": {
+      "bytes": 982,
+      "sha256": "768ff734b4f6cd59ae62590c60918431b061295616898b84554bad23c151ee14"
+     },
+     "ansi": {
+      "bytes": 2290,
+      "sha256": "e66de902a3f164e4978e797a398d16e0233c906f1ba7f304d98b5a10de517e31"
+     }
+    },
+    {
+     "width": 160,
+     "height": 12,
+     "rows": 12,
+     "cols": 160,
+     "txt": {
+      "bytes": 1942,
+      "sha256": "1cdb31b4d53e8ba974221433c878e6fadf920430f4862da7d8812391c37e26a7"
+     },
+     "ansi": {
+      "bytes": 3250,
+      "sha256": "4fed2587751e6fb59d9daede9203367824d47bdc9fe104314c858bead6a4e8ee"
+     }
+    }
+   ]
   },
-  "comparisonDepthDefault": "truecolor-canonical",
-  "scenarios": [
+  {
+   "id": "tool-wrap-error-expanded",
+   "source": "test/cli/tui/inline-tool-wrap-snapshot.test.tsx",
+   "description": "Same tool rows with errorExpanded (LSP error rendered under the tool text, v2-dark theme)",
+   "componentClass": "tool-row",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
     {
-      "id": "tool-wrap-rows",
-      "source": "test/cli/tui/inline-tool-wrap-snapshot.test.tsx",
-      "description": "Five consecutive grep/glob/read InlineToolRow summaries at width 72 (wrap behavior, v2-dark theme)",
-      "componentClass": "tool-row",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 12,
-          "rows": 12,
-          "cols": 80,
-          "txt": {
-            "bytes": 982,
-            "sha256": "768ff734b4f6cd59ae62590c60918431b061295616898b84554bad23c151ee14"
-          },
-          "ansi": {
-            "bytes": 2290,
-            "sha256": "e66de902a3f164e4978e797a398d16e0233c906f1ba7f304d98b5a10de517e31"
-          }
-        },
-        {
-          "width": 160,
-          "height": 12,
-          "rows": 12,
-          "cols": 160,
-          "txt": {
-            "bytes": 1942,
-            "sha256": "1cdb31b4d53e8ba974221433c878e6fadf920430f4862da7d8812391c37e26a7"
-          },
-          "ansi": {
-            "bytes": 3250,
-            "sha256": "4fed2587751e6fb59d9daede9203367824d47bdc9fe104314c858bead6a4e8ee"
-          }
-        }
-      ]
+     "width": 80,
+     "height": 12,
+     "rows": 12,
+     "cols": 80,
+     "txt": {
+      "bytes": 982,
+      "sha256": "2fcc39fa1f247be1ca0dce7b519920c43209b45464eafce0d1d288a005a36ab6"
+     },
+     "ansi": {
+      "bytes": 2360,
+      "sha256": "55726e6e1aedbab244daa190cae98bd7758999345179b6dca0337550ba7343e8"
+     }
     },
     {
-      "id": "tool-wrap-error-expanded",
-      "source": "test/cli/tui/inline-tool-wrap-snapshot.test.tsx",
-      "description": "Same tool rows with errorExpanded (LSP error rendered under the tool text, v2-dark theme)",
-      "componentClass": "tool-row",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 12,
-          "rows": 12,
-          "cols": 80,
-          "txt": {
-            "bytes": 982,
-            "sha256": "2fcc39fa1f247be1ca0dce7b519920c43209b45464eafce0d1d288a005a36ab6"
-          },
-          "ansi": {
-            "bytes": 2360,
-            "sha256": "55726e6e1aedbab244daa190cae98bd7758999345179b6dca0337550ba7343e8"
-          }
-        },
-        {
-          "width": 160,
-          "height": 12,
-          "rows": 12,
-          "cols": 160,
-          "txt": {
-            "bytes": 1942,
-            "sha256": "bf8c423e62d8eb1c797f2c354b1d6a964e24bf0ad1ff67b61ffaa1115e693481"
-          },
-          "ansi": {
-            "bytes": 3320,
-            "sha256": "06ba03ed4733a04ebb9e4ffe3a79fbb1d6f1edd24ea17ce1c38a463e3e23417c"
-          }
-        }
-      ]
-    },
-    {
-      "id": "session-tabs-horizontal",
-      "source": "test/component/session-tabs-status.test.tsx",
-      "description": "SessionTabs horizontal bar/rail with two tabs; first tab carries an unread-activity indicator",
-      "componentClass": "session-tabs",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 10,
-          "rows": 10,
-          "cols": 80,
-          "txt": {
-            "bytes": 812,
-            "sha256": "a3c4b9f4c8b8ccfcbf3719907630ab568c3bf97031aeab354eea08a45a3b256b"
-          },
-          "ansi": {
-            "bytes": 1701,
-            "sha256": "b33a7557736a4b0c74f1c870db6ee16e094f33bdd0765490736e202fe6c28dde"
-          }
-        },
-        {
-          "width": 160,
-          "height": 10,
-          "rows": 10,
-          "cols": 160,
-          "txt": {
-            "bytes": 1612,
-            "sha256": "ee0c2a186b2cb4ae458f4513e28292e210e2c87ff48daa55c4632cdae44d8590"
-          },
-          "ansi": {
-            "bytes": 2501,
-            "sha256": "a8aced64e73913e2195c0ed220958d59a251c0f704d47c6198ce9f3dcd051f64"
-          }
-        }
-      ]
-    },
-    {
-      "id": "footer-prompt-idle",
-      "source": "test/mini/footer.view.test.tsx",
-      "description": "RunFooterView default prompt composer (idle phase, fallback dark theme)",
-      "componentClass": "mini-footer",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 12,
-          "rows": 12,
-          "cols": 80,
-          "txt": {
-            "bytes": 976,
-            "sha256": "792ba03f4cc1b13350f344f2714af94a854c09fe38590896e3f46ce112eb4d12"
-          },
-          "ansi": {
-            "bytes": 1686,
-            "sha256": "da04335e9be07fcfed53dc1dbde75e9e87129f2800850f94f4c3a2b26185900d"
-          }
-        },
-        {
-          "width": 160,
-          "height": 12,
-          "rows": 12,
-          "cols": 160,
-          "txt": {
-            "bytes": 1936,
-            "sha256": "afd25dc561b07342882957f22b8b6ccea4d45aa68c38f07b5b5377e79135b068"
-          },
-          "ansi": {
-            "bytes": 2646,
-            "sha256": "78fcc28dcf4a852e73a55717f95e9990af3d4234bf9ecb0fe7ff4e4f32364e13"
-          }
-        }
-      ]
-    },
-    {
-      "id": "footer-permission",
-      "source": "test/mini/footer.view.test.tsx",
-      "description": "RunFooterView permission view: 'Permission required' with Allow once / Reject actions",
-      "componentClass": "mini-footer-permission",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 16,
-          "rows": 16,
-          "cols": 80,
-          "txt": {
-            "bytes": 1318,
-            "sha256": "ede7ac0a120ee4d37d21bfb785c8566efae068a68e471ae28294ed1b629b316c"
-          },
-          "ansi": {
-            "bytes": 3216,
-            "sha256": "1d5ff7a8760df44581eb061ca1e61c3bd03226f0f586060750d4db682a77331f"
-          }
-        },
-        {
-          "width": 160,
-          "height": 16,
-          "rows": 16,
-          "cols": 160,
-          "txt": {
-            "bytes": 2598,
-            "sha256": "dbad47248ed9b6eba3f4ea7cb8d17c58c686c59214259b0f506e6a94ad6ab273"
-          },
-          "ansi": {
-            "bytes": 4496,
-            "sha256": "c834245b51e5f156262bf4ad79500d252f8702f444b9ee7c60ddcad4b4715a3d"
-          }
-        }
-      ]
-    },
-    {
-      "id": "footer-form",
-      "source": "test/mini/footer.view.test.tsx",
-      "description": "RunFooterView multi-field form view (Deployment: Service + Notes)",
-      "componentClass": "mini-footer-form",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 16,
-          "rows": 16,
-          "cols": 80,
-          "txt": {
-            "bytes": 1298,
-            "sha256": "13177f213242871e0b8254b8dfdee5623431431a991ca9ce1325820640c20013"
-          },
-          "ansi": {
-            "bytes": 2374,
-            "sha256": "a667b9b43bb3c4e13bf099540bf4191f3e9f860baf1672e64cbda64f22eb19da"
-          }
-        },
-        {
-          "width": 160,
-          "height": 16,
-          "rows": 16,
-          "cols": 160,
-          "txt": {
-            "bytes": 2578,
-            "sha256": "f20f79be86c8090f2c42dd08e5d9f21dc502d137de7a1514fd77424f20f8d6e3"
-          },
-          "ansi": {
-            "bytes": 3654,
-            "sha256": "8f1196e087811ba8dd02d31db6ccbd75b1829b3d6b6f9bea16d6402bad487129"
-          }
-        }
-      ]
-    },
-    {
-      "id": "permission-reject-field",
-      "source": "test/mini/footer.view.test.tsx",
-      "description": "RejectField free-text reason input shown with permission actions",
-      "componentClass": "mini-footer-permission",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 18,
-          "rows": 18,
-          "cols": 80,
-          "txt": {
-            "bytes": 1458,
-            "sha256": "c7fbc14988a79c386ec5c9c8576c9407c6618aa005d3ee2e1676f7b2ccf3e7e9"
-          },
-          "ansi": {
-            "bytes": 2144,
-            "sha256": "a79e909731422c397faf0625d922a01f94f33a4fbfda65ce88bd7733f356d76b"
-          }
-        },
-        {
-          "width": 160,
-          "height": 18,
-          "rows": 18,
-          "cols": 160,
-          "txt": {
-            "bytes": 2898,
-            "sha256": "2c469b0fa45c8741d41c4a06e9c6292dd90a0523ebf222707e40fd728fb90c1a"
-          },
-          "ansi": {
-            "bytes": 3584,
-            "sha256": "dfb10a7846745a4675f7e53cc94cfdbf8cf8eca42f3e497722fe82b321e1ff73"
-          }
-        }
-      ]
-    },
-    {
-      "id": "footer-command-menu",
-      "source": "test/mini/footer.view.test.tsx",
-      "description": "RunCommandMenuBody grouped commands panel (Session/Agent/Editor sections + MCP command)",
-      "componentClass": "mini-footer-panel",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 17,
-          "rows": 17,
-          "cols": 80,
-          "txt": {
-            "bytes": 1537,
-            "sha256": "2960af8fb3a711f41531206cd19bd5da3e0fd6c1da72132dd44620b5324f4004"
-          },
-          "ansi": {
-            "bytes": 3365,
-            "sha256": "df7884df89ec90015e632eb9456749622b4669f3dca18baa0b798edc28ea0b6a"
-          }
-        },
-        {
-          "width": 160,
-          "height": 17,
-          "rows": 17,
-          "cols": 160,
-          "txt": {
-            "bytes": 3057,
-            "sha256": "cb36e187d3d8facebf76ab7d9f71b9d2d158a9e4ec6b03bdc6008e11f63b5526"
-          },
-          "ansi": {
-            "bytes": 4885,
-            "sha256": "8b4b7dc65cde61b0928a2dd561fbdc41847099d6ed189b52fe8affb570576166"
-          }
-        }
-      ]
-    },
-    {
-      "id": "footer-model-select",
-      "source": "test/mini/footer.view.test.tsx",
-      "description": "RunModelSelectBody provider/model picker (opencode: GPT-5, GPT Free, deprecated Old Model)",
-      "componentClass": "mini-footer-panel",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 17,
-          "rows": 17,
-          "cols": 80,
-          "txt": {
-            "bytes": 1377,
-            "sha256": "bb293d53d37652b2f662e4927bf5d84737a1d4c9ebd5fbdd29930429ef5cca05"
-          },
-          "ansi": {
-            "bytes": 2565,
-            "sha256": "fc9318d7a11db8b8616d6b1395d36dcb95c8cae6ac29e50268a88f0185500383"
-          }
-        },
-        {
-          "width": 160,
-          "height": 17,
-          "rows": 17,
-          "cols": 160,
-          "txt": {
-            "bytes": 2737,
-            "sha256": "8ba924741cc93b01fab195d4c3b2418da44f6080178380fd78aa7977823d539b"
-          },
-          "ansi": {
-            "bytes": 3925,
-            "sha256": "abf6c64807b507dd4f7f101b04fc94551626e48e9c91bbb3071a29e3ee89999b"
-          }
-        }
-      ]
-    },
-    {
-      "id": "footer-agent-select",
-      "source": "test/mini/footer.view.test.tsx",
-      "description": "RunAgentSelectBody agent picker (Build/Review/Explore, current=review, hidden agent excluded)",
-      "componentClass": "mini-footer-panel",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 16,
-          "rows": 16,
-          "cols": 80,
-          "txt": {
-            "bytes": 1296,
-            "sha256": "1b74a1e47a483d0580d9cd12bd09037a7f80cceaee9343c9550ebf3bebb21b4a"
-          },
-          "ansi": {
-            "bytes": 2483,
-            "sha256": "c5c78b36cdad9017692a1d56598b1da85336e1cf8e03fb2750ed154655289287"
-          }
-        },
-        {
-          "width": 160,
-          "height": 16,
-          "rows": 16,
-          "cols": 160,
-          "txt": {
-            "bytes": 2576,
-            "sha256": "fcd0d4dfdd64d09163f9dac48090951b7c31e6ef38f334a553b5821446616595"
-          },
-          "ansi": {
-            "bytes": 3763,
-            "sha256": "64f763f439bf054da8ec3e9ce2cc8f5fedf3d6a71ee111b43141ccd348783b73"
-          }
-        }
-      ]
-    },
-    {
-      "id": "footer-variant-select",
-      "source": "test/mini/footer.view.test.tsx",
-      "description": "RunVariantSelectBody reasoning-effort picker (Default + high/minimal, current=high)",
-      "componentClass": "mini-footer-panel",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 16,
-          "rows": 16,
-          "cols": 80,
-          "txt": {
-            "bytes": 1296,
-            "sha256": "ad9d9ae52713ba98798cb5b31a38381514510d7fc40713df5680892f739e2ce3"
-          },
-          "ansi": {
-            "bytes": 2483,
-            "sha256": "fc9efe587683f2b230a2ca576ec5afc7a781673ca7969c4f0607d1643345ed6a"
-          }
-        },
-        {
-          "width": 160,
-          "height": 16,
-          "rows": 16,
-          "cols": 160,
-          "txt": {
-            "bytes": 2576,
-            "sha256": "300269599d553df5db9e1ac3cd0e099215e94d533f2fd767e33eb45b46cddadb"
-          },
-          "ansi": {
-            "bytes": 3763,
-            "sha256": "7ca6ac770239ff9ff59db6b0af0766cd4ec2813820a74bad80df395c81060d05"
-          }
-        }
-      ]
-    },
-    {
-      "id": "footer-settings",
-      "source": "test/mini/footer.view.test.tsx",
-      "description": "RunSettingsBody verbosity/thinking/tools/shell settings panel (mono=false, animations off)",
-      "componentClass": "mini-footer-panel",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 16,
-          "rows": 16,
-          "cols": 80,
-          "txt": {
-            "bytes": 1299,
-            "sha256": "3a84471f685cbcbe2eb1ee4e13ed48206105ba721a6528f653b71df1f856c11c"
-          },
-          "ansi": {
-            "bytes": 3501,
-            "sha256": "9881199195992027ae924227d6ce86c8bce00e2597faac979452a894a2c17153"
-          }
-        },
-        {
-          "width": 160,
-          "height": 16,
-          "rows": 16,
-          "cols": 160,
-          "txt": {
-            "bytes": 2579,
-            "sha256": "4810cab9b8b9ed6f588b8fbb096105353e510833bac8f6bb90d073ec030dc314"
-          },
-          "ansi": {
-            "bytes": 4781,
-            "sha256": "28b6db5679e17db6eb65ef8a525ad0e5fa940c4fecbb9b2549c52f341cd13bc2"
-          }
-        }
-      ]
-    },
-    {
-      "id": "form-authorization",
-      "source": "test/cli/tui/form.test.tsx",
-      "description": "Session FormPrompt: external authorization form (acknowledgement required)",
-      "componentClass": "prompt-composer",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 20,
-          "rows": 20,
-          "cols": 80,
-          "txt": {
-            "bytes": 1648,
-            "sha256": "a8200698d4b672767aec7dffbe8e0e88aed75828f96fa361f8f4e1e1c0f18374"
-          },
-          "ansi": {
-            "bytes": 3725,
-            "sha256": "e7be717715fa0c3e20f16140a34f0c34a9caee927cab661455576b9a6e4f9669"
-          }
-        },
-        {
-          "width": 160,
-          "height": 20,
-          "rows": 20,
-          "cols": 160,
-          "txt": {
-            "bytes": 3248,
-            "sha256": "cf1867cd0ec7e7ca254e866605952375eb736bb449d462aa3d321323a2d8383d"
-          },
-          "ansi": {
-            "bytes": 5325,
-            "sha256": "743120df312e3feeb0c52102a80a770ef272dcf92170997ad26278f1e66c1949"
-          }
-        }
-      ]
-    },
-    {
-      "id": "command-palette",
-      "source": "test/cli/tui/command-palette.test.tsx",
-      "description": "CommandPaletteDialog listing two registered commands (New session / Switch model)",
-      "componentClass": "dialog",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 24,
-          "rows": 24,
-          "cols": 80,
-          "txt": {
-            "bytes": 1944,
-            "sha256": "44d3d16c06f81eb1e24d5bab4543e449a40e8f4e605045d034c204b4334adba3"
-          },
-          "ansi": {
-            "bytes": 4329,
-            "sha256": "ce25dcde05e797ac645a204c8b21917916707ca56df60e2eafbef1dbd1329afb"
-          }
-        },
-        {
-          "width": 160,
-          "height": 24,
-          "rows": 24,
-          "cols": 160,
-          "txt": {
-            "bytes": 3864,
-            "sha256": "08d7ac3651c05041e647d5254710cd9395d7c1ea3a45d7433171a8c7c32a6ba6"
-          },
-          "ansi": {
-            "bytes": 6249,
-            "sha256": "2ee113e67ef8f6f4c3d0f37e0075bc0f50fac1f67e156d74b374be925e2cdfc1"
-          }
-        }
-      ]
-    },
-    {
-      "id": "dialog-select",
-      "source": "test/cli/tui/dialog-select.test.tsx",
-      "description": "DialogSelect fuzzy picker with three items, Beta selected, two row actions",
-      "componentClass": "dialog",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 20,
-          "rows": 20,
-          "cols": 80,
-          "txt": {
-            "bytes": 1622,
-            "sha256": "66f9f14a544fc45c11a6e98f833e940d5cb82c1cb8ccd34fffafbe63f66d2eaa"
-          },
-          "ansi": {
-            "bytes": 3290,
-            "sha256": "efb4a56ea6dafb0ec4a3ca0759752e15b6114dfe78ea7221ab660ab487f96b87"
-          }
-        },
-        {
-          "width": 160,
-          "height": 20,
-          "rows": 20,
-          "cols": 160,
-          "txt": {
-            "bytes": 3222,
-            "sha256": "d98f3ccd525ba4f3f7e4efd1806f64147e25776ba87616866848feb5a1a89cdf"
-          },
-          "ansi": {
-            "bytes": 4890,
-            "sha256": "fbbfef6526b6d8196f5ab0dd02a84f55af851a4d2426f6d9ee826a0b21e6b413"
-          }
-        }
-      ]
-    },
-    {
-      "id": "group-view-instructions",
-      "source": "test/cli/tui/group-view.test.tsx",
-      "description": "SessionGroupView collapsed instructions group ('Instructions: 2 files' summary row)",
-      "componentClass": "session-group",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 24,
-          "rows": 24,
-          "cols": 80,
-          "txt": {
-            "bytes": 1946,
-            "sha256": "41a4121d37a3239267ae40456487e9ce6112f58d2b8d61a7bc850972db3f0932"
-          },
-          "ansi": {
-            "bytes": 3022,
-            "sha256": "00b8b18fdf573d762d163f17b1014c1427e0724ba0e443f4755276caa05b2c68"
-          }
-        },
-        {
-          "width": 160,
-          "height": 24,
-          "rows": 24,
-          "cols": 160,
-          "txt": {
-            "bytes": 3866,
-            "sha256": "a419737070b9a8f59180f75cb0f891dc664ed36b9bbe976605d8388cb3c41615"
-          },
-          "ansi": {
-            "bytes": 4942,
-            "sha256": "c074e4a60c0a5157250af81704017b5efa8742680489fe5bf52278c5707f1f6a"
-          }
-        }
-      ]
-    },
-    {
-      "id": "diff-viewer-split",
-      "source": "test/cli/tui/diff-viewer.test.tsx",
-      "description": "Diff viewer split view rendering three hunks of a modified file (gutter +/- rows)",
-      "componentClass": "diff-viewer",
-      "class": "tier-b",
-      "comparisonDepth": "degraded-256",
-      "variants": [
-        {
-          "width": 80,
-          "height": 24,
-          "rows": 24,
-          "cols": 80,
-          "txt": {
-            "bytes": 1945,
-            "sha256": "44d40a2f644ae6b3c3e70857ed222076850c237beaf9acce54b83dc6a9f6ad94"
-          },
-          "ansi": {
-            "bytes": 6485,
-            "sha256": "dc5b5a1bf8f58bd96b7f676aeb0b69a968af621067f3c5fbf235cb7400f8fb46"
-          }
-        },
-        {
-          "width": 160,
-          "height": 24,
-          "rows": 24,
-          "cols": 160,
-          "txt": {
-            "bytes": 3871,
-            "sha256": "2417c02a1c76f6634132de11f1e8e50f24a3dc3aa81ae4fb5231c0c90d2f88be"
-          },
-          "ansi": {
-            "bytes": 10362,
-            "sha256": "8e30ed6685e8130fef0c32d1fc5d360f31c3a571300354f2c872ca56a78bf7d4"
-          }
-        }
-      ]
-    },
-    {
-      "id": "width-edge-cjk",
-      "source": "tui-dump width-edge corpus (oracle-gate8 finding 2)",
-      "description": "CJK display-width probe: mixed zh + ASCII, full-width punctuation and brackets, wrap-anywhere reflow",
-      "componentClass": "width-probe",
-      "class": "width-edge",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 30,
-          "rows": 30,
-          "cols": 80,
-          "txt": {
-            "bytes": 2591,
-            "sha256": "b10fd056a93d1b25adef305177e31757b81ae6761669281094051de3e30530bb"
-          },
-          "ansi": {
-            "bytes": 4321,
-            "sha256": "313b5f0985badbca6922341c2224366218a5732fb748ed27455787e9d3ebe6e3"
-          }
-        },
-        {
-          "width": 40,
-          "height": 30,
-          "rows": 30,
-          "cols": 40,
-          "txt": {
-            "bytes": 1391,
-            "sha256": "9d5e050bd958b78c9f3bd5310f57ddd891c596fad1e355d5ece0bec555df9ded"
-          },
-          "ansi": {
-            "bytes": 3891,
-            "sha256": "984bd38ca254f7ccc681462cdcfacb6dda59616ece530725ca9085149dcbe02c"
-          }
-        }
-      ],
-      "widths": {
-        "file": "width-edge-cjk.widths.json",
-        "bytes": 1490,
-        "sha256": "5cd896eb63a244e167854279e0f1ba90d4e7ee0df23431fe515a6d8a029a844a",
-        "samples": 8
-      }
-    },
-    {
-      "id": "width-edge-emoji",
-      "source": "tui-dump width-edge corpus (oracle-gate8 finding 2)",
-      "description": "Emoji display-width probe: ZWJ sequences (family/flags/handshake), skin-tone modifiers, keycap VS16",
-      "componentClass": "width-probe",
-      "class": "width-edge",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 30,
-          "rows": 30,
-          "cols": 80,
-          "txt": {
-            "bytes": 2530,
-            "sha256": "891c8074c1ed9645236b1297b75a4ae15a1e59b68f7f41dd176233bed3e11695"
-          },
-          "ansi": {
-            "bytes": 4238,
-            "sha256": "dc2142f85e46a914002a03fb835b9b8f4a2b9c7000b1ebdcc82353152ed925ea"
-          }
-        },
-        {
-          "width": 40,
-          "height": 30,
-          "rows": 30,
-          "cols": 40,
-          "txt": {
-            "bytes": 1330,
-            "sha256": "d696097995dbe3ba01824d7f68c5c99d4868b7bca12dc999d5e0237aa7f8c044"
-          },
-          "ansi": {
-            "bytes": 3248,
-            "sha256": "438e3101db3a205b685ace72846215586b71cdac03bf6df50275e284459e95b8"
-          }
-        }
-      ],
-      "widths": {
-        "file": "width-edge-emoji.widths.json",
-        "bytes": 1269,
-        "sha256": "756aa6a810060374ad7bae267c0c96af6cb182fc36f803f6c8169c55a687d1e1",
-        "samples": 8
-      }
-    },
-    {
-      "id": "width-edge-combining",
-      "source": "tui-dump width-edge corpus (oracle-gate8 finding 2)",
-      "description": "Combining-marks / ambiguous-width probe: NFD vs precomposed, ±·…○△, circled/roman numerals, box drawing, Indic scripts",
-      "componentClass": "width-probe",
-      "class": "width-edge",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 30,
-          "rows": 30,
-          "cols": 80,
-          "txt": {
-            "bytes": 2579,
-            "sha256": "9dd54d734f41e2ff0329ccbdbecd7d10bff554dd2459621f6904980257d7060c"
-          },
-          "ansi": {
-            "bytes": 4289,
-            "sha256": "253e6e03d69906656920df6146fd056271c49a128119b2d2e20180275a50c865"
-          }
-        },
-        {
-          "width": 40,
-          "height": 30,
-          "rows": 30,
-          "cols": 40,
-          "txt": {
-            "bytes": 1379,
-            "sha256": "fb5dacfedffdeec34b3771b09da6b6456c0be2b24aa171edeead2bb5d7c29cd1"
-          },
-          "ansi": {
-            "bytes": 3579,
-            "sha256": "1398075eb5a77b299e90585cef9a9c1b5dd4e51e49a0d6aa1a52642a6e6893eb"
-          }
-        }
-      ],
-      "widths": {
-        "file": "width-edge-combining.widths.json",
-        "bytes": 1351,
-        "sha256": "a9ef01020305d60afeeba1ef7114aeaf9913e11b3d0caa28fd8aa170c5513782",
-        "samples": 8
-      }
-    },
-    {
-      "id": "composer-placeholder-empty",
-      "source": "packages/tui/src/component/prompt (state corpus; drive via PromptRef.set)",
-      "description": "Empty composer with a single-entry placeholder list (Ask anything… prompt)",
-      "componentClass": "composer",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 20,
-          "rows": 20,
-          "cols": 80,
-          "txt": {
-            "bytes": 1790,
-            "sha256": "c2f429515caf81e170b46b3661f85304ac0242447729914af93741b830760466"
-          },
-          "ansi": {
-            "bytes": 3007,
-            "sha256": "fcae8bf5d0cf2b5cbf8d3d34e88977178b7038c40e5d0ce31f025ecf5768f432"
-          }
-        },
-        {
-          "width": 40,
-          "height": 20,
-          "rows": 20,
-          "cols": 40,
-          "txt": {
-            "bytes": 910,
-            "sha256": "3fb39e63135cd1d544996bf7db3a2cf935e82eae7d458b44a0954a2d5a04ca91"
-          },
-          "ansi": {
-            "bytes": 1952,
-            "sha256": "2a333a4d1dc7adfa4de4fbb18f53b4e0e43fab13b7cc3576d89eab36a15dfd21"
-          }
-        }
-      ]
-    },
-    {
-      "id": "composer-typed-multiline",
-      "source": "packages/tui/src/component/prompt (state corpus; drive via PromptRef.set)",
-      "description": "Composer holding a three-line typed draft (multi-row input, caret at end)",
-      "componentClass": "composer",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 20,
-          "rows": 20,
-          "cols": 80,
-          "txt": {
-            "bytes": 1792,
-            "sha256": "7dc42d1da0637695fb33ef68f8b470d439a54747c1f4452b58151d3516285b4f"
-          },
-          "ansi": {
-            "bytes": 3213,
-            "sha256": "179293d07eb939490eb150febc15e35bf275ec50acb5a410f0b545bd5fb69562"
-          }
-        },
-        {
-          "width": 40,
-          "height": 20,
-          "rows": 20,
-          "cols": 40,
-          "txt": {
-            "bytes": 912,
-            "sha256": "f9b827a55f99733061649d28f5df1a20d5cb2d0ed97aa457af9dec9e3a40d7d6"
-          },
-          "ansi": {
-            "bytes": 2158,
-            "sha256": "5cc569a26d8224c682c2e4f198558b79b1759db1eaef65c5c649f24091c6655d"
-          }
-        }
-      ]
-    },
-    {
-      "id": "composer-cjk-input",
-      "source": "packages/tui/src/component/prompt (state corpus; drive via PromptRef.set)",
-      "description": "Composer holding a mixed Japanese/ASCII draft (double-width glyphs in the input)",
-      "componentClass": "composer",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 20,
-          "rows": 20,
-          "cols": 80,
-          "txt": {
-            "bytes": 1807,
-            "sha256": "1a2b7f82f8e8b5ca04563169890ccf2631ed82301d340bcb40b531b902933ff9"
-          },
-          "ansi": {
-            "bytes": 3024,
-            "sha256": "035c2076305e4b7b0e17e7ec93823474e700f76a5452abbbe24cfe4336228c6b"
-          }
-        },
-        {
-          "width": 40,
-          "height": 20,
-          "rows": 20,
-          "cols": 40,
-          "txt": {
-            "bytes": 929,
-            "sha256": "2fc62a7f6932d69561be4d95e641f962270fdb830411a35c1b63b4c65abd2bec"
-          },
-          "ansi": {
-            "bytes": 2073,
-            "sha256": "114a6b4d823e613579db5f41de026dc9ef392bfc3643408c6c452d649829f146"
-          }
-        }
-      ]
-    },
-    {
-      "id": "composer-attachment-chip",
-      "source": "packages/tui/src/component/prompt (state corpus; drive via PromptRef.set)",
-      "description": "Composer with a pasted-image attachment: [Image 1] chip rendered as a file extmark inside the input",
-      "componentClass": "composer",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 20,
-          "rows": 20,
-          "cols": 80,
-          "txt": {
-            "bytes": 1788,
-            "sha256": "cb921b2c783c145d78bfb0d08a9e1f10d87b4863c5b0dc10202943f292f6159b"
-          },
-          "ansi": {
-            "bytes": 3076,
-            "sha256": "54cdaaf58ebb8b824895acedba723afb2ec90ff2f5467605a76c05d7c0e9ac91"
-          }
-        },
-        {
-          "width": 40,
-          "height": 20,
-          "rows": 20,
-          "cols": 40,
-          "txt": {
-            "bytes": 910,
-            "sha256": "0ce67dabe9df028887abed29ea192a2dd988ec404d49f9fe69ad744eacfca2d3"
-          },
-          "ansi": {
-            "bytes": 2125,
-            "sha256": "c9b3852c19d628265e42c52874e1b4d4de96c059b464e4c5e7d9e2bc294f6a79"
-          }
-        }
-      ]
-    },
-    {
-      "id": "composer-autocomplete-open",
-      "source": "packages/tui/src/component/prompt (state corpus; drive via PromptRef.set)",
-      "description": "Slash-command autocomplete open on '/re': filtered list (/redo, /rename) with the selected row highlighted",
-      "componentClass": "composer",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 20,
-          "rows": 20,
-          "cols": 80,
-          "txt": {
-            "bytes": 1796,
-            "sha256": "ede505a86113fd1576454b1949d8a45e48e4509e5538ff9c67bf29b4ef7d424d"
-          },
-          "ansi": {
-            "bytes": 3322,
-            "sha256": "c092ff9dc28a56ec21db260d2172895af7bad1b8adc8dd872a640ba8ef90d023"
-          }
-        },
-        {
-          "width": 40,
-          "height": 20,
-          "rows": 20,
-          "cols": 40,
-          "txt": {
-            "bytes": 916,
-            "sha256": "2c29f357b1d7f22334400f9625fab2399516f6aad549e6e1870244cbb2de20ee"
-          },
-          "ansi": {
-            "bytes": 2267,
-            "sha256": "45ca857403595c10ce7d25aa18a73a2ff181a64f24e759e6f4df7be7b2bc4a13"
-          }
-        }
-      ]
-    },
-    {
-      "id": "markdown-frame",
-      "source": "packages/tui/src/routes/session/message-parts.tsx (TextPart mount)",
-      "description": "Assistant markdown mix (heading/bold/inline-code/emphasis/lists/fence) with a ≥10-char bold run crossing the wrap boundary at both widths",
-      "componentClass": "markdown",
-      "class": "tier-c1",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 30,
-          "rows": 30,
-          "cols": 80,
-          "txt": {
-            "bytes": 2430,
-            "sha256": "309f75f46ddddfcce75e2ded9b831f89ec9e0a056324e5bffb2c3aeef6fa7c52"
-          },
-          "ansi": {
-            "bytes": 5565,
-            "sha256": "9d8e1c6979f4cc52e136e88796372fd0343786d8ef48a462c0e2111050932fc7"
-          }
-        },
-        {
-          "width": 40,
-          "height": 30,
-          "rows": 30,
-          "cols": 40,
-          "txt": {
-            "bytes": 1230,
-            "sha256": "7008fe0bf6d8e5af0afe883d1cf78c62d96d8417bd6d5c336d263208c6143ed9"
-          },
-          "ansi": {
-            "bytes": 4577,
-            "sha256": "0b2bb27117e32afb1f0b284e1b5496e46ca6284b8f5586f260b9b9591a3646b2"
-          }
-        }
-      ]
-    },
-    {
-      "id": "spinner-frozen",
-      "source": "packages/tui/src/routes/session/group-view.tsx (running InlineToolRow, ManualClock)",
-      "description": "Tool-running row frozen at t=0: spinner glyph ⠋ beside its pending label, clock never advances",
-      "componentClass": "spinner",
-      "class": "tier-c1",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 6,
-          "rows": 6,
-          "cols": 80,
-          "txt": {
-            "bytes": 488,
-            "sha256": "0f6443d0d15c9949e635c20eb227386dca8d089e5893feec30052692bd2f093d"
-          },
-          "ansi": {
-            "bytes": 862,
-            "sha256": "e01669bb7f897104dce0c0f0d0b7e14e13d9e14b98a2533f74ff5119be4c7f35"
-          }
-        },
-        {
-          "width": 40,
-          "height": 6,
-          "rows": 6,
-          "cols": 40,
-          "txt": {
-            "bytes": 248,
-            "sha256": "7ddccf233ae2d4f8024020eb9e0133d43b8d3fab039d5ed5b3b185e30b2ce664"
-          },
-          "ansi": {
-            "bytes": 622,
-            "sha256": "e9f2201dc41cf0c756e4bbac466ad8977e2312bfe98a0eb1b092278b53795332"
-          }
-        }
-      ]
-    },
-    {
-      "id": "message-groups",
-      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
-      "description": "Consecutive user/assistant turns with exploration ('Explored: 1 read') and reasoning ('Thought') group headers plus the boundary row between turns",
-      "componentClass": "message-group",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 30,
-          "rows": 30,
-          "cols": 80,
-          "txt": {
-            "bytes": 2609,
-            "sha256": "55e3a0d0f13e0d9f5d92db94c69076e9f98e00466bde49b05f65debda88880ad"
-          },
-          "ansi": {
-            "bytes": 6026,
-            "sha256": "cf187b0747bc34c926cd7f6811920f11c62cd46aaf34e0f7af3a11d211d6410f"
-          }
-        },
-        {
-          "width": 40,
-          "height": 30,
-          "rows": 30,
-          "cols": 40,
-          "txt": {
-            "bytes": 1333,
-            "sha256": "c2a650e30f190a1b60e1fdaaeac2d7e536139c7434c0534956907b84ff5ba3b8"
-          },
-          "ansi": {
-            "bytes": 4680,
-            "sha256": "abe50e9f1e26fd07563f9291fae82115f610e0dcf40d403427720d4a984bcf0f"
-          }
-        }
-      ]
-    },
-    {
-      "id": "vscroll-top",
-      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
-      "description": "Virtual-scroll transcript ≫ viewport pinned at scrollTop=0 (oldest turn at the top, 'Jump to latest' indicator visible)",
-      "componentClass": "vscroll",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "scrollOffset": "top",
-      "variants": [
-        {
-          "width": 80,
-          "height": 24,
-          "rows": 24,
-          "cols": 80,
-          "txt": {
-            "bytes": 2122,
-            "sha256": "bdbb56f36afa34d2f3a846c79a660a9398c9da5f3d825319dbde87f72a104e60"
-          },
-          "ansi": {
-            "bytes": 5027,
-            "sha256": "f4760bbc02aeb316bf46540d3e9e5c9cc83ed0e3dcd6c84f06212ae37682429e"
-          }
-        }
-      ]
-    },
-    {
-      "id": "vscroll-middle",
-      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
-      "description": "Same transcript pinned at the middle of the scroll range (half the maximum scrollTop)",
-      "componentClass": "vscroll",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "scrollOffset": "middle",
-      "variants": [
-        {
-          "width": 80,
-          "height": 24,
-          "rows": 24,
-          "cols": 80,
-          "txt": {
-            "bytes": 2122,
-            "sha256": "954395bdd8db539574cba0c3d1fe352e6f2b201e89dcf077cfd8b83c16be1795"
-          },
-          "ansi": {
-            "bytes": 5027,
-            "sha256": "7507e0f04f0e35e4147d0021b584ac844af4da776b26a5535b122661098ad802"
-          }
-        }
-      ]
-    },
-    {
-      "id": "vscroll-bottom",
-      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
-      "description": "Same transcript scrolled to the maximum scrollTop after being away (indicator cleared, sticky re-armed)",
-      "componentClass": "vscroll",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "scrollOffset": "bottom",
-      "variants": [
-        {
-          "width": 80,
-          "height": 24,
-          "rows": 24,
-          "cols": 80,
-          "txt": {
-            "bytes": 2120,
-            "sha256": "0a5d8e555694be773b39b2cafb5c4f3a6e0a9744a85b3fd37a7aa4168316f44a"
-          },
-          "ansi": {
-            "bytes": 4955,
-            "sha256": "c48121dc7f9bd2c7748cdd751ae45339d63245d0ae83c8d0be49f7c18752d193"
-          }
-        }
-      ]
-    },
-    {
-      "id": "vscroll-stick-bottom",
-      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
-      "description": "Same transcript left sticky-at-bottom while a new assistant turn streams in — the viewport follows the append",
-      "componentClass": "vscroll",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "scrollOffset": "stick-to-bottom",
-      "variants": [
-        {
-          "width": 80,
-          "height": 24,
-          "rows": 24,
-          "cols": 80,
-          "txt": {
-            "bytes": 2116,
-            "sha256": "4795f78f64976d5e783d69e898de79cbad578307119381f57833c2ddf9f6d6bb"
-          },
-          "ansi": {
-            "bytes": 4743,
-            "sha256": "159827c065c167fa4835b6a0ba4205f5f0753c0bde7b5e1ae7d53adbf2c08cb0"
-          }
-        }
-      ]
-    },
-    {
-      "id": "sidebar-expanded",
-      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
-      "description": "Session route at width 160 with the right-hand sidebar pane visible (session title + plugin slot area, sidebar=auto)",
-      "componentClass": "sidebar",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 160,
-          "height": 30,
-          "rows": 30,
-          "cols": 160,
-          "txt": {
-            "bytes": 5089,
-            "sha256": "7b35d39e9c556dbb330f53f7f9cd3fb33d38999b589bc8b80fa722de37b7e714"
-          },
-          "ansi": {
-            "bytes": 11170,
-            "sha256": "b085e165589c528731d1c5c91a9feed8a5047c4dee884fe332897295545b5250"
-          }
-        }
-      ]
-    },
-    {
-      "id": "sidebar-collapsed",
-      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
-      "description": "Same session route with the sidebar pane hidden (session.sidebar=hide) — full-width transcript",
-      "componentClass": "sidebar",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 160,
-          "height": 30,
-          "rows": 30,
-          "cols": 160,
-          "txt": {
-            "bytes": 5169,
-            "sha256": "291c184877317241c39514c3c3ba6a7485c86b9e49cac346712ba90113c0a7f6"
-          },
-          "ansi": {
-            "bytes": 8516,
-            "sha256": "5b080176b4f2c394f090f314871ab0e3d83edc65279abd3515e3203b91e0ca9d"
-          }
-        }
-      ]
-    },
-    {
-      "id": "session-screen-40",
-      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
-      "description": "Complete session route at 40 columns: transcript list, composer input and the horizontal tabs bar",
-      "componentClass": "session-screen",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 40,
-          "height": 30,
-          "rows": 30,
-          "cols": 40,
-          "txt": {
-            "bytes": 1331,
-            "sha256": "fc0501227f5bd999351bbb56070a68ac5a2e0e6522774cebb524416e9573582e"
-          },
-          "ansi": {
-            "bytes": 4716,
-            "sha256": "a1e262e869affd395c25710ea46eb2a34d195bbcdfa1b3b3720987588ce2594c"
-          }
-        }
-      ]
-    },
-    {
-      "id": "toast-over-session",
-      "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
-      "description": "One toast surface (title + message + dismiss affordance) rendered over live session content via the app's tui.toast.show event",
-      "componentClass": "toast",
-      "class": "tier-c1",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 30,
-          "rows": 30,
-          "cols": 80,
-          "txt": {
-            "bytes": 2629,
-            "sha256": "ea5fd549df8963fd5ee2dbc115ca49254112c2ecbc3583ffe0a090143bbf4d2c"
-          },
-          "ansi": {
-            "bytes": 6843,
-            "sha256": "c942062269deceed57bc936c0db1341c552f891af48f693a58d760bd7c5441e3"
-          }
-        }
-      ]
-    },
-    {
-      "id": "home",
-      "source": "packages/tui/src/routes/home.tsx full-app fixture (session_app.tsx pattern, no sessionID)",
-      "description": "Home route: OPENCODE wordmark, centered prompt composer (placeholder pinned to entry 0) and the home.footer plugin slot (app version)",
-      "componentClass": "home",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 30,
-          "rows": 30,
-          "cols": 80,
-          "txt": {
-            "bytes": 2758,
-            "sha256": "ae9ba79c914fed365fcf4ce127eb57fea9bc157c07071aacfabc7e8728c331cc"
-          },
-          "ansi": {
-            "bytes": 6029,
-            "sha256": "b4b87273bcbecbe407418b31c71726e87a9fc0073e3c8a5a56ddbf0ce273c16a"
-          }
-        },
-        {
-          "width": 160,
-          "height": 30,
-          "rows": 30,
-          "cols": 160,
-          "txt": {
-            "bytes": 5158,
-            "sha256": "33107db5bde607a4344dd057c724a754aff34a88564bee5a48be9327e62d8387"
-          },
-          "ansi": {
-            "bytes": 8429,
-            "sha256": "9a2d17d7df4b68216a2ccb1f03fa19c4e1debea26ea1493d1fb48dbf9c0cd70d"
-          }
-        }
-      ]
-    },
-    {
-      "id": "session-error-part",
-      "source": "crates/oc-tui/src/components/session.rs (live route; App::frame with a failed assistant step)",
-      "description": "Send-failure transcript: the assistant step's error renders as the styled 'Error: …' part (text.feedback.error.base) above the muted-label assistant footer, with the blinking block cursor pinned in its visible phase",
-      "componentClass": "session",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 24,
-          "rows": 24,
-          "cols": 80,
-          "txt": {
-            "bytes": 2116,
-            "sha256": "fcff8c941172e0b2f2ff8fe79d467e7ec95414308157209459aa556d35f6dc21"
-          },
-          "ansi": {
-            "bytes": 4290,
-            "sha256": "98c8047feb7d40f47aba1bc1ecf74bacbec3823deccfb350681a7bac0c5d711e"
-          }
-        }
-      ]
-    },
-    {
-      "id": "session-slash-palette",
-      "source": "crates/oc-tui/src/components/session.rs (live route; typing '/' opens the composer command palette)",
-      "description": "The slash-command palette over the composer: filtered rows with the description/preview column, selected row highlighted, agent-colored rail (categorical[0]) and the block cursor after the typed slash",
-      "componentClass": "session",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 24,
-          "rows": 24,
-          "cols": 80,
-          "txt": {
-            "bytes": 2148,
-            "sha256": "de495cb97c5c44cdf987955db8eb5e70cce07b403acf0ef916881d75ef40b5ee"
-          },
-          "ansi": {
-            "bytes": 5893,
-            "sha256": "0a89f136d69559a9501af9739977e2bcc658c25a7d3c67271b3cdc9dac165de6"
-          }
-        }
-      ]
-    },
-    {
-      "id": "session-sidebar-live",
-      "source": "crates/oc-tui/src/components/session.rs (live route; the session-frame sidebar port)",
-      "description": "The live session route's sidebar (session-frame.tsx): at 160 session.sidebar=auto docks the 42-col pane at the right edge (bold session title, getting-started card at height >= 22) and the transcript + composer reflow to 118; at 80 the pane is absent (auto shows only above 120)",
-      "componentClass": "session",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 160,
-          "height": 30,
-          "rows": 30,
-          "cols": 160,
-          "txt": {
-            "bytes": 5082,
-            "sha256": "f80bc31ec092939369e57f5832f2efd8449aada6fa7eb9f6a74c0020654d57db"
-          },
-          "ansi": {
-            "bytes": 10083,
-            "sha256": "33b52ffee289deee0d9a6f40149bbe29d46c0b21aef38462eea5de512c54b2b3"
-          }
-        },
-        {
-          "width": 80,
-          "height": 24,
-          "rows": 24,
-          "cols": 80,
-          "txt": {
-            "bytes": 2116,
-            "sha256": "1470eba426dff22bc6a2b4215f81cb2aee2a092da6739eaf7816a901dca62d27"
-          },
-          "ansi": {
-            "bytes": 4254,
-            "sha256": "f22490af51de24f9e165163478addcdf0e4c2786d233dff738699edeebccf4fd"
-          }
-        }
-      ]
-    },
-    {
-      "id": "surf1-detail-states",
-      "source": "local fixture: session route with the SURF-1 detail states (shell cell, skill row, compaction dividers, revert banner)",
-      "description": "Transcript detail states golden: shell tool block ($ cmd + collapsed preview), Skill row, queued + completed compaction dividers with usage and summary, staged revert banner with file rows",
-      "componentClass": "session-route",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 80,
-          "height": 30,
-          "rows": 30,
-          "cols": 80,
-          "txt": {
-            "bytes": 2818,
-            "sha256": "a7fc2fe9ea37675bf74fb4a0e67c42f0210339abe53770f0fd2d07705b0e01db"
-          },
-          "ansi": {
-            "bytes": 7113,
-            "sha256": "b4c82cda8ab884f4decf1b36b36035d7fe2429f16acff13450a98bac7dcd5d14"
-          }
-        }
-      ]
-    },
-    {
-      "id": "surf1-sidebar-live",
-      "source": "local fixture: session route with the SURF-1 sidebar live sections",
-      "description": "Sidebar live-content golden: Context tokens/percent/cost rows, collapsed MCP header + status dots, {dir}:{branch} location footer",
-      "componentClass": "sidebar",
-      "class": "tier-a",
-      "comparisonDepth": "truecolor-canonical",
-      "variants": [
-        {
-          "width": 160,
-          "height": 30,
-          "rows": 30,
-          "cols": 160,
-          "txt": {
-            "bytes": 5087,
-            "sha256": "361b526a0309330ff2d89110f9c18d861a24b08a7697dde88b9506b4d5ff91ec"
-          },
-          "ansi": {
-            "bytes": 10015,
-            "sha256": "174b5780604f2c87d81cd041adec1e3546ec10dde6b4400371d24b7fb4537742"
-          }
-        }
-      ]
+     "width": 160,
+     "height": 12,
+     "rows": 12,
+     "cols": 160,
+     "txt": {
+      "bytes": 1942,
+      "sha256": "bf8c423e62d8eb1c797f2c354b1d6a964e24bf0ad1ff67b61ffaa1115e693481"
+     },
+     "ansi": {
+      "bytes": 3320,
+      "sha256": "06ba03ed4733a04ebb9e4ffe3a79fbb1d6f1edd24ea17ce1c38a463e3e23417c"
+     }
     }
-  ],
-  "replay": [
+   ]
+  },
+  {
+   "id": "session-tabs-horizontal",
+   "source": "test/component/session-tabs-status.test.tsx",
+   "description": "SessionTabs horizontal bar/rail with two tabs; first tab carries an unread-activity indicator",
+   "componentClass": "session-tabs",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
     {
-      "id": "exit-leader-q",
-      "description": "Leader-q decollision (Wave A interaction audit §1b): <leader>q belongs to session.queued_prompts (v2 keybind.ts:131); app.exit keeps ctrl+c/ctrl+d. With text in the prompt the app.exit binding is disabled and the chord suspends the textarea (D-02 — the q is dispatched to the queue manager, not typed, and the draft survives); once the draft is cleared, ctrl+c dispatches app.exit and tears the renderer down",
-      "source": "test/app-lifecycle.test.tsx (exit ordering) + src/config/keybind.ts (app.exit = 'ctrl+c,ctrl+d' after the Wave A decollision, session.queued_prompts = '<leader>q', leader default ctrl+x) + src/app.tsx app.exit layer enabled only while the prompt is empty + terminal-pane.tsx:144 (focused surfaces skip leader strokes — the chord fires over a non-empty draft)",
-      "keys": "kitty",
-      "steps": 4,
-      "file": "replay/exit-leader-q.json",
-      "bytes": 1833,
-      "sha256": "ed17998456089198e5e18f7a3c926c4775bcd58784ed0100e536a0a1427d9d84"
+     "width": 80,
+     "height": 10,
+     "rows": 10,
+     "cols": 80,
+     "txt": {
+      "bytes": 812,
+      "sha256": "a3c4b9f4c8b8ccfcbf3719907630ab568c3bf97031aeab354eea08a45a3b256b"
+     },
+     "ansi": {
+      "bytes": 1701,
+      "sha256": "b33a7557736a4b0c74f1c870db6ee16e094f33bdd0765490736e202fe6c28dde"
+     }
     },
     {
-      "id": "palette-ctrl-p",
-      "description": "Command palette flow: ctrl+p opens the palette (suggested commands visible), typed text fuzzy-filters the list, Enter runs the selected command — here 'Rename session', which replaces the palette with the rename dialog",
-      "source": "test/cli/tui/command-palette.test.tsx (open → filter → enter select) + src/app.tsx COMMAND_PALETTE_COMMAND via command.palette.show (default ctrl+p)",
-      "keys": "kitty",
-      "steps": 3,
-      "file": "replay/palette-ctrl-p.json",
-      "bytes": 1174,
-      "sha256": "25d02d3909b2fdd1dfa7c06407b34f995d260b8c8d149bc07b3babbb68608aaa"
-    },
-    {
-      "id": "permission-once-always-deny",
-      "description": "Permission prompt replies: the prompt lists Allow once / Always allow (when the request carries save patterns) / Reject with 'once' selected; Enter replies once, left/right move the selection, Escape opens the reject stage whose free-text reason Enter confirms",
-      "source": "test/cli/tui/input-scope.test.tsx (Enter → {decision:'once'}; Escape → reject stage keeping the reason draft) + src/routes/session/permission.tsx SessionQuestion (left/h, right/l, escapeKey=reject; app.exit shadowed while open)",
-      "keys": "kitty",
-      "steps": 6,
-      "file": "replay/permission-once-always-deny.json",
-      "bytes": 1917,
-      "sha256": "f4a6c274d3924454e90b81b15d25a2a4b85c1e3e6d11cf121c71186a878505fd"
-    },
-    {
-      "id": "session-list-leader-l",
-      "description": "Session list dialog: <leader>l opens the Sessions dialog (search + the project's sessions listed, delete/rename + all-projects footer); typing filters the search field; Escape closes back to the prompt",
-      "source": "recorded against the booted reference app (createAppFixture, sessions Alpha/Beta served by the fixture server) — src/app.tsx session.list via DialogSessions; keys ctrl+x then l per config/keybind.ts session.list = '<leader>l'",
-      "keys": "kitty",
-      "steps": 3,
-      "file": "replay/session-list-leader-l.json",
-      "bytes": 1181,
-      "sha256": "8e28b1b8a3323cc0417b43c01c2fb4e2c1de8082436089608303d1c000852d72"
-    },
-    {
-      "id": "theme-dialog-select",
-      "description": "Theme selection: the command palette filtered to 'theme' runs 'Switch theme' opening the Themes dialog (registry names sorted, the current theme marked); filtering to 'nord' narrows to the one row and Enter selects it, closing the dialog",
-      "source": "recorded against the booted reference app (createAppFixture) — src/app.tsx theme.switch via the palette; component/dialog-theme-list.tsx lists Object.keys(themes.all()).sort() with themes.set(opt.value) on select",
-      "keys": "kitty",
-      "steps": 5,
-      "file": "replay/theme-dialog-select.json",
-      "bytes": 1595,
-      "sha256": "d4377018f4bdb436bb89c7ff7db1f2f30048321522c97cf548297115cb7f4138"
+     "width": 160,
+     "height": 10,
+     "rows": 10,
+     "cols": 160,
+     "txt": {
+      "bytes": 1612,
+      "sha256": "ee0c2a186b2cb4ae458f4513e28292e210e2c87ff48daa55c4632cdae44d8590"
+     },
+     "ansi": {
+      "bytes": 2501,
+      "sha256": "a8aced64e73913e2195c0ed220958d59a251c0f704d47c6198ce9f3dcd051f64"
+     }
     }
-  ]
+   ]
+  },
+  {
+   "id": "footer-prompt-idle",
+   "source": "test/mini/footer.view.test.tsx",
+   "description": "RunFooterView default prompt composer (idle phase, fallback dark theme)",
+   "componentClass": "mini-footer",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 12,
+     "rows": 12,
+     "cols": 80,
+     "txt": {
+      "bytes": 976,
+      "sha256": "792ba03f4cc1b13350f344f2714af94a854c09fe38590896e3f46ce112eb4d12"
+     },
+     "ansi": {
+      "bytes": 1686,
+      "sha256": "da04335e9be07fcfed53dc1dbde75e9e87129f2800850f94f4c3a2b26185900d"
+     }
+    },
+    {
+     "width": 160,
+     "height": 12,
+     "rows": 12,
+     "cols": 160,
+     "txt": {
+      "bytes": 1936,
+      "sha256": "afd25dc561b07342882957f22b8b6ccea4d45aa68c38f07b5b5377e79135b068"
+     },
+     "ansi": {
+      "bytes": 2646,
+      "sha256": "78fcc28dcf4a852e73a55717f95e9990af3d4234bf9ecb0fe7ff4e4f32364e13"
+     }
+    }
+   ]
+  },
+  {
+   "id": "footer-permission",
+   "source": "test/mini/footer.view.test.tsx",
+   "description": "RunFooterView permission view: 'Permission required' with Allow once / Reject actions",
+   "componentClass": "mini-footer-permission",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 16,
+     "rows": 16,
+     "cols": 80,
+     "txt": {
+      "bytes": 1318,
+      "sha256": "ede7ac0a120ee4d37d21bfb785c8566efae068a68e471ae28294ed1b629b316c"
+     },
+     "ansi": {
+      "bytes": 3216,
+      "sha256": "1d5ff7a8760df44581eb061ca1e61c3bd03226f0f586060750d4db682a77331f"
+     }
+    },
+    {
+     "width": 160,
+     "height": 16,
+     "rows": 16,
+     "cols": 160,
+     "txt": {
+      "bytes": 2598,
+      "sha256": "dbad47248ed9b6eba3f4ea7cb8d17c58c686c59214259b0f506e6a94ad6ab273"
+     },
+     "ansi": {
+      "bytes": 4496,
+      "sha256": "c834245b51e5f156262bf4ad79500d252f8702f444b9ee7c60ddcad4b4715a3d"
+     }
+    }
+   ]
+  },
+  {
+   "id": "footer-form",
+   "source": "test/mini/footer.view.test.tsx",
+   "description": "RunFooterView multi-field form view (Deployment: Service + Notes)",
+   "componentClass": "mini-footer-form",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 16,
+     "rows": 16,
+     "cols": 80,
+     "txt": {
+      "bytes": 1298,
+      "sha256": "13177f213242871e0b8254b8dfdee5623431431a991ca9ce1325820640c20013"
+     },
+     "ansi": {
+      "bytes": 2374,
+      "sha256": "a667b9b43bb3c4e13bf099540bf4191f3e9f860baf1672e64cbda64f22eb19da"
+     }
+    },
+    {
+     "width": 160,
+     "height": 16,
+     "rows": 16,
+     "cols": 160,
+     "txt": {
+      "bytes": 2578,
+      "sha256": "f20f79be86c8090f2c42dd08e5d9f21dc502d137de7a1514fd77424f20f8d6e3"
+     },
+     "ansi": {
+      "bytes": 3654,
+      "sha256": "8f1196e087811ba8dd02d31db6ccbd75b1829b3d6b6f9bea16d6402bad487129"
+     }
+    }
+   ]
+  },
+  {
+   "id": "permission-reject-field",
+   "source": "test/mini/footer.view.test.tsx",
+   "description": "RejectField free-text reason input shown with permission actions",
+   "componentClass": "mini-footer-permission",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 18,
+     "rows": 18,
+     "cols": 80,
+     "txt": {
+      "bytes": 1458,
+      "sha256": "c7fbc14988a79c386ec5c9c8576c9407c6618aa005d3ee2e1676f7b2ccf3e7e9"
+     },
+     "ansi": {
+      "bytes": 2144,
+      "sha256": "a79e909731422c397faf0625d922a01f94f33a4fbfda65ce88bd7733f356d76b"
+     }
+    },
+    {
+     "width": 160,
+     "height": 18,
+     "rows": 18,
+     "cols": 160,
+     "txt": {
+      "bytes": 2898,
+      "sha256": "2c469b0fa45c8741d41c4a06e9c6292dd90a0523ebf222707e40fd728fb90c1a"
+     },
+     "ansi": {
+      "bytes": 3584,
+      "sha256": "dfb10a7846745a4675f7e53cc94cfdbf8cf8eca42f3e497722fe82b321e1ff73"
+     }
+    }
+   ]
+  },
+  {
+   "id": "footer-command-menu",
+   "source": "test/mini/footer.view.test.tsx",
+   "description": "RunCommandMenuBody grouped commands panel (Session/Agent/Editor sections + MCP command)",
+   "componentClass": "mini-footer-panel",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 17,
+     "rows": 17,
+     "cols": 80,
+     "txt": {
+      "bytes": 1537,
+      "sha256": "2960af8fb3a711f41531206cd19bd5da3e0fd6c1da72132dd44620b5324f4004"
+     },
+     "ansi": {
+      "bytes": 3365,
+      "sha256": "df7884df89ec90015e632eb9456749622b4669f3dca18baa0b798edc28ea0b6a"
+     }
+    },
+    {
+     "width": 160,
+     "height": 17,
+     "rows": 17,
+     "cols": 160,
+     "txt": {
+      "bytes": 3057,
+      "sha256": "cb36e187d3d8facebf76ab7d9f71b9d2d158a9e4ec6b03bdc6008e11f63b5526"
+     },
+     "ansi": {
+      "bytes": 4885,
+      "sha256": "8b4b7dc65cde61b0928a2dd561fbdc41847099d6ed189b52fe8affb570576166"
+     }
+    }
+   ]
+  },
+  {
+   "id": "footer-model-select",
+   "source": "test/mini/footer.view.test.tsx",
+   "description": "RunModelSelectBody provider/model picker (opencode: GPT-5, GPT Free, deprecated Old Model)",
+   "componentClass": "mini-footer-panel",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 17,
+     "rows": 17,
+     "cols": 80,
+     "txt": {
+      "bytes": 1377,
+      "sha256": "bb293d53d37652b2f662e4927bf5d84737a1d4c9ebd5fbdd29930429ef5cca05"
+     },
+     "ansi": {
+      "bytes": 2565,
+      "sha256": "fc9318d7a11db8b8616d6b1395d36dcb95c8cae6ac29e50268a88f0185500383"
+     }
+    },
+    {
+     "width": 160,
+     "height": 17,
+     "rows": 17,
+     "cols": 160,
+     "txt": {
+      "bytes": 2737,
+      "sha256": "8ba924741cc93b01fab195d4c3b2418da44f6080178380fd78aa7977823d539b"
+     },
+     "ansi": {
+      "bytes": 3925,
+      "sha256": "abf6c64807b507dd4f7f101b04fc94551626e48e9c91bbb3071a29e3ee89999b"
+     }
+    }
+   ]
+  },
+  {
+   "id": "footer-agent-select",
+   "source": "test/mini/footer.view.test.tsx",
+   "description": "RunAgentSelectBody agent picker (Build/Review/Explore, current=review, hidden agent excluded)",
+   "componentClass": "mini-footer-panel",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 16,
+     "rows": 16,
+     "cols": 80,
+     "txt": {
+      "bytes": 1296,
+      "sha256": "1b74a1e47a483d0580d9cd12bd09037a7f80cceaee9343c9550ebf3bebb21b4a"
+     },
+     "ansi": {
+      "bytes": 2483,
+      "sha256": "c5c78b36cdad9017692a1d56598b1da85336e1cf8e03fb2750ed154655289287"
+     }
+    },
+    {
+     "width": 160,
+     "height": 16,
+     "rows": 16,
+     "cols": 160,
+     "txt": {
+      "bytes": 2576,
+      "sha256": "fcd0d4dfdd64d09163f9dac48090951b7c31e6ef38f334a553b5821446616595"
+     },
+     "ansi": {
+      "bytes": 3763,
+      "sha256": "64f763f439bf054da8ec3e9ce2cc8f5fedf3d6a71ee111b43141ccd348783b73"
+     }
+    }
+   ]
+  },
+  {
+   "id": "footer-variant-select",
+   "source": "test/mini/footer.view.test.tsx",
+   "description": "RunVariantSelectBody reasoning-effort picker (Default + high/minimal, current=high)",
+   "componentClass": "mini-footer-panel",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 16,
+     "rows": 16,
+     "cols": 80,
+     "txt": {
+      "bytes": 1296,
+      "sha256": "ad9d9ae52713ba98798cb5b31a38381514510d7fc40713df5680892f739e2ce3"
+     },
+     "ansi": {
+      "bytes": 2483,
+      "sha256": "fc9efe587683f2b230a2ca576ec5afc7a781673ca7969c4f0607d1643345ed6a"
+     }
+    },
+    {
+     "width": 160,
+     "height": 16,
+     "rows": 16,
+     "cols": 160,
+     "txt": {
+      "bytes": 2576,
+      "sha256": "300269599d553df5db9e1ac3cd0e099215e94d533f2fd767e33eb45b46cddadb"
+     },
+     "ansi": {
+      "bytes": 3763,
+      "sha256": "7ca6ac770239ff9ff59db6b0af0766cd4ec2813820a74bad80df395c81060d05"
+     }
+    }
+   ]
+  },
+  {
+   "id": "footer-settings",
+   "source": "test/mini/footer.view.test.tsx",
+   "description": "RunSettingsBody verbosity/thinking/tools/shell settings panel (mono=false, animations off)",
+   "componentClass": "mini-footer-panel",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 16,
+     "rows": 16,
+     "cols": 80,
+     "txt": {
+      "bytes": 1299,
+      "sha256": "3a84471f685cbcbe2eb1ee4e13ed48206105ba721a6528f653b71df1f856c11c"
+     },
+     "ansi": {
+      "bytes": 3501,
+      "sha256": "9881199195992027ae924227d6ce86c8bce00e2597faac979452a894a2c17153"
+     }
+    },
+    {
+     "width": 160,
+     "height": 16,
+     "rows": 16,
+     "cols": 160,
+     "txt": {
+      "bytes": 2579,
+      "sha256": "4810cab9b8b9ed6f588b8fbb096105353e510833bac8f6bb90d073ec030dc314"
+     },
+     "ansi": {
+      "bytes": 4781,
+      "sha256": "28b6db5679e17db6eb65ef8a525ad0e5fa940c4fecbb9b2549c52f341cd13bc2"
+     }
+    }
+   ]
+  },
+  {
+   "id": "form-authorization",
+   "source": "test/cli/tui/form.test.tsx",
+   "description": "Session FormPrompt: external authorization form (acknowledgement required)",
+   "componentClass": "prompt-composer",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 20,
+     "rows": 20,
+     "cols": 80,
+     "txt": {
+      "bytes": 1648,
+      "sha256": "a8200698d4b672767aec7dffbe8e0e88aed75828f96fa361f8f4e1e1c0f18374"
+     },
+     "ansi": {
+      "bytes": 3725,
+      "sha256": "e7be717715fa0c3e20f16140a34f0c34a9caee927cab661455576b9a6e4f9669"
+     }
+    },
+    {
+     "width": 160,
+     "height": 20,
+     "rows": 20,
+     "cols": 160,
+     "txt": {
+      "bytes": 3248,
+      "sha256": "cf1867cd0ec7e7ca254e866605952375eb736bb449d462aa3d321323a2d8383d"
+     },
+     "ansi": {
+      "bytes": 5325,
+      "sha256": "743120df312e3feeb0c52102a80a770ef272dcf92170997ad26278f1e66c1949"
+     }
+    }
+   ]
+  },
+  {
+   "id": "command-palette",
+   "source": "test/cli/tui/command-palette.test.tsx",
+   "description": "CommandPaletteDialog listing two registered commands (New session / Switch model)",
+   "componentClass": "dialog",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 24,
+     "rows": 24,
+     "cols": 80,
+     "txt": {
+      "bytes": 1944,
+      "sha256": "44d3d16c06f81eb1e24d5bab4543e449a40e8f4e605045d034c204b4334adba3"
+     },
+     "ansi": {
+      "bytes": 4329,
+      "sha256": "ce25dcde05e797ac645a204c8b21917916707ca56df60e2eafbef1dbd1329afb"
+     }
+    },
+    {
+     "width": 160,
+     "height": 24,
+     "rows": 24,
+     "cols": 160,
+     "txt": {
+      "bytes": 3864,
+      "sha256": "08d7ac3651c05041e647d5254710cd9395d7c1ea3a45d7433171a8c7c32a6ba6"
+     },
+     "ansi": {
+      "bytes": 6249,
+      "sha256": "2ee113e67ef8f6f4c3d0f37e0075bc0f50fac1f67e156d74b374be925e2cdfc1"
+     }
+    }
+   ]
+  },
+  {
+   "id": "dialog-select",
+   "source": "test/cli/tui/dialog-select.test.tsx",
+   "description": "DialogSelect fuzzy picker with three items, Beta selected, two row actions",
+   "componentClass": "dialog",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 20,
+     "rows": 20,
+     "cols": 80,
+     "txt": {
+      "bytes": 1622,
+      "sha256": "66f9f14a544fc45c11a6e98f833e940d5cb82c1cb8ccd34fffafbe63f66d2eaa"
+     },
+     "ansi": {
+      "bytes": 3290,
+      "sha256": "efb4a56ea6dafb0ec4a3ca0759752e15b6114dfe78ea7221ab660ab487f96b87"
+     }
+    },
+    {
+     "width": 160,
+     "height": 20,
+     "rows": 20,
+     "cols": 160,
+     "txt": {
+      "bytes": 3222,
+      "sha256": "d98f3ccd525ba4f3f7e4efd1806f64147e25776ba87616866848feb5a1a89cdf"
+     },
+     "ansi": {
+      "bytes": 4890,
+      "sha256": "fbbfef6526b6d8196f5ab0dd02a84f55af851a4d2426f6d9ee826a0b21e6b413"
+     }
+    }
+   ]
+  },
+  {
+   "id": "group-view-instructions",
+   "source": "test/cli/tui/group-view.test.tsx",
+   "description": "SessionGroupView collapsed instructions group ('Instructions: 2 files' summary row)",
+   "componentClass": "session-group",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 24,
+     "rows": 24,
+     "cols": 80,
+     "txt": {
+      "bytes": 1946,
+      "sha256": "41a4121d37a3239267ae40456487e9ce6112f58d2b8d61a7bc850972db3f0932"
+     },
+     "ansi": {
+      "bytes": 3022,
+      "sha256": "00b8b18fdf573d762d163f17b1014c1427e0724ba0e443f4755276caa05b2c68"
+     }
+    },
+    {
+     "width": 160,
+     "height": 24,
+     "rows": 24,
+     "cols": 160,
+     "txt": {
+      "bytes": 3866,
+      "sha256": "a419737070b9a8f59180f75cb0f891dc664ed36b9bbe976605d8388cb3c41615"
+     },
+     "ansi": {
+      "bytes": 4942,
+      "sha256": "c074e4a60c0a5157250af81704017b5efa8742680489fe5bf52278c5707f1f6a"
+     }
+    }
+   ]
+  },
+  {
+   "id": "diff-viewer-split",
+   "source": "test/cli/tui/diff-viewer.test.tsx",
+   "description": "Diff viewer split view rendering three hunks of a modified file (gutter +/- rows)",
+   "componentClass": "diff-viewer",
+   "class": "tier-b",
+   "comparisonDepth": "degraded-256",
+   "variants": [
+    {
+     "width": 80,
+     "height": 24,
+     "rows": 24,
+     "cols": 80,
+     "txt": {
+      "bytes": 1945,
+      "sha256": "44d40a2f644ae6b3c3e70857ed222076850c237beaf9acce54b83dc6a9f6ad94"
+     },
+     "ansi": {
+      "bytes": 6485,
+      "sha256": "dc5b5a1bf8f58bd96b7f676aeb0b69a968af621067f3c5fbf235cb7400f8fb46"
+     }
+    },
+    {
+     "width": 160,
+     "height": 24,
+     "rows": 24,
+     "cols": 160,
+     "txt": {
+      "bytes": 3871,
+      "sha256": "2417c02a1c76f6634132de11f1e8e50f24a3dc3aa81ae4fb5231c0c90d2f88be"
+     },
+     "ansi": {
+      "bytes": 10362,
+      "sha256": "8e30ed6685e8130fef0c32d1fc5d360f31c3a571300354f2c872ca56a78bf7d4"
+     }
+    }
+   ]
+  },
+  {
+   "id": "width-edge-cjk",
+   "source": "tui-dump width-edge corpus (oracle-gate8 finding 2)",
+   "description": "CJK display-width probe: mixed zh + ASCII, full-width punctuation and brackets, wrap-anywhere reflow",
+   "componentClass": "width-probe",
+   "class": "width-edge",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 30,
+     "rows": 30,
+     "cols": 80,
+     "txt": {
+      "bytes": 2591,
+      "sha256": "b10fd056a93d1b25adef305177e31757b81ae6761669281094051de3e30530bb"
+     },
+     "ansi": {
+      "bytes": 4321,
+      "sha256": "313b5f0985badbca6922341c2224366218a5732fb748ed27455787e9d3ebe6e3"
+     }
+    },
+    {
+     "width": 40,
+     "height": 30,
+     "rows": 30,
+     "cols": 40,
+     "txt": {
+      "bytes": 1391,
+      "sha256": "9d5e050bd958b78c9f3bd5310f57ddd891c596fad1e355d5ece0bec555df9ded"
+     },
+     "ansi": {
+      "bytes": 3891,
+      "sha256": "984bd38ca254f7ccc681462cdcfacb6dda59616ece530725ca9085149dcbe02c"
+     }
+    }
+   ],
+   "widths": {
+    "file": "width-edge-cjk.widths.json",
+    "bytes": 1490,
+    "sha256": "5cd896eb63a244e167854279e0f1ba90d4e7ee0df23431fe515a6d8a029a844a",
+    "samples": 8
+   }
+  },
+  {
+   "id": "width-edge-emoji",
+   "source": "tui-dump width-edge corpus (oracle-gate8 finding 2)",
+   "description": "Emoji display-width probe: ZWJ sequences (family/flags/handshake), skin-tone modifiers, keycap VS16",
+   "componentClass": "width-probe",
+   "class": "width-edge",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 30,
+     "rows": 30,
+     "cols": 80,
+     "txt": {
+      "bytes": 2530,
+      "sha256": "891c8074c1ed9645236b1297b75a4ae15a1e59b68f7f41dd176233bed3e11695"
+     },
+     "ansi": {
+      "bytes": 4238,
+      "sha256": "dc2142f85e46a914002a03fb835b9b8f4a2b9c7000b1ebdcc82353152ed925ea"
+     }
+    },
+    {
+     "width": 40,
+     "height": 30,
+     "rows": 30,
+     "cols": 40,
+     "txt": {
+      "bytes": 1330,
+      "sha256": "d696097995dbe3ba01824d7f68c5c99d4868b7bca12dc999d5e0237aa7f8c044"
+     },
+     "ansi": {
+      "bytes": 3248,
+      "sha256": "438e3101db3a205b685ace72846215586b71cdac03bf6df50275e284459e95b8"
+     }
+    }
+   ],
+   "widths": {
+    "file": "width-edge-emoji.widths.json",
+    "bytes": 1269,
+    "sha256": "756aa6a810060374ad7bae267c0c96af6cb182fc36f803f6c8169c55a687d1e1",
+    "samples": 8
+   }
+  },
+  {
+   "id": "width-edge-combining",
+   "source": "tui-dump width-edge corpus (oracle-gate8 finding 2)",
+   "description": "Combining-marks / ambiguous-width probe: NFD vs precomposed, \u00b1\u00b7\u2026\u25cb\u25b3, circled/roman numerals, box drawing, Indic scripts",
+   "componentClass": "width-probe",
+   "class": "width-edge",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 30,
+     "rows": 30,
+     "cols": 80,
+     "txt": {
+      "bytes": 2579,
+      "sha256": "9dd54d734f41e2ff0329ccbdbecd7d10bff554dd2459621f6904980257d7060c"
+     },
+     "ansi": {
+      "bytes": 4289,
+      "sha256": "253e6e03d69906656920df6146fd056271c49a128119b2d2e20180275a50c865"
+     }
+    },
+    {
+     "width": 40,
+     "height": 30,
+     "rows": 30,
+     "cols": 40,
+     "txt": {
+      "bytes": 1379,
+      "sha256": "fb5dacfedffdeec34b3771b09da6b6456c0be2b24aa171edeead2bb5d7c29cd1"
+     },
+     "ansi": {
+      "bytes": 3579,
+      "sha256": "1398075eb5a77b299e90585cef9a9c1b5dd4e51e49a0d6aa1a52642a6e6893eb"
+     }
+    }
+   ],
+   "widths": {
+    "file": "width-edge-combining.widths.json",
+    "bytes": 1351,
+    "sha256": "a9ef01020305d60afeeba1ef7114aeaf9913e11b3d0caa28fd8aa170c5513782",
+    "samples": 8
+   }
+  },
+  {
+   "id": "composer-placeholder-empty",
+   "source": "packages/tui/src/component/prompt (state corpus; drive via PromptRef.set)",
+   "description": "Empty composer with a single-entry placeholder list (Ask anything\u2026 prompt)",
+   "componentClass": "composer",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 20,
+     "rows": 20,
+     "cols": 80,
+     "txt": {
+      "bytes": 1790,
+      "sha256": "c2f429515caf81e170b46b3661f85304ac0242447729914af93741b830760466"
+     },
+     "ansi": {
+      "bytes": 3007,
+      "sha256": "fcae8bf5d0cf2b5cbf8d3d34e88977178b7038c40e5d0ce31f025ecf5768f432"
+     }
+    },
+    {
+     "width": 40,
+     "height": 20,
+     "rows": 20,
+     "cols": 40,
+     "txt": {
+      "bytes": 910,
+      "sha256": "3fb39e63135cd1d544996bf7db3a2cf935e82eae7d458b44a0954a2d5a04ca91"
+     },
+     "ansi": {
+      "bytes": 1952,
+      "sha256": "2a333a4d1dc7adfa4de4fbb18f53b4e0e43fab13b7cc3576d89eab36a15dfd21"
+     }
+    }
+   ]
+  },
+  {
+   "id": "composer-typed-multiline",
+   "source": "packages/tui/src/component/prompt (state corpus; drive via PromptRef.set)",
+   "description": "Composer holding a three-line typed draft (multi-row input, caret at end)",
+   "componentClass": "composer",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 20,
+     "rows": 20,
+     "cols": 80,
+     "txt": {
+      "bytes": 1792,
+      "sha256": "7dc42d1da0637695fb33ef68f8b470d439a54747c1f4452b58151d3516285b4f"
+     },
+     "ansi": {
+      "bytes": 3213,
+      "sha256": "179293d07eb939490eb150febc15e35bf275ec50acb5a410f0b545bd5fb69562"
+     }
+    },
+    {
+     "width": 40,
+     "height": 20,
+     "rows": 20,
+     "cols": 40,
+     "txt": {
+      "bytes": 912,
+      "sha256": "f9b827a55f99733061649d28f5df1a20d5cb2d0ed97aa457af9dec9e3a40d7d6"
+     },
+     "ansi": {
+      "bytes": 2158,
+      "sha256": "5cc569a26d8224c682c2e4f198558b79b1759db1eaef65c5c649f24091c6655d"
+     }
+    }
+   ]
+  },
+  {
+   "id": "composer-cjk-input",
+   "source": "packages/tui/src/component/prompt (state corpus; drive via PromptRef.set)",
+   "description": "Composer holding a mixed Japanese/ASCII draft (double-width glyphs in the input)",
+   "componentClass": "composer",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 20,
+     "rows": 20,
+     "cols": 80,
+     "txt": {
+      "bytes": 1807,
+      "sha256": "1a2b7f82f8e8b5ca04563169890ccf2631ed82301d340bcb40b531b902933ff9"
+     },
+     "ansi": {
+      "bytes": 3024,
+      "sha256": "035c2076305e4b7b0e17e7ec93823474e700f76a5452abbbe24cfe4336228c6b"
+     }
+    },
+    {
+     "width": 40,
+     "height": 20,
+     "rows": 20,
+     "cols": 40,
+     "txt": {
+      "bytes": 929,
+      "sha256": "2fc62a7f6932d69561be4d95e641f962270fdb830411a35c1b63b4c65abd2bec"
+     },
+     "ansi": {
+      "bytes": 2073,
+      "sha256": "114a6b4d823e613579db5f41de026dc9ef392bfc3643408c6c452d649829f146"
+     }
+    }
+   ]
+  },
+  {
+   "id": "composer-attachment-chip",
+   "source": "packages/tui/src/component/prompt (state corpus; drive via PromptRef.set)",
+   "description": "Composer with a pasted-image attachment: [Image 1] chip rendered as a file extmark inside the input",
+   "componentClass": "composer",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 20,
+     "rows": 20,
+     "cols": 80,
+     "txt": {
+      "bytes": 1788,
+      "sha256": "cb921b2c783c145d78bfb0d08a9e1f10d87b4863c5b0dc10202943f292f6159b"
+     },
+     "ansi": {
+      "bytes": 3076,
+      "sha256": "54cdaaf58ebb8b824895acedba723afb2ec90ff2f5467605a76c05d7c0e9ac91"
+     }
+    },
+    {
+     "width": 40,
+     "height": 20,
+     "rows": 20,
+     "cols": 40,
+     "txt": {
+      "bytes": 910,
+      "sha256": "0ce67dabe9df028887abed29ea192a2dd988ec404d49f9fe69ad744eacfca2d3"
+     },
+     "ansi": {
+      "bytes": 2125,
+      "sha256": "c9b3852c19d628265e42c52874e1b4d4de96c059b464e4c5e7d9e2bc294f6a79"
+     }
+    }
+   ]
+  },
+  {
+   "id": "composer-autocomplete-open",
+   "source": "packages/tui/src/component/prompt (state corpus; drive via PromptRef.set)",
+   "description": "Slash-command autocomplete open on '/re': filtered list (/redo, /rename) with the selected row highlighted",
+   "componentClass": "composer",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 20,
+     "rows": 20,
+     "cols": 80,
+     "txt": {
+      "bytes": 1796,
+      "sha256": "ede505a86113fd1576454b1949d8a45e48e4509e5538ff9c67bf29b4ef7d424d"
+     },
+     "ansi": {
+      "bytes": 3322,
+      "sha256": "c092ff9dc28a56ec21db260d2172895af7bad1b8adc8dd872a640ba8ef90d023"
+     }
+    },
+    {
+     "width": 40,
+     "height": 20,
+     "rows": 20,
+     "cols": 40,
+     "txt": {
+      "bytes": 916,
+      "sha256": "2c29f357b1d7f22334400f9625fab2399516f6aad549e6e1870244cbb2de20ee"
+     },
+     "ansi": {
+      "bytes": 2267,
+      "sha256": "45ca857403595c10ce7d25aa18a73a2ff181a64f24e759e6f4df7be7b2bc4a13"
+     }
+    }
+   ]
+  },
+  {
+   "id": "markdown-frame",
+   "source": "packages/tui/src/routes/session/message-parts.tsx (TextPart mount)",
+   "description": "Assistant markdown mix (heading/bold/inline-code/emphasis/lists/fence) with a \u226510-char bold run crossing the wrap boundary at both widths",
+   "componentClass": "markdown",
+   "class": "tier-c1",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 30,
+     "rows": 30,
+     "cols": 80,
+     "txt": {
+      "bytes": 2430,
+      "sha256": "309f75f46ddddfcce75e2ded9b831f89ec9e0a056324e5bffb2c3aeef6fa7c52"
+     },
+     "ansi": {
+      "bytes": 5565,
+      "sha256": "9d8e1c6979f4cc52e136e88796372fd0343786d8ef48a462c0e2111050932fc7"
+     }
+    },
+    {
+     "width": 40,
+     "height": 30,
+     "rows": 30,
+     "cols": 40,
+     "txt": {
+      "bytes": 1230,
+      "sha256": "7008fe0bf6d8e5af0afe883d1cf78c62d96d8417bd6d5c336d263208c6143ed9"
+     },
+     "ansi": {
+      "bytes": 4577,
+      "sha256": "0b2bb27117e32afb1f0b284e1b5496e46ca6284b8f5586f260b9b9591a3646b2"
+     }
+    }
+   ]
+  },
+  {
+   "id": "spinner-frozen",
+   "source": "packages/tui/src/routes/session/group-view.tsx (running InlineToolRow, ManualClock)",
+   "description": "Tool-running row frozen at t=0: spinner glyph \u280b beside its pending label, clock never advances",
+   "componentClass": "spinner",
+   "class": "tier-c1",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 6,
+     "rows": 6,
+     "cols": 80,
+     "txt": {
+      "bytes": 488,
+      "sha256": "0f6443d0d15c9949e635c20eb227386dca8d089e5893feec30052692bd2f093d"
+     },
+     "ansi": {
+      "bytes": 862,
+      "sha256": "e01669bb7f897104dce0c0f0d0b7e14e13d9e14b98a2533f74ff5119be4c7f35"
+     }
+    },
+    {
+     "width": 40,
+     "height": 6,
+     "rows": 6,
+     "cols": 40,
+     "txt": {
+      "bytes": 248,
+      "sha256": "7ddccf233ae2d4f8024020eb9e0133d43b8d3fab039d5ed5b3b185e30b2ce664"
+     },
+     "ansi": {
+      "bytes": 622,
+      "sha256": "e9f2201dc41cf0c756e4bbac466ad8977e2312bfe98a0eb1b092278b53795332"
+     }
+    }
+   ]
+  },
+  {
+   "id": "message-groups",
+   "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+   "description": "Consecutive user/assistant turns with exploration ('Explored: 1 read') and reasoning ('Thought') group headers plus the boundary row between turns",
+   "componentClass": "message-group",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 30,
+     "rows": 30,
+     "cols": 80,
+     "txt": {
+      "bytes": 2609,
+      "sha256": "55e3a0d0f13e0d9f5d92db94c69076e9f98e00466bde49b05f65debda88880ad"
+     },
+     "ansi": {
+      "bytes": 6026,
+      "sha256": "cf187b0747bc34c926cd7f6811920f11c62cd46aaf34e0f7af3a11d211d6410f"
+     }
+    },
+    {
+     "width": 40,
+     "height": 30,
+     "rows": 30,
+     "cols": 40,
+     "txt": {
+      "bytes": 1333,
+      "sha256": "c2a650e30f190a1b60e1fdaaeac2d7e536139c7434c0534956907b84ff5ba3b8"
+     },
+     "ansi": {
+      "bytes": 4680,
+      "sha256": "abe50e9f1e26fd07563f9291fae82115f610e0dcf40d403427720d4a984bcf0f"
+     }
+    }
+   ]
+  },
+  {
+   "id": "vscroll-top",
+   "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+   "description": "Virtual-scroll transcript \u226b viewport pinned at scrollTop=0 (oldest turn at the top, 'Jump to latest' indicator visible)",
+   "componentClass": "vscroll",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "scrollOffset": "top",
+   "variants": [
+    {
+     "width": 80,
+     "height": 24,
+     "rows": 24,
+     "cols": 80,
+     "txt": {
+      "bytes": 2122,
+      "sha256": "bdbb56f36afa34d2f3a846c79a660a9398c9da5f3d825319dbde87f72a104e60"
+     },
+     "ansi": {
+      "bytes": 5027,
+      "sha256": "f4760bbc02aeb316bf46540d3e9e5c9cc83ed0e3dcd6c84f06212ae37682429e"
+     }
+    }
+   ]
+  },
+  {
+   "id": "vscroll-middle",
+   "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+   "description": "Same transcript pinned at the middle of the scroll range (half the maximum scrollTop)",
+   "componentClass": "vscroll",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "scrollOffset": "middle",
+   "variants": [
+    {
+     "width": 80,
+     "height": 24,
+     "rows": 24,
+     "cols": 80,
+     "txt": {
+      "bytes": 2122,
+      "sha256": "954395bdd8db539574cba0c3d1fe352e6f2b201e89dcf077cfd8b83c16be1795"
+     },
+     "ansi": {
+      "bytes": 5027,
+      "sha256": "7507e0f04f0e35e4147d0021b584ac844af4da776b26a5535b122661098ad802"
+     }
+    }
+   ]
+  },
+  {
+   "id": "vscroll-bottom",
+   "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+   "description": "Same transcript scrolled to the maximum scrollTop after being away (indicator cleared, sticky re-armed)",
+   "componentClass": "vscroll",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "scrollOffset": "bottom",
+   "variants": [
+    {
+     "width": 80,
+     "height": 24,
+     "rows": 24,
+     "cols": 80,
+     "txt": {
+      "bytes": 2120,
+      "sha256": "0a5d8e555694be773b39b2cafb5c4f3a6e0a9744a85b3fd37a7aa4168316f44a"
+     },
+     "ansi": {
+      "bytes": 4955,
+      "sha256": "c48121dc7f9bd2c7748cdd751ae45339d63245d0ae83c8d0be49f7c18752d193"
+     }
+    }
+   ]
+  },
+  {
+   "id": "vscroll-stick-bottom",
+   "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+   "description": "Same transcript left sticky-at-bottom while a new assistant turn streams in \u2014 the viewport follows the append",
+   "componentClass": "vscroll",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "scrollOffset": "stick-to-bottom",
+   "variants": [
+    {
+     "width": 80,
+     "height": 24,
+     "rows": 24,
+     "cols": 80,
+     "txt": {
+      "bytes": 2116,
+      "sha256": "4795f78f64976d5e783d69e898de79cbad578307119381f57833c2ddf9f6d6bb"
+     },
+     "ansi": {
+      "bytes": 4743,
+      "sha256": "159827c065c167fa4835b6a0ba4205f5f0753c0bde7b5e1ae7d53adbf2c08cb0"
+     }
+    }
+   ]
+  },
+  {
+   "id": "sidebar-expanded",
+   "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+   "description": "Session route at width 160 with the right-hand sidebar pane visible (session title + plugin slot area, sidebar=auto)",
+   "componentClass": "sidebar",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 160,
+     "height": 30,
+     "rows": 30,
+     "cols": 160,
+     "txt": {
+      "bytes": 5089,
+      "sha256": "7b35d39e9c556dbb330f53f7f9cd3fb33d38999b589bc8b80fa722de37b7e714"
+     },
+     "ansi": {
+      "bytes": 11170,
+      "sha256": "b085e165589c528731d1c5c91a9feed8a5047c4dee884fe332897295545b5250"
+     }
+    }
+   ]
+  },
+  {
+   "id": "sidebar-collapsed",
+   "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+   "description": "Same session route with the sidebar pane hidden (session.sidebar=hide) \u2014 full-width transcript",
+   "componentClass": "sidebar",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 160,
+     "height": 30,
+     "rows": 30,
+     "cols": 160,
+     "txt": {
+      "bytes": 5169,
+      "sha256": "291c184877317241c39514c3c3ba6a7485c86b9e49cac346712ba90113c0a7f6"
+     },
+     "ansi": {
+      "bytes": 8516,
+      "sha256": "5b080176b4f2c394f090f314871ab0e3d83edc65279abd3515e3203b91e0ca9d"
+     }
+    }
+   ]
+  },
+  {
+   "id": "session-screen-40",
+   "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+   "description": "Complete session route at 40 columns: transcript list, composer input and the horizontal tabs bar",
+   "componentClass": "session-screen",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 40,
+     "height": 30,
+     "rows": 30,
+     "cols": 40,
+     "txt": {
+      "bytes": 1331,
+      "sha256": "fc0501227f5bd999351bbb56070a68ac5a2e0e6522774cebb524416e9573582e"
+     },
+     "ansi": {
+      "bytes": 4716,
+      "sha256": "a1e262e869affd395c25710ea46eb2a34d195bbcdfa1b3b3720987588ce2594c"
+     }
+    }
+   ]
+  },
+  {
+   "id": "toast-over-session",
+   "source": "packages/tui/src/app.tsx full-app fixture (test/fixture/app.ts pattern)",
+   "description": "One toast surface (title + message + dismiss affordance) rendered over live session content via the app's tui.toast.show event",
+   "componentClass": "toast",
+   "class": "tier-c1",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 30,
+     "rows": 30,
+     "cols": 80,
+     "txt": {
+      "bytes": 2629,
+      "sha256": "ea5fd549df8963fd5ee2dbc115ca49254112c2ecbc3583ffe0a090143bbf4d2c"
+     },
+     "ansi": {
+      "bytes": 6843,
+      "sha256": "c942062269deceed57bc936c0db1341c552f891af48f693a58d760bd7c5441e3"
+     }
+    }
+   ]
+  },
+  {
+   "id": "home",
+   "source": "packages/tui/src/routes/home.tsx full-app fixture (session_app.tsx pattern, no sessionID)",
+   "description": "Home route: OPENCODE wordmark, centered prompt composer (placeholder pinned to entry 0) and the home.footer plugin slot (app version)",
+   "componentClass": "home",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 30,
+     "rows": 30,
+     "cols": 80,
+     "txt": {
+      "bytes": 2758,
+      "sha256": "ae9ba79c914fed365fcf4ce127eb57fea9bc157c07071aacfabc7e8728c331cc"
+     },
+     "ansi": {
+      "bytes": 6029,
+      "sha256": "b4b87273bcbecbe407418b31c71726e87a9fc0073e3c8a5a56ddbf0ce273c16a"
+     }
+    },
+    {
+     "width": 160,
+     "height": 30,
+     "rows": 30,
+     "cols": 160,
+     "txt": {
+      "bytes": 5158,
+      "sha256": "33107db5bde607a4344dd057c724a754aff34a88564bee5a48be9327e62d8387"
+     },
+     "ansi": {
+      "bytes": 8429,
+      "sha256": "9a2d17d7df4b68216a2ccb1f03fa19c4e1debea26ea1493d1fb48dbf9c0cd70d"
+     }
+    }
+   ]
+  },
+  {
+   "id": "session-error-part",
+   "source": "crates/oc-tui/src/components/session.rs (live route; App::frame with a failed assistant step)",
+   "description": "Send-failure transcript: the assistant step's error renders as the styled 'Error: \u2026' part (text.feedback.error.base) above the muted-label assistant footer, with the blinking block cursor pinned in its visible phase",
+   "componentClass": "session",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 24,
+     "rows": 24,
+     "cols": 80,
+     "txt": {
+      "bytes": 2116,
+      "sha256": "fcff8c941172e0b2f2ff8fe79d467e7ec95414308157209459aa556d35f6dc21"
+     },
+     "ansi": {
+      "bytes": 4290,
+      "sha256": "98c8047feb7d40f47aba1bc1ecf74bacbec3823deccfb350681a7bac0c5d711e"
+     }
+    }
+   ]
+  },
+  {
+   "id": "session-slash-palette",
+   "source": "crates/oc-tui/src/components/session.rs (live route; typing '/' opens the composer command palette)",
+   "description": "The slash-command palette over the composer: filtered rows with the description/preview column, selected row highlighted, agent-colored rail (categorical[0]) and the block cursor after the typed slash",
+   "componentClass": "session",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 24,
+     "rows": 24,
+     "cols": 80,
+     "txt": {
+      "bytes": 2148,
+      "sha256": "c90bf13df3e7da554387765ed3b7a1d1d67c490d521e442697cfdf87545aa0f2"
+     },
+     "ansi": {
+      "bytes": 5893,
+      "sha256": "e50df11f1bf0565e8cbe83e69c2497fa6579bf85922f0835e717e635c171586b"
+     }
+    }
+   ]
+  },
+  {
+   "id": "session-sidebar-live",
+   "source": "crates/oc-tui/src/components/session.rs (live route; the session-frame sidebar port)",
+   "description": "The live session route's sidebar (session-frame.tsx): at 160 session.sidebar=auto docks the 42-col pane at the right edge (bold session title, getting-started card at height >= 22) and the transcript + composer reflow to 118; at 80 the pane is absent (auto shows only above 120)",
+   "componentClass": "session",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 160,
+     "height": 30,
+     "rows": 30,
+     "cols": 160,
+     "txt": {
+      "bytes": 5082,
+      "sha256": "f80bc31ec092939369e57f5832f2efd8449aada6fa7eb9f6a74c0020654d57db"
+     },
+     "ansi": {
+      "bytes": 10083,
+      "sha256": "33b52ffee289deee0d9a6f40149bbe29d46c0b21aef38462eea5de512c54b2b3"
+     }
+    },
+    {
+     "width": 80,
+     "height": 24,
+     "rows": 24,
+     "cols": 80,
+     "txt": {
+      "bytes": 2116,
+      "sha256": "1470eba426dff22bc6a2b4215f81cb2aee2a092da6739eaf7816a901dca62d27"
+     },
+     "ansi": {
+      "bytes": 4254,
+      "sha256": "f22490af51de24f9e165163478addcdf0e4c2786d233dff738699edeebccf4fd"
+     }
+    }
+   ]
+  },
+  {
+   "id": "surf1-detail-states",
+   "source": "local fixture: session route with the SURF-1 detail states (shell cell, skill row, compaction dividers, revert banner)",
+   "description": "Transcript detail states golden: shell tool block ($ cmd + collapsed preview), Skill row, queued + completed compaction dividers with usage and summary, staged revert banner with file rows",
+   "componentClass": "session-route",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 30,
+     "rows": 30,
+     "cols": 80,
+     "txt": {
+      "bytes": 2818,
+      "sha256": "a7fc2fe9ea37675bf74fb4a0e67c42f0210339abe53770f0fd2d07705b0e01db"
+     },
+     "ansi": {
+      "bytes": 7113,
+      "sha256": "b4c82cda8ab884f4decf1b36b36035d7fe2429f16acff13450a98bac7dcd5d14"
+     }
+    }
+   ]
+  },
+  {
+   "id": "surf1-sidebar-live",
+   "source": "local fixture: session route with the SURF-1 sidebar live sections",
+   "description": "Sidebar live-content golden: Context tokens/percent/cost rows, collapsed MCP header + status dots, {dir}:{branch} location footer",
+   "componentClass": "sidebar",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 160,
+     "height": 30,
+     "rows": 30,
+     "cols": 160,
+     "txt": {
+      "bytes": 5087,
+      "sha256": "361b526a0309330ff2d89110f9c18d861a24b08a7697dde88b9506b4d5ff91ec"
+     },
+     "ansi": {
+      "bytes": 10015,
+      "sha256": "174b5780604f2c87d81cd041adec1e3546ec10dde6b4400371d24b7fb4537742"
+     }
+    }
+   ]
+  }
+ ],
+ "replay": [
+  {
+   "id": "exit-leader-q",
+   "description": "Leader-q decollision (Wave A interaction audit \u00a71b): <leader>q belongs to session.queued_prompts (v2 keybind.ts:131); app.exit keeps ctrl+c/ctrl+d. With text in the prompt the app.exit binding is disabled and the chord suspends the textarea (D-02 \u2014 the q is dispatched to the queue manager, not typed, and the draft survives); once the draft is cleared, ctrl+c dispatches app.exit and tears the renderer down",
+   "source": "test/app-lifecycle.test.tsx (exit ordering) + src/config/keybind.ts (app.exit = 'ctrl+c,ctrl+d' after the Wave A decollision, session.queued_prompts = '<leader>q', leader default ctrl+x) + src/app.tsx app.exit layer enabled only while the prompt is empty + terminal-pane.tsx:144 (focused surfaces skip leader strokes \u2014 the chord fires over a non-empty draft)",
+   "keys": "kitty",
+   "steps": 4,
+   "file": "replay/exit-leader-q.json",
+   "bytes": 1833,
+   "sha256": "ed17998456089198e5e18f7a3c926c4775bcd58784ed0100e536a0a1427d9d84"
+  },
+  {
+   "id": "palette-ctrl-p",
+   "description": "Command palette flow: ctrl+p opens the palette (suggested commands visible), typed text fuzzy-filters the list, Enter runs the selected command \u2014 here 'Rename session', which replaces the palette with the rename dialog",
+   "source": "test/cli/tui/command-palette.test.tsx (open \u2192 filter \u2192 enter select) + src/app.tsx COMMAND_PALETTE_COMMAND via command.palette.show (default ctrl+p)",
+   "keys": "kitty",
+   "steps": 3,
+   "file": "replay/palette-ctrl-p.json",
+   "bytes": 1174,
+   "sha256": "25d02d3909b2fdd1dfa7c06407b34f995d260b8c8d149bc07b3babbb68608aaa"
+  },
+  {
+   "id": "permission-once-always-deny",
+   "description": "Permission prompt replies: the prompt lists Allow once / Always allow (when the request carries save patterns) / Reject with 'once' selected; Enter replies once, left/right move the selection, Escape opens the reject stage whose free-text reason Enter confirms",
+   "source": "test/cli/tui/input-scope.test.tsx (Enter \u2192 {decision:'once'}; Escape \u2192 reject stage keeping the reason draft) + src/routes/session/permission.tsx SessionQuestion (left/h, right/l, escapeKey=reject; app.exit shadowed while open)",
+   "keys": "kitty",
+   "steps": 6,
+   "file": "replay/permission-once-always-deny.json",
+   "bytes": 1917,
+   "sha256": "f4a6c274d3924454e90b81b15d25a2a4b85c1e3e6d11cf121c71186a878505fd"
+  },
+  {
+   "id": "session-list-leader-l",
+   "description": "Session list dialog: <leader>l opens the Sessions dialog (search + the project's sessions listed, delete/rename + all-projects footer); typing filters the search field; Escape closes back to the prompt",
+   "source": "recorded against the booted reference app (createAppFixture, sessions Alpha/Beta served by the fixture server) \u2014 src/app.tsx session.list via DialogSessions; keys ctrl+x then l per config/keybind.ts session.list = '<leader>l'",
+   "keys": "kitty",
+   "steps": 3,
+   "file": "replay/session-list-leader-l.json",
+   "bytes": 1181,
+   "sha256": "8e28b1b8a3323cc0417b43c01c2fb4e2c1de8082436089608303d1c000852d72"
+  },
+  {
+   "id": "theme-dialog-select",
+   "description": "Theme selection: the command palette filtered to 'theme' runs 'Switch theme' opening the Themes dialog (registry names sorted, the current theme marked); filtering to 'nord' narrows to the one row and Enter selects it, closing the dialog",
+   "source": "recorded against the booted reference app (createAppFixture) \u2014 src/app.tsx theme.switch via the palette; component/dialog-theme-list.tsx lists Object.keys(themes.all()).sort() with themes.set(opt.value) on select",
+   "keys": "kitty",
+   "steps": 5,
+   "file": "replay/theme-dialog-select.json",
+   "bytes": 1595,
+   "sha256": "d4377018f4bdb436bb89c7ff7db1f2f30048321522c97cf548297115cb7f4138"
+  }
+ ]
 }

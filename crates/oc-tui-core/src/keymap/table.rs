@@ -665,6 +665,7 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "dialog.move_session.move" => "dialog.move_session.move", "ctrl+m", "Move session to worktree", "dialog";
     "dialog.move_session.delete" => "dialog.move_session.delete", "ctrl+d", "Delete worktree", "dialog";
     "dialog.move_session.refresh" => "dialog.move_session.refresh", "ctrl+r", "Refresh worktrees", "dialog";
+    "dialog_mcp_toggle" => "dialog.mcp.toggle", "space", "Toggle MCP server", "dialog";
     "prompt.autocomplete.prev" => "prompt.autocomplete.prev", "up,ctrl+p", "Move to previous autocomplete item", "autocomplete";
     "prompt.autocomplete.next" => "prompt.autocomplete.next", "down,ctrl+n", "Move to next autocomplete item", "autocomplete";
     "prompt.autocomplete.hide" => "prompt.autocomplete.hide", "escape", "Hide autocomplete", "autocomplete";
