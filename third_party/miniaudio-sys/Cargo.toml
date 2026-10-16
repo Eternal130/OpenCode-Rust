@@ -1,0 +1,12 @@
+[package]
+name = "miniaudio-sys"
+description = "Vendored miniaudio 0.11.22 (headers + pre-generated bindings) — no bindgen, no libclang, no link-time audio libs on Linux"
+version = "0.11.22"
+edition = "2021"
+license = "MIT-0 OR Apache-2.0"
+publish = false
+links = "miniaudio"
+build = "build.rs"
+
+[build-dependencies]
+cc = "1"
