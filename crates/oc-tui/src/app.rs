@@ -532,6 +532,26 @@ impl App {
         }
     }
 
+    /// The paint-path twin of [`Self::refresh_strip_hover`] — the
+    /// render-driven re-hover (v2's reconciler redoes hit-testing on
+    /// every tree change; ours recomputes at each frame paint).
+    fn rehover_strip_from_last_pointer(&self) {
+        let Some((col, row)) = self.last_pointer else { return };
+        if row != 0 || !self.store.dialogs().is_empty() || self.permission_live() {
+            return;
+        }
+        if !self.store.tabs_enabled() || self.store.tabs().tabs.is_empty() {
+            return;
+        }
+        let width = usize::from(self.size.0);
+        let (hover, close, add) = self.strip_hover_at(col, width);
+        let changed = self.store.set_tab_hover(hover.as_deref(), close);
+        let changed_add = self.store.set_tab_add_hovered(add);
+        if changed || changed_add {
+            self.store.request_redraw();
+        }
+    }
+
     /// Move the top dialog's selection to a flat index (pointer
     /// motion over an option row — `moveTo`).
     fn move_dialog_selection_to(&mut self, index: usize) {
@@ -1081,6 +1101,13 @@ impl App {
     /// The current frame (route + blockers + dialog overlay).
     #[must_use]
     pub fn frame(&self) -> Frame {
+        // opentui re-dispatches strip hover from the LAST pointer
+        // position on every re-render that moves controls under it
+        // (the multi-session census: the ✕ stays revealed on the tab
+        // that replaced the promoted slot after a submit opened it).
+        // The store setters are signal-backed (`&self`) — the paint
+        // path can self-heal the hover exactly like the render tree.
+        self.rehover_strip_from_last_pointer();
         let theme = self.store.theme();
         let mut frame = render_app(&self.store, &theme, self.size);
         let footer_theme = FooterTheme::from_resolved(&theme.resolved.tokens);

@@ -34,3 +34,62 @@ Family = census "mini-footer family" (final-sweep-2.md:100-104) decomposed:
    (session-tabs.tsx:1342, title "New session" :183, indicator "+",
    selected→BOLD, activeID="new" :1339), showPlus=false (:1344
    showPlus = add && !newTab). Ours renders plain " + " at home.
+
+## Implementation (commits 1ef30a9, b0e817a)
+1. command_palette.rs: dispatch mount titles (Select model/agent/
+   variant; Sessions/MCP servers unchanged); model_list_props
+   connected-gated (flat rows, no categories/descriptions, action
+   row View all integrations|Connect an integration ctrl+a);
+   suggested(provider.connect) = !ServerLists.connected.
+2. store.rs: ServerLists.connected + set_integration_connected;
+   focus_dialog_current SKIPS ServerList{model.list} (cursor row 0);
+   TabsState.hover_close + set_tab_hover(_, close).
+3. app.rs: spawn_server_lists folds integration.list → Connected
+   event; strip mouse routing via strip_layout_tabs/strip_hover_at
+   (home appends pseudo-tab NEW_SESSION_TAB_ID, showPlus=false);
+   last_pointer + refresh_strip_hover after mouse-driven strip
+   mutations (opentui re-hover semantics); pseudo ✕ → select last
+   tab (close(undefined)); Tab(pseudo) = stay home.
+4. session.rs paint_live_tabs_bar: home pseudo-tab + close_hover
+   passthrough. session_tabs_solid.rs: fade_title_color (verbatim
+   FADE_WIDTH=4 tail fade), close_chunks close-hover → text.base,
+   indicator "+" for the pseudo (tint(text,selected,0.25), bold).
+5. Tests: models_panel_golden.rs (open/selected/marker/connected),
+   pty_models_panel.rs (open→select→apply cycle), app home-strip +
+   add-release hover persistence, strip fade/close-hover/pseudo
+   unit tests, palette trio + agent/variant titles + cursor-0.
+   oc-tui full: 690/691 pass (1 pre-existing skip). clippy clean.
+NOTE (gap): model.dialog.provider ctrl+a is RENDERED but not
+   dispatched (v2 replaces with DialogIntegration — separate
+   surface, not in the census cells; no rig script triggers it).
+
+## Rig --quick evidence (final binary, 80x24, runs 1, live ref)
+RIG GOTCHA FOUND: tui-diff reuses target/debug/opencode-rust if present
+(stale-binary trap) — rebuild `cargo build -p oc-cli --bin opencode-rust`
+before rig verdicts (rigs 1-6 partially stale; 7-12 final).
+
+Before = sweep-2 (docs/msweep2-rig.log @80x24 r0) → After (L1):
+* type-edit-submit models-open:   297 mism, fd (15,7) 'e'/'w' Select↔Switch
+                            → 1   mism, fd (9,13) backdrop-idx15 (registered)
+* type-edit-submit models-filter: 107 → 4 (backdrop family only; structure
+  lines GONE — run-digest divergence cleared)
+* palette palette-open: 64 → 1; palette-down: 145 → 1 (same backdrop cell)
+* multi-session: ✕ diff cells 116 → 0 (grep); idx251/246/241/236 cells
+  24 → 0; steps 11/12 (tab-add-release, type-2) now IDENTICAL (the
+  "+ New session" pseudo-tab); rename steps 20/21 exact (prompt-dialog
+  hover reset); 6 identical steps (sweep-2 r0: 2)
+* tabs-keyboard: 40 → 39 mism/step (style-only), all first-diffs coin
+* boot-home: coin-only (placeholder 'b'↔'a') — registered (b)-class
+UNCHANGED (pre-existing, signature-identical): models-select 1920
+(variant sub-dialog surface — sweep-1 finding #11 class, out of this
+lane's census list), backdrop-fg idx15 family, bg idx0↔idx232 forms,
+home-placeholder coin, stats-row digits.
+
+## Late adds (rig-driven)
+* Painted block cursor REMOVED from the select filter input (both
+  renderers) — v2 paints no cursor cell (#8 ruling's raw-ANSI mirror);
+  models-filter 5 → 4.
+* frame() re-hovers the strip from last_pointer on every paint (the
+  render-driven re-dispatch) — fixes submit-opened-tab ✕ persistence.
+* Prompt dialogs (rename/worktree-name) clear the strip hover on open
+  (v2 census: ✕ vanishes under rename, returns after close).
