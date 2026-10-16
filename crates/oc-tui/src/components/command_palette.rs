@@ -240,12 +240,7 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand { command: "docs.open", title: "Open docs", group: "System", bindings: &[] },
     // The diff viewer's plugin command (`diff.open`, group "VCS",
     // slash `/diff` — diff-viewer.tsx:1198-1204).
-    PaletteCommand {
-        command: "diff.open",
-        title: "Open diff viewer",
-        group: "VCS",
-        bindings: &[],
-    },
+    PaletteCommand { command: "diff.open", title: "Open diff viewer", group: "VCS", bindings: &[] },
     PaletteCommand {
         command: "app.exit",
         title: "Exit the app",
@@ -581,20 +576,17 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         // The MCP error details (dialog-mcp.tsx:163-174 — the
         // `DialogErrorDetails` role: error + context rows).
         DialogKind::McpError { name } => {
-            let row = store
-                .mcp_servers()
-                .into_iter()
-                .find(|server| server.name == *name);
+            let row = store.mcp_servers().into_iter().find(|server| server.name == *name);
             let mut options = Vec::new();
             if let Some(row) = row {
                 options.push(SelectOption::titled(
                     row.error.clone().unwrap_or_else(|| "Unknown MCP connection error".to_owned()),
                     "error",
                 ));
-                options.push(SelectOption::titled(
-                    format!("Status: {}", row.status),
-                    "context",
-                ).muted_placeholder());
+                options.push(
+                    SelectOption::titled(format!("Status: {}", row.status), "context")
+                        .muted_placeholder(),
+                );
                 options.push(
                     SelectOption::titled(
                         format!("Configuration: mcp.servers.{}", row.name),
@@ -615,7 +607,11 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 options.push(SelectOption::titled("No MCP servers", "status").muted_placeholder());
             } else {
                 options.push(SelectOption::titled(
-                    format!("{} MCP server{}", servers.len(), if servers.len() == 1 { "" } else { "s" }),
+                    format!(
+                        "{} MCP server{}",
+                        servers.len(),
+                        if servers.len() == 1 { "" } else { "s" }
+                    ),
                     "count",
                 ));
                 for server in &servers {
@@ -645,9 +641,7 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 options.push(SelectOption::titled(variant.clone(), variant));
             }
             let current = match store.route() {
-                Route::Session { session_id } => {
-                    store.selection_for(&session_id).model
-                }
+                Route::Session { session_id } => store.selection_for(&session_id).model,
                 Route::Home => store.selection_for(crate::app::HOME_PROMPT_KEY).model,
             }
             .and_then(|model| model.variant)
@@ -700,9 +694,7 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         // env/config entries + the share hint (enter copies).
         DialogKind::Debug => {
             let model = match store.route() {
-                Route::Session { session_id } => {
-                    store.effective_model(&session_id)
-                }
+                Route::Session { session_id } => store.effective_model(&session_id),
                 Route::Home => store.effective_model(crate::app::HOME_PROMPT_KEY),
             };
             let session = match store.route() {
@@ -712,10 +704,7 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             let terminal = std::env::var("TERM").unwrap_or_default();
             let entries = [
                 ("Version", format!("{} (local)", env!("CARGO_PKG_VERSION"))),
-                (
-                    "Date",
-                    chrono_like_now(),
-                ),
+                ("Date", chrono_like_now()),
                 ("OS", std::env::consts::OS.to_owned()),
                 ("Terminal", terminal),
                 ("Session ID", session),
@@ -733,9 +722,11 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                     SelectOption::titled(format!("{label:<10}{value}"), format!("debug:{label}"))
                 })
                 .collect();
-            SelectProps::new("Debug", options)
-                .flat(true)
-                .with_actions(vec![SelectAction::new("dialog.debug.copy", "copy", "return")])
+            SelectProps::new("Debug", options).flat(true).with_actions(vec![SelectAction::new(
+                "dialog.debug.copy",
+                "copy",
+                "return",
+            )])
         }
         // SURF-2 `DialogTimeline` (`session.timeline`,
         // dialog-timeline.tsx:21-39): the user messages newest-first
@@ -743,8 +734,9 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         DialogKind::Timeline { session_id } => {
             let mut options = Vec::new();
             for message in store.messages(session_id) {
-                if let crate::components::message::model::Message::User { id, text, created, .. } =
-                    &message
+                if let crate::components::message::model::Message::User {
+                    id, text, created, ..
+                } = &message
                 {
                     options.push(
                         SelectOption::titled(text.replace('\n', " "), id.clone())
@@ -801,18 +793,20 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                     })
                     .filter(|text| !text.is_empty())
                     .collect();
-                if shortcuts.is_empty() { "unbound".to_owned() } else { shortcuts.join(" / ") }
+                if shortcuts.is_empty() {
+                    "unbound".to_owned()
+                } else {
+                    shortcuts.join(" / ")
+                }
             };
             let mut options = Vec::new();
             let mut group = |title: &str, rows: &[(&str, &str)]| {
                 for (commands, label) in rows {
                     let shortcut_text = shortcut(commands);
+                    let value = format!("help:{}", label.replace('/', "-"));
                     options.push(
-                        SelectOption::titled(
-                            format!("{shortcut_text:<17}{}", label),
-                            format!("help:{}", label.replace('/', "-")),
-                        )
-                        .categorized(title),
+                        SelectOption::titled(format!("{shortcut_text:<17}{label}"), value)
+                            .categorized(title),
                     );
                 }
             };
@@ -1448,9 +1442,8 @@ impl CommandDispatcher for StoreDispatcher {
                 copy_message_to_clipboard(store);
                 Dispatch::Handled
             }
-            "model.list" | "agent.list" | "session.list"
-            | "open.menu" | "provider.connect" | "opencode.settings"
-            | "session.share" | "session.fork" | "location.reload"
+            "model.list" | "agent.list" | "session.list" | "open.menu" | "provider.connect"
+            | "opencode.settings" | "session.share" | "session.fork" | "location.reload"
             | "docs.open" => {
                 // The mounted dialog's title is the COMPONENT mount's,
                 // not the palette row's (the models-dialog lane's #7):
@@ -1492,11 +1485,19 @@ impl CommandDispatcher for StoreDispatcher {
                 store.close_diff_viewer();
                 Dispatch::Handled
             }
-            "diff.down" | "diff.up" | "diff.page.down" | "diff.page.up" | "diff.half_page.down"
-            | "diff.half_page.up" | "diff.first" | "diff.last" => {
+            "diff.down"
+            | "diff.up"
+            | "diff.page.down"
+            | "diff.page.up"
+            | "diff.half_page.down"
+            | "diff.half_page.up"
+            | "diff.first"
+            | "diff.last" => {
                 let viewport = usize::from(store.terminal_size().1).max(1);
                 store.update_diff_viewer(|live| {
-                    crate::components::diff_viewer_mount::diff_scroll_command(live, command, viewport)
+                    crate::components::diff_viewer_mount::diff_scroll_command(
+                        live, command, viewport,
+                    )
                 });
                 Dispatch::Handled
             }
@@ -1522,7 +1523,9 @@ impl CommandDispatcher for StoreDispatcher {
                 });
                 Dispatch::Handled
             }
-            "diff.mark_reviewed" | "diff.toggle_file_tree" | "diff.single_patch"
+            "diff.mark_reviewed"
+            | "diff.toggle_file_tree"
+            | "diff.single_patch"
             | "diff.toggle_view" => {
                 // The viewer's own preference machine
                 // (`DiffViewerState::run_command`): tree/view/single/
@@ -1537,9 +1540,7 @@ impl CommandDispatcher for StoreDispatcher {
                     live.viewer.tree_enabled,
                     files.len(),
                 );
-                store.update_diff_viewer(|live| {
-                    live.viewer.run_command(command, &layout, &files)
-                });
+                store.update_diff_viewer(|live| live.viewer.run_command(command, &layout, &files));
                 Dispatch::Handled
             }
             "diff.switch_source" => {
@@ -1850,11 +1851,14 @@ mod tests {
             ]),
             Vec::new(),
         );
-        store.stage_model(crate::app::HOME_PROMPT_KEY, ModelSelection {
-            provider_id: "opencode".to_owned(),
-            model_id: "grok".to_owned(),
-            variant: None,
-        });
+        store.stage_model(
+            crate::app::HOME_PROMPT_KEY,
+            ModelSelection {
+                provider_id: "opencode".to_owned(),
+                model_id: "grok".to_owned(),
+                variant: None,
+            },
+        );
         assert_eq!(dispatcher.dispatch(&store, "variant.list", None), Dispatch::Handled);
         assert!(
             matches!(&store.top_dialog().unwrap().kind, DialogKind::Variant),
@@ -1868,11 +1872,14 @@ mod tests {
 
         // The no-variants guard: without variants the command toasts.
         store.clear_dialogs();
-        store.stage_model(crate::app::HOME_PROMPT_KEY, ModelSelection {
-            provider_id: "opencode".to_owned(),
-            model_id: "kimi".to_owned(),
-            variant: None,
-        });
+        store.stage_model(
+            crate::app::HOME_PROMPT_KEY,
+            ModelSelection {
+                provider_id: "opencode".to_owned(),
+                model_id: "kimi".to_owned(),
+                variant: None,
+            },
+        );
         assert_eq!(dispatcher.dispatch(&store, "variant.list", None), Dispatch::Handled);
         assert!(store.dialogs().is_empty(), "no dialog on the guard path");
         let toast = store.toasts().current().cloned().expect("the guard toast");
@@ -1893,11 +1900,7 @@ mod tests {
 
         // /mcps — the live rows with status footers (dialog-mcp.tsx).
         store.set_mcp_servers(vec![
-            McpServerRow {
-                name: "beta".into(),
-                status: "connected",
-                error: None,
-            },
+            McpServerRow { name: "beta".into(), status: "connected", error: None },
             McpServerRow {
                 name: "alpha".into(),
                 status: "failed",
@@ -1911,11 +1914,8 @@ mod tests {
         assert_eq!(props.options[0].footer.as_deref(), Some("Failed !"));
         assert_eq!(props.options[1].footer.as_deref(), Some("Connected ✓"));
         // Submit on the failed row → the error details dialog.
-        let details = crate::components::dialog::execute_submission(
-            &store,
-            &mut dispatcher,
-            "alpha",
-        );
+        let details =
+            crate::components::dialog::execute_submission(&store, &mut dispatcher, "alpha");
         assert_eq!(details, Dispatch::Handled);
         assert!(matches!(
             &store.top_dialog().unwrap().kind,
@@ -2117,7 +2117,7 @@ mod tests {
         assert!(live.open, "mounted");
         assert_eq!(live.return_route, Route::Home);
         assert_eq!(live.mode, crate::store::DiffSource::Branch, "default source");
-        assert_eq!(matches!(live.phase, DiffPhase::Loading), true);
+        assert!(matches!(live.phase, DiffPhase::Loading));
         assert_eq!(sink.calls.borrow().len(), 1, "fetch kicked");
         assert!(store.dialogs().is_empty(), "dialog cleared (diff-viewer.tsx:1225)");
 
@@ -2151,7 +2151,9 @@ mod tests {
         // Empty diff → the "No changes to show" body.
         let generation = store.diff_viewer().generation;
         store.diff_fetch_result(generation, Ok((None, Vec::new())));
-        assert!(matches!(store.diff_viewer().phase, DiffPhase::Loaded(ref files) if files.is_empty()));
+        assert!(
+            matches!(store.diff_viewer().phase, DiffPhase::Loaded(ref files) if files.is_empty())
+        );
 
         // Close returns to the captured route.
         assert_eq!(dispatcher.dispatch(&store, "diff.close", None), Dispatch::Handled);

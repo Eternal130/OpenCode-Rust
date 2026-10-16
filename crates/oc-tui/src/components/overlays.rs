@@ -5,7 +5,7 @@
 //!   "Connection lost…" + "Reconnecting to the server automatically."
 //!   Shows 1 s after a RETRY transition, 5 s after the initial one
 //!   (app.tsx:1294-1315).
-//! * **StartupLoading** (`component/startup-loading.tsx`): the
+//! * **`StartupLoading`** (`component/startup-loading.tsx`): the
 //!   bottom-centered pill — "Loading plugins…" 500 ms after boot goes
 //!   un-ready, "Finishing startup…" once ready with a 3 s hold, at
 //!   `bottom=1` full-width centered, raised background, padding 1.
@@ -55,8 +55,7 @@ pub fn overlay_reconnecting(frame: &mut Frame, styles: &ThemeStyles, elapsed_ms:
     }
     let write = |frame: &mut Frame, row: usize, col: usize, text: &str, fg| {
         for (offset, ch) in text.chars().enumerate() {
-            if let Some(cell) =
-                frame.cells.get_mut(row).and_then(|line| line.get_mut(col + offset))
+            if let Some(cell) = frame.cells.get_mut(row).and_then(|line| line.get_mut(col + offset))
             {
                 cell.ch = ch;
                 cell.fg = fg;
@@ -65,7 +64,13 @@ pub fn overlay_reconnecting(frame: &mut Frame, styles: &ThemeStyles, elapsed_ms:
     };
     // Row 1 (inside the top pad): the spinner + headline.
     let spinner = spinner_frame(elapsed_ms);
-    write(frame, top + 1, left + 2, &format!("{spinner} Connection lost…"), CellColor::from(fg_base));
+    write(
+        frame,
+        top + 1,
+        left + 2,
+        &format!("{spinner} Connection lost…"),
+        CellColor::from(fg_base),
+    );
     // Row 2: the muted copy (unmanaged — the port spawns no managed
     // service restart).
     write(
@@ -77,6 +82,7 @@ pub fn overlay_reconnecting(frame: &mut Frame, styles: &ThemeStyles, elapsed_ms:
     );
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // the dialog backdrop's dim math
 fn blend_to_black(color: CellColor, alpha: f64) -> CellColor {
     let dim = |value: u8| -> u8 { (f64::from(value) * (1.0 - alpha)).round() as u8 };
     match color {
@@ -85,9 +91,14 @@ fn blend_to_black(color: CellColor, alpha: f64) -> CellColor {
     }
 }
 
-/// The StartupLoading pill at `bottom=1`, horizontally centered:
+/// The `StartupLoading` pill at `bottom=1`, horizontally centered:
 /// raised background, paddingLeft/Right 1, the muted spinner + label.
-pub fn overlay_startup_loading(frame: &mut Frame, styles: &ThemeStyles, text: &str, elapsed_ms: u64) {
+pub fn overlay_startup_loading(
+    frame: &mut Frame,
+    styles: &ThemeStyles,
+    text: &str,
+    elapsed_ms: u64,
+) {
     let width = frame.width;
     if width < 4 || frame.height < 2 {
         return;
@@ -117,7 +128,7 @@ pub fn overlay_startup_loading(frame: &mut Frame, styles: &ThemeStyles, text: &s
 }
 
 /// Paint both overlays over the frame (the run loop's frame tail):
-/// StartupLoading (zIndex 5000) under Reconnecting (zIndex 10000),
+/// `StartupLoading` (`zIndex` 5000) under `Reconnecting` (`zIndex` 10000),
 /// both above the dialog layer.
 pub fn overlay_app_state(frame: &mut Frame, store: &Store, styles: &ThemeStyles) {
     let now = store.clock();
@@ -132,13 +143,16 @@ pub fn overlay_app_state(frame: &mut Frame, store: &Store, styles: &ThemeStyles)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::Cell;
     use crate::reactive::Runtime;
+    use crate::render::Cell;
     use crate::store::Store;
 
     fn frame_with(width: usize, height: usize) -> Frame {
         Frame {
-            cells: vec![vec![Cell { bg: CellColor::Rgb(200, 200, 200), ..Cell::default() }; width]; height],
+            cells: vec![
+                vec![Cell { bg: CellColor::Rgb(200, 200, 200), ..Cell::default() }; width];
+                height
+            ],
             width,
             height,
         }
@@ -177,7 +191,7 @@ mod tests {
         assert!(!store.reconnecting_overlay_visible(15_001));
     }
 
-    /// StartupLoading (startup-loading.tsx:42-46): 500 ms wait, 3 s
+    /// `StartupLoading` (startup-loading.tsx:42-46): 500 ms wait, 3 s
     /// hold after ready with the copy flip.
     #[test]
     fn startup_loading_wait_and_hold() {

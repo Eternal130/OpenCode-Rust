@@ -971,7 +971,7 @@ pub struct Store {
     /// SURF-2: when the connection state last changed (the
     /// Reconnecting overlay's threshold anchor).
     connection_since: Cell<u64>,
-    /// SURF-2: the StartupLoading pill's state machine.
+    /// SURF-2: the `StartupLoading` pill's state machine.
     startup_state: RefCell<StartupLoadingState>,
     /// SURF-1 revert state (`session.revert.*` — the
     /// `RevertMessage` banner's source, index.tsx:1413-1418):
@@ -1225,7 +1225,10 @@ impl DiffViewerLive {
         };
         if self.viewer.single_patch {
             if let Some(index) = self.viewer.selected_file {
-                return files.get(index).map_or(&[] as &[crate::components::diff_viewer::DiffFile], std::slice::from_ref);
+                return files.get(index).map_or(
+                    &[] as &[crate::components::diff_viewer::DiffFile],
+                    std::slice::from_ref,
+                );
             }
             return &[];
         }
@@ -1268,12 +1271,7 @@ pub enum PairState {
     Loading,
     /// Both calls resolved: the auth links, the localhost link, the
     /// expiry minutes, whether any URL is loopback.
-    Loaded {
-        links: Vec<String>,
-        localhost: Option<String>,
-        minutes: u64,
-        loopback: bool,
-    },
+    Loaded { links: Vec<String>, localhost: Option<String>, minutes: u64, loopback: bool },
     /// The fetch errored — the error body copy.
     Failed(String),
 }
@@ -1349,7 +1347,7 @@ impl McpToggleSink for RecordingMcpToggleSink {
     }
 }
 
-/// The StartupLoading pill's state machine fields
+/// The `StartupLoading` pill's state machine fields
 /// (startup-loading.tsx:7-11's `show`/`wait`/`hold`/`stamp`).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StartupLoadingState {
@@ -3694,10 +3692,7 @@ impl Store {
     }
 
     /// Mutate the viewer state (the `diff.*` preference commands).
-    pub fn update_diff_viewer(
-        &self,
-        update: impl FnOnce(&mut DiffViewerLive) -> bool,
-    ) -> bool {
+    pub fn update_diff_viewer(&self, update: impl FnOnce(&mut DiffViewerLive) -> bool) -> bool {
         let mut live = self.diff_viewer.get();
         let changed = update(&mut live);
         if changed {
@@ -3771,8 +3766,12 @@ impl Store {
             .rows()
             .map(|rows| {
                 rows.iter()
-                    .find(|row| row.provider_id == selection.provider_id && row.id == selection.model_id)
-                    .map(|row| row.variants.iter().filter(|v| v.as_str() != "default").cloned().collect())
+                    .find(|row| {
+                        row.provider_id == selection.provider_id && row.id == selection.model_id
+                    })
+                    .map(|row| {
+                        row.variants.iter().filter(|v| v.as_str() != "default").cloned().collect()
+                    })
                     .unwrap_or_default()
             })
             .unwrap_or_default()
@@ -3794,10 +3793,7 @@ impl Store {
     }
 
     /// Closure-based sink install (the run loop's HTTP worker).
-    pub fn set_diff_sink_fn(
-        &self,
-        fetch: impl Fn(DiffSource, Option<String>, u64) + 'static,
-    ) {
+    pub fn set_diff_sink_fn(&self, fetch: impl Fn(DiffSource, Option<String>, u64) + 'static) {
         struct FnDiffSink<F: Fn(DiffSource, Option<String>, u64)>(F);
         impl<F: Fn(DiffSource, Option<String>, u64)> DiffSink for FnDiffSink<F> {
             fn fetch(&self, mode: DiffSource, session_id: Option<String>, generation: u64) {
@@ -4545,7 +4541,9 @@ impl Store {
         // v2's toggle writes `session.sidebar` through config.update
         // (the SURF-2 seam — replaces the channel-storage diversion
         // F-1 registered).
-        self.config_sink.borrow().update_session_sidebar(matches!(mode, crate::components::sidebar::SidebarMode::Hide));
+        self.config_sink
+            .borrow()
+            .update_session_sidebar(matches!(mode, crate::components::sidebar::SidebarMode::Hide));
     }
 
     /// The configured theme-mode pin (`theme.mode`: dark/light/system
@@ -4579,18 +4577,14 @@ impl Store {
     /// theme pins its CURRENT resolved mode; a pinned one unlocks
     /// back to system (re-resolving against the terminal probe).
     pub fn theme_mode_lock(&self) {
-        let locked =
-            self.theme_mode_pref.borrow().as_deref().is_some_and(|pref| pref != "system");
+        let locked = self.theme_mode_pref.borrow().as_deref().is_some_and(|pref| pref != "system");
         if locked {
             *self.theme_mode_pref.borrow_mut() = Some("system".to_owned());
             self.switch_theme_mode(self.system_mode.get());
             self.config_sink.borrow().update_theme_mode("system");
         } else {
-            let current = if self.theme.get().mode == oc_theme::types::Mode::Dark {
-                "dark"
-            } else {
-                "light"
-            };
+            let current =
+                if self.theme.get().mode == oc_theme::types::Mode::Dark { "dark" } else { "light" };
             *self.theme_mode_pref.borrow_mut() = Some(current.to_owned());
             self.config_sink.borrow().update_theme_mode(current);
         }
@@ -4966,7 +4960,7 @@ impl Store {
         now_ms.saturating_sub(self.connection_since.get()) >= threshold
     }
 
-    /// The StartupLoading machine (startup-loading.tsx:13-47): the
+    /// The `StartupLoading` machine (startup-loading.tsx:13-47): the
     /// pill appears 500 ms after plugins go un-ready and holds 3 s
     /// from the moment it showed once ready ("Finishing startup…").
     /// Returns the pill's text when visible.
@@ -4998,7 +4992,7 @@ impl Store {
     }
 
     /// The plugin host finished booting (or none was configured) —
-    /// flips the StartupLoading copy to "Finishing startup…" and
+    /// flips the `StartupLoading` copy to "Finishing startup…" and
     /// starts the 3 s hold.
     pub fn set_plugins_ready(&self) {
         self.startup_state.borrow_mut().ready = true;

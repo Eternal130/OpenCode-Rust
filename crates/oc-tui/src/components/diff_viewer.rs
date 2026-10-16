@@ -244,8 +244,7 @@ pub fn diff_layout(width: usize, tree_enabled: bool, file_count: usize) -> DiffL
     let show_tree = width >= FILE_TREE_BREAKPOINT && tree_enabled && file_count > 0;
     let tree_width =
         if show_tree { (width / 4).clamp(FILE_TREE_MIN_WIDTH, FILE_TREE_MAX_WIDTH) } else { 0 };
-    let patch_pane_width =
-        width.saturating_sub(if show_tree { tree_width + 4 } else { 4 }).max(1);
+    let patch_pane_width = width.saturating_sub(if show_tree { tree_width + 4 } else { 4 }).max(1);
     let split_available = patch_pane_width >= MIN_SPLIT_WIDTH;
     DiffLayout { show_tree, tree_width, patch_pane_width, split_available }
 }

@@ -24,7 +24,6 @@ pub mod dialog_solid;
 pub mod dialog_worktrees;
 pub mod diff_viewer;
 pub mod diff_viewer_mount;
-pub mod overlays;
 pub mod footer;
 pub mod home;
 /// Lane M5: the home route chrome on opentui-solid (the
@@ -33,6 +32,7 @@ pub mod home;
 /// `docs/migration-m1-tabstrip.md`).
 pub mod home_solid;
 pub mod message;
+pub mod overlays;
 /// Lane M6 (retired): the composer's subagent picker panel on
 /// opentui-solid — the ONLY renderer since the retirement lane
 /// deleted the `OC_SUBAGENT_OPENTUI` flag pair.
