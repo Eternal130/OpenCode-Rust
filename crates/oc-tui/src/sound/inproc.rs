@@ -60,6 +60,8 @@ impl DecodedSound {
     }
 
     /// Playback duration in seconds (decode-path sanity tests).
+    #[cfg(test)]
+    #[allow(clippy::cast_precision_loss)] // frame counts stay far below 2^52
     fn duration_seconds(&self) -> f64 {
         if self.sample_rate == 0 {
             0.0
@@ -69,11 +71,13 @@ impl DecodedSound {
     }
 
     /// Native channel count of the decoded file (decode tests).
+    #[cfg(test)]
     fn channels(&self) -> u32 {
         self.channels
     }
 
     /// Native sample rate of the decoded file (decode tests).
+    #[cfg(test)]
     fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
@@ -91,7 +95,7 @@ struct Voice {
 impl Voice {
     fn finished(&self) -> bool {
         // SAFETY: only called on voices whose sound was initialized.
-        self.sound_ready && unsafe { sys::ma_sound_at_end(&self.sound) != 0 }
+        self.sound_ready && unsafe { sys::ma_sound_at_end(ptr::from_ref(&self.sound)) != 0 }
     }
 
     /// v2's `clearVoice` order: sound first, then the buffer reference it
@@ -101,11 +105,11 @@ impl Voice {
         // matching uninitialization.
         unsafe {
             if self.sound_ready {
-                sys::ma_sound_uninit(&mut self.sound);
+                sys::ma_sound_uninit(ptr::from_mut(&mut self.sound));
                 self.sound_ready = false;
             }
             if self.buffer_ready {
-                sys::ma_audio_buffer_ref_uninit(&mut self.buffer_ref);
+                sys::ma_audio_buffer_ref_uninit(ptr::from_mut(&mut self.buffer_ref));
                 self.buffer_ready = false;
             }
         }
@@ -126,7 +130,9 @@ unsafe extern "C" fn device_callback(
     let engine = unsafe { (*device).pUserData }.cast::<sys::ma_engine>();
     // SAFETY: `engine` points at the initialized engine core; this is the
     // documented audio-thread entry point.
-    unsafe { sys::ma_engine_read_pcm_frames(engine, output, frame_count as u64, ptr::null_mut()) };
+    unsafe {
+        sys::ma_engine_read_pcm_frames(engine, output, u64::from(frame_count), ptr::null_mut())
+    };
 }
 
 /// v2's `MAX_VOICES` guard: a voice-pool cap so a runaway trigger loop
@@ -171,12 +177,14 @@ impl Engine {
         // value is never used.
         let mut core: sys::ma_engine = unsafe { std::mem::zeroed() };
         // SAFETY: as above.
-        let core = if unsafe { sys::ma_engine_init(&config, &mut core) } == sys::ma_result::MA_SUCCESS
-        {
-            Some(core)
-        } else {
-            None
-        };
+        let core =
+            if unsafe { sys::ma_engine_init(ptr::from_ref(&config), ptr::from_mut(&mut core)) }
+                == sys::ma_result::MA_SUCCESS
+            {
+                Some(core)
+            } else {
+                None
+            };
         Self {
             core,
             device: None,
@@ -198,7 +206,8 @@ impl Engine {
             return true;
         }
         // SAFETY: `ma_device_config_init` is a pure config constructor.
-        let mut config = unsafe { sys::ma_device_config_init(sys::ma_device_type::ma_device_type_playback) };
+        let mut config =
+            unsafe { sys::ma_device_config_init(sys::ma_device_type::ma_device_type_playback) };
         let Some(core) = self.core.as_mut() else {
             return false;
         };
@@ -206,10 +215,8 @@ impl Engine {
         config.sampleRate = unsafe { sys::ma_engine_get_sample_rate(core) };
         config.playback.format = sys::ma_format::ma_format_f32;
         config.playback.channels = 2;
-        config.playback.pDeviceID = self
-            .forced_device_id
-            .as_deref()
-            .map_or(ptr::null(), |id| ptr::from_ref(id));
+        config.playback.pDeviceID =
+            self.forced_device_id.as_deref().map_or(ptr::null(), ptr::from_ref);
         config.dataCallback = Some(device_callback);
         config.pUserData = ptr::from_mut(core).cast::<c_void>();
 
@@ -217,14 +224,17 @@ impl Engine {
         // miniaudio create the device's own context internally (the same
         // dlopen backend discovery v2's explicit context performs).
         let mut device: sys::ma_device = unsafe { std::mem::zeroed() };
-        if unsafe { sys::ma_device_init(ptr::null_mut(), &config, &mut device) } != sys::ma_result::MA_SUCCESS
+        if unsafe {
+            sys::ma_device_init(ptr::null_mut(), ptr::from_ref(&config), ptr::from_mut(&mut device))
+        } != sys::ma_result::MA_SUCCESS
         {
             return false;
         }
         // SAFETY: `device` was just initialized; on start failure v2
         // uninitialized it and cleared `has_device`.
-        if unsafe { sys::ma_device_start(&mut device) } != sys::ma_result::MA_SUCCESS {
-            unsafe { sys::ma_device_uninit(&mut device) };
+        if unsafe { sys::ma_device_start(ptr::from_mut(&mut device)) } != sys::ma_result::MA_SUCCESS
+        {
+            unsafe { sys::ma_device_uninit(ptr::from_mut(&mut device)) };
             return false;
         }
         self.device = Some(device);
@@ -274,7 +284,7 @@ impl Engine {
                 sound.channels,
                 ptr::from_ref(sound.samples.as_slice()).cast::<c_void>(),
                 frame_count,
-                &mut voice.buffer_ref,
+                ptr::from_mut(&mut voice.buffer_ref),
             ) != sys::ma_result::MA_SUCCESS
             {
                 return false;
@@ -294,7 +304,7 @@ impl Engine {
                 data_source,
                 flags,
                 ptr::null_mut(),
-                &mut voice.sound,
+                ptr::from_mut(&mut voice.sound),
             ) != sys::ma_result::MA_SUCCESS
             {
                 voice.clear();
@@ -303,9 +313,11 @@ impl Engine {
             voice.sound_ready = true;
             // v2: `slot.volume = clamp(options.volume, 0, 4)` then
             // `ma_sound_set_volume` (the TUI already clamped 0..=1).
+            // Precision loss on the 0..=4 gain is irrelevant (a volume dial).
+            #[allow(clippy::cast_possible_truncation)]
             let clamped = volume.clamp(0.0, 4.0) as f32;
-            sys::ma_sound_set_volume(&mut voice.sound, clamped);
-            if sys::ma_sound_start(&mut voice.sound) != sys::ma_result::MA_SUCCESS {
+            sys::ma_sound_set_volume(ptr::from_mut(&mut voice.sound), clamped);
+            if sys::ma_sound_start(ptr::from_mut(&mut voice.sound)) != sys::ma_result::MA_SUCCESS {
                 voice.clear();
                 return false;
             }
@@ -390,8 +402,8 @@ fn decode_mp3(bytes: &[u8]) -> Option<DecodedSound> {
         sys::ma_decoder_init_memory(
             ptr::from_ref(bytes).cast::<c_void>(),
             bytes.len(),
-            &config,
-            &mut decoder,
+            ptr::from_ref(&config),
+            ptr::from_mut(&mut decoder),
         )
     };
     if init != sys::ma_result::MA_SUCCESS {
@@ -400,11 +412,12 @@ fn decode_mp3(bytes: &[u8]) -> Option<DecodedSound> {
     // `ma_decoder`'s first member is its `ma_data_source` (v2's
     // `streamFromDecoder` cast).
     // SAFETY: the decoder is initialized.
-    let decoded = unsafe { decode_data_source(ptr::from_mut(&mut decoder).cast::<sys::ma_data_source>()) };
+    let sound =
+        unsafe { decode_data_source(ptr::from_mut(&mut decoder).cast::<sys::ma_data_source>()) };
     // SAFETY: the decoder was initialized above regardless of the read
     // outcome.
-    unsafe { sys::ma_decoder_uninit(&mut decoder) };
-    decoded
+    unsafe { sys::ma_decoder_uninit(ptr::from_mut(&mut decoder)) };
+    sound
 }
 
 /// v2's `decodeSound*`: query the source's native format, then read all
@@ -419,9 +432,9 @@ unsafe fn decode_data_source(source: *mut sys::ma_data_source) -> Option<Decoded
     let mut sample_rate: sys::ma_uint32 = 0;
     if sys::ma_data_source_get_data_format(
         source,
-        &mut format,
-        &mut channels,
-        &mut sample_rate,
+        ptr::from_mut(&mut format),
+        ptr::from_mut(&mut channels),
+        ptr::from_mut(&mut sample_rate),
         ptr::null_mut(),
         0,
     ) != sys::ma_result::MA_SUCCESS
@@ -434,7 +447,6 @@ unsafe fn decode_data_source(source: *mut sys::ma_data_source) -> Option<Decoded
     if sys::ma_data_source_seek_to_pcm_frame(source, 0) != sys::ma_result::MA_SUCCESS {
         return None;
     }
-    const CHUNK_FRAMES: usize = 4096;
     let mut samples: Vec<f32> = Vec::new();
     let mut chunk = vec![0_f32; CHUNK_FRAMES * channels as usize];
     loop {
@@ -443,9 +455,9 @@ unsafe fn decode_data_source(source: *mut sys::ma_data_source) -> Option<Decoded
             source,
             ptr::from_mut(chunk.as_mut_slice()).cast::<c_void>(),
             CHUNK_FRAMES as u64,
-            &mut frames_read,
+            ptr::from_mut(&mut frames_read),
         );
-        let read = frames_read as usize * channels as usize;
+        let read = usize::try_from(frames_read).unwrap_or(0) * channels as usize;
         samples.extend_from_slice(&chunk[..read]);
         if result == sys::ma_result::MA_AT_END || frames_read == 0 {
             break;
@@ -457,12 +469,11 @@ unsafe fn decode_data_source(source: *mut sys::ma_data_source) -> Option<Decoded
     if samples.is_empty() {
         return None;
     }
-    Some(DecodedSound {
-        samples,
-        channels,
-        sample_rate,
-    })
+    Some(DecodedSound { samples, channels, sample_rate })
 }
+
+/// v2's decode chunk size (`decodeSoundUnknownLength`: 4096-frame reads).
+const CHUNK_FRAMES: usize = 4096;
 
 /// The process-global engine (v2's module-level `let audio` — created
 /// once; every failure turns the channel into a silent no-op).
@@ -474,6 +485,7 @@ fn engine() -> &'static Mutex<Engine> {
 /// Decode a file through the engine's decode path without touching any
 /// device (the decode-path unit tests: format/channels/duration sanity
 /// per vendored asset).
+#[cfg(test)]
 pub(crate) fn decode_file_for_test(path: &Path) -> Option<DecodedSound> {
     let bytes = std::fs::read(path).ok()?;
     decode_mp3(&bytes)
@@ -513,10 +525,12 @@ impl crate::attention::AttentionEmitter for InprocSoundPlayer {
 /// Point the next device attempt at a nonexistent playback sink (the
 /// no-device graceful test seam — v2's device selection uses exactly this
 /// `pPlaybackDeviceID`/`pDeviceID` path).
+#[cfg(test)]
 pub(crate) fn force_bogus_device_for_test() {
+    let bogus = || Box::new(unsafe { std::mem::zeroed::<sys::ma_device_id>() });
     match engine().lock() {
-        Ok(mut engine) => engine.forced_device_id = Some(Box::new(unsafe { std::mem::zeroed() })),
-        Err(poisoned) => poisoned.into_inner().forced_device_id = Some(Box::new(unsafe { std::mem::zeroed() })),
+        Ok(mut engine) => engine.forced_device_id = Some(bogus()),
+        Err(poisoned) => poisoned.into_inner().forced_device_id = Some(bogus()),
     }
 }
 
@@ -531,7 +545,8 @@ mod tests {
     /// production decode path (`ma_decoder_config_init(f32, 0, 0)`).
     #[test]
     fn decodes_every_builtin_asset() {
-        let cache = std::env::temp_dir().join(format!("oc-tui-sound-decode-{}", std::process::id()));
+        let cache =
+            std::env::temp_dir().join(format!("oc-tui-sound-decode-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&cache);
         let resolver = crate::sound::builtin_sound_resolver(cache.clone());
         for name in [
@@ -547,10 +562,7 @@ mod tests {
             let (ch, rate, secs) =
                 (decoded.channels(), decoded.sample_rate(), decoded.duration_seconds());
             assert!((1..=2).contains(&ch), "{name:?}: channels {ch}");
-            assert!(
-                [22_050, 44_100, 48_000].contains(&rate),
-                "{name:?}: sample rate {rate}"
-            );
+            assert!([22_050, 44_100, 48_000].contains(&rate), "{name:?}: sample rate {rate}");
             assert!(
                 (0.05..10.0).contains(&secs),
                 "{name:?}: duration {secs}s outside the chime band"
