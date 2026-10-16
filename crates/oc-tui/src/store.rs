@@ -961,6 +961,8 @@ pub struct Store {
     /// sidebar's MCP section + DialogStatus source). Fetched by the
     /// server-lists worker; statuses drive the per-server dot.
     mcp_servers: Signal<Vec<McpServerRow>>,
+    /// The MCP section's collapse state (mcp.tsx's `view.open`).
+    sidebar_mcp_open: Signal<bool>,
 }
 
 /// One staged revert (`session.revert.staged`'s `revert` payload).
@@ -1414,6 +1416,7 @@ struct StoreSignals {
     history_loading: Signal<HashMap<String, bool>>,
     expanded_tools: Signal<std::collections::HashSet<String>>,
     mcp_servers: Signal<Vec<McpServerRow>>,
+    sidebar_mcp_open: Signal<bool>,
 }
 
 impl Store {
@@ -1460,6 +1463,7 @@ impl Store {
                 watchers.history_loading.get(),
                 watchers.expanded_tools.get(),
                 watchers.mcp_servers.get(),
+                watchers.sidebar_mcp_open.get(),
                 watch_clock.get(),
             );
             bump.set(bump.get() + 1);
@@ -1513,6 +1517,7 @@ impl Store {
             history_loading,
             expanded_tools,
             mcp_servers,
+            sidebar_mcp_open,
         } = signals;
         Self {
             runtime,
@@ -1590,6 +1595,7 @@ impl Store {
             history_loading,
             expanded_tools,
             mcp_servers,
+            sidebar_mcp_open,
             interrupt_sink: std::cell::RefCell::new(Rc::new(RecordingInterruptSink::default())),
             model_ring_dirty: Cell::new(false),
             revert_sink: std::cell::RefCell::new(Rc::new(RecordingRevertSink::default())),
@@ -1646,6 +1652,7 @@ impl Store {
         let expanded_tools =
             Signal::new(&runtime, std::collections::HashSet::<String>::new());
         let mcp_servers = Signal::new(&runtime, Vec::<McpServerRow>::new());
+        let sidebar_mcp_open = Signal::new(&runtime, true);
         Self::build(
             runtime,
             StoreSignals {
@@ -1685,6 +1692,7 @@ impl Store {
                 history_loading,
                 expanded_tools,
                 mcp_servers,
+                sidebar_mcp_open,
             },
         )
     }
@@ -3165,6 +3173,17 @@ impl Store {
 
     pub fn set_mcp_servers(&self, rows: Vec<McpServerRow>) {
         self.mcp_servers.set(rows);
+    }
+
+    /// The MCP section's collapse toggle (`storage.store("view")`,
+    /// mcp.tsx:19 — default open; only meaningful past two servers).
+    #[must_use]
+    pub fn sidebar_mcp_open(&self) -> bool {
+        self.sidebar_mcp_open.get()
+    }
+
+    pub fn set_sidebar_mcp_open(&self, open: bool) {
+        self.sidebar_mcp_open.set(open);
     }
 
     // -- queued prompts (Wave A: mini/queue.rs lifted into the main store) ----

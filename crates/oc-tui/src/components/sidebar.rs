@@ -27,6 +27,7 @@
 #![allow(clippy::cast_possible_truncation)]
 
 use crate::components::session_tabs::SESSION_SIDEBAR_WIDTH;
+use crate::components::message::rows::locale_number;
 use crate::layout::{Placed, PlacedLine};
 use crate::render::Fill;
 use crate::theme::ThemeStyles;
@@ -83,18 +84,128 @@ impl SidebarSection {
 /// has no widget data, so empty sections render nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SidebarSections {
-    /// The context widget's entries (directory/recent files).
-    pub context: Vec<String>,
-    /// The MCP widget's server entries.
-    pub mcp: Vec<String>,
+    /// The context widget (`SidebarContext`, feature-plugins/sidebar/
+    /// context.tsx): the token/percent/cost rows, gated by
+    /// `state() || cost > 0`.
+    pub context: SidebarContextWidget,
+    /// The MCP widget (`SidebarMcp`, feature-plugins/sidebar/mcp.tsx):
+    /// per-server rows with status dots, collapsible past two.
+    pub mcp: SidebarMcpWidget,
     /// Plugin-provided sections (registration/refresh-time).
     pub plugins: Vec<SidebarSection>,
 }
 
+/// The context widget's data (`contextUsage` + `session.cost`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SidebarContextWidget {
+    /// `contextUsage().tokens` → the `{n} tokens` row.
+    pub tokens: Option<u64>,
+    /// `percent` → the `{p}% used` row (only when the model's context
+    /// limit resolved).
+    pub percent: Option<u8>,
+    /// `data.session.cost()` pre-formatted (`$X.XX`) → the `{cost}
+    /// spent` row.
+    pub cost: Option<String>,
+}
+
+impl SidebarContextWidget {
+    /// `state() || cost() > 0` — the `<Show>` gate (context.tsx:24).
+    #[must_use]
+    pub fn is_shown(&self) -> bool {
+        self.tokens.is_some() || self.cost.is_some()
+    }
+
+    /// The widget's row count: the bold `Context` title + the data rows.
+    #[must_use]
+    pub fn height(&self) -> usize {
+        1 + usize::from(self.tokens.is_some())
+            + usize::from(self.percent.is_some())
+            + usize::from(self.cost.is_some())
+    }
+
+    /// The widget's rendered rows (plain text forms — the paint adds
+    /// the bold title + muted styling).
+    #[must_use]
+    pub fn rows(&self) -> Vec<String> {
+        let mut rows = Vec::new();
+        if let Some(tokens) = self.tokens {
+            rows.push(format!("{} tokens", locale_number(tokens)));
+        }
+        if let Some(percent) = self.percent {
+            rows.push(format!("{percent}% used"));
+        }
+        if let Some(cost) = &self.cost {
+            rows.push(format!("{cost} spent"));
+        }
+        rows
+    }
+}
+
+/// The MCP widget's data + collapse state (mcp.tsx:19-27: `view.open`
+/// persists per storage; rows hide past two servers while closed).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SidebarMcpWidget {
+    pub servers: Vec<crate::store::McpServerRow>,
+    pub open: bool,
+}
+
+impl SidebarMcpWidget {
+    /// `list.length > 0` — the section's `<Show>` gate.
+    #[must_use]
+    pub fn is_shown(&self) -> bool {
+        !self.servers.is_empty()
+    }
+
+    /// Rows render when `list.length <= 2 || view.open` (mcp.tsx:73).
+    #[must_use]
+    pub fn rows_visible(&self) -> bool {
+        self.servers.len() <= 2 || self.open
+    }
+
+    /// The connected/errored counts for the collapsed header label
+    /// (`({n} active[, {m} errors])`, mcp.tsx:37-42).
+    #[must_use]
+    pub fn counts(&self) -> (usize, usize) {
+        (
+            self.servers
+                .iter()
+                .filter(|server| server.status == "connected")
+                .count(),
+            self.servers
+                .iter()
+                .filter(|server| server.status == "failed" || server.status == "needs_auth")
+                .count(),
+        )
+    }
+
+    /// The widget's row count: the header + the visible server rows.
+    #[must_use]
+    pub fn height(&self) -> usize {
+        1 + if self.rows_visible() { self.servers.len() } else { 0 }
+    }
+
+    /// One server row's label + status (the paint adds the dot).
+    #[must_use]
+    pub fn status_label(status: &str) -> &'static str {
+        match status {
+            "connected" => "Connected",
+            "pending" => "Connecting",
+            "failed" => "Error",
+            "disabled" => "Disabled",
+            "needs_auth" => "Sign in",
+            _ => "status",
+        }
+    }
+}
+
 impl SidebarSections {
     #[must_use]
-    pub const fn empty() -> Self {
-        Self { context: Vec::new(), mcp: Vec::new(), plugins: Vec::new() }
+    pub fn empty() -> Self {
+        Self {
+            context: SidebarContextWidget::default(),
+            mcp: SidebarMcpWidget::default(),
+            plugins: Vec::new(),
+        }
     }
 
     /// The slot's content height (rows the scroll area consumes).
@@ -103,11 +214,19 @@ impl SidebarSections {
     pub fn content_height(&self) -> usize {
         // Per non-empty section: title + rows + the 1-row gap that
         // follows.
-        self.plugins
+        let mut total = 0usize;
+        if self.context.is_shown() {
+            total += self.context.height() + 1;
+        }
+        if self.mcp.is_shown() {
+            total += self.mcp.height() + 1;
+        }
+        total + self
+            .plugins
             .iter()
             .filter(|section| !section.title.is_empty() || !section.rows.is_empty())
             .map(|section| section.height() + 1)
-            .sum()
+            .sum::<usize>()
     }
 }
 
@@ -261,12 +380,148 @@ pub fn render_sidebar_scrolled(
     };
 
     // The content slot (`sidebar.content`): one blank row after the
-    // title, then every plugin section — a bold header row plus
-    // muted rows, 2 columns in, 1-row gap between sections. Empty
-    // sections render nothing (the golden fixture's shape). The
-    // wheel offset shifts the slot; rows outside the viewport drop.
+    // title, then every section — 2 columns in, 1-row gap between
+    // sections. Empty sections render nothing (the golden fixture's
+    // shape). The wheel offset shifts the slot; rows outside the
+    // viewport drop.
     let mut y = 0usize;
     let slot_row = |y: usize| y.checked_sub(scroll).map(|visible| visible + 2);
+
+    // The context widget (context.tsx:24-45): the bold `Context`
+    // title, then the muted token/percent/cost rows.
+    if view.sections.context.is_shown() {
+        if let Some(row) = slot_row(y).filter(|row| *row < footer_top) {
+            paint.placed.push(Placed {
+                x: 2,
+                y: row,
+                width: 7,
+                lines: vec![PlacedLine::plain(
+                    "Context",
+                    Style::new().fg(fg_base).bg(raised).add_modifier(Modifier::BOLD),
+                )],
+                tag: Some("sidebar.context".into()),
+            });
+        }
+        y += 1;
+        for text in view.sections.context.rows() {
+            if let Some(slot) = slot_row(y).filter(|slot| *slot < footer_top) {
+                let text = crate::wrap::take_width(&text, SESSION_SIDEBAR_WIDTH - 4);
+                paint.placed.push(Placed {
+                    x: 2,
+                    y: slot,
+                    width: crate::wrap::display_width(&text),
+                    lines: vec![PlacedLine::plain(text, Style::new().fg(fg_muted).bg(raised))],
+                    tag: None,
+                });
+            }
+            y += 1;
+        }
+        y += 1; // the inter-section gap
+    }
+
+    // The MCP widget (mcp.tsx:20-102): the bold `MCP` header (the
+    // disclosure marker + collapsed counts past two servers), then the
+    // per-server rows — a status dot, the bold name (truncated) and
+    // the right-aligned status label.
+    if view.sections.mcp.is_shown() {
+        let (active, errors) = view.sections.mcp.counts();
+        let collapsed = !view.sections.mcp.rows_visible();
+        let header = if collapsed {
+            if errors > 0 {
+                format!(
+                    "MCP ({active} active, {errors} error{})",
+                    if errors > 1 { "s" } else { "" }
+                )
+            } else {
+                format!("MCP ({active} active)")
+            }
+        } else {
+            "MCP".to_owned()
+        };
+        let marker = (view.sections.mcp.servers.len() > 2)
+            .then(|| if collapsed { "▶ " } else { "▼ " })
+            .unwrap_or_default();
+        if let Some(row) = slot_row(y).filter(|row| *row < footer_top) {
+            paint.placed.push(Placed {
+                x: 2,
+                y: row,
+                width: crate::wrap::display_width(&header) + 2,
+                lines: vec![PlacedLine {
+                    runs: vec![
+                        crate::layout::StyledSpan {
+                            text: marker.to_owned(),
+                            style: Style::new().fg(fg_base).bg(raised),
+                        },
+                        crate::layout::StyledSpan {
+                            text: header,
+                            style: Style::new().fg(fg_base).bg(raised).add_modifier(Modifier::BOLD),
+                        },
+                    ],
+                }],
+                tag: Some("sidebar.mcp".into()),
+            });
+        }
+        y += 1;
+        if !collapsed {
+            for server in &view.sections.mcp.servers {
+                if let Some(slot) = slot_row(y).filter(|slot| *slot < footer_top) {
+                    let status = SidebarMcpWidget::status_label(server.status);
+                    let dot_color = match server.status {
+                        "connected" => theme.success,
+                        "failed" => theme.error,
+                        "needs_auth" => theme.warning,
+                        _ => fg_muted,
+                    };
+                    let status_width = crate::wrap::display_width(status);
+                    // `• {name}` truncated to leave the right-aligned
+                    // status its columns (gap 1).
+                    let name_budget = SESSION_SIDEBAR_WIDTH
+                        .saturating_sub(4 + 2 + 1 + status_width + 1)
+                        .max(2);
+                    let name = crate::wrap::take_width(&server.name, name_budget);
+                    let name_width = crate::wrap::display_width(&name);
+                    paint.placed.push(Placed {
+                        x: 2,
+                        y: slot,
+                        width: 2 + name_width,
+                        lines: vec![PlacedLine {
+                            runs: vec![
+                                crate::layout::StyledSpan {
+                                    text: "• ".to_owned(),
+                                    style: Style::new().fg(dot_color).bg(raised),
+                                },
+                                crate::layout::StyledSpan {
+                                    text: name,
+                                    style: Style::new().fg(fg_base).bg(raised)
+                                        .add_modifier(Modifier::BOLD),
+                                },
+                            ],
+                        }],
+                        tag: Some(format!("sidebar.mcp.server:{}", server.name)),
+                    });
+                    paint.placed.push(Placed {
+                        x: SESSION_SIDEBAR_WIDTH - 2 - status_width,
+                        y: slot,
+                        width: status_width,
+                        lines: vec![PlacedLine::plain(
+                            status,
+                            Style::new()
+                                .fg(if server.status == "failed" {
+                                    theme.error
+                                } else {
+                                    fg_muted
+                                })
+                                .bg(raised),
+                        )],
+                        tag: None,
+                    });
+                }
+                y += 1;
+            }
+        }
+        y += 1; // the inter-section gap
+    }
+
     for section in &view.sections.plugins {
         if section.title.is_empty() && section.rows.is_empty() {
             continue;
