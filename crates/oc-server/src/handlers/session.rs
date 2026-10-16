@@ -750,96 +750,136 @@ async fn fork(
     Path(session_id): Path<String>,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let (services, row) = session_services(&state, &session_id).await?;
-    let messages = services
-        .store
-        .messages(oc_core::session::store::MessagesInput {
-            session_id: session_id.clone(),
-            order: Some(ListOrder::Asc),
-            ..Default::default()
+    let (services, _row) = session_services(&state, &session_id).await?;
+    // v2 `Session.fork` (core session.ts:319-355): locate the boundary —
+    // the `before` message when the payload names one (HTTP wire carries
+    // the bare messageID, protocol groups/session.ts:313), else the newest
+    // message — then publish ONE durable `session.forked` event; the
+    // projector (`project_fork`, projector.rs:571) creates the row, copies
+    // the settled history below the boundary (`{type, messageID}` union,
+    // schema/session-fork.ts:6-10), fork-styles the title and seeds the
+    // instruction state. No row is pre-created: a pre-created row makes
+    // the projector's `INSERT OR IGNORE` fail ALREADY_PROJECTED and the
+    // fork copies nothing (auditE core #3).
+    let before = body["before"].as_str().map(String::from);
+    let lookup_session = session_id.clone();
+    let lookup_before = before.clone();
+    let boundary_id: Option<String> = state
+        .engine
+        .db
+        .transaction(move |tx| {
+            let id: Option<String> = match &lookup_before {
+                Some(before) => tx
+                    .conn()
+                    .query_row(
+                        "SELECT id FROM session_message WHERE session_id = ?1 AND id = ?2 \
+                         ORDER BY seq DESC LIMIT 1",
+                        (lookup_session, before),
+                        |row| row.get(0),
+                    )
+                    .ok(),
+                None => tx
+                    .conn()
+                    .query_row(
+                        "SELECT id FROM session_message WHERE session_id = ?1 \
+                         ORDER BY seq DESC LIMIT 1",
+                        (lookup_session,),
+                        |row| row.get(0),
+                    )
+                    .ok(),
+            };
+            Ok(id)
         })
         .await
         .map_err(|error| {
             crate::errors::debug_cause("session:unknown_ref", &error);
             ApiError::unknown_ref()
         })?;
-    let before = body["before"].as_str().map(String::from);
-    let boundary_messages: Vec<_> = match &before {
-        Some(before) => match messages.iter().position(|message| message.id == *before) {
-            Some(index) => messages.into_iter().take(index).collect(),
-            None => Vec::new(),
-        },
-        None => messages,
+    let boundary_id = match (&before, boundary_id) {
+        (Some(_), None) => {
+            // MessageNotFoundError → 404 (ref session.ts:334-338).
+            let missing = body["before"].as_str().unwrap_or_default().to_owned();
+            return Err(ApiError::message_not_found(&session_id, &missing));
+        }
+        (None, None) => {
+            // ForkEmptyError → 400 empty_session (ref session.ts:339).
+            return Err(ApiError::invalid_request_kind("Session is empty", "empty_session"));
+        }
+        (_, Some(id)) => id,
     };
-    if boundary_messages.is_empty() {
-        // ForkEmpty → 400 empty_session (§3).
-        return Err(ApiError::invalid_request_kind("Session is empty", "empty_session"));
-    }
+    let boundary_type = if before.is_some() { "before" } else { "through" };
 
-    let fork_row = state
+    // The fork adopts the parent's newest instruction values rather than
+    // the values in effect at the boundary (ref session.ts:341-349).
+    let parent_id = session_id.clone();
+    let inherited = state
         .engine
-        .create_session(
-            &LocationRef::new(std::path::PathBuf::from(&row.directory), row.workspace_id.clone()),
-            CreateInput {
-                id: Some(parse_session_id(&state.ids.new_id("ses"))),
-                parent_id: Some(parse_session_id(&session_id)),
-                location: Some(oc_schema::location::Ref {
-                    directory: oc_schema::common::AbsolutePath(row.directory.clone()),
-                    workspace_id: None,
-                }),
-                title: row.title.clone(),
-                agent: row.agent.clone(),
-                model: row.model.as_deref().and_then(|text| serde_json::from_str(text).ok()),
-                metadata: row.metadata.as_deref().and_then(|text| serde_json::from_str(text).ok()),
-                permissions: row
-                    .permission
-                    .as_deref()
-                    .and_then(|text| serde_json::from_str(text).ok()),
-                project: Some(ResolvedProject {
-                    id: services.project.id.clone(),
-                    directory: services.project.canonical.to_string_lossy().into_owned(),
-                }),
-                version: state.version.clone(),
-            },
-        )
+        .db
+        .transaction(move |tx| {
+            let values: Option<String> = tx
+                .conn()
+                .query_row(
+                    "SELECT current_values FROM instruction_state WHERE session_id = ?1",
+                    (parent_id.clone(),),
+                    |row| row.get(0),
+                )
+                .ok();
+            let mut statement = tx.conn().prepare(
+                "SELECT key, value, removed FROM instruction_entry WHERE session_id = ?1",
+            )?;
+            let entries = statement
+                .query_map((parent_id,), |row| {
+                    let raw: Option<String> = row.get::<_, Option<String>>(1)?;
+                    let value = raw
+                        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                        .unwrap_or(Value::Null);
+                    Ok(json!({
+                        "key": row.get::<_, String>(0)?,
+                        "value": value,
+                        "removed": row.get::<_, bool>(2)?,
+                    }))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            Ok((values, entries))
+        })
         .await
         .map_err(|error| {
             crate::errors::debug_cause("session:unknown_ref", &error);
             ApiError::unknown_ref()
         })?;
-
-    // Copy the boundary messages into the fork via the message projector.
-    for message in boundary_messages {
-        let mut data = message_row_to_info(&message);
-        if let Value::Object(map) = &mut data {
-            map.insert("sessionID".to_owned(), json!(fork_row.id));
-        }
-        if let Some(definition) = registry::by_type_latest("session.inbox.delivered") {
-            let _ = services
-                .graph
-                .bus
-                .publish(
-                    definition,
-                    json!({ "sessionID": fork_row.id, "inboxID": message.id, "item": {
-                        "type": "synthetic",
-                        "payload": { "text": "", "description": "forked" },
-                        "delivery": "queue",
-                    }}),
-                    PublishOptions::default(),
-                )
-                .await;
-        }
-        let _ = data;
+    let (instructions, instruction_entries) = inherited;
+    let mut data = json!({
+        "sessionID": state.ids.new_id("ses"),
+        "parentID": session_id,
+        "boundary": { "type": boundary_type, "messageID": boundary_id },
+    });
+    if let Some(instructions) = instructions {
+        data["instructions"] =
+            serde_json::from_str::<Value>(&instructions).unwrap_or_else(|_| json!({}));
     }
-    let _ = services
+    data["instructionEntries"] = Value::Array(instruction_entries);
+
+    let definition = registry::by_type_latest("session.forked").ok_or_else(ApiError::unknown_ref)?;
+    services
         .graph
         .bus
-        .publish(
-            registry::by_type_latest("session.forked").ok_or_else(ApiError::unknown_ref)?,
-            json!({ "sessionID": fork_row.id, "parentID": session_id, "boundary": before }),
-            PublishOptions::default(),
-        )
-        .await;
+        .publish(definition, data.clone(), PublishOptions::default())
+        .await
+        .map_err(|error| {
+            crate::errors::debug_cause("session:fork_projection", &error);
+            ApiError::unknown_ref()
+        })?;
+    // The projected fork row (the projector created it inside the publish).
+    let fork_id = data["sessionID"].as_str().unwrap_or_default().to_owned();
+    let fork_row = services
+        .store
+        .get(&fork_id)
+        .await
+        .map_err(|error| {
+            crate::errors::debug_cause("session:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?
+        .ok_or_else(ApiError::unknown_ref)?;
     Ok(json_data(session_row_to_info(&fork_row)))
 }
 
@@ -915,33 +955,146 @@ async fn shell(
     Path(session_id): Path<String>,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let (services, _) = session_services(&state, &session_id).await?;
+    let (services, row) = session_services(&state, &session_id).await?;
     let command = body["command"].as_str().unwrap_or_default().to_owned();
-    let message_id = body["id"].as_str().map_or_else(|| state.ids.new_id("msg"), String::from);
+    let input_id = body["id"].as_str().map(String::from);
+    // v2 `Session.shell` (session/session.ts:179-222 + session/shell.ts):
+    // the command EXECUTES through the location's Shell service (cwd =
+    // the session directory, timeout 0, background metadata) — it is
+    // never admitted as LLM input. The request observes the run: publish
+    // `session.shell.started`, await the result + output preview,
+    // publish `session.shell.ended`, then admit the user-notification
+    // synthetic (resume stays false — the model is not woken).
+    let metadata: oc_schema::common::Record = serde_json::from_value(json!({
+        "sessionID": session_id,
+        "background": true,
+    }))
+    .unwrap_or_default();
+    let started = services
+        .shell
+        .create(
+            oc_schema::shell::CreateInput {
+                command: command.clone(),
+                cwd: Some(row.directory.clone()),
+                timeout: Some(0),
+                metadata: Some(metadata),
+            },
+            None,
+            None,
+            None,
+        )
+        .await;
+    let info = match started {
+        Ok(info) => info,
+        Err(error) => {
+            // ref taps the spawn failure into an error synthetic before
+            // dying (session.ts:188-195) — the handler still 500s.
+            let message_id = state.ids.new_id("msg");
+            let payload = oc_schema::session_inbox::SyntheticPayload {
+                text: format!("User shell command failed to start:\n{command}\n\n{error}"),
+                description: Some(command.clone()),
+                metadata: Some(
+                    serde_json::from_value::<oc_schema::common::Record>(json!({
+                        "source": "shell",
+                        "state": "error",
+                    }))
+                    .unwrap_or_default(),
+                ),
+            };
+            let _ = services
+                .inbox
+                .admit(
+                    &message_id,
+                    &session_id,
+                    Item::Synthetic { payload, delivery: Delivery::Queue },
+                )
+                .await;
+            crate::errors::debug_cause("session:shell_start", &error);
+            return Err(ApiError::unknown_ref());
+        }
+    };
+
+    // `session.shell.started` — the event id derives from the caller's
+    // message id (`msg_` → `evt_`, session.ts:197-203).
+    let mut options = PublishOptions::default();
+    if let Some(id) = &input_id {
+        if let Ok(event_id) = oc_schema::id::EventId::parse(id.replacen("msg_", "evt_", 1)) {
+            options.id = Some(event_id);
+        }
+    }
+    if let Some(definition) = registry::by_type_latest("session.shell.started") {
+        let _ = services
+            .graph
+            .bus
+            .publish(
+                definition,
+                json!({ "sessionID": session_id, "shell": info }),
+                options,
+            )
+            .await;
+    }
+
+    let result = services.shell.result(info).await;
+    let terminal = result.info.clone();
+    // The preview page the ended event carries (session.ts:206-210):
+    // up to 1 MiB from the cursor start; a vanished capture serves the
+    // `ShellResult.unavailable` stand-in.
+    let preview = match services
+        .shell
+        .output(
+            &result.info.id,
+            Some(oc_schema::shell::OutputInput { cursor: None, limit: Some(1024 * 1024) }),
+        )
+        .await
+    {
+        Ok(page) => json!({
+            "output": page.output,
+            "cursor": page.cursor,
+            "size": page.size,
+            "truncated": page.truncated,
+        }),
+        Err(_) => {
+            const MISSING: &str = "Shell command output is no longer available.";
+            let size = MISSING.len();
+            json!({
+                "output": MISSING,
+                "cursor": size,
+                "size": size,
+                "truncated": false,
+            })
+        }
+    };
+    if let Some(definition) = registry::by_type_latest("session.shell.ended") {
+        let _ = services
+            .graph
+            .bus
+            .publish(
+                definition,
+                json!({ "sessionID": session_id, "shell": terminal, "output": preview }),
+                PublishOptions::default(),
+            )
+            .await;
+    }
+
+    // The user-notification synthetic (`ShellResult.userNotification`) —
+    // resume:false, so unlike the old path nothing reaches the model.
+    let notification = oc_core::shell::result::user_notification(&result);
+    let message_id = input_id.unwrap_or_else(|| state.ids.new_id("msg"));
+    let payload = oc_schema::session_inbox::SyntheticPayload {
+        text: notification.text,
+        description: None,
+        metadata: serde_json::from_value::<oc_schema::common::Record>(notification.metadata)
+            .ok(),
+    };
     services
         .inbox
         .admit(
             &message_id,
             &session_id,
-            Item::Synthetic {
-                payload: oc_schema::session_inbox::SyntheticPayload {
-                    text: command,
-                    description: None,
-                    metadata: None,
-                },
-                delivery: Delivery::Queue,
-            },
+            Item::Synthetic { payload, delivery: Delivery::Steer },
         )
         .await
         .map_err(|error| inbox_error(&error, &message_id))?;
-    services
-        .execution
-        .resume(&session_id)
-        .await
-        .map_err(|error| {
-            run_error(error).err();
-        })
-        .ok();
     Ok(no_content())
 }
 
