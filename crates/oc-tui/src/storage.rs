@@ -463,6 +463,36 @@ mod tests {
         );
     }
 
+    /// The onboarding doc's round trip (dogfood3 / auditC S2): the
+    /// dismissal writes v2's `getting-started` shape
+    /// (`{"dismissed":true}`) and the boot read seeds back — the
+    /// restart leg of the PTY dismiss cycle (a second live boot in
+    /// one process can't re-arm crossterm's input source, so the
+    /// file contract is proven here).
+    #[test]
+    fn getting_started_doc_round_trips() {
+        let root = temp_root("onboarding");
+        let storage = ChannelStorage::open(&root, "stable").expect("open");
+        assert_eq!(
+            storage.read(KEY_GETTING_STARTED),
+            None,
+            "a fresh channel has no onboarding doc"
+        );
+        let doc: GettingStartedDoc = storage.read_or_default(KEY_GETTING_STARTED);
+        assert!(!doc.dismissed, "the default initial value (footer.tsx:12)");
+        storage.write_typed(KEY_GETTING_STARTED, &GettingStartedDoc { dismissed: true })
+            .expect("write");
+        let body =
+            std::fs::read_to_string(storage.path_for(KEY_GETTING_STARTED)).expect("read back");
+        assert_eq!(body, r#"{"dismissed":true}"#, "v2's compact storage-draft shape");
+        let back: GettingStartedDoc = storage.read_or_default(KEY_GETTING_STARTED);
+        assert!(back.dismissed, "the boot read seeds the dismissal");
+        // A v2-written file (no whitespace) reads back too.
+        std::fs::write(storage.path_for(KEY_GETTING_STARTED), r#"{"dismissed":true}"#)
+            .unwrap();
+        assert!(storage.read_or_default::<GettingStartedDoc>(KEY_GETTING_STARTED).dismissed);
+    }
+
     /// The file layout matches v2: `<state>/<channel>/tui/<key>.json`,
     /// keys validate, writes are atomic-safe, reads fall back.
     #[test]

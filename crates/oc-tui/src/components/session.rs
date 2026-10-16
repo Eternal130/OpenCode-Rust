@@ -1293,8 +1293,7 @@ mod tests {
 
     /// A subagent session never mounts the pane (session-frame.tsx:108).
     #[test]
-    fn subagent_session_never_shows_the_sidebar() {
-        let store = Store::new(Runtime::new());
+    fn subagent_session_never_shows_the_sidebar() {        let store = Store::new(Runtime::new());
         store.open_tab("sub", None);
         store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
             "session.created",
@@ -1305,6 +1304,45 @@ mod tests {
         assert!(
             !frame.text_grid().iter().any(|row| row.contains("Getting started")),
             "no pane for subagent sessions"
+        );
+    }
+
+    /// The connected gate (auditB #4 — GATE-MISMATCH vs
+    /// footer.tsx:18-23's `!hasConnectedProvider(integrations)`): the
+    /// card hides once an integration is connected (our
+    /// `ServerLists.connected` fold), and the hit rects clear with it.
+    #[test]
+    fn connected_provider_hides_the_onboarding_card() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Bug hunt".to_owned()));
+        let theme = crate::theme::ThemeState::v2_dark();
+        let before = render_session(&store, "s1", &theme.styles(), (160, 30));
+        assert!(
+            before.text_grid().iter().any(|row| row.contains("Getting started")),
+            "the card shows while disconnected"
+        );
+        assert!(store.sidebar_onboarding_hits().is_some(), "the targets recorded");
+        store.set_integration_connected(true);
+        let after = render_session(&store, "s1", &theme.styles(), (160, 30));
+        assert!(
+            !after.text_grid().iter().any(|row| row.contains("Getting started")),
+            "a connected provider gates the card off"
+        );
+        assert!(store.sidebar_onboarding_hits().is_none(), "no targets without the card");
+    }
+
+    /// The dismissal gate (`!onboarding.dismissed`, footer.tsx:22):
+    /// the boot-restored flag hides the card the same way.
+    #[test]
+    fn restored_dismissal_hides_the_onboarding_card() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Bug hunt".to_owned()));
+        store.restore_sidebar_onboarding(true);
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame = render_session(&store, "s1", &theme.styles(), (160, 30));
+        assert!(
+            !frame.text_grid().iter().any(|row| row.contains("Getting started")),
+            "the persisted dismissal keeps the card hidden"
         );
     }
 
