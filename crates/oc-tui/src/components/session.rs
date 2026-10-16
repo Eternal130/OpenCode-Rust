@@ -74,8 +74,8 @@ pub fn paint_live_tabs_bar(
     let tabs = store.tabs();
     let permission_live =
         matches!(store.footer().view, crate::components::footer::FooterView::Permission { .. });
-    let mut views: Vec<TabView> = tabs
-        .tabs
+    let mut views: Vec<TabView> = store
+        .strip_tabs_ordered()
         .iter()
         .map(|tab| TabView {
             // Session-title-first (session-tabs.tsx:754): the live
@@ -111,7 +111,13 @@ pub fn paint_live_tabs_bar(
     // tree — the only renderer since the retirement lane deleted the
     // hand-rolled bar walk.
     let close_hover = tabs.hover_close.then(|| tabs.hover.clone()).flatten();
-    crate::components::session_tabs_solid::paint_solid_bar(
+    // The close-hold's frozen layout (lane KM): `heldSessionTabLayout`
+    // over the SAME view list (a mismatched list releases the hold).
+    let owned: Vec<SessionTab> = views.iter().map(|view| view.tab.clone()).collect();
+    let held = store
+        .close_hold()
+        .and_then(|hold| crate::components::session_tabs::held_session_tab_layout(&hold, &owned));
+    crate::components::session_tabs_solid::paint_solid_bar_held(
         &views,
         active,
         show_plus,
@@ -120,6 +126,7 @@ pub fn paint_live_tabs_bar(
         tabs.hover.as_deref(),
         close_hover.as_deref(),
         tabs.add_hovered,
+        held,
     )
 }
 

@@ -49,6 +49,7 @@ use crate::components::footer::permission::{
     PermissionReply, PermissionRequest,
 };
 use crate::components::footer::{FooterTheme, FooterView};
+use crate::components::session_tabs::AdaptiveLayout;
 use crate::data::{Connection, HttpResync, Ingest};
 use crate::keymap::{KeyStroke, Keymap, ManualClock, Outcome};
 use crate::render::color_mode::{self, ColorMode};
@@ -101,6 +102,11 @@ pub struct App {
     /// re-evaluation source after a re-layout moves controls under a
     /// stationary pointer (opentui re-dispatches hover on render).
     last_pointer: Option<(usize, usize)>,
+    /// The strip drag-reorder (lane KM, auditA #8b): the pressed tab
+    /// (`dragging`, session-tabs.tsx:1543-1547) + whether the pointer
+    /// crossed a slot boundary (`didDrag` — the release persists the
+    /// move and SUPPRESSES the click-select, :1505-1514).
+    strip_drag: Option<(String, bool)>,
     /// Whether the exit command fired (the run loop's teardown gate).
     pub exit_requested: bool,
     /// The applied keybind override set (re-merged when the store's
@@ -138,6 +144,7 @@ impl App {
             input_mode: false,
             permission_states: HashMap::new(),
             permission_replies: Vec::new(),
+            strip_drag: None,
             rename_requests: Vec::new(),
             autoaccept: false,
             auto_approved: std::collections::HashSet::new(),
@@ -305,7 +312,7 @@ impl App {
     // sibling key layers.
     #[allow(clippy::too_many_lines)]
     pub fn mouse_event(&mut self, mouse: &crossterm::event::MouseEvent) {
-        use crate::components::session_tabs::{strip_hit, StripHit};
+        use crate::components::session_tabs::StripHit;
         use crossterm::event::{MouseButton, MouseEventKind};
         let width = usize::from(self.size.0);
         let col = usize::from(mouse.column);
@@ -429,10 +436,37 @@ impl App {
                 }
                 if strip_live && row == 0 {
                     let hit = {
-                        let (tabs, active, show_plus) = self.strip_layout_tabs();
+                        let (tabs, active, show_plus, held) = self.strip_effective_layout();
                         let hover = self.store.tabs().hover.clone();
-                        strip_hit(&tabs, active.as_deref(), show_plus, width, col, hover.as_deref())
+                        crate::components::session_tabs::strip_hit_with_layout(
+                            &tabs,
+                            active.as_deref(),
+                            show_plus,
+                            width,
+                            col,
+                            hover.as_deref(),
+                            held.as_ref(),
+                        )
                     };
+                    // The drag release (session-tabs.tsx:1505-1514):
+                    // a drag that crossed slots persists the move and
+                    // SUPPRESSES the click-select (a captured drag
+                    // ends with a synthetic up on its drop target).
+                    let drag = self.strip_drag.take();
+                    if drag.is_some() {
+                        let preview = self.store.tab_drag_preview();
+                        self.store.set_tab_drag_preview(None);
+                        if let (Some((source, _)), Some((_, index))) = (drag, preview) {
+                            self.store.move_tab(&source, index);
+                            // `release()`: the moved tab selects (the
+                            // home pseudo-tab never selects).
+                            if source != crate::components::session_tabs::NEW_SESSION_TAB_ID {
+                                self.store.select_tab(&source);
+                            }
+                            self.refresh_strip_hover(width);
+                            return;
+                        }
+                    }
                     match hit {
                         StripHit::Tab(id) => {
                             // The home pseudo-tab IS the home route —
@@ -455,6 +489,12 @@ impl App {
                                     self.store.select_tab(&session_id);
                                 }
                             } else {
+                                // The close-hold (session-tabs.tsx:
+                                // 1481-1503): freeze the pre-close
+                                // layout so the neighbor's ✕ stays
+                                // under the stationary pointer for
+                                // rapid multi-close (5 s window).
+                                self.arm_strip_close_hold(&id, col);
                                 self.store.close_tab(Some(&id));
                             }
                         }
@@ -623,6 +663,149 @@ impl App {
                     }
                 }
             }
+            // -- lane KM (auditA #8b): the strip's press-side pointer
+            // arms — middle-click close, the right-click context menu,
+            // the drag-reorder press, and the drag motion itself.
+            MouseEventKind::Down(MouseButton::Middle) => {
+                if strip_live && row == 0 {
+                    // Middle click closes on DOWN (session-tabs.tsx:
+                    // 1657-1664: `tabs.close(...)` + preventDefault —
+                    // no select, no drag).
+                    let (tabs, active, show_plus, held) = self.strip_effective_layout();
+                    let hit = crate::components::session_tabs::strip_hit_with_layout(
+                        &tabs,
+                        active.as_deref(),
+                        show_plus,
+                        width,
+                        col,
+                        None,
+                        held.as_ref(),
+                    );
+                    if let StripHit::Tab(id) | StripHit::Close(id) = hit {
+                        if id == crate::components::session_tabs::NEW_SESSION_TAB_ID {
+                            let fallback =
+                                self.store.tabs().tabs.last().map(|tab| tab.session_id.clone());
+                            if let Some(session_id) = fallback {
+                                self.store.select_tab(&session_id);
+                            }
+                        } else {
+                            self.store.close_tab(Some(&id));
+                        }
+                        self.refresh_strip_hover(width);
+                    }
+                }
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                // Right press inside an open menu closes it (the
+                // scrollbox's own onMouseDown, session-tabs.tsx:470).
+                if !self.store.dialogs().is_empty() {
+                    if let Some((x, y, w, h)) = self.store.dialog_frame_rect() {
+                        if col >= x && row >= y && col < x + w && row < y + h {
+                            self.store.close_dialog();
+                            self.store.request_redraw();
+                        }
+                    }
+                    return;
+                }
+                if strip_live && row == 0 && self.store.tabs_enabled() {
+                    // The tab context menu (session-tabs.tsx:1664-1679
+                    // + the `+`'s own right press, :1795-1802): the
+                    // home pseudo-tab and the `+` open the
+                    // recently-closed variant (no session actions).
+                    let (tabs, active, show_plus, held) = self.strip_effective_layout();
+                    let hit = crate::components::session_tabs::strip_hit_with_layout(
+                        &tabs,
+                        active.as_deref(),
+                        show_plus,
+                        width,
+                        col,
+                        None,
+                        held.as_ref(),
+                    );
+                    let session_id = match hit {
+                        StripHit::Tab(id) | StripHit::Close(id) => {
+                            if id == crate::components::session_tabs::NEW_SESSION_TAB_ID {
+                                None
+                            } else {
+                                Some(id)
+                            }
+                        }
+                        StripHit::Add | StripHit::Outside => None,
+                    };
+                    self.store.open_dialog(
+                        crate::store::DialogKind::TabMenu { session_id, x: col, y: row },
+                        crate::store::DialogSize::Medium,
+                    );
+                    self.store.request_redraw();
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                // The drag arm (session-tabs.tsx:1680-1681): a left
+                // press on a tab captures it as the drag source (the
+                // ✕'s own press never arms — it stops propagation,
+                // :1714-1718).
+                self.strip_drag = None;
+                if strip_live && row == 0 {
+                    let (tabs, active, show_plus, held) = self.strip_effective_layout();
+                    let hit = crate::components::session_tabs::strip_hit_with_layout(
+                        &tabs,
+                        active.as_deref(),
+                        show_plus,
+                        width,
+                        col,
+                        None,
+                        held.as_ref(),
+                    );
+                    if let StripHit::Tab(id) = hit {
+                        self.store.clear_close_hold();
+                        self.strip_drag = Some((id, false));
+                    }
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                // The drag motion (session-tabs.tsx:1519-1527): map
+                // the pointer column to the visible slot beneath it
+                // and preview the reorder locally (one persist on
+                // release, never per slot crossing).
+                if let Some((source, _moved)) = self.strip_drag.clone() {
+                    if strip_live
+                        && row == 0
+                        && source != crate::components::session_tabs::NEW_SESSION_TAB_ID
+                    {
+                        let real_tabs: Vec<crate::store::SessionTab> =
+                            self.store.strip_tabs_ordered();
+                        let layout = crate::components::session_tabs::adaptive_session_tab_layout(
+                            &real_tabs, None, width, 0,
+                        );
+                        // The slot under the pointer: overflow marker
+                        // + visible widths walk (`slotAt`).
+                        let mut edge = if layout.before > 0 {
+                            crate::components::session_tabs::session_tab_overflow_width(
+                                layout.before,
+                            )
+                        } else {
+                            0
+                        };
+                        let mut slot = layout.before + layout.widths.len().saturating_sub(1);
+                        for (index, tab_width) in layout.widths.iter().enumerate() {
+                            edge += tab_width;
+                            if col < edge {
+                                slot = layout.before + index;
+                                break;
+                            }
+                        }
+                        let target = slot.min(real_tabs.len().saturating_sub(1));
+                        let source_index =
+                            real_tabs.iter().position(|tab| tab.session_id == source);
+                        if let Some(source_index) = source_index {
+                            if target != source_index {
+                                self.store.set_tab_drag_preview(Some((source.clone(), target)));
+                                self.strip_drag = Some((source, true));
+                            }
+                        }
+                    }
+                }
+            }
             // The wheel (auditA #1 — `MouseEventKind::Scroll*` was
             // unhandled anywhere): v2 forwards wheel events into the
             // focused scrollbox (`session-frame.tsx:310-317` hands
@@ -716,12 +899,12 @@ impl App {
         moved
     }
 
-    /// The strip's layout inputs RIGHT NOW: the store tabs plus the
-    /// home-route `New session` pseudo-tab (selected; the idle ` + `
-    /// hides — session-tabs.tsx:1339-1344).
+    /// The strip's layout inputs RIGHT NOW: the store tabs (drag-
+    /// preview order applied) plus the home-route `New session`
+    /// pseudo-tab (selected; the idle ` + ` hides —
+    /// session-tabs.tsx:1339-1344).
     fn strip_layout_tabs(&self) -> (Vec<crate::store::SessionTab>, Option<String>, bool) {
-        let tabs = self.store.tabs();
-        let mut items: Vec<crate::store::SessionTab> = tabs.tabs.clone();
+        let mut items: Vec<crate::store::SessionTab> = self.store.strip_tabs_ordered();
         if matches!(self.store.route(), Route::Home) && !items.is_empty() {
             items.push(crate::store::SessionTab {
                 session_id: crate::components::session_tabs::NEW_SESSION_TAB_ID.to_owned(),
@@ -737,13 +920,74 @@ impl App {
         }
     }
 
+    /// The strip's EFFECTIVE layout (lane KM): the adaptive solve,
+    /// overridden by the close-hold's frozen geometry while live.
+    fn strip_effective_layout(
+        &self,
+    ) -> (Vec<crate::store::SessionTab>, Option<String>, bool, Option<AdaptiveLayout>) {
+        let (tabs, active, show_plus) = self.strip_layout_tabs();
+        let held = self.store.close_hold().and_then(|hold| {
+            crate::components::session_tabs::held_session_tab_layout(&hold, &tabs)
+        });
+        (tabs, active, show_plus, held)
+    }
+
+    /// Arm the ✕ close-hold (`holdCloseCell`, session-tabs.tsx:
+    /// 1481-1503): snapshot the CURRENT view list + the visible
+    /// window's ids/widths, pick the NEIGHBOR the pointer's ✕ column
+    /// will address next (`all[itemIndex + 1] ?? all[itemIndex - 1]`
+    /// over the ordered items), and start the 5 s clock.
+    fn arm_strip_close_hold(&mut self, closed: &str, col: usize) {
+        let (tabs, active, show_plus) = self.strip_layout_tabs();
+        let layout = crate::components::session_tabs::adaptive_session_tab_layout(
+            &tabs,
+            active.as_deref(),
+            usize::from(self.size.0).saturating_sub(if show_plus {
+                crate::components::session_tabs::ADD_TAB_WIDTH
+            } else {
+                0
+            }),
+            0,
+        );
+        let Some(item_index) = tabs.iter().position(|tab| tab.session_id == closed) else {
+            return;
+        };
+        let Some(target) = tabs
+            .get(item_index + 1)
+            .or_else(|| item_index.checked_sub(1).and_then(|left| tabs.get(left)))
+        else {
+            return;
+        };
+        let target = target.session_id.clone();
+        if target == closed {
+            return;
+        }
+        self.store.arm_close_hold(crate::store::CloseHold {
+            items: tabs.iter().map(|tab| tab.session_id.clone()).collect(),
+            ids: layout.tabs.iter().map(|tab| tab.session_id.clone()).collect(),
+            widths: layout.widths.clone(),
+            closed: closed.to_owned(),
+            target,
+            x: col,
+            expires_ms: self.store.clock().saturating_add(crate::store::MOUSE_CLOSE_HOLD_MS),
+        });
+    }
+
     /// The strip hover state under pointer column `col`:
     /// (hovered tab, pointer-on-✕, ` + ` hovered).
     fn strip_hover_at(&self, col: usize, width: usize) -> (Option<String>, bool, bool) {
-        use crate::components::session_tabs::{strip_hit, StripHit};
-        let (tabs, active, show_plus) = self.strip_layout_tabs();
+        use crate::components::session_tabs::{strip_hit_with_layout, StripHit};
+        let (tabs, active, show_plus, held) = self.strip_effective_layout();
         let hover = self.store.tabs().hover.clone();
-        match strip_hit(&tabs, active.as_deref(), show_plus, width, col, hover.as_deref()) {
+        match strip_hit_with_layout(
+            &tabs,
+            active.as_deref(),
+            show_plus,
+            width,
+            col,
+            hover.as_deref(),
+            held.as_ref(),
+        ) {
             StripHit::Tab(id) => (Some(id), false, false),
             StripHit::Close(id) => (Some(id), true, false),
             StripHit::Add => (None, false, true),
@@ -6506,4 +6750,201 @@ fn history_loading_paints_the_jump_slot_label() {
         !settled.contains("Loading session history…"),
         "the label clears once the fetch lands: {settled}"
     );
+}
+
+/// Lane KM (auditA #8b) — MIDDLE-CLICK close fires on the press
+/// (`session-tabs.tsx:1657-1664`: `tabs.close(...)` + preventDefault,
+/// no select, no drag arm).
+#[test]
+fn mouse_strip_middle_click_closes_on_down() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut app = App::new((80, 24));
+    app.store.open_tab("s1", Some("Alpha".to_owned()));
+    app.store.open_tab("s2", Some("Beta".to_owned()));
+    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+    // The second tab's body (x=40 on the 32+32 split).
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Middle), 40, 0));
+    let tabs = app.store.tabs().tabs.clone();
+    assert_eq!(
+        tabs.iter().map(|tab| tab.session_id.as_str()).collect::<Vec<_>>(),
+        vec!["s1"],
+        "middle press closed s2"
+    );
+    // No drag arm survived the press.
+    assert!(app.strip_drag.is_none());
+}
+
+/// Lane KM (auditA #8b) — the RIGHT-CLICK context menu
+/// (`TabContextMenu`, session-tabs.tsx:372-538): a tab press opens
+/// the tab-scoped actions; the rows run New session / Rename / Copy /
+/// Close; the strip-scoped press (no tab under the pointer) lists the
+/// recently-closed tabs with reopen actions.
+#[test]
+fn mouse_strip_right_click_menu_actions() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut app = App::new((80, 24));
+    app.store.open_tab("s1", Some("Alpha".to_owned()));
+    app.store.open_tab("s2", Some("Beta".to_owned()));
+    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+
+    // Right-press the second tab's body: the menu opens AT the press.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Right), 40, 0));
+    match app.store.top_dialog().map(|entry| entry.kind.clone()) {
+        Some(crate::store::DialogKind::TabMenu { session_id, x, y }) => {
+            assert_eq!(session_id.as_deref(), Some("s2"));
+            assert_eq!((x, y), (40, 0));
+        }
+        other => panic!("the tab menu opened: {other:?}"),
+    }
+    // The menu's rows render (the frame carries all four actions).
+    let frame = app.frame_text();
+    for label in ["New session", "Rename", "Copy session ID", "Close"] {
+        assert!(frame.contains(label), "the menu carries {label}: {frame}");
+    }
+    // The frame rect is seated at the pointer (left clamped, one row
+    // under the press) — the backdrop-outside release closes.
+    let (bx, by, _, _) = app.store.dialog_frame_rect().expect("the menu painted");
+    assert_eq!((bx, by), (40, 1), "seated at the press, top + 1");
+
+    // Enter submits the FIRST row (New session) → home route.
+    app.press("enter");
+    assert!(app.store.dialogs().is_empty(), "the submit closed the menu");
+    assert_eq!(app.store.route(), Route::Home);
+
+    // Reopen on s1 and run Rename → the rename dialog.
+    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Right), 5, 0));
+    app.press("down");
+    app.press("enter");
+    assert!(matches!(
+        app.store.top_dialog().map(|entry| entry.kind.clone()),
+        Some(crate::store::DialogKind::SessionRename { session_id }) if session_id == "s1"
+    ));
+    app.press("escape");
+
+    // Close via the menu: the fourth row.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Right), 5, 0));
+    app.press("down");
+    app.press("down");
+    app.press("down");
+    app.press("enter");
+    assert!(
+        !app.store.tabs().tabs.iter().any(|tab| tab.session_id == "s1"),
+        "the Close action closed s1"
+    );
+
+    // The strip-scoped press (past the tabs, before the `+`) opens
+    // the recently-closed variant; its rows reopen the closed tab.
+    app.store.navigate(Route::Session { session_id: "s2".to_owned() });
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Right), 63, 0));
+    match app.store.top_dialog().map(|entry| entry.kind.clone()) {
+        Some(crate::store::DialogKind::TabMenu { session_id, .. }) => {
+            assert_eq!(session_id, None, "the strip-scoped variant");
+        }
+        other => panic!("the strip menu opened: {other:?}"),
+    }
+    let frame = app.frame_text();
+    assert!(frame.contains("Recently closed tabs"), "the header row: {frame}");
+    assert!(frame.contains("Alpha"), "the closed tab's title: {frame}");
+    // Down to the reopen row, enter → the tab returns.
+    app.press("down");
+    app.press("enter");
+    assert!(
+        app.store.tabs().tabs.iter().any(|tab| tab.session_id == "s1"),
+        "the reopen row restored s1"
+    );
+}
+
+/// Lane KM (auditA #8b) — the DRAG reorder (`session-tabs.tsx:
+/// 1519-1527` + `release` :1505-1514): a left press arms the drag,
+/// crossing a slot boundary previews the reorder, the release
+/// PERSISTS the move and selects the source (the click is
+/// suppressed).
+#[test]
+fn mouse_strip_drag_reorders_on_release() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut app = App::new((80, 24));
+    app.store.open_tab("s1", Some("Alpha".to_owned()));
+    app.store.open_tab("s2", Some("Beta".to_owned()));
+    app.store.open_tab("s3", Some("Gamma".to_owned()));
+    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+
+    // Press s1's body (slot 0), drag over s3's slot (index 2), release.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 5, 0));
+    assert_eq!(app.strip_drag.as_ref().map(|(source, _)| source.as_str()), Some("s1"));
+    // The three-tab layout at 80: widths [26, 26, 25] — x=60 sits in
+    // the third slot (index 2).
+    app.mouse_event(&mouse(MouseEventKind::Drag(MouseButton::Left), 60, 0));
+    assert_eq!(app.store.tab_drag_preview(), Some(("s1".to_owned(), 2)), "the preview armed");
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 60, 0));
+    let order: Vec<String> =
+        app.store.tabs().tabs.iter().map(|tab| tab.session_id.clone()).collect();
+    assert_eq!(order, vec!["s2", "s3", "s1"], "the move persisted on release");
+    assert_eq!(
+        app.store.route(),
+        Route::Session { session_id: "s1".to_owned() },
+        "release() selects the SOURCE"
+    );
+    assert_eq!(app.store.tab_drag_preview(), None, "the preview cleared");
+
+    // A press + release without a crossing is a plain select.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 5, 0));
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 0));
+    assert_eq!(app.store.route(), Route::Session { session_id: "s2".to_owned() });
+    assert_eq!(
+        app.store.tabs().tabs.iter().map(|tab| tab.session_id.as_str()).collect::<Vec<_>>(),
+        vec!["s2", "s3", "s1"],
+        "a plain click never reorders"
+    );
+}
+
+/// Lane KM (auditA #8b) — the ✕ CLOSE-HOLD (`holdCloseCell` +
+/// `heldSessionTabLayout`, session-tabs.tsx:240-278/1481-1503): the
+/// layout FREEZES after a ✕ close so the neighbor's ✕ stays under
+/// the stationary pointer (rapid multi-close), expiring after 5 s.
+#[test]
+fn mouse_strip_close_hold_freezes_the_layout_for_rapid_closes() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut app = App::new((80, 24));
+    app.store.open_tab("s1", Some("Alpha".to_owned()));
+    app.store.open_tab("s2", Some("Beta".to_owned()));
+    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+
+    // Hover s1, ✕ at x=30 (tab 0 = 0..32, the mark at width-2).
+    app.mouse_event(&mouse(MouseEventKind::Moved, 30, 0));
+    app.mouse_event(&mouse(MouseEventKind::Moved, 30, 0));
+    assert!(app.store.tabs().hover_close, "the mark revealed under the pointer");
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 30, 0));
+    assert!(
+        !app.store.tabs().tabs.iter().any(|tab| tab.session_id == "s1"),
+        "the first ✕ closed s1"
+    );
+    let hold = app.store.close_hold().expect("the hold armed");
+    assert_eq!(hold.closed, "s1");
+    assert_eq!(hold.target, "s2", "the right neighbor is the next ✕ target");
+    assert_eq!(hold.x, 30);
+
+    // Without the hold the reflowed single tab spans the full width —
+    // the FROZEN layout keeps s2's ✕ at the SAME column (30), so the
+    // stationary pointer's next release closes it too.
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 30, 0));
+    assert!(
+        !app.store.tabs().tabs.iter().any(|tab| tab.session_id == "s2"),
+        "the second ✕ at the same column closed the neighbor"
+    );
+
+    // The hold expires after 5 s (the lazy read drops it).
+    app.store.open_tab("s3", Some("Gamma".to_owned()));
+    app.store.navigate(Route::Session { session_id: "s3".to_owned() });
+    app.store.arm_close_hold(crate::store::CloseHold {
+        items: vec!["s3".to_owned()],
+        ids: vec!["s3".to_owned()],
+        widths: vec![77],
+        closed: "s3".to_owned(),
+        target: "s3".to_owned(),
+        x: 30,
+        expires_ms: app.store.clock() + crate::store::MOUSE_CLOSE_HOLD_MS,
+    });
+    app.advance_clock(crate::store::MOUSE_CLOSE_HOLD_MS + 1);
+    assert!(app.store.close_hold().is_none(), "the hold expired");
 }
