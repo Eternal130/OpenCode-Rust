@@ -23,7 +23,9 @@
 //!   the replay corpus never distinguishes.
 
 use crate::components::dialog_select::{SelectAction, SelectOption, SelectProps, SelectState};
-use crate::store::{DialogKind, DialogSize, ListState, ModelSelection, Route, ServerAgent, Store};
+use crate::store::{
+    DialogKind, DialogSize, DiffSource, ListState, ModelSelection, Route, ServerAgent, Store,
+};
 use oc_tui_core::scroll::ScrollCommand;
 
 /// One palette-visible command (`KeymapCommand` from the app tables).
@@ -235,6 +237,14 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
     },
     PaletteCommand { command: "help.show", title: "Help", group: "System", bindings: &[] },
     PaletteCommand { command: "docs.open", title: "Open docs", group: "System", bindings: &[] },
+    // The diff viewer's plugin command (`diff.open`, group "VCS",
+    // slash `/diff` — diff-viewer.tsx:1198-1204).
+    PaletteCommand {
+        command: "diff.open",
+        title: "Open diff viewer",
+        group: "VCS",
+        bindings: &[],
+    },
     PaletteCommand {
         command: "app.exit",
         title: "Exit the app",
@@ -499,6 +509,96 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             *title,
             vec![SelectOption::titled("Not wired in this build", "stub").muted_placeholder()],
         ),
+        // The diff source select (`openSwitchDiffDialog`,
+        // diff-viewer.tsx:735-767): one row per available source, the
+        // current one marked; "turn" only from a session route.
+        DialogKind::DiffSource => {
+            let live = store.diff_viewer();
+            let mut options = Vec::new();
+            for mode in [DiffSource::Branch, DiffSource::Committed, DiffSource::Working] {
+                options.push(
+                    SelectOption::titled(mode.label(), mode.vcs_mode())
+                        .described(mode.description())
+                        .with_search(mode.description().to_owned()),
+                );
+            }
+            if live.session_id.is_some() {
+                options.push(
+                    SelectOption::titled(DiffSource::Turn.label(), "turn")
+                        .described(DiffSource::Turn.description()),
+                );
+            }
+            SelectProps::new("Diff source", options)
+                .flat(true)
+                .with_current(Some(live.mode.vcs_mode().to_owned()))
+        }
+        // The diff shortcuts dialog (`DiffViewerHelpDialog`,
+        // diff-viewer.tsx:1100-1192): the viewer's key groups with the
+        // binding displays (`shortcut()` reads the table's defaults).
+        DialogKind::DiffHelp => {
+            let shortcut = |commands: &str| -> String {
+                let shortcuts: Vec<String> = commands
+                    .split('|')
+                    .map(|command| {
+                        crate::keymap::default_table()
+                            .iter()
+                            .find(|def| def.command == command)
+                            .map_or_else(String::new, |def| {
+                                def.defaults
+                                    .split(',')
+                                    .map(str::trim)
+                                    .filter(|spec| !spec.is_empty() && *spec != "none")
+                                    .map(crate::components::dialog::spec_display)
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                    })
+                    .filter(|text| !text.is_empty())
+                    .collect();
+                if shortcuts.is_empty() { "unbound".to_owned() } else { shortcuts.join(" / ") }
+            };
+            let mut options = Vec::new();
+            let mut group = |title: &str, rows: &[(&str, &str)]| {
+                for (commands, label) in rows {
+                    let shortcut_text = shortcut(commands);
+                    options.push(
+                        SelectOption::titled(
+                            format!("{shortcut_text:<17}{}", label),
+                            format!("help:{}", label.replace('/', "-")),
+                        )
+                        .categorized(title),
+                    );
+                }
+            };
+            group(
+                "Files",
+                &[
+                    ("diff.next_file|diff.previous_file", "Next / previous file"),
+                    ("diff.next_hunk|diff.previous_hunk", "Next / previous hunk"),
+                    ("diff.mark_reviewed", "Mark reviewed"),
+                ],
+            );
+            group(
+                "Scroll",
+                &[
+                    ("diff.down|diff.up", "Down / up"),
+                    ("diff.half_page.down|diff.half_page.up", "Half page down / up"),
+                    ("diff.page.down|diff.page.up", "Page down / up"),
+                    ("diff.first|diff.last", "First / last"),
+                ],
+            );
+            group(
+                "View",
+                &[
+                    ("diff.toggle_view", "Split / unified"),
+                    ("diff.single_patch", "All files / single file"),
+                    ("diff.toggle_file_tree", "Show / hide file tree"),
+                    ("diff.switch_source", "Switch diff source"),
+                    ("diff.close", "Close diff viewer"),
+                ],
+            );
+            SelectProps::new("Diff shortcuts", options).flat(true)
+        }
         // `DialogMessage` (`routes/session/dialog-message.tsx`): the
         // four fixed actions over the clicked user message.
         DialogKind::MessageActions { .. } => SelectProps::new(
@@ -1088,6 +1188,74 @@ impl CommandDispatcher for StoreDispatcher {
                 );
                 Dispatch::Handled
             }
+            // -- SURF-2: the diff viewer (`diff.open`'s plugin route +
+            // the `diff` key layer, diff-viewer.tsx:559-733) ------
+            "diff.open" => {
+                store.open_diff_viewer(None);
+                Dispatch::Handled
+            }
+            "diff.close" => {
+                store.close_diff_viewer();
+                Dispatch::Handled
+            }
+            "diff.down" | "diff.up" | "diff.page.down" | "diff.page.up" | "diff.half_page.down"
+            | "diff.half_page.up" | "diff.first" | "diff.last" => {
+                let viewport = usize::from(store.terminal_size().1).max(1);
+                store.update_diff_viewer(|live| {
+                    crate::components::diff_viewer_mount::diff_scroll_command(live, command, viewport)
+                });
+                Dispatch::Handled
+            }
+            "diff.next_hunk" | "diff.previous_hunk" => {
+                let viewport = usize::from(store.terminal_size().1).max(1);
+                store.update_diff_viewer(|live| {
+                    crate::components::diff_viewer_mount::diff_jump_hunk(
+                        live,
+                        command == "diff.next_hunk",
+                        viewport,
+                    )
+                });
+                Dispatch::Handled
+            }
+            "diff.next_file" | "diff.previous_file" => {
+                let viewport = usize::from(store.terminal_size().1).max(1);
+                store.update_diff_viewer(|live| {
+                    crate::components::diff_viewer_mount::diff_jump_file(
+                        live,
+                        command == "diff.next_file",
+                        viewport,
+                    )
+                });
+                Dispatch::Handled
+            }
+            "diff.mark_reviewed" | "diff.toggle_file_tree" | "diff.single_patch"
+            | "diff.toggle_view" => {
+                // The viewer's own preference machine
+                // (`DiffViewerState::run_command`): tree/view/single/
+                // reviewed over the loaded files.
+                let live = store.diff_viewer();
+                let files = match &live.phase {
+                    crate::store::DiffPhase::Loaded(files) => files.clone(),
+                    _ => Vec::new(),
+                };
+                let layout = crate::components::diff_viewer::diff_layout(
+                    usize::from(store.terminal_size().0),
+                    live.viewer.tree_enabled,
+                    files.len(),
+                );
+                store.update_diff_viewer(|live| {
+                    live.viewer.run_command(command, &layout, &files)
+                });
+                Dispatch::Handled
+            }
+            "diff.switch_source" => {
+                store.replace_dialog(DialogKind::DiffSource, DialogSize::Medium);
+                Dispatch::Handled
+            }
+            "diff.help" => {
+                store.replace_dialog(DialogKind::DiffHelp, DialogSize::Medium);
+                Dispatch::Handled
+            }
             "app.exit" => {
                 store.clear_dialogs();
                 // The app shell exits the run loop (wave 3); the replay
@@ -1406,6 +1574,65 @@ mod tests {
             other => panic!("unexpected dialog {other:?}"),
         }
         assert_eq!(dispatcher.dispatch(&store, "nope.nope", None), Dispatch::Unknown);
+    }
+
+    /// SURF-2: the diff viewer's open → fetch → scroll → close cycle
+    /// through the dispatcher (the `diff` plugin route).
+    #[test]
+    fn diff_viewer_opens_scrolls_and_closes() {
+        use crate::store::{DiffPhase, DiffSink, RecordingDiffSink};
+        let store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(RecordingDiffSink::default());
+        store.set_diff_sink(sink.clone());
+        let mut dispatcher = StoreDispatcher;
+
+        // `diff.open` from home: loading phase, no session (the turn
+        // source unavailable), dialog cleared.
+        assert_eq!(dispatcher.dispatch(&store, "diff.open", None), Dispatch::Handled);
+        let live = store.diff_viewer();
+        assert!(live.open, "mounted");
+        assert_eq!(live.return_route, Route::Home);
+        assert_eq!(live.mode, crate::store::DiffSource::Branch, "default source");
+        assert_eq!(matches!(live.phase, DiffPhase::Loading), true);
+        assert_eq!(sink.calls.borrow().len(), 1, "fetch kicked");
+        assert!(store.dialogs().is_empty(), "dialog cleared (diff-viewer.tsx:1225)");
+
+        // The fetch lands: files + a resolved base.
+        store.diff_fetch_result(
+            live.generation,
+            Ok((Some("main".to_owned()), crate::components::diff_viewer::diff_viewer_fixture())),
+        );
+        let live = store.diff_viewer();
+        assert!(matches!(live.phase, DiffPhase::Loaded(_)), "loaded");
+        assert_eq!(live.base.as_deref(), Some("main"));
+        assert_eq!(live.source_detail(), "vs main");
+
+        // The viewer preferences + scroll family.
+        assert_eq!(dispatcher.dispatch(&store, "diff.toggle_file_tree", None), Dispatch::Handled);
+        assert!(!store.diff_viewer().viewer.tree_enabled, "tree toggled off");
+        assert_eq!(dispatcher.dispatch(&store, "diff.down", None), Dispatch::Handled);
+        assert_eq!(store.diff_viewer().scroll, 1, "scrolled one line");
+        assert_eq!(dispatcher.dispatch(&store, "diff.first", None), Dispatch::Handled);
+        assert_eq!(store.diff_viewer().scroll, 0, "back to top");
+
+        // The source dialog + switch.
+        assert_eq!(dispatcher.dispatch(&store, "diff.switch_source", None), Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::DiffSource));
+        store.clear_dialogs();
+        store.switch_diff_source(crate::store::DiffSource::Working);
+        assert_eq!(store.diff_viewer().mode, crate::store::DiffSource::Working);
+        assert_eq!(sink.calls.borrow().len(), 2, "switch refetches");
+        assert!(matches!(store.diff_viewer().phase, DiffPhase::Loading));
+
+        // Empty diff → the "No changes to show" body.
+        let generation = store.diff_viewer().generation;
+        store.diff_fetch_result(generation, Ok((None, Vec::new())));
+        assert!(matches!(store.diff_viewer().phase, DiffPhase::Loaded(ref files) if files.is_empty()));
+
+        // Close returns to the captured route.
+        assert_eq!(dispatcher.dispatch(&store, "diff.close", None), Dispatch::Handled);
+        assert!(!store.diff_viewer().open, "unmounted");
+        assert_eq!(store.route(), Route::Home);
     }
 
     // -- F3.i: the server-backed pickers ---------------------------------

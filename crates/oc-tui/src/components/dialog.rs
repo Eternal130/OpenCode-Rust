@@ -89,7 +89,9 @@ pub fn handle_dialog_key(
         | DialogKind::MessageActions { .. }
         | DialogKind::WorkingDirectory { .. }
         | DialogKind::ServerList { .. }
-        | DialogKind::ToolOutput { .. } => true,
+        | DialogKind::ToolOutput { .. }
+        | DialogKind::DiffSource
+        | DialogKind::DiffHelp => true,
     };
     let is_help = matches!(entry.kind, DialogKind::Help);
     let is_static = is_help
@@ -342,7 +344,9 @@ pub fn render_overlay_with_options(
         | DialogKind::ServerList { .. }
         | DialogKind::MessageActions { .. }
         | DialogKind::WorkingDirectory { .. }
-        | DialogKind::ToolOutput { .. } => true,
+        | DialogKind::ToolOutput { .. }
+        | DialogKind::DiffSource
+        | DialogKind::DiffHelp => true,
         // A plugin dialog records rows only when its content is a
         // select (rows-only dialogs render statically).
         DialogKind::Plugin { .. } => {
@@ -443,10 +447,22 @@ pub(crate) fn spec_display(spec: &str) -> String {
 #[must_use]
 pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u16)) -> Frame {
     let styles = theme.styles();
-    let mut frame = match store.route() {
-        crate::store::Route::Home => crate::components::home::render_home(store, &styles, size),
-        crate::store::Route::Session { session_id } => {
-            crate::components::session::render_session(store, &session_id, &styles, size)
+    let mut frame = if store.diff_viewer_open() {
+        // The `diff` plugin route (SURF-2, diff-viewer.tsx:193): the
+        // viewer mounts FULLSCREEN over the app shell — body states,
+        // scrolled patch column, tree pane.
+        crate::components::diff_viewer_mount::render_diff_mount(
+            store,
+            &styles,
+            usize::from(size.0),
+            usize::from(size.1),
+        )
+    } else {
+        match store.route() {
+            crate::store::Route::Home => crate::components::home::render_home(store, &styles, size),
+            crate::store::Route::Session { session_id } => {
+                crate::components::session::render_session(store, &session_id, &styles, size)
+            }
         }
     };
     render_overlay(&mut frame, store, theme, size);
@@ -483,6 +499,21 @@ pub fn execute_submission(
             return crate::components::command_palette::execute_server_list_selection(
                 store, picker, &selection,
             );
+        }
+        // The diff source select's `onSelect` (`props.onSwitchSource`,
+        // diff-viewer.tsx:748-751): close + switch (a refetch rides
+        // the store's diff sink).
+        Some(DialogKind::DiffSource) => {
+            let mode = crate::store::DiffSource::parse(value);
+            store.clear_dialogs();
+            store.switch_diff_source(mode);
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // The shortcuts dialog's rows are informational (`unbound`
+        // placeholders never submit anything).
+        Some(DialogKind::DiffHelp) => {
+            store.clear_dialogs();
+            return crate::components::command_palette::Dispatch::Handled;
         }
         // A Worktrees row submit: v2's `onSelect` → `selectWorkspace` —
         // close + navigate home at the directory.
