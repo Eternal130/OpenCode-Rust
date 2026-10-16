@@ -43,6 +43,7 @@ pub mod queue;
 pub mod runtime;
 pub mod scrollback;
 pub mod splash;
+pub mod theme;
 pub mod transport;
 
 /// The docked footer height (`FOOTER_HEIGHT`,
