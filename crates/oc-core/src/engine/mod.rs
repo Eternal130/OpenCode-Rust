@@ -157,6 +157,14 @@ pub struct EngineOptions {
     pub home: PathBuf,
     /// Provider catalog (default: the embedded models.dev snapshot).
     pub catalog: Arc<Catalog>,
+    /// Whether to spawn the models-dev refresh loop (v2 `Options.fetch`,
+    /// models-dev.ts:431). Off by default in [`EngineOptions::new`] —
+    /// the production server composition root opts in; direct engine
+    /// boots (tests) stay hermetic with the frozen snapshot.
+    pub catalog_fetch: bool,
+    /// Remote catalog base override (v2 `Options.url`; default
+    /// `https://models.opencode.ai`).
+    pub catalog_url: Option<String>,
     /// Injectable clock/ids/rng (tests).
     pub clock: Arc<dyn Clock>,
     pub ids: Arc<dyn IdGen>,
@@ -201,6 +209,8 @@ impl EngineOptions {
             data_root,
             home,
             catalog: Arc::new(Catalog::embedded().clone()),
+            catalog_fetch: false,
+            catalog_url: None,
             clock: Arc::new(SystemClock),
             ids: Arc::new(UuidV4IdGen),
             rng: Arc::new(SystemRng),
@@ -316,6 +326,10 @@ pub struct Engine {
     pub db: Arc<Database>,
     pub bus: Arc<Bus>,
     pub catalog: Arc<Catalog>,
+    /// The live models-dev catalog service (v2 `ModelsDev.Service`): the
+    /// boot [`Engine::catalog`] is its snapshot; `get()` serves refreshes
+    /// (the server's model surface reads it live).
+    pub catalog_service: Arc<crate::provider_catalog::refresh::CatalogService>,
     clock: Arc<dyn Clock>,
     ids: Arc<dyn IdGen>,
     rng: Arc<dyn RngSource>,
@@ -384,6 +398,45 @@ impl Engine {
             },
         ));
         install_projectors(&bus);
+        // The models-dev catalog service (v2 `ModelsDev` layer): the KV
+        // cache populates the boot catalog when present (v2 populate:
+        // cache → snapshot), and the boot-spawned spaced loop keeps it
+        // fresh (models-dev.ts:431-433) when `catalog_fetch` is on. The
+        // engine's `catalog` is the boot snapshot of this service — the
+        // server's model surface reads the service live.
+        let catalog_service = Arc::new(
+            crate::provider_catalog::refresh::CatalogService::new(
+                Arc::new(crate::provider_catalog::refresh::ReqwestCatalogSource::new(
+                    options.catalog_url.clone().unwrap_or_else(|| {
+                        crate::provider_catalog::refresh::DEFAULT_SOURCE.to_string()
+                    }),
+                    crate::session::runner::model_request::useragent(&options.app),
+                )),
+                Arc::new(crate::provider_catalog::refresh::DbCatalogKv::new((*db).clone())),
+                options.clock.clone(),
+            )
+            .with_bus((*bus).clone()),
+        );
+        if !catalog_service.populate_from_cache().await {
+            catalog_service.adopt((*options.catalog).clone());
+        }
+        let catalog = catalog_service.get();
+        if options.catalog_fetch {
+            let refresh_loop = Arc::clone(&catalog_service);
+            tokio::spawn(async move {
+                // v2: `refresh().pipe(Effect.repeat(Schedule.spaced(ttl)),
+                // Effect.ignore)` — an immediate pass, then one every
+                // 5 minutes; failures are logged and ignored (the catalog
+                // stays on its frozen snapshot while offline).
+                loop {
+                    if let Err(error) = refresh_loop.refresh(false).await {
+                        // v2 logs and ignores (`tapCause(logError) + ignore`).
+                        eprintln!("[models-dev] Failed to fetch models.dev: {error}");
+                    }
+                    tokio::time::sleep(crate::provider_catalog::refresh::REFRESH_TTL).await;
+                }
+            });
+        }
         let tool_output = Arc::new(ToolOutput::new(&options.data_root, options.clock.clone()));
         let projects = Arc::new(crate::project::SqliteProjectStore::new((*db).clone()));
         let llm: Arc<dyn LlmClient> =
@@ -396,7 +449,7 @@ impl Engine {
             options.model_resolver.clone().unwrap_or_else(|| {
                 Arc::new(resolver::CatalogModelResolver::new(
                     FacadeContext::new(Arc::clone(&facade_transport)),
-                    Arc::clone(&options.catalog),
+                    Arc::clone(&catalog),
                     options.connections.clone(),
                     options.custom_providers.clone(),
                     options.default_model.clone(),
@@ -414,7 +467,7 @@ impl Engine {
             Arc::clone(&db),
             Arc::clone(&bus),
             Arc::clone(&projects) as Arc<dyn crate::project::ProjectStore>,
-            Arc::clone(&options.catalog),
+            Arc::clone(&catalog),
             options.clock.clone(),
             options.home.clone(),
             interruptor,
@@ -430,7 +483,8 @@ impl Engine {
             home: options.home.clone(),
             db,
             bus,
-            catalog: options.catalog,
+            catalog,
+            catalog_service,
             clock: options.clock.clone(),
             ids: options.ids.clone(),
             rng: options.rng.clone(),

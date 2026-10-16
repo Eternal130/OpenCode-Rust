@@ -87,7 +87,8 @@ fn location_model_entries(
     engine: &oc_core::engine::Engine,
     location: &oc_core::location::LocationRef,
 ) -> Vec<Value> {
-    let catalog = &engine.catalog;
+    // The live catalog (v2 `ModelsDev.get()` — invalidated by refresh).
+    let catalog = engine.catalog_service.get();
     let mut data: Vec<(f64, Value)> = catalog
         .available_models(|name| std::env::var_os(name).is_some())
         .into_iter()
@@ -169,7 +170,7 @@ async fn model_default(
                 });
             Some(custom_model_json(&provider, &model))
         } else {
-            let catalog = &state.engine.catalog;
+            let catalog = state.engine.catalog_service.get();
             catalog
                 .providers()
                 .iter()
@@ -205,7 +206,7 @@ async fn provider_list(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
-    let catalog = &state.engine.catalog;
+    let catalog = state.engine.catalog_service.get();
     let data: Vec<Value> = catalog.providers().iter().map(provider_json).collect();
     Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
 }
@@ -218,7 +219,7 @@ async fn provider_get(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
-    let catalog = &state.engine.catalog;
+    let catalog = state.engine.catalog_service.get();
     let snapshot =
         catalog.provider(&provider_id).ok_or_else(|| ApiError::provider_not_found(&provider_id))?;
     Ok(json_location_data(&location.as_path().to_string_lossy(), provider_json(snapshot)))
