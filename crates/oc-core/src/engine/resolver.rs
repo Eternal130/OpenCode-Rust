@@ -73,6 +73,9 @@ pub struct CatalogModelResolver {
     custom: Vec<CustomProvider>,
     /// The default model selection (config `model`).
     default: Option<oc_schema::config::ModelSelection>,
+    /// Credential-driven provider bindings (copilot transport), shared
+    /// with the integration host and refreshed on credential events.
+    credentials: Option<Arc<crate::integration::copilot::CredentialBindings>>,
 }
 
 impl CatalogModelResolver {
@@ -85,7 +88,17 @@ impl CatalogModelResolver {
         custom: Vec<CustomProvider>,
         default: Option<oc_schema::config::ModelSelection>,
     ) -> Self {
-        Self { context, catalog, connections, custom, default }
+        Self { context, catalog, connections, custom, default, credentials: None }
+    }
+
+    /// Attaches the credential-driven provider bindings.
+    #[must_use]
+    pub fn with_credentials(
+        mut self,
+        bindings: Arc<crate::integration::copilot::CredentialBindings>,
+    ) -> Self {
+        self.credentials = Some(bindings);
+        self
     }
 
     /// The catalog's canonical provider id for a requested prefix: the
@@ -125,7 +138,7 @@ impl CatalogModelResolver {
     /// and the CANONICAL reference (the configured provider/model keys —
     /// v2 records the selected catalog identity on assistant messages,
     /// model-resolver.ts:386-392).
-    fn bind(
+    pub(crate) fn bind(
         &self,
         reference: &oc_schema::model::Ref,
     ) -> Result<(oc_ai::LanguageModel, oc_schema::model::Info, oc_schema::model::Ref), ModelError>
@@ -170,7 +183,21 @@ impl CatalogModelResolver {
                 // session/runner/model.ts:20-31,86-89).
                 ModelError::Unavailable(reference.provider_id.0.clone(), reference.id.0.clone())
             })?;
-        let connection = self.connection_for(&reference.provider_id.0);
+        let mut connection = self.connection_for(&reference.provider_id.0);
+        // Credential-driven providers (copilot transport, BE-3b): the
+        // stored integration credential wins over config/env — base URL,
+        // token, and client headers merge into the connection before the
+        // facade builds the route (v2 resolves the same per attempt via
+        // the plugin context, github-copilot.ts:165-207).
+        if let Some(bindings) = &self.credentials {
+            if let Some(binding) = bindings.get(&provider_id) {
+                connection.api_key = Some(binding.api_key.clone());
+                connection.base_url = binding.base_url.clone().or(connection.base_url);
+                for (key, value) in binding.headers {
+                    connection.headers.insert(key, value);
+                }
+            }
+        }
         let model = language_model(
             &self.context,
             &self.catalog,

@@ -448,17 +448,48 @@ impl Engine {
         // per-location provider overlay bind onto it.
         let facade_transport: SharedTransport =
             Arc::new(oc_ai::route::transport::reqwest_transport::ReqwestTransport::new());
+        // The integration/auth host (BE-3): registry over the catalog's
+        // key/env surface + the named OAuth providers; credential rows +
+        // events ride the engine's database and bus.
+        let integration = crate::integration::IntegrationHost::new(
+            Arc::clone(&db),
+            Arc::clone(&bus),
+            &catalog,
+            &crate::session::runner::model_request::useragent(&options.app),
+        );
         let resolver: Arc<dyn ModelResolver> =
             options.model_resolver.clone().unwrap_or_else(|| {
-                Arc::new(resolver::CatalogModelResolver::new(
-                    FacadeContext::new(Arc::clone(&facade_transport)),
-                    Arc::clone(&catalog),
-                    options.connections.clone(),
-                    options.custom_providers.clone(),
-                    options.default_model.clone(),
-                ))
+                Arc::new(
+                    resolver::CatalogModelResolver::new(
+                        FacadeContext::new(Arc::clone(&facade_transport)),
+                        Arc::clone(&catalog),
+                        options.connections.clone(),
+                        options.custom_providers.clone(),
+                        options.default_model.clone(),
+                    )
+                    .with_credentials(Arc::clone(&integration.credential_bindings())),
+                )
             });
 
+        // Credential-driven provider bindings (copilot transport): the
+        // boot snapshot + a refresh loop on credential/integration events
+        // (v2 re-resolves per attempt; the snapshot keeps bind()
+        // synchronous).
+        integration.refresh_provider_bindings().await;
+        {
+            use futures::StreamExt as _;
+            let host = Arc::clone(&integration);
+            let mut subscription = bus.subscribe_types(&[
+                crate::bus::registry::CREDENTIAL_SWITCHED,
+                crate::bus::registry::CREDENTIAL_UPDATED,
+                crate::bus::registry::INTEGRATION_UPDATED,
+            ]);
+            tokio::spawn(async move {
+                while subscription.next().await.is_some() {
+                    host.refresh_provider_bindings().await;
+                }
+            });
+        }
         // The boot globals carry the engine-level ports; per-location
         // globals (built in `assemble`) swap in the location's plugin
         // supervisor and per-location close ports.
@@ -481,15 +512,6 @@ impl Engine {
             PluginSupervisor::new(),
         );
         let locations = Arc::new(LocationServiceMap::new(Arc::new(globals)));
-        // The integration/auth host (BE-3): registry over the catalog's
-        // key/env surface + the named OAuth providers; credential rows +
-        // events ride the engine's database and bus.
-        let integration = crate::integration::IntegrationHost::new(
-            Arc::clone(&db),
-            Arc::clone(&bus),
-            &catalog,
-            &crate::session::runner::model_request::useragent(&options.app),
-        );
         let engine = Engine {
             data_root: options.data_root.clone(),
             home: options.home.clone(),
@@ -629,7 +651,8 @@ impl Engine {
                         BTreeMap::new(),
                         location_providers.custom,
                         location_providers.default_model,
-                    ),
+                    )
+                    .with_credentials(Arc::clone(&self.integration.credential_bindings())),
                     Arc::clone(&self.resolver),
                 ))
             };
