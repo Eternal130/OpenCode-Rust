@@ -12,6 +12,7 @@ pub mod providers_enterprise;
 #[cfg(test)]
 mod tests;
 pub mod types;
+pub mod wellknown_config;
 
 use crate::bus::{registry, Bus, PublishOptions};
 use crate::database::Database;
@@ -149,6 +150,11 @@ pub struct IntegrationHost {
     /// The console-issued provider snapshot (`console.rs`) shared with
     /// model resolvers.
     console_providers_shared: Arc<console::ConsoleProviders>,
+    /// The resolved well-known config documents (`wellknown_config.rs`)
+    /// the config Loader reads.
+    wellknown_documents_shared: Arc<wellknown_config::WellknownDocuments>,
+    /// The shared database handle (kv reads for well-known sources).
+    db: Arc<Database>,
 }
 
 fn now_ms() -> i64 {
@@ -198,6 +204,8 @@ impl IntegrationHost {
             scrub_started: std::sync::Once::new(),
             provider_bindings_shared: copilot::CredentialBindings::new(),
             console_providers_shared: console::ConsoleProviders::new(),
+            wellknown_documents_shared: wellknown_config::WellknownDocuments::new(),
+            db,
         }
     }
 
@@ -211,6 +219,12 @@ impl IntegrationHost {
     #[must_use]
     pub fn store(&self) -> &CredentialStore {
         &self.store
+    }
+
+    /// The shared database handle (well-known source persistence).
+    #[must_use]
+    pub fn database(&self) -> &Arc<Database> {
+        &self.db
     }
 
     // -- registry -----------------------------------------------------------

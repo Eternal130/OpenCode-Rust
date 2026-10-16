@@ -1831,3 +1831,136 @@ async fn console_provider_resolves_through_the_snapshot() {
         })
         .expect("console provider binds");
 }
+
+// -- BE-3b: wellknown config resolution (item 3) ---------------------------------
+
+#[tokio::test]
+async fn wellknown_documents_resolve_with_credential_variables() {
+    use crate::config::WellknownSource as _;
+    // Manifest server: auth env + static config + a remote_config whose
+    // URL embeds the credential token via {env:ACME_TOKEN}.
+    let remote = MockOAuth::start(vec![(
+        "/BE3B_SECRET_TOKEN/config.json",
+        vec![json!({ "acme-remote": { "npm": "@acme/remote" } })],
+    )])
+    .await;
+    let remote_url = format!("{}/{{env:ACME_TOKEN}}/config.json", remote.base);
+    let manifest = json!({
+        "auth": { "command": ["echo", "key"], "env": "ACME_TOKEN" },
+        "config": { "acme": { "npm": "@acme/sdk", "models": {} } },
+        "remote_config": { "url": remote_url }
+    });
+    let manifest_server = MockOAuth::start(vec![("/.well-known/opencode", vec![manifest])]).await;
+
+    let host = host().await;
+    let origin = manifest_server.base.clone();
+    host.database()
+        .transaction(move |tx| {
+            tx.kv_set(
+                super::wellknown_config::WELLKNOWN_SOURCES_KEY,
+                &Value::Array(vec![Value::String(origin.clone())]),
+            )
+        })
+        .await
+        .expect("kv set");
+    let key = CredentialValue::Key(super::types::KeyValue {
+        key: "BE3B_SECRET_TOKEN".into(),
+        metadata: None,
+        configuration: None,
+    });
+    host.store()
+        .create(credential::CreateInput {
+            id: None,
+            integration_id: &manifest_server.base,
+            label: Some("acme"),
+            value: &key,
+            activate: None,
+        })
+        .await
+        .expect("create");
+
+    host.refresh_wellknown_documents().await;
+    let source = super::wellknown_config::HostWellknownSource::new(std::sync::Arc::clone(
+        host.wellknown_documents(),
+    ));
+    let documents = source.documents(&|_| None);
+    assert_eq!(documents.len(), 2, "static config + remote config");
+    let joined =
+        documents.iter().map(|document| document.text.as_str()).collect::<Vec<_>>().join("\n");
+    assert!(joined.contains("\"acme\""), "{joined}");
+    assert!(joined.contains("\"acme-remote\""), "{joined}");
+    // The credential variable is exposed to the loader for substitution.
+    assert!(documents
+        .iter()
+        .all(|document| document.env.get("ACME_TOKEN") == Some(&"BE3B_SECRET_TOKEN".to_owned())));
+    // The remote fetch carried the substituted token in its URL.
+    let requests = remote.requests().join("\n");
+    assert!(requests.contains("/BE3B_SECRET_TOKEN/config.json"), "{requests}");
+}
+
+#[tokio::test]
+async fn wellknown_documents_skip_sources_without_key_credentials() {
+    use crate::config::WellknownSource as _;
+    let mock = MockOAuth::start(vec![(
+        "/.well-known/opencode",
+        vec![json!({ "auth": { "command": ["echo", "x"], "env": "T" }, "config": { "p": {} } })],
+    )])
+    .await;
+    let host = host().await;
+    let origin = mock.base.clone();
+    host.database()
+        .transaction(move |tx| {
+            tx.kv_set(
+                super::wellknown_config::WELLKNOWN_SOURCES_KEY,
+                &Value::Array(vec![Value::String(origin.clone())]),
+            )
+        })
+        .await
+        .expect("kv set");
+    // No credential stored → no documents.
+    host.refresh_wellknown_documents().await;
+    let source = super::wellknown_config::HostWellknownSource::new(std::sync::Arc::clone(
+        host.wellknown_documents(),
+    ));
+    assert!(source.documents(&|_| None).is_empty());
+}
+
+#[tokio::test]
+async fn wellknown_documents_feed_the_config_loader() {
+    use crate::config::Loader;
+    let host = host().await;
+    let documents = crate::config::WellknownDocument {
+        source: "https://acme.test".into(),
+        dir: "https://acme.test".into(),
+        text: r#"{"provider":{"acme":{"name":"Acme","npm":"@acme/sdk"}}}"#.into(),
+        env: BTreeMap::new(),
+    };
+    host.wellknown_documents().push_for_test(vec![documents]);
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let loader = Loader::new(
+        dir.path().to_path_buf(),
+        crate::config::GlobalDirs {
+            config: dir.path().join("cfg"),
+            home: dir.path().to_path_buf(),
+        },
+    )
+    .with_wellknown(std::sync::Arc::new(super::wellknown_config::HostWellknownSource::new(
+        std::sync::Arc::clone(host.wellknown_documents()),
+    )));
+    let snapshot = loader.load();
+    let providers = snapshot
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            oc_schema::config::Entry::Document(document) => Some(&document.info),
+            oc_schema::config::Entry::Directory(_) => None,
+        })
+        .filter_map(|info| info.providers.as_ref())
+        .flat_map(|providers| providers.keys())
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    assert!(
+        providers.contains(&"acme"),
+        "wellknown provider reached the config entries: {providers:?}"
+    );
+}
