@@ -53,17 +53,57 @@ pub enum Body {
     },
 }
 
+/// JS-number parity for wire bodies: TS `JSON.stringify` renders integral
+/// numbers without a decimal point, so `11.0` must cross the wire as `11`
+/// (see `protocols::shared::number`, same policy applied deeply here).
+#[must_use]
+pub fn normalize_numbers(value: &Value) -> Value {
+    match value {
+        Value::Number(number) => {
+            if let Some(float) = number.as_f64() {
+                if float.is_finite() && float.fract() == 0.0 && float.abs() < 9_007_199_254_740_992.0 {
+                    Value::from(float as i64)
+                } else {
+                    value.clone()
+                }
+            } else {
+                value.clone()
+            }
+        }
+        Value::Array(items) => Value::Array(items.iter().map(normalize_numbers).collect()),
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, value)| (key.clone(), normalize_numbers(value)))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
 impl Body {
     /// `MediaProtocol.json` (media-protocol.ts:37-41).
     #[must_use]
     pub fn json(value: JsonRecord) -> Self {
-        Self::Json { value, query: None }
+        Self::Json {
+            value: normalize_numbers(&Value::Object(value))
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            query: None,
+        }
     }
 
     /// `MediaProtocol.json(body, query)`.
     #[must_use]
     pub fn json_with_query(value: JsonRecord, query: Query) -> Self {
-        Self::Json { value, query: Some(query) }
+        Self::Json {
+            value: normalize_numbers(&Value::Object(value))
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            query: Some(query),
+        }
     }
 
     /// `MediaProtocol.multipart` (media-protocol.ts:42).

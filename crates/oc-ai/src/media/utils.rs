@@ -2,7 +2,7 @@
 //! `packages/ai/src/protocols/utils/{media-input,media-type,speech-stream,
 //! speaker-turns}.ts`).
 
-use crate::media::body::{Body, Form, Query, QueryValue};
+use crate::media::body::{merge_records, Body, Form, Query, QueryValue, normalize_numbers};
 use crate::media::protocol::TextOutput;
 use crate::schema::media::{self, Asset};
 use crate::schema::{AiError, ProviderId, ProviderOptions};
@@ -171,10 +171,11 @@ pub fn append_fields(
                 continue;
             }
         }
-        // Strings append as-is; other values as JSON (media-input.ts:92).
+        // Strings append as-is; other values as JSON (media-input.ts:92)
+        // with JS-number formatting.
         form.append_field(key, match &value {
             serde_json::Value::String(text) => text.clone(),
-            other => serde_json::to_string(other).unwrap_or_default(),
+            other => serde_json::to_string(&normalize_numbers(other)).unwrap_or_default(),
         });
     }
 }
