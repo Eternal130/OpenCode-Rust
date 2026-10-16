@@ -717,9 +717,13 @@ pub struct PtyChild {
     master: File,
     vt: Arc<Mutex<VtStream>>,
     raw: Arc<Mutex<Vec<u8>>>,
-    writer: File,
+    /// The PTY writer, shared with the lane/termatrix query responder
+    /// (terminal answers are written through the same master fd).
+    writer: Arc<Mutex<File>>,
     start: Instant,
     _ctty_keepalive: File,
+    /// The lane/termatrix terminal-query responder, if attached.
+    responder: Option<crate::termatrix::PtyResponder>,
 }
 
 impl PtyChild {
@@ -811,8 +815,26 @@ impl PtyChild {
                 }
             });
         }
-        let writer = master.try_clone().context("clone pty writer")?;
-        Ok(Self { child, master, vt, raw, writer, start, _ctty_keepalive: ctty })
+        let writer = Arc::new(Mutex::new(master.try_clone().context("clone pty writer")?));
+        Ok(Self { child, master, vt, raw, writer, start, _ctty_keepalive: ctty, responder: None })
+    }
+
+    /// Attach the lane/termatrix query responder: a background thread
+    /// that answers the child's terminal capability queries (DA1 /
+    /// kitty / OSC 11 …) with the profile's canned replies, written
+    /// back through the master — the child sees a live terminal.
+    pub fn attach_term_profile(&mut self, profile: &'static crate::termatrix::TermProfile) {
+        self.responder = Some(crate::termatrix::PtyResponder::attach(
+            profile,
+            Arc::clone(&self.raw),
+            Arc::clone(&self.writer),
+        ));
+    }
+
+    /// Replies the attached responder has written (diagnostics).
+    #[must_use]
+    pub fn responder_replies(&self) -> usize {
+        self.responder.as_ref().map_or(0, crate::termatrix::PtyResponder::replies_sent)
     }
 
     #[must_use]
@@ -821,8 +843,11 @@ impl PtyChild {
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
-        let _ = self.writer.write_all(bytes);
-        let _ = self.writer.flush();
+        use std::io::Write as _;
+        if let Ok(mut writer) = self.writer.lock() {
+            let _ = writer.write_all(bytes);
+            let _ = writer.flush();
+        }
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
@@ -880,14 +905,18 @@ impl PtyChild {
         self.child.try_wait().is_ok_and(|status| status.is_none())
     }
 
-    /// Terminate: SIGTERM to the group (filtered allowlist), then
-    /// SIGKILL the leader; close the pty.
+    /// Terminate: stop the lane/termatrix responder (it holds a master
+    /// clone), SIGTERM to the group (filtered allowlist), then SIGKILL
+    /// the leader; close the pty.
     pub fn kill(&mut self) {
+        if let Some(mut responder) = self.responder.take() {
+            responder.stop();
+        }
         let pid = self.child.id();
         let _ = oc_util::procutil::signal_group_filtered(
             pid,
             libc::SIGTERM,
-            &["bun", "opencode", "oc-server", "node", "sh", "cargo"],
+            &["bun", "opencode", "oc-server", "node", "sh", "cargo", "tmux"],
         );
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline && self.is_running() {
@@ -1622,6 +1651,15 @@ pub struct ScriptRun {
     /// Main-request shapes the stub recorded during this run
     /// (request-path parity; see `RecordedRequest`).
     pub requests: Vec<RecordedRequest>,
+    /// Terminal protocol signature of the ref's raw stream
+    /// (lane/termatrix; empty when no profile ran).
+    pub protocol_ref: Vec<String>,
+    /// Terminal protocol signature of our raw stream.
+    pub protocol_our: Vec<String>,
+    /// The lane/termatrix profile id this ran under ("" = baseline).
+    pub term_profile: String,
+    /// Replies the responder wrote per side (diagnostics; ref, our).
+    pub responder_replies: (usize, usize),
 }
 
 impl ScriptRun {
@@ -1661,6 +1699,12 @@ pub struct RigConfig {
     /// mode: N independent live observations, then the caller
     /// confirms the entries from the collected digests.
     pub capture_only: bool,
+    /// The lane/termatrix terminal environment (`--term-profile`).
+    /// `None` = the baseline rig (TERM=xterm-256color, silent PTY).
+    /// Profiles FORCE the ref-capture off (entries were captured under
+    /// the baseline environment and must never be replayed under
+    /// another one).
+    pub term_profile: Option<&'static crate::termatrix::TermProfile>,
 }
 
 impl RigConfig {
@@ -1675,6 +1719,7 @@ impl RigConfig {
             no_ref: false,
             ref_cache: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tui-diff/cache/ref")),
             capture_only: false,
+            term_profile: None,
         }
     }
 }
@@ -2243,6 +2288,17 @@ fn home_env(home: &Path, password: &str, config: &Path) -> Vec<(String, String)>
     ]
 }
 
+/// Overlay a lane/termatrix profile's terminal env on a side's
+/// environment (replaces the baseline `TERM`).
+fn apply_term_overlay(env: &mut Vec<(String, String)>, profile: &crate::termatrix::TermProfile) {
+    for (key, value) in profile.env_overlay() {
+        match env.iter_mut().find(|(existing, _)| *existing == key) {
+            Some(slot) => slot.1 = value,
+            None => env.push((key, value)),
+        }
+    }
+}
+
 /// The alternate-screen leave sequence — the TUI exit footprint.
 pub const ALT_SCREEN_LEAVE: &[u8] = b"\x1b[?1049l";
 
@@ -2610,6 +2666,10 @@ pub async fn run_script_once(
         booted_our: false,
         ref_source,
         requests: Vec::new(),
+        protocol_ref: Vec::new(),
+        protocol_our: Vec::new(),
+        term_profile: cfg.term_profile.map_or(String::new(), |profile| profile.id.to_owned()),
+        responder_replies: (0, 0),
     };
     // Request-path parity: start from a clean recording window.
     let _ = stub.take_recorded();
@@ -2721,17 +2781,50 @@ pub async fn run_script_once(
         argv.push(ref_url);
         argv
     };
+    // lane/termatrix: the spawn seam. When a profile is active BOTH
+    // sides get the profile's env overlay (TERM/COLORTERM) and, for
+    // the tmux profile, run inside a REAL tmux session (the wrap
+    // materializes a wrapper script + conf under the fixed work root;
+    // inner TERM is pinned by the conf). The query responder attaches
+    // to both non-tmux PTYs so both TUIs SEE identical terminal
+    // answers (DA1/DA2/XTVERSION/kitty/OSC-11/DECRQM).
+    let tmux_wrap = |program: &Path,
+                     argv: &[String],
+                     side: &str|
+     -> Result<(PathBuf, Vec<String>), anyhow::Error> {
+        let profile = cfg.term_profile.expect("tmux wrap requires a profile");
+        let (tmux_argv, _socket) =
+            crate::termatrix::wrap_argv_for_tmux(profile, program, argv, &fixed, side, cols, rows)
+                .map_err(anyhow::Error::from)?;
+        Ok((PathBuf::from("tmux"), tmux_argv))
+    };
+    // The tmux server sockets (deterministic paths inside the fixed
+    // work root — see wrap_argv_for_tmux); teardown must kill the
+    // SERVERS, not just the clients (pane processes live in the
+    // server's session).
+    let tmux_sockets: Vec<PathBuf> = cfg
+        .term_profile
+        .filter(|profile| profile.tmux)
+        .map(|_| vec![fixed.join("tmux-ref.sock"), fixed.join("tmux-our.sock")])
+        .unwrap_or_default();
     let ref_side = (!cfg.no_ref && !skip_ref)
         .then(|| {
             let server = ref_server.as_ref().unwrap();
-            PtyChild::spawn(
-                bun,
-                &ref_argv,
-                &project,
-                &home_env(&ref_home, server.password(), &config_path),
-                cols,
-                rows,
-            )
+            let (program, argv): (PathBuf, Vec<String>) =
+                if cfg.term_profile.is_some_and(|profile| profile.tmux) {
+                    tmux_wrap(bun, &ref_argv, "ref")?
+                } else {
+                    (bun.to_path_buf(), ref_argv.clone())
+                };
+            let mut env = home_env(&ref_home, server.password(), &config_path);
+            if let Some(profile) = cfg.term_profile {
+                apply_term_overlay(&mut env, profile);
+            }
+            let mut side = PtyChild::spawn(&program, &argv, &project, &env, cols, rows)?;
+            if let Some(profile) = cfg.term_profile {
+                side.attach_term_profile(profile);
+            }
+            Ok::<PtyChild, anyhow::Error>(side)
         })
         .transpose();
     let our_side = our_server.as_ref().and_then(|server| {
@@ -2748,7 +2841,23 @@ pub async fn run_script_once(
                 env.push((key, value));
             }
         }
-        PtyChild::spawn(cli, &["--server".to_owned(), our_url], &project, &env, cols, rows).ok()
+        if let Some(profile) = cfg.term_profile {
+            apply_term_overlay(&mut env, profile);
+        }
+        let plain_argv = vec!["--server".to_owned(), our_url];
+        let spawn = |program: &Path, argv: &[String]| {
+            let mut side = PtyChild::spawn(program, argv, &project, &env, cols, rows).ok()?;
+            if let Some(profile) = cfg.term_profile {
+                side.attach_term_profile(profile);
+            }
+            Some(side)
+        };
+        if cfg.term_profile.is_some_and(|profile| profile.tmux) {
+            let (program, argv) = tmux_wrap(cli, &plain_argv, "our").ok()?;
+            spawn(&program, &argv)
+        } else {
+            spawn(cli, &plain_argv)
+        }
     });
 
     let (mut ref_side, mut our_side): (Option<PtyChild>, Option<PtyChild>) =
@@ -2760,6 +2869,9 @@ pub async fn run_script_once(
                     ref_side.is_ok(),
                     our_side.is_some()
                 ));
+                for socket in &tmux_sockets {
+                    crate::termatrix::kill_tmux_server(socket);
+                }
                 if let Ok(Some(mut side)) = ref_side {
                     side.kill();
                 }
@@ -2949,6 +3061,9 @@ pub async fn run_script_once(
         // step, every remaining step replays from the cache — the ref
         // PTY + server would only add teardown waits at the end.
         if last_live_step == Some(index) {
+            if let Some(socket) = tmux_sockets.first() {
+                crate::termatrix::kill_tmux_server(socket);
+            }
             if let Some(mut side) = ref_side.take() {
                 side.kill();
             }
@@ -2978,13 +3093,41 @@ pub async fn run_script_once(
     if let Some(side) = our_side.as_ref() {
         let _ = side.wait_for_after(ALT_SCREEN_LEAVE, side.raw_len(), Duration::from_secs(5));
     }
-    if std::env::var_os("PARITY_DUMP_RAW").is_some() {
+    if std::env::var_os("PARITY_DUMP_RAW").is_some() || cfg.term_profile.is_some() {
         if let Some(side) = ref_side.as_ref() {
             let _ = std::fs::write(root.join("ref.raw.ansi"), side.raw_mirror());
         }
         if let Some(side) = our_side.as_ref() {
             let _ = std::fs::write(root.join("our.raw.ansi"), side.raw_mirror());
         }
+    }
+    // lane/termatrix: the protocol negotiation evidence. The raw
+    // streams are classified (modes h/l, kitty push/pop/query, cursor
+    // shape, OSC 52/11, DA queries, SGR truecolor-vs-index split) so
+    // negotiation differences are REPORTED even when grids match —
+    // the vt grid cannot see protocol-level choices.
+    if let Some(profile) = cfg.term_profile {
+        if let Some(side) = ref_side.as_ref() {
+            outcome.protocol_ref = crate::termatrix::protocol_signature(&side.raw_mirror());
+        }
+        if let Some(side) = our_side.as_ref() {
+            outcome.protocol_our = crate::termatrix::protocol_signature(&side.raw_mirror());
+        }
+        outcome.responder_replies = (
+            ref_side.as_ref().map_or(0, PtyChild::responder_replies),
+            our_side.as_ref().map_or(0, PtyChild::responder_replies),
+        );
+        let _ = std::fs::write(
+            root.join("protocol-signature.txt"),
+            format!(
+                "profile: {}\nterm: {} colorterm: {}\n--- ref ---\n{}\n--- our ---\n{}\n",
+                profile.id,
+                profile.term,
+                profile.colorterm.unwrap_or("-"),
+                outcome.protocol_ref.join("\n"),
+                outcome.protocol_our.join("\n")
+            ),
+        );
     }
     if std::env::var_os("PARITY_DUMP_STYLES").is_some() {
         // Per-cell style digests (row-major, space-separated) for the
@@ -3012,6 +3155,11 @@ pub async fn run_script_once(
     }
     if let Some(side) = our_side.as_mut() {
         side.kill();
+    }
+    // The tmux servers hold the pane processes (session-scoped, not
+    // client-group-scoped) — kill them after the clients.
+    for socket in &tmux_sockets {
+        crate::termatrix::kill_tmux_server(socket);
     }
     if let Some(server) = ref_server.take() {
         let _ = server.stop().await;
@@ -3212,6 +3360,53 @@ impl CorpusReport {
         if !any_requests {
             out.push_str("(no main requests recorded — no submit steps ran)\n\n");
         }
+        // Terminal protocol signatures (lane/termatrix): the
+        // negotiation evidence channel. Grid verdicts cannot see
+        // protocol choices — this section is where SGR downgrade
+        // splits, kitty push/pop, mouse modes, clipboard OSC and
+        // cursor shape divergences are reported per run.
+        if self.runs.iter().any(|run| !run.protocol_ref.is_empty() || !run.protocol_our.is_empty())
+        {
+            out.push_str("\n## Terminal protocol signatures (lane/termatrix)\n\n");
+            out.push_str("Per run: the multiset diff of protocol-class sequences in each\n");
+            out.push_str("side's raw stream (modes h/l, kitty keyboard push/pop/query, cursor\n");
+            out.push_str("shape, OSC 52/11, DA queries, SGR truecolor-vs-index emission).\n");
+            out.push_str("Identical lists mean the two stacks negotiated identically.\n\n");
+            out.push_str("| run | profile | replies | ref-only | our-only |\n");
+            out.push_str("|---|---|---|---|---|\n");
+            for run in &self.runs {
+                if run.protocol_ref.is_empty() && run.protocol_our.is_empty() {
+                    continue;
+                }
+                let (ref_only, our_only) =
+                    crate::termatrix::signature_diff(&run.protocol_ref, &run.protocol_our);
+                let cell = |entries: &[String]| {
+                    if entries.is_empty() {
+                        "-".to_owned()
+                    } else {
+                        entries
+                            .iter()
+                            .map(std::string::String::as_str)
+                            .collect::<Vec<_>>()
+                            .join("<br>")
+                    }
+                };
+                let _ = writeln!(
+                    out,
+                    "| {} @ {}x{} r{} | {} | {}/{} | {} | {} |",
+                    run.script_id,
+                    run.cols,
+                    run.rows,
+                    run.run,
+                    run.term_profile,
+                    run.responder_replies.0,
+                    run.responder_replies.1,
+                    cell(&ref_only),
+                    cell(&our_only)
+                );
+            }
+            out.push('\n');
+        }
         // Per-mismatch detail.
         out.push_str("\n## Mismatch detail\n\n");
         for run in &self.runs {
@@ -3368,10 +3563,25 @@ pub async fn run_corpus(cfg: &RigConfig) -> Result<CorpusReport> {
     // Ref-capture cache: enabled unless disabled by config/`--no-ref`
     // or the OC_TUI_DIFF_REF_CACHE=0 kill switch. Opened ONCE — the
     // base fingerprint (bun identity, ref revision, defines) is shared
-    // by every entry.
+    // by every entry. lane/termatrix profiles FORCE the cache off:
+    // entries were captured under the baseline terminal environment
+    // and must never be replayed under another one (the fingerprint
+    // does not cover the terminal environment).
     let cache_enabled = cfg.ref_cache.is_some()
         && !cfg.no_ref
+        && cfg.term_profile.is_none()
         && std::env::var("OC_TUI_DIFF_REF_CACHE").ok().as_deref() != Some("0");
+    if let Some(profile) = cfg.term_profile {
+        eprintln!(
+            "[tui-diff] termatrix profile {}: {} (TERM={}, COLORTERM={:?}, tmux={}, replies={})",
+            profile.id,
+            profile.description,
+            profile.term,
+            profile.colorterm,
+            profile.tmux,
+            profile.answers_queries()
+        );
+    }
     let ref_cache = if cache_enabled {
         let dir = cfg.ref_cache.clone().unwrap_or_default();
         match RefCaptureCache::open(&dir, &bun) {
