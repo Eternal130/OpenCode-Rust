@@ -91,8 +91,7 @@ pub fn paint_live_tabs_bar(
         .collect();
     // The promoted new-session slot: home + at least one open tab
     // (`tabsAvailable` gates the whole strip on tabs.length > 0).
-    let home_pseudo =
-        matches!(store.route(), crate::store::Route::Home) && !views.is_empty();
+    let home_pseudo = matches!(store.route(), crate::store::Route::Home) && !views.is_empty();
     let (active, show_plus) = if home_pseudo {
         views.push(TabView {
             tab: SessionTab {
@@ -102,10 +101,7 @@ pub fn paint_live_tabs_bar(
             status: TabStatus::EMPTY,
             detail: None,
         });
-        (
-            Some(crate::components::session_tabs::NEW_SESSION_TAB_ID),
-            false,
-        )
+        (Some(crate::components::session_tabs::NEW_SESSION_TAB_ID), false)
     } else {
         (active, true)
     };

@@ -518,7 +518,7 @@ pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
                     let mut option = SelectOption::titled(title, value)
                         .with_search(format!("{} {}", model.provider_id, model.id));
                     // Categories exist only while connected — the
-                        // unconnected dialog renders one flat list.
+                    // unconnected dialog renders one flat list.
                     if connected {
                         option = option.categorized(provider_name(&model.provider_id));
                     }
@@ -1273,7 +1273,11 @@ mod tests {
         let _ = store.effective_model("s1");
         store.stage_model(
             "s1",
-            crate::store::ModelSelection { provider_id: "anthropic".into(), model_id: "claude".into(), variant: None },
+            crate::store::ModelSelection {
+                provider_id: "anthropic".into(),
+                model_id: "claude".into(),
+                variant: None,
+            },
         );
         store.open_dialog(
             DialogKind::ServerList { command: "model.list", title: "Select model" },
