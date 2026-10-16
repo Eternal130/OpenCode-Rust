@@ -284,6 +284,9 @@ struct PluginInputs {
     catalog: Arc<Catalog>,
     config_documents: Vec<oc_schema::config::Document>,
     home: PathBuf,
+    /// This location's websearch service (v2 `WebSearch.Service`): the
+    /// env-key-eligible providers + the config-seeded default selection.
+    websearch: Arc<crate::tool::websearch::WebSearch>,
 }
 
 impl PluginInputs {
@@ -571,6 +574,18 @@ impl Engine {
         let hooks = Arc::new(crate::hooks::HookRegistry::new());
         let config_documents = crate::config::agent_md::load_documents(&loaded.entries);
 
+        // The websearch service (v2 `WebSearch.Service` +
+        // `ConfigWebSearchPlugin`): providers eligible through the v2 env
+        // connection methods, with the config `websearch` selection as
+        // the default (last document owning the key — `Config.latest`).
+        let websearch = Arc::new(
+            crate::tool::websearch::WebSearch::new(
+                (*self.db).clone(),
+                crate::tool::websearch_providers::providers_from_env(),
+            )
+            .with_config_selection(config_websearch_selection(&config_documents)),
+        );
+
         // Permission engine (session/agent ruleset resolver over the row +
         // the agent table).
         let permission = Permission::new(
@@ -711,6 +726,7 @@ impl Engine {
             catalog: Arc::clone(&self.catalog),
             config_documents,
             home: self.home.clone(),
+            websearch: Arc::clone(&websearch),
         });
         self.inputs.insert(location.clone(), Arc::clone(&inputs));
         let graph = self.build_graph(location.clone(), &inputs).await?;
@@ -900,6 +916,7 @@ impl Engine {
             execution,
             runner,
             resolver,
+            websearch,
         });
         let (effective, fresh_won) = self.services.insert(location.clone(), Arc::clone(&services));
         if fresh_won {
@@ -1253,6 +1270,9 @@ pub struct LocationServices {
     /// This location's model resolver: the config overlay first, then the
     /// engine-level bindings (per-location provider wiring).
     pub resolver: Arc<dyn ModelResolver>,
+    /// This location's websearch service (v2 `WebSearch.Service` — the
+    /// server's `websearch.*` routes and the `websearch` tool share it).
+    pub websearch: Arc<crate::tool::websearch::WebSearch>,
 }
 
 // ===========================================================================
@@ -1609,8 +1629,7 @@ fn webfetch_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
 fn websearch_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
     let inputs = Arc::clone(inputs);
     InternalPlugin::new("opencode.tool.websearch", move |hooks, ports| {
-        let db = inputs.tool_services.db.clone().expect("tool services db");
-        let search = Arc::new(crate::tool::websearch::WebSearch::new(db, Vec::new()));
+        let search = Arc::clone(&inputs.websearch);
         tool::register_builtin(
             ports.tools,
             hooks,
@@ -1620,6 +1639,34 @@ fn websearch_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
                 inputs.forms.clone(),
             ))),
         )
+    })
+}
+
+/// The config `websearch` selection (v2 `ConfigWebSearchPlugin`,
+/// config/plugin/websearch.ts): the LAST document owning the key
+/// (`Config.latest`); `false` disables, otherwise the provider id or
+/// `"random"`.
+fn config_websearch_selection(
+    documents: &[oc_schema::config::Document],
+) -> Option<crate::tool::websearch::Selection> {
+    documents.iter().rev().find_map(|document| {
+        let selection = document.info.websearch.as_ref()?;
+        match selection {
+            oc_schema::config::websearch::WebSearchSelection::Disabled(false) => {
+                Some(crate::tool::websearch::Selection::Disabled)
+            }
+            oc_schema::config::websearch::WebSearchSelection::Disabled(_) => None,
+            oc_schema::config::websearch::WebSearchSelection::Info(info) => {
+                Some(match info.provider {
+                    oc_schema::config::websearch::WebSearchProvider::Random => {
+                        crate::tool::websearch::Selection::Random
+                    }
+                    oc_schema::config::websearch::WebSearchProvider::Id(ref id) => {
+                        crate::tool::websearch::Selection::Provider(id.clone())
+                    }
+                })
+            }
+        }
     })
 }
 
