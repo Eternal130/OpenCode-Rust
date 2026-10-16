@@ -16,6 +16,7 @@ pub mod list;
 pub mod markdown;
 pub mod model;
 pub mod rows;
+pub mod tool_detail;
 
 pub use list::{
     render_transcript, resolve_part, vscroll_appended_turn, vscroll_messages_fixture, FollowState,
