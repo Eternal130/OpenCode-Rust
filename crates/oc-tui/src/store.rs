@@ -89,6 +89,10 @@ pub enum DialogKind {
     CommandPalette,
     /// `DialogSessionRename`: rename the active session.
     SessionRename { session_id: String },
+    /// The plugin manager select (`plugins.list`, lane KM — v2's
+    /// `DialogPlugins` approximation): one row per REGISTERED plugin
+    /// id; enable/disable state is not modeled (submits close).
+    Plugins,
     /// `DialogThemeList`: the built-in theme registry.
     ThemeList,
     /// `DialogHelp` (`ui/dialog-help.tsx`): the palette hint + the
@@ -862,6 +866,10 @@ pub struct Store {
     /// The onboarding card's dismissal (storage `getting-started`).
     sidebar_onboarding: Signal<bool>,
     permission_autoaccept: Signal<bool>,
+    /// `config.session.grouping !== "none"` (index.tsx:233 — lane KM):
+    /// the exploration-grouping toggle behind
+    /// `session.toggle.exploration_grouping`.
+    exploration_grouping: Signal<bool>,
     /// Plugin footer hint segments (one per plugin, latest wins).
     plugin_hints: Signal<Vec<(String, String)>>,
     /// Plugin home quick actions (registration-time).
@@ -997,6 +1005,8 @@ pub struct Store {
     /// sidebar's MCP section + `DialogStatus` source). Fetched by the
     /// server-lists worker; statuses drive the per-server dot.
     mcp_servers: Signal<Vec<McpServerRow>>,
+    /// app.tsx:521's `mcpAlerted` record (the toast-once tracker).
+    mcp_alerted: std::cell::RefCell<Option<std::collections::HashMap<String, String>>>,
     /// The MCP section's collapse state (mcp.tsx's `view.open`).
     sidebar_mcp_open: Signal<bool>,
     /// SURF-2 the diff viewer's live state (the `diff` plugin route —
@@ -1761,6 +1771,7 @@ struct StoreSignals {
     /// "autoaccept"`, permission.tsx:14 — boot-immutable, from the
     /// CLI flag; the composer metadata's `auto` marker reads it).
     permission_autoaccept: Signal<bool>,
+    exploration_grouping: Signal<bool>,
     plugin_hints: Signal<Vec<(String, String)>>,
     plugin_home_actions: Signal<Vec<crate::components::home::PluginQuickAction>>,
     plugin_group_rules: Signal<crate::components::message::model::GroupRules>,
@@ -1867,6 +1878,7 @@ impl Store {
             terminal_size,
             sidebar_onboarding,
             permission_autoaccept,
+            exploration_grouping,
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
@@ -1912,6 +1924,7 @@ impl Store {
             terminal_size,
             sidebar_onboarding,
             permission_autoaccept,
+            exploration_grouping,
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
@@ -1960,6 +1973,7 @@ impl Store {
             history_loading,
             expanded_tools,
             mcp_servers,
+            mcp_alerted: std::cell::RefCell::new(None),
             sidebar_mcp_open,
             diff_viewer,
             diff_sink: std::cell::RefCell::new(Rc::new(NoDiffSink)),
@@ -2011,6 +2025,7 @@ impl Store {
         let terminal_size = Signal::new(&runtime, (0u16, 0u16));
         let sidebar_onboarding = Signal::new(&runtime, false);
         let permission_autoaccept = Signal::new(&runtime, false);
+        let exploration_grouping = Signal::new(&runtime, true);
         let plugin_hints = Signal::new(&runtime, Vec::<(String, String)>::new());
         let plugin_home_actions =
             Signal::new(&runtime, Vec::<crate::components::home::PluginQuickAction>::new());
@@ -2055,6 +2070,7 @@ impl Store {
                 terminal_size,
                 sidebar_onboarding,
                 permission_autoaccept,
+                exploration_grouping,
                 plugin_hints,
                 plugin_home_actions,
                 plugin_group_rules,
@@ -2209,6 +2225,17 @@ impl Store {
         self.toasts.update(|queue| {
             queue.advance(now_ms);
         });
+    }
+
+    /// `toast.activate()` (ui/toast.tsx:170-175 — lane KM): dismiss +
+    /// hand the action's dispatch target back to the caller (the
+    /// pump runs it through the palette dispatcher; `None` = no
+    /// action, the dismiss stands).
+    #[must_use]
+    pub fn toast_activate(&self) -> Option<String> {
+        let command = self.toasts.get().current().and_then(|toast| toast.action_command.clone());
+        self.toasts.update(super::components::toast::ToastQueue::dismiss);
+        command
     }
 
     // -- prompt (composer, wave 2) ---------------------------------------------
@@ -2544,6 +2571,8 @@ impl Store {
                 variant: "error",
                 duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
                 action_label: None,
+                action_command: None,
+                modal: false,
             });
         }
     }
@@ -3013,6 +3042,64 @@ impl Store {
     /// `route.navigate({type:"session"})`, `session-tabs.tsx:393-396`).
     pub fn select_tab(&self, session_id: &str) {
         self.navigate(Route::Session { session_id: session_id.to_owned() });
+    }
+
+    /// `session.tab.history.back` (keybind.ts:114 — lane KM): walk the
+    /// in-memory navigation history one entry back (the browser-shaped
+    /// stack `recordSessionTabHistory` maintains). The walk must NOT
+    /// re-record through `navigate` (that appends + truncates the
+    /// forward tail) — the cursor moves inside the preserved stack.
+    #[must_use]
+    pub fn tab_history_back(&self) -> Option<String> {
+        let tabs = self.tabs.get();
+        let index = tabs.history.index;
+        if index <= 0 {
+            return None;
+        }
+        let target = tabs.history.entries.get(usize::try_from(index - 1).unwrap_or(0))?.clone();
+        let mut history = tabs.history.clone();
+        history.index = index - 1;
+        self.navigate(Route::Session { session_id: target.clone() });
+        self.tabs.update(|state| state.history = history);
+        Some(target)
+    }
+
+    /// `session.tab.history.forward` (keybind.ts:115 — lane KM,
+    /// ctrl+i): the symmetric forward walk.
+    #[must_use]
+    pub fn tab_history_forward(&self) -> Option<String> {
+        let tabs = self.tabs.get();
+        let next = tabs.history.index + 1;
+        let target = usize::try_from(next)
+            .ok()
+            .and_then(|index| tabs.history.entries.get(index).cloned())?;
+        let mut history = tabs.history.clone();
+        history.index = next;
+        self.navigate(Route::Session { session_id: target.clone() });
+        self.tabs.update(|state| state.history = history);
+        Some(target)
+    }
+
+    /// Reorder a tab (`moveSessionTab`, the drag-release persist).
+    pub fn move_tab(&self, session_id: &str, index: usize) {
+        self.tabs.update(|state| {
+            state.tabs =
+                model::move_session_tab(std::mem::take(&mut state.tabs), session_id, index);
+        });
+        self.request_redraw();
+    }
+
+    /// `queued_prompt.undo` (keybind.ts:132 — lane KM): remove the
+    /// LAST queued prompt of the session (`true` when one existed).
+    pub fn undo_queued_prompt(&self, session_id: &str) -> bool {
+        let last = self.queue.get().queue_of(session_id).last().cloned();
+        let Some(last) = last else { return false };
+        self.queue.update(|state| {
+            if let Some(list) = state.by_session.get_mut(session_id) {
+                list.retain(|item| item.id != last.id);
+            }
+        });
+        true
     }
 
     /// Quick slot 1-9 (and 10 via 0): select the tab at that position.
@@ -3559,6 +3646,41 @@ impl Store {
     }
 
     pub fn set_mcp_servers(&self, rows: Vec<McpServerRow>) {
+        // Toast once when a server ENTERS a failed/needs-auth state
+        // (app.tsx:522-545 — lane KM): per-server alerted-status
+        // tracking avoids re-toasting the same problem on every
+        // refresh while still re-alerting if the state changes. The
+        // action dispatches `mcp.list` (`keymap.dispatch` in v2's
+        // `action.run`, :534/:541).
+        let mut alerts: std::collections::HashMap<String, String> =
+            self.mcp_alerted.borrow_mut().take().unwrap_or_default();
+        for server in &rows {
+            if server.status != "failed" && server.status != "needs_auth" {
+                alerts.remove(&server.name);
+                continue;
+            }
+            if alerts.get(&server.name).map(String::as_str) == Some(server.status) {
+                continue;
+            }
+            alerts.insert(server.name.clone(), server.status.to_owned());
+            let toast = if server.status == "needs_auth" {
+                crate::components::toast::ToastOptions {
+                    title: Some("MCP server needs authentication".to_owned()),
+                    message: format!("Connect \"{}\" to use its tools.", server.name),
+                    variant: "warning",
+                    ..crate::components::toast::ToastOptions::info("")
+                }
+            } else {
+                crate::components::toast::ToastOptions {
+                    title: Some(format!("MCP server failed: {}", server.name)),
+                    message: "Run /mcps to view details.".to_owned(),
+                    variant: "error",
+                    ..crate::components::toast::ToastOptions::info("")
+                }
+            };
+            self.toast_show(toast.with_action("Open MCP servers", "mcp.list"));
+        }
+        *self.mcp_alerted.borrow_mut() = Some(alerts);
         self.mcp_servers.set(rows);
     }
 
@@ -4845,6 +4967,24 @@ impl Store {
         self.sidebar_onboarding.set(true);
     }
 
+    /// `config.session.grouping !== "none"` (lane KM): the
+    /// exploration-grouping flag the transcript walk reads.
+    #[must_use]
+    pub fn exploration_grouping(&self) -> bool {
+        self.exploration_grouping.get()
+    }
+
+    /// `session.toggle.exploration_grouping` (index.tsx:1049-1061 —
+    /// the "Group related tool calls" toggle): flip the flag; the
+    /// next transcript pass re-groups (or explodes) the exploration
+    /// rows.
+    pub fn toggle_exploration_grouping(&self) -> bool {
+        let next = !self.exploration_grouping.get();
+        self.exploration_grouping.set(next);
+        self.request_redraw();
+        next
+    }
+
     /// The boot restore (the document's `dismissed` seeds the signal —
     /// the run loop reads `<state>/<ch>/tui/getting-started.json`
     /// before the first frame, mirroring v2's `storage.store(...)`
@@ -5101,6 +5241,10 @@ impl Store {
                         variant: "error",
                         duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
                         action_label: None,
+                        action_command: None,
+                        // The F11 modal surface (keystrokes swallow
+                        // until dismissed).
+                        modal: true,
                     });
                 }
                 // Attention (the notifications plugin's always-on
@@ -5287,6 +5431,8 @@ impl Store {
                     variant,
                     duration_ms: duration,
                     action_label: None,
+                    action_command: None,
+                    modal: false,
                 });
             }
             "message.updated" | "message.part.updated" => {

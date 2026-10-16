@@ -1086,16 +1086,14 @@ impl App {
         }
     }
 
-    /// F11: whether an ERROR panel currently holds the screen — a
-    /// TITLED error toast (the "Session failed" / "Failed to send
-    /// prompt" panel class). Untitled error notices (the log-skip
-    /// surface: transient transport skips like a failed switch POST)
-    /// stay transparent, like every non-error toast.
+    /// F11: whether an ERROR panel currently holds the screen — the
+    /// MODAL-flagged error toasts (the "Session failed" / "Failed to
+    /// send prompt" panel class, flagged at creation). Every other
+    /// toast stays transparent to typing like v2's (ui/toast.tsx
+    /// never blocks input — the lane KM MCP-failure toasts ride the
+    /// non-modal path).
     fn error_toast_live(&self) -> bool {
-        self.store
-            .toasts()
-            .current()
-            .is_some_and(|toast| toast.variant == "error" && toast.title.is_some())
+        self.store.toasts().current().is_some_and(|toast| toast.modal)
     }
 
     /// `--auto`'s autoaccept arm (v2 session/index.tsx:252-262): while
@@ -2523,6 +2521,9 @@ pub fn apply_send_failure(store: &Store, event: PromptSinkEvent) {
         variant: "error",
         duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
         action_label: None,
+        action_command: None,
+        // The F11 modal surface (keystrokes swallow until dismissed).
+        modal: true,
     });
     if store.prompt_draft(&session_key).text.is_empty() && !draft.is_empty() {
         let mut composer = store.composer(&session_key);
@@ -3546,6 +3547,8 @@ pub async fn run_with_size(
                         variant: "error",
                         duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
                         action_label: None,
+                        action_command: None,
+                        modal: false,
                     });
                 }
                 WorktreeEvent::RemoveResult { directory, result } => match result {
@@ -5746,6 +5749,8 @@ mod core_interaction_tests {
             variant: "error",
             duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
             action_label: None,
+            action_command: None,
+            modal: true,
         });
         assert!(app.error_toast_live(), "the error panel is up");
 
