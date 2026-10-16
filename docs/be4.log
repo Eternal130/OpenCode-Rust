@@ -53,3 +53,18 @@ Worktree: `.worktrees/lane-be4` (branch lane/be4).
   clippy 0 warnings, fmt applied. AWS docs GET SigV4 vector reproduces the
   documented signature byte-for-byte (5d672d79...); POST variant pinned
   against a python hmac cross-check. Committing WIP.
+- phase-2 (oc-ai vertex + copilot): vertex.rs (project/location/tuned
+  endpoint routing, Express Mode x-goog-api-key, ADC bearer over
+  GOOGLE_OAUTH_ACCESS_TOKEN, labels body option, serviceTier header,
+  Gemini-protocol reuse minus serviceTier) + copilot.rs (client headers,
+  per-request x-initiator escalation + Copilot-Vision-Request, interaction
+  vocabulary, bearer over the bound token / GITHUB_TOKEN, openai-compatible
+  chat reuse). 15/15 new tests.
+- phase-3 (oc-core): facade families BedrockConverse / BedrockMantleChat /
+  BedrockMantleResponses / VertexGemini / CopilotChat (facade.rs
+  family_of + build_route, model-id aware); integration/vertex.rs —
+  authorized-user ADC file → oauth2.googleapis.com refresh →
+  CredentialBindings "google-vertex" bearer (service_account = registered
+  remainder, needs RS256); session.diff registered ephemeral in the bus
+  registry (bus/registry.rs, v1/session.ts:633-639). Verification: oc-ai
+  704/704, oc-core 825/825, oc-server cargo check clean, clippy 0, fmt ok.

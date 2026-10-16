@@ -54,3 +54,11 @@ pub mod mistral_chat;
 // Amazon Bedrock — SigV4 signing, the AWS event-stream binary framing, and
 // the Converse protocol (+ anthropic-on-bedrock invoke-stream composition).
 pub mod bedrock;
+
+// Google Vertex native — the Gemini generateContent protocol on Vertex with
+// project/location routing, tuned endpoints, Express Mode keys, ADC bearer.
+pub mod vertex;
+
+// GitHub Copilot chat — the openai-compatible chat protocol with the
+// Copilot client header policy over the credential-bound transport.
+pub mod copilot;
