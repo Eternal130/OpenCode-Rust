@@ -36,6 +36,87 @@ pub trait CatalogSource: Send + Sync {
     async fn fetch_text(&self) -> Result<String, String>;
 }
 
+/// The production source (v2 `fetchApi`, models-dev.ts:345-352): a GET of
+/// `<source>/api.json` with the app User-Agent and a 10-second timeout.
+pub struct ReqwestCatalogSource {
+    /// Remote base (v2 `defaultSource` when unset).
+    pub url: String,
+    /// `App.useragent` stamp.
+    pub user_agent: String,
+}
+
+impl ReqwestCatalogSource {
+    #[must_use]
+    pub fn new(url: impl Into<String>, user_agent: impl Into<String>) -> Self {
+        Self { url: url.into(), user_agent: user_agent.into() }
+    }
+}
+
+#[async_trait]
+impl CatalogSource for ReqwestCatalogSource {
+    async fn fetch_text(&self) -> Result<String, String> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|error| format!("catalog http client: {error}"))?;
+        let response = client
+            .get(format!("{}/api.json", self.url.trim_end_matches('/')))
+            .header("User-Agent", &self.user_agent)
+            .send()
+            .await
+            .map_err(|error| format!("catalog fetch: {error}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("catalog fetch failed (HTTP {status})"));
+        }
+        response
+            .text()
+            .await
+            .map_err(|error| format!("catalog body: {error}"))
+    }
+}
+
+/// The production KV cache (v2 `KV.Service`): one key holding
+/// `{updatedAt, digest, body}` in the engine database.
+pub struct DbCatalogKv {
+    db: crate::database::Database,
+}
+
+impl DbCatalogKv {
+    #[must_use]
+    pub fn new(db: crate::database::Database) -> Self {
+        Self { db }
+    }
+}
+
+#[async_trait]
+impl CatalogKv for DbCatalogKv {
+    async fn get(&self, key: &str) -> Option<String> {
+        self.db
+            .kv_get(key)
+            .await
+            .ok()
+            .flatten()
+            .map(|value| value.to_string())
+    }
+
+    async fn set(&self, key: &str, value: &str) {
+        let parsed: serde_json::Value = serde_json::from_str(value).unwrap_or(serde_json::Value::Null);
+        let _ = self.db.kv_set(key, &parsed).await;
+    }
+
+    async fn remove(&self, key: &str) {
+        let key = key.to_string();
+        let _ = self
+            .db
+            .transaction(move |tx| {
+                tx.kv_delete(&key)?;
+                Ok(())
+            })
+            .await;
+    }
+}
+
 /// Durable KV cache for the catalog body (v2 `KV.Service` usage: one key
 /// holding `{updatedAt, digest, body}`).
 ///
@@ -106,6 +187,39 @@ impl CatalogService {
     pub fn with_bus(mut self, bus: crate::bus::Bus) -> Self {
         self.bus = Some(bus);
         self
+    }
+
+    /// Boot-time populate from the KV cache (v2 `loadFromCache` +
+    /// `populate`, models-dev.ts:312-321/358-375): a decodable cached body
+    /// becomes the served catalog; a corrupt entry is removed. Returns
+    /// whether a cached catalog was applied (the caller falls back to the
+    /// snapshot otherwise — the frozen-snapshot floor).
+    pub async fn populate_from_cache(&self) -> bool {
+        let Some(cached) = self.kv.get(CACHE_KEY).await else { return false };
+        let body = serde_json::from_str::<serde_json::Value>(&cached)
+            .ok()
+            .and_then(|entry| entry.get("body").and_then(|body| body.as_str()).map(str::to_string));
+        let Some(body) = body else {
+            self.kv.remove(CACHE_KEY).await;
+            return false;
+        };
+        match Catalog::parse(&body) {
+            Ok(catalog) => {
+                *self.catalog.write() = Arc::new(catalog);
+                true
+            }
+            Err(_) => {
+                self.kv.remove(CACHE_KEY).await;
+                false
+            }
+        }
+    }
+
+    /// Serve an explicitly provided catalog (v2 `options.file` /
+    /// `options.snapshot`): the embedder's boot catalog becomes the
+    /// single source when no cache applied.
+    pub fn adopt(&self, catalog: Catalog) {
+        *self.catalog.write() = Arc::new(catalog);
     }
 
     /// Current catalog.
@@ -353,5 +467,149 @@ mod tests {
         let error = service.refresh(false).await.unwrap_err();
         assert!(error.contains("invalid catalog"), "decode failure surfaces: {error}");
         assert!(kv.get(CACHE_KEY).await.is_none(), "bad body never cached");
+    }
+
+    /// A tiny HTTP server speaking enough HTTP/1.1 for the reqwest source.
+    async fn spawn_api_server(body: String) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let handle = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = match listener.accept().await {
+                    Ok(accepted) => accepted,
+                    Err(_) => break,
+                };
+                let body = body.clone();
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 4096];
+                    let _ = socket.read(&mut buffer).await;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test]
+    async fn provider_refresh_dbkv_roundtrip_and_boot_populate() {
+        // The production KV over the engine database + the boot populate
+        // (v2 loadFromCache): a cached body becomes the served catalog; a
+        // corrupt entry is removed rather than trusted.
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let db = crate::database::Database::open_file(dir.path().join("t.db")).await.expect("db");
+        let kv = Arc::new(DbCatalogKv::new(db.clone()));
+
+        kv.set("k", &serde_json::json!({ "a": 1 }).to_string()).await;
+        assert_eq!(kv.get("k").await.as_deref(), Some(r#"{"a":1}"#));
+        kv.remove("k").await;
+        assert_eq!(kv.get("k").await, None);
+
+        // Seed the cache exactly as a refresh writes it.
+        let body = tiny_catalog();
+        kv.set(
+            CACHE_KEY,
+            &serde_json::json!({
+                "updatedAt": 1_000,
+                "digest": "irrelevant",
+                "body": body,
+            })
+            .to_string(),
+        )
+        .await;
+        let service = CatalogService::new(
+            FakeSource::new("unused") as Arc<dyn CatalogSource>,
+            Arc::clone(&kv) as Arc<dyn CatalogKv>,
+            Arc::new(SteppedClock(parking_lot::Mutex::new(60_000))) as Arc<dyn Clock>,
+        );
+        assert!(service.populate_from_cache().await, "cache applies");
+        assert_eq!(service.get().provider_count(), 1, "cached body served");
+
+        // Corrupt cache: removed, falls back (false) — the caller keeps
+        // the frozen snapshot.
+        kv.set(CACHE_KEY, "not-an-object").await;
+        let service = CatalogService::new(
+            FakeSource::new("unused") as Arc<dyn CatalogSource>,
+            Arc::clone(&kv) as Arc<dyn CatalogKv>,
+            Arc::new(SteppedClock(parking_lot::Mutex::new(60_000))) as Arc<dyn Clock>,
+        );
+        assert!(!service.populate_from_cache().await);
+        assert_eq!(kv.get(CACHE_KEY).await, None, "corrupt entry removed");
+        assert_eq!(service.get().provider_count(), 226, "snapshot floor holds");
+
+        // `adopt` — the embedder-provided catalog becomes the source.
+        service.adopt(Catalog::empty());
+        assert_eq!(service.get().provider_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn provider_refresh_engine_boot_loop_updates_and_publishes() {
+        // The v2 trigger (models-dev.ts:431-433): the boot-spawned loop
+        // refreshes immediately — the live service catalog updates and
+        // `models-dev.refreshed` publishes — while the engine's boot
+        // snapshot (resolver plumbing) keeps serving until re-boot.
+        let (url, server) = spawn_api_server(tiny_catalog()).await;
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let engine = crate::engine::Engine::boot(crate::engine::EngineOptions {
+            catalog_fetch: true,
+            catalog_url: Some(url),
+            ..crate::engine::EngineOptions::new(
+                dir.path().join("data"),
+                dir.path().join("home"),
+            )
+        })
+        .await;
+        let mut subscription = engine.bus.subscribe();
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if engine.catalog_service.get().provider_count() == 1 {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "refresh loop never applied the fetched catalog"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        let frame = {
+            use futures::StreamExt;
+            tokio::time::timeout(
+                deadline.saturating_duration_since(tokio::time::Instant::now()),
+                subscription.next(),
+            )
+            .await
+            .expect("timeout waiting for models-dev.refreshed")
+            .expect("event")
+        };
+        assert_eq!(frame.type_, "models-dev.refreshed");
+        assert_eq!(frame.data, serde_json::json!({}));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn provider_refresh_offline_engine_stays_on_frozen_snapshot() {
+        // v2 degradation: fetch failures are logged and ignored — the
+        // catalog keeps serving the frozen snapshot (226 providers).
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let engine = crate::engine::Engine::boot(crate::engine::EngineOptions {
+            catalog_fetch: true,
+            // A closed local port: connection refused, fast.
+            catalog_url: Some("http://127.0.0.1:9".to_string()),
+            ..crate::engine::EngineOptions::new(
+                dir.path().join("data"),
+                dir.path().join("home"),
+            )
+        })
+        .await;
+        assert!(engine.catalog_service.refresh(false).await.is_err(), "offline fetch fails");
+        assert_eq!(engine.catalog_service.get().provider_count(), 226, "frozen snapshot");
+        assert_eq!(engine.catalog.provider_count(), 226, "engine snapshot unchanged");
+        assert_eq!(engine.catalog_service.version(), 0, "no invalidation");
     }
 }
