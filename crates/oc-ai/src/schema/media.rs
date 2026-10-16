@@ -191,9 +191,9 @@ pub fn is_aspect_ratio(value: &str) -> bool {
     if parts.len() != 2 {
         return false;
     }
-    [parts[0], parts[1]].iter().all(|part| {
-        !part.is_empty() && part.chars().all(|c| c.is_ascii_digit() || c == '.')
-    })
+    [parts[0], parts[1]]
+        .iter()
+        .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit() || c == '.'))
 }
 
 /// Constructors mirroring `Media.bytes/base64/url/ref`.

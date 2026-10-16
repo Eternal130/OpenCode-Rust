@@ -37,18 +37,28 @@ pub fn upscale_identity() -> Identity {
 /// `sd3` endpoint and select the model with a form field.
 #[must_use]
 pub fn endpoint(model: &str) -> &str {
-    if model.starts_with("sd3") { "sd3" } else { model }
+    if model.starts_with("sd3") {
+        "sd3"
+    } else {
+        model
+    }
 }
 
 /// `validate` + `form` (stability-images.ts:85-121).
 pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
     if request.n.is_some_and(|n| n > 1) {
-        return Err(identity().unsupported("media.n", "Stability AI generates one image per request; call it once per image"));
+        return Err(identity().unsupported(
+            "media.n",
+            "Stability AI generates one image per request; call it once per image",
+        ));
     }
     let target = endpoint(&request.model);
     let edit = !request.images.is_empty();
     if edit && target == "core" {
-        return Err(identity().unsupported("media.images", "Stability AI core is text-to-image only; use ultra or sd3.5-*"));
+        return Err(identity().unsupported(
+            "media.images",
+            "Stability AI core is text-to-image only; use ultra or sd3.5-*",
+        ));
     }
     form_body(
         &identity(),
@@ -77,7 +87,8 @@ fn form_body(
     source: &[media::Asset],
 ) -> Result<Body, AiError> {
     if source.len() > 1 {
-        return Err(identity.unsupported("media.images", format!("{} takes one source image", identity.name)));
+        return Err(identity
+            .unsupported("media.images", format!("{} takes one source image", identity.name)));
     }
     let mut form = Form::new();
     let owned: Vec<(String, serde_json::Value)> = fields
@@ -99,7 +110,10 @@ fn form_body(
 
 /// `decodeImageDocument` (stability-images.ts:138-155): generate names the
 /// base64 image `image`; `/v2beta/results/{id}` names it `result`.
-pub fn decode_image_document(identity: &Identity, output: &TextOutput) -> Result<ImageResponse, AiError> {
+pub fn decode_image_document(
+    identity: &Identity,
+    output: &TextOutput,
+) -> Result<ImageResponse, AiError> {
     let document = output.decode_json(output.body)?;
     let data = document
         .get("image")
@@ -118,19 +132,26 @@ pub fn decode_image_document(identity: &Identity, output: &TextOutput) -> Result
     )?;
     let mut stability = std::collections::BTreeMap::new();
     stability.insert("seed".to_string(), document.get("seed").cloned().unwrap_or_default());
-    stability.insert("finishReason".to_string(), document.get("finish_reason").cloned().unwrap_or_default());
+    stability.insert(
+        "finishReason".to_string(),
+        document.get("finish_reason").cloned().unwrap_or_default(),
+    );
     let mut metadata = crate::schema::ProviderMetadata::new();
     metadata.insert("stability".to_string(), stability);
     Ok(ImageResponse {
         images: vec![image],
-        notices: (document.get("finish_reason").and_then(|v| v.as_str()) == Some("CONTENT_FILTERED"))
-            .then(|| {
-                vec![Notice {
-                    kind: NoticeType::Moderated,
-                    message: format!("{} blurred the image for violating its content policy", identity.name),
-                    provider_metadata: None,
-                }]
-            }),
+        notices: (document.get("finish_reason").and_then(|v| v.as_str())
+            == Some("CONTENT_FILTERED"))
+        .then(|| {
+            vec![Notice {
+                kind: NoticeType::Moderated,
+                message: format!(
+                    "{} blurred the image for violating its content policy",
+                    identity.name
+                ),
+                provider_metadata: None,
+            }]
+        }),
         usage: None,
         provider_metadata: Some(metadata),
     })
@@ -215,7 +236,12 @@ pub fn upscale_decode_start(output: &TextOutput) -> Result<Started<UpscaleToken>
     let value = output.decode_json(output.body)?;
     let id = value.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
     Ok(Started {
-        snapshot: Snapshot { id: id.clone(), status: Status::Queued, progress: None, position: None },
+        snapshot: Snapshot {
+            id: id.clone(),
+            status: Status::Queued,
+            progress: None,
+            position: None,
+        },
         token: UpscaleToken { id },
     })
 }
@@ -226,7 +252,11 @@ pub fn upscale_decode_status(
     http: Option<&HttpContext>,
     context: &PollContext<UpscaleToken>,
 ) -> Result<Snapshot, AiError> {
-    let status = if http.is_some_and(|http| http.status == 202) { Status::Running } else { Status::Completed };
+    let status = if http.is_some_and(|http| http.status == 202) {
+        Status::Running
+    } else {
+        Status::Completed
+    };
     Ok(Snapshot { id: context.token.id.clone(), status, progress: None, position: None })
 }
 
@@ -369,7 +399,11 @@ mod tests {
         let context = PollContext { token: &token, auth: &auth };
         let http = HttpContext { url: "https://x".into(), status: 202, headers: BTreeMap::new() };
         assert_eq!(upscale_decode_status(Some(&http), &context).unwrap().status, Status::Running);
-        let http200 = HttpContext { url: "https://x".into(), status: 200, headers: BTreeMap::new() };
-        assert_eq!(upscale_decode_status(Some(&http200), &context).unwrap().status, Status::Completed);
+        let http200 =
+            HttpContext { url: "https://x".into(), status: 200, headers: BTreeMap::new() };
+        assert_eq!(
+            upscale_decode_status(Some(&http200), &context).unwrap().status,
+            Status::Completed
+        );
     }
 }

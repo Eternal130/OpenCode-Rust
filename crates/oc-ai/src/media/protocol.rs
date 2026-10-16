@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::media::body::Body;
-use crate::media::model::{Addressed, DecodeContext, Mode, ResponseContext, Snapshot, Started, Status};
+use crate::media::model::{
+    Addressed, DecodeContext, Mode, ResponseContext, Snapshot, Started, Status,
+};
 use crate::schema::media::{self, Asset};
 use crate::schema::{AiError, AiErrorReason, HttpContext, ProviderId};
 
@@ -112,28 +114,18 @@ pub enum Failure {
 
 impl Failure {
     fn error(self, message: String, body: String, http: Option<HttpContext>) -> AiError {
-        let fields = crate::schema::ReasonFields {
-            message,
-            body: Some(body),
-            http,
-            cause: None,
-        };
+        let fields = crate::schema::ReasonFields { message, body: Some(body), http, cause: None };
         AiError::new(match self {
-            Self::InvalidRequest => AiErrorReason::InvalidRequest {
-                fields,
-                parameter: None,
-                classification: None,
-            },
+            Self::InvalidRequest => {
+                AiErrorReason::InvalidRequest { fields, parameter: None, classification: None }
+            }
             Self::Authentication => AiErrorReason::Authentication { fields },
-            Self::RateLimit => AiErrorReason::RateLimit {
-                fields,
-                retry_after_ms: None,
-                rate_limit: None,
-            },
-            Self::ProviderInternal => AiErrorReason::ProviderInternal {
-                fields,
-                retry_after_ms: None,
-            },
+            Self::RateLimit => {
+                AiErrorReason::RateLimit { fields, retry_after_ms: None, rate_limit: None }
+            }
+            Self::ProviderInternal => {
+                AiErrorReason::ProviderInternal { fields, retry_after_ms: None }
+            }
         })
     }
 }
@@ -172,7 +164,9 @@ impl<'a> TextOutput<'a> {
     /// `cancelled`/`expired` mean the result will never exist.
     pub fn ended(&self, status: Status, message: impl Into<String>, failure: Failure) -> AiError {
         match status {
-            Status::Failed => failure.error(message.into(), self.body.to_string(), self.http.cloned()),
+            Status::Failed => {
+                failure.error(message.into(), self.body.to_string(), self.http.cloned())
+            }
             _ => AiError::new(AiErrorReason::InvalidRequest {
                 fields: self.fields(message),
                 parameter: None,
@@ -203,7 +197,8 @@ impl<'a> TextOutput<'a> {
     /// with the raw body (media-protocol.ts:263-272).
     pub fn decode_json(&self, value: &str) -> Result<serde_json::Value, AiError> {
         serde_json::from_str(value).map_err(|cause| {
-            let mut error = self.invalid(format!("{} returned an invalid response", self.identity.name));
+            let mut error =
+                self.invalid(format!("{} returned an invalid response", self.identity.name));
             if let AiErrorReason::InvalidProviderOutput { fields, .. } = &mut error.reason {
                 fields.cause = Some(cause.to_string());
             }
@@ -228,14 +223,24 @@ impl<'a> TextOutput<'a> {
 
 /// Map a provider status string through the protocol's table; unknown
 /// values are an invalid provider document (media-protocol.ts:314-321).
-pub fn status(table: &BTreeMap<&str, Status>, raw: &str, output: &TextOutput) -> Result<Status, AiError> {
-    table.get(raw).copied().ok_or_else(|| output.invalid(format!("Unknown generation status \"{raw}\"")))
+pub fn status(
+    table: &BTreeMap<&str, Status>,
+    raw: &str,
+    output: &TextOutput,
+) -> Result<Status, AiError> {
+    table
+        .get(raw)
+        .copied()
+        .ok_or_else(|| output.invalid(format!("Unknown generation status \"{raw}\"")))
 }
 
 /// Map a provider error code through the protocol's table; missing or
 /// unmapped codes are `ProviderInternal` (media-protocol.ts:323-325).
 #[must_use]
-pub fn failure<K: std::hash::Hash + Eq + Copy>(table: &std::collections::HashMap<K, Failure>, code: Option<K>) -> Failure {
+pub fn failure<K: std::hash::Hash + Eq + Copy>(
+    table: &std::collections::HashMap<K, Failure>,
+    code: Option<K>,
+) -> Failure {
     code.and_then(|code| table.get(&code).copied()).unwrap_or(Failure::ProviderInternal)
 }
 
@@ -272,7 +277,9 @@ pub fn expiring_url_at(
         let mut namespace = std::collections::BTreeMap::new();
         namespace.insert(
             "headers".to_string(),
-            serde_json::Value::Object(headers.iter().map(|(k, v)| (k.clone(), serde_json::json!(v))).collect()),
+            serde_json::Value::Object(
+                headers.iter().map(|(k, v)| (k.clone(), serde_json::json!(v))).collect(),
+            ),
         );
         let mut metadata = asset.provider_metadata.take().unwrap_or_default();
         metadata.insert("route".to_string(), namespace);
@@ -414,7 +421,10 @@ pub enum Frame {
     Bytes(Vec<u8>),
     /// A whole-document read carrying the requested `output_format` for
     /// responses that omit it (openai-images:89-90).
-    Document { document: String, requested: Option<String> },
+    Document {
+        document: String,
+        requested: Option<String>,
+    },
 }
 
 impl Frame {
@@ -424,7 +434,7 @@ impl Frame {
     /// For `Document` the caller supplies the body's requested-format hint.
     #[must_use]
     pub fn parse_all(kind: Framing, bytes: &[u8], requested: Option<String>) -> Vec<Self> {
-        use crate::route::framing::{FramingDecoder, Framing as RouteFraming};
+        use crate::route::framing::{Framing as RouteFraming, FramingDecoder};
         if matches!(kind, Framing::Bytes) {
             return vec![Self::Bytes(bytes.to_vec())];
         }
@@ -526,7 +536,8 @@ mod tests {
     fn incomplete_carries_the_classification() {
         let identity = Identity::new("openai-speech", "OpenAI Speech", "openai");
         let error = identity.incomplete();
-        let AiErrorReason::InvalidProviderOutput { classification, route, fields, .. } = error.reason
+        let AiErrorReason::InvalidProviderOutput { classification, route, fields, .. } =
+            error.reason
         else {
             panic!()
         };
@@ -539,7 +550,13 @@ mod tests {
     fn expiring_url_sets_deadline_and_optional_headers() {
         let mut headers = BTreeMap::new();
         headers.insert("authorization".to_string(), "Bearer k".to_string());
-        let asset = expiring_url_at("https://x/v.mp4", 1_000.0, 86_400_000.0, Some("video/mp4".into()), Some(&headers));
+        let asset = expiring_url_at(
+            "https://x/v.mp4",
+            1_000.0,
+            86_400_000.0,
+            Some("video/mp4".into()),
+            Some(&headers),
+        );
         assert_eq!(asset.expires_at, Some(86_401_000.0));
         assert_eq!(asset.media_type, "video/mp4");
         assert_eq!(
@@ -557,7 +574,10 @@ mod tests {
         let document = Frame::parse_all(Framing::Document, b"{\"ok\":true}", Some("png".into()));
         assert_eq!(
             document,
-            vec![Frame::Document { document: "{\"ok\":true}".to_string(), requested: Some("png".to_string()) }]
+            vec![Frame::Document {
+                document: "{\"ok\":true}".to_string(),
+                requested: Some("png".to_string())
+            }]
         );
         let bytes = Frame::parse_all(Framing::Bytes, &[1, 2, 3], None);
         assert_eq!(bytes, vec![Frame::Bytes(vec![1, 2, 3])]);
