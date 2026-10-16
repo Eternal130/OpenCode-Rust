@@ -91,7 +91,7 @@ pub fn mount(state: SharedState) -> Router {
 /// the client sees a TCP reset (curl exit 52) with no HTTP status, and
 /// nothing reaches the server log beyond the runtime's stderr line. Here
 /// the panic is caught at the router boundary, logged (`[api-panic]`,
-/// stderr + the `<data>/log/server.log` sink, mirroring `[api-cause]`),
+/// stderr + the `<data>/log/opencode.log` sink, mirroring `[api-cause]`),
 /// and mapped to the standard 500 envelope.
 async fn catch_panics(request: axum::extract::Request, next: Next) -> Response {
     let method = request.method().clone();
