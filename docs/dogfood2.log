@@ -134,3 +134,23 @@ GROUND TRUTH (ref beta.12, live probes, synthetic config):
   predicate incl. the empty-array wildcard; the fallback = first available text
   model with the full Model.Info shape).
 All passing locally (nextest).
+
+## Phase 7 — regression + final repro
+- Full crate runs (nextest): oc-tui + oc-core + oc-server = 1609 passed, 1 skipped.
+- Rig --quick per script (fresh homes): boot-home 3 steps → 3 mismatch (baseline-class),
+  tabs-keyboard 8/8, tabs-live-session 22 mismatch + 2 identical, mouse-hover-tabstrip
+  12 mismatch + 5 text-only, multi-session 23 mismatch + 2 identical. Baseline
+  comparison vs merge-base d3fb7b0 running (REPORT.md's numbers are from an older
+  corpus vintage — script op counts changed).
+- FINAL sandbox repro (rebuilt binary, real-DB copy, empty cwd, restored tabs):
+  * strip row 0 paints both restored tabs;
+  * hardware cursor (6,14) == the composer input row ("Ask anything…" at row 14);
+  * SGR click col5/row1 → session route, the real transcript paints (cursor to the
+    session composer (5,19));
+  * composer metadata now resolves config providers (fallback model shown = the
+    v2.0.24 case-miss semantics; own/* reachable in the picker).
+- RESIDUAL (out of scope, noted): with the strip present, our home block sits one
+  row lower than the ref's (ours input row 14 vs ref 13 at 80x24) — v2's taffy
+  centering absorbs the strip row into the top spacer (odd-free split floors);
+  our plan_home rounds the top spacer up (div_ceil). No-strip home stays
+  byte-exact (goldens). The cursor-on-input-row invariant holds either way.
