@@ -342,6 +342,7 @@ fn assert_help_dialog_geometry(captured: &str) {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // the staged mouse script IS the scenario
 fn pty_mouse_closes_a_tab_and_add_opens_home() {
     let _sandbox = sandbox_env("mouse");
     let (url, shutdown, _prompt_posts) = spawn_scripted_server();
