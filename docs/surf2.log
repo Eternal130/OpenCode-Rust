@@ -1,0 +1,24 @@
+# Lane SURF-2 — oc-tui serial chain (after SURF-1)
+
+Worktree: .worktrees/lane-surf2 (branch lane/surf2, off main 93d1f62).
+Scope (v2 items, 1:1):
+1. Diff viewer mount + diff.* keymap layer + variants (auditB #6,
+   auditA #7 / §2.12 / §3 divergent table).
+2. Reconnecting + StartupLoading overlays (auditB #2).
+3. Six pure-TUI command wirings: /mcps /status /variants /pair
+   /debug /timeline (auditE traceability table row 1).
+4. F-1 TUI consumption halves (docs/f1.log registrations).
+5. Cheap: home first-use MCP/plugins-failed cells (auditB #7 partial).
+
+## Phase 1 — keymap table parity for the diff layer
+- table.rs: the 5 v1-era residue bindings fixed to v2 semantics —
+  diff.toggle/expand/expand_all/collapse/switch_focus default "none"
+  (keybind.ts:75-79 "deprecated: file tree is mouse-controlled").
+- Added the missing v2 scroll family: diff.down j,down / diff.up k,up /
+  diff.page.down pagedown,ctrl+f / diff.page.up pageup,ctrl+b /
+  diff.half_page.down ctrl+d / diff.half_page.up ctrl+u /
+  diff.first gg,home / diff.last shift+g,end / diff.mark_reviewed m.
+- diff.next_file n,alt+down / diff.previous_file p,alt+up /
+  diff.help ?,shift+?,shift+/ (was n / p / ?).
+- diff-layer app.exit ctrl+d ("Close diff viewer" — diff-viewer.tsx:726-732
+  shadows the base exit while the viewer is open).

@@ -577,7 +577,23 @@ impl KeymapEngine {
                 pending: None,
                 cancelled: false,
             },
-            _ => DispatchOutcome::unhandled(),
+            // A non-leader sequence's first stroke arms the pending
+            // sequence too (the concatenation grammar's `gg` — the
+            // opentui engine's K-1 fix, mirrored here for parity).
+            LayerMatch::Prefix => {
+                self.pending = Some(PendingSequence {
+                    strokes: vec![stroke],
+                    token: None,
+                    expires_at: clock.now_ms() + self.timeout_ms,
+                });
+                DispatchOutcome {
+                    command: None,
+                    consumed: true,
+                    pending: self.pending_display(),
+                    cancelled: false,
+                }
+            }
+            LayerMatch::None => DispatchOutcome::unhandled(),
         }
     }
 
@@ -638,9 +654,13 @@ impl KeymapEngine {
                     // Rejected: keep walking (index.js:2010-2014).
                     continue;
                 }
+                // Any multi-stroke binding whose prefix the fed
+                // strokes match arms a pending sequence (`gg` in the
+                // diff layer, `<leader>q` everywhere) — the donor
+                // grammar sequences by concatenation, not just via
+                // the leader token.
                 if binding.chord.strokes.len() > strokes.len()
                     && binding.chord.strokes.starts_with(strokes)
-                    && strokes.first() == Some(&self.leader)
                 {
                     prefix = true;
                 }
