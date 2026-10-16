@@ -471,19 +471,39 @@ async fn resolve_refreshes_expiring_oauth_token() {
 
 // -- device flow against a local mock server -----------------------------------
 
-/// A single-shot mock HTTP server for OAuth endpoints.
+/// A single-shot mock HTTP server: path-prefix → sequential JSON bodies,
+/// with a shared request log for shape assertions.
 struct MockOAuth {
     base: String,
+    log: Arc<parking_lot::Mutex<Vec<String>>>,
+    #[allow(dead_code)]
     handle: tokio::task::JoinHandle<()>,
 }
 
 impl MockOAuth {
-    async fn start(device_body: Value, token_bodies: Vec<Value>) -> Self {
+    #[allow(clippy::type_complexity)]
+    async fn start(routes: Vec<(&'static str, Vec<Value>)>) -> Self {
+        Self::start_with_status(
+            routes
+                .into_iter()
+                .map(|(prefix, bodies)| {
+                    (prefix, bodies.into_iter().map(|body| (200u16, body)).collect())
+                })
+                .collect(),
+        )
+        .await
+    }
+
+    #[allow(clippy::type_complexity)]
+    async fn start_with_status(routes: Vec<(&'static str, Vec<(u16, Value)>)>) -> Self {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
         let port = listener.local_addr().expect("addr").port();
+        let log: Arc<parking_lot::Mutex<Vec<String>>> = Arc::default();
+        let log_handle = Arc::clone(&log);
+        let mut cursors: Vec<(&'static str, std::collections::VecDeque<(u16, Value)>)> =
+            routes.into_iter().map(|(prefix, bodies)| (prefix, bodies.into())).collect();
         let handle = tokio::spawn(async move {
-            let mut token_index = 0;
             while let Ok((mut stream, _)) = listener.accept().await {
                 let mut buffer = [0u8; 8192];
                 let read = stream.read(&mut buffer).await.unwrap_or(0);
@@ -491,51 +511,51 @@ impl MockOAuth {
                 let path = request.split_whitespace().nth(1).unwrap_or_default().to_owned();
                 let body_start = request.find("\r\n\r\n").map_or(read, |index| index + 4);
                 let form_body = request[body_start..].to_owned();
-                let (status, response_body) = if path.starts_with("/auth/device/code") {
-                    (200, device_body.clone())
-                } else if path.starts_with("/auth/device/token") {
-                    let body = token_bodies[token_index.min(token_bodies.len() - 1)].clone();
-                    token_index += 1;
-                    (200, body)
-                } else {
-                    (404, json!({"error": "not_found"}))
+                log_handle.lock().push(format!("{path} {form_body}"));
+                let route = cursors.iter_mut().find(|(prefix, _)| path.starts_with(prefix));
+                let (status, response_body) = match route {
+                    Some((_, bodies)) => bodies.pop_front().unwrap_or((404, Value::Null)),
+                    None => (404, serde_json::json!({"error": "not_found"})),
                 };
-                // Capture the request for shape assertions via stdout of the test.
-                eprintln!("MOCK {path} <- {form_body}");
                 let response = format!(
-                    "HTTP/1.1 {} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    status,
+                    "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     response_body.to_string().len(),
                     response_body
                 );
                 let _ = stream.write_all(response.as_bytes()).await;
             }
         });
-        Self { base: format!("http://127.0.0.1:{port}"), handle }
+        Self { base: format!("http://127.0.0.1:{port}"), log, handle }
+    }
+
+    fn requests(&self) -> Vec<String> {
+        self.log.lock().clone()
     }
 }
 
-impl Drop for MockOAuth {
-    fn drop(&mut self) {
-        self.handle.abort();
-    }
-}
+// -- device-flow round-trips against the mock -----------------------------------
 
 #[tokio::test]
 async fn zen_device_flow_round_trip_against_mock() {
-    let mock = MockOAuth::start(
-        json!({
-            "device_code": "dev-123",
-            "user_code": "ABCD-1234",
-            "verification_uri_complete": "/verify?code=ABCD-1234",
-            "expires_in": 900,
-            "interval": 0
-        }),
-        vec![
-            json!({"error": "authorization_pending"}),
-            json!({"access_token": "zen-access", "refresh_token": "zen-refresh", "expires_in": 3600, "org_id": "org_9"}),
-        ],
-    )
+    let mock = MockOAuth::start(vec![
+        (
+            "/auth/device/code",
+            vec![json!({
+                "device_code": "dev-123",
+                "user_code": "ABCD-1234",
+                "verification_uri_complete": "/verify?code=ABCD-1234",
+                "expires_in": 900,
+                "interval": 0
+            })],
+        ),
+        (
+            "/auth/device/token",
+            vec![
+                json!({"error": "authorization_pending"}),
+                json!({"access_token": "zen-access", "refresh_token": "zen-refresh", "expires_in": 3600, "org_id": "org_9"}),
+            ],
+        ),
+    ])
     .await;
 
     let host = host().await;
@@ -546,10 +566,9 @@ async fn zen_device_flow_round_trip_against_mock() {
     assert_eq!(attempt.mode, "auto");
     assert_eq!(attempt.url, format!("{}/verify?code=ABCD-1234", mock.base));
     assert_eq!(attempt.instructions, "Enter code: ABCD-1234");
-    // The device code exchange drives expiresAt through (integration.ts:580).
     assert!(attempt.time.expires > crate::database::migrations::now_ms());
 
-    for _ in 0..200 {
+    for _ in 0..400 {
         if matches!(
             host.oauth_status("opencode", &attempt.attempt_id).await,
             Ok(AttemptStatus::Complete { .. })
@@ -558,10 +577,19 @@ async fn zen_device_flow_round_trip_against_mock() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    match host.oauth_status("opencode", &attempt.attempt_id).await {
-        Ok(AttemptStatus::Complete { .. }) => {}
-        other => panic!("expected complete, got {other:?}"),
-    }
+    assert!(matches!(
+        host.oauth_status("opencode", &attempt.attempt_id).await,
+        Ok(AttemptStatus::Complete { .. })
+    ));
+
+    // Request shapes (opencode.ts:96-99, 30-37): client_id + org scope on
+    // the device request; the device grant on the poll.
+    let requests = mock.requests().join("\n");
+    assert!(requests.contains("client_id=opencode-cli"), "{requests}");
+    assert!(requests.contains("supports_org_scope=true"), "{requests}");
+    assert!(requests.contains("grant_type=urn"), "{requests}");
+    assert!(requests.contains("device_code=dev-123"), "{requests}");
+
     // The credential: label derives from orgName (opencode.ts:152-164).
     let info = host.get("opencode").await.expect("get").expect("present");
     let ConnectionInfo::Credential { label, method, .. } = &info.connections[0] else { panic!() };
@@ -572,6 +600,199 @@ async fn zen_device_flow_round_trip_against_mock() {
     let CredentialValue::OAuth(oauth) = resolved else { panic!() };
     assert_eq!(oauth.access, "zen-access");
     assert_eq!(oauth.refresh, "zen-refresh");
+}
+
+#[tokio::test]
+async fn copilot_device_flow_round_trip_against_mock() {
+    let mock = MockOAuth::start(vec![
+        (
+            "/login/device/code",
+            vec![json!({
+                "device_code": "gh-dev",
+                "user_code": "FFFF-GGGG",
+                "verification_uri": "https://github.com/login/device",
+                "expires_in": 900,
+                "interval": 0
+            })],
+        ),
+        (
+            "/login/oauth/access_token",
+            vec![json!({"access_token": "gho_copilot", "expires_in": 0})],
+        ),
+        (
+            "/copilot_internal/user",
+            vec![json!({"chat_enabled": true, "endpoints": {"api": "https://api.githubcopilot.com/"}})],
+        ),
+    ])
+    .await;
+    let host = host().await;
+    // The device endpoints are github.com fixed (github-copilot.ts:73);
+    // only the entitlement lookup is mockable through the api domain →
+    // drive the flow with the enterprise path pointed at the mock host.
+    let enterprise = mock.base.clone();
+    let attempt = host
+        .oauth_connect(
+            "github-copilot",
+            "device",
+            &answer(&[("deploymentType", "enterprise"), ("enterpriseUrl", enterprise.as_str())]),
+            None,
+        )
+        .await
+        .expect("connect");
+    assert_eq!(attempt.url, "https://github.com/login/device");
+    assert!(attempt.instructions.contains("FFFF-GGGG"));
+
+    for _ in 0..400 {
+        if matches!(
+            host.oauth_status("github-copilot", &attempt.attempt_id).await,
+            Ok(AttemptStatus::Complete { .. })
+        ) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(matches!(
+        host.oauth_status("github-copilot", &attempt.attempt_id).await,
+        Ok(AttemptStatus::Complete { .. })
+    ));
+
+    // Request shapes (github-copilot.ts:71-73, 92-98): client id + scope;
+    // the device grant; the entitlement probe with the api version header.
+    let requests = mock.requests().join("\n");
+    assert!(requests.contains("client_id=Ov23li8tweQw6odWQebz"), "{requests}");
+    assert!(requests.contains("scope=read"), "{requests}");
+    assert!(requests.contains("device_code=gh-dev"), "{requests}");
+
+    // Credential: access == refresh (the token is both), expires 0,
+    // metadata carries the enterprise URL + api endpoint.
+    let active = host.connection_active("github-copilot").await.expect("active").expect("some");
+    let resolved = host.connection_resolve(&active).await.expect("resolve").expect("value");
+    let CredentialValue::OAuth(oauth) = resolved else { panic!() };
+    assert_eq!(oauth.access, "gho_copilot");
+    assert_eq!(oauth.refresh, "gho_copilot");
+    assert_eq!(oauth.expires, 0);
+    let metadata = oauth.metadata.expect("metadata");
+    assert_eq!(metadata.get("enterpriseUrl").and_then(Value::as_str), Some(enterprise.as_str()));
+    assert_eq!(
+        metadata.get("apiEndpoint").and_then(Value::as_str),
+        Some("https://api.githubcopilot.com")
+    );
+}
+
+#[tokio::test]
+async fn copilot_entitlement_denial_fails_the_attempt() {
+    let mock = MockOAuth::start(vec![
+        (
+            "/login/device/code",
+            vec![json!({
+                "device_code": "gh-dev-2",
+                "user_code": "AAAA-BBBB",
+                "verification_uri": "https://github.com/login/device",
+                "expires_in": 900,
+                "interval": 0
+            })],
+        ),
+        ("/login/oauth/access_token", vec![json!({"access_token": "gho_denied"})]),
+        ("/copilot_internal/user", vec![json!({"chat_enabled": false})]),
+    ])
+    .await;
+    let host = host().await;
+    let enterprise = mock.base.clone();
+    let attempt = host
+        .oauth_connect(
+            "github-copilot",
+            "device",
+            &answer(&[("deploymentType", "enterprise"), ("enterpriseUrl", enterprise.as_str())]),
+            None,
+        )
+        .await
+        .expect("connect");
+    for _ in 0..400 {
+        if matches!(
+            host.oauth_status("github-copilot", &attempt.attempt_id).await,
+            Ok(AttemptStatus::Failed { .. })
+        ) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    match host.oauth_status("github-copilot", &attempt.attempt_id).await {
+        Ok(AttemptStatus::Failed { message, .. }) => {
+            assert!(message.contains("not enabled"), "{message}");
+        }
+        other => panic!("expected failed, got {other:?}"),
+    }
+    assert!(host.connection_active("github-copilot").await.expect("active").is_none());
+}
+
+#[tokio::test]
+async fn zen_refresh_round_trip_against_mock() {
+    let mock = MockOAuth::start(vec![(
+        "/auth/device/token",
+        vec![json!({"access_token": "rotated-access", "refresh_token": "rotated-refresh", "expires_in": 1800})],
+    )])
+    .await;
+    let host = host().await;
+    // An expired zen credential pointing at the mock console (metadata.server).
+    let expiring = CredentialValue::OAuth(OAuthValue {
+        method_id: "device".into(),
+        refresh: "old-refresh".into(),
+        access: "old-access".into(),
+        expires: crate::database::migrations::now_ms() - 1000,
+        metadata: Some(BTreeMap::from([("server".to_owned(), Value::String(mock.base.clone()))])),
+    });
+    let (stored, _) = host
+        .store()
+        .create(credential::CreateInput {
+            id: None,
+            integration_id: "opencode",
+            label: Some("expiring"),
+            value: &expiring,
+            activate: None,
+        })
+        .await
+        .expect("create");
+    let _ = stored;
+    let active = host.connection_active("opencode").await.expect("active").expect("some");
+    let resolved = host.connection_resolve(&active).await.expect("resolve").expect("value");
+    let CredentialValue::OAuth(oauth) = resolved else { panic!() };
+    assert_eq!(oauth.access, "rotated-access");
+    assert_eq!(oauth.refresh, "rotated-refresh");
+    // Refresh request shape (opencode.ts:115-123): refresh grant + client id.
+    let requests = mock.requests().join("\n");
+    assert!(requests.contains("grant_type=refresh_token"), "{requests}");
+    assert!(requests.contains("refresh_token=old-refresh"), "{requests}");
+    assert!(requests.contains("client_id=opencode-cli"), "{requests}");
+}
+
+#[tokio::test]
+async fn zen_refresh_invalid_grant_reports_reconnect() {
+    let mock = MockOAuth::start_with_status(vec![(
+        "/auth/device/token",
+        vec![(400, json!({"error": "invalid_grant"}))],
+    )])
+    .await;
+    let host = host().await;
+    let expiring = CredentialValue::OAuth(OAuthValue {
+        method_id: "device".into(),
+        refresh: "dead-refresh".into(),
+        access: "old".into(),
+        expires: crate::database::migrations::now_ms() - 1000,
+        metadata: Some(BTreeMap::from([("server".to_owned(), Value::String(mock.base.clone()))])),
+    });
+    host.store()
+        .create(credential::CreateInput {
+            id: None,
+            integration_id: "opencode",
+            label: Some("dead"),
+            value: &expiring,
+            activate: None,
+        })
+        .await
+        .expect("create");
+    let active = host.connection_active("opencode").await.expect("active").expect("some");
+    let error = host.connection_resolve(&active).await.expect_err("refresh fails");
+    assert!(error.to_string().contains("Reconnect OpenCode Console"), "{error}");
 }
 
 // -- loopback listener ---------------------------------------------------------
