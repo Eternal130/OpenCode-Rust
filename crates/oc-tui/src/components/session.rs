@@ -15,7 +15,9 @@ use crate::components::composer::autocomplete;
 use crate::components::composer::render::{AutocompleteView, FooterHints, PromptView};
 use crate::components::message::list::{render_transcript, TranscriptOptions};
 use crate::components::session_tabs::{Attention, TabStatus, TabView};
-use crate::components::sidebar::{SidebarSections, SidebarView, SIDEBAR_AUTO_BREAKPOINT};
+use crate::components::sidebar::{
+    SidebarContextWidget, SidebarMcpWidget, SidebarSections, SidebarView, SIDEBAR_AUTO_BREAKPOINT,
+};
 use crate::render::{paint_placed_with_fills, Fill, Frame};
 use crate::store::{SessionTab, Store};
 use ratatui::style::Style;
@@ -268,6 +270,16 @@ pub fn render_session(
             // The user-block rail keys on the SESSION's agent (the
             // child view's `general` hue, session/index.tsx:2200).
             user_rail: store.session_agent_rail_color(session_id),
+            // SURF-1: the tool cells' inline disclosure keys.
+            expanded_tools: store.expanded_tool_keys(),
+            // SURF-1: the staged revert (the boundary filter + the
+            // tail banner), the queued-compaction dividers and the
+            // redo shortcut label (index.tsx:1413-1418/2153 — the
+            // `session.redo` binding label, "R" until the keymap
+            // registry carries it).
+            revert: store.revert(session_id),
+            pending_compactions: store.pending_compactions(session_id),
+            redo_key: "R".to_owned(),
             ..TranscriptOptions::default()
         },
         styles,
@@ -383,6 +395,53 @@ pub fn render_session(
                         x,
                         width: end - x,
                     })
+                } else if let Some(rest) = row.key.strip_prefix("tool:") {
+                    // SURF-1: a tool detail cell's click surface. The
+                    // action keys on the tool: `execute` (and
+                    // background shells with a `shellID`) open the
+                    // detail dialog (`openDetails` → DialogExecute,
+                    // index.tsx:3207); the shell block / generic tool
+                    // toggle the INLINE expand (ShellDisplay:2897,
+                    // GenericTool:2548). Both the expanded-group
+                    // cells (`tool:`) and the ungrouped part rows
+                    // (`part:`) register.
+                    let (message_id, part_id) = rest.split_once(':')?;
+                    tool_cell_hit(store, session_id, message_id, part_id, row, screen_y)
+                } else if let Some(rest) = row.key.strip_prefix("part:") {
+                    let (message_id, part_id) = rest.split_once(':')?;
+                    // Only TOOL parts carry a click surface (text and
+                    // reasoning rows never arm).
+                    let is_tool = {
+                        let messages = store.messages(session_id);
+                        messages
+                            .iter()
+                            .find(|message| message.id() == message_id)
+                            .and_then(|message| {
+                                crate::components::message::resolve_part(message.parts(), part_id)
+                            })
+                            .is_some_and(|part| {
+                                matches!(part, crate::components::message::model::Part::Tool { .. })
+                            })
+                    };
+                    is_tool
+                        .then(|| {
+                            tool_cell_hit(store, session_id, message_id, part_id, row, screen_y)
+                        })
+                        .flatten()
+                } else if row.key == "revert:banner" {
+                    // The banner's dismiss surface: the raised block's
+                    // full width (`RevertMessage`'s onMouseUp,
+                    // index.tsx:2093-2113).
+                    Some(crate::store::TranscriptHitRow {
+                        session_id: session_id.to_owned(),
+                        action: crate::store::TranscriptHitAction::DismissRevert {
+                            session_id: session_id.to_owned(),
+                        },
+                        y: screen_y,
+                        height: row.height,
+                        x: transcript.inset,
+                        width: column.saturating_sub(transcript.inset * 2),
+                    })
                 } else if let Some(message_id) = row.key.strip_prefix("message:") {
                     // The user-message block (`UserMessage`'s inner
                     // content box, session/index.tsx:2219-2250):
@@ -451,6 +510,35 @@ pub fn render_session(
     );
     let mut frame = paint_placed_with_fills(&[], &[], size, fill);
     paste(&mut frame, &region, 0, content_top);
+    // SURF-1: the jump slot's loading state ("Loading session
+    // history…", index.tsx:1425-1427) — right-aligned over the slot
+    // row while the transcript fetch is in flight and no rows landed
+    // yet (v2's `firstJump()` hold suppresses the jump indicator).
+    if store.history_loading(session_id) && transcript.rows.is_empty() {
+        let slot_y = content_top + transcript_height.saturating_sub(1);
+        let label = "Loading session history…";
+        let label_width = crate::wrap::display_width(label);
+        let x = column.saturating_sub(inset + label_width);
+        let loading = crate::render::paint_placed(
+            &[crate::layout::Placed {
+                x,
+                y: 0,
+                width: label_width,
+                lines: vec![crate::layout::PlacedLine::plain(
+                    label,
+                    ratatui::style::Style::new()
+                        .fg(styles.text_muted.fg.unwrap_or_default())
+                        .bg(styles.background),
+                )],
+                tag: Some("session-loading-history".into()),
+            }],
+            (u16::try_from(column).unwrap_or(u16::MAX), 1),
+            ratatui::style::Style::new()
+                .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
+                .bg(styles.background),
+        );
+        paste(&mut frame, &loading, 0, slot_y);
+    }
     if let Some(strip) = strip {
         paste(&mut frame, &strip, 0, 0);
     }
@@ -515,6 +603,21 @@ pub fn render_session(
             shift(&mut hits.connect);
             hits
         }));
+        // The MCP section's targets ride the same walk (the header's
+        // collapse toggle + the per-server rows) — translated to the
+        // pane's paste origin like the onboarding rects above.
+        let mut mcp_hits =
+            crate::components::sidebar::render_sidebar_scrolled(&view, styles, pane_height, scroll)
+                .mcp_hits;
+        if let Some(header) = &mut mcp_hits.header {
+            header.x += origin_x;
+            header.y += content_top;
+        }
+        for (_, rect) in &mut mcp_hits.rows {
+            rect.x += origin_x;
+            rect.y += content_top;
+        }
+        store.set_sidebar_mcp_hits(mcp_hits);
         if sidebar_docked {
             paste(&mut frame, &pane, column, content_top);
         } else if sidebar_overlay {
@@ -524,6 +627,7 @@ pub fn render_session(
         }
     } else {
         store.set_sidebar_onboarding_hits(None);
+        store.set_sidebar_mcp_hits(crate::store::SidebarMcpHits::default());
         // The pane unmounted — v2's scrollbox goes with it (the
         // offset resets, no x extent gates the wheel).
         store.set_sidebar_scroll_geometry(0, 0, None);
@@ -532,10 +636,72 @@ pub fn render_session(
 }
 
 /// The manual-open scrim (session-frame.tsx:385-397): the whole frame
-/// area under the strip dims under the floating sidebar — v2 blends
-/// rgba(0,0,0,70) over the content; the text grid has no alpha, so
+/// area under the strip dims under the floating sidebar — v2 blends/// rgba(0,0,0,70) over the content; the text grid has no alpha, so
 /// the scrim paints opaque black (the dominant visual: a dark
 /// backdrop with the pane floating right).
+/// One tool cell's hit row (the `tool:`/`part:` arm's shared body):
+/// resolves the part, picks the action by canonical tool name and
+/// wraps the head row's glyph extent in the hit rect.
+fn tool_cell_hit(
+    store: &Store,
+    session_id: &str,
+    message_id: &str,
+    part_id: &str,
+    row: &crate::components::message::list::MeasuredRow,
+    screen_y: usize,
+) -> Option<crate::store::TranscriptHitRow> {
+    let messages = store.messages(session_id);
+    let (name, state) = messages
+        .iter()
+        .find(|message| message.id() == message_id)
+        .and_then(|message| crate::components::message::resolve_part(message.parts(), part_id))
+        .and_then(|part| match part {
+            crate::components::message::model::Part::Tool { name, state, .. } => {
+                Some((name.clone(), state.clone()))
+            }
+            _ => None,
+        })?;
+    let canonical = crate::components::message::model::canonical_tool_name(&name).to_owned();
+    let background_shell = canonical == "shell" && state.metadata.contains_key("shellID");
+    let action = if canonical == "execute" || background_shell {
+        crate::store::TranscriptHitAction::OpenToolDialog {
+            message_id: message_id.to_owned(),
+            part_id: part_id.to_owned(),
+        }
+    } else {
+        crate::store::TranscriptHitAction::ToggleToolDetail {
+            message_id: message_id.to_owned(),
+            part_id: part_id.to_owned(),
+        }
+    };
+    let heads = row.placed.iter().filter(|item| item.y == row.y);
+    let x = heads.clone().map(|item| item.x).min().unwrap_or_default();
+    let end = heads
+        .map(|item| {
+            item.x
+                + item
+                    .lines
+                    .first()
+                    .map(|line| {
+                        line.runs
+                            .iter()
+                            .map(|run| crate::wrap::display_width(&run.text))
+                            .sum::<usize>()
+                    })
+                    .unwrap_or_default()
+        })
+        .max()
+        .unwrap_or_default();
+    (end > x).then(|| crate::store::TranscriptHitRow {
+        session_id: session_id.to_owned(),
+        action,
+        y: screen_y,
+        height: row.height,
+        x,
+        width: end - x,
+    })
+}
+
 fn scrim_frame(width: usize, height: usize) -> Frame {
     let black = ratatui::style::Color::Rgb(0, 0, 0);
     let style = Style::new().fg(crate::components::tool_rows::DEFAULT_FOREGROUND).bg(black);
@@ -546,12 +712,11 @@ fn scrim_frame(width: usize, height: usize) -> Frame {
 
 /// The live sidebar's content (`routes/session/sidebar.tsx`): the
 /// session's title (the tab list's title — the strip's "Untitled
-/// session" fallback), the plugin sections (`sidebar.content` — one
-/// per plugin through the slot bridge), the getting-started card
-/// (height ≥ 22 and not dismissed, footer.tsx:18-23) and the footer
-/// location line (absent until the live route carries a
-/// `{dir}:{branch}` source — the composer's status seam is empty
-/// too).
+/// session" fallback), the plugin sections (`sidebar.content` — the
+/// context/MCP widgets + one per plugin through the slot bridge), the
+/// getting-started card (height ≥ 22 and not dismissed, footer.tsx:18-23)
+/// and the footer location line `{dir}:{branch}` (the same source the
+/// composer footer's status reads — the location worker's vcs lookup).
 fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarView {
     // Session-title-first (the tab list's title resolution —
     // session-tabs.tsx:754), the strip's "Untitled session" fallback.
@@ -562,17 +727,85 @@ fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarV
         .find(|tab| tab.session_id == session_id)
         .and_then(|tab| store.display_title(tab))
         .unwrap_or_else(|| "Untitled session".to_owned());
+    // The context widget (`contextUsage`, util/session.ts:46-73): the
+    // LAST assistant with a token payload after the newest completed
+    // compaction; percent divides by the model catalog's context
+    // limit. The mm2 seam (docs/migration-m1-tabstrip.md): the ref's
+    // live "Context / N tokens" meter — NOW wired on our side; the
+    // rig's A/B mismatch class for it retires with this lane.
+    // `cost` (the ref's `data.session.cost()` — a per-session server
+    // total over the family) has no store source yet: the row waits
+    // for the session-info cost field (seam noted in surf1.log).
+    let messages = store.messages(session_id);
+    let compaction_index = messages
+        .iter()
+        .rposition(|message| {
+            matches!(
+                message,
+                crate::components::message::model::Message::Compaction {
+                    failed: false,
+                    running: false,
+                    ..
+                }
+            )
+        })
+        .map_or(0, |index| index + 1);
+    let usage = messages[compaction_index..].iter().rev().find_map(|message| match message {
+        crate::components::message::model::Message::Assistant {
+            usage_total: Some(total),
+            model,
+            ..
+        } if *total > 0 => Some((*total, model.clone())),
+        _ => None,
+    });
+    let context = match usage {
+        Some((tokens, model)) => SidebarContextWidget {
+            tokens: Some(tokens),
+            percent: {
+                let lists = store.server_lists();
+                lists
+                    .models
+                    .rows()
+                    .and_then(|models| {
+                        models
+                            .iter()
+                            .find(|entry| model == format!("{}/{}", entry.provider_id, entry.id))
+                    })
+                    .and_then(|entry| entry.context_limit.filter(|limit| *limit > 0))
+                    .map(|limit| {
+                        // `Math.round(tokens / limit * 100)` — display
+                        // rounding, not accounting (bounded + clamped:
+                        // a used-context meter stays in 0..=100; the
+                        // allows cover the display-only f64 round-trip).
+                        #[allow(
+                            clippy::cast_possible_truncation,
+                            clippy::cast_sign_loss,
+                            clippy::cast_precision_loss
+                        )]
+                        fn percent(tokens: u64, limit: i64) -> u8 {
+                            let ratio = (tokens.min(u64::from(u32::MAX)) as f64
+                                / f64::from(limit.clamp(1, 100_000_000) as u32))
+                                * 100.0;
+                            ratio.round().clamp(0.0, 100.0) as u8
+                        }
+                        percent(tokens, limit)
+                    })
+            },
+            cost: None,
+        },
+        None => SidebarContextWidget::default(),
+    };
     SidebarView {
         title,
         sections: SidebarSections {
-            context: Vec::new(),
-            mcp: Vec::new(),
+            context,
+            mcp: SidebarMcpWidget { servers: store.mcp_servers(), open: store.sidebar_mcp_open() },
             plugins: store.plugin_sidebar_sections(),
         },
         onboarding: height >= 22
             && !store.sidebar_onboarding_dismissed()
             && !store.server_lists().connected,
-        location: None,
+        location: (!store.footer_location().is_empty()).then(|| store.footer_location().clone()),
     }
 }
 

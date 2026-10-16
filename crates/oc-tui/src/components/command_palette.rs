@@ -376,6 +376,80 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 .collect();
             SelectProps::new("Queued prompts", options)
         }
+        // SURF-1: the tool detail viewer (`DialogExecute` for
+        // execute — dialog-execute.tsx; `DialogShellOutput` for
+        // background shells — dialog-shell-output.tsx): one row per
+        // line of the part's detail — the shell output (with the
+        // `(N earlier lines omitted)` notice when the tail truncated)
+        // or the execute input/metadata rows.
+        DialogKind::ToolOutput { session_id, message_id, part_id } => {
+            const SHELL_WINDOW: usize = 512;
+            let part = store
+                .messages(session_id)
+                .iter()
+                .find(|message| message.id() == message_id.as_str())
+                .and_then(|message| {
+                    crate::components::message::resolve_part(message.parts(), part_id).cloned()
+                });
+            let Some(crate::components::message::model::Part::Tool { name, state, .. }) = part
+            else {
+                return SelectProps::new("Tool", Vec::new());
+            };
+            let canonical =
+                crate::components::message::model::canonical_tool_name(&name).to_owned();
+            if canonical == "execute" {
+                // DialogExecute: the input/metadata views.
+                let mut options = Vec::new();
+                for (key, value) in &state.input {
+                    options.push(
+                        SelectOption::titled(format!("{key}: {value}"), format!("input:{key}"))
+                            .categorized("Input"),
+                    );
+                }
+                for (key, value) in &state.metadata {
+                    options.push(
+                        SelectOption::titled(format!("{key}: {value}"), format!("meta:{key}"))
+                            .categorized("Metadata"),
+                    );
+                }
+                if let Some(error) = &state.error {
+                    options.push(SelectOption::titled(error.clone(), "error").categorized("Error"));
+                }
+                if let Some(output) = &state.output {
+                    for (index, line) in output.lines().enumerate() {
+                        options.push(
+                            SelectOption::titled(line.to_owned(), format!("line:{index}"))
+                                .categorized("Output"),
+                        );
+                    }
+                }
+                return SelectProps::new("Execute", options).flat(true);
+            }
+            // DialogShellOutput: the tail preview + the omitted-lines
+            // notice (PAGE_BYTES windowing approximated per line here;
+            // the full viewer scrolls the same rows).
+            let output = state.output.clone().unwrap_or_default();
+            let lines: Vec<&str> = output.lines().collect();
+            let (omitted, visible) = if lines.len() > SHELL_WINDOW {
+                (Some(lines.len() - SHELL_WINDOW), &lines[lines.len() - SHELL_WINDOW..])
+            } else {
+                (None, &lines[..])
+            };
+            let mut options = Vec::new();
+            if let Some(count) = omitted {
+                options.push(
+                    SelectOption::titled(format!("({count} earlier lines omitted)"), "omitted")
+                        .muted_placeholder(),
+                );
+            }
+            if let Some(error) = &state.error {
+                options.push(SelectOption::titled(error.clone(), "error").categorized("Error"));
+            }
+            for (index, line) in visible.iter().enumerate() {
+                options.push(SelectOption::titled((*line).to_owned(), format!("line:{index}")));
+            }
+            SelectProps::new("Shell output", options).flat(true)
+        }
         DialogKind::ServerList { command: "model.list", title } => {
             model_list_props(store, title).with_current(model_current_value(store))
         }

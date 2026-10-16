@@ -131,6 +131,12 @@ pub enum DialogKind {
     /// index.tsx:627-675): enter steers the selected prompt, ctrl+d
     /// deletes it (`queued_prompt.delete`).
     QueuedPrompts,
+    /// SURF-1: the tool detail viewer — `DialogExecute` for `execute`
+    /// (dialog-execute.tsx; `dialog.replace` at index.tsx:3207) and
+    /// `DialogShellOutput` for background shells
+    /// (dialog-shell-output.tsx). The content materializes from the
+    /// transcript's tool part state.
+    ToolOutput { session_id: String, message_id: String, part_id: String },
 }
 
 /// One stack entry: the dialog kind, chrome size and content state.
@@ -885,6 +891,8 @@ pub struct Store {
     /// The sidebar onboarding card's pointer targets (the render
     /// pass's absolute rects; `None` while the card is hidden).
     sidebar_onboarding_hits: std::cell::RefCell<Option<SidebarOnboardingHits>>,
+    /// The MCP section's pointer targets (SURF-1).
+    sidebar_mcp_hits: std::cell::RefCell<SidebarMcpHits>,
     /// The session sidebar's wheel-scroll state (auditA #1): the
     /// content-slot offset plus the geometry the last render saw
     /// (content rows, viewport rows, absolute x extent). v2's
@@ -931,6 +939,81 @@ pub struct Store {
     /// hardware cursor, never a cell-painted block). Set during the
     /// route render; `None` hides it.
     caret_cell: Cell<Option<(u16, u16)>>,
+    /// SURF-1 revert state (`session.revert.*` — the
+    /// `RevertMessage` banner's source, index.tsx:1413-1418):
+    /// per-session boundary + file list; `cleared`/`committed`
+    /// remove it.
+    reverts: Signal<HashMap<String, RevertState>>,
+    /// The revert-clear API seam (`client.api.session.revert.clear`,
+    /// index.tsx:2105-2111 — the banner's click). Tests record calls.
+    revert_sink: std::cell::RefCell<Rc<dyn RevertSink>>,
+    /// Pending compaction inbox ids (`pending.list` items of type
+    /// `compaction` — the `◇ Compaction queued` divider rows,
+    /// rows.ts:72-79). `session.compaction.started` with a matching
+    /// `inputID` removes one (data.ts:1013).
+    pending_compactions: Signal<HashMap<String, Vec<String>>>,
+    /// SURF-1 history loading: the transcript fetch for a session is
+    /// in flight — the jump row shows "Loading session history…"
+    /// (index.tsx:1425-1427, v2's `firstJump()` hold).
+    history_loading: Signal<HashMap<String, bool>>,
+    /// SURF-1 tool detail disclosure (`InlineTool`/`ShellDisplay`'s
+    /// inline expand): expanded `{mid}:{pid}` keys.
+    expanded_tools: Signal<std::collections::HashSet<String>>,
+    /// SURF-1 MCP server list (`location.mcp.server.list` — the
+    /// sidebar's MCP section + `DialogStatus` source). Fetched by the
+    /// server-lists worker; statuses drive the per-server dot.
+    mcp_servers: Signal<Vec<McpServerRow>>,
+    /// The MCP section's collapse state (mcp.tsx's `view.open`).
+    sidebar_mcp_open: Signal<bool>,
+}
+
+/// One staged revert (`session.revert.staged`'s `revert` payload).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RevertState {
+    /// `revert.messageID` — messages at/after it are hidden (the
+    /// transcript filter, rows.ts:63-66).
+    pub message_id: String,
+    /// `revert.files` — the banner's file rows (empty → no list).
+    pub files: Vec<RevertFile>,
+}
+
+/// One reverted file row (`statusLabel` + path + `+A/−D`,
+/// index.tsx:2131-2148).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RevertFile {
+    pub file: String,
+    /// `added` | `modified` | `deleted`.
+    pub status: String,
+    pub additions: i64,
+    pub deletions: i64,
+}
+
+/// The `session.revert.clear` API seam (the banner's dismiss click).
+pub trait RevertSink {
+    fn clear(&self, session_id: &str);
+}
+
+/// The recording sink (tests + the default no-op).
+#[derive(Default)]
+pub struct RecordingRevertSink {
+    pub calls: std::cell::RefCell<Vec<String>>,
+}
+
+impl RevertSink for RecordingRevertSink {
+    fn clear(&self, session_id: &str) {
+        self.calls.borrow_mut().push(session_id.to_owned());
+    }
+}
+
+/// One MCP server row for the sidebar's MCP section
+/// (`location.mcp.server.list` — mcp.tsx:13-18).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct McpServerRow {
+    pub name: String,
+    /// `connected`, `pending`, `failed`, `disabled` or `needs_auth`.
+    pub status: &'static str,
+    /// The failed/`needs_auth` error text (`DialogMcp`'s details view).
+    pub error: Option<String>,
 }
 
 /// The composer panel's tab (`ComposerTab` — registration order:
@@ -1036,6 +1119,17 @@ pub enum TranscriptHitAction {
     /// ([`UserMessage`]'s `onMouseUp` → `dialog.replace(DialogMessage)`,
     /// session/index.tsx:2243-2249).
     MessageActions { message_id: String },
+    /// Toggle a tool detail cell's INLINE disclosure
+    /// (`ShellDisplay`'s expand / `GenericTool`'s expand — the
+    /// `BlockTool`/`InlineTool` `onMouseUp`, index.tsx:2768-2786).
+    ToggleToolDetail { message_id: String, part_id: String },
+    /// Open the tool detail dialog (`Execute`'s `openDetails` →
+    /// `dialog.replace(DialogExecute)`, index.tsx:3207; the background
+    /// shell's `DialogShellOutput`).
+    OpenToolDialog { message_id: String, part_id: String },
+    /// Dismiss the staged-revert banner (`RevertMessage`'s `onMouseUp`
+    /// → `session.revert.clear`, index.tsx:2105-2111).
+    DismissRevert { session_id: String },
 }
 
 impl TranscriptHitAction {
@@ -1045,7 +1139,11 @@ impl TranscriptHitAction {
     pub fn toggle_key(&self) -> Option<&str> {
         match self {
             Self::ToggleGroup(key) => Some(key.as_str()),
-            Self::ToggleThought { .. } | Self::MessageActions { .. } => None,
+            Self::ToggleThought { .. }
+            | Self::MessageActions { .. }
+            | Self::ToggleToolDetail { .. }
+            | Self::OpenToolDialog { .. }
+            | Self::DismissRevert { .. } => None,
         }
     }
 }
@@ -1114,6 +1212,18 @@ impl HitRect {
 pub struct SidebarOnboardingHits {
     pub dismiss: HitRect,
     pub connect: HitRect,
+}
+
+/// The sidebar MCP section's pointer targets (SURF-1, mcp.tsx:26-33 +
+/// 76-84): the header row (the collapse toggle, only past two
+/// servers) and one rect per visible server row (click → the MCP
+/// dialog focused on that server).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SidebarMcpHits {
+    /// `None` while `list.length <= 2` (no toggle).
+    pub header: Option<HitRect>,
+    /// `(server name, rect)` in paint order.
+    pub rows: Vec<(String, HitRect)>,
 }
 
 /// The sidebar's wheel-scroll model (auditA #1): the content-slot
@@ -1315,6 +1425,12 @@ struct StoreSignals {
     interrupts: Signal<HashMap<String, InterruptArm>>,
     model_ring: Signal<ModelRing>,
     picker: Signal<PickerState>,
+    reverts: Signal<HashMap<String, RevertState>>,
+    pending_compactions: Signal<HashMap<String, Vec<String>>>,
+    history_loading: Signal<HashMap<String, bool>>,
+    expanded_tools: Signal<std::collections::HashSet<String>>,
+    mcp_servers: Signal<Vec<McpServerRow>>,
+    sidebar_mcp_open: Signal<bool>,
 }
 
 impl Store {
@@ -1356,6 +1472,12 @@ impl Store {
                 watchers.queue.get(),
                 watchers.interrupts.get(),
                 watchers.model_ring.get(),
+                watchers.reverts.get(),
+                watchers.pending_compactions.get(),
+                watchers.history_loading.get(),
+                watchers.expanded_tools.get(),
+                watchers.mcp_servers.get(),
+                watchers.sidebar_mcp_open.get(),
                 watch_clock.get(),
             );
             bump.set(bump.get() + 1);
@@ -1404,6 +1526,12 @@ impl Store {
             interrupts,
             model_ring,
             picker,
+            reverts,
+            pending_compactions,
+            history_loading,
+            expanded_tools,
+            mcp_servers,
+            sidebar_mcp_open,
         } = signals;
         Self {
             runtime,
@@ -1466,6 +1594,7 @@ impl Store {
             dialog_option_rows: std::cell::RefCell::new(Vec::new()),
             footer_location_hit: std::cell::RefCell::new(None),
             sidebar_onboarding_hits: std::cell::RefCell::new(None),
+            sidebar_mcp_hits: std::cell::RefCell::new(SidebarMcpHits::default()),
             sidebar_scroll: std::cell::RefCell::new(SidebarScrollState::default()),
             permission_pointer_hits: std::cell::RefCell::new(None),
             dialog_button_hits: std::cell::RefCell::new(Vec::new()),
@@ -1476,8 +1605,15 @@ impl Store {
             interrupts,
             model_ring,
             picker,
+            reverts,
+            pending_compactions,
+            history_loading,
+            expanded_tools,
+            mcp_servers,
+            sidebar_mcp_open,
             interrupt_sink: std::cell::RefCell::new(Rc::new(RecordingInterruptSink::default())),
             model_ring_dirty: Cell::new(false),
+            revert_sink: std::cell::RefCell::new(Rc::new(RecordingRevertSink::default())),
             footer_location: std::cell::RefCell::new(String::new()),
             caret_cell: Cell::new(None),
         }
@@ -1524,6 +1660,12 @@ impl Store {
         let interrupts = Signal::new(&runtime, HashMap::<String, InterruptArm>::new());
         let model_ring = Signal::new(&runtime, ModelRing::default());
         let picker = Signal::new(&runtime, PickerState::default());
+        let reverts = Signal::new(&runtime, HashMap::<String, RevertState>::new());
+        let pending_compactions = Signal::new(&runtime, HashMap::<String, Vec<String>>::new());
+        let history_loading = Signal::new(&runtime, HashMap::<String, bool>::new());
+        let expanded_tools = Signal::new(&runtime, std::collections::HashSet::<String>::new());
+        let mcp_servers = Signal::new(&runtime, Vec::<McpServerRow>::new());
+        let sidebar_mcp_open = Signal::new(&runtime, true);
         Self::build(
             runtime,
             StoreSignals {
@@ -1558,6 +1700,12 @@ impl Store {
                 interrupts,
                 model_ring,
                 picker,
+                reverts,
+                pending_compactions,
+                history_loading,
+                expanded_tools,
+                mcp_servers,
+                sidebar_mcp_open,
             },
         )
     }
@@ -2742,6 +2890,16 @@ impl Store {
     pub fn set_sidebar_onboarding_hits(&self, hits: Option<SidebarOnboardingHits>) {
         *self.sidebar_onboarding_hits.borrow_mut() = hits;
     }
+    /// The recorded MCP-section targets (absolute cells; empty while
+    /// the section is hidden).
+    pub fn set_sidebar_mcp_hits(&self, hits: SidebarMcpHits) {
+        *self.sidebar_mcp_hits.borrow_mut() = hits;
+    }
+    /// The recorded MCP-section targets from the last render.
+    #[must_use]
+    pub fn sidebar_mcp_hits(&self) -> SidebarMcpHits {
+        self.sidebar_mcp_hits.borrow().clone()
+    }
     /// The recorded onboarding targets (`None` while the card is
     /// hidden — the render clears them every pass).
     #[must_use]
@@ -2954,6 +3112,101 @@ impl Store {
         self.interrupts.update(|state| {
             state.remove(session_id);
         });
+    }
+
+    // -- SURF-1: revert / pending compactions / history loading / tool
+    // disclosure / MCP --------------------------------------------------
+
+    /// The session's staged revert (the `RevertMessage` banner's
+    /// source, index.tsx:1413-1418).
+    #[must_use]
+    pub fn revert(&self, session_id: &str) -> Option<RevertState> {
+        self.reverts.get().get(session_id).cloned()
+    }
+
+    /// Install the revert sink (the production POST
+    /// `session.revert.clear`).
+    pub fn set_revert_sink(&self, sink: Rc<dyn RevertSink>) {
+        *self.revert_sink.borrow_mut() = sink;
+    }
+
+    /// The banner's dismiss click (index.tsx:2105-2111): fire the
+    /// clear API and drop the local state (the server's
+    /// `session.revert.cleared` echo is the consistency net).
+    pub fn revert_dismiss(&self, session_id: &str) {
+        self.revert_sink.borrow().clear(session_id);
+        self.reverts.update(|reverts| {
+            reverts.remove(session_id);
+        });
+    }
+
+    /// The queued-compaction inbox ids (the `◇ Compaction queued`
+    /// divider rows render one each, rows.ts:72-79).
+    #[must_use]
+    pub fn pending_compactions(&self, session_id: &str) -> Vec<String> {
+        self.pending_compactions.get().get(session_id).cloned().unwrap_or_default()
+    }
+
+    /// Seed the pending-compaction queue (tests + the pending.sync
+    /// snapshot seam).
+    pub fn set_pending_compactions(&self, session_id: &str, ids: Vec<String>) {
+        self.pending_compactions.update(|queues| {
+            queues.insert(session_id.to_owned(), ids);
+        });
+    }
+
+    /// The transcript fetch is in flight for this session — the jump
+    /// row shows "Loading session history…" (index.tsx:1425-1427).
+    #[must_use]
+    pub fn history_loading(&self, session_id: &str) -> bool {
+        self.history_loading.get().get(session_id).copied().unwrap_or(false)
+    }
+
+    pub fn set_history_loading(&self, session_id: &str, loading: bool) {
+        self.history_loading.update(|map| {
+            map.insert(session_id.to_owned(), loading);
+        });
+    }
+
+    /// A tool detail cell's inline disclosure (`{mid}:{pid}` key).
+    #[must_use]
+    pub fn tool_expanded(&self, key: &str) -> bool {
+        self.expanded_tools.get().contains(key)
+    }
+
+    pub fn toggle_tool_expanded(&self, key: &str) {
+        self.expanded_tools.update(|set| {
+            if !set.remove(key) {
+                set.insert(key.to_owned());
+            }
+        });
+    }
+
+    /// The expanded tool keys (the transcript render's options feed).
+    #[must_use]
+    pub fn expanded_tool_keys(&self) -> std::collections::HashSet<String> {
+        self.expanded_tools.get()
+    }
+
+    /// The MCP server rows (`location.mcp.server.list`).
+    #[must_use]
+    pub fn mcp_servers(&self) -> Vec<McpServerRow> {
+        self.mcp_servers.get()
+    }
+
+    pub fn set_mcp_servers(&self, rows: Vec<McpServerRow>) {
+        self.mcp_servers.set(rows);
+    }
+
+    /// The MCP section's collapse toggle (`storage.store("view")`,
+    /// mcp.tsx:19 — default open; only meaningful past two servers).
+    #[must_use]
+    pub fn sidebar_mcp_open(&self) -> bool {
+        self.sidebar_mcp_open.get()
+    }
+
+    pub fn set_sidebar_mcp_open(&self, open: bool) {
+        self.sidebar_mcp_open.set(open);
     }
 
     // -- queued prompts (Wave A: mini/queue.rs lifted into the main store) ----
@@ -4212,6 +4465,7 @@ impl Store {
     }
 
     #[allow(clippy::too_many_lines)] // one match over the event alphabet
+    #[allow(clippy::too_many_lines)] // the SSE reducer table (one arm per event)
     fn reduce_event(&self, event: &BusEvent) {
         match event.type_.as_str() {
             "session.updated" | "session.renamed" => {
@@ -4367,6 +4621,18 @@ impl Store {
                         },
                     );
                 }
+                // A queued compaction rides the inbox the same way
+                // (data.ts:783-788 → pending.list → the `◇ Compaction
+                // queued` rows, rows.ts:72-79).
+                if item.get("type").and_then(Value::as_str) == Some("compaction") {
+                    let id = event.string("inboxID").unwrap_or_else(|| event.id.clone());
+                    self.pending_compactions.update(|queues| {
+                        let queue = queues.entry(session).or_default();
+                        if !queue.iter().any(|pending| pending == &id) {
+                            queue.push(id);
+                        }
+                    });
+                }
             }
             // -- lane C: SSE message-part reducers (`rows.ts` subscriptions) --
             "session.text.delta" => {
@@ -4500,6 +4766,9 @@ impl Store {
                                 status: ToolStatus::Running,
                                 input: crate::data::stringify_map(input.as_ref()),
                                 metadata: std::collections::BTreeMap::new(),
+                                metadata_json: None,
+                                output: None,
+                                error: None,
                             };
                             if time.created.is_none() {
                                 time.created = created;
@@ -4526,6 +4795,47 @@ impl Store {
                 let Some((session, assistant)) = session_and_assistant(event) else { return };
                 let Some(part_id) = event.string("id") else { return };
                 let metadata = event.data.get("metadata").cloned();
+                // The settled state's detail payload (data.ts:954-985):
+                // success joins `content`'s text blocks into the output
+                // preview; failed also keeps `error.message` for the
+                // error row + DialogExecute's error variant.
+                let output = event
+                    .data
+                    .get("content")
+                    .and_then(|content| content.as_array())
+                    .map(|blocks| {
+                        blocks
+                            .iter()
+                            .filter_map(|block| {
+                                let text =
+                                    block.get("text").and_then(Value::as_str).map(str::to_owned);
+                                text.or_else(|| {
+                                    block
+                                        .get("name")
+                                        .and_then(Value::as_str)
+                                        .map(str::to_owned)
+                                        .or_else(|| {
+                                            block
+                                                .get("uri")
+                                                .and_then(Value::as_str)
+                                                .map(str::to_owned)
+                                        })
+                                })
+                            })
+                            .filter(|text| !text.is_empty())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .filter(|text| !text.is_empty());
+                let error = (event.type_ == "session.tool.failed")
+                    .then(|| {
+                        event
+                            .data
+                            .pointer("/error/message")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .flatten();
                 let completed = event.created;
                 self.update_messages(&session, |messages| {
                     with_tool_part(messages, &assistant, &part_id, |part| {
@@ -4538,7 +4848,11 @@ impl Store {
                                 };
                                 if !metadata_is_empty(metadata.as_ref()) {
                                     state.metadata = crate::data::stringify_map(metadata.as_ref());
+                                    state.metadata_json =
+                                        metadata.clone().filter(|value| !value.is_null());
                                 }
+                                state.output.clone_from(&output);
+                                state.error.clone_from(&error);
                                 time.completed = time.completed.or(completed);
                             }
                         }
@@ -4682,10 +4996,232 @@ impl Store {
                     .filter(|id| !id.is_empty())
                     .unwrap_or_else(|| format!("msg_{}", event.id.trim_start_matches("evt_")));
                 let created = event.created.unwrap_or(0);
+                // `removePending`: a queued compaction that started
+                // leaves the inbox (data.ts:1013).
+                self.pending_compactions.update(|queues| {
+                    if let Some(queue) = queues.get_mut(&session) {
+                        queue.retain(|pending| pending != &id);
+                    }
+                });
                 self.update_messages(&session, |messages| {
                     if !messages.iter().any(|m| m.id() == id.as_str()) {
-                        messages.push(Message::Compaction { id, running: true, created });
+                        messages.push(Message::Compaction {
+                            id,
+                            created,
+                            running: true,
+                            failed: false,
+                            cancelled: false,
+                            error: None,
+                            summary: Some(String::new()),
+                            tokens_in: None,
+                            tokens_out: None,
+                            provider_compaction: false,
+                        });
                     }
+                });
+            }
+            // The running compaction's streaming summary body
+            // (data.ts:1093-1098).
+            "session.compaction.delta" => {
+                let Some(session) = event.string("sessionID") else { return };
+                let text = event.string("text").unwrap_or_default();
+                self.update_messages(&session, |messages| {
+                    if let Some(Message::Compaction { summary, running: true, .. }) = messages
+                        .iter_mut()
+                        .rev()
+                        .find(|m| matches!(m, Message::Compaction { running: true, .. }))
+                    {
+                        *summary = Some(format!("{}{}", summary.clone().unwrap_or_default(), text));
+                    }
+                });
+            }
+            // Running → completed (or a fresh completed row when the
+            // started event was missed — data.ts:1099-1127).
+            "session.compaction.ended" => {
+                let Some(session) = event.string("sessionID") else { return };
+                let summary = event.string("text");
+                let tokens = event.data.get("tokens").cloned();
+                let provider_compaction =
+                    event.data.get("providerContext").is_some_and(|value| !value.is_null());
+                self.update_messages(&session, |messages| {
+                    let position = messages
+                        .iter()
+                        .rposition(|m| matches!(m, Message::Compaction { running: true, .. }));
+                    let fields = || {
+                        let tokens = tokens.as_ref().map(|tokens| {
+                            let number = |field: &str| {
+                                tokens.pointer(&format!("/{field}")).and_then(Value::as_f64)
+                            };
+                            (
+                                number("input"),
+                                number("cache/read"),
+                                number("cache/write"),
+                                number("output"),
+                                number("reasoning"),
+                            )
+                        });
+                        let (input, output) = tokens.map_or((None, None), |usage| {
+                            let (input, cr, cw, output, reasoning) = usage;
+                            let input =
+                                input.unwrap_or(0.0) + cr.unwrap_or(0.0) + cw.unwrap_or(0.0);
+                            let output = output.unwrap_or(0.0) + reasoning.unwrap_or(0.0);
+                            // Token counts: bounded by real usage.
+                            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                            let input = Some(input.max(0.0) as u64);
+                            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                            let output = Some(output.max(0.0) as u64);
+                            (input, output)
+                        });
+                        (summary.clone().or_else(|| Some(String::new())), input, output)
+                    };
+                    if let Some(index) = position {
+                        if let Some(Message::Compaction {
+                            running,
+                            failed,
+                            summary: slot,
+                            tokens_in,
+                            tokens_out,
+                            provider_compaction: slot_provider,
+                            ..
+                        }) = messages.get_mut(index)
+                        {
+                            let (summary, tokens_in_new, tokens_out_new) = fields();
+                            *running = false;
+                            *failed = false;
+                            *slot = summary;
+                            *tokens_in = tokens_in_new;
+                            *tokens_out = tokens_out_new;
+                            *slot_provider = provider_compaction;
+                        }
+                    } else {
+                        let id =
+                            event.string("inputID").filter(|id| !id.is_empty()).unwrap_or_else(
+                                || format!("msg_{}", event.id.trim_start_matches("evt_")),
+                            );
+                        let (summary, tokens_in, tokens_out) = fields();
+                        messages.push(Message::Compaction {
+                            id,
+                            created: event.created.unwrap_or(0),
+                            running: false,
+                            failed: false,
+                            cancelled: false,
+                            error: None,
+                            summary,
+                            tokens_in,
+                            tokens_out,
+                            provider_compaction,
+                        });
+                    }
+                });
+            }
+            // Running → failed (or a fresh failed row — data.ts:1128+).
+            "session.compaction.failed" => {
+                let Some(session) = event.string("sessionID") else { return };
+                let id = event
+                    .string("inputID")
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or_else(|| format!("msg_{}", event.id.trim_start_matches("evt_")));
+                self.pending_compactions.update(|queues| {
+                    if let Some(queue) = queues.get_mut(&session) {
+                        queue.retain(|pending| pending != &id);
+                    }
+                });
+                let error_type = event
+                    .data
+                    .pointer("/error/type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("compaction.failed")
+                    .to_owned();
+                let error_message = event
+                    .data
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Compaction failed before recording an error")
+                    .to_owned();
+                let cancelled = error_type == "aborted";
+                self.update_messages(&session, |messages| {
+                    let failed = Message::Compaction {
+                        id: id.clone(),
+                        created: event.created.unwrap_or(0),
+                        running: false,
+                        failed: true,
+                        cancelled,
+                        error: (!cancelled).then(|| error_message.clone()),
+                        summary: None,
+                        tokens_in: None,
+                        tokens_out: None,
+                        provider_compaction: false,
+                    };
+                    let position = messages
+                        .iter()
+                        .rposition(|m| matches!(m, Message::Compaction { running: true, .. }));
+                    if let Some(index) = position {
+                        if let Some(Message::Compaction {
+                            created,
+                            failed: slot_failed,
+                            cancelled: slot_cancelled,
+                            error: slot_error,
+                            ..
+                        }) = messages.get_mut(index)
+                        {
+                            *created = event.created.unwrap_or(0);
+                            *slot_failed = true;
+                            *slot_cancelled = cancelled;
+                            *slot_error = (!cancelled).then(|| error_message.clone());
+                        }
+                    } else if !messages.iter().any(|m| m.id() == id.as_str()) {
+                        messages.push(failed);
+                    }
+                });
+            }
+            // The `◇ Compaction queued` divider rows' source
+            // (pending.list items of type `compaction`,
+            // rows.ts:72-79 — fed by `session.inbox.enqueued`,
+            // data.ts:783-788).
+            // The revert banner's lifecycle (data.ts:1068-1086):
+            // staged carries `{messageID, files}`; cleared/committed
+            // drop it (committed also re-filters the message list via
+            // the server's next snapshot).
+            "session.revert.staged" => {
+                let Some(session) = event.string("sessionID") else { return };
+                let Some(revert) = event.data.get("revert") else { return };
+                let message_id =
+                    revert.get("messageID").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let files = revert
+                    .get("files")
+                    .and_then(Value::as_array)
+                    .map(|files| {
+                        files
+                            .iter()
+                            .filter_map(|file| {
+                                Some(RevertFile {
+                                    file: file.get("file")?.as_str()?.to_owned(),
+                                    status: file
+                                        .get("status")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("modified")
+                                        .to_owned(),
+                                    additions: file
+                                        .get("additions")
+                                        .and_then(Value::as_i64)
+                                        .unwrap_or(0),
+                                    deletions: file
+                                        .get("deletions")
+                                        .and_then(Value::as_i64)
+                                        .unwrap_or(0),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.reverts.update(|reverts| {
+                    reverts.insert(session, RevertState { message_id, files });
+                });
+            }
+            "session.revert.cleared" | "session.revert.committed" => {
+                let Some(session) = event.string("sessionID") else { return };
+                self.reverts.update(|reverts| {
+                    reverts.remove(&session);
                 });
             }
             _ => {}
@@ -4929,6 +5465,8 @@ fn files_from_event(data: &Value) -> Vec<crate::components::message::model::User
 
 /// Parse a full message payload off `message.updated` (`SessionMessageInfo`
 /// subset).
+// One arm per message kind (the SURF-1 skill arm pushed it over).
+#[allow(clippy::too_many_lines)]
 fn message_from_event(event: &BusEvent) -> Option<Message> {
     let id = event.string("id").or_else(|| event.string("messageID"))?;
     let time = PartTime {
@@ -4964,20 +5502,44 @@ fn message_from_event(event: &BusEvent) -> Option<Message> {
                         }
                         *ordinal += 1;
                     }
-                    "tool" => parts.push(Part::Tool {
-                        id: part.get("id").and_then(Value::as_str)?.to_owned(),
-                        name: part
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned(),
-                        time: part_time,
-                        state: crate::data::tool_state_from_json(
+                    "tool" => {
+                        let mut state = crate::data::tool_state_from_json(
                             part.pointer("/state/status").and_then(Value::as_str).unwrap_or(""),
                             part.pointer("/state/input"),
                             part.pointer("/state/metadata"),
-                        ),
-                    }),
+                        );
+                        // The settled states carry `content` (+ `error`
+                        // on failed) — the detail cells' output/error
+                        // (data.ts:954-985).
+                        state.output = part
+                            .pointer("/state/content")
+                            .and_then(Value::as_array)
+                            .map(|blocks| {
+                                blocks
+                                    .iter()
+                                    .filter_map(|block| {
+                                        block.get("text").and_then(Value::as_str).map(str::to_owned)
+                                    })
+                                    .filter(|text| !text.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
+                            .filter(|text| !text.is_empty());
+                        state.error = part
+                            .pointer("/state/error/message")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                        parts.push(Part::Tool {
+                            id: part.get("id").and_then(Value::as_str)?.to_owned(),
+                            name: part
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                            time: part_time,
+                            state,
+                        });
+                    }
                     _ => {}
                 }
             }
@@ -5013,6 +5575,13 @@ fn message_from_event(event: &BusEvent) -> Option<Message> {
                 usage_total: None,
             })
         }
+        // The `→ Skill {name}` row (message type `skill`,
+        // index.tsx:1993-1999).
+        Some("skill") => Some(Message::Skill {
+            id,
+            name: event.string("name").unwrap_or_default(),
+            created: time.created.unwrap_or(0),
+        }),
         _ => None,
     }
 }
