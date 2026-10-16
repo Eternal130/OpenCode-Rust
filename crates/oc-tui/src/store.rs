@@ -968,6 +968,9 @@ pub struct Store {
     /// The footer location label's hit rect + directory from the last
     /// render (None when the label didn't paint — empty location).
     footer_location_hit: std::cell::RefCell<Option<FooterLocationHit>>,
+    /// The home footer's chip rects (lane KM — cleared when the
+    /// footer hides or the route leaves home).
+    home_footer_chip_hits: std::cell::RefCell<Option<FooterChipHits>>,
     /// The sidebar onboarding card's pointer targets (the render
     /// pass's absolute rects; `None` while the card is hidden).
     sidebar_onboarding_hits: std::cell::RefCell<Option<SidebarOnboardingHits>>,
@@ -1048,6 +1051,9 @@ pub struct Store {
     /// sidebar's MCP section + `DialogStatus` source). Fetched by the
     /// server-lists worker; statuses drive the per-server dot.
     mcp_servers: Signal<Vec<McpServerRow>>,
+    /// Lane KM (auditA #10): the plugins-failed count (the boot
+    /// resolution's failures — the home footer chip's source).
+    plugins_failed: Signal<usize>,
     /// app.tsx:521's `mcpAlerted` record (the toast-once tracker).
     mcp_alerted: std::cell::RefCell<Option<std::collections::HashMap<String, String>>>,
     /// The MCP section's collapse state (mcp.tsx's `view.open`).
@@ -1601,6 +1607,17 @@ pub struct HitRect {
     pub height: usize,
 }
 
+/// The home footer's status chips (lane KM, auditA #10 —
+/// `feature-plugins/home/footer.tsx`): the MCP cell (success or
+/// failure — both dispatch `mcp.list`, :24) and the plugins-failed
+/// cell (`plugins.list`, :64). Absolute rects from the last home
+/// render pass.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FooterChipHits {
+    pub mcp: Option<HitRect>,
+    pub plugins: Option<HitRect>,
+}
+
 impl HitRect {
     /// Whether the pointer cell sits inside the rect.
     #[must_use]
@@ -1839,6 +1856,7 @@ struct StoreSignals {
     history_loading: Signal<HashMap<String, bool>>,
     expanded_tools: Signal<std::collections::HashSet<String>>,
     mcp_servers: Signal<Vec<McpServerRow>>,
+    plugins_failed: Signal<usize>,
     sidebar_mcp_open: Signal<bool>,
     diff_viewer: Signal<DiffViewerLive>,
     /// SURF-2 `DialogPair`'s resource state.
@@ -1889,6 +1907,7 @@ impl Store {
                 watchers.history_loading.get(),
                 watchers.expanded_tools.get(),
                 watchers.mcp_servers.get(),
+                watchers.plugins_failed.get(),
                 watchers.sidebar_mcp_open.get(),
                 watchers.diff_viewer.get(),
                 watchers.pair.get(),
@@ -1946,6 +1965,7 @@ impl Store {
             history_loading,
             expanded_tools,
             mcp_servers,
+            plugins_failed,
             sidebar_mcp_open,
             diff_viewer,
             pair,
@@ -2011,6 +2031,7 @@ impl Store {
             dialog_frame_rect: std::cell::RefCell::new(None),
             dialog_option_rows: std::cell::RefCell::new(Vec::new()),
             footer_location_hit: std::cell::RefCell::new(None),
+            home_footer_chip_hits: std::cell::RefCell::new(None),
             sidebar_onboarding_hits: std::cell::RefCell::new(None),
             sidebar_mcp_hits: std::cell::RefCell::new(SidebarMcpHits::default()),
             sidebar_scroll: std::cell::RefCell::new(SidebarScrollState::default()),
@@ -2028,6 +2049,7 @@ impl Store {
             history_loading,
             expanded_tools,
             mcp_servers,
+            plugins_failed,
             mcp_alerted: std::cell::RefCell::new(None),
             sidebar_mcp_open,
             diff_viewer,
@@ -2096,6 +2118,7 @@ impl Store {
         let history_loading = Signal::new(&runtime, HashMap::<String, bool>::new());
         let expanded_tools = Signal::new(&runtime, std::collections::HashSet::<String>::new());
         let mcp_servers = Signal::new(&runtime, Vec::<McpServerRow>::new());
+        let plugins_failed = Signal::new(&runtime, 0usize);
         let sidebar_mcp_open = Signal::new(&runtime, true);
         let diff_viewer = Signal::new(&runtime, DiffViewerLive::default());
         let pair = Signal::new(&runtime, PairState::default());
@@ -2139,6 +2162,7 @@ impl Store {
                 history_loading,
                 expanded_tools,
                 mcp_servers,
+                plugins_failed,
                 sidebar_mcp_open,
                 diff_viewer,
                 pair,
@@ -3379,6 +3403,9 @@ impl Store {
         self.transcript_hit_rows.borrow_mut().clear();
         *self.footer_location_hit.borrow_mut() = None;
         *self.sidebar_onboarding_hits.borrow_mut() = None;
+        // Lane KM: the home chips are route-scoped too (the footer
+        // unmounts with the home route).
+        *self.home_footer_chip_hits.borrow_mut() = None;
         // The sidebar's wheel geometry is route-scoped the same way
         // (the pane unmounts with the session route).
         *self.sidebar_scroll.borrow_mut() = SidebarScrollState::default();
@@ -3442,6 +3469,18 @@ impl Store {
     #[must_use]
     pub fn footer_location_hit(&self) -> Option<FooterLocationHit> {
         self.footer_location_hit.borrow().clone()
+    }
+
+    /// The home footer chips' rects (lane KM, auditA #10) — recorded
+    /// by the home render pass, cleared when the footer hides.
+    pub fn set_home_footer_chip_hits(&self, hits: Option<FooterChipHits>) {
+        *self.home_footer_chip_hits.borrow_mut() = hits;
+    }
+
+    /// The home footer chips' rects from the last render.
+    #[must_use]
+    pub fn home_footer_chip_hits(&self) -> Option<FooterChipHits> {
+        self.home_footer_chip_hits.borrow().clone()
     }
 
     /// The sidebar onboarding card's pointer targets, when the card
@@ -3791,6 +3830,17 @@ impl Store {
         }
         *self.mcp_alerted.borrow_mut() = Some(alerts);
         self.mcp_servers.set(rows);
+    }
+
+    /// The plugins-failed count (the home footer chip's source).
+    #[must_use]
+    pub fn plugins_failed(&self) -> usize {
+        self.plugins_failed.get()
+    }
+
+    /// Set the plugins-failed count (the boot resolution's failures).
+    pub fn set_plugins_failed(&self, count: usize) {
+        self.plugins_failed.set(count);
     }
 
     /// The MCP section's collapse toggle (`storage.store("view")`,

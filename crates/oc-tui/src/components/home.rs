@@ -128,6 +128,11 @@ pub struct HomeView<'a> {
     /// `(connected, failed)` — `None` when no servers are configured
     /// (footer.tsx:26's `Show when={list().length}`).
     pub mcp: Option<(usize, usize)>,
+    /// Lane KM (auditA #10): the plugins-failed chip's count
+    /// (footer.tsx:48-72 — `plugins.list().filter(failed).length +
+    /// server().filter(failed).length`); `None`/`Some(0)` never
+    /// renders (`Show when={failed()}`).
+    pub plugins_failed: Option<usize>,
     /// The live slash-palette popup (`None` in the golden harness —
     /// the fixture drafts never open it).
     pub autocomplete: Option<AutocompleteView<'a>>,
@@ -162,6 +167,14 @@ pub(crate) struct HomePlan {
     /// SURF-2: the MCP status cell (auditB #7) — the failed variant,
     /// the label text, the `/mcps` hint gate, and the composed width.
     pub mcp: Option<(bool, String, bool, usize)>,
+    /// Lane KM (auditA #10): the plugins-failed chip — the label
+    /// text, the `/plugins` hint gate, and the composed width.
+    pub plugins_failed: Option<(String, bool, usize)>,
+    /// Lane KM: the footer chips' hit extents `(x, width)` on the
+    /// footer row (the `onMouseUp` boxes — `mcp.list` /
+    /// `plugins.list`, footer.tsx:24/64).
+    pub mcp_chip: Option<(usize, usize)>,
+    pub plugins_chip: Option<(usize, usize)>,
     /// The prompt box's clamped width (`maxWidth 75`).
     pub prompt_width: usize,
     /// The prompt mount's height (paddingTop 1 + the composer).
@@ -255,11 +268,26 @@ pub(crate) fn plan_home(view: &HomeView, width: usize, height: usize) -> HomePla
         (failed_cell, label, hint, cell_width)
     });
     let mcp_width = mcp.as_ref().map_or(0, |(_, _, _, width)| width + 2);
+    // Lane KM (auditA #10): the plugins-failed chip (footer.tsx:
+    // 48-72) — `{n} plugin{s} failed` + the `/plugins` hint at ≥ 80.
+    let plugins_failed = view.plugins_failed.filter(|failed| *failed > 0).map(|failed| {
+        let label = format!("{failed} plugin{} failed", if failed == 1 { "" } else { "s" });
+        let hint = width >= 80;
+        let cell_width = 2 + display_width(&label) + if hint { 1 + 9 } else { 0 };
+        (label, hint, cell_width)
+    });
+    let plugins_width = plugins_failed.as_ref().map_or(0, |(_, _, width)| width + 2);
+    // The chips' hit extents: the MCP cell first, the plugins chip
+    // after its 2-col gap (the footer row's left-to-right walk).
+    let mcp_chip = mcp.as_ref().map(|(_, _, _, width)| (padding, *width));
+    // The plugins chip sits after the MCP cell's 2-col gap.
+    let plugins_chip = plugins_failed.as_ref().map(|(_, _, width)| (padding + mcp_width, *width));
     let actions = if view.plugin_actions.is_empty() {
         String::new()
     } else {
         let joined = view.plugin_actions.join(" · ");
-        let budget = width.saturating_sub(padding * 2 + version_width + 2 + mcp_width);
+        let budget =
+            width.saturating_sub(padding * 2 + version_width + 2 + mcp_width + plugins_width);
         crate::wrap::take_width(&joined, budget)
     };
 
@@ -271,6 +299,9 @@ pub(crate) fn plan_home(view: &HomeView, width: usize, height: usize) -> HomePla
         version_x,
         actions,
         mcp,
+        plugins_failed,
+        mcp_chip,
+        plugins_chip,
         prompt_width,
         mount,
         popup_rows,
@@ -367,6 +398,10 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
                 (connected, failed)
             })
         },
+        // Lane KM (auditA #10): the plugins-failed chip (the boot
+        // resolution's failures — footer.tsx:48-72's Show gate is
+        // `failed() > 0`, resolved in the plan).
+        plugins_failed: Some(store.plugins_failed()),
         autocomplete,
         rail: store.composer_rail_color(crate::app::HOME_PROMPT_KEY).map(CellColor::from),
         // NEW-S1a: the caret's char offset — the terminal cursor
@@ -393,6 +428,27 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
     let strip_shows = store.tabs_enabled() && !tabs.tabs.is_empty() && usize::from(size.1) > 1;
     let sub_size = (size.0, if strip_shows { size.1 - 1 } else { size.1 });
     let (mut frame, caret_screen) = render_home_view(&view, &state, sub_size);
+    // Lane KM (auditA #10): the footer chips' hit rects (absolute
+    // cells — the strip's one-row shift applies like the caret's).
+    // The chips render ONLY on the footer row of a shown footer.
+    let plan = plan_home(&view, usize::from(sub_size.0), usize::from(sub_size.1));
+    let shift = usize::from(strip_shows);
+    let chip = |extent: Option<(usize, usize)>| {
+        extent.map(|(x, width)| crate::store::HitRect {
+            x,
+            y: plan.footer_row + shift,
+            width,
+            height: 1,
+        })
+    };
+    store.set_home_footer_chip_hits(if plan.show_footer {
+        Some(crate::store::FooterChipHits {
+            mcp: chip(plan.mcp_chip),
+            plugins: chip(plan.plugins_chip),
+        })
+    } else {
+        None
+    });
     if strip_shows {
         let (width, height) = (usize::from(size.0), usize::from(size.1));
         let strip =

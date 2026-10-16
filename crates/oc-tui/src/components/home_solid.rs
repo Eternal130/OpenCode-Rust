@@ -393,6 +393,44 @@ fn footer_left_label(
                 link: None,
             });
         }
+        if plan.plugins_failed.is_some() || !plan.actions.is_empty() {
+            chunks.push(TextChunk {
+                text: "  ".to_owned(),
+                fg: Some(rgba(muted)),
+                bg: None,
+                attributes: 0,
+                link: None,
+            });
+        }
+    }
+    // Lane KM (auditA #10): the plugins-failed chip (footer.tsx:
+    // 48-72) — the error dot + `{n} plugin(s) failed` + the muted
+    // `/plugins` hint at width ≥ 80.
+    if let Some((label, hint, _)) = &plan.plugins_failed {
+        let feedback = &theme.resolved.tokens.text.feedback;
+        chunks.push(TextChunk {
+            text: "⊙ ".to_owned(),
+            fg: Some(rgba(theme_cell(feedback.error.base))),
+            bg: None,
+            attributes: 0,
+            link: None,
+        });
+        chunks.push(TextChunk {
+            text: label.clone(),
+            fg: Some(rgba(theme_cell(theme.resolved.tokens.text.base))),
+            bg: None,
+            attributes: 0,
+            link: None,
+        });
+        if *hint {
+            chunks.push(TextChunk {
+                text: " /plugins".to_owned(),
+                fg: Some(rgba(muted)),
+                bg: None,
+                attributes: 0,
+                link: None,
+            });
+        }
         if !plan.actions.is_empty() {
             chunks.push(TextChunk {
                 text: "  ".to_owned(),
@@ -546,6 +584,7 @@ mod tests {
             plugin_hints: Vec::new(),
             plugin_actions: scenario.actions.clone(),
             mcp: None,
+            plugins_failed: None,
             autocomplete: scenario.autocomplete.clone(),
             rail: None,
             caret: scenario.caret,
