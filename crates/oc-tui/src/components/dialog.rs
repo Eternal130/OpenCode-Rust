@@ -553,19 +553,16 @@ pub fn execute_submission(
             store.switch_diff_source(mode);
             return crate::components::command_palette::Dispatch::Handled;
         }
-        // The shortcuts dialog's rows are informational (`unbound`
-        // placeholders never submit anything).
-        Some(DialogKind::DiffHelp) => {
+        // The rows-only surfaces (diff shortcuts, status, pair,
+        // debug): informational submits just close.
+        Some(DialogKind::DiffHelp | DialogKind::Status | DialogKind::Pair | DialogKind::Debug) => {
             store.clear_dialogs();
             return crate::components::command_palette::Dispatch::Handled;
         }
         // `DialogMcp`'s `select` (dialog-mcp.tsx:100-109): a failed /
         // needs-auth server opens its error details.
         Some(DialogKind::Mcp) => {
-            let server = store
-                .mcp_servers()
-                .into_iter()
-                .find(|server| server.name == value);
+            let server = store.mcp_servers().into_iter().find(|server| server.name == value);
             if let Some(server) = server {
                 if server.error.is_some() {
                     store.replace_dialog(
@@ -601,12 +598,6 @@ pub fn execute_submission(
                 DialogKind::MessageActions { session_id, message_id },
                 DialogSize::Medium,
             );
-            return crate::components::command_palette::Dispatch::Handled;
-        }
-        // The rows-only surfaces (status/pair/debug): informational
-        // submits just close.
-        Some(DialogKind::Status | DialogKind::Pair | DialogKind::Debug) => {
-            store.clear_dialogs();
             return crate::components::command_palette::Dispatch::Handled;
         }
         // A Worktrees row submit: v2's `onSelect` → `selectWorkspace` —
