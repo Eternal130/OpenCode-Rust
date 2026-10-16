@@ -388,8 +388,7 @@ impl App {
                                 // no target → navigate to the previous
                                 // history session, else the last tab.
                                 let tabs = self.store.tabs();
-                                let fallback =
-                                    tabs.tabs.last().map(|tab| tab.session_id.clone());
+                                let fallback = tabs.tabs.last().map(|tab| tab.session_id.clone());
                                 if let Some(session_id) = fallback {
                                     self.store.select_tab(&session_id);
                                 }
@@ -1694,7 +1693,7 @@ pub fn spawn_server_lists(
             .integration()
             .list(&oc_client::types::IntegrationListQuery { location: None })
             .await
-            .map_or(false, |response| {
+            .is_ok_and(|response| {
                 response.data.iter().any(|integration| !integration.connections.is_empty())
             });
         let _ = tx.send(ServerListEvent::Connected(connected)).await;
@@ -3374,6 +3373,63 @@ mod tests {
             ..oc_client::types::SessionUpdateBody::default()
         };
         assert_eq!(body.title.as_deref(), Some("Fix it"));
+    }
+
+    /// L1 — the home route renders the strip with the `New session`
+    /// pseudo-tab selected and NO idle ` + ` affordance
+    /// (`items = [...ordered, NEW_SESSION_TAB]`, `showPlus`,
+    /// session-tabs.tsx:1339-1344); the session route keeps the ` + `.
+    #[test]
+    fn home_strip_promotes_the_new_session_slot() {
+        use crate::store::Route;
+        let app = App::new((100, 30));
+        app.store.open_tab("s1", Some("One".to_owned()));
+        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        let session_row = app.frame_text().lines().next().unwrap_or_default().to_owned();
+        assert!(session_row.contains("One"), "session route shows the tab: {session_row}");
+        assert!(session_row.contains('+'), "session route keeps the add affordance: {session_row}");
+        assert!(
+            !session_row.contains("New session"),
+            "no pseudo-tab on the session route: {session_row}"
+        );
+
+        app.store.navigate(Route::Home);
+        let home_row = app.frame_text().lines().next().unwrap_or_default().to_owned();
+        assert!(
+            home_row.contains("+ New session"),
+            "home promotes the new-session slot: {home_row}"
+        );
+        assert!(!home_row.ends_with('+'), "no idle add affordance at home: {home_row}");
+    }
+
+    /// L1 — opentui re-hovers from the stationary pointer after a
+    /// re-layout: clicking ` + ` (home route, pseudo-tab grows under
+    /// the pointer) keeps the ✕ revealed on the pseudo-tab — the
+    /// multi-session census cells (`✕` at the hovered tab's edge).
+    #[test]
+    fn add_release_keeps_hover_on_the_tab_under_the_pointer() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let mut app = App::new((100, 30));
+        app.store.open_tab("s1", Some("Parity fake says hello.".to_owned()));
+        app.store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+        let motion = |col: u16, kind: MouseEventKind| MouseEvent {
+            kind,
+            column: col,
+            row: 0,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        // Motion onto the ` + ` glyph (one tab at 100: the solver caps
+        // the tab at 32 cols, the plus zone is 32..35 — the glyph
+        // sits at col 33).
+        app.mouse_event(&motion(33, MouseEventKind::Moved));
+        assert!(app.store.tabs().add_hovered, "the affordance is hovered");
+        // Press + release → home route; the pointer now sits INSIDE
+        // the grown pseudo-tab (no motion event fires).
+        app.mouse_event(&motion(33, MouseEventKind::Down(MouseButton::Left)));
+        app.mouse_event(&motion(33, MouseEventKind::Up(MouseButton::Left)));
+        assert_eq!(app.store.route(), crate::store::Route::Home, "the add routed home");
+        let row = app.frame_text().lines().next().unwrap_or_default().to_owned();
+        assert!(row.contains('✕'), "the hovered pseudo-tab reveals its ✕: {row}");
     }
 
     /// A model pick through the DIALOG applies server-side: the sink

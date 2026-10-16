@@ -229,7 +229,7 @@ fn hex(rgb: Rgb) -> String {
 /// the tsx's `<Index each={visibleTitleParts}>` spans), or
 /// per-character TAIL FADE while the title overflows its slot
 /// (`titleFades` → `fadeTitleColor`, session-tabs.tsx:1605-1626:
-/// FADE_WIDTH=4, opacity 0.2/0.44/0.68/0.92 toward the tab
+/// `FADE_WIDTH` = 4, opacity 0.2/0.44/0.68/0.92 toward the tab
 /// background on the last four visible cells — the registered
 /// idx251/246/241/236 cluster). Chunks carry NO bg: the cell keeps
 /// the pulse/background beneath (the upstream transparent-bg blend),
@@ -253,8 +253,8 @@ fn title_chunks(inputs: &StripInputs, paint: &TabPaint, key: &str) -> StyledText
     let foreground =
         if paint.selected || paint.hovered { inputs.colors.text } else { inputs.colors.muted };
     let bold = u32::from(paint.selected); // attributes bit 1 = BOLD
-    // `titleFades` — marqueeOverflows(title, availableTitleWidth) &&
-    // availableTitleWidth > FADE_WIDTH (session-tabs.tsx:1605-1607).
+                                          // `titleFades` — marqueeOverflows(title, availableTitleWidth) &&
+                                          // availableTitleWidth > FADE_WIDTH (session-tabs.tsx:1605-1607).
     let title_fades =
         title.chars().count() > title_width_chars(&title, title_width) && title_width > FADE_WIDTH;
     match paint.glow {
@@ -296,8 +296,7 @@ fn title_chunks(inputs: &StripInputs, paint: &TabPaint, key: &str) -> StyledText
                 .enumerate()
                 .map(|(cell, ch)| {
                     let column = 1 + number_width + cell;
-                    let mut fg =
-                        glow_text_color(foreground, glow, column, paint.width, 1.0);
+                    let mut fg = glow_text_color(foreground, glow, column, paint.width, 1.0);
                     if title_fades {
                         let length = title_text.chars().count();
                         fg = fade_title_color(fg, paint.bg, cell, length, 0.0);
@@ -325,7 +324,7 @@ fn title_width_chars(title: &str, width: usize) -> usize {
 }
 
 /// `fadeTitleColor` (session-tabs.tsx:232-236), verbatim: the last
-/// FADE_WIDTH cells of an overflowing title dissolve toward the tab
+/// `FADE_WIDTH` cells of an overflowing title dissolve toward the tab
 /// background at 0.2/0.44/0.68/0.92 (`leading` = the marquee's
 /// leading fade; 0 while not scrolling).
 fn fade_title_color(color: Rgb, background: Rgb, index: usize, length: usize, leading: f64) -> Rgb {
@@ -333,12 +332,16 @@ fn fade_title_color(color: Rgb, background: Rgb, index: usize, length: usize, le
         if position <= 0 {
             0.0
         } else {
-            0.2 + 0.72 * ((position - 1) as f64 / (((FADE_WIDTH as i64) - 1).max(1)) as f64)
+            0.2 + 0.72
+                * (f64::from(u32::try_from(position - 1).unwrap_or(0))
+                    / f64::from(u32::try_from((FADE_WIDTH - 1).max(1)).unwrap_or(1)))
         }
     };
-    let start = if index < FADE_WIDTH { (FADE_WIDTH - index) as i64 } else { 0 };
-    let end = index as i64 - (length as i64 - FADE_WIDTH as i64) + 1;
-    let opacity = (fade(start) * f64::from(leading)).max(fade(end));
+    let start = if index < FADE_WIDTH { i64::try_from(FADE_WIDTH - index).unwrap_or(0) } else { 0 };
+    let end = i64::try_from(index).unwrap_or(0)
+        - i64::try_from(length.saturating_sub(FADE_WIDTH)).unwrap_or(0)
+        + 1;
+    let opacity = (fade(start) * leading).max(fade(end));
     if opacity == 0.0 {
         color
     } else {
@@ -925,6 +928,7 @@ thread_local! {
 /// Paint the strip through the opentui-solid path (see the module
 /// doc for the bridge shape and the flag).
 #[must_use]
+#[allow(clippy::too_many_arguments)] // the strip's full hover state, one input per signal
 pub fn paint_solid_bar(
     tabs: &[TabView],
     active: Option<&str>,
@@ -1018,7 +1022,7 @@ mod tests {
         );
     }
 
-    /// L1 — `fadeTitleColor` verbatim: the last FADE_WIDTH cells of an
+    /// L1 — `fadeTitleColor` verbatim: the last `FADE_WIDTH` cells of an
     /// overflowing title dissolve toward the tab background at
     /// 0.2/0.44/0.68/0.92 (session-tabs.tsx:232-236) — the registered
     /// idx251/246/241/236 cluster; a FITTING title stays flat.
@@ -1057,7 +1061,11 @@ mod tests {
         let tabs = vec![view("only", "Short", TabStatus::EMPTY)];
         let frame = paint_solid_bar(&tabs, Some("only"), true, 40, &styles, None, None, false);
         for col in 3..8 {
-            assert_eq!(frame.cell(0, col).fg, flat_fg, "cell {col} stays flat while the title fits");
+            assert_eq!(
+                frame.cell(0, col).fg,
+                flat_fg,
+                "cell {col} stays flat while the title fits"
+            );
         }
     }
 
@@ -1079,8 +1087,7 @@ mod tests {
                 .position(|cell| cell.ch == '✕')
                 .unwrap_or_else(|| panic!("no ✕: {}", frame.text_grid()[0]))
         };
-        let close_color =
-            crate::components::tab_pulse::tint(colors.muted, colors.text, 0.6);
+        let close_color = crate::components::tab_pulse::tint(colors.muted, colors.text, 0.6);
         let mark = tab_hover.cell(0, find_mark(&tab_hover));
         assert_eq!(
             mark.fg,
@@ -1151,7 +1158,8 @@ mod tests {
         // Mount at 80, then squeeze to 40, then widen to 160.
         let mut first_at_80: Option<String> = None;
         for width in [80usize, 40, 160, 80] {
-            let frame = paint_solid_bar(&tabs, Some("second"), true, width, &styles, None, None, false);
+            let frame =
+                paint_solid_bar(&tabs, Some("second"), true, width, &styles, None, None, false);
             assert_eq!(frame.text_grid().len(), 1, "one strip row at width {width}");
             let row = frame.text_grid()[0].clone();
             assert_eq!(row.chars().count(), width, "full row at width {width}");
