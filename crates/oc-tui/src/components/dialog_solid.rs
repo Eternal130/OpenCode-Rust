@@ -686,8 +686,9 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
         ]),
     );
 
-    // The filter input: a formfield-background box; the block cursor
-    // is an explicit-bg chunk (fg surface over formfield_fg).
+    // The filter input: a formfield-background box. No painted
+    // cursor — v2's input shows the hardware cursor only (the #8
+    // ruling; the row past the typed text stays the input's own bg).
     let input_box = box_()
         .height(1.0)
         .dyn_prop(
@@ -702,17 +703,7 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
                     styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
                 } else {
                     let typed = take_width(&i.filter, width);
-                    let end = display_width(&typed);
-                    let mut chunks = vec![chunk(typed, i.colors.formfield_fg, None, 0)];
-                    if end < width {
-                        chunks.push(chunk(
-                            " ".to_owned(),
-                            i.colors.surface,
-                            Some(i.colors.formfield_fg),
-                            0,
-                        ));
-                    }
-                    styled(chunks)
+                    styled(vec![chunk(typed, i.colors.formfield_fg, None, 0)])
                 }
             })),
         ));
