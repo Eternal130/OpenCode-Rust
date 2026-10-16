@@ -290,7 +290,7 @@ pub async fn publish_installation_event(bus: &oc_core::bus::Bus, available: bool
     };
     let Some(definition) = oc_core::bus::registry::by_type(type_) else { return };
     let _ = bus
-        .publish(&definition, json!({ "version": version }), oc_core::bus::PublishOptions::default())
+        .publish(definition, json!({ "version": version }), oc_core::bus::PublishOptions::default())
         .await;
 }
 
@@ -460,7 +460,7 @@ pub async fn run(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
 
 /// Resolves the location's VCS HEAD file — the v2 location watcher's sole
 /// target (`location-watcher.ts:33-51`: `git.repo.discover(...)?.gitDirectory`
-/// + realPath, watching `<gitdir>/HEAD`; `.git` files (linked worktrees)
+/// with realPath, watching `<gitdir>/HEAD`; `.git` files (linked worktrees)
 /// resolve through their `gitdir:` pointer).
 fn discover_head_file(directory: &std::path::Path) -> Option<std::path::PathBuf> {
     let mut current = Some(directory);
@@ -473,8 +473,7 @@ fn discover_head_file(directory: &std::path::Path) -> Option<std::path::PathBuf>
                 let text = std::fs::read_to_string(&dot_git).ok()?;
                 let target = text.lines().next()?.strip_prefix("gitdir:")?.trim();
                 let target = std::path::PathBuf::from(target);
-                let canonical =
-                    std::fs::canonicalize(&target).unwrap_or_else(|_| target.clone());
+                let canonical = std::fs::canonicalize(&target).unwrap_or_else(|_| target.clone());
                 return Some(canonical.join("HEAD"));
             }
             Err(_) => current = dir.parent(),
@@ -485,16 +484,14 @@ fn discover_head_file(directory: &std::path::Path) -> Option<std::path::PathBuf>
 
 /// The change fingerprint of a HEAD file (`(mtime_ns, len)`).
 fn head_fingerprint(path: &std::path::Path) -> (u64, u64) {
-    std::fs::metadata(path)
-        .map(|meta| {
-            let mtime = meta
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0, |duration| duration.as_nanos() as u64);
-            (mtime, meta.len())
-        })
-        .unwrap_or((0, 0))
+    std::fs::metadata(path).map_or((0, 0), |meta| {
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |duration| u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX));
+        (mtime, meta.len())
+    })
 }
 
 /// Parses the branch a HEAD file points at (`ref: refs/heads/<name>` →
@@ -546,7 +543,7 @@ pub async fn watch_location_head(state: &Arc<AppState>, location: &LocationRef) 
             .engine
             .bus
             .publish(
-                &definition,
+                definition,
                 json!({ "file": head_path.to_string_lossy(), "event": "change" }),
                 options,
             )
@@ -558,7 +555,7 @@ pub async fn watch_location_head(state: &Arc<AppState>, location: &LocationRef) 
     // concern; the poller cannot be overtaken mid-tick).
     let branch = head_branch(&head_path);
     if branch != entry.branch {
-        entry.branch = branch.clone();
+        entry.branch.clone_from(&branch);
         if let Some(definition) =
             oc_core::bus::registry::by_type(oc_core::bus::registry::VCS_BRANCH_UPDATED)
         {
@@ -570,7 +567,7 @@ pub async fn watch_location_head(state: &Arc<AppState>, location: &LocationRef) 
                 location: Some(envelope(location)),
                 ..oc_core::bus::PublishOptions::default()
             };
-            let _ = state.engine.bus.publish(&definition, data, options).await;
+            let _ = state.engine.bus.publish(definition, data, options).await;
         }
     }
 }

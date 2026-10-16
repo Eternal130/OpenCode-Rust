@@ -239,10 +239,8 @@ async fn activate(
             };
             // credential.ts:186-192 — already the picked-active row: no-op
             // (and no `credential.switched` event).
-            let current: Option<String> = tx
-                .conn()
-                .query_row(ACTIVE_PICK_SQL, (integration.clone(),), |row| row.get(0))
-                .ok();
+            let current: Option<String> =
+                tx.conn().query_row(ACTIVE_PICK_SQL, (integration.clone(),), |row| row.get(0)).ok();
             if current.as_deref() == Some(credential_id.as_str()) {
                 return Ok(None);
             }
@@ -302,10 +300,8 @@ async fn remove(
             };
             let mut switched = None;
             if let Some(integration) = &integration_id {
-                let active: Option<String> = tx
-                    .conn()
-                    .query_row(ACTIVE_PICK_SQL, (integration,), |row| row.get(0))
-                    .ok();
+                let active: Option<String> =
+                    tx.conn().query_row(ACTIVE_PICK_SQL, (integration,), |row| row.get(0)).ok();
                 if active.as_deref() == Some(credential_id.as_str()) {
                     tx.execute("DELETE FROM credential WHERE id = ?1", (credential_id.clone(),))?;
                     let replacement: Option<String> = tx
