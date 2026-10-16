@@ -295,12 +295,18 @@ impl App {
         let width = usize::from(self.size.0);
         let col = usize::from(mouse.column);
         let row = usize::from(mouse.row);
-        // The strip renders on row 0 of the session route while tabs
-        // are enabled and nothing modal owns the screen.
+        // The strip renders on row 0 while tabs are enabled and nothing
+        // modal owns the screen — on EVERY non-plugin route, exactly
+        // like v2's app-wide mount (`app.tsx:1353-1355` seats
+        // `<SessionTabs/>` above the route `<Switch>`; `tabsAvailable()`
+        // gates on `route.data.type !== "plugin"` only, `app.tsx:576-579`
+        // — home included, no active pill). The dogfood2 repro: restored
+        // tabs on the home route painted but took no clicks because this
+        // gate was session-only.
         let strip_live = self.store.tabs_enabled()
             && self.store.dialogs().is_empty()
             && !self.permission_live()
-            && matches!(self.store.route(), Route::Session { .. });
+            && !self.store.tabs().tabs.is_empty();
         let active = match self.store.route() {
             Route::Session { session_id } => Some(session_id),
             Route::Home => None,
