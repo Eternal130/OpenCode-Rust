@@ -14,6 +14,16 @@ mod util;
 use clap::Parser;
 use cli::{Cli, Commands, ServerParams};
 
+/// The `mini` section of `cli.json` (`resolved.mini` in v2's
+/// `handlers/mini.ts:37-38`) — the `--replay`/`--replay-limit` flag
+/// fallbacks. Reads through [`oc_core::cli_config`] (env overlay
+/// included); unreadable config degrades to no fallback (defaults
+/// apply).
+fn mini_replay_config() -> oc_core::cli_config::MiniInfo {
+    let roots = oc_util::global_roots::resolve();
+    oc_core::cli_config::CliConfig::open(&roots).get().mini.unwrap_or_default()
+}
+
 #[tokio::main]
 async fn main() {
     // Hidden entrypoint: OpenSSH execs the binary directly as askpass.
@@ -121,6 +131,11 @@ async fn dispatch(cli: Cli) -> i32 {
             prompt,
             demo,
         }) => {
+            // v2 `handlers/mini.ts:37-38`: the CLI flag wins, then the
+            // `mini` section of cli.json (`mini.replay` / `mini.replay_limit`),
+            // then the built-in defaults (replay on; the limit default
+            // applies inside the mini host).
+            let resolved = mini_replay_config();
             let input = mini::MiniInput {
                 continue_,
                 session,
@@ -128,11 +143,22 @@ async fn dispatch(cli: Cli) -> i32 {
                 model,
                 agent,
                 prompt,
-                // v2: `input.replay ?? resolved.mini?.replay ?? true`
-                // (`handlers/mini.ts:37`) — default ON, `--no-replay`
-                // flips it (the `overrides_with` negation pair).
-                replay: replay && !mini_no_replay,
-                replay_limit,
+                // `--replay`/`--no-replay` presence: `--no-replay` wins
+                // when both are given (v2's negation pair).
+                replay: mini::resolve_replay(
+                    if mini_no_replay {
+                        Some(false)
+                    } else if replay {
+                        Some(true)
+                    } else {
+                        None
+                    },
+                    resolved.replay,
+                ),
+                replay_limit: mini::resolve_replay_limit(
+                    replay_limit,
+                    resolved.replay_limit.and_then(|limit| u32::try_from(limit).ok()),
+                ),
                 demo,
             };
             handlers::misc::mini(input, &server).await
