@@ -745,25 +745,17 @@ async fn move_session(
 // POST /:id/fork
 // ---------------------------------------------------------------------------
 
-async fn fork(
-    State(state): State<SharedState>,
-    Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
-) -> Result<Response, ApiError> {
-    let (services, _row) = session_services(&state, &session_id).await?;
-    // v2 `Session.fork` (core session.ts:319-355): locate the boundary —
-    // the `before` message when the payload names one (HTTP wire carries
-    // the bare messageID, protocol groups/session.ts:313), else the newest
-    // message — then publish ONE durable `session.forked` event; the
-    // projector (`project_fork`, projector.rs:571) creates the row, copies
-    // the settled history below the boundary (`{type, messageID}` union,
-    // schema/session-fork.ts:6-10), fork-styles the title and seeds the
-    // instruction state. No row is pre-created: a pre-created row makes
-    // the projector's `INSERT OR IGNORE` fail ALREADY_PROJECTED and the
-    // fork copies nothing (auditE core #3).
-    let before = body["before"].as_str().map(String::from);
-    let lookup_session = session_id.clone();
-    let lookup_before = before.clone();
+/// The fork boundary lookup (ref session.ts:321-339): the `before`
+/// message when the payload names one, else the newest message. Errors:
+/// named-but-missing → 404 `MessageNotFound`; no messages at all → 400
+/// `empty_session`.
+async fn fork_boundary(
+    state: &SharedState,
+    session_id: &str,
+    before: Option<&str>,
+) -> Result<String, ApiError> {
+    let lookup_session = session_id.to_owned();
+    let lookup_before = before.map(String::from);
     let boundary_id: Option<String> = state
         .engine
         .db
@@ -795,24 +787,21 @@ async fn fork(
             crate::errors::debug_cause("session:unknown_ref", &error);
             ApiError::unknown_ref()
         })?;
-    let boundary_id = match (&before, boundary_id) {
-        (Some(_), None) => {
-            // MessageNotFoundError → 404 (ref session.ts:334-338).
-            let missing = body["before"].as_str().unwrap_or_default().to_owned();
-            return Err(ApiError::message_not_found(&session_id, &missing));
-        }
-        (None, None) => {
-            // ForkEmptyError → 400 empty_session (ref session.ts:339).
-            return Err(ApiError::invalid_request_kind("Session is empty", "empty_session"));
-        }
-        (_, Some(id)) => id,
-    };
-    let boundary_type = if before.is_some() { "before" } else { "through" };
+    match (before, boundary_id) {
+        (Some(_), None) => Err(ApiError::message_not_found(session_id, before.unwrap_or_default())),
+        (None, None) => Err(ApiError::invalid_request_kind("Session is empty", "empty_session")),
+        (_, Some(id)) => Ok(id),
+    }
+}
 
-    // The fork adopts the parent's newest instruction values rather than
-    // the values in effect at the boundary (ref session.ts:341-349).
-    let parent_id = session_id.clone();
-    let inherited = state
+/// The inherited instruction snapshot for a fork (ref session.ts:341-349):
+/// the parent's newest instruction values + entry snapshot.
+async fn fork_instructions(
+    state: &SharedState,
+    session_id: &str,
+) -> Result<(Option<String>, Vec<Value>), ApiError> {
+    let parent_id = session_id.to_owned();
+    state
         .engine
         .db
         .transaction(move |tx| {
@@ -846,8 +835,32 @@ async fn fork(
         .map_err(|error| {
             crate::errors::debug_cause("session:unknown_ref", &error);
             ApiError::unknown_ref()
-        })?;
-    let (instructions, instruction_entries) = inherited;
+        })
+}
+
+async fn fork(
+    State(state): State<SharedState>,
+    Path(session_id): Path<String>,
+    axum::Json(body): axum::Json<Value>,
+) -> Result<Response, ApiError> {
+    let (services, _row) = session_services(&state, &session_id).await?;
+    // v2 `Session.fork` (core session.ts:319-355): locate the boundary —
+    // the `before` message when the payload names one (HTTP wire carries
+    // the bare messageID, protocol groups/session.ts:313), else the newest
+    // message — then publish ONE durable `session.forked` event; the
+    // projector (`project_fork`, projector.rs:571) creates the row, copies
+    // the settled history below the boundary (`{type, messageID}` union,
+    // schema/session-fork.ts:6-10), fork-styles the title and seeds the
+    // instruction state. No row is pre-created: a pre-created row makes
+    // the projector's `INSERT OR IGNORE` fail ALREADY_PROJECTED and the
+    // fork copies nothing (auditE core #3).
+    let before = body["before"].as_str().map(String::from);
+    let boundary_id = fork_boundary(&state, &session_id, before.as_deref()).await?;
+    let boundary_type = if before.is_some() { "before" } else { "through" };
+
+    // The fork adopts the parent's newest instruction values rather than
+    // the values in effect at the boundary (ref session.ts:341-349).
+    let (instructions, instruction_entries) = fork_instructions(&state, &session_id).await?;
     let mut data = json!({
         "sessionID": state.ids.new_id("ses"),
         "parentID": session_id,
@@ -859,16 +872,14 @@ async fn fork(
     }
     data["instructionEntries"] = Value::Array(instruction_entries);
 
-    let definition = registry::by_type_latest("session.forked").ok_or_else(ApiError::unknown_ref)?;
-    services
-        .graph
-        .bus
-        .publish(definition, data.clone(), PublishOptions::default())
-        .await
-        .map_err(|error| {
+    let definition =
+        registry::by_type_latest("session.forked").ok_or_else(ApiError::unknown_ref)?;
+    services.graph.bus.publish(definition, data.clone(), PublishOptions::default()).await.map_err(
+        |error| {
             crate::errors::debug_cause("session:fork_projection", &error);
             ApiError::unknown_ref()
-        })?;
+        },
+    )?;
     // The projected fork row (the projector created it inside the publish).
     let fork_id = data["sessionID"].as_str().unwrap_or_default().to_owned();
     let fork_row = services
@@ -950,6 +961,41 @@ async fn generate(
 // POST /:id/shell, /:id/view, /:id/wait, /:id/background
 // ---------------------------------------------------------------------------
 
+/// The preview page the ended event carries (session.ts:206-210): up to
+/// 1 MiB from the cursor start; a vanished capture serves the
+/// `ShellResult.unavailable` stand-in.
+#[allow(clippy::single_match_else)] // the two arms read as the v2 fallback
+async fn shell_output_preview(
+    services: &std::sync::Arc<LocationServices>,
+    shell_id: &oc_schema::id::ShellId,
+) -> Value {
+    match services
+        .shell
+        .output(
+            shell_id,
+            Some(oc_schema::shell::OutputInput { cursor: None, limit: Some(1024 * 1024) }),
+        )
+        .await
+    {
+        Ok(page) => json!({
+            "output": page.output,
+            "cursor": page.cursor,
+            "size": page.size,
+            "truncated": page.truncated,
+        }),
+        Err(_) => {
+            const MISSING: &str = "Shell command output is no longer available.";
+            let size = MISSING.len();
+            json!({
+                "output": MISSING,
+                "cursor": size,
+                "size": size,
+                "truncated": false,
+            })
+        }
+    }
+}
+
 async fn shell(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
@@ -1026,44 +1072,13 @@ async fn shell(
         let _ = services
             .graph
             .bus
-            .publish(
-                definition,
-                json!({ "sessionID": session_id, "shell": info }),
-                options,
-            )
+            .publish(definition, json!({ "sessionID": session_id, "shell": info }), options)
             .await;
     }
 
     let result = services.shell.result(info).await;
     let terminal = result.info.clone();
-    // The preview page the ended event carries (session.ts:206-210):
-    // up to 1 MiB from the cursor start; a vanished capture serves the
-    // `ShellResult.unavailable` stand-in.
-    let preview = match services
-        .shell
-        .output(
-            &result.info.id,
-            Some(oc_schema::shell::OutputInput { cursor: None, limit: Some(1024 * 1024) }),
-        )
-        .await
-    {
-        Ok(page) => json!({
-            "output": page.output,
-            "cursor": page.cursor,
-            "size": page.size,
-            "truncated": page.truncated,
-        }),
-        Err(_) => {
-            const MISSING: &str = "Shell command output is no longer available.";
-            let size = MISSING.len();
-            json!({
-                "output": MISSING,
-                "cursor": size,
-                "size": size,
-                "truncated": false,
-            })
-        }
-    };
+    let preview = shell_output_preview(&services, &result.info.id).await;
     if let Some(definition) = registry::by_type_latest("session.shell.ended") {
         let _ = services
             .graph
@@ -1078,21 +1093,19 @@ async fn shell(
 
     // The user-notification synthetic (`ShellResult.userNotification`) —
     // resume:false, so unlike the old path nothing reaches the model.
+    // v2 passes no id (session.ts:206-215): the notification gets a FRESH
+    // message id — reusing the caller's would collide with the
+    // shell-message row the started event just projected.
     let notification = oc_core::shell::result::user_notification(&result);
-    let message_id = input_id.unwrap_or_else(|| state.ids.new_id("msg"));
+    let message_id = state.ids.new_id("msg");
     let payload = oc_schema::session_inbox::SyntheticPayload {
         text: notification.text,
         description: None,
-        metadata: serde_json::from_value::<oc_schema::common::Record>(notification.metadata)
-            .ok(),
+        metadata: serde_json::from_value::<oc_schema::common::Record>(notification.metadata).ok(),
     };
     services
         .inbox
-        .admit(
-            &message_id,
-            &session_id,
-            Item::Synthetic { payload, delivery: Delivery::Steer },
-        )
+        .admit(&message_id, &session_id, Item::Synthetic { payload, delivery: Delivery::Steer })
         .await
         .map_err(|error| inbox_error(&error, &message_id))?;
     Ok(no_content())

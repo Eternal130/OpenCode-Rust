@@ -117,8 +117,8 @@ async fn be1_sse_credential_events_on_create_activate_and_remove() {
         .await
         .expect("credential create");
 
-    let updated = expect_frame(&mut stream, "\"type\":\"credential.updated\"", "credential.updated")
-        .await;
+    let updated =
+        expect_frame(&mut stream, "\"type\":\"credential.updated\"", "credential.updated").await;
     assert!(updated.contains("\"data\":{}"), "payload is the empty object: {updated}");
     let switched =
         expect_frame(&mut stream, "\"type\":\"credential.switched\"", "credential.switched").await;
@@ -128,8 +128,8 @@ async fn be1_sse_credential_events_on_create_activate_and_remove() {
     // Removal of the active row switches to the replacement (or null).
     client.credential().remove(&entry.id).await.expect("remove");
     expect_frame(&mut stream, "\"type\":\"credential.updated\"", "remove updated").await;
-    let switched = expect_frame(&mut stream, "\"type\":\"credential.switched\"", "remove switched")
-        .await;
+    let switched =
+        expect_frame(&mut stream, "\"type\":\"credential.switched\"", "remove switched").await;
     assert!(
         switched.contains("\"credentialID\":null") || switched.contains("\"credentialID\":\""),
         "replacement or null: {switched}"
@@ -167,7 +167,8 @@ async fn be1_sse_worktree_updated_on_create() {
         })
         .await
         .expect("worktree create");
-    let frame = expect_frame(&mut stream, "\"type\":\"worktree.updated\"", "worktree.updated").await;
+    let frame =
+        expect_frame(&mut stream, "\"type\":\"worktree.updated\"", "worktree.updated").await;
     assert!(frame.contains(&format!("\"projectID\":\"{project_id}\"")), "{frame}");
 }
 
@@ -302,10 +303,7 @@ async fn be1_sse_session_status_busy_then_idle_over_a_real_turn() {
     let session_id = create_session(client, "status").await;
     let _ = client
         .session()
-        .prompt(
-            &session_id,
-            &SessionPromptBody { text: "hello".to_owned(), ..Default::default() },
-        )
+        .prompt(&session_id, &SessionPromptBody { text: "hello".to_owned(), ..Default::default() })
         .await
         .expect("prompt");
 
@@ -367,12 +365,18 @@ async fn be1_fork_copies_history_and_fork_styles_the_title() {
     let parent = create_session(client, "fork me").await;
     seed_settled_history(&server.state, &parent).await;
 
-    let fork = client
-        .session()
-        .fork(&parent, &SessionForkBody::default())
-        .await
-        .expect("fork");
-    assert_eq!(fork.parent_id.as_deref(), Some(parent.as_str()), "fork is a child session");
+    let fork = client.session().fork(&parent, &SessionForkBody::default()).await.expect("fork");
+    // v2 wire shape for forks (info.ts:21-27): parent linkage rides the
+    // `fork` object (`forkSessionId` column), not `parentID` (NULL for
+    // forks — projector.ts:151-152).
+    let fork_info = fork.fork.as_ref().expect("fork linkage");
+    assert_eq!(fork_info.session_id, parent, "fork points at the parent");
+    match &fork_info.boundary {
+        SessionForkBoundary::Through(variant) => {
+            assert_eq!(variant.message_id, "msg_assistant_root", "through = newest message");
+        }
+        other => panic!("expected through boundary, got {other:?}"),
+    }
     assert_eq!(fork.title.as_deref(), Some("fork me (fork #1)"), "fork-styled title");
 
     // The projector copied BOTH settled messages.
@@ -386,10 +390,7 @@ async fn be1_fork_copies_history_and_fork_styles_the_title() {
     // `before` excludes the boundary message and its successors.
     let fork_before = client
         .session()
-        .fork(
-            &parent,
-            &SessionForkBody { before: Some("msg_assistant_root".to_owned()) },
-        )
+        .fork(&parent, &SessionForkBody { before: Some("msg_assistant_root".to_owned()) })
         .await
         .expect("fork before");
     let copied_before = client
@@ -398,7 +399,10 @@ async fn be1_fork_copies_history_and_fork_styles_the_title() {
         .await
         .expect("fork before messages");
     assert_eq!(copied_before.data.len(), 1, "boundary type=before copies strictly below");
-    assert_eq!(fork_before.title.as_deref(), Some("fork me (fork #2)"), "fork counter increments");
+    // v2 derives the counter from the PARENT title (projector.ts:159,
+    // forkTitle(parent.title)) — the parent title never mutates, so every
+    // fork of "fork me" is "(fork #1)".
+    assert_eq!(fork_before.title.as_deref(), Some("fork me (fork #1)"), "parent-derived title");
 
     // v2 error contracts: unknown boundary message → 404; empty session →
     // 400 empty_session.
@@ -415,11 +419,7 @@ async fn be1_fork_copies_history_and_fork_styles_the_title() {
         other => panic!("expected Api(404), got {other:?}"),
     }
     let empty = create_session(client, "empty").await;
-    let error = client
-        .session()
-        .fork(&empty, &SessionForkBody::default())
-        .await
-        .expect_err("400");
+    let error = client.session().fork(&empty, &SessionForkBody::default()).await.expect_err("400");
     match &error {
         oc_client::error::ClientError::Api { status, fields, .. } => {
             assert_eq!(*status, 400, "{status}");
@@ -487,11 +487,8 @@ async fn be1_config_update_writes_shell_preserving_comments() {
     let config_dir = server.state.engine.home.join(".config").join("opencode");
     std::fs::create_dir_all(&config_dir).expect("config dir");
     let config_path = config_dir.join("opencode.jsonc");
-    std::fs::write(
-        &config_path,
-        "{\n  // keep me around\n  \"username\": \"lane-be1\"\n}\n",
-    )
-    .expect("seed config");
+    std::fs::write(&config_path, "{\n  // keep me around\n  \"username\": \"lane-be1\"\n}\n")
+        .expect("seed config");
 
     client
         .config()
@@ -504,11 +501,7 @@ async fn be1_config_update_writes_shell_preserving_comments() {
     assert!(updated.contains("\"shell\": \"/bin/zsh\""), "shell written: {updated}");
 
     // null removes the key, comments still intact.
-    client
-        .config()
-        .update(&ConfigPatch { shell: None })
-        .await
-        .expect("patch null 204");
+    client.config().update(&ConfigPatch { shell: None }).await.expect("patch null 204");
     let removed = std::fs::read_to_string(&config_path).expect("read back");
     assert!(removed.contains("// keep me around"), "comment still preserved: {removed}");
     assert!(!removed.contains("\"shell\""), "shell key removed: {removed}");

@@ -701,7 +701,14 @@ mod tests {
     #[tokio::test]
     async fn server_feed_public_type_filter_covers_audit_d_types() {
         // (a) published-but-filtered.
-        for type_ in ["form.created", "form.replied", "form.cancelled", "shell.created", "shell.exited", "shell.deleted"] {
+        for type_ in [
+            "form.created",
+            "form.replied",
+            "form.cancelled",
+            "shell.created",
+            "shell.exited",
+            "shell.deleted",
+        ] {
             assert!(is_public_event(type_), "{type_} must be public");
         }
         // (b) the 14 wired in this lane.
