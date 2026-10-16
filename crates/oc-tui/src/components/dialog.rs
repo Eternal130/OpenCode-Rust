@@ -88,7 +88,8 @@ pub fn handle_dialog_key(
         | DialogKind::WorktreeDeleteConfirm { .. }
         | DialogKind::MessageActions { .. }
         | DialogKind::WorkingDirectory { .. }
-        | DialogKind::ServerList { .. } => true,
+        | DialogKind::ServerList { .. }
+        | DialogKind::ToolOutput { .. } => true,
     };
     let is_help = matches!(entry.kind, DialogKind::Help);
     let is_static = is_help
@@ -340,7 +341,8 @@ pub fn render_overlay_with_options(
         | DialogKind::WorktreeDeleteConfirm { .. }
         | DialogKind::ServerList { .. }
         | DialogKind::MessageActions { .. }
-        | DialogKind::WorkingDirectory { .. } => true,
+        | DialogKind::WorkingDirectory { .. }
+        | DialogKind::ToolOutput { .. } => true,
         // A plugin dialog records rows only when its content is a
         // select (rows-only dialogs render statically).
         DialogKind::Plugin { .. } => {
