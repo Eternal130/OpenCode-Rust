@@ -480,7 +480,8 @@ mod tests {
         );
         let doc: GettingStartedDoc = storage.read_or_default(KEY_GETTING_STARTED);
         assert!(!doc.dismissed, "the default initial value (footer.tsx:12)");
-        storage.write_typed(KEY_GETTING_STARTED, &GettingStartedDoc { dismissed: true })
+        storage
+            .write_typed(KEY_GETTING_STARTED, &GettingStartedDoc { dismissed: true })
             .expect("write");
         let body =
             std::fs::read_to_string(storage.path_for(KEY_GETTING_STARTED)).expect("read back");
@@ -488,8 +489,7 @@ mod tests {
         let back: GettingStartedDoc = storage.read_or_default(KEY_GETTING_STARTED);
         assert!(back.dismissed, "the boot read seeds the dismissal");
         // A v2-written file (no whitespace) reads back too.
-        std::fs::write(storage.path_for(KEY_GETTING_STARTED), r#"{"dismissed":true}"#)
-            .unwrap();
+        std::fs::write(storage.path_for(KEY_GETTING_STARTED), r#"{"dismissed":true}"#).unwrap();
         assert!(storage.read_or_default::<GettingStartedDoc>(KEY_GETTING_STARTED).dismissed);
     }
 

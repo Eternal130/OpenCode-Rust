@@ -259,7 +259,8 @@ mod tests {
     /// `session.sidebar` (config/index.tsx:151-152): "auto" default,
     /// "hide" the only other value — anything else falls back to auto.
     #[test]
-    fn parses_session_sidebar_mode() {        assert_eq!(
+    fn parses_session_sidebar_mode() {
+        assert_eq!(
             TuiConfig::parse("{}", None).session_sidebar,
             crate::components::sidebar::SidebarMode::Auto
         );

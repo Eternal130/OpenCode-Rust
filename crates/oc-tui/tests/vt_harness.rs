@@ -959,13 +959,7 @@ pub fn run_tui(url: &str, cols: u16, rows: u16, limit: Duration) {
 /// auto-submits the first turn, `--auto` arms permission
 /// autoaccept — the flags' live-loop semantics need the real boot
 /// path, not a post-boot store poke).
-pub fn run_tui_boot(
-    url: &str,
-    cols: u16,
-    rows: u16,
-    limit: Duration,
-    boot: oc_tui::app::BootArgs,
-) {
+pub fn run_tui_boot(url: &str, cols: u16, rows: u16, limit: Duration, boot: oc_tui::app::BootArgs) {
     let client = oc_client::Client::new(url).expect("client");
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("rt");
     let finished = runtime.block_on(async {
