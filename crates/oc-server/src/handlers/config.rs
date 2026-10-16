@@ -76,10 +76,9 @@ async fn update(
         config: state.engine.home.join(".config").join("opencode"),
         home: state.engine.home.clone(),
     };
-    oc_core::config::update_shell(&globals, shell.as_deref())
-        .map_err(|error| {
-            crate::errors::debug_cause("config:update", &error);
-            ApiError::unknown_ref()
-        })?;
+    oc_core::config::update_shell(&globals, shell.as_deref()).map_err(|error| {
+        crate::errors::debug_cause("config:update", &error);
+        ApiError::unknown_ref()
+    })?;
     Ok(no_content())
 }

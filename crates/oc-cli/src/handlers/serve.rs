@@ -146,7 +146,8 @@ pub async fn run(options: Options) -> i32 {
                         oc_server::announce::publish_installation_event(&bus, true, &version).await;
                     }
                     Some(crate::services::autoupdate::InstallationNotice::Installed(version)) => {
-                        oc_server::announce::publish_installation_event(&bus, false, &version).await;
+                        oc_server::announce::publish_installation_event(&bus, false, &version)
+                            .await;
                     }
                     None => break,
                 }

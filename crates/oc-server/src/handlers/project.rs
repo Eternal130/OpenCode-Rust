@@ -284,7 +284,8 @@ async fn worktree_create(
 /// row-owning mutation (`changed(projectID, true)`, worktree.ts:128-131 +
 /// create:228 / remove:270), routed to the project's location.
 async fn publish_worktree_updated(state: &SharedState, project_id: &str) {
-    let Some(definition) = oc_core::bus::registry::by_type(oc_core::bus::registry::WORKTREE_UPDATED)
+    let Some(definition) =
+        oc_core::bus::registry::by_type(oc_core::bus::registry::WORKTREE_UPDATED)
     else {
         return;
     };
@@ -296,11 +297,9 @@ async fn publish_worktree_updated(state: &SharedState, project_id: &str) {
         .transaction(move |tx| {
             Ok(tx
                 .conn()
-                .query_row(
-                    "SELECT worktree FROM project WHERE id = ?1",
-                    (lookup_id,),
-                    |row| row.get(0),
-                )
+                .query_row("SELECT worktree FROM project WHERE id = ?1", (lookup_id,), |row| {
+                    row.get(0)
+                })
                 .ok())
         })
         .await
@@ -314,7 +313,7 @@ async fn publish_worktree_updated(state: &SharedState, project_id: &str) {
     let _ = state
         .engine
         .bus
-        .publish(&definition, serde_json::json!({ "projectID": project_id }), options)
+        .publish(definition, serde_json::json!({ "projectID": project_id }), options)
         .await;
 }
 
