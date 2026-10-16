@@ -75,6 +75,50 @@ fn custom_model_json(
     })
 }
 
+/// The location's ordered model entries — exactly what
+/// [`model_list`] serves: `Model.available()` sorted by
+/// `time.released` DESCENDING (core model.ts:218-220) over the
+/// available providers, with config-defined custom providers
+/// activation-"enabled" (config/plugin/provider.ts:67) riding the
+/// same stable sort (released = 0, after every dated catalog model).
+/// `Model.default`'s fallback (`available.find(supportsText)`,
+/// model.ts:260-266) scans the SAME ordering.
+fn location_model_entries(
+    engine: &oc_core::engine::Engine,
+    location: &oc_core::location::LocationRef,
+) -> Vec<Value> {
+    let catalog = &engine.catalog;
+    let mut data: Vec<(f64, Value)> = catalog
+        .available_models(|name| std::env::var_os(name).is_some())
+        .into_iter()
+        .map(|(snapshot, model)| (model.time.released.0, model_json(snapshot, model)))
+        .collect();
+    for provider in crate::boot::location_custom_providers(engine, location) {
+        for model in &provider.models {
+            data.push((0.0, custom_model_json(&provider, model)));
+        }
+    }
+    data.sort_by(|a, b| b.0.total_cmp(&a.0));
+    data.into_iter().map(|(_, value)| value).collect()
+}
+
+/// `Model.supportsText` (core model.ts:273-277): empty capabilities
+/// wildcard to text, else some modality must start with `text`.
+fn supports_text(model: &Value) -> bool {
+    let modality_has_text = |key: &str| {
+        model
+            .get("capabilities")
+            .and_then(|caps| caps.get(key))
+            .and_then(Value::as_array)
+            .map_or(true, |items| {
+                items.iter().any(|item| {
+                    item.as_str().map_or(false, |text| text.starts_with("text"))
+                })
+            })
+    };
+    modality_has_text("input") && modality_has_text("output")
+}
+
 async fn model_list(
     State(state): State<SharedState>,
     uri: Uri,
@@ -82,27 +126,7 @@ async fn model_list(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
-    let catalog = &state.engine.catalog;
-    // v2's `Model.available()` serves the flattened list sorted by
-    // `time.released` DESCENDING (core model.ts:218-220) over the
-    // AVAILABLE providers only — the availability fold
-    // (`Catalog::available_models`: the keyless `opencode` zen
-    // provider's free tier + providers with an env credential set);
-    // config-defined custom providers are activation-"enabled"
-    // (config/plugin/provider.ts:67) and ride the same stable sort
-    // (released = 0, after every dated catalog model).
-    let mut data: Vec<(f64, Value)> = catalog
-        .available_models(|name| std::env::var_os(name).is_some())
-        .into_iter()
-        .map(|(snapshot, model)| (model.time.released.0, model_json(snapshot, model)))
-        .collect();
-    for provider in crate::boot::location_custom_providers(&state.engine, &location) {
-        for model in &provider.models {
-            data.push((0.0, custom_model_json(&provider, model)));
-        }
-    }
-    data.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let data: Vec<Value> = data.into_iter().map(|(_, value)| value).collect();
+    let data = location_model_entries(&state.engine, &location);
     Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
 }
 
@@ -121,8 +145,14 @@ async fn model_default(
             .find(|provider| provider.id == selection.provider_id.as_str());
         // A custom (config) provider renders its own entry; a catalog
         // provider's default resolves through the catalog so the payload
-        // keeps the full (client-parseable) Model.Info shape.
-        let default = if let Some(provider) = provider {
+        // keeps the full (client-parseable) Model.Info shape. When the
+        // selection resolves to NOTHING (v2: `byProvider.get(providerID)
+        // ?.get(modelID)` — an exact-map miss, e.g. a `model: "Own/…"`
+        // selection against a `providers.own` key — or a disabled
+        // model), v2 serves `available.find(supportsText)` (model.ts:
+        // 260-266): the first text model of the SAME ordering the list
+        // serves, never a synthetic stub.
+        let resolved = if let Some(provider) = provider {
             let model = provider
                 .models
                 .iter()
@@ -134,14 +164,13 @@ async fn model_default(
                     headers: None,
                     body: None,
                 });
-            custom_model_json(&provider, &model)
+            Some(custom_model_json(&provider, &model))
         } else {
             let catalog = &state.engine.catalog;
-            let catalog_snapshot = catalog
+            catalog
                 .providers()
                 .iter()
-                .find(|snapshot| snapshot.info.id.0 == selection.provider_id.as_str());
-            catalog_snapshot
+                .find(|snapshot| snapshot.info.id.0 == selection.provider_id.as_str())
                 .and_then(|snapshot| {
                     snapshot
                         .models
@@ -149,36 +178,21 @@ async fn model_default(
                         .find(|model| model.id.0 == selection.model.as_str())
                         .map(|model| model_json(snapshot, model))
                 })
-                .or_else(|| {
-                    catalog_snapshot.and_then(|snapshot| {
-                        snapshot.models.first().map(|model| model_json(snapshot, model))
-                    })
-                })
-                .unwrap_or_else(|| {
-                    json!({
-                        "id": selection.model.as_str(),
-                        "modelID": selection.model.as_str(),
-                        "providerID": selection.provider_id.as_str(),
-                        "name": selection.model.as_str(),
-                        "enabled": true,
-                        "status": "active",
-                        "time": { "released": 0 },
-                        "capabilities": { "input": ["text"], "output": ["text"], "tools": true },
-                        "limit": { "context": 0, "output": 0 },
-                        "cost": [],
-                        "variants": [],
-                    })
-                })
         };
-        return Ok(json_location_data(&location.as_path().to_string_lossy(), default));
+        let default = resolved.or_else(|| {
+            location_model_entries(&state.engine, &location)
+                .into_iter()
+                .find(supports_text)
+        });
+        if let Some(default) = default {
+            return Ok(json_location_data(&location.as_path().to_string_lossy(), default));
+        }
     }
-    let catalog = &state.engine.catalog;
-    // Default: the first active model of the first enabled provider
-    // (the configured default model selection rides the resolver seam).
-    let default = catalog
-        .providers()
-        .iter()
-        .find_map(|snapshot| snapshot.models.first().map(|model| model_json(snapshot, model)))
+    // No configured selection (or an empty catalog): the same
+    // available-first fallback v2's `Model.default()` takes.
+    let default = location_model_entries(&state.engine, &location)
+        .into_iter()
+        .find(supports_text)
         .unwrap_or(Value::Null);
     Ok(json_location_data(&location.as_path().to_string_lossy(), default))
 }

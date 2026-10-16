@@ -3368,3 +3368,4 @@ mod tests {
         assert!(serde_json::from_value::<oc_schema::config::Info>(to_value(&encoded)).is_ok());
     }
 }
+
