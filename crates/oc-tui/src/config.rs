@@ -127,7 +127,7 @@ impl TabsConfig {
 }
 
 /// The TUI-relevant slice of `cli.json`.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TuiConfig {
     pub keybinds: Value,
     pub theme: ThemeConfig,
@@ -145,7 +145,11 @@ pub struct TuiConfig {
     /// pane when space permits (>120 cols), "hide" never — default
     /// auto.
     pub session_sidebar: crate::components::sidebar::SidebarMode,
-    /// The `model` field — the shared config's default model
+    /// `mouse` (config/index.tsx:247, default true at :311): the
+    /// terminal mouse-capture gate — `false` keeps the terminal's
+    /// native text selection (v2's documented opt-out; see
+    /// `crate::mouse_modes`).
+    pub mouse: bool,
     /// The file this was loaded from (`None` when no config file
     /// exists — all defaults).
     pub path: Option<PathBuf>,
@@ -154,6 +158,26 @@ pub struct TuiConfig {
 // (Historical note, kept from the pre-merge layout.) Parse the `model`
 // field's two shapes (string `provider/model`, or the
 // `{providerID, model, variant}` object — local.tsx:177-184).
+/// The derived-default exception: `mouse` defaults TRUE (v2's
+/// `input.mouse ?? true`, config/index.tsx:311) — a derive would
+/// give `false`, silently disabling capture for every boot without a
+/// cli.json (the missing-file `load` path returns the default).
+impl Default for TuiConfig {
+    fn default() -> Self {
+        Self {
+            keybinds: Value::Null,
+            theme: ThemeConfig::default(),
+            leader_timeout_ms: None,
+            attention: AttentionConfig::default(),
+            session_image_preview: false,
+            tabs: TabsConfig::default(),
+            session_sidebar: crate::components::sidebar::SidebarMode::default(),
+            mouse: true,
+            path: None,
+        }
+    }
+}
+
 impl TuiConfig {
     /// Load `<config_root>/cli.json` (missing file = defaults; invalid
     /// JSON = defaults + a logged skip).
@@ -188,6 +212,9 @@ impl TuiConfig {
             Some("hide") => crate::components::sidebar::SidebarMode::Hide,
             _ => crate::components::sidebar::SidebarMode::Auto,
         };
+        // `mouse` (config/index.tsx:247 + :311): absent = true (v2's
+        // `input.mouse ?? true`).
+        let mouse = value.get("mouse").and_then(Value::as_bool).unwrap_or(true);
         Self {
             keybinds: value.get("keybinds").cloned().unwrap_or(Value::Null),
             theme,
@@ -196,6 +223,7 @@ impl TuiConfig {
             session_image_preview,
             tabs,
             session_sidebar,
+            mouse,
             path,
         }
     }
@@ -249,6 +277,25 @@ mod tests {
             crate::components::sidebar::SidebarMode::Auto,
             "unknown values degrade to the default"
         );
+    }
+
+    /// `mouse` (config/index.tsx:247, default `true` at :311 — v2's
+    /// `input.mouse ?? true`): the terminal mouse-capture gate, the
+    /// selection escape hatch auditC P1 says the port silently
+    /// dropped.
+    #[test]
+    fn parses_the_mouse_gate() {
+        assert!(TuiConfig::parse("{}", None).mouse, "absent = the true default");
+        assert!(TuiConfig::parse(r#"{"mouse": true}"#, None).mouse);
+        assert!(!TuiConfig::parse(r#"{"mouse": false}"#, None).mouse);
+        assert!(
+            TuiConfig::parse(r#"{"mouse": "bogus"}"#, None).mouse,
+            "non-bool values degrade to the default"
+        );
+        // The missing-file path (`load` with no cli.json) returns the
+        // DEFAULT — which must still carry the true default (the
+        // derived-default trap the PTY proof caught).
+        assert!(TuiConfig::default().mouse, "the Default impl keeps v2's true default");
     }
 
     #[test]

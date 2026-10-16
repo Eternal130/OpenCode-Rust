@@ -190,6 +190,10 @@ fn card_fg(theme: &ThemeStyles) -> ratatui::style::Color {
 pub struct SidebarPaint {
     pub placed: Vec<Placed>,
     pub fills: Vec<Fill>,
+    /// The onboarding card's pointer targets at the SAME column-local
+    /// coordinates (v2's two `onMouseUp` boxes, footer.tsx:45-70);
+    /// `None` when the card didn't paint.
+    pub onboarding_hits: Option<crate::store::SidebarOnboardingHits>,
 }
 
 /// Render the sidebar pane over `height` rows.
@@ -275,6 +279,8 @@ pub fn render_sidebar(view: &SidebarView, theme: &ThemeStyles, height: usize) ->
 /// Paint the getting-started card with its top row at `y` (column
 /// local): background `raised.high` cols [2, 40), glyph ⬖ then the
 /// 32-column text stack, the ✕ dismiss at the column's right edge.
+/// Also records the card's two pointer targets (v2's `onMouseUp`
+/// boxes, footer.tsx:45-70): the ✕ cell and the full connect row.
 fn paint_card(paint: &mut SidebarPaint, theme: &ThemeStyles, y: usize) {
     let bg = card_bg(theme);
     let fg_base = theme.text.fg.unwrap_or(crate::components::tool_rows::DEFAULT_FOREGROUND);
@@ -351,6 +357,20 @@ fn paint_card(paint: &mut SidebarPaint, theme: &ThemeStyles, y: usize) {
             Style::new().fg(fg_muted).bg(bg),
         )],
         tag: None,
+    });
+    // The card's pointer targets, column-local: the ✕ cell (the
+    // dismiss `text`'s own box, footer.tsx:45-55) and the connect row
+    // (the `space-between` box spanning the text column,
+    // footer.tsx:61-70). The session render translates by the pane's
+    // paste origin.
+    paint.onboarding_hits = Some(crate::store::SidebarOnboardingHits {
+        dismiss: crate::store::HitRect {
+            x: stack_x + CARD_TEXT_WIDTH - 1,
+            y: y + 1,
+            width: 1,
+            height: 1,
+        },
+        connect: crate::store::HitRect { x: stack_x, y: row, width: CARD_TEXT_WIDTH, height: 1 },
     });
 }
 
