@@ -513,7 +513,7 @@ fn sidebar_pane_budget_body() {
     let _ = view();
     let render = || {
         let pane =
-            crate::components::sidebar_solid::sidebar_pane_frame(&view(), &theme.styles(), 50);
+            crate::components::sidebar_solid::sidebar_pane_frame(&view(), &theme.styles(), 50, 0);
         assert_eq!(pane.height, 50);
         pane
     };
