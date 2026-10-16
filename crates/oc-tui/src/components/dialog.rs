@@ -315,6 +315,12 @@ pub fn render_overlay(
     store.set_dialog_button_hits(button_hits);
 }
 
+/// The overlay render's mouse surface bundle: the chrome rect, the
+/// option-row map (flat index → absolute screen row) and the chrome
+/// button hits (auditA #6).
+pub type OverlayMouseSurface =
+    ((usize, usize, usize, usize), Vec<Option<usize>>, Vec<crate::store::DialogButtonHit>);
+
 /// [`render_overlay_with`] plus the option-row map (the mouse surface).
 pub fn render_overlay_with_options(
     base: &mut Frame,
@@ -323,7 +329,7 @@ pub fn render_overlay_with_options(
     plugin: Option<&crate::store::PluginDialogContent>,
     theme: &crate::theme::ThemeState,
     terminal: (u16, u16),
-) -> ((usize, usize, usize, usize), Vec<Option<usize>>, Vec<crate::store::DialogButtonHit>) {
+) -> OverlayMouseSurface {
     // Select dialogs record their option rows (absolute screen rows,
     // flat-index order); static content records none.
     let option_rows = if match &entry.kind {
@@ -350,8 +356,9 @@ pub fn render_overlay_with_options(
     } else {
         Vec::new()
     };
-    let (rect, button_hits) =
-        crate::components::dialog_solid::render_overlay_solid(base, entry, props, plugin, theme, terminal);
+    let (rect, button_hits) = crate::components::dialog_solid::render_overlay_solid(
+        base, entry, props, plugin, theme, terminal,
+    );
     let (_box_x, box_y, _, _) = rect;
     let option_rows =
         option_rows.into_iter().map(|row| row.map(|content_row| box_y + 1 + content_row)).collect();

@@ -552,6 +552,12 @@ pub struct FakeLlm {
     pub url: String,
     shutdown: Arc<AtomicBool>,
     pub prompt_posts: Arc<AtomicUsize>,
+    /// Whether `/api/vcs` answers (opt-in — lane/if's footer-label
+    /// proof): the default OFF keeps the vcs lookup failing, so the
+    /// location label stays absent for the suites whose baselines
+    /// predate it (the hover sweeps assert off-strip cells do not
+    /// respond).
+    pub vcs: Arc<AtomicBool>,
     /// SSE script played once, after the first prompt POST.
     script: Arc<Mutex<Option<Vec<ScriptEvent>>>>,
 }
@@ -563,10 +569,12 @@ impl FakeLlm {
         let addr = listener.local_addr().expect("addr");
         let shutdown = Arc::new(AtomicBool::new(false));
         let prompt_posts = Arc::new(AtomicUsize::new(0));
+        let vcs = Arc::new(AtomicBool::new(false));
         let script: Arc<Mutex<Option<Vec<ScriptEvent>>>> = Arc::new(Mutex::new(None));
         let flag = Arc::clone(&shutdown);
         let shared_script = Arc::clone(&script);
         let shared_posts = Arc::clone(&prompt_posts);
+        let shared_vcs = Arc::clone(&vcs);
         std::thread::spawn(move || {
             listener.set_nonblocking(true).expect("nonblocking accept");
             while !flag.load(Ordering::SeqCst) {
@@ -575,7 +583,10 @@ impl FakeLlm {
                         let sessions = sessions.clone();
                         let script = Arc::clone(&shared_script);
                         let posts = Arc::clone(&shared_posts);
-                        std::thread::spawn(move || handle(socket, &sessions, &script, &posts));
+                        let vcs = Arc::clone(&shared_vcs);
+                        std::thread::spawn(move || {
+                            handle(socket, &sessions, &script, &posts, &vcs);
+                        });
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(10));
@@ -584,7 +595,13 @@ impl FakeLlm {
                 }
             }
         });
-        Self { url: format!("http://{addr}"), shutdown, prompt_posts, script }
+        Self { url: format!("http://{addr}"), shutdown, prompt_posts, vcs, script }
+    }
+
+    /// Answer `/api/vcs` (the footer location label's boot lookup —
+    /// `{cwd}:{branch}` paints once it resolves).
+    pub fn arm_vcs(&self) {
+        self.vcs.store(true, Ordering::SeqCst);
     }
 
     /// Arm the streaming script (played on the SSE feed after the
@@ -603,6 +620,7 @@ fn handle(
     sessions: &[FakeSession],
     script: &Arc<Mutex<Option<Vec<ScriptEvent>>>>,
     prompt_posts: &Arc<AtomicUsize>,
+    vcs: &Arc<AtomicBool>,
 ) {
     socket.set_read_timeout(Some(Duration::from_secs(10))).ok();
     let mut buffer = [0u8; 8192];
@@ -683,7 +701,15 @@ fn handle(
     if path.ends_with("/prompt") {
         prompt_posts.fetch_add(1, Ordering::SeqCst);
     }
-    let body = if path.starts_with("/api/session/") && path.ends_with("/prompt") {
+    let body = if path.split('?').next().unwrap_or("") == "/api/vcs" && vcs.load(Ordering::SeqCst) {
+        // vcs.get (lane/if: the footer location label's boot lookup —
+        // the phantom-click PTY proof needs the `{cwd}:{branch}` label
+        // to paint, so the stub resolves a branch; OPT-IN because the
+        // label's hover lift is a real cell response the hover sweeps
+        // would flag).
+        r#"{"data":{"branch":{"current":"main","default":"main"}},"location":{"directory":"/tmp"}}"#
+            .to_owned()
+    } else if path.starts_with("/api/session/") && path.ends_with("/prompt") {
         // session.prompt response: decodable Envelope<SessionInboxUser>
         // (a decode failure would toast SendFailed and pollute the
         // temporal observations; `payload.text` is required).
@@ -775,6 +801,18 @@ impl HarnessHandle {
     /// `onMouseUp` trigger (v2's pointer surfaces act on release).
     pub fn sgr_release(&mut self, x: u16, y: u16) {
         self.write(format!("\x1b[<0;{};{}m", x + 1, y + 1).as_bytes());
+    }
+
+    /// SGR 1006 wheel UP at 0-based cell `(x, y)` (button 64) —
+    /// crossterm decodes it as `MouseEventKind::ScrollUp`.
+    pub fn sgr_scroll_up(&mut self, x: u16, y: u16) {
+        self.write(format!("\x1b[<64;{};{}M", x + 1, y + 1).as_bytes());
+    }
+
+    /// SGR 1006 wheel DOWN at 0-based cell `(x, y)` (button 65) —
+    /// `MouseEventKind::ScrollDown`.
+    pub fn sgr_scroll_down(&mut self, x: u16, y: u16) {
+        self.write(format!("\x1b[<65;{};{}M", x + 1, y + 1).as_bytes());
     }
 
     /// Bytes fed so far (the cumulative mirror length).

@@ -1161,7 +1161,8 @@ pub fn render_overlay_solid(
         }
     });
 
-    let rect = (box_x, box_y, box_width.min(width - box_x), box_height.min(height.saturating_sub(box_y)));
+    let rect =
+        (box_x, box_y, box_width.min(width - box_x), box_height.min(height.saturating_sub(box_y)));
     (rect, dialog_chrome_button_hits(entry, &inputs, rect))
 }
 

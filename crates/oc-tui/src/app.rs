@@ -553,9 +553,15 @@ impl App {
                             crate::store::TranscriptHitAction::ToggleGroup(key) => {
                                 self.store.toggle_group_expanded(&hit.session_id, key);
                             }
-                            crate::store::TranscriptHitAction::ToggleThought { message_id, part_id } => {
-                                self.store
-                                    .toggle_thought_expanded(&hit.session_id, message_id, part_id);
+                            crate::store::TranscriptHitAction::ToggleThought {
+                                message_id,
+                                part_id,
+                            } => {
+                                self.store.toggle_thought_expanded(
+                                    &hit.session_id,
+                                    message_id,
+                                    part_id,
+                                );
                             }
                             crate::store::TranscriptHitAction::MessageActions { message_id } => {
                                 self.store.open_dialog(
@@ -921,9 +927,10 @@ impl App {
         // reject reply (with the typed message), `esc cancel` returns
         // to the ask with the selection on Reject.
         let key = if row == hits.as_ref().map_or(usize::MAX, |hits| hits.row) {
-            if let (Some(hits), true) =
-                (&hits, state.stage == crate::components::footer::permission::PermissionStage::Reject)
-            {
+            if let (Some(hits), true) = (
+                &hits,
+                state.stage == crate::components::footer::permission::PermissionStage::Reject,
+            ) {
                 let inside = |rect: Option<&(usize, usize)>| {
                     rect.is_some_and(|(x, width)| col >= *x && col < *x + *width)
                 };
@@ -1472,13 +1479,12 @@ impl App {
             // origin — the body mounts full-width (x is already
             // absolute), the controls row sits at screen row
             // `size.1 − 2`.
-            let mut hits =
-                crate::components::footer::permission::permission_pointer_hits(
-                    &request,
-                    &state,
-                    width,
-                    mount_height,
-                );
+            let mut hits = crate::components::footer::permission::permission_pointer_hits(
+                &request,
+                &state,
+                width,
+                mount_height,
+            );
             hits.row = usize::from(self.size.1).saturating_sub(2);
             self.store.set_permission_pointer_hits(Some(hits));
         } else {
@@ -5411,10 +5417,7 @@ mod core_interaction_tests {
             "the session render armed the footer rect"
         );
         app.store.navigate(Route::Home);
-        assert!(
-            app.store.transcript_hit_rows().is_empty(),
-            "navigate cleared the transcript rows"
-        );
+        assert!(app.store.transcript_hit_rows().is_empty(), "navigate cleared the transcript rows");
         assert!(app.store.footer_location_hit().is_none(), "navigate cleared the footer rect");
         assert!(app.store.sidebar_onboarding_hits().is_none(), "the onboarding card disarmed");
     }
@@ -5429,12 +5432,8 @@ mod core_interaction_tests {
         use crossterm::event::{MouseButton, MouseEventKind};
         let mut app = App::new((80, 24));
         staged_reasoning_session(&mut app);
-        let stale = app
-            .store
-            .transcript_hit_rows()
-            .first()
-            .cloned()
-            .expect("the session armed a hit row");
+        let stale =
+            app.store.transcript_hit_rows().first().cloned().expect("the session armed a hit row");
         let stale_footer = app.store.footer_location_hit().expect("the footer rect armed");
         app.store.navigate(Route::Home);
 
@@ -5453,15 +5452,13 @@ mod core_interaction_tests {
         app.store.set_transcript_hit_rows(vec![stale]);
         app.store.set_footer_location_hit(Some(stale_footer.clone()));
         app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 10, row));
-        app.mouse_event(
-            &mouse(
-                MouseEventKind::Up(MouseButton::Left),
-                u16::try_from(stale_footer.x).unwrap_or(u16::MAX),
-                u16::try_from(stale_footer.row).unwrap_or(u16::MAX),
-            ),
-        );
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(stale_footer.x).unwrap_or(u16::MAX),
+            u16::try_from(stale_footer.row).unwrap_or(u16::MAX),
+        ));
         assert!(
-            !app.store.group_expanded(&"s1".to_owned(), "group:Reasoning:a1:reasoning:0"),
+            !app.store.group_expanded("s1", "group:Reasoning:a1:reasoning:0"),
             "the route gate blocked the re-injected row"
         );
         assert!(
@@ -5470,27 +5467,27 @@ mod core_interaction_tests {
         );
         // A hover over the stale footer rect cannot flip the home
         // label's hover state either.
-        app.mouse_event(
-            &mouse(
-                MouseEventKind::Moved,
-                u16::try_from(stale_footer.x).unwrap_or(u16::MAX),
-                u16::try_from(stale_footer.row).unwrap_or(u16::MAX),
-            ),
-        );
+        app.mouse_event(&mouse(
+            MouseEventKind::Moved,
+            u16::try_from(stale_footer.x).unwrap_or(u16::MAX),
+            u16::try_from(stale_footer.row).unwrap_or(u16::MAX),
+        ));
         assert!(!app.store.location_hovered(), "the stale rect cannot arm hover on home");
     }
 
     // -- lane/if item 1: the wheel (auditA #1) ------------------------------
 
-    /// `Math.round` with halves toward +∞ (opentui's js_round — the
-    /// E1 scroll math's rounding rule).
+    /// `Math.round` with halves toward +∞ (opentui's `js_round` — the
+    /// E1 scroll math's rounding rule). The test feeds non-negative
+    /// offsets only.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn js_round(value: f64) -> usize {
-        value.floor() as usize + usize::from(value.fract() >= 0.5)
+        value.floor().max(0.0) as usize + usize::from(value.fract() >= 0.5)
     }
 
     /// The transcript wheel runs the E1 half-page math (auditA #1 +
     /// ROADMAP wave E1): one notch = `session.page.up/down` —
-    /// ±viewport/2 with js_round (15-row viewport: −7/+8), sticky
+    /// ±viewport/2 with `js_round` (15-row viewport: −7/+8), sticky
     /// re-arming at the tail — and lands EXACTLY where the page keys
     /// land.
     #[test]
@@ -5511,7 +5508,10 @@ mod core_interaction_tests {
                 id: format!("a{index}"),
                 agent: "build".into(),
                 model: "fixture/fixture".into(),
-                parts: vec![Part::Text { text: format!("answer {index}"), time: PartTime::default() }],
+                parts: vec![Part::Text {
+                    text: format!("answer {index}"),
+                    time: PartTime::default(),
+                }],
                 finish: Some("stop".into()),
                 error: None,
                 time: PartTime::default(),
@@ -5530,7 +5530,11 @@ mod core_interaction_tests {
         // One wheel notch up: -(viewport/2) with js_round (half toward
         // +∞) — the E1 numbers (15-row viewport ⇒ −7).
         app.mouse_event(&mouse(MouseEventKind::ScrollUp, 40, 10));
-        let expected = js_round(max as f64 - viewport as f64 / 2.0);
+        #[allow(clippy::cast_precision_loss)]
+        let expected = js_round(
+            f64::from(u32::try_from(max).unwrap_or(u32::MAX))
+                - f64::from(u32::try_from(viewport).unwrap_or(0)) / 2.0,
+        );
         assert_eq!(
             app.store.scroll_offset("s1"),
             expected,
@@ -5544,11 +5548,7 @@ mod core_interaction_tests {
         app.press("end");
         assert_eq!(app.store.scroll_offset("s1"), max, "end re-sticks");
         app.press("pageup");
-        assert_eq!(
-            app.store.scroll_offset("s1"),
-            expected,
-            "the page key and the wheel agree"
-        );
+        assert_eq!(app.store.scroll_offset("s1"), expected, "the page key and the wheel agree");
 
         // Wheel down from the head: +(viewport/2) js_round (⇒ +8) —
         // then repeated notches re-reach the tail (sticky re-arms).
@@ -5635,14 +5635,18 @@ mod core_interaction_tests {
         // Outside the pane's columns the wheel belongs to the
         // transcript — the sidebar offset must not move.
         app.mouse_event(&mouse(MouseEventKind::ScrollDown, 10, 10));
-        assert_eq!(app.store.sidebar_scroll().offset, 27, "the transcript wheel left the pane alone");
+        assert_eq!(
+            app.store.sidebar_scroll().offset,
+            27,
+            "the transcript wheel left the pane alone"
+        );
     }
 
     // -- lane/if item 3: the permission pointer arms (auditA #4) ----------
 
     /// Stage one permission ask (SSE ingest shape) with `save`
     /// patterns (the "Always allow" pill's gate).
-    fn stage_permission_ask(app: &mut App, id: &str, save: serde_json::Value) {
+    fn stage_permission_ask(app: &mut App, id: &str, save: &serde_json::Value) {
         app.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
             "permission.asked",
             serde_json::json!({
@@ -5650,7 +5654,7 @@ mod core_interaction_tests {
                 "sessionID": "ses",
                 "action": "read",
                 "resources": ["src/index.ts"],
-                "save": save,
+                "save": save.clone(),
             }),
         ))]);
     }
@@ -5666,7 +5670,7 @@ mod core_interaction_tests {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
         app.store.navigate(Route::Session { session_id: "s1".to_owned() });
-        stage_permission_ask(&mut app, "p1", serde_json::json!([]));
+        stage_permission_ask(&mut app, "p1", &serde_json::json!([]));
         assert!(app.permission_live(), "the ask holds the screen");
         let _ = app.frame();
         let hits = app.store.permission_pointer_hits().expect("the render armed the pills");
@@ -5716,7 +5720,7 @@ mod core_interaction_tests {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
         app.store.navigate(Route::Session { session_id: "s1".to_owned() });
-        stage_permission_ask(&mut app, "p2", serde_json::json!(["src/**"]));
+        stage_permission_ask(&mut app, "p2", &serde_json::json!(["src/**"]));
         let _ = app.frame();
         let hits = app.store.permission_pointer_hits().expect("armed");
         let pills: Vec<(PermissionOption, (usize, usize))> = hits.pills.clone();
@@ -5769,7 +5773,7 @@ mod core_interaction_tests {
         // A release on the transcript rows under a live ask stays
         // dead (the early return that protects the transcript must
         // not fire anything).
-        stage_permission_ask(&mut app, "p3", serde_json::json!([]));
+        stage_permission_ask(&mut app, "p3", &serde_json::json!([]));
         let _ = app.frame();
         app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 10, 5));
         assert!(app.permission_live(), "a stray transcript release toggled nothing");
@@ -5779,7 +5783,7 @@ mod core_interaction_tests {
     // -- lane/if item 4: all five disclosure surfaces (auditA #5) --------
 
     /// The Exploration group's header arms and toggles (v2
-    /// group-view.tsx:152 — `onMouseUp={toggle}` on the InlineToolRow;
+    /// group-view.tsx:152 — `onMouseUp={toggle}` on the `InlineToolRow`;
     /// previously only `group:Reasoning:` rows had hit rows, so the
     /// affordance rendered but swallowed clicks).
     #[test]
@@ -5807,10 +5811,7 @@ mod core_interaction_tests {
                             time: PartTime { created: Some(1), completed: Some(2) },
                             state: ToolState::default(),
                         },
-                        Part::Text {
-                            text: "done".into(),
-                            time: PartTime::default(),
-                        },
+                        Part::Text { text: "done".into(), time: PartTime::default() },
                     ],
                     finish: Some("success".into()),
                     error: None,
@@ -5839,7 +5840,10 @@ mod core_interaction_tests {
             10,
             u16::try_from(hit.y).unwrap_or(u16::MAX),
         ));
-        assert!(app.store.group_expanded(&hit.session_id, &key), "the release armed the disclosure");
+        assert!(
+            app.store.group_expanded(&hit.session_id, &key),
+            "the release armed the disclosure"
+        );
         app.mouse_event(&mouse(
             MouseEventKind::Up(MouseButton::Left),
             10,
@@ -5852,7 +5856,7 @@ mod core_interaction_tests {
     }
 
     /// The thought rows toggle their own disclosure (v2's minimal-mode
-    /// ReasoningHeader, message-parts.tsx:66-86): the `thought:` row's
+    /// `ReasoningHeader`, message-parts.tsx:66-86): the `thought:` row's
     /// first line is the hit target; collapsed renders the one-line
     /// `+ Thought: {title}` header, expanded the bordered body.
     #[test]
@@ -5885,11 +5889,13 @@ mod core_interaction_tests {
             .store
             .transcript_hit_rows()
             .iter()
-            .find(|row| matches!(
-                &row.action,
-                crate::store::TranscriptHitAction::ToggleThought { message_id, part_id }
-                    if message_id == "a1" && part_id == "reasoning:0"
-            ))
+            .find(|row| {
+                matches!(
+                    &row.action,
+                    crate::store::TranscriptHitAction::ToggleThought { message_id, part_id }
+                        if message_id == "a1" && part_id == "reasoning:0"
+                )
+            })
             .cloned()
             .expect("the thought row recorded a hit");
         app.mouse_event(&mouse(
@@ -5912,10 +5918,9 @@ mod core_interaction_tests {
             .store
             .transcript_hit_rows()
             .iter()
-            .find(|row| matches!(
-                &row.action,
-                crate::store::TranscriptHitAction::ToggleThought { .. }
-            ))
+            .find(|row| {
+                matches!(&row.action, crate::store::TranscriptHitAction::ToggleThought { .. })
+            })
             .cloned()
             .expect("the collapsed header re-recorded its hit");
         app.mouse_event(&mouse(
@@ -5943,8 +5948,7 @@ mod core_interaction_tests {
         use crate::store::DialogKind;
         use crossterm::event::{MouseButton, MouseEventKind};
         let mut app = App::new((80, 24));
-        app.store
-            .open_dialog(DialogKind::CommandPalette, crate::store::DialogSize::Medium);
+        app.store.open_dialog(DialogKind::CommandPalette, crate::store::DialogSize::Medium);
         let _ = app.frame();
         let close = app
             .store
@@ -5954,17 +5958,8 @@ mod core_interaction_tests {
             .expect("the close label armed");
         // The rect points at the painted `esc` glyphs (the label's
         // own extent, right-aligned against the paddingRight-4 edge).
-        let line = app
-            .frame_text()
-            .lines()
-            .nth(close.rect.y)
-            .unwrap_or_default()
-            .to_owned();
-        let painted = line
-            .chars()
-            .skip(close.rect.x)
-            .take(close.rect.width)
-            .collect::<String>();
+        let line = app.frame_text().lines().nth(close.rect.y).unwrap_or_default().to_owned();
+        let painted = line.chars().skip(close.rect.x).take(close.rect.width).collect::<String>();
         assert_eq!(painted.trim(), "esc", "the hit rect hugs the label: {line}");
         app.mouse_event(&mouse(
             MouseEventKind::Up(MouseButton::Left),
@@ -5995,17 +5990,8 @@ mod core_interaction_tests {
         assert_eq!(close.rect.width, 9, "Help's label is `esc/enter`");
         // The ok pill's rect is the painted button box (padding 3 +
         // `ok` + padding 3 = 8 wide, right-justified).
-        let line = app
-            .frame_text()
-            .lines()
-            .nth(ok.rect.y)
-            .unwrap_or_default()
-            .to_owned();
-        let painted = line
-            .chars()
-            .skip(ok.rect.x)
-            .take(ok.rect.width)
-            .collect::<String>();
+        let line = app.frame_text().lines().nth(ok.rect.y).unwrap_or_default().to_owned();
+        let painted = line.chars().skip(ok.rect.x).take(ok.rect.width).collect::<String>();
         assert_eq!(painted.trim(), "ok", "the hit rect is the pill: {line}");
 
         // The ok pill clears.

@@ -708,10 +708,13 @@ fn composer_mount_frame(
         rail,
         caret: None,
     };
-    // #33 — the location label's hit rect (the status row docks at
-    // `height - 2`; the label's painted extent from the same math the
-    // row paints with). Empty label ⇒ no hit.
-    let status_row = height.saturating_sub(2);
+    // #33 — the location label's hit rect (the footer row is the
+    // prompt mount's LAST row: pasted at `height - prompt_height`,
+    // its footer row lands on `height - 1` — the lane/if PTY proof
+    // clicked the painted label and caught the rect one row high).
+    // The label's painted extent comes from the same math the row
+    // paints with. Empty label ⇒ no hit.
+    let status_row = height.saturating_sub(1);
     let location_hit = crate::components::composer::render::footer_location_extent(&view, width)
         .map(|(x, label_width)| crate::store::FooterLocationHit {
             directory: view
