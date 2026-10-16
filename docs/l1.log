@@ -1,0 +1,36 @@
+# Lane L1-mini-footer (worktree .worktrees/lane-l1, base a44d5cf)
+
+## Spec study (v2 citations, sweep-2 evidence mapped)
+Family = census "mini-footer family" (final-sweep-2.md:100-104) decomposed:
+1. MODELS PANEL (click-coverage-session.md:44-72 s03/s04): ref panel titled
+   "Select model" (dialog-model.tsx:122 title=provider?.name?:"Select model")
+   vs our "Switch model" (palette entry title, app.tsx:840 — the PALETTE row
+   keeps it; the mounted dialog does not). Same family: agent.list→
+   "Select agent" (dialog-agent.tsx:22), variant.list→"Select variant"
+   (dialog-variant.tsx:35), mcp.list→"MCP servers" (dialog-mcp.tsx:140).
+   Ref panel: cursor row0 (focusCurrent=false, dialog-model.tsx:171), FLAT
+   list w/ NO categories+NO row description while unconnected
+   (dialog-model.tsx:96-99 category only when connected, description only
+   "(Favorite"), footer action "View all integrations ctrl+a"
+   (dialog-model.tsx:168-176, keybind.ts:162). Cursor style = selected_bg
+   action.primary.focused (idx216) — ours renders current-row fg idx255
+   bg idx233 because we focus the CURRENT row (store.rs focus_dialog_current)
+   where v2 focuses row 0.
+2. PALETTE 'C' row (palette.md:90-130): ref suggested list = [Switch model,
+   Connect an integration, Open settings] — provider.connect is
+   suggested: !connected() (app.tsx:946-948); ours omits it.
+   connected = any integration has connections (use-connected.tsx).
+3. TAB TITLE FADE (click-coverage-session.md:116-129): ref tail 4 cells
+   idx251/246/241/236 = fadeTitleColor (session-tabs.tsx:232-236, FADE_WIDTH=4,
+   opacity .2/.44/.68/.92 toward tab bg) when marqueeOverflows(title,slot).
+   STATIC — not the shimmer (math verified: tint(#eeeeee,#1c1c1c,op) hits
+   idx251/246/241/236 exactly).
+4. TAB ✕ (mouse-hover-tabstrip.md:287): closeHovered→fg=text.base idx255
+   (session-tabs.tsx:1091); tab-hover fg=closeColor tint(muted,base,.6)=idx7
+   ✓ already ours. multi-session.md:241: ✕ persists on tab under STATIONARY
+   pointer after layout change (opentui re-hovers on re-layout).
+5. NEW-TAB/pseudo-tab (multi-session.md:191-235): home route → newTab()=true
+   (context/session-tabs.tsx:146) → strip items += NEW_SESSION_TAB
+   (session-tabs.tsx:1342, title "New session" :183, indicator "+",
+   selected→BOLD, activeID="new" :1339), showPlus=false (:1344
+   showPlus = add && !newTab). Ours renders plain " + " at home.
