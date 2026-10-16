@@ -233,10 +233,7 @@ pub enum Message {
     },
     /// `session.idle` marker: closes a turn (drives turn duration and
     /// the wave-3 unread semantics).
-    Idle {
-        id: String,
-        created: u64,
-    },
+    Idle { id: String, created: u64 },
     /// `compaction` message — the `──── Compaction ────` divider row
     /// (`CompactionMessage`, session/index.tsx:2002-2068). The wire
     /// union's three statuses project onto these fields (running →
@@ -267,11 +264,7 @@ pub enum Message {
     },
     /// `skill` message — the `→ Skill {name}` inline row
     /// (`SessionSkillMessage`, session/index.tsx:1993-1999).
-    Skill {
-        id: String,
-        name: String,
-        created: u64,
-    },
+    Skill { id: String, name: String, created: u64 },
     /// `synthetic` message: an instruction load (`metadata.instruction`)
     /// — groups under one `◈ Instructions: N files` summary row
     /// (`instructionPaths`).
@@ -826,7 +819,16 @@ pub fn instructions_label(files: usize) -> String {
 /// `canonicalToolName` (`util/tool-display`): strip provider prefixes.
 #[must_use]
 pub fn canonical_tool_name(tool: &str) -> &str {
-    tool.rsplit_once('_').map_or(tool, |(_, last)| last)
+    // The prefix strip (`foo_bash` → `bash`), then the display alias
+    // map (`canonicalToolName`, util/tool-display.ts:1-6: bash→shell,
+    // task→subagent, apply_patch→patch).
+    let stripped = tool.rsplit_once('_').map_or(tool, |(_, last)| last);
+    match stripped {
+        "bash" => "shell",
+        "task" => "subagent",
+        "apply_patch" => "patch",
+        other => other,
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,30 @@
+  ┃                                                                             
+  ┃  $ echo hi                                                                  
+  ┃                                                                             
+  ┃  hi                                                                         
+  ┃  second line                                                                
+  ┃                                                                             
+                                                                                
+  ───────────────────── Compaction · 1,200 in · 200 out ──────────────────────  
+                                                                                
+     Condensed the early turns.                                                 
+                                                                                
+     → Skill commitlint                                                         
+                                                                                
+  ─────────────────────────── ◇ Compaction queued ────────────────────────────  
+                                                                                
+  ┃                                                                             
+  ┃  0 messages reverted                                                        
+  ┃                                                                             
+  ┃  M src/a.py +3 -1                                                           
+  ┃                                                                             
+  ┃  R or /redo to restore                                                      
+  ┃                                                                             
+                                                                                
+  ┃                                                                             
+  ┃                                                                             
+  ┃                                                                             
+  ┃                                                                             
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+  /tmp/opencode/packages/tui:main            shift+tab agents  ctrl+p commands  
+                                                                                

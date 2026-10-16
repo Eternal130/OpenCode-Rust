@@ -619,6 +619,8 @@ pub fn assistant_footer_row(
 /// (`error.message === "Step interrupted"`, index.tsx:1872/1895-1897):
 /// NO error row, the agent label stays muted (an error is present),
 /// and a trailing ` · interrupted` span rides the label.
+// The ref's footer carries exactly these inputs (index.tsx:1857-1897).
+#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn assistant_footer_row_ext(
     agent: &str,
@@ -714,6 +716,8 @@ pub fn assistant_error_row(message: &str, theme: &ThemeStyles, width: usize) -> 
 /// `summary_lines` (already-rendered markdown rows, `paddingTop 1
 /// paddingLeft 3`) stack under the divider when non-empty — the
 /// failed non-cancelled variant's error message rides there too.
+// The divider mirrors the ref's one-box shape (index.tsx:2032-2073).
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 #[must_use]
 pub fn compaction_message_row(
     running: bool,
@@ -752,7 +756,11 @@ pub fn compaction_message_row(
     if !running {
         if let (Some(input), Some(output)) = (tokens_in, tokens_out) {
             if input + output > 0 {
-                segments.push(format!("· {} in · {} out", locale_number(input), locale_number(output)));
+                segments.push(format!(
+                    "· {} in · {} out",
+                    locale_number(input),
+                    locale_number(output)
+                ));
             }
         }
     }
@@ -803,8 +811,12 @@ pub fn compaction_message_row(
             tag: None,
         });
     }
-    let summary =
-        RowRender { placed: body, fills: Vec::new(), height: summary_lines.len(), images: Vec::new() };
+    let summary = RowRender {
+        placed: body,
+        fills: Vec::new(),
+        height: summary_lines.len(),
+        images: Vec::new(),
+    };
     stack_rows(divider, summary.offset_y(1))
 }
 
@@ -823,13 +835,7 @@ pub fn compaction_queued_row(theme: &ThemeStyles, width: usize) -> RowRender {
     let left_end = fill_width;
     let right_start = left_end + center_width;
     if left_end > 0 {
-        fills.push(Fill {
-            x: 0,
-            y: 0,
-            width: left_end as u16,
-            height: 1,
-            style,
-        });
+        fills.push(Fill { x: 0, y: 0, width: left_end as u16, height: 1, style });
         placed.push(text_at(0, 0, "─".repeat(left_end), style));
     }
     placed.push(text_at(left_end, 0, center, style));
@@ -849,7 +855,7 @@ pub fn compaction_queued_row(theme: &ThemeStyles, width: usize) -> RowRender {
 }
 
 /// The `→ Skill {name}` inline row (`SessionSkillMessage`,
-/// session/index.tsx:1993-1999): the completed InlineToolRow shape in
+/// session/index.tsx:1993-1999): the completed `InlineToolRow` shape in
 /// `text.muted`.
 #[must_use]
 pub fn skill_message_row(name: &str, theme: &ThemeStyles, width: usize) -> RowRender {
@@ -858,21 +864,17 @@ pub fn skill_message_row(name: &str, theme: &ThemeStyles, width: usize) -> RowRe
 
 /// One staged-revert file row (`A path.txt +3 -1`,
 /// index.tsx:2131-2148): status letter muted, the path in `text.base`
-/// (FilePath-contracted), `+A`/`−D` in the diff added/removed colors.
-fn revert_file_row(file: &crate::store::RevertFile, theme: &ThemeStyles, width: usize) -> Vec<Placed> {
+/// (FilePath-contracted), `+A`/`-D` in the diff added/removed colors.
+fn revert_file_row(
+    entry: &crate::store::RevertFile,
+    theme: &ThemeStyles,
+    width: usize,
+) -> Vec<Placed> {
     let muted = theme.text_muted;
     let base = theme.text.fg.unwrap_or(theme.background);
-    let additions = if file.additions > 0 {
-        Some(format!("+{}", file.additions))
-    } else {
-        None
-    };
-    let deletions = if file.deletions > 0 {
-        Some(format!("-{}", file.deletions))
-    } else {
-        None
-    };
-    let status = match file.status.as_str() {
+    let additions = (entry.additions > 0).then(|| format!("+{}", entry.additions));
+    let deletions = (entry.deletions > 0).then(|| format!("-{}", entry.deletions));
+    let status = match entry.status.as_str() {
         "added" => "A",
         "deleted" => "D",
         _ => "M",
@@ -881,20 +883,21 @@ fn revert_file_row(file: &crate::store::RevertFile, theme: &ThemeStyles, width: 
     // truncates to what remains (FilePath maxWidth, ref geometry).
     let mut used = status.len() + 1;
     let mut placed = vec![text_at(0, 0, status, muted)];
-    for count in [additions.as_deref(), deletions.as_deref()] {
-        if let Some(count) = count {
-            used += count.len() + 1;
-        }
+    for count in [additions.as_deref(), deletions.as_deref()].into_iter().flatten() {
+        used += count.len() + 1;
     }
     let path_budget = width.saturating_sub(used + 1).max(2);
-    let path = crate::wrap::take_width(&file.file, path_budget);
+    let path = crate::wrap::take_width(&entry.file, path_budget);
     placed.push(text_at(2, 0, path, Style::new().fg(base).bg(theme.background)));
-    let mut x = 2 + crate::wrap::display_width(&file.file).min(path_budget) + 1;
-    for (text, color) in [(additions.as_deref(), theme.diff.text_added), (deletions.as_deref(), theme.diff.text_removed)] {
-        if let Some(count) = text {
-            if x + count.len() <= width {
-                placed.push(text_at(x, 0, count, Style::new().fg(color).bg(theme.background)));
-            }
+    let mut x = 2 + crate::wrap::display_width(&entry.file).min(path_budget) + 1;
+    for (count, color) in [
+        (additions.as_deref(), theme.diff.text_added),
+        (deletions.as_deref(), theme.diff.text_removed),
+    ] {
+        if let Some(count) = count.filter(|count| x + count.len() <= width) {
+            placed.push(text_at(x, 0, count, Style::new().fg(color).bg(theme.background)));
+        }
+        if let Some(count) = count {
             x += count.len() + 1;
         }
     }
@@ -949,12 +952,18 @@ pub fn revert_banner_row(
             placed.push(item);
         }
     }
-    let fills = vec![Fill { x: 0, y: 0, width: width as u16, height: height as u16, style: Style::new().bg(raised) }];
+    let background_fill = vec![Fill {
+        x: 0,
+        y: 0,
+        width: width as u16,
+        height: height as u16,
+        style: Style::new().bg(raised),
+    }];
     // The left rail (SplitBorder vertical `┃`).
     for row in 0..height {
         placed.push(text_at(0, row, "┃", Style::new().fg(raised).bg(theme.background)));
     }
-    RowRender { placed, fills, height, images: Vec::new() }
+    RowRender { placed, fills: background_fill, height, images: Vec::new() }
 }
 
 /// Locale-grouped number (`Locale.number`, util/locale.ts) — the
@@ -1201,6 +1210,155 @@ mod tests {
         // …and the agent label dropped to muted (not the categorical
         // blue the healthy footer carries).
         assert_eq!(frame.cell(2, 3).fg, crate::render::CellColor::Rgb(128, 128, 128));
+    }
+
+    // -- SURF-1: the compaction/skill/revert row family ---------------------
+
+    #[test]
+    fn compaction_divider_paints_running_completed_and_failed_variants() {
+        let theme = theme();
+        let frame = |row: RowRender| {
+            crate::render::paint_placed(
+                &row.placed,
+                (60, u16::try_from(row.height).unwrap_or(u16::MAX)),
+                crate::components::tool_rows::fill_style(&theme),
+            )
+        };
+        // Running: the spinner glyph leads the label.
+        let running =
+            compaction_message_row(true, false, false, false, None, None, &[], 0, &theme, 60);
+        let grid = frame(running).text_grid();
+        assert!(grid[0].contains("⠋ Compaction"), "running divider: {}", grid[0]);
+        // Completed with usage: `· N in · M out` (locale-grouped).
+        let completed = compaction_message_row(
+            false,
+            false,
+            false,
+            false,
+            Some(1_200),
+            Some(200),
+            &[],
+            0,
+            &theme,
+            60,
+        );
+        let grid = frame(completed).text_grid();
+        assert!(grid[0].contains("Compaction · 1,200 in · 200 out"), "{}", grid[0]);
+        assert!(grid[0].starts_with('─') && grid[0].ends_with('─'), "the border fills");
+        // Provider compaction label variant.
+        let provider =
+            compaction_message_row(false, false, false, true, Some(1), Some(1), &[], 0, &theme, 60);
+        assert!(frame(provider).text_grid()[0].contains("Provider compaction"));
+        // Failed + cancelled: NO ✗ icon (the icon is the
+        // non-cancelled failure's — index.tsx:2042-2046), just the
+        // `· cancelled` suffix in the muted color.
+        let cancelled =
+            compaction_message_row(false, true, true, false, None, None, &[], 0, &theme, 60);
+        let text = frame(cancelled).text_grid()[0].clone();
+        assert!(text.contains("Compaction · cancelled"), "{text}");
+        assert!(!text.contains('✗'), "cancelled carries no icon: {text}");
+        // Failed (not cancelled): the error color.
+        let failed =
+            compaction_message_row(false, true, false, false, None, None, &[], 0, &theme, 60);
+        let failed_frame = frame(failed);
+        assert!(failed_frame.text_grid()[0].contains("✗ Compaction"));
+        assert_eq!(
+            failed_frame.cell(0, 26).fg,
+            crate::render::CellColor::Rgb(224, 108, 117),
+            "the failed divider paints the error color"
+        );
+    }
+
+    #[test]
+    fn compaction_queued_row_paints_the_diamond_divider() {
+        let theme = theme();
+        let row = compaction_queued_row(&theme, 40);
+        let frame = crate::render::paint_placed(
+            &row.placed,
+            (40, 1),
+            crate::components::tool_rows::fill_style(&theme),
+        );
+        let line = frame.text_grid()[0].clone();
+        assert!(line.contains("◇ Compaction queued"), "{line}");
+        assert!(line.starts_with('─') && line.ends_with('─'), "border-base fills: {line}");
+        assert_eq!(
+            frame.cell(0, 9).fg,
+            crate::render::CellColor::Rgb(128, 128, 128),
+            "muted label"
+        );
+    }
+
+    #[test]
+    fn skill_row_paints_the_arrow_label() {
+        let theme = theme();
+        let row = skill_message_row("commitlint", &theme, 40);
+        let frame = crate::render::paint_placed(
+            &row.placed,
+            (40, 1),
+            crate::components::tool_rows::fill_style(&theme),
+        );
+        assert_eq!(frame.text_grid()[0].trim(), "→ Skill commitlint");
+    }
+
+    #[test]
+    fn revert_banner_paints_counts_files_and_redo_hint() {
+        let theme = theme();
+        let files = vec![
+            crate::store::RevertFile {
+                file: "src/a.py".into(),
+                status: "modified".into(),
+                additions: 3,
+                deletions: 1,
+            },
+            crate::store::RevertFile {
+                file: "src/new.rs".into(),
+                status: "added".into(),
+                additions: 10,
+                deletions: 0,
+            },
+        ];
+        let row = revert_banner_row(2, &files, "R", &theme, 60);
+        // padTop + count + padT + 2 files + padB + redo + padBottom.
+        assert_eq!(row.height, 1 + 1 + 1 + 2 + 1 + 1 + 1);
+        let frame = crate::render::paint_placed_with_fills(
+            &row.placed,
+            &row.fills,
+            (60, u16::try_from(row.height).unwrap_or(u16::MAX)),
+            crate::components::tool_rows::fill_style(&theme),
+        );
+        let grid = frame.text_grid();
+        assert!(grid[1].contains("2 messages reverted"), "count: {}", grid[1]);
+        assert!(grid[3].contains("M src/a.py +3 -1"), "file row 1: {}", grid[3]);
+        assert!(grid[4].contains("A src/new.rs +10"), "file row 2: {}", grid[4]);
+        assert!(grid[6].contains("R or /redo to restore"), "redo hint: {}", grid[6]);
+        assert_eq!(grid[3].chars().next(), Some('┃'), "the SplitBorder rail");
+    }
+
+    #[test]
+    fn interrupted_footer_drops_the_error_row_and_appends_the_suffix() {
+        let theme = theme();
+        let row = super::assistant_footer_row_ext(
+            "build",
+            "fixture/fixture",
+            0,
+            None,
+            Some("Step interrupted"),
+            true,
+            &theme,
+            76,
+        );
+        assert_eq!(row.height, 1, "no error row, no blank");
+        let frame = crate::render::paint_placed(
+            &row.placed,
+            (76, 1),
+            crate::components::tool_rows::fill_style(&theme),
+        );
+        assert_eq!(frame.text_grid()[0].trim(), "Build · fixture/fixture · interrupted");
+        assert_eq!(
+            frame.cell(0, 3).fg,
+            crate::render::CellColor::Rgb(128, 128, 128),
+            "the agent label stays muted (an error is present)"
+        );
     }
 
     // -- R-07: the user-message image strip ---------------------------------
