@@ -16,7 +16,7 @@
 //! counter* (never an immediate redraw); the render loop compares the
 //! counter between ticks.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
@@ -946,6 +946,11 @@ pub struct Store {
     /// hardware cursor, never a cell-painted block). Set during the
     /// route render; `None` hides it.
     caret_cell: Cell<Option<(u16, u16)>>,
+    /// SURF-2: when the connection state last changed (the
+    /// Reconnecting overlay's threshold anchor).
+    connection_since: Cell<u64>,
+    /// SURF-2: the StartupLoading pill's state machine.
+    startup_state: RefCell<StartupLoadingState>,
     /// SURF-1 revert state (`session.revert.*` — the
     /// `RevertMessage` banner's source, index.tsx:1413-1418):
     /// per-session boundary + file list; `cleared`/`committed`
@@ -1219,6 +1224,18 @@ impl DiffSink for RecordingDiffSink {
     fn fetch(&self, mode: DiffSource, session_id: Option<String>, generation: u64) {
         self.calls.borrow_mut().push((mode, session_id, generation));
     }
+}
+
+/// The StartupLoading pill's state machine fields
+/// (startup-loading.tsx:7-11's `show`/`wait`/`hold`/`stamp`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StartupLoadingState {
+    /// `plugins.ready` (the host finished booting).
+    pub ready: bool,
+    /// When the 500 ms wait armed (`wait` fired at stamp).
+    pub wait_started_at: Option<u64>,
+    /// When the pill showed (`stamp` — the 3 s hold anchor).
+    pub shown_at: Option<u64>,
 }
 
 /// The composer panel's tab (`ComposerTab` — registration order:
@@ -1826,6 +1843,8 @@ impl Store {
             revert_sink: std::cell::RefCell::new(Rc::new(RecordingRevertSink::default())),
             footer_location: std::cell::RefCell::new(String::new()),
             caret_cell: Cell::new(None),
+            connection_since: Cell::new(0),
+            startup_state: RefCell::new(StartupLoadingState::default()),
         }
     }
 
@@ -4636,7 +4655,74 @@ impl Store {
     }
 
     pub fn set_connection(&self, state: ConnectionState) {
+        // SURF-2: the Reconnecting overlay's timer anchor — the clock
+        // reading when the state LAST CHANGED (app.tsx:1298-1315's
+        // effect re-arms the timeout on every transition).
+        if self.connection.get() != state {
+            self.connection_since.set(self.clock.get());
+        }
         self.connection.set(state);
+    }
+
+    /// When the connection state last changed (ms; 0 before any
+    /// transition) — the overlay's threshold anchor.
+    #[must_use]
+    pub fn connection_since(&self) -> u64 {
+        self.connection_since.get()
+    }
+
+    /// Whether the Reconnecting overlay shows at `now`
+    /// (app.tsx:1294-1315): every non-connected state arms a timer —
+    /// `reconnecting` surfaces after 1 s, the initial/failed states
+    /// after 5 s ("Initial connection gets a longer grace period;
+    /// retries surface more quickly").
+    #[must_use]
+    pub fn reconnecting_overlay_visible(&self, now_ms: u64) -> bool {
+        let state = self.connection.get();
+        if state == ConnectionState::Connected {
+            return false;
+        }
+        let threshold =
+            if matches!(state, ConnectionState::Reconnecting { .. }) { 1000 } else { 5000 };
+        now_ms.saturating_sub(self.connection_since.get()) >= threshold
+    }
+
+    /// The StartupLoading machine (startup-loading.tsx:13-47): the
+    /// pill appears 500 ms after plugins go un-ready and holds 3 s
+    /// from the moment it showed once ready ("Finishing startup…").
+    /// Returns the pill's text when visible.
+    #[must_use]
+    pub fn startup_loading_text(&self, now_ms: u64) -> Option<&'static str> {
+        let mut state = self.startup_state.borrow_mut();
+        if state.ready {
+            if let Some(shown_at) = state.shown_at {
+                if now_ms.saturating_sub(shown_at) >= 3000 {
+                    state.shown_at = None;
+                }
+            }
+            return state.shown_at.map(|_| "Finishing startup…");
+        }
+        match (state.wait_started_at, state.shown_at) {
+            (None, _) => {
+                state.wait_started_at = Some(now_ms);
+                None
+            }
+            (Some(started), None) => {
+                if now_ms.saturating_sub(started) >= 500 {
+                    state.shown_at = Some(now_ms);
+                    return Some("Loading plugins…");
+                }
+                None
+            }
+            (Some(_), Some(_)) => Some("Loading plugins…"),
+        }
+    }
+
+    /// The plugin host finished booting (or none was configured) —
+    /// flips the StartupLoading copy to "Finishing startup…" and
+    /// starts the 3 s hold.
+    pub fn set_plugins_ready(&self) {
+        self.startup_state.borrow_mut().ready = true;
     }
 
     /// A permission reply resolved the ask (the pump's reply path and
@@ -4763,6 +4849,15 @@ impl Store {
                 }
             }
             Ingest::Resync { sessions, unread, messages } => {
+                // A resync only happens after a successful subscribe —
+                // the stream is attached, the client is connected
+                // (SURF-2: servers that never emit the `server.
+                // connected` event must not leave the state Connecting
+                // forever, or the Reconnecting scrim would cover a
+                // healthy session).
+                if self.connection.get() != ConnectionState::Connected {
+                    self.set_connection(ConnectionState::Connected);
+                }
                 // Reconcile AFTER the channel drained (v2's
                 // `normalize()` effect, `session-tabs.tsx:241-250`):
                 // the resync NEVER admits new tabs — only OPEN tabs

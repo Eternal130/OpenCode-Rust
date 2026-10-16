@@ -1611,6 +1611,11 @@ impl App {
                 &theme.resolved.tokens,
             );
         }
+        // The app-shell state overlays (SURF-2, auditB #2): the
+        // StartupLoading pill (zIndex 5000) and the Reconnecting
+        // scrim (zIndex 10000) paint above every other layer
+        // (app.tsx:1390-1393).
+        crate::components::overlays::overlay_app_state(&mut frame, &self.store, &theme.styles());
         frame
     }
 
@@ -3246,6 +3251,10 @@ pub async fn run_with_size(
         app.set_plugin_commands(projection.owned);
         app.set_plugin_themes(projection.themes);
     }
+    // SURF-2: plugins ready (no runtime configured = ready) — flips
+    // any live StartupLoading pill to "Finishing startup…" and starts
+    // its 3 s hold (startup-loading.tsx:13-31).
+    app.store.set_plugins_ready();
 
     let result: Result<(), String> = loop {
         // The plugin pump (wave-12): refresh the palette sink's active
