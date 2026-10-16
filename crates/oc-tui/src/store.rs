@@ -3096,10 +3096,7 @@ impl Store {
         if matches!(entry.kind, DialogKind::SessionRename { .. }) {
             return;
         }
-        if matches!(
-            entry.kind,
-            DialogKind::ServerList { command: "model.list", .. }
-        ) {
+        if matches!(entry.kind, DialogKind::ServerList { command: "model.list", .. }) {
             return;
         }
         let props = crate::components::command_palette::select_props_for_entry(&entry, self);
