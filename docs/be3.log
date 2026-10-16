@@ -1,0 +1,97 @@
+# Lane BE-3 work log (append-only) — integration/auth host
+
+Scope: auditE-core #1 — the entire provider-login pipeline is absent
+(`integration.list` → `[]`, oauth routes → errors, wellknown add → always-400,
+no IntegrationService in oc-core). This lane lands the host.
+
+## Phase 1 — v2 integration surface inventory (citations)
+
+### Service shape (packages/core/src/integration.ts, 834 L)
+- Interface `Integration.Interface` (integration.ts:157-233): `get/list`,
+  `connection.{active,resolve,key,activate,update,remove,status}`, `oauth.{connect,status,complete,cancel}`,
+  `command.{connect,status,cancel}`, `revision()`, `transform` (editor).
+- Registry semantics (integration.ts:293-356): entries = `{ref:{id,name,metadata?}, methods[], implementations:Map<methodID,OAuthImpl>}`;
+  `editor.method.update` dedupes by (type, id) for oauth/command, by type for key/env;
+  every transform notifies ephemeral `integration.updated` (schema/integration.ts:57-60; bus publish integration.ts:355).
+- Attempt lifecycle (integration.ts:237-260): 10-min attempt lifetime, 1-min terminal
+  retention, 30-s scrub loop (integration.ts:509-556); pending → (complete|failed|expired);
+  `persisting`/`completing` flags guard double-claim (integration.ts:408-461, 762-784).
+- Connections (integration.ts:369-383): stored credentials reversed (newest first —
+  db orders `asc(active), asc(created), asc(id)` and `.toReversed()`), then env connections
+  for every env-method name present in `process.env`.
+- `connection.resolve` (integration.ts:696-714): env → `Credential.Key` from env var;
+  credential → if oauth + implementation.refresh + `expires <= now+5min` → refresh + update row.
+- OAuth connect (integration.ts:558-608): validate form answer (Form.validateFields/validateAnswer),
+  run `authorize(answer)` → `OAuthAuthorization{url,instructions,expiresAt?,mode:auto|code,callback}`
+  (integration.ts:57-70); mode auto → fork callback, settle on exit; mode code → complete(code)
+  drives `callback(code)`. `CodeRequiredError` (integration.ts:109-111) when code missing.
+- Command connect (integration.ts:610-674): spawn `method.command` (extendEnv, stdin ignore),
+  stderr appended to attempt message (visible while pending), exit!=0 → fail with trimmed stderr,
+  stdout.trim() → `Credential.Key`; empty → fail.
+- Credential auto-label (integration.ts:358-367): `name`, `name 2`, `name 3`… first free label.
+
+### Credential model (packages/core/src/credential.ts, 325 L)
+- Table `credential` (id, integration_id, label, value JSON, active, time_created);
+  Value = `{type:"oauth", methodID, refresh, access, expires, metadata?}` |
+  `{type:"key", key, metadata?, configuration?}` (schema/credential.ts:29-47).
+- create (credential.ts:105-168): activate unless `activate===false && existing`;
+  publishes global `credential.updated` always + `credential.switched` when activated.
+- activate (169-204): picked-active = `desc(active), desc(created), desc(id)`; no-op if same;
+  publishes `credential.switched`.
+- remove (255-320): replacement pick `desc(created), desc(id)`; publishes
+  `credential.updated` + `credential.switched {credentialID: replacement|null}`.
+- update (205-254): label change → `credential.updated` only.
+
+### HTTP surface (protocol groups/integration.ts; server handlers/integration.ts)
+- 11 ops: list, get, wellknown.add (204; 400 kind `well_known_discovery` on failure),
+  connect.key (204), oauth.connect (Attempt), oauth.status (AttemptStatus),
+  oauth.complete (204; CodeRequired → 400 kind `integration_code_required`;
+  AuthorizationError → 400 kind `integration_authorization`), oauth.cancel (204),
+  command.connect (CommandAttempt), command.status, command.cancel.
+- 404s: `IntegrationNotFoundError`, `IntegrationAttemptNotFoundError`,
+  `IntegrationMethodNotFoundError` (command connect only).
+- Wire shapes: Attempt `{attemptID,url,instructions,mode,time:{created,expires}}`;
+  AttemptStatus tag-union on `status`; CommandAttempt `{attemptID,time}`;
+  Info `{id,name,methods[],connections[]}`; connection union tag `type`
+  (credential: `{type,id,label,method:key|oauth,status?}`; env: `{type,name,status?}`).
+
+### Auth kinds registered in v2 (plugin space)
+- Catalog-wide (plugin/models-dev.ts:33-52): every models.dev provider with
+  `environment.length>0` gets `{type:"key"}` + `{type:"env",names:environmentNames(provider)}`
+  (azure filter `_API_KEY` + AZURE_COGNITIVE_SERVICES_API_KEY, models-dev.ts:77-84).
+- zen / OpenCode Console (plugin/provider/opencode.ts:88-165): integration `opencode`,
+  method `device` (form: hidden `server` default `https://opencode.ai/console`),
+  clientID `opencode-cli`; `POST {server}/auth/device/code` `{client_id, supports_org_scope:true}` →
+  poll `{server}/auth/device/token`; mode auto; instructions `Enter code: {user_code}`;
+  refresh = same endpoint `grant_type=refresh_token` (invalid_grant → SignedOut);
+  label from metadata.orgName; plus key method "API key (service account)" (:239-240).
+- GitHub Copilot (plugin/provider/github-copilot.ts:13-176): integration `github-copilot`,
+  method `device`; clientID `Ov23li8tweQw6odWQebz`, scope `read:user`;
+  device endpoints `https://github.com/login/device/code` + `/login/oauth/access_token`
+  (oauthURLs(domain) — enterprise domain support);
+  entitlement check `https://api.github.com/copilot_internal/user` (chat_enabled);
+  credential access=refresh=token, expires 0, metadata {enterpriseUrl?, apiEndpoint?};
+  key method REMOVED (:213); no refresh (token re-polled by transport).
+- xAI (plugin/provider/xai.ts:11-101): integration `xai`, method `device`
+  "SuperGrok Subscription"; issuer `https://auth.x.ai/oauth2`, device grant,
+  scope `openid profile email offline_access grok-cli:access api:access`, referrer `opencode`;
+  refresh via `/token` grant_type=refresh_token; key method "Manually enter API Key" (:95-96).
+- DigitalOcean (plugin/provider/digitalocean.ts:19-118): method `browser`, implicit flow,
+  fixed port 1456, callback `/auth/callback`, browser page POSTs token to `/auth/token`,
+  authorize `https://cloud.digitalocean.com/v1/oauth/authorize` scope `genai:read inference:query`.
+- Poe (plugin/provider/poe.ts:20-125): method `browser`, code+PKCE (S256) loopback
+  127.0.0.1:0 `/callback`, authorize `https://poe.com/oauth/authorize` scope `apikey:create`,
+  exchange `https://api.poe.com/token`; refresh = expiry check only (keys valid till expiry).
+- Others in v2 not ported this lane (deferred): chatgpt browser/headless token-sharing,
+  azure Entra CLI, gitlab, snowflake external-browser, openai codex variants.
+- WellKnown (core/wellknown.ts): manifest `{auth:{command[],env},config?,remote_config?}` at
+  `{origin}/.well-known/opencode`; sources persisted in KV `wellknown:sources`;
+  command-auth integrations spawn `manifest.auth.command` (CommandMethod).
+
+### Rust side before this lane
+- Routes exist but stub: misc.rs:161-264 (list → [], get → 404, wellknown → 400 always,
+  oauth/command → 404s / 400s).
+- Credential table + handlers complete (handlers/credential.rs; events wired BE-1).
+- oc-cli `auth list/login/logout/export/import` exists (890 L) against oc-client —
+  dead-ends at the stubbed routes.
+- Engine exposes `db`, `bus`, `catalog_service` (engine/mod.rs:323-331) — host hangs off these.
