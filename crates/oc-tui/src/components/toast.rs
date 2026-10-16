@@ -285,6 +285,12 @@ fn panel_rows(toast: &ToastOptions) -> usize {
     }
 }
 
+/// [`panel_rows`] exposed for the app's pointer hit rect (lane KM).
+#[must_use]
+pub fn panel_rows_public(toast: &ToastOptions) -> usize {
+    panel_rows(toast)
+}
+
 /// Composite the toast over a LIVE frame (`toast-over-session`): the
 /// panel interior replaces the content cells, while the two `┃` rails
 /// keep the UNDERLYING cell's background — the reference surface is
