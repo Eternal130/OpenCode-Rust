@@ -224,6 +224,20 @@ pub fn language_model(
     let env = &snapshot.environment;
 
     let route = build_route(context, family, provider_id, package, base_url, env, connection)?;
+    // Connection headers ride the route defaults (transport headers) —
+    // the seam credential-driven providers (copilot) use for their
+    // client headers; model overlays apply after and win per key.
+    let route = if connection.headers.is_empty() {
+        route
+    } else {
+        route.with(RoutePatch {
+            defaults: RouteDefaults {
+                headers: Some(connection.headers.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    };
     let route = apply_model_overlays(&route, model);
     route.model(model.id.as_str(), None).map_err(|error| ProviderError::Configuration {
         provider: provider_id.to_string(),
