@@ -3031,6 +3031,7 @@ impl Store {
             theme_initial,
         };
         self.dialogs.update(|stack| stack.push(entry));
+        self.dialog_opened_strip_hover_reset();
         self.focus_dialog_current();
     }
 
@@ -3050,6 +3051,7 @@ impl Store {
         for entry in &removed {
             self.revert_unconfirmed_theme_dialog(entry);
         }
+        self.dialog_opened_strip_hover_reset();
         self.focus_dialog_current();
     }
 
@@ -3059,6 +3061,24 @@ impl Store {
         match kind {
             DialogKind::ThemeList => Some(self.theme.get().name.clone()),
             _ => None,
+        }
+    }
+
+    /// A PROMPT-input dialog (rename / worktree name) drops the
+    /// strip's hover — v2's `DialogSessionRename` focuses its `<input>`
+    /// and the marquee hover resets (the census: the `✕` vanishes
+    /// while the rename dialog is open, returns after it closes).
+    /// Select-family dialogs keep the hover (the session-list steps
+    /// hold their `✕`).
+    fn dialog_opened_strip_hover_reset(&self) {
+        let prompt_dialog = self.top_dialog().is_some_and(|entry| {
+            matches!(entry.kind, DialogKind::SessionRename { .. } | DialogKind::WorktreeName)
+        });
+        if prompt_dialog {
+            self.tabs.update(|state| {
+                state.hover = None;
+                state.hover_close = false;
+            });
         }
     }
 

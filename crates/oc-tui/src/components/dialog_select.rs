@@ -671,13 +671,10 @@ pub fn render_select(
     if state.filter.is_empty() {
         input.text(4, &props.placeholder, styles.muted, styles.formfield_bg, 0);
     } else {
-        let end = input.text(4, &state.filter, styles.formfield_fg, styles.formfield_bg, 0);
-        // Block cursor at the end of the typed text (the reference's
-        // `cursorColor`/`focusedTextColor`; no golden pins a typed
-        // frame — see the module notes).
-        if end < 4 + input_width {
-            input.cells[end] = cell(' ', 0, surface_bg, styles.formfield_fg);
-        }
+        // No painted cursor: v2's input shows the hardware cursor
+        // only — past the typed text the row stays default-fg over
+        // the formfield bg (the #8 ruling's raw-ANSI mirror).
+        input.text(4, &state.filter, styles.formfield_fg, styles.formfield_bg, 0);
     }
     rows.push(input.cells);
 
