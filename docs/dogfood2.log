@@ -154,3 +154,17 @@ All passing locally (nextest).
   centering absorbs the strip row into the top spacer (odd-free split floors);
   our plan_home rounds the top spacer up (div_ceil). No-strip home stays
   byte-exact (goldens). The cursor-on-input-row invariant holds either way.
+
+## Phase 8 — no-new-divergence vs merge-base d3fb7b0 (rig --quick, per script)
+Apples-to-apples (same scripts, fresh homes, separate worktrees):
+| script | base d3fb7b0 | lane | verdict |
+| boot-home | 0..3 mismatch (flips across runs) | 0..3 mismatch | the ONLY delta = the placeholder
+| tabs-keyboard | flips (lucky 8/8 identical once) | 8/8 mismatch | pick flake (xorshift on time^pid^ASLR,
+| tabs-live-session | 19 mismatch | 22 mismatch | REPORT.md "placeholder pick (b)"); reruns
+| mouse-hover-tabstrip | 15 mismatch | 15 mismatch | flip BOTH sides; per-step first-diff
+| multi-session | 20 mismatch | 23 mismatch | signatures IDENTICAL (✕ cell, idx-color
+notes, digit/time drift, placeholder) after digit-masking. No new divergence class.
+The lane's model_default change is neutral on the corpus: "Build · Fake Model
+parityfake" row byte-identical both sides.
+
+## Phase 9 — verify-lane final (phased: fmt/clippy → workspace → pty → release budgets → rig full)
