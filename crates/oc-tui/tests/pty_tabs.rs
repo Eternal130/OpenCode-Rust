@@ -456,8 +456,8 @@ fn real_shape_fixture() -> RealShapeFixture {
         .collect();
     // The restored tabs reference two of them (like the real tabs.json:
     // sessions of /opt/lobechat + /opt/new-api restored into ~).
-    sessions[7].2 = "Synth Restored Seven".to_owned();
-    sessions[11].2 = "Synth Restored Eleven".to_owned();
+    "Synth Restored Seven".clone_into(&mut sessions[7].2);
+    "Synth Restored Eleven".clone_into(&mut sessions[11].2);
     RealShapeFixture {
         restored: vec![
             ("ses_shape_07".to_owned(), "Synth Restored Seven".to_owned()),
@@ -488,8 +488,7 @@ fn real_shape_session_list(fixture: &RealShapeFixture) -> String {
 /// unambiguous transcript.
 fn real_shape_messages(session_id: &str) -> String {
     format!(
-        r#"{{"cursor":{{}},"data":[{{"type":"user","id":"msg_{sid}","text":"SYNTH TRANSCRIPT {sid}","time":{{"created":1}}}}]}}"#,
-        sid = session_id
+        r#"{{"cursor":{{}},"data":[{{"type":"user","id":"msg_{session_id}","text":"SYNTH TRANSCRIPT {session_id}","time":{{"created":1}}}}]}}"#
     )
 }
 
@@ -523,7 +522,7 @@ fn spawn_real_shape_server() -> (String, Arc<AtomicBool>) {
 /// captured stream — the hardware cursor's cell (the app positions it
 /// exactly once per frame, at the caret).
 fn last_cursor_cell(bytes: &[u8]) -> Option<(usize, usize)> {
-    let text = bytes.as_ref();
+    let text = bytes;
     let mut best: Option<(usize, usize)> = None;
     let mut index = 0;
     while let Some(escape) = text[index..].iter().position(|&b| b == 0x1b) {
