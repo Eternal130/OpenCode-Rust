@@ -93,3 +93,17 @@ home-placeholder coin, stats-row digits.
   render-driven re-dispatch) — fixes submit-opened-tab ✕ persistence.
 * Prompt dialogs (rename/worktree-name) clear the strip hover on open
   (v2 census: ✕ vanishes under rename, returns after close).
+
+## Final verification (tier: affected crates + targeted + rig --quick)
+* oc-tui + parity nextest: 790 passed, 12 skipped (pre-existing skips).
+* fmt --check + clippy --all-targets (oc-tui, parity): clean (0 warnings).
+* Rig --quick (live ref, final binary): boot-home, type-edit-submit,
+  palette, tabs-keyboard, multi-session — collapse table above; zero
+  new divergence classes (every remaining first-diff maps to a
+  registered class: (b)-coin placeholder/stats, backdrop-fg idx15,
+  bg idx0↔idx232, models-select variant sub-dialog pre-existing).
+* New targeted tests: models_panel_golden (4), pty_models_panel (1),
+  app-level (2), strip unit (3), palette/dispatch unit (3) — all green
+  in the 790.
+Full workspace nextest / pty profile / release budget: DEFERRED to the
+chain-end consolidated gate per the lane's verification ruling.
