@@ -106,18 +106,17 @@ fn location_model_entries(
 /// wildcard to text, else some modality must start with `text`.
 fn supports_text(model: &Value) -> bool {
     let modality_has_text = |key: &str| {
-        model
-            .get("capabilities")
-            .and_then(|caps| caps.get(key))
-            .and_then(Value::as_array)
-            .map_or(true, |items| {
+        model.get("capabilities").and_then(|caps| caps.get(key)).and_then(Value::as_array).map_or(
+            true,
+            |items| {
                 // `length === 0 || some(startsWith "text")` — the empty
                 // array is the wildcard, exactly like the reference.
                 items.is_empty()
-                    || items.iter().any(|item| {
-                        item.as_str().map_or(false, |text| text.starts_with("text"))
-                    })
-            })
+                    || items
+                        .iter()
+                        .any(|item| item.as_str().map_or(false, |text| text.starts_with("text")))
+            },
+        )
     };
     modality_has_text("input") && modality_has_text("output")
 }
@@ -183,9 +182,7 @@ async fn model_default(
                 })
         };
         let default = resolved.or_else(|| {
-            location_model_entries(&state.engine, &location)
-                .into_iter()
-                .find(supports_text)
+            location_model_entries(&state.engine, &location).into_iter().find(supports_text)
         });
         if let Some(default) = default {
             return Ok(json_location_data(&location.as_path().to_string_lossy(), default));
@@ -235,9 +232,9 @@ mod tests {
     #[test]
     fn supports_text_matches_the_reference_predicate() {
         assert!(supports_text(&json!({"capabilities": {"input": [], "output": []}})));
-        assert!(
-            supports_text(&json!({"capabilities": {"input": ["text", "image"], "output": ["text"]}}))
-        );
+        assert!(supports_text(
+            &json!({"capabilities": {"input": ["text", "image"], "output": ["text"]}})
+        ));
         assert!(!supports_text(&json!({"capabilities": {"input": ["image"], "output": ["text"]}})));
         assert!(!supports_text(&json!({"capabilities": {"input": ["text"], "output": ["audio"]}})));
         // Missing capability blocks wildcard to text (never a false no).
