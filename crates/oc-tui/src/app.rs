@@ -340,10 +340,13 @@ impl App {
                 }
                 // #33 — the footer location label's hover lift
                 // (`useWorkingDirectoryActions`: muted → text.base).
-                let location_hover =
-                    self.store.footer_location_hit().is_some_and(|hit| {
+                // Route-gated (auditA §4.1): a stale session rect
+                // must not flip the hover state on Home.
+                let location_hover = matches!(self.store.route(), Route::Session { .. })
+                    && self.store.footer_location_hit().is_some_and(|hit| {
                         row == hit.row && col >= hit.x && col < hit.x + hit.width
-                    }) && !self.permission_live();
+                    })
+                    && !self.permission_live();
                 let changed_location = self.store.set_location_hovered(location_hover);
                 let (hover, close, add) = if strip_live && row == 0 {
                     self.strip_hover_at(col, width)
@@ -446,8 +449,11 @@ impl App {
                 // #33 — the footer location label opens the Working
                 // directory select on release
                 // (`useWorkingDirectoryActions.openMenu`,
-                // prompt/index.tsx:1932-1934).
-                if !self.permission_live() {
+                // prompt/index.tsx:1932-1934). Route-gated (auditA
+                // §4.1): the rect belongs to the session render —
+                // v2's label unmounts with the route, so a stale
+                // rect must never fire on Home.
+                if !self.permission_live() && matches!(self.store.route(), Route::Session { .. }) {
                     if let Some(hit) = self.store.footer_location_hit() {
                         if row == hit.row && col >= hit.x && col < hit.x + hit.width {
                             self.store.open_dialog(
@@ -472,10 +478,23 @@ impl App {
                 //   select (`UserMessage`'s `onMouseUp`,
                 //   session/index.tsx:2210-2250).
                 // Nothing pointer-driven happens under a modal.
+                // Route-gated (auditA §4.1): each row carries its
+                // session id — the release only fires while THAT
+                // session is the live route (v2's rows unmount with
+                // the route; the belt to `navigate`'s registry
+                // clear, covering the window between a route flip
+                // and the next render pass).
                 if self.permission_live() {
                     return;
                 }
+                let route_session = match self.store.route() {
+                    Route::Session { session_id } => Some(session_id),
+                    Route::Home => None,
+                };
                 for hit in self.store.transcript_hit_rows() {
+                    if route_session.as_deref() != Some(hit.session_id.as_str()) {
+                        continue;
+                    }
                     if row >= hit.y
                         && row < hit.y + hit.height
                         && col >= hit.x
@@ -5057,5 +5076,128 @@ mod core_interaction_tests {
         assert!(app.store.sidebar_shown("s1", 160), "the wide pane docks");
         app.press("escape");
         assert!(app.store.sidebar_shown("s1", 160), "escape left the docked pane alone");
+    }
+
+    // -- lane/if item 2: hit-registry lifetime + route gating (auditA #2) --
+
+    /// A staged session with one reasoning group (the transcript hit
+    /// rows' source) — shared by the phantom-click proofs.
+    fn staged_reasoning_session(app: &mut App) {
+        use crate::components::message::model::{Message, Part, PartTime};
+        app.store.set_messages(
+            "s1",
+            vec![
+                Message::User {
+                    id: "u1".into(),
+                    text: "think".into(),
+                    created: 0,
+                    files: Vec::new(),
+                },
+                Message::Assistant {
+                    id: "a1".into(),
+                    agent: "build".into(),
+                    model: "fixture/fixture".into(),
+                    parts: vec![Part::Reasoning {
+                        text: "Pondering the parser edges".into(),
+                        time: PartTime { created: Some(1), completed: Some(2) },
+                    }],
+                    finish: Some("success".into()),
+                    error: None,
+                    time: PartTime { created: Some(1), completed: Some(2) },
+                    tokens: None,
+                    usage_total: None,
+                },
+            ],
+        );
+        app.store.open_tab("s1", Some("Thoughts".to_owned()));
+        // The footer location label (its hit rect's source): v2's
+        // `{cwd}:{branch}` — empty label ⇒ no rect.
+        app.store.set_footer_location("/w:main:feature".to_owned());
+        // The session render records the hit rows + the footer rect.
+        let _ = app.frame_text();
+    }
+
+    /// Route change disarms the session's pointer registries (auditA
+    /// §4.1): `navigate` is the only `route.set` site — leaving the
+    /// session clears the transcript rows, the footer-location rect
+    /// and the onboarding card, exactly like v2's renderables
+    /// unmounting with the route.
+    #[test]
+    fn route_change_clears_the_pointer_registries() {
+        let mut app = App::new((80, 24));
+        staged_reasoning_session(&mut app);
+        assert!(!app.store.transcript_hit_rows().is_empty(), "the session render armed rows");
+        assert!(
+            app.store.footer_location_hit().is_some(),
+            "the session render armed the footer rect"
+        );
+        app.store.navigate(Route::Home);
+        assert!(
+            app.store.transcript_hit_rows().is_empty(),
+            "navigate cleared the transcript rows"
+        );
+        assert!(app.store.footer_location_hit().is_none(), "navigate cleared the footer rect");
+        assert!(app.store.sidebar_onboarding_hits().is_none(), "the onboarding card disarmed");
+    }
+
+    /// The phantom-click negative: after Session → Home, a release on
+    /// the coordinates the stale rows used to occupy toggles nothing
+    /// and opens no dialog — twice over (the registry clear AND the
+    /// route gate in `mouse_event`, so either regressing alone stays
+    /// pinned).
+    #[test]
+    fn home_release_fires_no_stale_transcript_or_location_hits() {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let mut app = App::new((80, 24));
+        staged_reasoning_session(&mut app);
+        let stale = app
+            .store
+            .transcript_hit_rows()
+            .first()
+            .cloned()
+            .expect("the session armed a hit row");
+        let stale_footer = app.store.footer_location_hit().expect("the footer rect armed");
+        app.store.navigate(Route::Home);
+
+        // The cleared registry: nothing under the old rects.
+        let row = u16::try_from(stale.y).unwrap_or(u16::MAX);
+        app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 10, row));
+        assert!(
+            !app.store.group_expanded(&stale.session_id, "group:Reasoning:a1:reasoning:0"),
+            "no stale toggle fired on home"
+        );
+        assert!(app.store.dialogs().is_empty(), "no dialog opened on home");
+
+        // The route gate, exercised directly: a re-injected stale row
+        // (the registry clear's failure mode) still cannot fire — the
+        // release only lands while the row's session is the route.
+        app.store.set_transcript_hit_rows(vec![stale]);
+        app.store.set_footer_location_hit(Some(stale_footer.clone()));
+        app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 10, row));
+        app.mouse_event(
+            &mouse(
+                MouseEventKind::Up(MouseButton::Left),
+                u16::try_from(stale_footer.x).unwrap_or(u16::MAX),
+                u16::try_from(stale_footer.row).unwrap_or(u16::MAX),
+            ),
+        );
+        assert!(
+            !app.store.group_expanded(&"s1".to_owned(), "group:Reasoning:a1:reasoning:0"),
+            "the route gate blocked the re-injected row"
+        );
+        assert!(
+            app.store.dialogs().is_empty(),
+            "the route gate blocked the stale footer rect (no WorkingDirectory dialog)"
+        );
+        // A hover over the stale footer rect cannot flip the home
+        // label's hover state either.
+        app.mouse_event(
+            &mouse(
+                MouseEventKind::Moved,
+                u16::try_from(stale_footer.x).unwrap_or(u16::MAX),
+                u16::try_from(stale_footer.row).unwrap_or(u16::MAX),
+            ),
+        );
+        assert!(!app.store.location_hovered(), "the stale rect cannot arm hover on home");
     }
 }

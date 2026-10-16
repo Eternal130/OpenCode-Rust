@@ -2537,6 +2537,19 @@ impl Store {
         *self.transcript_hit_rows.borrow_mut() = rows;
     }
 
+    /// Disarm every route-scoped pointer registry (auditA §4.1): the
+    /// transcript hit rows, the footer-location rect and the sidebar
+    /// onboarding card all belong to the SESSION render that recorded
+    /// them — v2's renderables unmount with the route, so the port's
+    /// absolute rects must not outlive it. Called on every
+    /// [`Store::navigate`] (the only `route.set` site); the next
+    /// session render re-records what paints.
+    pub fn clear_route_pointer_registries(&self) {
+        self.transcript_hit_rows.borrow_mut().clear();
+        *self.footer_location_hit.borrow_mut() = None;
+        *self.sidebar_onboarding_hits.borrow_mut() = None;
+    }
+
     /// The last frame's top-dialog frame rect (absolute screen cells)
     /// — the outside-click dismissal surface (`ui/dialog.tsx:34-63`:
     /// the full-screen backdrop closes on mouseup; the inner box's
@@ -3016,6 +3029,16 @@ impl Store {
     // -- route / dialogs / theme / connection --------------------------------
 
     pub fn navigate(&self, route: Route) {
+        // Pointer-registry lifetime (auditA §4.1, finding #2): v2's
+        // hit targets are per-render-frame renderables — leaving a
+        // route must disarm its recorded rects. `render_session`
+        // re-records the transcript rows, the footer-location rect
+        // and the sidebar onboarding card on its next pass; without
+        // this clear, a release on the HOME screen could fire a
+        // stale transcript toggle / open the WorkingDirectory dialog
+        // with the previous session's directory (the phantom-click
+        // hazard — the inverse of dogfood2's home-strip bug).
+        self.clear_route_pointer_registries();
         if let Route::Session { session_id } = &route {
             // v2's session-tabs context roots every routed session
             // (context/session-tabs.tsx:138, 188): navigating into a
