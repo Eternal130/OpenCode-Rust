@@ -24,7 +24,8 @@
 
 use crate::components::dialog_select::{SelectAction, SelectOption, SelectProps, SelectState};
 use crate::store::{
-    DialogKind, DialogSize, DiffSource, ListState, ModelSelection, Route, ServerAgent, Store,
+    DialogKind, DialogSize, DiffSource, ListState, ModelSelection, PairState, Route, ServerAgent,
+    Store,
 };
 use oc_tui_core::scroll::ScrollCommand;
 
@@ -283,6 +284,21 @@ pub fn palette_options(commands: &[PaletteCommand]) -> Vec<SelectOption> {
         .collect()
 }
 
+/// [`palette_options`] over borrowed entries (the conditional slice).
+#[must_use]
+fn palette_options_slice(commands: &[&PaletteCommand]) -> Vec<SelectOption> {
+    commands
+        .iter()
+        .map(|entry| {
+            SelectOption::titled(entry.title, entry.command)
+                .categorized(entry.group)
+                .with_search(entry.command)
+                .with_footer(entry.footer())
+                .with_search_footer(entry.search_footer())
+        })
+        .collect()
+}
+
 /// The full palette props for the current store state: the suggested
 /// section first (a duplicate set under "Suggested") when no filter is
 /// active, then every registry command — `list()` in
@@ -304,7 +320,17 @@ pub fn palette_props(store: &Store) -> SelectProps {
         })
         .collect();
     options.extend(suggested);
-    options.extend(palette_options(PALETTE_COMMANDS));
+    // v2's conditional palette entries (`palette: undefined` — e.g.
+    // variant.list without variants, app.tsx:923): a command whose
+    // surface cannot open is REMOVED from the list, never advertised
+    // as a dead row.
+    let advertised: Vec<&PaletteCommand> = PALETTE_COMMANDS
+        .iter()
+        .filter(|entry| {
+            !(entry.command == "variant.list" && store.current_model_variants().is_empty())
+        })
+        .collect();
+    options.extend(palette_options_slice(&advertised));
     // The plugin layer (registration-time snapshot): id search text,
     // the plugin id beside the group, no bindings display.
     for entry in store.plugin_commands() {
@@ -509,6 +535,226 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             *title,
             vec![SelectOption::titled("Not wired in this build", "stub").muted_placeholder()],
         ),
+        // SURF-2 `DialogMcp` (`/mcps`, dialog-mcp.tsx:70-81): the
+        // name-sorted server rows with the status footer text
+        // (`Status`, :20-34).
+        DialogKind::Mcp => {
+            let mut servers = store.mcp_servers();
+            servers.sort_by(|left, right| left.name.cmp(&right.name));
+            let options = servers
+                .iter()
+                .map(|server| {
+                    let footer = match server.status {
+                        "connected" => "Connected ✓".to_owned(),
+                        "pending" => "Connecting …".to_owned(),
+                        "failed" => "Failed !".to_owned(),
+                        "needs_auth" => "Sign in required →".to_owned(),
+                        _ => "Disabled ○".to_owned(),
+                    };
+                    let toggle = match server.status {
+                        "connected" => "disconnect",
+                        "failed" => "retry",
+                        "needs_auth" => "sign in",
+                        _ => "connect",
+                    };
+                    SelectOption::titled(server.name.clone(), server.name.clone())
+                        .with_footer(footer)
+                        .with_search(toggle.to_owned())
+                })
+                .collect();
+            let mut props = SelectProps::new("MCP servers", options);
+            if store.mcp_servers().is_empty() {
+                props = SelectProps::new(
+                    "MCP servers",
+                    vec![SelectOption::titled("No MCP servers", "status").muted_placeholder()],
+                );
+            }
+            // The toggle action (`dialog.mcp.toggle` = space,
+            // dialog-mcp.tsx:145-153).
+            props = props.flat(true).with_actions(vec![SelectAction::new(
+                "dialog.mcp.toggle",
+                "toggle",
+                "space",
+            )]);
+            props
+        }
+        // The MCP error details (dialog-mcp.tsx:163-174 — the
+        // `DialogErrorDetails` role: error + context rows).
+        DialogKind::McpError { name } => {
+            let row = store
+                .mcp_servers()
+                .into_iter()
+                .find(|server| server.name == *name);
+            let mut options = Vec::new();
+            if let Some(row) = row {
+                options.push(SelectOption::titled(
+                    row.error.clone().unwrap_or_else(|| "Unknown MCP connection error".to_owned()),
+                    "error",
+                ));
+                options.push(SelectOption::titled(
+                    format!("Status: {}", row.status),
+                    "context",
+                ).muted_placeholder());
+                options.push(
+                    SelectOption::titled(
+                        format!("Configuration: mcp.servers.{}", row.name),
+                        "config",
+                    )
+                    .muted_placeholder(),
+                );
+            }
+            SelectProps::new(format!("MCP server: {name}"), options).flat(true)
+        }
+        // SURF-2 `DialogStatus` (`/status`, dialog-status.tsx:29-56):
+        // the count line + per-server bullet rows, or the empty
+        // fallback.
+        DialogKind::Status => {
+            let servers = store.mcp_servers();
+            let mut options = Vec::new();
+            if servers.is_empty() {
+                options.push(SelectOption::titled("No MCP servers", "status").muted_placeholder());
+            } else {
+                options.push(SelectOption::titled(
+                    format!("{} MCP server{}", servers.len(), if servers.len() == 1 { "" } else { "s" }),
+                    "count",
+                ));
+                for server in &servers {
+                    let status_text = match server.status {
+                        "connected" => "Connected".to_owned(),
+                        "failed" => server.error.clone().unwrap_or_else(|| "failed".to_owned()),
+                        "disabled" => "Disabled in configuration".to_owned(),
+                        "needs_auth" => format!(
+                            "Needs authentication: {}",
+                            server.error.clone().unwrap_or_default()
+                        ),
+                        _ => server.status.to_owned(),
+                    };
+                    options.push(SelectOption::titled(
+                        format!("• {} {}", server.name, status_text),
+                        server.name.clone(),
+                    ));
+                }
+            }
+            SelectProps::new("Status", options).flat(true)
+        }
+        // SURF-2 `DialogVariant` (`/variants`, dialog-variant.tsx:
+        // 10-29): "Default" + the current model's variants.
+        DialogKind::Variant => {
+            let mut options = vec![SelectOption::titled("Default", "default")];
+            for variant in store.current_model_variants() {
+                options.push(SelectOption::titled(variant.clone(), variant));
+            }
+            let current = match store.route() {
+                Route::Session { session_id } => {
+                    store.selection_for(&session_id).model
+                }
+                Route::Home => store.selection_for(crate::app::HOME_PROMPT_KEY).model,
+            }
+            .and_then(|model| model.variant)
+            .unwrap_or_else(|| "default".to_owned());
+            SelectProps::new("Select variant", options).flat(true).with_current(Some(current))
+        }
+        // SURF-2 `DialogPair` (`/pair`, dialog-pair.tsx:99-127): the
+        // loading / error / loaded link list (the QR block deferred —
+        // see docs/surf2.log).
+        DialogKind::Pair => {
+            let options = match store.pair_state() {
+                PairState::Loading => vec![status_option("Loading server information…")],
+                PairState::Failed(error) => vec![
+                    SelectOption::titled("Could not load server information", "error"),
+                    SelectOption::titled(error, "detail").muted_placeholder(),
+                    SelectOption::titled("Close and reopen Pair to try again.", "retry")
+                        .muted_placeholder(),
+                ],
+                PairState::Loaded { links, localhost, minutes, loopback } => {
+                    let mut rows = vec![SelectOption::titled(
+                        format!(
+                            "Open a link to connect. Links work once and expire in {minutes} minutes."
+                        ),
+                        "intro",
+                    )
+                    .muted_placeholder()];
+                    if let Some(url) = &localhost {
+                        rows.push(SelectOption::titled("This device", "label").muted_placeholder());
+                        rows.push(SelectOption::titled(url.clone(), "localhost"));
+                    }
+                    rows.push(SelectOption::titled("Links", "label").muted_placeholder());
+                    for (index, url) in links.iter().enumerate() {
+                        rows.push(SelectOption::titled(url.clone(), format!("link:{index}")));
+                    }
+                    if loopback {
+                        rows.push(
+                            SelectOption::titled(
+                                "Run `opencode service set hostname 0.0.0.0` to access the service remotely.",
+                                "loopback",
+                            )
+                            .muted_placeholder(),
+                        );
+                    }
+                    rows
+                }
+            };
+            SelectProps::new("Pair", options).flat(true)
+        }
+        // SURF-2 `DialogDebug` (`/debug`, dialog-debug.tsx:25-35): the
+        // env/config entries + the share hint (enter copies).
+        DialogKind::Debug => {
+            let model = match store.route() {
+                Route::Session { session_id } => {
+                    store.effective_model(&session_id)
+                }
+                Route::Home => store.effective_model(crate::app::HOME_PROMPT_KEY),
+            };
+            let session = match store.route() {
+                Route::Session { session_id } => session_id,
+                Route::Home => "n/a".to_owned(),
+            };
+            let terminal = std::env::var("TERM").unwrap_or_default();
+            let entries = [
+                ("Version", format!("{} (local)", env!("CARGO_PKG_VERSION"))),
+                (
+                    "Date",
+                    chrono_like_now(),
+                ),
+                ("OS", std::env::consts::OS.to_owned()),
+                ("Terminal", terminal),
+                ("Session ID", session),
+                (
+                    "Model",
+                    model.map_or_else(
+                        || "n/a".to_owned(),
+                        |model| format!("{}/{}", model.provider_id, model.model_id),
+                    ),
+                ),
+            ];
+            let options = entries
+                .iter()
+                .map(|(label, value)| {
+                    SelectOption::titled(format!("{label:<10}{value}"), format!("debug:{label}"))
+                })
+                .collect();
+            SelectProps::new("Debug", options)
+                .flat(true)
+                .with_actions(vec![SelectAction::new("dialog.debug.copy", "copy", "return")])
+        }
+        // SURF-2 `DialogTimeline` (`session.timeline`,
+        // dialog-timeline.tsx:21-39): the user messages newest-first
+        // with the short-time footer.
+        DialogKind::Timeline { session_id } => {
+            let mut options = Vec::new();
+            for message in store.messages(session_id) {
+                if let crate::components::message::model::Message::User { id, text, created, .. } =
+                    &message
+                {
+                    options.push(
+                        SelectOption::titled(text.replace('\n', " "), id.clone())
+                            .with_footer(short_time(*created)),
+                    );
+                }
+            }
+            options.reverse();
+            SelectProps::new("Timeline", options)
+        }
         // The diff source select (`openSwitchDiffDialog`,
         // diff-viewer.tsx:735-767): one row per available source, the
         // current one marked; "turn" only from a session route.
@@ -816,6 +1062,41 @@ fn active_selection(store: &Store) -> crate::store::SessionSelection {
 /// A muted status row (loading/error) — the placeholder surface.
 fn status_option(text: &str) -> SelectOption {
     SelectOption::titled(text, "status").muted_placeholder()
+}
+
+/// `Locale.time` (`util/locale.ts:7-10` — `toLocaleTimeString` at
+/// `timeStyle: "short"`): the local HH:MM form. The port renders the
+/// 24-hour short form (a fixed locale, like every other ported
+/// locale surface).
+fn short_time(epoch_seconds: u64) -> String {
+    let seconds_of_day = epoch_seconds % 86_400;
+    format!("{:02}:{:02}", seconds_of_day / 3_600, (seconds_of_day % 3_600) / 60)
+}
+
+/// `new Date().toISOString()` (dialog-debug.tsx:29): the UTC stamp.
+fn chrono_like_now() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let date = now / 86_400;
+    let seconds_of_day = now % 86_400;
+    // Days since epoch → y/m/d (civil-from-days, Howard Hinnant).
+    let z = i64::try_from(date).unwrap_or(0) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        seconds_of_day / 3_600,
+        (seconds_of_day % 3_600) / 60,
+        seconds_of_day % 60
+    )
 }
 
 impl SelectOption {
@@ -1154,10 +1435,10 @@ impl CommandDispatcher for StoreDispatcher {
                 copy_message_to_clipboard(store);
                 Dispatch::Handled
             }
-            "model.list" | "agent.list" | "mcp.list" | "variant.list" | "session.list"
-            | "open.menu" | "provider.connect" | "opencode.settings" | "opencode.status"
-            | "session.share" | "session.fork" | "server.pair" | "location.reload"
-            | "opencode.debug" | "docs.open" => {
+            "model.list" | "agent.list" | "session.list"
+            | "open.menu" | "provider.connect" | "opencode.settings"
+            | "session.share" | "session.fork" | "location.reload"
+            | "docs.open" => {
                 // The mounted dialog's title is the COMPONENT mount's,
                 // not the palette row's (the models-dialog lane's #7):
                 // DialogModel "Select model" (dialog-model.tsx:122),
@@ -1254,6 +1535,61 @@ impl CommandDispatcher for StoreDispatcher {
             }
             "diff.help" => {
                 store.replace_dialog(DialogKind::DiffHelp, DialogSize::Medium);
+                Dispatch::Handled
+            }
+            // -- SURF-2: the six pure-TUI command wirings (auditE's
+            // traceability row: working core, TUI wiring only) ------
+            // `/mcps` (mcp.list — dialog-mcp.tsx): the live MCP rows.
+            "mcp.list" => {
+                store.replace_dialog(DialogKind::Mcp, DialogSize::Medium);
+                Dispatch::Handled
+            }
+            // `/status` (opencode.status — dialog-status.tsx).
+            "opencode.status" => {
+                store.replace_dialog(DialogKind::Status, DialogSize::Medium);
+                Dispatch::Handled
+            }
+            // `/variants` (variant.list — dialog-variant.tsx:919-934):
+            // the no-variants guard toasts instead of opening; the
+            // palette row is removed per v2's `palette: undefined`.
+            "variant.list" => {
+                if store.current_model_variants().is_empty() {
+                    store.toast_show(crate::components::toast::ToastOptions {
+                        title: Some("No variants available".to_owned()),
+                        message: "The current model does not support any variants.".to_owned(),
+                        variant: "info",
+                        ..crate::components::toast::ToastOptions::info("")
+                    });
+                    return Dispatch::Handled;
+                }
+                store.replace_dialog(DialogKind::Variant, DialogSize::Medium);
+                Dispatch::Handled
+            }
+            // `/pair` (server.pair — dialog-pair.tsx:18-19): large +
+            // centered, the fetch rides the pair sink.
+            "server.pair" => {
+                store.set_pair_state(crate::store::PairState::Loading);
+                if let Some(sink) = store.pair_refresh_sink() {
+                    sink.refresh();
+                }
+                store.replace_dialog(DialogKind::Pair, DialogSize::Large);
+                Dispatch::Handled
+            }
+            // `/debug` (opencode.debug — dialog-debug.tsx:23): large.
+            "opencode.debug" => {
+                store.replace_dialog(DialogKind::Debug, DialogSize::Large);
+                Dispatch::Handled
+            }
+            // `session.timeline` (dialog-timeline.tsx:17-19): large,
+            // session-route only (the message list source).
+            "session.timeline" => {
+                let Route::Session { session_id } = store.route() else {
+                    return Dispatch::Handled;
+                };
+                store.replace_dialog(
+                    DialogKind::Timeline { session_id: session_id.clone() },
+                    DialogSize::Large,
+                );
                 Dispatch::Handled
             }
             "app.exit" => {
@@ -1487,17 +1823,192 @@ mod tests {
             }
             other => panic!("unexpected dialog {other:?}"),
         }
+        // SURF-2: variant.list now mounts the REAL DialogVariant —
+        // seeded with a variant-carrying model (the no-variants guard
+        // toasts instead, dialog-variant.tsx:926-931).
+        store.set_models(
+            ListState::Loaded(vec![
+                {
+                    let mut entry = model("opencode", "grok", "Grok", false, false);
+                    entry.variants = vec!["high".to_owned(), "low".to_owned()];
+                    entry
+                },
+                model("opencode", "kimi", "Kimi", false, false),
+            ]),
+            Vec::new(),
+        );
+        store.stage_model(crate::app::HOME_PROMPT_KEY, ModelSelection {
+            provider_id: "opencode".to_owned(),
+            model_id: "grok".to_owned(),
+            variant: None,
+        });
         assert_eq!(dispatcher.dispatch(&store, "variant.list", None), Dispatch::Handled);
-        match &store.top_dialog().unwrap().kind {
-            DialogKind::ServerList { command, title } => {
-                assert_eq!(*command, "variant.list");
-                assert_eq!(*title, "Select variant");
-            }
-            other => panic!("unexpected dialog {other:?}"),
-        }
+        assert!(
+            matches!(&store.top_dialog().unwrap().kind, DialogKind::Variant),
+            "the variant dialog mounts: {:?}",
+            store.top_dialog().unwrap().kind
+        );
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        let titles: Vec<&str> = props.options.iter().map(|option| option.title.as_str()).collect();
+        assert_eq!(titles, vec!["Default", "high", "low"], "the variant rows");
+        assert_eq!(props.current.as_deref(), Some("default"), "the current marker");
+
+        // The no-variants guard: without variants the command toasts.
+        store.clear_dialogs();
+        store.stage_model(crate::app::HOME_PROMPT_KEY, ModelSelection {
+            provider_id: "opencode".to_owned(),
+            model_id: "kimi".to_owned(),
+            variant: None,
+        });
+        assert_eq!(dispatcher.dispatch(&store, "variant.list", None), Dispatch::Handled);
+        assert!(store.dialogs().is_empty(), "no dialog on the guard path");
+        let toast = store.toasts().current().cloned().expect("the guard toast");
+        assert_eq!(toast.title.as_deref(), Some("No variants available"));
+        assert_eq!(toast.message, "The current model does not support any variants.");
     }
 
-    /// L1 — the models dialog opens with the cursor on ROW 0
+    /// SURF-2: the six pure-TUI command wirings mount their REAL
+    /// surfaces (auditE's traceability row — TUI wiring over working
+    /// core): /mcps /status /variants /pair /debug /timeline.
+    #[test]
+    fn six_tui_commands_mount_real_surfaces() {
+        use crate::store::{McpServerRow, PairState, RecordingMcpToggleSink};
+        let store = Store::new(Runtime::new());
+        let toggle_sink = std::rc::Rc::new(RecordingMcpToggleSink::default());
+        store.set_mcp_toggle_sink(toggle_sink.clone());
+        let mut dispatcher = StoreDispatcher;
+
+        // /mcps — the live rows with status footers (dialog-mcp.tsx).
+        store.set_mcp_servers(vec![
+            McpServerRow {
+                name: "beta".into(),
+                status: "connected",
+                error: None,
+            },
+            McpServerRow {
+                name: "alpha".into(),
+                status: "failed",
+                error: Some("spawn failed".into()),
+            },
+        ]);
+        assert_eq!(dispatcher.dispatch(&store, "mcp.list", None), Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Mcp));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        assert_eq!(props.options[0].value, "alpha", "sorted by name");
+        assert_eq!(props.options[0].footer.as_deref(), Some("Failed !"));
+        assert_eq!(props.options[1].footer.as_deref(), Some("Connected ✓"));
+        // Submit on the failed row → the error details dialog.
+        let details = crate::components::dialog::execute_submission(
+            &store,
+            &mut dispatcher,
+            "alpha",
+        );
+        assert_eq!(details, Dispatch::Handled);
+        assert!(matches!(
+            &store.top_dialog().unwrap().kind,
+            DialogKind::McpError { name } if name == "alpha"
+        ));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        let text = props.options.iter().map(|o| o.title.clone()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("spawn failed") && text.contains("Status: failed"));
+
+        // /status — the count + bullet rows (dialog-status.tsx).
+        assert_eq!(dispatcher.dispatch(&store, "opencode.status", None), Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Status));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        let rows: Vec<&str> = props.options.iter().map(|o| o.title.as_str()).collect();
+        assert_eq!(rows[0], "2 MCP servers");
+        assert!(rows[1].contains("• beta Connected"), "list order: {rows:?}");
+        assert!(rows[2].contains("• alpha spawn failed"), "the failed error text: {rows:?}");
+        store.clear_dialogs();
+
+        // /pair — the loading row, then the loaded links.
+        assert_eq!(dispatcher.dispatch(&store, "server.pair", None), Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Pair));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        assert_eq!(props.options[0].title, "Loading server information…");
+        store.set_pair_state(PairState::Loaded {
+            links: vec!["http://127.0.0.1:4096/auth/connect/abc".to_owned()],
+            localhost: Some("http://localhost:4096/auth/connect/abc".to_owned()),
+            minutes: 5,
+            loopback: true,
+        });
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        let text = props.options.iter().map(|o| o.title.clone()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("expire in 5 minutes"), "{text}");
+        assert!(text.contains("This device"));
+        assert!(text.contains("opencode service set hostname 0.0.0.0"));
+        store.set_pair_state(PairState::Failed("connection refused".to_owned()));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        assert_eq!(props.options[0].title, "Could not load server information");
+        store.clear_dialogs();
+
+        // /debug — the env entries (dialog-debug.tsx:25-35).
+        assert_eq!(dispatcher.dispatch(&store, "opencode.debug", None), Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Debug));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        let text = props.options.iter().map(|o| o.title.clone()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("Version"));
+        assert!(text.contains("Session ID"));
+        assert!(text.starts_with("Debug") || props.title == "Debug");
+        store.clear_dialogs();
+
+        // session.timeline — the user-message rows newest-first
+        // (dialog-timeline.tsx:21-39).
+        store.open_tab("s1", None);
+        store.ingest_all([crate::data::Ingest::MessagesSnapshot {
+            session_id: "s1".to_owned(),
+            messages: vec![
+                crate::components::message::model::Message::User {
+                    id: "u1".to_owned(),
+                    text: "first turn".to_owned(),
+                    created: 1_000,
+                    files: Vec::new(),
+                },
+                crate::components::message::model::Message::User {
+                    id: "u2".to_owned(),
+                    text: "second turn".to_owned(),
+                    created: 3_600_000,
+                    files: Vec::new(),
+                },
+            ],
+        }]);
+        assert_eq!(dispatcher.dispatch(&store, "session.timeline", None), Dispatch::Handled);
+        assert!(matches!(
+            &store.top_dialog().unwrap().kind,
+            DialogKind::Timeline { session_id } if session_id == "s1"
+        ));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        assert_eq!(props.options[0].value, "u2", "newest first");
+        assert_eq!(props.options[1].value, "u1");
+        // Submit → the message actions over that message.
+        let dispatch = crate::components::dialog::execute_submission(&store, &mut dispatcher, "u1");
+        assert_eq!(dispatch, Dispatch::Handled);
+        assert!(matches!(
+            &store.top_dialog().unwrap().kind,
+            DialogKind::MessageActions { message_id, .. } if message_id == "u1"
+        ));
+    }
+
+    /// The MCP toggle action (`dialog.mcp.toggle` = space) rides the
+    /// sink with the right direction (dialog-mcp.tsx:113-132).
+    #[test]
+    fn mcp_toggle_action_directions() {
+        use crate::store::{McpServerRow, RecordingMcpToggleSink};
+        let store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(RecordingMcpToggleSink::default());
+        store.set_mcp_toggle_sink(sink.clone());
+        store.set_mcp_servers(vec![
+            McpServerRow { name: "on".into(), status: "connected", error: None },
+            McpServerRow { name: "off".into(), status: "failed", error: Some("x".into()) },
+            McpServerRow { name: "wait".into(), status: "pending", error: None },
+        ]);
+        store.mcp_toggle("on");
+        store.mcp_toggle("off");
+        store.mcp_toggle("wait");
+        let calls = sink.calls.borrow().clone();
+        assert_eq!(calls, vec![("on".to_owned(), false), ("off".to_owned(), true)]);
+    }
     /// (`focusCurrent={false}`, dialog-model.tsx:171): the current
     /// model only carries its `●` marker, never the selection.
     #[test]
