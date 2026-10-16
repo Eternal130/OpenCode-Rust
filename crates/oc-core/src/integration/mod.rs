@@ -6,6 +6,7 @@
 pub mod credential;
 pub mod flows;
 pub mod providers;
+pub mod providers_enterprise;
 #[cfg(test)]
 mod tests;
 pub mod types;

@@ -511,7 +511,12 @@ impl MockOAuth {
                 let path = request.split_whitespace().nth(1).unwrap_or_default().to_owned();
                 let body_start = request.find("\r\n\r\n").map_or(read, |index| index + 4);
                 let form_body = request[body_start..].to_owned();
-                log_handle.lock().push(format!("{path} {form_body}"));
+                let auth_header = request
+                    .lines()
+                    .find(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+                    .map(std::borrow::ToOwned::to_owned)
+                    .unwrap_or_default();
+                log_handle.lock().push(format!("{path} {form_body} | {auth_header}"));
                 let route = cursors.iter_mut().find(|(prefix, _)| path.starts_with(prefix));
                 let (status, response_body) = match route {
                     Some((_, bodies)) => bodies.pop_front().unwrap_or((404, Value::Null)),
@@ -846,4 +851,605 @@ async fn info_serializes_to_v2_wire_shape() {
     assert!(env["names"]
         .as_array()
         .is_some_and(|names| names.iter().any(|name| name == "ANTHROPIC_API_KEY")));
+}
+
+// -- BE-3b: gitlab ---------------------------------------------------------------
+
+fn parse_query_param(url: &str, key: &str) -> Option<String> {
+    let query = url.split_once('?')?.1;
+    for pair in query.split('&') {
+        let (k, v) = pair.split_once('=')?;
+        if k == key {
+            return Some(
+                urlencoding::decode(v).map_or_else(|_| v.to_owned(), std::borrow::Cow::into_owned),
+            );
+        }
+    }
+    None
+}
+
+async fn wait_complete(
+    host: &Arc<IntegrationHost>,
+    integration: &str,
+    attempt: &Attempt,
+    spins: usize,
+) -> AttemptStatus {
+    for _ in 0..spins {
+        if let Ok(status) = host.oauth_status(integration, &attempt.attempt_id).await {
+            if !matches!(status, AttemptStatus::Pending { .. }) {
+                return status;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    host.oauth_status(integration, &attempt.attempt_id).await.expect("status")
+}
+
+#[tokio::test]
+async fn gitlab_pkce_flow_round_trip_against_mock() {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    // GitLab pins redirect port 8080 — a busy port is an environment
+    // conflict (v2 fails identically), documented-skip.
+    if tokio::net::TcpListener::bind(("127.0.0.1", 8080)).await.is_err() {
+        eprintln!("skipping: port 8080 busy (gitlab pins it)");
+        return;
+    }
+    let mock = MockOAuth::start(vec![(
+        "/oauth/token",
+        vec![
+            json!({"access_token": "gl-access", "refresh_token": "gl-refresh", "expires_in": 7200}),
+        ],
+    )])
+    .await;
+    // SAFETY: test-scoped env (self-managed-instance client override).
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::set_var("GITLAB_OAUTH_CLIENT_ID", "test-client-id");
+    };
+    let host = host().await;
+    let attempt = host
+        .oauth_connect("gitlab", "pkce", &answer(&[("instanceUrl", mock.base.as_str())]), None)
+        .await
+        .expect("connect");
+    assert_eq!(attempt.mode, "auto");
+    // The authorize URL: fixed redirect + S256 challenge + api scope.
+    assert!(attempt.url.starts_with(&format!("{}/oauth/authorize?", mock.base)), "{}", attempt.url);
+    assert!(
+        attempt.url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A8080%2Fcallback"),
+        "{}",
+        attempt.url
+    );
+    assert!(attempt.url.contains("scope=api"), "{}", attempt.url);
+    assert!(attempt.url.contains("code_challenge_method=S256"), "{}", attempt.url);
+    let state = parse_query_param(&attempt.url, "state").expect("state");
+
+    // Act as the browser: hit the fixed loopback redirect.
+    let callback =
+        reqwest::get(format!("http://127.0.0.1:8080/callback?code=gl-code&state={state}"))
+            .await
+            .expect("callback");
+    assert_eq!(callback.status(), 200);
+
+    let status = wait_complete(&host, "gitlab", &attempt, 400).await;
+    assert!(matches!(status, AttemptStatus::Complete { .. }), "{status:?}");
+
+    // Request shapes: authorization_code + verifier + fixed redirect +
+    // client id; S256(verifier) == the authorize challenge.
+    let requests = mock.requests().join("\n");
+    assert!(requests.contains("grant_type=authorization_code"), "{requests}");
+    assert!(requests.contains("code=gl-code"), "{requests}");
+    assert!(requests.contains("code_verifier="), "{requests}");
+    assert!(
+        requests.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A8080%2Fcallback"),
+        "{requests}"
+    );
+    assert!(requests.contains("client_id=test-client-id"), "{requests}");
+    let verifier = requests
+        .lines()
+        .find_map(|line| line.split("code_verifier=").nth(1)?.split('&').next().map(String::from))
+        .expect("verifier");
+    let challenge = parse_query_param(&attempt.url, "code_challenge").expect("challenge");
+    let recomputed = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(Sha256::digest(verifier.as_bytes()));
+    assert_eq!(recomputed, challenge, "PKCE S256 consistency");
+
+    // Credential: instance + client recorded; label = instance host.
+    let info = host.get("gitlab").await.expect("get").expect("present");
+    let ConnectionInfo::Credential { label, .. } = &info.connections[0] else { panic!() };
+    assert_eq!(label, "127.0.0.1");
+    let active = host.connection_active("gitlab").await.expect("active").expect("some");
+    let resolved = host.connection_resolve(&active).await.expect("resolve").expect("value");
+    let CredentialValue::OAuth(oauth) = resolved else { panic!() };
+    assert_eq!(oauth.access, "gl-access");
+    assert_eq!(oauth.metadata.as_ref().unwrap()["clientID"], "test-client-id");
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::remove_var("GITLAB_OAUTH_CLIENT_ID");
+    };
+}
+
+#[tokio::test]
+async fn gitlab_bundled_client_rejected_off_gitlab_com() {
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::remove_var("GITLAB_OAUTH_CLIENT_ID");
+    };
+    let host = host().await;
+    let error = host
+        .oauth_connect(
+            "gitlab",
+            "pkce",
+            &answer(&[("instanceUrl", "https://gitlab.example.corp")]),
+            None,
+        )
+        .await
+        .expect_err("non-gitlab.com rejected");
+    assert!(error.to_string().contains("bundled GitLab OAuth application"), "{error}");
+}
+
+#[tokio::test]
+async fn gitlab_refresh_rotates_via_mock() {
+    let mock = MockOAuth::start(vec![(
+        "/oauth/token",
+        vec![json!({"access_token": "gl-rotated", "refresh_token": "gl-rotated-refresh", "expires_in": 7200})],
+    )])
+    .await;
+    let host = host().await;
+    let expiring = CredentialValue::OAuth(OAuthValue {
+        method_id: "pkce".into(),
+        refresh: "gl-old-refresh".into(),
+        access: "gl-old".into(),
+        expires: crate::database::migrations::now_ms() - 1000,
+        metadata: Some(BTreeMap::from([
+            ("instanceUrl".to_owned(), Value::String(mock.base.clone())),
+            ("clientID".to_owned(), Value::String("legacy-client".into())),
+        ])),
+    });
+    host.store()
+        .create(credential::CreateInput {
+            id: None,
+            integration_id: "gitlab",
+            label: Some("expiring"),
+            value: &expiring,
+            activate: None,
+        })
+        .await
+        .expect("create");
+    let active = host.connection_active("gitlab").await.expect("active").expect("some");
+    let resolved = host.connection_resolve(&active).await.expect("resolve").expect("value");
+    let CredentialValue::OAuth(oauth) = resolved else { panic!() };
+    assert_eq!(oauth.access, "gl-rotated");
+    let requests = mock.requests().join("\n");
+    assert!(requests.contains("grant_type=refresh_token"), "{requests}");
+    assert!(requests.contains("refresh_token=gl-old-refresh"), "{requests}");
+    assert!(requests.contains("client_id=legacy-client"), "{requests}");
+}
+
+// -- BE-3b: azure CLI ---------------------------------------------------------------
+
+#[tokio::test]
+async fn azure_cli_flow_with_fake_az() {
+    // A fake `az` on PATH (v2's endpoint-injection analog).
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let bin = dir.path().join("az");
+    let expires_on = crate::database::migrations::now_ms() / 1000 + 3600;
+    std::fs::write(
+        &bin,
+        format!("#!/bin/sh\necho '{{\"accessToken\":\"az-token\",\"expires_on\":{expires_on}}}'"),
+    )
+    .expect("write az");
+    #[allow(unsafe_code)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let old_path = std::env::var("PATH").unwrap_or_default();
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::set_var("PATH", format!("{}:{old_path}", dir.path().display()));
+    };
+    let host = host().await;
+    let info = host.get("azure").await.expect("get").expect("present");
+    assert!(
+        info.methods
+            .iter()
+            .any(|method| matches!(method, Method::OAuth { id, .. } if id == "azure-cli")),
+        "cli method registered"
+    );
+
+    let attempt = host
+        .oauth_connect("azure", "azure-cli", &answer(&[("resourceName", "my-models")]), None)
+        .await
+        .expect("connect");
+    assert_eq!(attempt.url, "");
+    assert_eq!(attempt.instructions, "Sign in with `az login` before continuing.");
+    let status = wait_complete(&host, "azure", &attempt, 200).await;
+    assert!(matches!(status, AttemptStatus::Complete { .. }), "{status:?}");
+    let active = host.connection_active("azure").await.expect("active").expect("some");
+    let resolved = host.connection_resolve(&active).await.expect("resolve").expect("value");
+    let CredentialValue::OAuth(oauth) = resolved else { panic!() };
+    assert_eq!(oauth.access, "az-token");
+    assert_eq!(oauth.refresh, "azure-cli");
+    assert_eq!(oauth.metadata.as_ref().unwrap()["resourceName"], "my-models");
+    assert!(oauth.expires > crate::database::migrations::now_ms());
+
+    // PATH without `az`: the CLI method is absent (azure.ts:124).
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::set_var("PATH", "/nonexistent");
+    };
+    let bare_host = host_with_bus().await.0;
+    let info = bare_host.get("azure").await.expect("get 2").expect("present");
+    assert!(
+        !info.methods.iter().any(|method| matches!(method, Method::OAuth { .. })),
+        "no cli method without az"
+    );
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::set_var("PATH", old_path);
+    };
+}
+
+// -- BE-3b: snowflake ---------------------------------------------------------------
+
+#[tokio::test]
+async fn snowflake_token_exchange_against_mock() {
+    use base64::Engine;
+    let mock = MockOAuth::start(vec![(
+        "/oauth/token-request",
+        vec![json!({"access_token": "sf-access", "expires_in": 600})],
+    )])
+    .await;
+    // No refresh_token in the response → falls back to the form value
+    // (snowflake.ts:68).
+    let tokens = super::providers_enterprise::snowflake_token_at(
+        &mock.base,
+        "myorg-myaccount",
+        vec![
+            ("grant_type", "authorization_code".to_owned()),
+            ("code", "sf-code".into()),
+            ("code_verifier", "sf-verifier".into()),
+            ("refresh_token", "sf-refresh".into()),
+        ],
+    )
+    .await
+    .expect("token");
+    assert_eq!(tokens.access, "sf-access");
+    assert_eq!(tokens.refresh, "sf-refresh");
+    assert_eq!(tokens.metadata.as_ref().unwrap()["account"], "myorg-myaccount");
+    let requests = mock.requests().join("\n");
+    assert!(requests.contains("client_id=LOCAL_APPLICATION"), "{requests}");
+    assert!(requests.contains("grant_type=authorization_code"), "{requests}");
+    // Basic LOCAL_APPLICATION:LOCAL_APPLICATION (snowflake.ts:57-58).
+    let expected =
+        base64::engine::general_purpose::STANDARD.encode("LOCAL_APPLICATION:LOCAL_APPLICATION");
+    let lowered = requests.to_ascii_lowercase();
+    assert!(
+        lowered.contains("authorization: basic ")
+            && requests.contains(&format!("Basic {expected}")),
+        "{requests}"
+    );
+}
+
+#[tokio::test]
+async fn snowflake_account_normalization_and_scope() {
+    use super::providers_enterprise::snowflake_account;
+    assert_eq!(
+        snowflake_account(Some("https://myorg-myaccount.snowflakecomputing.com/")),
+        "myorg-myaccount"
+    );
+    assert_eq!(snowflake_account(Some("myorg.snowflakecomputing.com")), "myorg");
+    assert_eq!(snowflake_account(Some("  plain-account ")), "plain-account");
+    assert_eq!(snowflake_account(None), "");
+
+    // Scope encoding (snowflake.ts:151-155): simple role, encoded role.
+    let host = host().await;
+    let simple = host
+        .oauth_connect(
+            "snowflake-cortex",
+            "browser",
+            &answer(&[("account", "acct"), ("role", "analyst")]),
+            None,
+        )
+        .await
+        .expect("connect");
+    assert!(
+        simple.url.contains("scope=refresh_token%20session%3Arole%3Aanalyst"),
+        "{}",
+        simple.url
+    );
+    host.oauth_cancel("snowflake-cortex", &simple.attempt_id).await;
+    let encoded = host
+        .oauth_connect(
+            "snowflake-cortex",
+            "browser",
+            &answer(&[("account", "acct"), ("role", "data eng")]),
+            None,
+        )
+        .await
+        .expect("connect 2");
+    assert!(encoded.url.contains("session%3Arole-encoded%3Adata%2520eng"), "{}", encoded.url);
+    host.oauth_cancel("snowflake-cortex", &encoded.attempt_id).await;
+}
+
+// -- BE-3b: openai codex ---------------------------------------------------------------
+
+#[tokio::test]
+async fn openai_exchange_extracts_account_from_id_token_claims() {
+    use base64::Engine;
+    let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256"}"#);
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(br#"{"chatgpt_account_id":"acct-9","exp":9999999999}"#);
+    let id_token = format!("{header}.{payload}.sig");
+    let mock = MockOAuth::start(vec![(
+        "/oauth/token",
+        vec![json!({"access_token": "oi-access", "refresh_token": "oi-refresh", "id_token": id_token, "expires_in": 3600})],
+    )])
+    .await;
+    let (access, refresh, returned_id, expires_in) =
+        super::providers_enterprise::openai_exchange_at(
+            &mock.base,
+            vec![
+                ("grant_type", "authorization_code".to_owned()),
+                ("code", "oi-code".into()),
+                ("client_id", "app_EMoamEEZ73f0CkXaXp7hrann".into()),
+                ("code_verifier", "oi-verifier".into()),
+            ],
+        )
+        .await
+        .expect("exchange");
+    #[allow(clippy::cast_possible_truncation)]
+    let expires = expires_in as i64;
+    assert_eq!((access.as_str(), refresh.as_str(), expires), ("oi-access", "oi-refresh", 3600));
+    assert!(returned_id.contains("acct-9") || !returned_id.is_empty());
+    let requests = mock.requests().join("\n");
+    assert!(requests.contains("grant_type=authorization_code"), "{requests}");
+    // The claim extraction (openai.ts:415-430) — via the credential builder.
+    let credential = super::providers_enterprise::openai_credential(
+        "chatgpt-browser",
+        access,
+        refresh,
+        &returned_id,
+        expires_in,
+    );
+    let CredentialValue::OAuth(oauth) = credential else { panic!() };
+    assert_eq!(oauth.metadata.as_ref().unwrap()["accountID"], "acct-9");
+}
+
+#[tokio::test]
+async fn openai_headless_flow_against_mock() {
+    let mock = MockOAuth::start(vec![
+        (
+            "/api/accounts/deviceauth/usercode",
+            vec![json!({"device_auth_id": "da-1", "user_code": "ZZZZ-9999", "interval": "1"})],
+        ),
+        (
+            "/api/accounts/deviceauth/token",
+            vec![json!({"authorization_code": "oi-auth-code", "code_verifier": "server-verifier"})],
+        ),
+        (
+            "/oauth/token",
+            vec![json!({"access_token": "oi-headless", "refresh_token": "oi-refresh-2", "expires_in": 3600})],
+        ),
+    ])
+    .await;
+    let authorization =
+        super::providers_enterprise::openai_headless_authorize_at(BTreeMap::new(), &mock.base)
+            .await
+            .expect("authorize");
+    assert_eq!(authorization.url, format!("{}/codex/device", mock.base));
+    assert_eq!(authorization.instructions, "Enter code: ZZZZ-9999");
+    let AuthMode::Auto(callback) = authorization.mode else { panic!("auto") };
+    let value = callback.await.expect("callback");
+    let CredentialValue::OAuth(oauth) = value else { panic!() };
+    assert_eq!(oauth.access, "oi-headless");
+    assert_eq!(oauth.method_id, "chatgpt-headless");
+    let requests = mock.requests().join("\n");
+    assert!(requests.contains("deviceauth/usercode"), "{requests}");
+    assert!(
+        requests.contains("device_auth_id=da-1") || requests.contains("device_auth_id"),
+        "{requests}"
+    );
+    assert!(requests.contains("code_verifier=server-verifier"), "{requests}");
+    assert!(requests.contains("redirect_uri="), "{requests}");
+}
+
+#[tokio::test]
+async fn listen_pinned_falls_back_when_primary_busy() {
+    let primary_holder = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("primary");
+    let primary = primary_holder.local_addr().expect("addr").port();
+    let fallback_listener =
+        tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("fallback probe");
+    let fallback = fallback_listener.local_addr().expect("addr").port();
+    drop(fallback_listener);
+    let listener = super::flows::listen_pinned(
+        primary,
+        Some(fallback),
+        |port| super::flows::LoopbackOptions {
+            port,
+            host: "127.0.0.1".into(),
+            callback_path: "/cb",
+            page: super::flows::CallbackPage::Html(super::flows::success_page("T")),
+        },
+        3,
+        std::time::Duration::from_millis(20),
+        |p, f| format!("conflict {p}/{f}"),
+    )
+    .await
+    .expect("fallback bind");
+    assert_eq!(listener.port, fallback);
+    let _ = primary_holder;
+}
+
+// -- BE-3b: chatgpt connector ---------------------------------------------------------------
+
+fn fake_jwt(claims: &str) -> String {
+    use base64::Engine;
+    let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256"}"#);
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.as_bytes());
+    format!("{header}.{payload}.sig")
+}
+
+/// A slot-valued mock: the response is set AFTER authorize produced its
+/// nonce (the `id_token` must echo it).
+struct SlotMock {
+    base: String,
+    slot: Arc<parking_lot::Mutex<Option<(u16, Value)>>>,
+    log: Arc<parking_lot::Mutex<Vec<String>>>,
+}
+
+impl SlotMock {
+    async fn start() -> Self {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let slot: Arc<parking_lot::Mutex<Option<(u16, Value)>>> = Arc::default();
+        let log: Arc<parking_lot::Mutex<Vec<String>>> = Arc::default();
+        let (slot_handle, log_handle) = (Arc::clone(&slot), Arc::clone(&log));
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buffer = [0u8; 8192];
+                let read = stream.read(&mut buffer).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
+                let path = request.split_whitespace().nth(1).unwrap_or_default().to_owned();
+                let body_start = request.find("\r\n\r\n").map_or(read, |index| index + 4);
+                log_handle.lock().push(format!("{path} {}", &request[body_start..]));
+                let (status, body) = slot_handle.lock().clone().unwrap_or((404, Value::Null));
+                let body = body.to_string();
+                let response = format!(
+                    "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        Self { base: format!("http://127.0.0.1:{port}"), slot, log }
+    }
+}
+
+#[tokio::test]
+async fn chatgpt_connector_round_trip_against_mock() {
+    let mock = SlotMock::start().await;
+    // authorize binds the loopback; the token URL points at the mock.
+    let authorization = super::providers_enterprise::chatgpt_authorize_at(
+        BTreeMap::new(),
+        &format!("{}/oauth/token", mock.base),
+    )
+    .await
+    .expect("authorize");
+    // The authorize URL carries the dynamic-client registration params
+    // (chatgpt.ts:498-519).
+    assert!(authorization.url.contains("client_id=dynamic_agent_client"), "{}", authorization.url);
+    assert!(authorization.url.contains("agent_name_hint=OpenCode"), "{}", authorization.url);
+    assert!(authorization.url.contains("nonce="), "{}", authorization.url);
+    assert!(authorization.url.contains("chatgpt.tokens.use.direct"), "{}", authorization.url);
+    let state = parse_query_param(&authorization.url, "state").expect("state");
+    let nonce = parse_query_param(&authorization.url, "nonce").expect("nonce");
+    let redirect = parse_query_param(&authorization.url, "redirect_uri").expect("redirect");
+
+    // The id_token must echo the attempt nonce; aud = the client the
+    // callback will carry (chatgpt.ts:165-171,439-461 claims subset).
+    let id_token = fake_jwt(&format!(
+        r#"{{"iss":"https://auth.openai.com","aud":"client_reg_1","exp":9999999999,"nonce":"{nonce}","sub":"user|1"}}"#
+    ));
+    *mock.slot.lock() = Some((
+        200,
+        json!({
+            "access_token": "cg-access",
+            "refresh_token": "cg-refresh",
+            "id_token": id_token,
+            "scope": "openid profile email offline_access chatgpt.tokens.use.direct",
+            "expires_in": 3600
+        }),
+    ));
+
+    // Act as the browser: redirect with code + the registered client id.
+    let callback =
+        reqwest::get(format!("{redirect}?code=cg-code&state={state}&client_id=client_reg_1"))
+            .await
+            .expect("callback");
+    assert_eq!(callback.status(), 200);
+
+    let AuthMode::Auto(callback_future) = authorization.mode else { panic!("auto") };
+    let value = callback_future.await.expect("callback value");
+    let CredentialValue::OAuth(oauth) = value else { panic!() };
+    assert_eq!(oauth.access, "cg-access");
+    assert_eq!(oauth.method_id, "chatgpt-token-sharing");
+    let metadata = oauth.metadata.expect("metadata");
+    assert_eq!(metadata["clientID"], "client_reg_1");
+    assert!(metadata["scopes"]
+        .as_array()
+        .is_some_and(|scopes| scopes.iter().any(|scope| scope == "chatgpt.tokens.use.direct")));
+
+    // Exchange request shape (chatgpt.ts:353-366).
+    let requests = mock.log.lock().join("\n");
+    assert!(requests.contains("grant_type=authorization_code"), "{requests}");
+    assert!(requests.contains("client_id=client_reg_1"), "{requests}");
+    assert!(requests.contains("code_verifier="), "{requests}");
+    assert!(requests.contains("resource=https%3A%2F%2Fapi.openai.com%2Fv1"), "{requests}");
+}
+
+#[tokio::test]
+async fn chatgpt_connector_rejects_missing_token_sharing_scope() {
+    let mock = SlotMock::start().await;
+    let authorization = super::providers_enterprise::chatgpt_authorize_at(
+        BTreeMap::new(),
+        &format!("{}/oauth/token", mock.base),
+    )
+    .await
+    .expect("authorize");
+    let state = parse_query_param(&authorization.url, "state").expect("state");
+    let nonce = parse_query_param(&authorization.url, "nonce").expect("nonce");
+    let redirect = parse_query_param(&authorization.url, "redirect_uri").expect("redirect");
+    let id_token = fake_jwt(&format!(
+        r#"{{"iss":"https://auth.openai.com","aud":"client_reg_1","exp":9999999999,"nonce":"{nonce}","sub":"user|1"}}"#
+    ));
+    *mock.slot.lock() = Some((
+        200,
+        json!({
+            "access_token": "cg-access",
+            "refresh_token": "cg-refresh",
+            "id_token": id_token,
+            "scope": "openid profile email",
+            "expires_in": 3600
+        }),
+    ));
+    let _ =
+        reqwest::get(format!("{redirect}?code=cg-code&state={state}&client_id=client_reg_1")).await;
+    let AuthMode::Auto(callback_future) = authorization.mode else { panic!("auto") };
+    let error = callback_future.await.expect_err("missing sharing scope");
+    assert!(error.contains("without token sharing"), "{error}");
+}
+
+#[tokio::test]
+async fn chatgpt_connector_rejects_nonce_mismatch() {
+    let mock = SlotMock::start().await;
+    let authorization = super::providers_enterprise::chatgpt_authorize_at(
+        BTreeMap::new(),
+        &format!("{}/oauth/token", mock.base),
+    )
+    .await
+    .expect("authorize");
+    let state = parse_query_param(&authorization.url, "state").expect("state");
+    let redirect = parse_query_param(&authorization.url, "redirect_uri").expect("redirect");
+    // The id_token echoes the WRONG nonce (chatgpt.ts:449-450).
+    let id_token = fake_jwt(
+        r#"{"iss":"https://auth.openai.com","aud":"client_reg_1","exp":9999999999,"nonce":"attacker-nonce","sub":"user|1"}"#,
+    );
+    *mock.slot.lock() = Some((
+        200,
+        json!({
+            "access_token": "cg-access",
+            "refresh_token": "cg-refresh",
+            "id_token": id_token,
+            "scope": "openid offline_access chatgpt.tokens.use.direct",
+            "expires_in": 3600
+        }),
+    ));
+    let _ =
+        reqwest::get(format!("{redirect}?code=cg-code&state={state}&client_id=client_reg_1")).await;
+    let AuthMode::Auto(callback_future) = authorization.mode else { panic!("auto") };
+    let error = callback_future.await.expect_err("nonce mismatch");
+    assert!(error.contains("nonce"), "{error}");
 }
