@@ -199,3 +199,29 @@ Code (all gated, tests included — see §7):
   fails `handlers_shell_round_trip` + `handlers_vcs_init_and_status` from
   cross-test interference — **reproduced on unmodified `main`**; each passes
   in isolation with this lane's changes applied.
+
+## 8. Conclusion landing (lane P3-d03, 2026-10-16)
+
+The ROADMAP disposition is closed: **resolved — equivalent semantics +
+permanent registrations.** What this lane added on top of §5-6:
+
+* `corpus_hook_mutation_replacement_shapes`
+  (oc-plugin-host/tests/corpus.rs; fixtures `hookswap-a.ts`/`hookswap-b.ts`)
+  — the first e2e proof that the *shapes* of v2 mutation, not just nested
+  appends, cross the bridge host-observable: whole-field replacement (the
+  `event.input = repair(...)` pattern, tool-input-repair.ts:33), scalar
+  rewrite, and key deletion all reach the host consumer AND the next plugin
+  in the chain, through the real bun subprocess + NDJSON boundary.
+* The registered divergences asserted as documented behavior in the same
+  test: R2 (a post-return `setTimeout` mutation on the held event is
+  provably invisible to the host and later plugins, even after the timer
+  fired) and R4 (a stashed `Date` crosses as its JSON string coercion —
+  later plugins observe `typeof === "string"`).
+* ROADMAP.md §3 D-03 row rewritten to the resolved disposition with the
+  citations above.
+
+Net D-03 position: every v2-observable hook-mutation behavior is achieved
+by copy-in/copy-out applied at v2's apply-points (the exhaustive §1 audit
+is the proof of coverage); what remains divergent is precisely the set a
+process boundary buys isolation from (R1-R5) — registered with the
+isolation-benefit rationale rather than papered over.
