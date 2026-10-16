@@ -1413,6 +1413,19 @@ impl CommandDispatcher for StoreDispatcher {
                 store.replace_dialog(DialogKind::ThemeList, DialogSize::Medium);
                 Dispatch::Handled
             }
+            // `theme.switch_mode` / `theme.mode.lock` (app.tsx:
+            // 1054-1073): toggle-and-pin / lock-unlock through the
+            // config sink (SURF-2, the F-1 consumption halves).
+            "theme.switch_mode" => {
+                store.theme_switch_mode();
+                store.clear_dialogs();
+                Dispatch::Handled
+            }
+            "theme.mode.lock" => {
+                store.theme_mode_lock();
+                store.clear_dialogs();
+                Dispatch::Handled
+            }
             "help.show" => {
                 // v2's DialogHelp takes the default (medium) size —
                 // no explicit setSize in dialog-help.tsx.
@@ -2091,7 +2104,7 @@ mod tests {
     /// through the dispatcher (the `diff` plugin route).
     #[test]
     fn diff_viewer_opens_scrolls_and_closes() {
-        use crate::store::{DiffPhase, DiffSink, RecordingDiffSink};
+        use crate::store::{DiffPhase, RecordingDiffSink};
         let store = Store::new(Runtime::new());
         let sink = std::rc::Rc::new(RecordingDiffSink::default());
         store.set_diff_sink(sink.clone());

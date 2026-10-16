@@ -14,6 +14,7 @@ oc-tui-core = { workspace = true }
 oc-theme = { workspace = true }
 oc-syntax = { workspace = true }
 oc-client = { workspace = true }
+oc-core = { workspace = true }
 oc-plugin-host = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -1013,6 +1013,12 @@ pub struct Store {
     mcp_toggle_sink: std::cell::RefCell<Rc<dyn McpToggleSink>>,
     /// SURF-2 `DialogPair`'s fetch seam (server.info + server.pair).
     pair_refresh_sink: std::cell::RefCell<Option<Rc<dyn PairRefreshSink>>>,
+    /// SURF-2 the config persistence sink (cli.json write-through).
+    config_sink: std::cell::RefCell<Rc<dyn ConfigSink>>,
+    /// The configured theme-mode pin (dark/light/system).
+    theme_mode_pref: RefCell<Option<String>>,
+    /// The terminal probe's system mode.
+    system_mode: Cell<oc_theme::types::Mode>,
 }
 
 /// One staged revert (`session.revert.staged`'s `revert` payload).
@@ -1283,6 +1289,45 @@ pub trait McpToggleSink {
 /// dialog-pair.tsx:21-38): the run loop wires the HTTP worker.
 pub trait PairRefreshSink {
     fn refresh(&self);
+}
+
+/// The config persistence seam (SURF-2, F-1's registered runtime
+/// toggles): v2's `configState.update` writes — the theme
+/// name/mode pins and `session.sidebar` land in cli.json through
+/// oc-core's `CliConfig` service (comment-preserving write-through).
+pub trait ConfigSink {
+    fn update_theme_name(&self, name: &str);
+    fn update_theme_mode(&self, mode: &str);
+    fn update_session_sidebar(&self, hide: bool);
+}
+
+/// The default no-op sink.
+pub struct NoConfigSink;
+
+impl ConfigSink for NoConfigSink {
+    fn update_theme_name(&self, _name: &str) {}
+    fn update_theme_mode(&self, _mode: &str) {}
+    fn update_session_sidebar(&self, _hide: bool) {}
+}
+
+/// The recording sink (tests).
+#[derive(Default)]
+pub struct RecordingConfigSink {
+    pub calls: std::cell::RefCell<Vec<(&'static str, String)>>,
+}
+
+impl ConfigSink for RecordingConfigSink {
+    fn update_theme_name(&self, name: &str) {
+        self.calls.borrow_mut().push(("theme.name", name.to_owned()));
+    }
+    fn update_theme_mode(&self, mode: &str) {
+        self.calls.borrow_mut().push(("theme.mode", mode.to_owned()));
+    }
+    fn update_session_sidebar(&self, hide: bool) {
+        self.calls
+            .borrow_mut()
+            .push(("session.sidebar", if hide { "hide" } else { "auto" }.to_owned()));
+    }
 }
 
 /// The default no-op sink.
@@ -1923,6 +1968,9 @@ impl Store {
             pair,
             mcp_toggle_sink: std::cell::RefCell::new(Rc::new(NoMcpToggleSink)),
             pair_refresh_sink: std::cell::RefCell::new(None),
+            config_sink: std::cell::RefCell::new(Rc::new(NoConfigSink)),
+            theme_mode_pref: RefCell::new(None),
+            system_mode: Cell::new(oc_theme::types::Mode::Dark),
             interrupt_sink: std::cell::RefCell::new(Rc::new(RecordingInterruptSink::default())),
             model_ring_dirty: Cell::new(false),
             revert_sink: std::cell::RefCell::new(Rc::new(RecordingRevertSink::default())),
@@ -4270,6 +4318,10 @@ impl Store {
         match self.registry.get().resolve(name, mode) {
             Some(state) => {
                 self.theme.set(state);
+                // v2's `themes.set` persists the name through
+                // `configState.update` (context/theme.tsx:339-346) —
+                // the SURF-2 config sink write-through.
+                self.config_sink.borrow().update_theme_name(name);
                 true
             }
             None => false,
@@ -4483,12 +4535,71 @@ impl Store {
             return;
         }
         let visible = matches!(self.route.get(), Route::Session { session_id } if self.sidebar_shown(&session_id, usize::from(self.terminal_size.get().0)));
-        self.sidebar_mode.set(if visible {
+        let mode = if visible {
             crate::components::sidebar::SidebarMode::Hide
         } else {
             crate::components::sidebar::SidebarMode::Auto
-        });
+        };
+        self.sidebar_mode.set(mode);
         self.sidebar_open.set(!visible);
+        // v2's toggle writes `session.sidebar` through config.update
+        // (the SURF-2 seam — replaces the channel-storage diversion
+        // F-1 registered).
+        self.config_sink.borrow().update_session_sidebar(matches!(mode, crate::components::sidebar::SidebarMode::Hide));
+    }
+
+    /// The configured theme-mode pin (`theme.mode`: dark/light/system
+    /// — `None` before the first `apply_config`).
+    #[must_use]
+    pub fn theme_mode_pref(&self) -> Option<String> {
+        self.theme_mode_pref.borrow().clone()
+    }
+
+    /// Boot/reload: record the configured pin + the terminal probe.
+    pub fn set_theme_mode_inputs(&self, pref: Option<String>, system: oc_theme::types::Mode) {
+        *self.theme_mode_pref.borrow_mut() = pref;
+        self.system_mode.set(system);
+    }
+
+    /// `theme.switch_mode` (app.tsx:1054-1062): toggle the resolved
+    /// mode and PIN it (the write lands in cli.json's `theme.mode`).
+    pub fn theme_switch_mode(&self) {
+        let target = if self.theme.get().mode == oc_theme::types::Mode::Dark {
+            oc_theme::types::Mode::Light
+        } else {
+            oc_theme::types::Mode::Dark
+        };
+        self.switch_theme_mode(target);
+        let pref = if target == oc_theme::types::Mode::Dark { "dark" } else { "light" };
+        *self.theme_mode_pref.borrow_mut() = Some(pref.to_owned());
+        self.config_sink.borrow().update_theme_mode(pref);
+    }
+
+    /// `theme.mode.lock` (app.tsx:1064-1073): a system-following
+    /// theme pins its CURRENT resolved mode; a pinned one unlocks
+    /// back to system (re-resolving against the terminal probe).
+    pub fn theme_mode_lock(&self) {
+        let locked =
+            self.theme_mode_pref.borrow().as_deref().is_some_and(|pref| pref != "system");
+        if locked {
+            *self.theme_mode_pref.borrow_mut() = Some("system".to_owned());
+            self.switch_theme_mode(self.system_mode.get());
+            self.config_sink.borrow().update_theme_mode("system");
+        } else {
+            let current = if self.theme.get().mode == oc_theme::types::Mode::Dark {
+                "dark"
+            } else {
+                "light"
+            };
+            *self.theme_mode_pref.borrow_mut() = Some(current.to_owned());
+            self.config_sink.borrow().update_theme_mode(current);
+        }
+    }
+
+    /// Install the config persistence sink (the run loop's cli.json
+    /// writer; tests record).
+    pub fn set_config_sink(&self, sink: Rc<dyn ConfigSink>) {
+        *self.config_sink.borrow_mut() = sink;
     }
 
     // -- the composer's subagent picker (#44) ------------------------------
