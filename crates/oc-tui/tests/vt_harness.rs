@@ -562,6 +562,9 @@ pub struct FakeLlm {
     /// proof): three servers (2 connected + 1 failed) exercise the
     /// collapse toggle AND the error dot.
     pub mcp: Arc<AtomicBool>,
+    /// Whether `/api/info` + `/api/pair` answer (opt-in — SURF-2's
+    /// `DialogPair` proof).
+    pub pair: Arc<AtomicBool>,
     /// SSE script played once, after the first prompt POST.
     script: Arc<Mutex<Option<Vec<ScriptEvent>>>>,
 }
@@ -575,12 +578,14 @@ impl FakeLlm {
         let prompt_posts = Arc::new(AtomicUsize::new(0));
         let vcs = Arc::new(AtomicBool::new(false));
         let mcp = Arc::new(AtomicBool::new(false));
+        let pair = Arc::new(AtomicBool::new(false));
         let script: Arc<Mutex<Option<Vec<ScriptEvent>>>> = Arc::new(Mutex::new(None));
         let flag = Arc::clone(&shutdown);
         let shared_script = Arc::clone(&script);
         let shared_posts = Arc::clone(&prompt_posts);
         let shared_vcs = Arc::clone(&vcs);
         let shared_mcp = Arc::clone(&mcp);
+        let shared_pair = Arc::clone(&pair);
         std::thread::spawn(move || {
             listener.set_nonblocking(true).expect("nonblocking accept");
             while !flag.load(Ordering::SeqCst) {
@@ -591,8 +596,9 @@ impl FakeLlm {
                         let posts = Arc::clone(&shared_posts);
                         let vcs = Arc::clone(&shared_vcs);
                         let mcp = Arc::clone(&shared_mcp);
+                        let pair = Arc::clone(&shared_pair);
                         std::thread::spawn(move || {
-                            handle(socket, &sessions, &script, &posts, &vcs, &mcp);
+                            handle(socket, &sessions, &script, &posts, &vcs, &mcp, &pair);
                         });
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -602,7 +608,7 @@ impl FakeLlm {
                 }
             }
         });
-        Self { url: format!("http://{addr}"), shutdown, prompt_posts, vcs, mcp, script }
+        Self { url: format!("http://{addr}"), shutdown, prompt_posts, vcs, mcp, pair, script }
     }
 
     /// Answer `/api/vcs` (the footer location label's boot lookup —
@@ -614,6 +620,11 @@ impl FakeLlm {
     /// Answer `/api/mcp` with the three-server fixture (SURF-1).
     pub fn arm_mcp(&self) {
         self.mcp.store(true, Ordering::SeqCst);
+    }
+
+    /// Answer `/api/info` + `/api/pair` (SURF-2's DialogPair proof).
+    pub fn arm_pair(&self) {
+        self.pair.store(true, Ordering::SeqCst);
     }
 
     /// Arm the streaming script (played on the SSE feed after the
@@ -634,6 +645,7 @@ fn handle(
     prompt_posts: &Arc<AtomicUsize>,
     vcs: &Arc<AtomicBool>,
     mcp: &Arc<AtomicBool>,
+    pair: &Arc<AtomicBool>,
 ) {
     socket.set_read_timeout(Some(Duration::from_secs(10))).ok();
     let mut buffer = [0u8; 8192];
@@ -722,6 +734,19 @@ fn handle(
         // would flag).
         r#"{"data":{"branch":{"current":"main","default":"main"}},"location":{"directory":"/tmp"}}"#
             .to_owned()
+    } else if path.split('?').next().unwrap_or("") == "/api/vcs/base" && vcs.load(Ordering::SeqCst) {
+        // vcs.base (SURF-2's diff viewer): no base reported.
+        r#"{"data":null,"location":{"directory":"/tmp"}}"#.to_owned()
+    } else if path.split('?').next().unwrap_or("") == "/api/vcs/diff" && vcs.load(Ordering::SeqCst) {
+        // vcs.diff (SURF-2's diff viewer): one modified file fixture.
+        r#"{"data":[{"file":"src/lib.rs","additions":1,"deletions":1,"patch":"--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n fn one() {\n-    let old = 1;\n+    let new = 1;\n }\n","status":"modified"}],"location":{"directory":"/tmp"}}"#.to_owned()
+    } else if path.split('?').next().unwrap_or("") == "/api/info" && pair.load(Ordering::SeqCst) {
+        // server.info (SURF-2's DialogPair): one loopback URL.
+        r#"{"paths":{"tmp":"/tmp"},"pid":1,"urls":["http://127.0.0.1:4096"],"version":"2.0.0"}"#
+            .to_owned()
+    } else if path.split('?').next().unwrap_or("") == "/api/pair" && pair.load(Ordering::SeqCst) {
+        // server.pair (SURF-2's DialogPair): a 10-minute code.
+        r#"{"code":"pair-code-123","expires_in":600}"#.to_owned()
     } else if path.split('?').next().unwrap_or("") == "/api/mcp" && mcp.load(Ordering::SeqCst) {
         // mcp.list (SURF-1: the sidebar MCP section rows) — two
         // connected servers + one failed.
