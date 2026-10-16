@@ -89,6 +89,10 @@ pub struct App {
     /// event stream).
     pub rename_requests: Vec<(String, String)>,
     size: (u16, u16),
+    /// The last pointer cell (motion/up events) — the strip's hover
+    /// re-evaluation source after a re-layout moves controls under a
+    /// stationary pointer (opentui re-dispatches hover on render).
+    last_pointer: Option<(usize, usize)>,
     /// Whether the exit command fired (the run loop's teardown gate).
     pub exit_requested: bool,
     /// The applied keybind override set (re-merged when the store's
@@ -128,6 +132,7 @@ impl App {
             permission_replies: Vec::new(),
             rename_requests: Vec::new(),
             size,
+            last_pointer: None,
             exit_requested: false,
             applied_keybinds: Vec::new(),
             plugin_owned: Vec::new(),
@@ -307,10 +312,11 @@ impl App {
             && self.store.dialogs().is_empty()
             && !self.permission_live()
             && !self.store.tabs().tabs.is_empty();
-        let active = match self.store.route() {
-            Route::Session { session_id } => Some(session_id),
-            Route::Home => None,
-        };
+        // Track the pointer for the strip's post-mutation hover
+        // re-evaluation (`refresh_strip_hover`).
+        if matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Up(MouseButton::Left)) {
+            self.last_pointer = Some((col, row));
+        }
         match mouse.kind {
             MouseEventKind::Moved => {
                 // A modal select's option rows track the pointer
@@ -329,24 +335,12 @@ impl App {
                         row == hit.row && col >= hit.x && col < hit.x + hit.width
                     }) && !self.permission_live();
                 let changed_location = self.store.set_location_hovered(location_hover);
-                let (hover, add) = if strip_live && row == 0 {
-                    let tabs = self.store.tabs();
-                    match strip_hit(
-                        &tabs.tabs,
-                        active.as_deref(),
-                        true,
-                        width,
-                        col,
-                        tabs.hover.as_deref(),
-                    ) {
-                        StripHit::Tab(id) | StripHit::Close(id) => (Some(id), false),
-                        StripHit::Add => (None, true),
-                        StripHit::Outside => (None, false),
-                    }
+                let (hover, close, add) = if strip_live && row == 0 {
+                    self.strip_hover_at(col, width)
                 } else {
-                    (None, false)
+                    (None, false, false)
                 };
-                let changed = self.store.set_tab_hover(hover.as_deref());
+                let changed = self.store.set_tab_hover(hover.as_deref(), close);
                 let changed_add = self.store.set_tab_add_hovered(add);
                 if changed || changed_add || changed_location {
                     self.store.request_redraw();
@@ -372,20 +366,46 @@ impl App {
                     return;
                 }
                 if strip_live && row == 0 {
-                    let tabs = self.store.tabs();
-                    match strip_hit(
-                        &tabs.tabs,
-                        active.as_deref(),
-                        true,
-                        width,
-                        col,
-                        tabs.hover.as_deref(),
-                    ) {
-                        StripHit::Tab(id) => self.store.select_tab(&id),
-                        StripHit::Close(id) => self.store.close_tab(Some(&id)),
+                    let hit = {
+                        let (tabs, active, show_plus) = self.strip_layout_tabs();
+                        let hover = self.store.tabs().hover.clone();
+                        strip_hit(&tabs, active.as_deref(), show_plus, width, col, hover.as_deref())
+                    };
+                    match hit {
+                        StripHit::Tab(id) => {
+                            // The home pseudo-tab IS the home route —
+                            // selecting it is a stay-put (`NEW_SESSION_TAB`
+                            // has no session to route to).
+                            if id != crate::components::session_tabs::NEW_SESSION_TAB_ID {
+                                self.store.select_tab(&id);
+                            }
+                        }
+                        StripHit::Close(id) => {
+                            if id == crate::components::session_tabs::NEW_SESSION_TAB_ID {
+                                // `tabs.close()` on the promoted slot
+                                // (session-tabs.tsx:1745-1753 +
+                                // context `close(undefined)` :420-433):
+                                // no target → navigate to the previous
+                                // history session, else the last tab.
+                                let tabs = self.store.tabs();
+                                let fallback =
+                                    tabs.tabs.last().map(|tab| tab.session_id.clone());
+                                if let Some(session_id) = fallback {
+                                    self.store.select_tab(&session_id);
+                                }
+                            } else {
+                                self.store.close_tab(Some(&id));
+                            }
+                        }
                         StripHit::Add => self.store.navigate(Route::Home),
                         StripHit::Outside => {}
                     }
+                    // opentui re-dispatches hover from the LAST
+                    // pointer position whenever a re-layout moves
+                    // controls under it (the multi-session ✕-persists
+                    // census cells): a release that mutates the strip
+                    // re-hits the stationary pointer.
+                    self.refresh_strip_hover(width);
                     return;
                 }
                 // #33 — the footer location label opens the Working
@@ -458,6 +478,59 @@ impl App {
             return None;
         }
         self.store.dialog_option_rows().into_iter().position(|option_row| option_row == Some(row))
+    }
+
+    /// The strip's layout inputs RIGHT NOW: the store tabs plus the
+    /// home-route `New session` pseudo-tab (selected; the idle ` + `
+    /// hides — session-tabs.tsx:1339-1344).
+    fn strip_layout_tabs(&self) -> (Vec<crate::store::SessionTab>, Option<String>, bool) {
+        let tabs = self.store.tabs();
+        let mut items: Vec<crate::store::SessionTab> = tabs.tabs.clone();
+        if matches!(self.store.route(), Route::Home) && !items.is_empty() {
+            items.push(crate::store::SessionTab {
+                session_id: crate::components::session_tabs::NEW_SESSION_TAB_ID.to_owned(),
+                title: Some(crate::components::session_tabs::NEW_SESSION_TAB_TITLE.to_owned()),
+            });
+            (items, Some(crate::components::session_tabs::NEW_SESSION_TAB_ID.to_owned()), false)
+        } else {
+            let active = match self.store.route() {
+                Route::Session { session_id } => Some(session_id),
+                Route::Home => None,
+            };
+            (items, active, true)
+        }
+    }
+
+    /// The strip hover state under pointer column `col`:
+    /// (hovered tab, pointer-on-✕, ` + ` hovered).
+    fn strip_hover_at(&self, col: usize, width: usize) -> (Option<String>, bool, bool) {
+        use crate::components::session_tabs::{strip_hit, StripHit};
+        let (tabs, active, show_plus) = self.strip_layout_tabs();
+        let hover = self.store.tabs().hover.clone();
+        match strip_hit(&tabs, active.as_deref(), show_plus, width, col, hover.as_deref()) {
+            StripHit::Tab(id) => (Some(id), false, false),
+            StripHit::Close(id) => (Some(id), true, false),
+            StripHit::Add => (None, false, true),
+            StripHit::Outside => (None, false, false),
+        }
+    }
+
+    /// Re-evaluate the strip hover from the LAST pointer position —
+    /// opentui's renderer re-dispatches `mouseOver/mouseOut` whenever
+    /// a re-render moves elements under a stationary pointer (the
+    /// multi-session census: the ✕ stays revealed on the tab that
+    /// grew under the pointer after an add-release).
+    fn refresh_strip_hover(&mut self, width: usize) {
+        let Some((col, row)) = self.last_pointer else { return };
+        if row != 0 {
+            return;
+        }
+        let (hover, close, add) = self.strip_hover_at(col, width);
+        let changed = self.store.set_tab_hover(hover.as_deref(), close);
+        let changed_add = self.store.set_tab_add_hovered(add);
+        if changed || changed_add {
+            self.store.request_redraw();
+        }
     }
 
     /// Move the top dialog's selection to a flat index (pointer
@@ -1347,6 +1420,8 @@ pub enum ServerListEvent {
     Config(Option<crate::store::ModelSelection>),
     Models(Result<(Vec<crate::store::ServerModel>, Vec<crate::store::ServerProvider>), String>),
     Agents(Result<Vec<crate::store::ServerAgent>, String>),
+    /// `useConnected()` — any integration has connections.
+    Connected(bool),
 }
 
 /// One `worktree.list` call mapped into the dialog's row type.
@@ -1611,6 +1686,18 @@ pub fn spawn_server_lists(
             .await
             .map_err(|error| error.to_string());
         let providers = providers.unwrap_or_default().data;
+        // `useConnected()` — `hasConnectedProvider(integration.list())`
+        // (use-connected.tsx): any integration carrying a connection
+        // flips the models dialog to its connected rendering and drops
+        // the palette's suggested "Connect an integration" row.
+        let connected = client
+            .integration()
+            .list(&oc_client::types::IntegrationListQuery { location: None })
+            .await
+            .map_or(false, |response| {
+                response.data.iter().any(|integration| !integration.connections.is_empty())
+            });
+        let _ = tx.send(ServerListEvent::Connected(connected)).await;
         let _ = tx
             .send(ServerListEvent::Models(models.map(|response| {
                 let models = response
@@ -2522,6 +2609,9 @@ pub async fn run_with_size(
                         eprintln!("[tui] agent list failed: {error}");
                     }
                     app.store.set_agents(crate::store::ListState::Failed(error));
+                }
+                ServerListEvent::Connected(connected) => {
+                    app.store.set_integration_connected(connected);
                 }
             }
         }
