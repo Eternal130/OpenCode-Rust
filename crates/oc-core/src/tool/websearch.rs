@@ -702,10 +702,8 @@ mod tests {
 
         let stub = Arc::new(StubProvider { queries: Mutex::new(Vec::new()) });
         let db = crate::database::Database::open_in_memory().await.unwrap();
-        let search =
-            WebSearch::new(db, vec![stub.clone() as Arc<dyn SearchProvider>]).with_config_selection(
-                Some(Selection::Provider("stub".into())),
-            );
+        let search = WebSearch::new(db, vec![stub.clone() as Arc<dyn SearchProvider>])
+            .with_config_selection(Some(Selection::Provider("stub".into())));
         let response = search.query("rust async io", None, None).await.unwrap();
         assert_eq!(response.provider_id.0, "stub");
         assert_eq!(response.results.len(), 1);
@@ -718,28 +716,26 @@ mod tests {
         // v2 ConfigWebSearchPlugin: the config `websearch` selection is the
         // in-memory default and wins over the stored KV choice
         // (websearch.ts:119-131 checks `data.selection` first).
-        let search = service()
-            .await
-            .with_config_selection(Some(Selection::Provider("exa".into())));
+        let search = service().await.with_config_selection(Some(Selection::Provider("exa".into())));
         let response = search.query("q", None, None).await.unwrap();
         assert_eq!(response.provider_id.0, "exa");
 
-        let search = service()
-            .await
-            .with_config_selection(Some(Selection::Provider("exa".into())));
+        let search = service().await.with_config_selection(Some(Selection::Provider("exa".into())));
         search.select(&Selection::Provider("tavily".into())).await;
         let response = search.query("q", None, None).await.unwrap();
         assert_eq!(response.provider_id.0, "exa", "config selection beats KV");
 
         let search = service().await.with_config_selection(Some(Selection::Disabled));
         search.select(&Selection::Provider("tavily".into())).await;
-        assert!(matches!(search.query("q", None, None).await.unwrap_err(), WebSearchError::Disabled));
+        assert!(matches!(
+            search.query("q", None, None).await.unwrap_err(),
+            WebSearchError::Disabled
+        ));
 
         // An unknown provider id in config does not own the selection —
         // the stored choice applies (v2: `providers.has(id)` gate).
-        let search = service()
-            .await
-            .with_config_selection(Some(Selection::Provider("missing".into())));
+        let search =
+            service().await.with_config_selection(Some(Selection::Provider("missing".into())));
         search.select(&Selection::Provider("tavily".into())).await;
         let response = search.query("q", None, None).await.unwrap();
         assert_eq!(response.provider_id.0, "tavily");

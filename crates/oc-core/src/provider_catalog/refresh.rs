@@ -69,10 +69,7 @@ impl CatalogSource for ReqwestCatalogSource {
         if !status.is_success() {
             return Err(format!("catalog fetch failed (HTTP {status})"));
         }
-        response
-            .text()
-            .await
-            .map_err(|error| format!("catalog body: {error}"))
+        response.text().await.map_err(|error| format!("catalog body: {error}"))
     }
 }
 
@@ -92,16 +89,12 @@ impl DbCatalogKv {
 #[async_trait]
 impl CatalogKv for DbCatalogKv {
     async fn get(&self, key: &str) -> Option<String> {
-        self.db
-            .kv_get(key)
-            .await
-            .ok()
-            .flatten()
-            .map(|value| value.to_string())
+        self.db.kv_get(key).await.ok().flatten().map(|value| value.to_string())
     }
 
     async fn set(&self, key: &str, value: &str) {
-        let parsed: serde_json::Value = serde_json::from_str(value).unwrap_or(serde_json::Value::Null);
+        let parsed: serde_json::Value =
+            serde_json::from_str(value).unwrap_or(serde_json::Value::Null);
         let _ = self.db.kv_set(key, &parsed).await;
     }
 
@@ -203,16 +196,12 @@ impl CatalogService {
             self.kv.remove(CACHE_KEY).await;
             return false;
         };
-        match Catalog::parse(&body) {
-            Ok(catalog) => {
-                *self.catalog.write() = Arc::new(catalog);
-                true
-            }
-            Err(_) => {
-                self.kv.remove(CACHE_KEY).await;
-                false
-            }
+        if let Ok(catalog) = Catalog::parse(&body) {
+            *self.catalog.write() = Arc::new(catalog);
+            return true;
         }
+        self.kv.remove(CACHE_KEY).await;
+        false
     }
 
     /// Serve an explicitly provided catalog (v2 `options.file` /
@@ -476,10 +465,7 @@ mod tests {
         let addr = listener.local_addr().expect("addr");
         let handle = tokio::spawn(async move {
             loop {
-                let (mut socket, _) = match listener.accept().await {
-                    Ok(accepted) => accepted,
-                    Err(_) => break,
-                };
+                let Ok((mut socket, _)) = listener.accept().await else { break };
                 let body = body.clone();
                 tokio::spawn(async move {
                     let mut buffer = [0u8; 4096];
@@ -558,10 +544,7 @@ mod tests {
         let engine = crate::engine::Engine::boot(crate::engine::EngineOptions {
             catalog_fetch: true,
             catalog_url: Some(url),
-            ..crate::engine::EngineOptions::new(
-                dir.path().join("data"),
-                dir.path().join("home"),
-            )
+            ..crate::engine::EngineOptions::new(dir.path().join("data"), dir.path().join("home"))
         })
         .await;
         let mut subscription = engine.bus.subscribe();
@@ -601,10 +584,7 @@ mod tests {
             catalog_fetch: true,
             // A closed local port: connection refused, fast.
             catalog_url: Some("http://127.0.0.1:9".to_string()),
-            ..crate::engine::EngineOptions::new(
-                dir.path().join("data"),
-                dir.path().join("home"),
-            )
+            ..crate::engine::EngineOptions::new(dir.path().join("data"), dir.path().join("home"))
         })
         .await;
         assert!(engine.catalog_service.refresh(false).await.is_err(), "offline fetch fails");
