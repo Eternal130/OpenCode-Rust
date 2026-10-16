@@ -313,6 +313,67 @@ pub fn encode_base64(data: &[u8]) -> String {
     out
 }
 
+/// Base64 decode (standard alphabet, padded or unpadded); rejects
+/// characters outside the alphabet. `Encoding.decodeBase64` parity for
+/// `MediaInput.inlineBytes` / `decodedAsset`.
+pub fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
+    const REVERSE: [i8; 256] = {
+        let mut table = [-1i8; 256];
+        let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut index = 0;
+        while index < 64 {
+            table[alphabet[index] as usize] = index as i8;
+            index += 1;
+        }
+        table
+    };
+    let bytes: Vec<u8> = input.bytes().filter(|byte| !matches!(byte, b'\n' | b'\r' | b' ')).collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    let mut buffer: u32 = 0;
+    let mut bits = 0u32;
+    for byte in bytes {
+        if byte == b'=' {
+            continue;
+        }
+        let value = REVERSE[byte as usize];
+        if value < 0 {
+            return Err(format!("invalid base64 character 0x{byte:02x}"));
+        }
+        buffer = (buffer << 6) | value as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buffer >> bits) as u8);
+        }
+    }
+    Ok(out)
+}
+
+/// `ProviderShared.requireInlineMedia` (shared.ts:188-191): inline view or
+/// a typed `InvalidRequest` for `url`/`ref` sources.
+pub fn require_inline_media(route: &str, asset: &crate::schema::media::Asset) -> Result<crate::schema::media::Inline, AiError> {
+    asset.inline().ok_or_else(|| inline_required(route, asset))
+}
+
+/// `ProviderShared.inlineRequired` (shared.ts:193-196).
+pub fn inline_required(route: &str, asset: &crate::schema::media::Asset) -> AiError {
+    let source = match &asset.source {
+        crate::schema::media::Source::Bytes { .. } => "bytes",
+        crate::schema::media::Source::Base64 { .. } => "base64",
+        crate::schema::media::Source::Url { .. } => "url",
+        crate::schema::media::Source::Ref { .. } => "ref",
+    };
+    invalid_request(format!(
+        "{route} requires inline media (bytes or base64); {source} sources must be materialized first"
+    ))
+}
+
+/// `ProviderShared.mediaUrl` (shared.ts:199).
+#[must_use]
+pub fn media_url(asset: &crate::schema::media::Asset) -> Option<&str> {
+    asset.url()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
