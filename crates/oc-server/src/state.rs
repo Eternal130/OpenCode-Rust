@@ -86,6 +86,9 @@ pub struct AppState {
     /// boots without it (tests); `/api/plugin` and the engine seams hang
     /// off it.
     pub plugins: Option<Arc<crate::plugins::PluginBoot>>,
+    /// Well-known integration sources restored into the host registry at
+    /// first use (v2's `WellKnownPlugin` boot transform).
+    pub wellknown_restore: std::sync::OnceLock<bool>,
 }
 
 impl AppState {
@@ -122,6 +125,7 @@ impl AppState {
             announce: crate::announce::Announcer::new(),
             shutdown,
             plugins: None,
+            wellknown_restore: std::sync::OnceLock::new(),
         }
     }
 
