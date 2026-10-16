@@ -1,0 +1,153 @@
+# termatrix.log — terminal-matrix smoke (lane/termatrix)
+# Append-only run log. All times UTC. Profiles via tools/parity/src/termatrix.rs.
+# Rig: tools/parity tui-diff --term-profile NAME (forces live ref, no cache replay).
+
+[2026-10-16T04:51:22Z] lane start: worktree .worktrees/lane-termatrix, rig extension built (termatrix.rs + tui_diff.rs wiring, 5 unit tests green).
+[2026-10-16T05:02:06Z] smoke evidence: baseline+profiles boot clean; ref probes OSC 10/11/4/99/1337/66/12+DA1+DECRQM(1004/1016/2004/2026/2027/2031)+kitty ?u; ours probes only OSC 11. inotify instance exhaustion (stale lane ref-servers) crashed ref fs.watch — raised fs.inotify.max_user_instances=512, isolated work root /tmp/opencode/termatrix-work (lane-dogfood2 runs the default root).
+[2026-10-16T05:02:16Z] RUN profile=xterm256-silent script=boot-home runs=2 size=80x24 live-ref
+[tui-diff]   done in 34.8s — 3 steps, 0 mismatch, 0 text-only (ok)
+[tui-diff]   done in 34.8s — 3 steps, 3 mismatch, 0 text-only (ok)
+[2026-10-16T05:03:28Z] RUN profile=xterm256-silent script=type-edit-submit runs=2 size=80x24 live-ref
+[tui-diff]   done in 59.6s — 13 steps, 9 mismatch, 0 text-only (ok)
+[tui-diff]   done in 60.0s — 13 steps, 6 mismatch, 0 text-only (ok)
+[2026-10-16T05:05:28Z] RUN profile=xterm256-silent script=themes-nord runs=2 size=80x24 live-ref
+[tui-diff]   done in 46.4s — 8 steps, 7 mismatch, 0 text-only (ok)
+[tui-diff]   done in 46.3s — 8 steps, 2 mismatch, 0 text-only (ok)
+[2026-10-16T05:07:01Z] RUN profile=xterm256-silent script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[tui-diff]   done in 69.1s — 17 steps, 15 mismatch, 0 text-only (ok)
+[tui-diff]   done in 69.1s — 17 steps, 15 mismatch, 0 text-only (ok)
+[2026-10-16T05:09:19Z] RUN profile=xterm256-silent script=palette runs=2 size=80x24 live-ref
+[tui-diff]   done in 40.7s — 6 steps, 2 mismatch, 0 text-only (ok)
+[tui-diff]   done in 40.7s — 6 steps, 6 mismatch, 0 text-only (ok)
+[2026-10-16T05:10:41Z] RUN profile=xterm256 script=boot-home runs=2 size=80x24 live-ref
+[tui-diff]   done in 33.8s — 3 steps, 0 mismatch, 0 text-only (ok)
+[tui-diff]   done in 34.2s — 3 steps, 3 mismatch, 0 text-only (ok)
+[2026-10-16T05:11:49Z] RUN profile=xterm256 script=type-edit-submit runs=2 size=80x24 live-ref
+[tui-diff]   done in 58.6s — 13 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 58.6s — 13 steps, 9 mismatch, 0 text-only (ok)
+[2026-10-16T05:13:46Z] RUN profile=xterm256 script=themes-nord runs=2 size=80x24 live-ref
+[tui-diff]   done in 45.3s — 8 steps, 2 mismatch, 0 text-only (ok)
+[tui-diff]   done in 45.4s — 8 steps, 7 mismatch, 0 text-only (ok)
+[2026-10-16T05:15:17Z] RUN profile=xterm256 script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[tui-diff]   done in 68.9s — 17 steps, 15 mismatch, 0 text-only (ok)
+[tui-diff]   done in 68.3s — 17 steps, 15 mismatch, 0 text-only (ok)
+[2026-10-16T05:17:34Z] RUN profile=xterm256 script=palette runs=2 size=80x24 live-ref
+[tui-diff]   done in 39.7s — 6 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 39.7s — 6 steps, 6 mismatch, 0 text-only (ok)
+[2026-10-16T05:20:53Z] RUN profile=xterm256-silent script=boot-home runs=2 size=80x24 live-ref
+[tui-diff]   done in 34.8s — 3 steps, 3 mismatch, 0 text-only (ok)
+[tui-diff]   done in 35.4s — 3 steps, 0 mismatch, 0 text-only (ok)
+[2026-10-16T05:22:04Z] RUN profile=xterm256-silent script=type-edit-submit runs=2 size=80x24 live-ref
+[tui-diff]   done in 59.9s — 13 steps, 9 mismatch, 0 text-only (ok)
+[tui-diff]   done in 59.7s — 13 steps, 9 mismatch, 0 text-only (ok)
+[2026-10-16T05:24:03Z] RUN profile=xterm256-silent script=themes-nord runs=2 size=80x24 live-ref
+[tui-diff]   done in 47.1s — 8 steps, 7 mismatch, 0 text-only (ok)
+[tui-diff]   done in 46.4s — 8 steps, 7 mismatch, 0 text-only (ok)
+[2026-10-16T05:25:37Z] RUN profile=xterm256-silent script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[tui-diff]   done in 70.3s — 17 steps, 15 mismatch, 0 text-only (ok)
+[tui-diff]   done in 70.8s — 17 steps, 15 mismatch, 0 text-only (ok)
+[2026-10-16T05:27:58Z] RUN profile=xterm256-silent script=palette runs=2 size=80x24 live-ref
+[tui-diff]   done in 51.9s — 6 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 54.6s — 6 steps, 2 mismatch, 0 text-only (ok)
+[2026-10-16T05:29:45Z] RUN profile=xterm256 script=boot-home runs=2 size=80x24 live-ref
+[tui-diff]   done in 34.4s — 3 steps, 3 mismatch, 0 text-only (ok)
+[tui-diff]   done in 34.0s — 3 steps, 3 mismatch, 0 text-only (ok)
+[2026-10-16T05:30:54Z] RUN profile=xterm256 script=type-edit-submit runs=2 size=80x24 live-ref
+[tui-diff]   done in 58.4s — 13 steps, 9 mismatch, 0 text-only (ok)
+[tui-diff]   done in 58.6s — 13 steps, 9 mismatch, 0 text-only (ok)
+[2026-10-16T05:32:51Z] RUN profile=xterm256 script=themes-nord runs=2 size=80x24 live-ref
+[tui-diff]   done in 45.3s — 8 steps, 7 mismatch, 0 text-only (ok)
+[tui-diff]   done in 48.0s — 8 steps, 7 mismatch, 0 text-only (ok)
+[2026-10-16T05:34:25Z] RUN profile=xterm256 script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[2026-10-16T05:34:25Z] RUN profile=xterm256 script=palette runs=2 size=80x24 live-ref
+[2026-10-16T05:34:25Z] RUN profile=truecolor script=boot-home runs=2 size=80x24 live-ref
+[2026-10-16T05:34:25Z] RUN profile=truecolor script=type-edit-submit runs=2 size=80x24 live-ref
+[2026-10-16T05:34:25Z] RUN profile=truecolor script=themes-nord runs=2 size=80x24 live-ref
+[2026-10-16T05:34:25Z] RUN profile=truecolor script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[2026-10-16T05:34:25Z] RUN profile=truecolor script=palette runs=2 size=80x24 live-ref
+[2026-10-16T05:34:25Z] RUN profile=screen256 script=boot-home runs=2 size=80x24 live-ref
+[2026-10-16T05:34:25Z] RUN profile=screen256 script=type-edit-submit runs=2 size=80x24 live-ref
+[2026-10-16T05:34:25Z] RUN profile=screen256 script=themes-nord runs=2 size=80x24 live-ref
+[2026-10-16T05:34:25Z] RUN profile=screen256 script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[2026-10-16T05:34:25Z] RUN profile=screen256 script=palette runs=2 size=80x24 live-ref
+[2026-10-16T05:34:56Z] RUN profile=xterm256 script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[tui-diff]   done in 69.8s — 17 steps, 12 mismatch, 0 text-only (ok)
+[tui-diff]   done in 68.2s — 17 steps, 15 mismatch, 0 text-only (ok)
+[2026-10-16T05:37:15Z] RUN profile=xterm256 script=palette runs=2 size=80x24 live-ref
+[tui-diff]   done in 39.9s — 6 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 39.7s — 6 steps, 6 mismatch, 0 text-only (ok)
+[2026-10-16T05:38:35Z] RUN profile=truecolor script=boot-home runs=2 size=80x24 live-ref
+[tui-diff]   done in 33.6s — 3 steps, 0 mismatch, 0 text-only (ok)
+[tui-diff]   done in 33.8s — 3 steps, 3 mismatch, 0 text-only (ok)
+[2026-10-16T05:39:42Z] RUN profile=truecolor script=type-edit-submit runs=2 size=80x24 live-ref
+[tui-diff]   done in 58.6s — 13 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 58.6s — 13 steps, 9 mismatch, 0 text-only (ok)
+[2026-10-16T05:41:40Z] RUN profile=truecolor script=themes-nord runs=2 size=80x24 live-ref
+[tui-diff]   done in 45.3s — 8 steps, 7 mismatch, 0 text-only (ok)
+[tui-diff]   done in 45.4s — 8 steps, 2 mismatch, 0 text-only (ok)
+[2026-10-16T05:43:11Z] RUN profile=truecolor script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[tui-diff]   done in 68.5s — 17 steps, 15 mismatch, 0 text-only (ok)
+[tui-diff]   done in 68.3s — 17 steps, 15 mismatch, 0 text-only (ok)
+[2026-10-16T05:45:28Z] RUN profile=truecolor script=palette runs=2 size=80x24 live-ref
+[tui-diff]   done in 39.7s — 6 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 39.7s — 6 steps, 2 mismatch, 0 text-only (ok)
+[2026-10-16T05:46:47Z] RUN profile=screen256 script=boot-home runs=2 size=80x24 live-ref
+[tui-diff]   done in 33.8s — 3 steps, 3 mismatch, 0 text-only (ok)
+[tui-diff]   done in 33.8s — 3 steps, 3 mismatch, 0 text-only (ok)
+[2026-10-16T05:47:55Z] RUN profile=screen256 script=type-edit-submit runs=2 size=80x24 live-ref
+[tui-diff]   done in 58.6s — 13 steps, 9 mismatch, 0 text-only (ok)
+[tui-diff]   done in 58.6s — 13 steps, 9 mismatch, 0 text-only (ok)
+[2026-10-16T05:49:52Z] RUN profile=screen256 script=themes-nord runs=2 size=80x24 live-ref
+[tui-diff]   done in 45.1s — 8 steps, 2 mismatch, 0 text-only (ok)
+[tui-diff]   done in 45.3s — 8 steps, 7 mismatch, 0 text-only (ok)
+[2026-10-16T05:51:30Z] RUN profile=screen256 script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[tui-diff]   done in 69.5s — 17 steps, 15 mismatch, 0 text-only (ok)
+[tui-diff]   done in 69.3s — 17 steps, 15 mismatch, 0 text-only (ok)
+[2026-10-16T05:53:49Z] RUN profile=screen256 script=palette runs=2 size=80x24 live-ref
+[tui-diff]   done in 41.1s — 6 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 40.6s — 6 steps, 2 mismatch, 0 text-only (ok)
+[2026-10-16T05:55:11Z] RUN profile=tmux script=boot-home runs=2 size=80x24 live-ref
+[tui-diff]   done in 35.0s — 3 steps, 0 mismatch, 0 text-only (ok)
+[tui-diff]   done in 35.6s — 3 steps, 3 mismatch, 0 text-only (ok)
+[2026-10-16T05:56:22Z] RUN profile=tmux script=type-edit-submit runs=2 size=80x24 live-ref
+[tui-diff]   done in 60.4s — 13 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 60.4s — 13 steps, 9 mismatch, 0 text-only (ok)
+[2026-10-16T05:58:23Z] RUN profile=tmux script=themes-nord runs=2 size=80x24 live-ref
+[tui-diff]   done in 47.2s — 8 steps, 7 mismatch, 0 text-only (ok)
+[tui-diff]   done in 47.3s — 8 steps, 7 mismatch, 0 text-only (ok)
+[2026-10-16T05:59:58Z] RUN profile=tmux script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[tui-diff]   done in 70.1s — 17 steps, 15 mismatch, 0 text-only (ok)
+[tui-diff]   done in 69.2s — 17 steps, 15 mismatch, 0 text-only (ok)
+[2026-10-16T06:02:17Z] RUN profile=tmux script=palette runs=2 size=80x24 live-ref
+[tui-diff]   done in 40.4s — 6 steps, 2 mismatch, 0 text-only (ok)
+[tui-diff]   done in 40.7s — 6 steps, 2 mismatch, 0 text-only (ok)
+[2026-10-16T06:03:46Z] RUN profile=kitty-yes script=boot-home runs=2 size=80x24 live-ref
+[tui-diff]   done in 36.1s — 3 steps, 0 mismatch, 0 text-only (ok)
+[tui-diff]   done in 34.0s — 3 steps, 3 mismatch, 0 text-only (ok)
+[2026-10-16T06:05:01Z] RUN profile=kitty-yes script=type-edit-submit runs=2 size=80x24 live-ref
+[tui-diff]   done in 58.6s — 13 steps, 9 mismatch, 0 text-only (ok)
+[tui-diff]   done in 58.7s — 13 steps, 9 mismatch, 0 text-only (ok)
+[2026-10-16T06:08:29Z] RUN profile=kitty-yes script=themes-nord runs=2 size=80x24 live-ref
+[tui-diff]   done in 46.5s — 8 steps, 7 mismatch, 0 text-only (ok)
+[tui-diff]   done in 45.3s — 8 steps, 7 mismatch, 0 text-only (ok)
+[2026-10-16T06:10:01Z] RUN profile=kitty-yes script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[tui-diff]   done in 68.3s — 17 steps, 15 mismatch, 0 text-only (ok)
+[tui-diff]   done in 68.2s — 17 steps, 15 mismatch, 0 text-only (ok)
+[2026-10-16T06:12:17Z] RUN profile=kitty-yes script=palette runs=2 size=80x24 live-ref
+[tui-diff]   done in 39.5s — 6 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 39.7s — 6 steps, 2 mismatch, 0 text-only (ok)
+[2026-10-16T06:13:37Z] RUN profile=kitty-no script=boot-home runs=2 size=80x24 live-ref
+[tui-diff]   done in 33.6s — 3 steps, 3 mismatch, 0 text-only (ok)
+[tui-diff]   done in 33.8s — 3 steps, 3 mismatch, 0 text-only (ok)
+[2026-10-16T06:14:44Z] RUN profile=kitty-no script=type-edit-submit runs=2 size=80x24 live-ref
+[tui-diff]   done in 58.6s — 13 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 58.6s — 13 steps, 6 mismatch, 0 text-only (ok)
+[2026-10-16T06:16:41Z] RUN profile=kitty-no script=themes-nord runs=2 size=80x24 live-ref
+[tui-diff]   done in 45.3s — 8 steps, 7 mismatch, 0 text-only (ok)
+[tui-diff]   done in 45.3s — 8 steps, 7 mismatch, 0 text-only (ok)
+[2026-10-16T06:18:12Z] RUN profile=kitty-no script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[tui-diff]   done in 68.3s — 17 steps, 12 mismatch, 0 text-only (ok)
+[tui-diff]   done in 68.3s — 17 steps, 15 mismatch, 0 text-only (ok)
+[2026-10-16T06:20:29Z] RUN profile=kitty-no script=palette runs=2 size=80x24 live-ref
+[tui-diff]   done in 39.7s — 6 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 39.7s — 6 steps, 6 mismatch, 0 text-only (ok)
