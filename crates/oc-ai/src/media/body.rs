@@ -217,12 +217,14 @@ pub fn merge_records(items: &[Option<&JsonRecord>]) -> Option<JsonRecord> {
 }
 
 /// A record from literal key/value pairs (test + lowering convenience).
+/// `None` — and JSON `null`, the TS `undefined` equivalent — skip the
+/// entry so bodies never carry null-valued keys the TS encoder omits.
 #[must_use]
 pub fn record<const N: usize>(entries: [(&str, Option<Value>); N]) -> Option<JsonRecord> {
     let mut out = JsonRecord::new();
     let mut any = false;
     for (key, value) in entries {
-        if let Some(value) = value {
+        if let Some(value) = value.filter(|value| !value.is_null()) {
             out.insert(key.to_string(), value);
             any = true;
         }
@@ -231,6 +233,28 @@ pub fn record<const N: usize>(entries: [(&str, Option<Value>); N]) -> Option<Jso
         Some(out)
     } else {
         None
+    }
+}
+
+/// `Some(value)` as JSON, `None` as JSON null — the optional-field lowering
+/// idiom for wire bodies (TS spreads `undefined` to the same effect).
+#[must_use]
+pub fn json_opt<T: serde::Serialize>(value: Option<T>) -> Value {
+    match value {
+        Some(value) => serde_json::to_value(value).unwrap_or(Value::Null),
+        None => Value::Null,
+    }
+}
+
+/// `true` as JSON or JSON null — the opt-in boolean lowering idiom
+/// (route/media.ts:419-423: protocols reject opt-in booleans with
+/// `=== true` instead of listing them unsupported).
+#[must_use]
+pub fn json_flag(condition: bool) -> Value {
+    if condition {
+        Value::Bool(true)
+    } else {
+        Value::Null
     }
 }
 

@@ -55,6 +55,10 @@
     // `Default::default()` in struct-update position vs explicit fields is
     // used where the TS spread (`...input`) sits.
     clippy::default_trait_access,
+    // Media protocol modules mirror the TS per-module function shapes
+    // (`fromRequest`, `decodeResponse`, …) whose results the route layer
+    // consumes; marking 30+ lowering helpers must_use adds no safety.
+    clippy::must_use_candidate,
 )]
 
 pub mod cache_policy;

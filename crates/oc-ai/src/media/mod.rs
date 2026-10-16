@@ -1,7 +1,7 @@
-//! Media protocol family (port of the v2 media surface: `image.ts`,
-//! `speech.ts`, `video.ts`, `transcription.ts`, `route/media-protocol.ts`
-//! + the 23 per-provider protocol modules under
-//! `packages/ai/src/protocols/*-{images,video,speech,transcription}.ts`).
+//! Media protocol family — the v2 media surface (`image.ts`, `speech.ts`,
+//! `video.ts`, `transcription.ts`, `route/media-protocol.ts` plus the 23
+//! per-provider protocol modules under
+//! `packages/ai/src/protocols/`).
 //!
 //! Layout:
 //! - [`model`] — the per-modality request/response/event types and the
@@ -15,6 +15,7 @@
 //!   `SpeakerTurns`.
 //! - [`image`] / [`video`] / [`speech`] / [`transcription`] — the concrete
 //!   provider protocols, one Rust file per TS module.
+//! - [`fal_queue`] — the shared fal submit/poll template.
 //!
 //! The executor/route composition (`route/media.ts` — auth, polling
 //! schedules, upload-before-submit) is the seam a future media-route lane

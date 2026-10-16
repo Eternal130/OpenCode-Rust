@@ -2,13 +2,9 @@
 //! the shared fal queue template; `/edit` and `/multi` endpoints take an
 //! `image_urls` list while the rest take one `image_url`.
 
-use std::collections::BTreeMap;
-
 use crate::media::body::{merge_records, Body};
 use crate::media::fal_queue::{self, FalToken};
-use crate::media::model::{
-    image_field_present, ImageRequest, ImageResponse, PollContext, Snapshot, Started,
-};
+use crate::media::model::{ImageRequest, ImageResponse, PollContext, Snapshot, Started};
 use crate::media::protocol::{Identity, MediaProtocolBase, QueuedProtocol, TextOutput};
 use crate::media::utils::dimensions;
 use crate::schema::media::{self, Notice, NoticeType};
@@ -83,11 +79,11 @@ pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
         images.push(fal_queue::media_url(image, "fal Images")?);
     }
     let list = takes_image_list(&request.model);
-    let (width, height) = request.size.as_deref().map(dimensions).unwrap_or((None, None));
+    let (width, height) = request.size.as_deref().map_or((None, None), dimensions);
     let image_size = match (width, height) {
-        (Some(width), Some(height)) => {
-            Some(serde_json::json!({ "width": width as u32, "height": height as u32 }))
-        }
+        (Some(width), Some(height)) => Some(
+            serde_json::json!({ "width": crate::media::utils::wire_u64(width), "height": crate::media::utils::wire_u64(height) }),
+        ),
         _ => None,
     };
     let base = crate::media::body::record([
@@ -126,13 +122,17 @@ pub fn decode_result(
     context: &PollContext<FalToken>,
 ) -> Result<ImageResponse, AiError> {
     let value = output.decode_json(output.body)?;
-    let images = value.get("images").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let images =
+        value.get("images").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
     if images.is_empty() {
         return Err(output.invalid("fal Images returned no images"));
     }
     let seed = value.get("seed").filter(|v| !v.is_null()).cloned();
-    let nsfw =
-        value.get("has_nsfw_concepts").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let nsfw = value
+        .get("has_nsfw_concepts")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let flagged: Vec<usize> = nsfw
         .iter()
         .enumerate()
@@ -140,10 +140,11 @@ pub fn decode_result(
         .collect();
     let mut assets = Vec::new();
     for image in &images {
-        let url = image.get("url").and_then(|v| v.as_str()).unwrap_or_default();
-        let width = image.get("width").and_then(|v| v.as_f64());
-        let height = image.get("height").and_then(|v| v.as_f64());
-        let media_type = image.get("content_type").and_then(|v| v.as_str()).map(str::to_string);
+        let url = image.get("url").and_then(serde_json::Value::as_str).unwrap_or_default();
+        let width = image.get("width").and_then(serde_json::Value::as_f64);
+        let height = image.get("height").and_then(serde_json::Value::as_f64);
+        let media_type =
+            image.get("content_type").and_then(serde_json::Value::as_str).map(str::to_string);
         let info = media::Info { width, height, ..media::Info::default() };
         // `sync_mode: true` returns data URIs instead of hosted URLs.
         assets.push(
@@ -262,6 +263,7 @@ impl QueuedProtocol for FalImages {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     fn request(model: &str) -> ImageRequest {
         ImageRequest { model: model.into(), prompt: "a cat".into(), ..Default::default() }

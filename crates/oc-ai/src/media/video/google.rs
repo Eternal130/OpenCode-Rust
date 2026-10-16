@@ -3,12 +3,10 @@
 //! days; downloads require the same API key as the poll, so output URLs
 //! carry the auth headers transiently.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use crate::media::body::{merge_records, Body};
-use crate::media::model::{
-    video_field_present, PollContext, Snapshot, Started, Status, VideoRequest, VideoResponse,
-};
+use crate::media::model::{PollContext, Snapshot, Started, Status, VideoRequest, VideoResponse};
 use crate::media::protocol::{
     expiring_url_at, failure, Failure, Identity, MediaProtocolBase, QueuedProtocol, TextOutput,
 };
@@ -131,7 +129,7 @@ fn failure_table() -> HashMap<i64, Failure> {
 /// Operations carry no status string: not done is running, done with
 /// `error` failed, otherwise completed (google-video.ts:142-145).
 fn status_of(operation: &serde_json::Value) -> Status {
-    if operation.get("done").and_then(|v| v.as_bool()) != Some(true) {
+    if operation.get("done").and_then(serde_json::Value::as_bool) != Some(true) {
         return Status::Running;
     }
     if operation.get("error").is_some() {
@@ -144,7 +142,8 @@ fn status_of(operation: &serde_json::Value) -> Status {
 /// `decodeStart` (google-video.ts:136-139).
 pub fn decode_start(output: &TextOutput) -> Result<Started<Token>, AiError> {
     let value = output.decode_json(output.body)?;
-    let name = value.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let name =
+        value.get("name").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
     Ok(Started {
         snapshot: Snapshot {
             id: name.clone(),
@@ -181,9 +180,11 @@ pub fn decode_result(
         return Err(output.pending(&context.token.operation));
     }
     if status == Status::Failed {
-        let message = operation.pointer("/error/message").and_then(|v| v.as_str());
-        let code =
-            operation.pointer("/error/code").and_then(|v| v.as_f64()).map(|code| code as i64);
+        let message = operation.pointer("/error/message").and_then(serde_json::Value::as_str);
+        let code = operation
+            .pointer("/error/code")
+            .and_then(serde_json::Value::as_f64)
+            .map(|code| code as i64);
         return Err(output.ended(
             Status::Failed,
             format!(
@@ -199,23 +200,27 @@ pub fn decode_result(
     let mut videos = Vec::new();
     for sample in generated
         .and_then(|value| value.get("generatedSamples"))
-        .and_then(|value| value.as_array())
+        .and_then(serde_json::Value::as_array)
         .cloned()
         .unwrap_or_default()
     {
-        let Some(uri) = sample.pointer("/video/uri").and_then(|v| v.as_str()) else { continue };
-        let media_type =
-            sample.pointer("/video/mimeType").and_then(|v| v.as_str()).unwrap_or("video/mp4");
+        let Some(uri) = sample.pointer("/video/uri").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let media_type = sample
+            .pointer("/video/mimeType")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("video/mp4");
         videos.push((uri.to_string(), media_type.to_string()));
     }
     let reasons: Vec<String> = generated
         .and_then(|value| value.get("raiMediaFilteredReasons"))
-        .and_then(|value| value.as_array())
+        .and_then(serde_json::Value::as_array)
         .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect())
         .unwrap_or_default();
     let filtered_count = generated
         .and_then(|value| value.get("raiMediaFilteredCount"))
-        .and_then(|v| v.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .unwrap_or(0.0);
     let notices: Vec<Notice> = reasons
         .iter()
@@ -321,6 +326,7 @@ mod tests {
     use super::*;
     use crate::schema::media;
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     fn request() -> VideoRequest {
         VideoRequest {

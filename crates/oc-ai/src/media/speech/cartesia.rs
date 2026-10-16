@@ -19,7 +19,7 @@ pub const API_VERSION: &str = "2026-08-14";
 pub const BYTES_PATH: &str = "/tts/bytes";
 pub const SSE_PATH: &str = "/tts/sse";
 const DEFAULT_SAMPLE_RATE: f64 = 44_100.0;
-const DEFAULT_BIT_RATE: f64 = 128_000.0;
+const DEFAULT_BIT_RATE: u64 = 128_000;
 
 pub fn identity() -> Identity {
     Identity::new(ID, "Cartesia", "cartesia")
@@ -76,7 +76,7 @@ pub fn output_format(request: &Addressed<SpeechRequest>) -> Result<OutputFormat,
         .provider_options
         .as_ref()
         .and_then(|options| options.get("sampleRate"))
-        .and_then(|value| value.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .unwrap_or(DEFAULT_SAMPLE_RATE);
     if *container == "mp3" {
         return Ok(OutputFormat { container, encoding: None, sample_rate });
@@ -86,7 +86,7 @@ pub fn output_format(request: &Addressed<SpeechRequest>) -> Result<OutputFormat,
         .provider_options
         .as_ref()
         .and_then(|options| options.get("encoding"))
-        .and_then(|value| value.as_str())
+        .and_then(serde_json::Value::as_str)
         .and_then(PcmEncoding::parse)
         .unwrap_or(PcmEncoding::pcm_s16le);
     Ok(OutputFormat { container, encoding: Some(encoding), sample_rate })
@@ -103,20 +103,17 @@ fn output_format_body(
         .as_ref()
         .and_then(|options| options.get("bitRate"))
         .cloned()
-        .unwrap_or(serde_json::json!(DEFAULT_BIT_RATE as u64));
+        .unwrap_or(serde_json::json!(DEFAULT_BIT_RATE));
     if format.container == "mp3" {
-        serde_json::json!({ "container": "mp3", "sample_rate": format.sample_rate as u64, "bit_rate": bit_rate })
+        serde_json::json!({ "container": "mp3", "sample_rate": crate::media::utils::wire_u64(format.sample_rate), "bit_rate": bit_rate })
     } else {
-        let encoding = format
-            .encoding
-            .map(|encoding| match encoding {
-                PcmEncoding::pcm_s16le => "pcm_s16le",
-                PcmEncoding::pcm_f32le => "pcm_f32le",
-                PcmEncoding::pcm_mulaw => "pcm_mulaw",
-                PcmEncoding::pcm_alaw => "pcm_alaw",
-            })
-            .unwrap_or("pcm_s16le");
-        serde_json::json!({ "container": "raw", "encoding": encoding, "sample_rate": format.sample_rate as u64 })
+        let encoding = match format.encoding {
+            Some(PcmEncoding::pcm_f32le) => "pcm_f32le",
+            Some(PcmEncoding::pcm_mulaw) => "pcm_mulaw",
+            Some(PcmEncoding::pcm_alaw) => "pcm_alaw",
+            Some(PcmEncoding::pcm_s16le) | None => "pcm_s16le",
+        };
+        serde_json::json!({ "container": "raw", "encoding": encoding, "sample_rate": crate::media::utils::wire_u64(format.sample_rate) })
     }
 }
 
@@ -145,7 +142,7 @@ pub fn body_from(request: &Addressed<SpeechRequest>) -> Result<Body, AiError> {
         ),
         (
             "add_timestamps",
-            (request.request.timestamps == Some(true)).then(|| serde_json::json!(true)),
+            Some(crate::media::body::json_flag(request.request.timestamps == Some(true))),
         ),
     ]);
     let merged = merge_records(&[
@@ -169,9 +166,9 @@ pub fn check_unsupported(request: &SpeechRequest) -> Result<(), AiError> {
 pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<SpeechEvent>, AiError> {
     let output = TextOutput { identity: &identity(), body: frame, http: None };
     let event = output.decode_frame(frame)?;
-    let event_type = event.get("type").and_then(|value| value.as_str()).unwrap_or_default();
+    let event_type = event.get("type").and_then(serde_json::Value::as_str).unwrap_or_default();
     if event_type == "chunk" {
-        if let Some(data) = event.get("data").and_then(|value| value.as_str()) {
+        if let Some(data) = event.get("data").and_then(serde_json::Value::as_str) {
             let chunk = crate::protocols::shared::decode_base64(data).map_err(|_| {
                 identity()
                     .frame_error("Cartesia chunk contains invalid base64 data", frame.to_string())
@@ -184,20 +181,20 @@ pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<SpeechEvent>, AiEr
         if let Some(words) = event.get("word_timestamps").filter(|value| !value.is_null()) {
             let texts: Vec<String> = words
                 .get("words")
-                .and_then(|value| value.as_array())
+                .and_then(serde_json::Value::as_array)
                 .map(|items| {
                     items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect()
                 })
                 .unwrap_or_default();
             let starts: Vec<f64> = words
                 .get("start")
-                .and_then(|value| value.as_array())
-                .map(|items| items.iter().filter_map(|item| item.as_f64()).collect())
+                .and_then(serde_json::Value::as_array)
+                .map(|items| items.iter().filter_map(serde_json::Value::as_f64).collect())
                 .unwrap_or_default();
             let ends: Vec<f64> = words
                 .get("end")
-                .and_then(|value| value.as_array())
-                .map(|items| items.iter().filter_map(|item| item.as_f64()).collect())
+                .and_then(serde_json::Value::as_array)
+                .map(|items| items.iter().filter_map(serde_json::Value::as_f64).collect())
                 .unwrap_or_default();
             return Ok(speech_stream::timestamps(&texts, &starts, &ends));
         }
@@ -208,10 +205,10 @@ pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<SpeechEvent>, AiEr
         return Ok(Vec::new());
     }
     if event_type == "error" {
-        let title = event.get("title").and_then(|value| value.as_str());
+        let title = event.get("title").and_then(serde_json::Value::as_str);
         let message =
-            event.get("message").and_then(|value| value.as_str()).unwrap_or("unknown error");
-        let status = event.get("status_code").and_then(|value| value.as_u64());
+            event.get("message").and_then(serde_json::Value::as_str).unwrap_or("unknown error");
+        let status = event.get("status_code").and_then(serde_json::Value::as_u64);
         let text = format!(
             "Cartesia stream failed{}: {message}",
             title.map(|title| format!(" ({title})")).unwrap_or_default()
@@ -380,7 +377,7 @@ mod tests {
         assert_eq!(value["voice"], json!("voice-1"));
         assert_eq!(
             value["output_format"],
-            json!({ "container": "mp3", "sample_rate": 44100, "bit_rate": 128000 })
+            json!({ "container": "mp3", "sample_rate": 44_100, "bit_rate": 128_000 })
         );
     }
 
@@ -455,8 +452,7 @@ mod tests {
         speech_stream::delta(&mut state.audio, vec![9, 9]);
         let events = finish(&state, &Addressed::new(request(), Mode::Stream)).unwrap_err();
         let _ = events; // not done yet -> incomplete
-        let mut state = State::default();
-        state.done = true;
+        let mut state = State { done: true, ..State::default() };
         speech_stream::delta(&mut state.audio, vec![9, 9]);
         let events = finish(&state, &Addressed::new(request(), Mode::Stream)).unwrap();
         let SpeechEvent::Finish { audio, .. } = &events[0] else { panic!() };

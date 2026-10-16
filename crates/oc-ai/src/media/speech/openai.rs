@@ -67,7 +67,7 @@ pub fn body_from(request: &Addressed<SpeechRequest>) -> Result<Body, AiError> {
         ("input", Some(serde_json::json!(request.request.text))),
         (
             "voice",
-            request.request.voice.as_ref().map(|voice| {
+            request.request.voice.as_ref().map(|_voice| {
                 serde_json::json!(
                     speech_stream::voice_id(&request.request.voice).unwrap_or_default()
                 )
@@ -106,9 +106,9 @@ fn is_sse(body: &Body) -> bool {
 pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<SpeechEvent>, AiError> {
     let output = TextOutput { identity: &identity(), body: frame, http: None };
     let event = output.decode_frame(frame)?;
-    let event_type = event.get("type").and_then(|value| value.as_str()).unwrap_or_default();
+    let event_type = event.get("type").and_then(serde_json::Value::as_str).unwrap_or_default();
     if event_type == "speech.audio.delta" {
-        let data = event.get("audio").and_then(|value| value.as_str()).unwrap_or_default();
+        let data = event.get("audio").and_then(serde_json::Value::as_str).unwrap_or_default();
         let chunk = crate::protocols::shared::decode_base64(data).map_err(|_| {
             identity().frame_error(
                 "OpenAI Speech partial audio contains invalid base64 data",
@@ -121,9 +121,9 @@ pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<SpeechEvent>, AiEr
         state.done = true;
         state.usage =
             event.get("usage").filter(|value| !value.is_null()).map(|value| MediaUsage::Tokens {
-                input: value.get("input_tokens").and_then(|v| v.as_f64()),
-                output: value.get("output_tokens").and_then(|v| v.as_f64()),
-                total: value.get("total_tokens").and_then(|v| v.as_f64()),
+                input: value.get("input_tokens").and_then(serde_json::Value::as_f64),
+                output: value.get("output_tokens").and_then(serde_json::Value::as_f64),
+                total: value.get("total_tokens").and_then(serde_json::Value::as_f64),
                 details: Some(serde_json::from_value(value.clone()).unwrap_or_default()),
             });
     }
@@ -145,7 +145,7 @@ pub fn finish(state: &State, body: &Body) -> Result<Vec<SpeechEvent>, AiError> {
     if is_sse(body) && !state.done {
         return Err(identity().incomplete());
     }
-    let sent = body.json_field("response_format").and_then(|value| value.as_str());
+    let sent = body.json_field("response_format").and_then(serde_json::Value::as_str);
     let format = sent.unwrap_or("mp3");
     let output = if format == "pcm" {
         speech_stream::pcm(speech_stream::PcmEncoding::pcm_s16le, Some(PCM_SAMPLE_RATE), None)

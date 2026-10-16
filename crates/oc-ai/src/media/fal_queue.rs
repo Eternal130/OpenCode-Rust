@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use crate::media::model::{PollContext, Snapshot, Started, Status};
-use crate::media::protocol::{status as table_status, Identity, TextOutput};
+use crate::media::protocol::{status as table_status, TextOutput};
 use crate::schema::AiError;
 
 pub const DEFAULT_BASE_URL: &str = "https://queue.fal.run";
@@ -40,9 +40,9 @@ fn status_table() -> BTreeMap<&'static str, Status> {
 /// (fal-queue.ts:56-70).
 pub fn decode_start(output: &TextOutput) -> Result<Started<FalToken>, AiError> {
     let value = output.decode_json(output.body)?;
-    let position = value.get("queue_position").and_then(|v| v.as_f64());
+    let position = value.get("queue_position").and_then(serde_json::Value::as_f64);
     let request_id =
-        value.get("request_id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        value.get("request_id").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
     Ok(Started {
         snapshot: Snapshot {
             id: request_id.clone(),
@@ -54,17 +54,17 @@ pub fn decode_start(output: &TextOutput) -> Result<Started<FalToken>, AiError> {
             request_id,
             status_url: value
                 .get("status_url")
-                .and_then(|v| v.as_str())
+                .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
             response_url: value
                 .get("response_url")
-                .and_then(|v| v.as_str())
+                .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
             cancel_url: value
                 .get("cancel_url")
-                .and_then(|v| v.as_str())
+                .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
         },
@@ -78,7 +78,7 @@ pub fn decode_status(
     context: &PollContext<FalToken>,
 ) -> Result<Snapshot, AiError> {
     let value = output.decode_json(output.body)?;
-    let raw = value.get("status").and_then(|v| v.as_str()).unwrap_or_default();
+    let raw = value.get("status").and_then(serde_json::Value::as_str).unwrap_or_default();
     let status = table_status(&status_table(), raw, output)?;
     let failed = status == Status::Completed && value.get("error").is_some_and(|e| !e.is_null());
     Ok(Snapshot {
@@ -86,7 +86,7 @@ pub fn decode_status(
         status: if failed { Status::Failed } else { status },
         progress: None,
         position: (status == Status::Queued)
-            .then(|| value.get("queue_position").and_then(|v| v.as_f64()))
+            .then(|| value.get("queue_position").and_then(serde_json::Value::as_f64))
             .flatten(),
     })
 }
@@ -100,6 +100,7 @@ pub fn cancel_spec() -> crate::media::protocol::CancelSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::media::protocol::Identity;
 
     #[test]
     fn decode_start_reads_queue_position() {
