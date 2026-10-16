@@ -1,0 +1,80 @@
+# dogfood2 lane log — ACCEPTANCE-BLOCKING: tab click dead + cursor mispositioned under real-DB shapes
+# Rules: append-only, one phase per tool call, WIP-commit every ~6 invocations, EN only.
+
+## Phase 0 — setup
+- Worktree .worktrees/lane-dogfood2 on branch lane/dogfood2 from main (d3fb7b0).
+- Symptoms from user real-world test (HOME=/root, real data dir):
+  (1) restored tabs render at top but CLICKING them does nothing (v2: switches session).
+  (2) cursor blinks at wrong position at boot (v2: composer row).
+- Sandbox plan: /tmp/opencode/dogfood2/home with COPY of real DB+state (never write real dir).
+
+## Phase 1 — root-cause analysis (code read, v2 ref citations)
+- BUG 1 (dead tab clicks): app.rs:300-303 gates `strip_live` on
+  `matches!(route, Route::Session)` — but the strip PAINTS on Home too
+  (home.rs:349-374, F9) whenever tabs_enabled && tabs non-empty. v2 mounts
+  SessionTabs app-wide: app.tsx:1353-1355 `<Show when={tabsVisible() && !tabsVertical()}>`
+  above the route `<Switch>`; `tabsAvailable()` app.tsx:576-579 = `enabled() &&
+  tabs().length > 0 && route.data.type !== "plugin"` — never session-gated. select()
+  = bare route.navigate (context/session-tabs.tsx:393-396). => clicks on Home no-op.
+- BUG 2 (cursor row): home.rs:344-347 `set_caret_cell(caret_screen)` runs BEFORE the
+  strip shift (home.rs:354-373): the frame rows shift down 1 but the caret stays at the
+  pre-shift row = exactly the strip height above the composer row. ALSO the shift
+  path renders the home view at FULL height then truncates (home.rs:365-367), clipping
+  the composer's bottom row; v2 lays Home out in height-1 (the strip is row 0 of the
+  same column, app.tsx:1349-1361) so nothing clips. Session route caret is bottom-docked
+  (session.rs:620-632 `height - prompt_height + cell_y`) — strip-independent, correct.
+- Suspect 2 (hydration of not-yet-loaded sessions): already covered — F12 transcript
+  fetch loop app.rs:2687-2702 fetches every open-session id once; navigate() (store.rs:2940-2979)
+  is a bare route set + tab open like v2. No preloaded-registry requirement.
+- Suspect 1 (strip_hit geometry): strip_hit mirrors adaptive_session_tab_layout, the same
+  solver paint_live_tabs_bar uses (session.rs:88-96 paints via session_tabs_solid with the
+  same layout); row 0 on both routes. Geometry consistent — not the cause.
+
+## Phase 2 — reproduction sandbox (next)
+- Plan: /tmp/opencode/dogfood2/home (copy real DB + state, chown eternal130), empty cwd dir,
+  run ref TUI + our debug TUI in PTY, capture strip row 0, SGR click at a tab cell, cursor cell.
+
+## Phase 2 — sandbox + repro rig (in progress)
+- Sandbox built at /tmp/opencode/dogfood2: base home with python sqlite3 ONLINE BACKUP
+  of the real 1.5G DB (source opened mode=ro; copy integrity ok, 797 sessions),
+  + storage/ + state/ copies (service.json + locks DELETED so nothing discovers the
+  production daemon at 49374) + config copy. chowned eternal130.
+- Seeded home-rust (tabs.json version 2) + home-ref (v2 format, no version): cwd scope
+  for the shared empty cwd = 2 restored tabs referencing sessions whose directory is
+  /opt/lobechat + /opt/new-api (not the cwd) — the real shape: many sessions in DB,
+  none for cwd, restored tabs reference not-yet-loaded sessions.
+- Driver: /tmp/opencode/dogfood2/drive.py (stdlib PTY, minimal VT parse, SGR click).
+- Built target/debug/opencode-rust (dev-gate, 1m41s).
+- Issue under investigation: our CLI child produces NO output in the PTY for >6s —
+  server ensure path appears to hang against the big-DB sandbox; testing `serve` directly.
+
+## Phase 3 — REPRODUCED both bugs (sandbox: real-DB copy, empty cwd, restored tabs)
+Sandbox learnings (shape fidelity):
+- Our roots are `opencode-rust`-suffixed (data AND state): tabs restore reads
+  `$XDG_STATE_HOME/opencode-rust/stable/tui/tabs.json` (channel default "stable");
+  v2 reads `.../opencode/latest|local/tui/tabs.json`. Both seeded per side.
+- First our-binary boot in a v2-shaped home runs the one-way v2→rust DB migration
+  (1.5G copy) — user's env has the marker; sandbox pre-seeded marker + DB.
+- Ref must run WITHOUT bun defines (the TUI-spawned background server re-execs without
+  them → channel skew local vs stable → discovery loop); ref DB = opencode-local.db.
+- v2 tsconfig.json seeded in the empty cwd (the rig's jsxImportSource fix).
+
+Evidence (80x24, cwd=/tmp/opencode/dogfood2/home/work, 2 restored tabs referencing
+sessions whose directory is /opt/lobechat + /opt/new-api — none for the cwd):
+- OURS boot: strip row0 painted (two tab titles + " + "). Composer input row = 14
+  ("Ask anything…" row), hardware cursor = (6,13) → ONE ROW ABOVE the input row
+  (= exactly the strip height; set_caret_cell ran before the strip shift).
+- OURS click SGR col5 row1 (tab 1 body): NOTHING changes (same rows, same cursor).
+- REF boot: strip row0 painted; input row = 13 (home lays out in height-1); cursor
+  (6,13) ON the input row. REF same click: route switches to the session (renders
+  its session card — "Session not found: …" for a cross-project session id, i.e.
+  v2 routes even when the cwd's project scope can't see it).
+- Extra divergence captured: ours lays home out at FULL height then truncates →
+  bottom status row clipped (ours shows version row at 22; ref status bar at 23).
+
+## Phase 4 — fix plan (1:1 v2 semantics)
+- app.rs mouse_event: strip_live must include Route::Home (v2 app.tsx:576-579
+  tabsAvailable gates on `route.data.type !== "plugin"` only + 1353-1355 app-wide mount).
+- home.rs render_home: lay the home view out in height-1 when the strip shows (v2:
+  strip is row 0 of the SAME column — app.tsx:1349-1361), prepend the strip row, and
+  shift the caret cell +1 (caret inside the shifted subtree).
