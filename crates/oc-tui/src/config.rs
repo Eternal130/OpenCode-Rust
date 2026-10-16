@@ -127,7 +127,7 @@ impl TabsConfig {
 }
 
 /// The TUI-relevant slice of `cli.json`.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TuiConfig {
     pub keybinds: Value,
     pub theme: ThemeConfig,
@@ -158,6 +158,26 @@ pub struct TuiConfig {
 // (Historical note, kept from the pre-merge layout.) Parse the `model`
 // field's two shapes (string `provider/model`, or the
 // `{providerID, model, variant}` object — local.tsx:177-184).
+/// The derived-default exception: `mouse` defaults TRUE (v2's
+/// `input.mouse ?? true`, config/index.tsx:311) — a derive would
+/// give `false`, silently disabling capture for every boot without a
+/// cli.json (the missing-file `load` path returns the default).
+impl Default for TuiConfig {
+    fn default() -> Self {
+        Self {
+            keybinds: Value::Null,
+            theme: ThemeConfig::default(),
+            leader_timeout_ms: None,
+            attention: AttentionConfig::default(),
+            session_image_preview: false,
+            tabs: TabsConfig::default(),
+            session_sidebar: crate::components::sidebar::SidebarMode::default(),
+            mouse: true,
+            path: None,
+        }
+    }
+}
+
 impl TuiConfig {
     /// Load `<config_root>/cli.json` (missing file = defaults; invalid
     /// JSON = defaults + a logged skip).
@@ -271,6 +291,10 @@ mod tests {
             TuiConfig::parse(r#"{"mouse": "bogus"}"#, None).mouse,
             "non-bool values degrade to the default"
         );
+        // The missing-file path (`load` with no cli.json) returns the
+        // DEFAULT — which must still carry the true default (the
+        // derived-default trap the PTY proof caught).
+        assert!(TuiConfig::default().mouse, "the Default impl keeps v2's true default");
     }
 
     #[test]
