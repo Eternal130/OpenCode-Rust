@@ -1,0 +1,178 @@
+# dogfood2 lane log — ACCEPTANCE-BLOCKING: tab click dead + cursor mispositioned under real-DB shapes
+# Rules: append-only, one phase per tool call, WIP-commit every ~6 invocations, EN only.
+
+## Phase 0 — setup
+- Worktree .worktrees/lane-dogfood2 on branch lane/dogfood2 from main (d3fb7b0).
+- Symptoms from user real-world test (HOME=/root, real data dir):
+  (1) restored tabs render at top but CLICKING them does nothing (v2: switches session).
+  (2) cursor blinks at wrong position at boot (v2: composer row).
+- Sandbox plan: /tmp/opencode/dogfood2/home with COPY of real DB+state (never write real dir).
+
+## Phase 1 — root-cause analysis (code read, v2 ref citations)
+- BUG 1 (dead tab clicks): app.rs:300-303 gates `strip_live` on
+  `matches!(route, Route::Session)` — but the strip PAINTS on Home too
+  (home.rs:349-374, F9) whenever tabs_enabled && tabs non-empty. v2 mounts
+  SessionTabs app-wide: app.tsx:1353-1355 `<Show when={tabsVisible() && !tabsVertical()}>`
+  above the route `<Switch>`; `tabsAvailable()` app.tsx:576-579 = `enabled() &&
+  tabs().length > 0 && route.data.type !== "plugin"` — never session-gated. select()
+  = bare route.navigate (context/session-tabs.tsx:393-396). => clicks on Home no-op.
+- BUG 2 (cursor row): home.rs:344-347 `set_caret_cell(caret_screen)` runs BEFORE the
+  strip shift (home.rs:354-373): the frame rows shift down 1 but the caret stays at the
+  pre-shift row = exactly the strip height above the composer row. ALSO the shift
+  path renders the home view at FULL height then truncates (home.rs:365-367), clipping
+  the composer's bottom row; v2 lays Home out in height-1 (the strip is row 0 of the
+  same column, app.tsx:1349-1361) so nothing clips. Session route caret is bottom-docked
+  (session.rs:620-632 `height - prompt_height + cell_y`) — strip-independent, correct.
+- Suspect 2 (hydration of not-yet-loaded sessions): already covered — F12 transcript
+  fetch loop app.rs:2687-2702 fetches every open-session id once; navigate() (store.rs:2940-2979)
+  is a bare route set + tab open like v2. No preloaded-registry requirement.
+- Suspect 1 (strip_hit geometry): strip_hit mirrors adaptive_session_tab_layout, the same
+  solver paint_live_tabs_bar uses (session.rs:88-96 paints via session_tabs_solid with the
+  same layout); row 0 on both routes. Geometry consistent — not the cause.
+
+## Phase 2 — reproduction sandbox (next)
+- Plan: /tmp/opencode/dogfood2/home (copy real DB + state, chown eternal130), empty cwd dir,
+  run ref TUI + our debug TUI in PTY, capture strip row 0, SGR click at a tab cell, cursor cell.
+
+## Phase 2 — sandbox + repro rig (in progress)
+- Sandbox built at /tmp/opencode/dogfood2: base home with python sqlite3 ONLINE BACKUP
+  of the real 1.5G DB (source opened mode=ro; copy integrity ok, 797 sessions),
+  + storage/ + state/ copies (service.json + locks DELETED so nothing discovers the
+  production daemon at 49374) + config copy. chowned eternal130.
+- Seeded home-rust (tabs.json version 2) + home-ref (v2 format, no version): cwd scope
+  for the shared empty cwd = 2 restored tabs referencing sessions whose directory is
+  /opt/lobechat + /opt/new-api (not the cwd) — the real shape: many sessions in DB,
+  none for cwd, restored tabs reference not-yet-loaded sessions.
+- Driver: /tmp/opencode/dogfood2/drive.py (stdlib PTY, minimal VT parse, SGR click).
+- Built target/debug/opencode-rust (dev-gate, 1m41s).
+- Issue under investigation: our CLI child produces NO output in the PTY for >6s —
+  server ensure path appears to hang against the big-DB sandbox; testing `serve` directly.
+
+## Phase 3 — REPRODUCED both bugs (sandbox: real-DB copy, empty cwd, restored tabs)
+Sandbox learnings (shape fidelity):
+- Our roots are `opencode-rust`-suffixed (data AND state): tabs restore reads
+  `$XDG_STATE_HOME/opencode-rust/stable/tui/tabs.json` (channel default "stable");
+  v2 reads `.../opencode/latest|local/tui/tabs.json`. Both seeded per side.
+- First our-binary boot in a v2-shaped home runs the one-way v2→rust DB migration
+  (1.5G copy) — user's env has the marker; sandbox pre-seeded marker + DB.
+- Ref must run WITHOUT bun defines (the TUI-spawned background server re-execs without
+  them → channel skew local vs stable → discovery loop); ref DB = opencode-local.db.
+- v2 tsconfig.json seeded in the empty cwd (the rig's jsxImportSource fix).
+
+Evidence (80x24, cwd=/tmp/opencode/dogfood2/home/work, 2 restored tabs referencing
+sessions whose directory is /opt/lobechat + /opt/new-api — none for the cwd):
+- OURS boot: strip row0 painted (two tab titles + " + "). Composer input row = 14
+  ("Ask anything…" row), hardware cursor = (6,13) → ONE ROW ABOVE the input row
+  (= exactly the strip height; set_caret_cell ran before the strip shift).
+- OURS click SGR col5 row1 (tab 1 body): NOTHING changes (same rows, same cursor).
+- REF boot: strip row0 painted; input row = 13 (home lays out in height-1); cursor
+  (6,13) ON the input row. REF same click: route switches to the session (renders
+  its session card — "Session not found: …" for a cross-project session id, i.e.
+  v2 routes even when the cwd's project scope can't see it).
+- Extra divergence captured: ours lays home out at FULL height then truncates →
+  bottom status row clipped (ours shows version row at 22; ref status bar at 23).
+
+## Phase 4 — fix plan (1:1 v2 semantics)
+- app.rs mouse_event: strip_live must include Route::Home (v2 app.tsx:576-579
+  tabsAvailable gates on `route.data.type !== "plugin"` only + 1353-1355 app-wide mount).
+- home.rs render_home: lay the home view out in height-1 when the strip shows (v2:
+  strip is row 0 of the SAME column — app.tsx:1349-1361), prepend the strip row, and
+  shift the caret cell +1 (caret inside the shifted subtree).
+
+## Phase 5 — bug 3: boot model ignores config providers (Own/glm-5.3)
+Real shape (sanitized probe of the live config): `providers.own` (camelCase keys,
+package @opencode/ai/providers/anthropic, settings{apiKey,baseURL}, models with
+cost as an ARRAY of {input,output}) + `model: "Own/glm-5.3"` + small_model.
+
+ROOT CAUSE (ours only): the provider/model seeding read the global config from the
+`opencode-rust`-suffixed dir — boot.rs:116 (engine seeding), boot.rs:297
+(location_config), engine/mod.rs:534 (per-location assemble) — while every other
+config consumer (handlers/config.rs:27, handlers/agent.rs:103, announce.rs:296) and
+the REF read the SHARED v2 dir `~/.config/opencode`. Result: zero config providers
+bound → `own` missing from /api/model (10 models vs ref's 38) → default fell to the
+catalog fallback ("opencode zen fledge alpha free").
+- normalize + provider decode are FINE (probe: providers.own + cost array + agents
+  .title.model small_model migration all survive; matches ref /api/config exactly).
+- Fix: the three sites join "opencode" like the rest of the pipeline.
+
+SECONDARY (miss-path parity): model_default's configured-but-unresolvable branch
+served a synthetic stub {providerID:"Own", id:"glm-5.3"}; v2 Model.default()
+(model.ts:260-266) serves `available.find(supportsText)` — the first text model of
+the SAME ordering /api/model serves. Extracted location_model_entries + supports_text
+(model.rs); both fallback paths now use it. (Also removed v2-divergent
+"first model of the provider" or_else.)
+
+GROUND TRUTH (ref beta.12, live probes, synthetic config):
+- matched case (synth/synth-1): ref default = synth/synth-1 "Synth One"; OURS = same ✓
+- mismatched case (Synth/synth-1): ref default = opencode/nemotron-3.5-super-vl-free
+  (its catalog vintage's first available text model); OURS = opencode/fledge-alpha-free
+  (OUR catalog vintage's first) — same semantics, different models.dev snapshot
+  (ref live-fetches; ours vendors). The providerID case miss is v2.0.24 behavior
+  (byProvider.get exact match, model.ts:263) — kept 1:1, NOT "fixed" case-insensitively.
+- user's real shape: ref lists own/{glm-5.3,glm-5.3-flash,gemini-3.8-flash,
+  qwen3.8-flash-next}; OURS (fixed) lists the same 4 ✓; both default→fallback.
+- NOT in scope (left): engine/mod.rs:761 global AGENTS.md discovery still uses the
+  suffixed dir; models.dev snapshot vintage drift (ref live vs ours vendored).
+
+## Phase 6 — tests pinning the real-DB shapes (all synthetic data)
+- oc-tui unit: mouse_home_strip_click_selects_the_restored_tab (app.rs) — home
+  hover + body release selects, ` + ` navigates home, second tab selects from home.
+- oc-tui unit: home_caret_sits_on_the_composer_row_under_the_strip (home.rs) —
+  input row shifts +1 under the strip; caret == input row; bottom row unclipped.
+- oc-tui PTY: pty_restored_tabs_home_click_switches_and_cursor_on_composer_row
+  (pty_tabs.rs) — REAL-SHAPE FIXTURE BUILDER (real_shape_fixture: 24 synthetic
+  sessions in OTHER directories, restored tabs referencing not-yet-loaded ids;
+  seeded tabs.json in the stable channel; scripted server serves the many-session
+  list + per-session transcripts). Asserts: home + restored strip at boot, SGR
+  click at tab-1 body switches into the session (transcript paints), and the
+  pre-click hardware cursor sits on the composer input row (SGR row 15 at 80x24).
+- oc-core: config_normalize_keeps_the_real_shape_custom_provider — the sanitized
+  provider shape (cost ARRAY, settings, mixed-case model selection, small_model →
+  agents.title.model) survives normalize.
+- oc-server: boot_binds_providers_from_the_shared_v2_config_dir (the config-dir
+  fix at boot + per-location surface) and handlers::model tests (supports_text
+  predicate incl. the empty-array wildcard; the fallback = first available text
+  model with the full Model.Info shape).
+All passing locally (nextest).
+
+## Phase 7 — regression + final repro
+- Full crate runs (nextest): oc-tui + oc-core + oc-server = 1609 passed, 1 skipped.
+- Rig --quick per script (fresh homes): boot-home 3 steps → 3 mismatch (baseline-class),
+  tabs-keyboard 8/8, tabs-live-session 22 mismatch + 2 identical, mouse-hover-tabstrip
+  12 mismatch + 5 text-only, multi-session 23 mismatch + 2 identical. Baseline
+  comparison vs merge-base d3fb7b0 running (REPORT.md's numbers are from an older
+  corpus vintage — script op counts changed).
+- FINAL sandbox repro (rebuilt binary, real-DB copy, empty cwd, restored tabs):
+  * strip row 0 paints both restored tabs;
+  * hardware cursor (6,14) == the composer input row ("Ask anything…" at row 14);
+  * SGR click col5/row1 → session route, the real transcript paints (cursor to the
+    session composer (5,19));
+  * composer metadata now resolves config providers (fallback model shown = the
+    v2.0.24 case-miss semantics; own/* reachable in the picker).
+- RESIDUAL (out of scope, noted): with the strip present, our home block sits one
+  row lower than the ref's (ours input row 14 vs ref 13 at 80x24) — v2's taffy
+  centering absorbs the strip row into the top spacer (odd-free split floors);
+  our plan_home rounds the top spacer up (div_ceil). No-strip home stays
+  byte-exact (goldens). The cursor-on-input-row invariant holds either way.
+
+## Phase 8 — no-new-divergence vs merge-base d3fb7b0 (rig --quick, per script)
+Apples-to-apples (same scripts, fresh homes, separate worktrees):
+| script | base d3fb7b0 | lane | verdict |
+| boot-home | 0..3 mismatch (flips across runs) | 0..3 mismatch | the ONLY delta = the placeholder
+| tabs-keyboard | flips (lucky 8/8 identical once) | 8/8 mismatch | pick flake (xorshift on time^pid^ASLR,
+| tabs-live-session | 19 mismatch | 22 mismatch | REPORT.md "placeholder pick (b)"); reruns
+| mouse-hover-tabstrip | 15 mismatch | 15 mismatch | flip BOTH sides; per-step first-diff
+| multi-session | 20 mismatch | 23 mismatch | signatures IDENTICAL (✕ cell, idx-color
+notes, digit/time drift, placeholder) after digit-masking. No new divergence class.
+The lane's model_default change is neutral on the corpus: "Build · Fake Model
+parityfake" row byte-identical both sides.
+
+## Phase 9 — verify-lane final (phased: fmt/clippy → workspace → pty → release budgets → rig full)
+- 9A fmt --all --check: CLEAN (after one fmt pass over the new code)
+- 9B clippy --workspace --all-targets --locked -D warnings: CLEAN (fixed: is_none_or,
+       clone_into, uninlined format args, Value::is_object method ref, useless as_ref)
+- 9C nextest full workspace: 2863 passed / 13 skipped / 2 timing-flakes retried OK
+       (pty_engine_cycle…, m1_scenario_prompt_fake_llm — known classes, pass on retry)
+- 9C' nextest --profile pty (serialized): 2863 passed / 13 skipped
+- 9D release build -p oc-cli --locked: OK (3m18s); frame_budget release tests: 11/11 PASS
+- 9E rig FULL matrix (both sizes × runs 2, no ref cache): RUNNING (background)

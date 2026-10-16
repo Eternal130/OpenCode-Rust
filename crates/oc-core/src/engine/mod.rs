@@ -532,7 +532,11 @@ impl Engine {
         // the boot-time provider seeding and the location config must see
         // the same document.
         let global_dirs = GlobalDirs {
-            config: self.home.join(".config").join(oc_util::global_roots::APP_NAME),
+            // The shared v2 global config dir (`.config/opencode`) — the
+            // boot seeding, the config endpoint and this per-location
+            // load must read the SAME documents (dogfood2 bug 3: the
+            // suffixed dir hid config providers from the resolver).
+            config: self.home.join(".config").join("opencode"),
             home: self.home.clone(),
         };
         let loaded = Loader::new(location.as_path().to_path_buf(), global_dirs).load();
