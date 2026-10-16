@@ -558,6 +558,10 @@ pub struct FakeLlm {
     /// predate it (the hover sweeps assert off-strip cells do not
     /// respond).
     pub vcs: Arc<AtomicBool>,
+    /// Whether `/api/mcp` answers (opt-in — SURF-1's sidebar MCP
+    /// proof): three servers (2 connected + 1 failed) exercise the
+    /// collapse toggle AND the error dot.
+    pub mcp: Arc<AtomicBool>,
     /// SSE script played once, after the first prompt POST.
     script: Arc<Mutex<Option<Vec<ScriptEvent>>>>,
 }
@@ -570,11 +574,13 @@ impl FakeLlm {
         let shutdown = Arc::new(AtomicBool::new(false));
         let prompt_posts = Arc::new(AtomicUsize::new(0));
         let vcs = Arc::new(AtomicBool::new(false));
+        let mcp = Arc::new(AtomicBool::new(false));
         let script: Arc<Mutex<Option<Vec<ScriptEvent>>>> = Arc::new(Mutex::new(None));
         let flag = Arc::clone(&shutdown);
         let shared_script = Arc::clone(&script);
         let shared_posts = Arc::clone(&prompt_posts);
         let shared_vcs = Arc::clone(&vcs);
+        let shared_mcp = Arc::clone(&mcp);
         std::thread::spawn(move || {
             listener.set_nonblocking(true).expect("nonblocking accept");
             while !flag.load(Ordering::SeqCst) {
@@ -584,8 +590,9 @@ impl FakeLlm {
                         let script = Arc::clone(&shared_script);
                         let posts = Arc::clone(&shared_posts);
                         let vcs = Arc::clone(&shared_vcs);
+                        let mcp = Arc::clone(&shared_mcp);
                         std::thread::spawn(move || {
-                            handle(socket, &sessions, &script, &posts, &vcs);
+                            handle(socket, &sessions, &script, &posts, &vcs, &mcp);
                         });
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -595,13 +602,18 @@ impl FakeLlm {
                 }
             }
         });
-        Self { url: format!("http://{addr}"), shutdown, prompt_posts, vcs, script }
+        Self { url: format!("http://{addr}"), shutdown, prompt_posts, vcs, mcp, script }
     }
 
     /// Answer `/api/vcs` (the footer location label's boot lookup —
     /// `{cwd}:{branch}` paints once it resolves).
     pub fn arm_vcs(&self) {
         self.vcs.store(true, Ordering::SeqCst);
+    }
+
+    /// Answer `/api/mcp` with the three-server fixture (SURF-1).
+    pub fn arm_mcp(&self) {
+        self.mcp.store(true, Ordering::SeqCst);
     }
 
     /// Arm the streaming script (played on the SSE feed after the
@@ -621,6 +633,7 @@ fn handle(
     script: &Arc<Mutex<Option<Vec<ScriptEvent>>>>,
     prompt_posts: &Arc<AtomicUsize>,
     vcs: &Arc<AtomicBool>,
+    mcp: &Arc<AtomicBool>,
 ) {
     socket.set_read_timeout(Some(Duration::from_secs(10))).ok();
     let mut buffer = [0u8; 8192];
@@ -709,6 +722,10 @@ fn handle(
         // would flag).
         r#"{"data":{"branch":{"current":"main","default":"main"}},"location":{"directory":"/tmp"}}"#
             .to_owned()
+    } else if path.split('?').next().unwrap_or("") == "/api/mcp" && mcp.load(Ordering::SeqCst) {
+        // mcp.list (SURF-1: the sidebar MCP section rows) — two
+        // connected servers + one failed.
+        r#"{"data":[{"name":"github","status":{"status":"connected"}},{"name":"filesystem","status":{"status":"connected"}},{"name":"broken","status":{"error":"connect ECONNREFUSED","status":"failed"}}],"location":{"directory":"/tmp"}}"#.to_owned()
     } else if path.starts_with("/api/session/") && path.ends_with("/prompt") {
         // session.prompt response: decodable Envelope<SessionInboxUser>
         // (a decode failure would toast SendFailed and pollute the
