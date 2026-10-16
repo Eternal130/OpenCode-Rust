@@ -478,6 +478,7 @@ impl Engine {
         // synchronous).
         integration.refresh_provider_bindings().await;
         integration.refresh_console().await;
+        integration.refresh_wellknown_documents().await;
         {
             use futures::StreamExt as _;
             let host = Arc::clone(&integration);
@@ -487,9 +488,21 @@ impl Engine {
                 crate::bus::registry::INTEGRATION_UPDATED,
             ]);
             tokio::spawn(async move {
-                while subscription.next().await.is_some() {
+                // Well-known manifests also refresh on a 10-minute
+                // interval (config.ts:303-317).
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
+                loop {
+                    tokio::select! {
+                        event = subscription.next() => {
+                            if event.is_none() {
+                                break;
+                            }
+                        }
+                        _ = interval.tick() => {}
+                    }
                     host.refresh_provider_bindings().await;
                     host.refresh_console().await;
+                    host.refresh_wellknown_documents().await;
                 }
             });
         }
@@ -634,7 +647,13 @@ impl Engine {
             config: self.home.join(".config").join("opencode"),
             home: self.home.clone(),
         };
-        let loaded = Loader::new(location.as_path().to_path_buf(), global_dirs).load();
+        let loaded = Loader::new(location.as_path().to_path_buf(), global_dirs)
+            .with_wellknown(Arc::new(
+                crate::integration::wellknown_config::HostWellknownSource::new(Arc::clone(
+                    self.integration.wellknown_documents(),
+                )),
+            ))
+            .load();
 
         // Per-location provider overlay (v2 resolves providers per
         // location — `provider.ts` reads the layer's `Config`): custom
