@@ -179,16 +179,137 @@ impl Default for TuiConfig {
 }
 
 impl TuiConfig {
-    /// Load `<config_root>/cli.json` (missing file = defaults; invalid
-    /// JSON = defaults + a logged skip).
+    /// Load through oc-core's `CliConfig` service (SURF-2, F-1's
+    /// registered delegation): JSONC tolerance, the v1→v2 migration
+    /// and the `OPENCODE_CLI_CONFIG_CONTENT` env overlay all ride the
+    /// shared reader; a missing file = defaults.
     #[must_use]
-    pub fn load(config_root: &Path) -> Self {
-        let path = config_root.join("cli.json");
-        let Ok(source) = std::fs::read_to_string(&path) else { return Self::default() };
-        Self::parse(&source, Some(path))
+    pub fn load(roots: &oc_util::global_roots::Roots) -> Self {
+        let service = oc_core::cli_config::CliConfig::open(roots);
+        let info = service.get();
+        Self::from_info(&info, Some(service.path().to_owned()))
     }
 
-    /// Parse a config document (invalid = defaults + logged skip).
+    /// Map the decoded `Info` onto the TUI slice (the per-key v2
+    /// defaults apply where the section is absent).
+    #[must_use]
+    pub fn from_info(info: &oc_core::cli_config::Info, path: Option<PathBuf>) -> Self {
+        let theme = info.theme.as_ref().map_or_else(ThemeConfig::default, |theme| ThemeConfig {
+            name: theme.name.clone(),
+            mode: theme.mode.clone(),
+        });
+        let leader_timeout_ms =
+            info.leader.as_ref().and_then(|leader| leader.timeout).filter(|ms| *ms > 0);
+        let attention = info.attention.as_ref().map_or_else(AttentionConfig::default, |source| {
+            AttentionConfig {
+                notifications: source.notifications.unwrap_or(false),
+                sound: source.sound.unwrap_or(false),
+                volume: source
+                    .volume
+                    .filter(|volume| volume.is_finite() && (0.0..=1.0).contains(volume))
+                    .unwrap_or(0.4),
+                sound_pack: source
+                    .sound_pack
+                    .clone()
+                    .unwrap_or_else(|| "opencode.default".to_owned()),
+                sounds: source
+                    .sounds
+                    .as_ref()
+                    .map(|sounds| {
+                        sounds
+                            .iter()
+                            .filter_map(|(name, value)| {
+                                let name = AttentionSoundName::parse(name)?;
+                                let value = value.as_ref()?;
+                                Some((name, PathBuf::from(value)))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            }
+        });
+        let session_image_preview =
+            info.session.as_ref().and_then(|session| session.image_preview).unwrap_or(false);
+        let tabs = TabsConfig {
+            enabled: {
+                let section = info.tabs.as_ref();
+                let mode = section
+                    .and_then(|tabs| tabs.mode.clone())
+                    .or_else(|| {
+                        section.and_then(|tabs| tabs.enabled).map(|enabled| {
+                            if enabled { "on".to_owned() } else { "off".to_owned() }
+                        })
+                    })
+                    .unwrap_or_else(|| "auto".to_owned());
+                let herdr = std::env::var("HERDR_ENV").is_ok_and(|value| value == "1");
+                mode == "on" || (mode == "auto" && !herdr)
+            },
+            scope: match info.tabs.as_ref().and_then(|tabs| tabs.scope.as_deref()) {
+                Some("global") => TabsScope::Global,
+                _ => TabsScope::Cwd,
+            },
+        };
+        let session_sidebar =
+            match info.session.as_ref().and_then(|session| session.sidebar.as_deref()) {
+                Some("hide") => crate::components::sidebar::SidebarMode::Hide,
+                _ => crate::components::sidebar::SidebarMode::Auto,
+            };
+        // `mouse` (config/index.tsx:247, default `true` at :311 — v2's
+        // `input.mouse ?? true`).
+        let mouse = info.mouse.unwrap_or(true);
+        Self {
+            keybinds: info
+                .keybinds
+                .as_ref()
+                .map(|binds| {
+                    serde_json::Value::Object(
+                        binds
+                            .iter()
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect(),
+                    )
+                })
+                .unwrap_or(serde_json::Value::Null),
+            theme,
+            leader_timeout_ms,
+            attention,
+            session_image_preview,
+            tabs,
+            session_sidebar,
+            mouse,
+            path,
+        }
+    }
+
+    /// Re-read from disk (config reload); `None` when the file does
+    /// not exist.
+    #[must_use]
+    pub fn reload(&self) -> Option<Self> {
+        let path = self.path.as_ref()?;
+        let roots = oc_util::global_roots::resolve();
+        let service = oc_core::cli_config::CliConfig::open(&roots);
+        if service.path() != path {
+            // The original load came from a test-injected root: read
+            // THAT document (same service semantics, different roots).
+            let mut test_roots = roots;
+            let fallback = test_roots.config.clone();
+            test_roots.config = path.parent().map(Path::to_path_buf).unwrap_or(fallback);
+            let service = oc_core::cli_config::CliConfig::open(&test_roots);
+            if !service.path().exists() {
+                return None;
+            }
+            let info = service.get();
+            return Some(Self::from_info(&info, Some(service.path().to_owned())));
+        }
+        if !path.is_file() {
+            return None;
+        }
+        let info = service.get();
+        Some(Self::from_info(&info, Some(path.clone())))
+    }
+
+    /// Parse a config document (invalid = defaults + logged skip) —
+    /// kept for the direct-parse tests.
     #[must_use]
     pub fn parse(source: &str, path: Option<PathBuf>) -> Self {
         let value: Value = match serde_json::from_str(source) {
@@ -228,19 +349,25 @@ impl TuiConfig {
         }
     }
 
-    /// Re-read from disk (config reload); `None` when the file does
-    /// not exist.
-    #[must_use]
-    pub fn reload(&self) -> Option<Self> {
-        let path = self.path.as_ref()?;
-        let source = std::fs::read_to_string(path).ok()?;
-        Some(Self::parse(&source, Some(path.clone())))
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test roots with an injected config dir (state/cache/tmp beside
+    /// it — hermetic; the CliConfig service only touches config +
+    /// state/locks).
+    fn test_roots(config: &Path) -> oc_util::global_roots::Roots {
+        oc_util::global_roots::Roots {
+            home: config.to_path_buf(),
+            data: config.join("data"),
+            cache: config.join("cache"),
+            config: config.to_path_buf(),
+            state: config.join("state"),
+            tmp: config.join("tmp"),
+        }
+    }
 
     #[test]
     fn parses_session_image_preview_defaulting_off() {
@@ -363,12 +490,53 @@ mod tests {
 
     #[test]
     fn missing_and_invalid_files_fall_back_to_defaults() {
-        assert_eq!(TuiConfig::load(Path::new("/nonexistent-opencode")), TuiConfig::default());
+        // Missing file: defaults, with the service's path recorded.
+        assert_eq!(
+            TuiConfig::load(&test_roots(Path::new("/nonexistent-opencode"))),
+            TuiConfig {
+                path: Some(PathBuf::from("/nonexistent-opencode/cli.json")),
+                ..TuiConfig::default()
+            }
+        );
         let config = TuiConfig::parse("{ broken", Some(PathBuf::from("/tmp/x.json")));
         assert_eq!(
             config,
             TuiConfig { path: Some(PathBuf::from("/tmp/x.json")), ..TuiConfig::default() }
         );
+    }
+
+    /// The F-1 delegation: JSONC comments, the v1 `tui.json` adoption
+    /// and the `OPENCODE_CLI_CONFIG_CONTENT` overlay all flow through
+    /// the shared `CliConfig` reader now.
+    #[test]
+    fn load_delegates_to_the_cli_config_service() {
+        let root = std::env::temp_dir().join(format!(
+            "oc-tui-config-delegation-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.subsec_nanos())
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(
+            root.join("cli.json"),
+            r#"{
+              // JSONC comment — the old reader choked on this
+              "theme": { "name": "catppuccin", "mode": "light" },
+              "leader": { "timeout": 750 },
+              "session": { "sidebar": "hide", "image_preview": true },
+              "mouse": false
+            }"#,
+        )
+        .expect("seed");
+        let config = TuiConfig::load(&test_roots(&root));
+        assert_eq!(config.theme.name.as_deref(), Some("catppuccin"));
+        assert_eq!(config.theme.mode.as_deref(), Some("light"));
+        assert_eq!(config.leader_timeout_ms, Some(750));
+        assert!(config.session_image_preview);
+        assert_eq!(config.session_sidebar, crate::components::sidebar::SidebarMode::Hide);
+        assert!(!config.mouse, "the mouse gate reads through the service");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The `tabs` section resolves exactly like v2's `tabsMode` chain
@@ -414,5 +582,61 @@ mod tests {
         // An unknown scope falls back to cwd (v2's schema enum).
         let config = TuiConfig::parse(r#"{ "tabs": { "scope": "everywhere" } }"#, None);
         assert_eq!(config.tabs.scope, TabsScope::Cwd);
+    }
+}
+
+#[cfg(test)]
+mod surf2_toggle_tests {
+    use crate::reactive::Runtime;
+    use crate::store::{RecordingConfigSink, Store};
+
+    /// The theme-mode pin + lock cycle and the sidebar toggle all
+    /// ride the config sink (F-1's consumption halves).
+    #[test]
+    fn theme_mode_and_sidebar_toggles_persist_through_the_sink() {
+        let store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(RecordingConfigSink::default());
+        store.set_config_sink(sink.clone());
+
+        // switch_mode: dark → light, pinned.
+        store.set_theme_mode_inputs(Some("system".to_owned()), oc_theme::types::Mode::Dark);
+        store.theme_switch_mode();
+        assert_eq!(store.theme().mode, oc_theme::types::Mode::Light, "toggled");
+        assert_eq!(store.theme_mode_pref().as_deref(), Some("light"), "pinned");
+
+        // lock: a pinned mode unlocks back to system (the probe says
+        // dark).
+        store.theme_mode_lock();
+        assert_eq!(store.theme_mode_pref().as_deref(), Some("system"));
+        assert_eq!(store.theme().mode, oc_theme::types::Mode::Dark, "re-resolved to the probe");
+
+        // lock again: pins the current resolved mode.
+        store.theme_mode_lock();
+        assert_eq!(store.theme_mode_pref().as_deref(), Some("dark"));
+
+        // The sidebar toggle writes session.sidebar (route-gated).
+        store.set_terminal_size((160, 40));
+        store.open_tab("s1", None);
+        store.toggle_sidebar();
+        assert_eq!(
+            store.sidebar_mode(),
+            crate::components::sidebar::SidebarMode::Hide,
+            "visible → hide"
+        );
+        store.toggle_sidebar();
+        assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Auto);
+
+        // The theme name persists on selection (themes.set).
+        store.set_theme_by_name("opencode");
+        let calls = sink.calls.borrow().clone();
+        let expected: Vec<(&str, String)> = vec![
+            ("theme.mode", "light".to_owned()),
+            ("theme.mode", "system".to_owned()),
+            ("theme.mode", "dark".to_owned()),
+            ("session.sidebar", "hide".to_owned()),
+            ("session.sidebar", "auto".to_owned()),
+            ("theme.name", "opencode".to_owned()),
+        ];
+        assert_eq!(calls, expected, "the full write order");
     }
 }

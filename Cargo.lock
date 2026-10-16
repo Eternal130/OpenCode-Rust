@@ -2172,6 +2172,7 @@ dependencies = [
  "libc",
  "miniaudio-sys",
  "oc-client",
+ "oc-core",
  "oc-plugin-host",
  "oc-syntax",
  "oc-theme",
