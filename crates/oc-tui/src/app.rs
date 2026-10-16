@@ -2592,6 +2592,10 @@ pub enum LoopRequest {
         generation: u64,
         directory: String,
     },
+    /// `DialogPair`'s fetch (SURF-2): `server.info` + `server.pair`.
+    Pair,
+    /// The MCP toggle (SURF-2): `experimental.mcp.connect/disconnect`.
+    McpToggle { server: String, connect: bool },
 }
 
 /// One resolved [`LoopRequest`].
@@ -2614,6 +2618,8 @@ pub enum LoopFetch {
             String,
         >,
     },
+    /// `DialogPair`'s resource result.
+    Pair(Result<crate::store::PairState, String>),
 }
 
 /// The fetch worker: requests spawn per-fetch tasks (no head-of-line
@@ -2675,6 +2681,89 @@ pub fn spawn_loop_fetcher(
                         let result =
                             fetch_diff(&client, mode, session_id.as_deref(), &directory).await;
                         let _ = tx.send(LoopFetch::Diff { generation, result });
+                    });
+                }
+                LoopRequest::Pair => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        // dialog-pair.tsx:21-38: both calls resolve
+                        // into the link model — `/auth/connect/{code}`
+                        // on each server URL, the localhost rewrite,
+                        // the expiry minutes, the loopback probe.
+                        let result = async {
+                            let server = client.server().info().await.map_err(|e| e.to_string())?;
+                            let pairing = client.server().pair().await.map_err(|e| e.to_string())?;
+                            let link = |url: &str| format!("{url}/auth/connect/{}", pairing.code);
+                            let localhost = server.urls.first().map(|url| {
+                                // `new URL(urls[0])` with hostname forced
+                                // to localhost (dialog-pair.tsx:25-26) —
+                                // the port survives.
+                                let trimmed = url.trim_end_matches('/');
+                                let rewritten = trimmed
+                                    .split_once("://")
+                                    .map_or_else(
+                                        || format!("http://{trimmed}"),
+                                        |(scheme, rest)| {
+                                            let (hostport, _) =
+                                                rest.split_once('/').unwrap_or((rest, ""));
+                                            let replaced = hostport.split_once(':').map_or_else(
+                                                || "localhost".to_owned(),
+                                                |(_host, port)| format!("localhost:{port}"),
+                                            );
+                                            format!("{scheme}://{replaced}")
+                                        },
+                                    );
+                                format!("{rewritten}/auth/connect/{}", pairing.code)
+                            });
+                            Ok(crate::store::PairState::Loaded {
+                                links: server.urls.iter().map(|url| link(url.trim_end_matches('/'))).collect(),
+                                localhost,
+                                minutes: pairing.expires_in.max(0) as u64 / 60,
+                                loopback: server.urls.iter().any(|url| {
+                                    let host = url
+                                        .split_once("://")
+                                        .map_or("", |(_, rest)| rest)
+                                        .split(['/', ':'])
+                                        .next()
+                                        .unwrap_or("");
+                                    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+                                }),
+                            })
+                        }
+                        .await;
+                        let _ = tx.send(LoopFetch::Pair(
+                            result.map_err(|error: String| error),
+                        ));
+                    });
+                }
+                LoopRequest::McpToggle { server, connect } => {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        let result = if connect {
+                            client
+                                .mcp()
+                                .connect(
+                                    &server,
+                                    &oc_client::types::ExperimentalMcpConnectQuery {
+                                        location: None,
+                                    },
+                                )
+                                .await
+                        } else {
+                            client
+                                .mcp()
+                                .disconnect(
+                                    &server,
+                                    &oc_client::types::ExperimentalMcpDisconnectQuery {
+                                        location: None,
+                                    },
+                                )
+                                .await
+                        };
+                        if let Err(error) = result {
+                            crate::keymap::log_skip(&format!("mcp toggle {server}: {error}"));
+                        }
                     });
                 }
             }
@@ -3125,6 +3214,32 @@ pub async fn run_with_size(
                 directory: directory.clone(),
             });
         });
+    }
+    // SURF-2: DialogPair's fetch seam + the MCP toggle worker.
+    {
+        let tx = loop_fetch_tx.clone();
+        struct HttpPairRefresh {
+            tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+        }
+        impl crate::store::PairRefreshSink for HttpPairRefresh {
+            fn refresh(&self) {
+                let _ = self.tx.send(LoopRequest::Pair);
+            }
+        }
+        app.store.set_pair_refresh_sink(std::rc::Rc::new(HttpPairRefresh { tx }));
+        let tx = loop_fetch_tx.clone();
+        struct HttpMcpToggle {
+            tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+        }
+        impl crate::store::McpToggleSink for HttpMcpToggle {
+            fn toggle(&self, server: &str, connect: bool) {
+                let _ = self.tx.send(LoopRequest::McpToggle {
+                    server: server.to_owned(),
+                    connect,
+                });
+            }
+        }
+        app.store.set_mcp_toggle_sink(std::rc::Rc::new(HttpMcpToggle { tx }));
     }
     let mut fetched_transcripts: std::collections::HashSet<String> =
         app.store.open_session_ids().into_iter().collect();
@@ -3609,6 +3724,14 @@ pub async fn run_with_size(
                 // generations drop inside the store).
                 LoopFetch::Diff { generation, result } => {
                     app.store.diff_fetch_result(generation, result);
+                }
+                // DialogPair's resource (dialog-pair.tsx:99-127).
+                LoopFetch::Pair(result) => {
+                    let state = match result {
+                        Ok(state) => state,
+                        Err(error) => crate::store::PairState::Failed(error),
+                    };
+                    app.store.set_pair_state(state);
                 }
             }
         }
