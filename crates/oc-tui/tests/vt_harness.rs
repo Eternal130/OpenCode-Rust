@@ -622,6 +622,7 @@ fn handle(
     }
     socket.set_read_timeout(Some(Duration::from_millis(200))).ok();
     let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
+    let method = head.split_whitespace().next().unwrap_or_default().to_uppercase();
     if path.starts_with("/api/event") {
         // The SSE connection must stay open for the WHOLE session: a
         // disconnect would make the app reconnect → resync → rebuild
@@ -690,6 +691,11 @@ fn handle(
     } else if path.starts_with("/api/session/") {
         // message.list for the opened tabs: empty transcript.
         r#"{"cursor":{},"data":[]}"#.to_owned()
+    } else if method == "POST" && path == "/api/session" {
+        // session.create (the home submission's first hop — dogfood3's
+        // --prompt E2E): a single-session envelope, NOT the list shape
+        // (a decode failure would fail the whole send chain).
+        r#"{"data":{"id":"ses_alpha","title":"New session","time":{"created":0,"updated":0},"location":{"directory":"/tmp"},"projectID":"p","cost":0,"tokens":{"cache":{"read":0,"write":0},"input":0,"output":0,"read":0,"write":0,"reasoning":0}}}"#.to_owned()
     } else if path.starts_with("/api/session") {
         let rows: Vec<String> = sessions
             .iter()
@@ -757,6 +763,18 @@ impl HarnessHandle {
     /// 0-based cell `(x, y)`; wire coords are 1-based, so +1 on both.
     pub fn sgr_motion(&mut self, x: u16, y: u16) {
         self.write(format!("\x1b[<35;{};{}M", x + 1, y + 1).as_bytes());
+    }
+
+    /// SGR 1006 left-button PRESS at 0-based cell `(x, y)` (button
+    /// 0; wire coords 1-based).
+    pub fn sgr_press(&mut self, x: u16, y: u16) {
+        self.write(format!("\x1b[<0;{};{}M", x + 1, y + 1).as_bytes());
+    }
+
+    /// SGR 1006 left-button RELEASE at 0-based cell `(x, y)` — the
+    /// `onMouseUp` trigger (v2's pointer surfaces act on release).
+    pub fn sgr_release(&mut self, x: u16, y: u16) {
+        self.write(format!("\x1b[<0;{};{}m", x + 1, y + 1).as_bytes());
     }
 
     /// Bytes fed so far (the cumulative mirror length).
@@ -934,18 +952,19 @@ impl LiveHarness {
 /// Run the real TUI loop against `url` at `cols×rows` until it exits
 /// (asserts the loop itself did not error and exited within `limit`).
 pub fn run_tui(url: &str, cols: u16, rows: u16, limit: Duration) {
+    run_tui_boot(url, cols, rows, limit, oc_tui::app::BootArgs::default());
+}
+
+/// [`run_tui`] with explicit boot args (dogfood3: `--prompt` seeds +
+/// auto-submits the first turn, `--auto` arms permission
+/// autoaccept — the flags' live-loop semantics need the real boot
+/// path, not a post-boot store poke).
+pub fn run_tui_boot(url: &str, cols: u16, rows: u16, limit: Duration, boot: oc_tui::app::BootArgs) {
     let client = oc_client::Client::new(url).expect("client");
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("rt");
     let finished = runtime.block_on(async {
-        tokio::time::timeout(
-            limit,
-            oc_tui::app::run_with_size(
-                client,
-                Some((cols, rows)),
-                oc_tui::app::BootArgs::default(),
-            ),
-        )
-        .await
+        tokio::time::timeout(limit, oc_tui::app::run_with_size(client, Some((cols, rows)), boot))
+            .await
     });
     match finished {
         Ok(Ok(())) => {}

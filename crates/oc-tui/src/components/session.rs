@@ -429,18 +429,38 @@ pub fn render_session(
         // (the `OC_SIDEBAR_OPENTUI=0` fallback, one release); BOTH
         // consume the same `render_sidebar` geometry.
         let pane = crate::components::sidebar_solid::sidebar_pane_frame(&view, styles, pane_height);
+        // The onboarding card's pointer targets at ABSOLUTE cells: the
+        // same `render_sidebar` geometry the pane painted, translated
+        // by the paste origin (docked at the transcript column, or the
+        // right edge under the overlay scrim). The extra walk only
+        // runs while the card is up; a hidden card clears the rects
+        // (stale hits after a dismiss would zombie-click).
+        let hits = view.onboarding.then(|| {
+            crate::components::sidebar::render_sidebar(&view, styles, pane_height).onboarding_hits
+        });
+        let origin_x = if sidebar_docked {
+            column
+        } else {
+            width.saturating_sub(crate::components::session_tabs::SESSION_SIDEBAR_WIDTH)
+        };
+        store.set_sidebar_onboarding_hits(hits.flatten().map(|mut hits| {
+            let shift = |rect: &mut crate::store::HitRect| {
+                rect.x += origin_x;
+                rect.y += content_top;
+            };
+            shift(&mut hits.dismiss);
+            shift(&mut hits.connect);
+            hits
+        }));
         if sidebar_docked {
             paste(&mut frame, &pane, column, content_top);
         } else if sidebar_overlay {
             let scrim = scrim_frame(width, pane_height);
             paste(&mut frame, &scrim, 0, content_top);
-            paste(
-                &mut frame,
-                &pane,
-                width.saturating_sub(crate::components::session_tabs::SESSION_SIDEBAR_WIDTH),
-                content_top,
-            );
+            paste(&mut frame, &pane, origin_x, content_top);
         }
+    } else {
+        store.set_sidebar_onboarding_hits(None);
     }
     frame
 }
@@ -483,7 +503,9 @@ fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarV
             mcp: Vec::new(),
             plugins: store.plugin_sidebar_sections(),
         },
-        onboarding: height >= 22 && !store.sidebar_onboarding_dismissed(),
+        onboarding: height >= 22
+            && !store.sidebar_onboarding_dismissed()
+            && !store.server_lists().connected,
         location: None,
     }
 }
@@ -709,10 +731,9 @@ pub fn composer_metadata(
     };
     crate::components::composer::render::MetadataLine {
         agent,
-        // `auto` rides `local.permission.mode === "autoaccept"` — the
-        // rig's config stays "prompt"; the permission-mode surface is
-        // the permissions lane's seam.
-        auto: false,
+        // `auto` rides `local.permission.mode === "autoaccept"` —
+        // `--auto`'s arm (the rig's config stays "prompt").
+        auto: store.permission_autoaccept(),
         model,
         provider,
         // The staged variant (`local.model.variant.current()`); the
@@ -1284,6 +1305,45 @@ mod tests {
         assert!(
             !frame.text_grid().iter().any(|row| row.contains("Getting started")),
             "no pane for subagent sessions"
+        );
+    }
+
+    /// The connected gate (auditB #4 — GATE-MISMATCH vs
+    /// footer.tsx:18-23's `!hasConnectedProvider(integrations)`): the
+    /// card hides once an integration is connected (our
+    /// `ServerLists.connected` fold), and the hit rects clear with it.
+    #[test]
+    fn connected_provider_hides_the_onboarding_card() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Bug hunt".to_owned()));
+        let theme = crate::theme::ThemeState::v2_dark();
+        let before = render_session(&store, "s1", &theme.styles(), (160, 30));
+        assert!(
+            before.text_grid().iter().any(|row| row.contains("Getting started")),
+            "the card shows while disconnected"
+        );
+        assert!(store.sidebar_onboarding_hits().is_some(), "the targets recorded");
+        store.set_integration_connected(true);
+        let after = render_session(&store, "s1", &theme.styles(), (160, 30));
+        assert!(
+            !after.text_grid().iter().any(|row| row.contains("Getting started")),
+            "a connected provider gates the card off"
+        );
+        assert!(store.sidebar_onboarding_hits().is_none(), "no targets without the card");
+    }
+
+    /// The dismissal gate (`!onboarding.dismissed`, footer.tsx:22):
+    /// the boot-restored flag hides the card the same way.
+    #[test]
+    fn restored_dismissal_hides_the_onboarding_card() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Bug hunt".to_owned()));
+        store.restore_sidebar_onboarding(true);
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame = render_session(&store, "s1", &theme.styles(), (160, 30));
+        assert!(
+            !frame.text_grid().iter().any(|row| row.contains("Getting started")),
+            "the persisted dismissal keeps the card hidden"
         );
     }
 
