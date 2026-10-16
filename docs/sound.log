@@ -1,0 +1,135 @@
+# P2-sound lane log (append-only)
+
+## 2026-10-16 — lane/sound kickoff: stack selection
+
+Divergence under fix: our TUI mirrors sound playback to a system player
+(detached `spawn`: pw-play/paplay/ffplay/mpv/canberra), while v2 plays
+in-process through miniaudio (opentui `@opentui/core` Audio → native Zig
+engine → vendored miniaudio 0.11.22).
+
+### Candidate evaluation (all evidence local + crates.io sparse index)
+
+1. **cpal 0.18.x / rodio 0.20.x — REJECTED.** cpal's Linux host is a
+   link-time dependency: `alsa`/`alsa-sys` emit `cargo:rustc-link-lib=asound`
+   (cpal 0.18 additionally pulls `jack`, `pipewire`, `pulseaudio` sys crates —
+   every one a native dev-header link). This box has only `libasound.so.2`
+   (no `libasound.so` dev symlink; `ld -lasound` fails) and CI
+   (.github/workflows/ci.yml, `ubuntu-latest`) runs no `apt-get`, so cpal
+   needs a CI workflow change + dev packages — incompatible with "dependency
+   tree stays compatible with the workspace and the 20-min CI build", and it
+   would add a hard link-time ALSA dep to every binary.
+2. **crates.io `miniaudio` 0.10.0 (→ `ep-miniaudio-sys` 2.4.0) — REJECTED.**
+   Vendored C is right (dlopen ALSA/Pulse at runtime, no link-time deps), but
+   the sys crate runs **bindgen 0.54 at build time**, which panics on modern
+   glibc headers (`__atomic_wide_counter_struct_... is not a valid Ident`,
+   reproduced locally: bindgen-0.54.0/src/ir/context.rs:894) and requires
+   libclang discovery at build time. Dead on this toolchain (rustc 1.99) and
+   on ubuntu-latest.
+3. **Vendored miniaudio sys crate with pre-generated bindings — CHOSEN.**
+   Mirrors the repo's third_party convention (agent-client-protocol,
+   tree-sitter-toml) AND is byte-for-byte the engine v2 uses:
+   `third_party/opentui/packages/native/src/vendor/miniaudio/miniaudio.h`
+   (miniaudio 0.11.22, copied verbatim into `third_party/miniaudio-sys/`)
+   + the same shim flags opentui compiles it with on Linux
+   (`miniaudio_shim.c`: `MA_ENABLE_ONLY_SPECIFIC_BACKENDS` +
+   `MA_ENABLE_ALSA` + `MA_ENABLE_PULSEAUDIO` — runtime `dlopen`, no null
+   backend). Bindings are pre-generated once with bindgen 0.70 and committed
+   (`src/bindings.rs`), so builds need only `cc` — no bindgen, no libclang,
+   no system dev headers, no network. Dep-tree delta: **1 path-only crate +
+   `cc` (already in the lock via tree-sitter)**.
+
+### v2 parity facts (citations)
+
+- `packages/tui/src/audio.ts:7-21` — `Audio.create({autoStart:false})` in a
+  try/catch; on failure `audio = null` and every later `loadSoundFile`/`play`
+  is a silent no-op returning null/false.
+- `packages/tui/src/audio.ts:38-43` — `play()`: if not started and
+  `start()` fails → null (the candidate loop in `attention.ts:110-126` then
+  gives up → `sound=false`).
+- `packages/tui/src/attention.ts:65-76` — volume clamp 0..1 (`clampVolume`);
+  native clamps again to 0..4 (`audio.zig`: `clamp(options.volume, 0, 4)`).
+- Engine: `audio.zig` `createEngine` — `ma_engine_init` with
+  `noDevice = MA_TRUE` (pure mixer; succeeds headless), device
+  `ma_device_init`+`ma_device_start` lazily at `audioStart`
+  (`ma_device_config_init(ma_device_type_playback)`, callback →
+  `ma_engine_read_pcm_frames`).
+- Decode: `audio.zig` `decodeSoundFromMemory` —
+  `ma_decoder_config_init(ma_format_f32, 0, 0)` (f32, native channels/rate)
+  → `ma_decoder_init_memory` → read all frames → cached `Sound { channels,
+  sample_rate, samples: []f32 }` (TUI caches per file path,
+  `audio.ts:23-36`).
+- Play: `audio.zig` `audioPlay` — `ma_audio_buffer_ref_init(f32, channels,
+  samples, frames)` (sampleRate patched) → `ma_sound_init_from_data_source(
+  engine, &buffer_ref, MA_SOUND_FLAG_NO_SPATIALIZATION | MA_SOUND_FLAG_NO_PITCH,
+  group)` → `ma_sound_set_volume(clamp(v,0,4))` → `ma_sound_start`; finished
+  voices reaped on later calls.
+- No env kill-switch exists in v2's audio path (only the
+  `config.attention.sound` boolean + per-request `sound:false`,
+  `attention.ts:70-76`); the only env var is `OPENCODE_NODE_ASSETS_DIR` for
+  node-build asset *paths* (`attention-sounds.node.ts:7-8`). Port keeps the
+  existing config gate and adds no new env var.
+
+### Plan
+
+1. `third_party/miniaudio-sys`: header + shim + pre-generated bindings + cc
+   build.rs (link dl/pthread/m on unix).
+2. oc-tui: in-process `InprocSoundPlayer` (engine/no-device mixer, lazy
+   device, decode cache, voice mixer) behind `cfg(target_os = "linux")`;
+   non-Linux keeps the process-player fallback. Trigger matrix untouched.
+3. Tests: per-asset decode sanity, bogus-device graceful no-op, existing
+   trigger tests stay green; fmt/clippy/nextest/release size delta.
+
+## 2026-10-16 — implementation + verification results
+
+### Deliverables
+
+- `third_party/miniaudio-sys/` — vendored miniaudio 0.11.22 (header copied
+  byte-identical from opentui's native vendor dir), shim with v2's Linux
+  backend selection (ALSA+Pulse only, runtime dlopen, no null backend),
+  pre-generated bindings.rs (bindgen 0.70, allow-listed surface), cc-only
+  build.rs linking just dl/pthread/m.
+- `crates/oc-tui/src/sound/inproc.rs` — the port of v2's engine:
+  no-device `ma_engine` mixer (created once per process), lazy
+  `ma_device_init`+`ma_device_start` retried per play (v2 latches
+  `playbackStarted` only on success), path-keyed decode cache
+  (`ma_decoder_config_init(f32, 0, 0)` → read-all), playback via
+  `ma_audio_buffer_ref_init` + sampleRate patch +
+  `ma_sound_init_from_data_source(NO_SPATIALIZATION|NO_PITCH)` +
+  `ma_sound_set_volume(clamp 0..4)` + `ma_sound_start`, voice reap on
+  `ma_sound_at_end`, MAX_VOICES=64 cap (v2's pool guard). Every failure =
+  `false` (silent no-op); no process spawn anywhere.
+- `crates/oc-tui/src/sound.rs` — `SoundHalf` alias: in-process player on
+  Linux, the spawn mirror (`ProcessSoundPlayer`/`PlayerKind`) kept for
+  other targets and its argv tests stay green everywhere.
+- `crates/oc-tui/src/app.rs` — the run loop installs
+  `sound::SoundHalf::default()`; trigger matrix untouched (store/
+  notifications_plugin trigger tests all green).
+- Kill-switch: none added — v2 has no env kill-switch for audio (cited in
+  the kickoff entry); the existing `config.attention.sound` +
+  per-request gates already mirror v2.
+
+### Dependency-size impact
+
+- Dep-tree delta: +1 path-only crate (`miniaudio-sys`); its only build
+  dep `cc` was already in Cargo.lock (tree-sitter). Cargo.lock unchanged.
+- Release binary: 68,145,760 B (main baseline) → 68,671,744 B =
+  **+525,984 B (+0.77%)** — the miniaudio engine + dr_mp3 decoder.
+- Build time: miniaudio-sys alone compiles in ~8.9 s (release, gated);
+  release `-p oc-cli` 1m43s incremental; no new system deps.
+- `ldd` on the release binary: no libasound/libpulse NEEDED entries —
+  ALSA/Pulse are dlopen'd at runtime exactly like v2's native lib.
+
+### Tests (all via dev-gate)
+
+- New: `decodes_every_builtin_asset` (5 assets × format/channels/rate/
+  duration sanity through the production decode path),
+  `assets_keep_mp3_magic` (embedding tripwire), `bogus_sink_is_a_silent_no_op`
+  (nonexistent playback sink → false ×2 incl. the retry path, no panic, no
+  spawn), `undecodable_input_is_none`, `candidate_loop_gives_up_gracefully`.
+- Existing sound tests: all green (argv mapping, extraction, trigger
+  matrix in store/notifications_plugin).
+- Gates: `cargo fmt --check` clean; `cargo clippy -p miniaudio-sys -p
+  oc-tui --all-targets` clean (0 warnings);
+  `cargo nextest -p oc-tui`: 666 passed / 1 skipped;
+  `cargo nextest -p oc-cli`: 184 passed / 1 skipped;
+  `cargo check --workspace --all-targets`: clean.
