@@ -73,6 +73,12 @@ pub struct CatalogModelResolver {
     custom: Vec<CustomProvider>,
     /// The default model selection (config `model`).
     default: Option<oc_schema::config::ModelSelection>,
+    /// Credential-driven provider bindings (copilot transport), shared
+    /// with the integration host and refreshed on credential events.
+    credentials: Option<Arc<crate::integration::copilot::CredentialBindings>>,
+    /// Console-issued providers (integration `opencode`), shared with the
+    /// host and refreshed on credential events.
+    console: Option<Arc<crate::integration::console::ConsoleProviders>>,
 }
 
 impl CatalogModelResolver {
@@ -85,7 +91,27 @@ impl CatalogModelResolver {
         custom: Vec<CustomProvider>,
         default: Option<oc_schema::config::ModelSelection>,
     ) -> Self {
-        Self { context, catalog, connections, custom, default }
+        Self { context, catalog, connections, custom, default, credentials: None, console: None }
+    }
+
+    /// Attaches the credential-driven provider bindings.
+    #[must_use]
+    pub fn with_credentials(
+        mut self,
+        bindings: Arc<crate::integration::copilot::CredentialBindings>,
+    ) -> Self {
+        self.credentials = Some(bindings);
+        self
+    }
+
+    /// Attaches the console-issued provider snapshot.
+    #[must_use]
+    pub fn with_console(
+        mut self,
+        console: Arc<crate::integration::console::ConsoleProviders>,
+    ) -> Self {
+        self.console = Some(console);
+        self
     }
 
     /// The catalog's canonical provider id for a requested prefix: the
@@ -125,7 +151,7 @@ impl CatalogModelResolver {
     /// and the CANONICAL reference (the configured provider/model keys —
     /// v2 records the selected catalog identity on assistant messages,
     /// model-resolver.ts:386-392).
-    fn bind(
+    pub(crate) fn bind(
         &self,
         reference: &oc_schema::model::Ref,
     ) -> Result<(oc_ai::LanguageModel, oc_schema::model::Info, oc_schema::model::Ref), ModelError>
@@ -160,6 +186,35 @@ impl CatalogModelResolver {
             };
             return Ok((model, info, canonical));
         }
+        // Console-issued providers (integration `opencode`): resolved
+        // before the catalog exactly like config customs — the console
+        // owns these ids (opencode.ts:243-268 `providers.update/add`).
+        if let Some(console) = &self.console {
+            if let Some(provider) = console.get(&reference.provider_id.0).or_else(|| {
+                self.console.as_ref().and_then(|console| {
+                    console
+                        .entries_iter()
+                        .find(|(key, _)| key.eq_ignore_ascii_case(&reference.provider_id.0))
+                        .map(|(_, value)| value.clone())
+                })
+            }) {
+                let canonical_model = provider
+                    .models
+                    .iter()
+                    .find(|model| model.id.eq_ignore_ascii_case(&reference.id.0))
+                    .map(|model| model.id.clone())
+                    .unwrap_or_else(|| reference.id.0.clone());
+                let model = custom_language_model(&self.context, &provider, &canonical_model)
+                    .map_err(|error| map_custom(error, &provider.id, &canonical_model))?;
+                let info = custom_model_info(&provider);
+                let canonical = oc_schema::model::Ref {
+                    provider_id: oc_schema::id::ProviderId::parse(provider.id.clone()),
+                    id: oc_schema::id::ModelId::parse(canonical_model),
+                    variant: reference.variant.clone(),
+                };
+                return Ok((model, info, canonical));
+            }
+        }
         // Catalog providers: canonicalize the prefix, keep the model id
         // exact (catalog ids are authoritative — v2's runner compares
         // `model.id === session.model.id` exactly, session/runner/model.ts:82-84).
@@ -170,7 +225,21 @@ impl CatalogModelResolver {
                 // session/runner/model.ts:20-31,86-89).
                 ModelError::Unavailable(reference.provider_id.0.clone(), reference.id.0.clone())
             })?;
-        let connection = self.connection_for(&reference.provider_id.0);
+        let mut connection = self.connection_for(&reference.provider_id.0);
+        // Credential-driven providers (copilot transport, BE-3b): the
+        // stored integration credential wins over config/env — base URL,
+        // token, and client headers merge into the connection before the
+        // facade builds the route (v2 resolves the same per attempt via
+        // the plugin context, github-copilot.ts:165-207).
+        if let Some(bindings) = &self.credentials {
+            if let Some(binding) = bindings.get(&provider_id) {
+                connection.api_key = Some(binding.api_key.clone());
+                connection.base_url = binding.base_url.clone().or(connection.base_url);
+                for (key, value) in binding.headers {
+                    connection.headers.insert(key, value);
+                }
+            }
+        }
         let model = language_model(
             &self.context,
             &self.catalog,

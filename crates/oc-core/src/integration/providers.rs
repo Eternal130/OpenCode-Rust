@@ -31,6 +31,7 @@ pub fn install(host: &IntegrationHost, catalog: &crate::provider_catalog::catalo
     install_xai(host);
     install_digitalocean(host);
     install_poe(host);
+    super::providers_enterprise::install(host);
 }
 
 // ---------------------------------------------------------------------------

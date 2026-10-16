@@ -448,17 +448,64 @@ impl Engine {
         // per-location provider overlay bind onto it.
         let facade_transport: SharedTransport =
             Arc::new(oc_ai::route::transport::reqwest_transport::ReqwestTransport::new());
+        // The integration/auth host (BE-3): registry over the catalog's
+        // key/env surface + the named OAuth providers; credential rows +
+        // events ride the engine's database and bus.
+        let integration = crate::integration::IntegrationHost::new(
+            Arc::clone(&db),
+            Arc::clone(&bus),
+            &catalog,
+            &crate::session::runner::model_request::useragent(&options.app),
+        );
         let resolver: Arc<dyn ModelResolver> =
             options.model_resolver.clone().unwrap_or_else(|| {
-                Arc::new(resolver::CatalogModelResolver::new(
-                    FacadeContext::new(Arc::clone(&facade_transport)),
-                    Arc::clone(&catalog),
-                    options.connections.clone(),
-                    options.custom_providers.clone(),
-                    options.default_model.clone(),
-                ))
+                Arc::new(
+                    resolver::CatalogModelResolver::new(
+                        FacadeContext::new(Arc::clone(&facade_transport)),
+                        Arc::clone(&catalog),
+                        options.connections.clone(),
+                        options.custom_providers.clone(),
+                        options.default_model.clone(),
+                    )
+                    .with_credentials(Arc::clone(&integration.credential_bindings()))
+                    .with_console(Arc::clone(&integration.console_providers())),
+                )
             });
 
+        // Credential-driven provider bindings (copilot transport): the
+        // boot snapshot + a refresh loop on credential/integration events
+        // (v2 re-resolves per attempt; the snapshot keeps bind()
+        // synchronous).
+        integration.refresh_provider_bindings().await;
+        integration.refresh_console().await;
+        integration.refresh_wellknown_documents().await;
+        {
+            use futures::StreamExt as _;
+            let host = Arc::clone(&integration);
+            let mut subscription = bus.subscribe_types(&[
+                crate::bus::registry::CREDENTIAL_SWITCHED,
+                crate::bus::registry::CREDENTIAL_UPDATED,
+                crate::bus::registry::INTEGRATION_UPDATED,
+            ]);
+            tokio::spawn(async move {
+                // Well-known manifests also refresh on a 10-minute
+                // interval (config.ts:303-317).
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
+                loop {
+                    tokio::select! {
+                        event = subscription.next() => {
+                            if event.is_none() {
+                                break;
+                            }
+                        }
+                        _ = interval.tick() => {}
+                    }
+                    host.refresh_provider_bindings().await;
+                    host.refresh_console().await;
+                    host.refresh_wellknown_documents().await;
+                }
+            });
+        }
         // The boot globals carry the engine-level ports; per-location
         // globals (built in `assemble`) swap in the location's plugin
         // supervisor and per-location close ports.
@@ -481,15 +528,6 @@ impl Engine {
             PluginSupervisor::new(),
         );
         let locations = Arc::new(LocationServiceMap::new(Arc::new(globals)));
-        // The integration/auth host (BE-3): registry over the catalog's
-        // key/env surface + the named OAuth providers; credential rows +
-        // events ride the engine's database and bus.
-        let integration = crate::integration::IntegrationHost::new(
-            Arc::clone(&db),
-            Arc::clone(&bus),
-            &catalog,
-            &crate::session::runner::model_request::useragent(&options.app),
-        );
         let engine = Engine {
             data_root: options.data_root.clone(),
             home: options.home.clone(),
@@ -609,7 +647,13 @@ impl Engine {
             config: self.home.join(".config").join("opencode"),
             home: self.home.clone(),
         };
-        let loaded = Loader::new(location.as_path().to_path_buf(), global_dirs).load();
+        let loaded = Loader::new(location.as_path().to_path_buf(), global_dirs)
+            .with_wellknown(Arc::new(
+                crate::integration::wellknown_config::HostWellknownSource::new(Arc::clone(
+                    self.integration.wellknown_documents(),
+                )),
+            ))
+            .load();
 
         // Per-location provider overlay (v2 resolves providers per
         // location — `provider.ts` reads the layer's `Config`): custom
@@ -629,7 +673,9 @@ impl Engine {
                         BTreeMap::new(),
                         location_providers.custom,
                         location_providers.default_model,
-                    ),
+                    )
+                    .with_credentials(Arc::clone(&self.integration.credential_bindings()))
+                    .with_console(Arc::clone(&self.integration.console_providers())),
                     Arc::clone(&self.resolver),
                 ))
             };
