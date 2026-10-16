@@ -508,8 +508,9 @@ fn head_branch(path: &std::path::Path) -> Option<String> {
 /// `filesystem.changed` (`{file, event:"change"}` — the sole v2 publisher,
 /// `location-watcher.ts:28-32` maps create/update/delete onto add/change/
 /// unlink), then refresh the branch and publish `vcs.branch.updated`
-/// `{branch}` when it moved (vcs.ts:118-152).
-async fn watch_location_head(state: &Arc<AppState>, location: &LocationRef) {
+/// `{branch}` when it moved (vcs.ts:118-152). Public for the poller and
+/// the lane tests.
+pub async fn watch_location_head(state: &Arc<AppState>, location: &LocationRef) {
     let key = key_of(location);
     let head = discover_head_file(&location.directory);
     let current = head.as_ref().map(|path| head_fingerprint(path));
