@@ -1043,16 +1043,16 @@ fn pty_reconnecting_overlay_on_loss_and_recovery() {
             "the home wordmark rendered"
         );
         assert!(
-            wait_for_after(
-                &probe(),
-                b"Connection lost",
-                0,
-                Duration::from_secs(20),
-            ),
+            wait_for_after(&probe(), b"Connection lost", 0, Duration::from_secs(20),),
             "the Reconnecting overlay appeared after the retry threshold"
         );
         assert!(
-            wait_for_after(&probe(), b"Reconnecting to the server automatically.", 0, Duration::from_secs(20)),
+            wait_for_after(
+                &probe(),
+                b"Reconnecting to the server automatically.",
+                0,
+                Duration::from_secs(20)
+            ),
             "the managed-copy line (unmanaged wording)"
         );
         // Recovery: the overlay's spinner repaints stop — the count of
@@ -1077,7 +1077,10 @@ fn pty_reconnecting_overlay_on_loss_and_recovery() {
                 last = now;
             }
         }
-        assert!(stable >= 6, "the overlay stopped repainting (recovered) — last {last}, stable {stable}");
+        assert!(
+            stable >= 6,
+            "the overlay stopped repainting (recovered) — last {last}, stable {stable}"
+        );
         // The recovered shell still works: exit cleanly.
         let _ = writer.write_all(b"\x03");
     });

@@ -622,7 +622,7 @@ impl FakeLlm {
         self.mcp.store(true, Ordering::SeqCst);
     }
 
-    /// Answer `/api/info` + `/api/pair` (SURF-2's DialogPair proof).
+    /// Answer `/api/info` + `/api/pair` (SURF-2's `DialogPair` proof).
     pub fn arm_pair(&self) {
         self.pair.store(true, Ordering::SeqCst);
     }
@@ -638,6 +638,7 @@ impl FakeLlm {
     }
 }
 
+#[allow(clippy::too_many_lines)] // one arm per scripted endpoint
 fn handle(
     mut socket: std::net::TcpStream,
     sessions: &[FakeSession],
@@ -734,10 +735,12 @@ fn handle(
         // would flag).
         r#"{"data":{"branch":{"current":"main","default":"main"}},"location":{"directory":"/tmp"}}"#
             .to_owned()
-    } else if path.split('?').next().unwrap_or("") == "/api/vcs/base" && vcs.load(Ordering::SeqCst) {
+    } else if path.split('?').next().unwrap_or("") == "/api/vcs/base" && vcs.load(Ordering::SeqCst)
+    {
         // vcs.base (SURF-2's diff viewer): no base reported.
         r#"{"data":null,"location":{"directory":"/tmp"}}"#.to_owned()
-    } else if path.split('?').next().unwrap_or("") == "/api/vcs/diff" && vcs.load(Ordering::SeqCst) {
+    } else if path.split('?').next().unwrap_or("") == "/api/vcs/diff" && vcs.load(Ordering::SeqCst)
+    {
         // vcs.diff (SURF-2's diff viewer): one modified file fixture.
         r#"{"data":[{"file":"src/lib.rs","additions":1,"deletions":1,"patch":"--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n fn one() {\n-    let old = 1;\n+    let new = 1;\n }\n","status":"modified"}],"location":{"directory":"/tmp"}}"#.to_owned()
     } else if path.split('?').next().unwrap_or("") == "/api/info" && pair.load(Ordering::SeqCst) {

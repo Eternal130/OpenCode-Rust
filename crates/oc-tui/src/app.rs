@@ -838,7 +838,7 @@ impl App {
         if self.store.focus() == Focus::Dialog {
             self.stroke_in_dialog(stroke);
         } else if self.diff_live() {
-            self.stroke_in_diff(stroke);
+            self.stroke_in_diff(&stroke);
         } else if self.permission_live() {
             self.stroke_in_permission(expanded);
         } else if self.error_toast_live() {
@@ -891,7 +891,7 @@ impl App {
     /// the layer's own `app.exit` rebind (CLOSES the viewer,
     /// diff-viewer.tsx:726-732); the base exit chords (ctrl+c,
     /// `<leader>q`) still exit.
-    fn stroke_in_diff(&mut self, stroke: KeyStroke) {
+    fn stroke_in_diff(&mut self, stroke: &KeyStroke) {
         if let Outcome::Command { command, args } = self.keymap.lookup(stroke.clone(), &self.clock)
         {
             if command == "app.exit" {
@@ -2613,10 +2613,7 @@ pub enum LoopFetch {
     /// The diff viewer's fetch result (base name + files, or error).
     Diff {
         generation: u64,
-        result: Result<
-            (Option<String>, Vec<crate::components::diff_viewer::DiffFile>),
-            String,
-        >,
+        result: Result<(Option<String>, Vec<crate::components::diff_viewer::DiffFile>), String>,
     },
     /// `DialogPair`'s resource result.
     Pair(Result<crate::store::PairState, String>),
@@ -2626,6 +2623,7 @@ pub enum LoopFetch {
 /// blocking); results arrive on one ordered channel the run loop
 /// drains into [`Store::ingest_all`].
 #[must_use]
+#[allow(clippy::too_many_lines)] // one arm per request kind
 pub fn spawn_loop_fetcher(
     client: oc_client::Client,
 ) -> (
@@ -2693,33 +2691,36 @@ pub fn spawn_loop_fetcher(
                         // the expiry minutes, the loopback probe.
                         let result = async {
                             let server = client.server().info().await.map_err(|e| e.to_string())?;
-                            let pairing = client.server().pair().await.map_err(|e| e.to_string())?;
+                            let pairing =
+                                client.server().pair().await.map_err(|e| e.to_string())?;
                             let link = |url: &str| format!("{url}/auth/connect/{}", pairing.code);
                             let localhost = server.urls.first().map(|url| {
                                 // `new URL(urls[0])` with hostname forced
                                 // to localhost (dialog-pair.tsx:25-26) —
                                 // the port survives.
                                 let trimmed = url.trim_end_matches('/');
-                                let rewritten = trimmed
-                                    .split_once("://")
-                                    .map_or_else(
-                                        || format!("http://{trimmed}"),
-                                        |(scheme, rest)| {
-                                            let (hostport, _) =
-                                                rest.split_once('/').unwrap_or((rest, ""));
-                                            let replaced = hostport.split_once(':').map_or_else(
-                                                || "localhost".to_owned(),
-                                                |(_host, port)| format!("localhost:{port}"),
-                                            );
-                                            format!("{scheme}://{replaced}")
-                                        },
-                                    );
+                                let rewritten = trimmed.split_once("://").map_or_else(
+                                    || format!("http://{trimmed}"),
+                                    |(scheme, rest)| {
+                                        let (hostport, _) =
+                                            rest.split_once('/').unwrap_or((rest, ""));
+                                        let replaced = hostport.split_once(':').map_or_else(
+                                            || "localhost".to_owned(),
+                                            |(_host, port)| format!("localhost:{port}"),
+                                        );
+                                        format!("{scheme}://{replaced}")
+                                    },
+                                );
                                 format!("{rewritten}/auth/connect/{}", pairing.code)
                             });
                             Ok(crate::store::PairState::Loaded {
-                                links: server.urls.iter().map(|url| link(url.trim_end_matches('/'))).collect(),
+                                links: server
+                                    .urls
+                                    .iter()
+                                    .map(|url| link(url.trim_end_matches('/')))
+                                    .collect(),
                                 localhost,
-                                minutes: pairing.expires_in.max(0) as u64 / 60,
+                                minutes: u64::try_from(pairing.expires_in.max(0)).unwrap_or(0) / 60,
                                 loopback: server.urls.iter().any(|url| {
                                     let host = url
                                         .split_once("://")
@@ -2732,9 +2733,7 @@ pub fn spawn_loop_fetcher(
                             })
                         }
                         .await;
-                        let _ = tx.send(LoopFetch::Pair(
-                            result.map_err(|error: String| error),
-                        ));
+                        let _ = tx.send(LoopFetch::Pair(result.map_err(|error: String| error)));
                     });
                 }
                 LoopRequest::McpToggle { server, connect } => {
@@ -2792,6 +2791,7 @@ impl crate::store::SessionListSink for HttpSessionListSink {
 /// `vcs.diff` with `context: 12` (`VCS_DIFF_CONTEXT_LINES`). A
 /// base-needing mode that resolves no base yields the unavailable
 /// body (committed) / a base-less branch diff.
+#[allow(clippy::too_many_lines)] // one arm per source, the resource port
 async fn fetch_diff(
     client: &oc_client::Client,
     mode: crate::store::DiffSource,
@@ -2799,19 +2799,17 @@ async fn fetch_diff(
     directory: &str,
 ) -> Result<(Option<String>, Vec<crate::components::diff_viewer::DiffFile>), String> {
     use crate::components::diff_viewer::{DiffFile, FileStatus};
-    let location = || {
-        Some(oc_client::types::QueryLocation { directory: Some(directory.to_owned()) })
-    };
+    let location =
+        || Some(oc_client::types::QueryLocation { directory: Some(directory.to_owned()) });
     let normalize = |entries: Vec<oc_client::types::FileDiffInfo>| -> Vec<DiffFile> {
         entries
             .into_iter()
             .map(|item| {
-                let image =
-                    crate::components::diff_viewer_mount::is_diff_image_file(&item.file);
+                let image = crate::components::diff_viewer_mount::is_diff_image_file(&item.file);
                 DiffFile {
                     file: item.file,
-                    additions: item.additions.max(0) as u64,
-                    deletions: item.deletions.max(0) as u64,
+                    additions: u64::try_from(item.additions.max(0)).unwrap_or(0),
+                    deletions: u64::try_from(item.deletions.max(0)).unwrap_or(0),
                     status: match item.status {
                         oc_client::types::FileDiffInfoStatus::Added => FileStatus::Added,
                         oc_client::types::FileDiffInfoStatus::Deleted => FileStatus::Deleted,
@@ -2867,6 +2865,29 @@ async fn fetch_diff(
     };
     let response = client.vcs().diff(&query).await.map_err(|error| error.to_string())?;
     Ok((base.map(|(name, _)| name), normalize(response.data)))
+}
+
+/// `DialogPair`'s fetch seam (the loop fetcher's Pair worker).
+struct HttpPairRefresh {
+    tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+}
+
+impl crate::store::PairRefreshSink for HttpPairRefresh {
+    fn refresh(&self) {
+        let _ = self.tx.send(LoopRequest::Pair);
+    }
+}
+
+/// The MCP toggle worker (mcp.connect/disconnect through the loop
+/// fetcher).
+struct HttpMcpToggle {
+    tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+}
+
+impl crate::store::McpToggleSink for HttpMcpToggle {
+    fn toggle(&self, server: &str, connect: bool) {
+        let _ = self.tx.send(LoopRequest::McpToggle { server: server.to_owned(), connect });
+    }
 }
 
 /// The config persistence sink's HTTP-less production impl: oc-core's
@@ -3278,27 +3299,8 @@ pub async fn run_with_size(
     // SURF-2: DialogPair's fetch seam + the MCP toggle worker.
     {
         let tx = loop_fetch_tx.clone();
-        struct HttpPairRefresh {
-            tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
-        }
-        impl crate::store::PairRefreshSink for HttpPairRefresh {
-            fn refresh(&self) {
-                let _ = self.tx.send(LoopRequest::Pair);
-            }
-        }
         app.store.set_pair_refresh_sink(std::rc::Rc::new(HttpPairRefresh { tx }));
         let tx = loop_fetch_tx.clone();
-        struct HttpMcpToggle {
-            tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
-        }
-        impl crate::store::McpToggleSink for HttpMcpToggle {
-            fn toggle(&self, server: &str, connect: bool) {
-                let _ = self.tx.send(LoopRequest::McpToggle {
-                    server: server.to_owned(),
-                    connect,
-                });
-            }
-        }
         app.store.set_mcp_toggle_sink(std::rc::Rc::new(HttpMcpToggle { tx }));
     }
     let mut fetched_transcripts: std::collections::HashSet<String> =

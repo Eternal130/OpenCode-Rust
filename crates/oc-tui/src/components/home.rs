@@ -124,6 +124,10 @@ pub struct HomeView<'a> {
     /// the footer row's left, ` · `-joined, only when non-empty so
     /// every golden stays byte-exact).
     pub plugin_actions: Vec<String>,
+    /// SURF-2 (auditB #7): the home footer's MCP status cell
+    /// `(connected, failed)` — `None` when no servers are configured
+    /// (footer.tsx:26's `Show when={list().length}`).
+    pub mcp: Option<(usize, usize)>,
     /// The live slash-palette popup (`None` in the golden harness —
     /// the fixture drafts never open it).
     pub autocomplete: Option<AutocompleteView<'a>>,
@@ -155,6 +159,9 @@ pub(crate) struct HomePlan {
     pub version_x: usize,
     /// The pre-truncated plugin-actions label ("" = none).
     pub actions: String,
+    /// SURF-2: the MCP status cell (auditB #7) — the failed variant,
+    /// the label text, the `/mcps` hint gate, and the composed width.
+    pub mcp: Option<(bool, String, bool, usize)>,
     /// The prompt box's clamped width (`maxWidth 75`).
     pub prompt_width: usize,
     /// The prompt mount's height (paddingTop 1 + the composer).
@@ -189,7 +196,9 @@ pub(crate) fn plan_home(view: &HomeView, width: usize, height: usize) -> HomePla
     // Rig-pinned at 60x20: the 2-row footer leaves free = 3 and the
     // wordmark centers a row HIGHER than a 3-row footer allows
     // (corpus #19 — our old always-3 model sat it one row low).
-    let footer_content = width >= 64 || !view.plugin_actions.is_empty();
+    let footer_content = width >= 64
+        || !view.plugin_actions.is_empty()
+        || view.mcp.is_some_and(|(connected, _)| connected > 0);
     let footer_rows = if !show_footer {
         0
     } else if height < 16 {
@@ -234,11 +243,23 @@ pub(crate) fn plan_home(view: &HomeView, width: usize, height: usize) -> HomePla
     let version_visible = width >= 64;
     let version_width = if version_visible { display_width(&view.version) } else { 0 };
     let version_x = width.saturating_sub(padding + version_width);
+    // The MCP status cell (SURF-2, footer.tsx:15-46): `⊙ N MCP` (or
+    // `N MCP failed`), the `/mcps` hint at width ≥ 64, a 2-col gap to
+    // the next cell.
+    let mcp = view.mcp.map(|(connected, failed)| {
+        let failed_cell = failed > 0;
+        let label =
+            if failed_cell { format!("{failed} MCP failed") } else { format!("{connected} MCP") };
+        let hint = width >= 64;
+        let cell_width = 2 + display_width(&label) + if hint { 1 + 5 } else { 0 };
+        (failed_cell, label, hint, cell_width)
+    });
+    let mcp_width = mcp.as_ref().map_or(0, |(_, _, _, width)| width + 2);
     let actions = if view.plugin_actions.is_empty() {
         String::new()
     } else {
         let joined = view.plugin_actions.join(" · ");
-        let budget = width.saturating_sub(padding * 2 + version_width + 2);
+        let budget = width.saturating_sub(padding * 2 + version_width + 2 + mcp_width);
         crate::wrap::take_width(&joined, budget)
     };
 
@@ -249,6 +270,7 @@ pub(crate) fn plan_home(view: &HomeView, width: usize, height: usize) -> HomePla
         version_visible,
         version_x,
         actions,
+        mcp,
         prompt_width,
         mount,
         popup_rows,
@@ -334,6 +356,17 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
             .into_iter()
             .map(|action| action.label)
             .collect(),
+        // SURF-2 (auditB #7): the MCP status cell — hidden while the
+        // boot fetch is empty (footer.tsx:26's Show gate).
+        mcp: {
+            let servers = store.mcp_servers();
+            (!servers.is_empty()).then(|| {
+                let connected =
+                    servers.iter().filter(|server| server.status == "connected").count();
+                let failed = servers.iter().filter(|server| server.status == "failed").count();
+                (connected, failed)
+            })
+        },
         autocomplete,
         rail: store.composer_rail_color(crate::app::HOME_PROMPT_KEY).map(CellColor::from),
         // NEW-S1a: the caret's char offset — the terminal cursor
@@ -623,5 +656,49 @@ mod tests {
             grid.iter().any(|row| row.contains(env!("CARGO_PKG_VERSION"))),
             "the bottom status row survives the strip (no full-height truncation)"
         );
+    }
+}
+
+#[cfg(test)]
+mod surf2_home_tests {
+    use super::*;
+    use crate::reactive::Runtime;
+    use crate::store::{McpServerRow, Store};
+
+    /// SURF-2 (auditB #7): the home footer's MCP status cell — the
+    /// success `⊙ N MCP` with the `/mcps` hint at ≥64 cols, the error
+    /// variant `N MCP failed`, hidden with no servers.
+    #[test]
+    fn mcp_status_cell_paints_both_variants() {
+        let theme = crate::theme::ThemeState::v2_dark();
+        let styles = theme.styles();
+
+        let healthy = Store::new(Runtime::new());
+        healthy.set_mcp_servers(vec![
+            McpServerRow { name: "a".into(), status: "connected", error: None },
+            McpServerRow { name: "b".into(), status: "connected", error: None },
+        ]);
+        let frame = render_home(&healthy, &styles, (80, 30));
+        let footer = frame.text_grid()[28].trim_start().to_owned();
+        assert!(footer.starts_with("⊙ 2 MCP /mcps"), "the success cell: {footer:?}");
+        let dot = frame.cell(28, 2).fg;
+        assert_eq!(dot, crate::render::CellColor::from(styles.success), "the dot paints success");
+
+        let failing = Store::new(Runtime::new());
+        failing.set_mcp_servers(vec![
+            McpServerRow { name: "a".into(), status: "connected", error: None },
+            McpServerRow { name: "b".into(), status: "failed", error: Some("boom".into()) },
+        ]);
+        let frame = render_home(&failing, &styles, (80, 30));
+        let footer = frame.text_grid()[28].trim_start().to_owned();
+        assert!(footer.starts_with("⊙ 1 MCP failed /mcps"), "the error cell: {footer:?}");
+        let dot = frame.cell(28, 2).fg;
+        assert_eq!(dot, crate::render::CellColor::from(styles.error), "the dot paints error");
+
+        // No servers: the cell hides (the footer row keeps the bare
+        // golden shape).
+        let bare = Store::new(Runtime::new());
+        let frame = render_home(&bare, &styles, (80, 30));
+        assert!(!frame.text_grid()[28].contains("MCP"), "no cell without servers");
     }
 }

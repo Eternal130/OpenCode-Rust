@@ -166,10 +166,49 @@ impl Chord {
 /// "no separator between sequence parts" grammar — see
 /// `opentui.rs::chord_spec`).
 const SEQUENCE_KEY_NAMES: &[&str] = &[
-    "pagedown", "pageup", "escape", "return", "delete", "backspace", "insert", "space", "home",
-    "end", "tab", "up", "down", "left", "right", "esc", "enter", "pgdown", "pgup", "f1", "f2",
-    "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16",
-    "f17", "f18", "f19", "f20", "f21", "f22", "f23", "f24",
+    "pagedown",
+    "pageup",
+    "escape",
+    "return",
+    "delete",
+    "backspace",
+    "insert",
+    "space",
+    "home",
+    "end",
+    "tab",
+    "up",
+    "down",
+    "left",
+    "right",
+    "esc",
+    "enter",
+    "pgdown",
+    "pgup",
+    "f1",
+    "f2",
+    "f3",
+    "f4",
+    "f5",
+    "f6",
+    "f7",
+    "f8",
+    "f9",
+    "f10",
+    "f11",
+    "f12",
+    "f13",
+    "f14",
+    "f15",
+    "f16",
+    "f17",
+    "f18",
+    "f19",
+    "f20",
+    "f21",
+    "f22",
+    "f23",
+    "f24",
 ];
 
 /// Parse one `>`-separated sequence segment into its strokes: a known
@@ -195,7 +234,11 @@ fn parse_sequence_segment(segment: &str) -> Option<Vec<KeyStroke>> {
     for ch in segment.chars() {
         strokes.push(KeyStroke::parse(&ch.to_string())?);
     }
-    if strokes.is_empty() { None } else { Some(strokes) }
+    if strokes.is_empty() {
+        None
+    } else {
+        Some(strokes)
+    }
 }
 
 /// Command palette group (`KeymapCommand.group` / `category`). The
