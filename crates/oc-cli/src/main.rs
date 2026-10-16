@@ -52,16 +52,6 @@ async fn main() {
     std::process::exit(code);
 }
 
-/// The documented TUI-lane handoff for the root boot flags the backend
-/// cannot pass through `BootArgs` without touching oc-tui (owned by the
-/// TUI lanes): `opencode --prompt P` / `--auto` (incl. `--yolo` /
-/// `--dangerously-skip-permissions`, folded exactly like v2's
-/// `handlers/default.ts:115-116`) set these before launching the TUI in
-/// this process. Semantics mirror v2's `args.prompt` (submitted as the
-/// first message) and `args.auto` (auto-approve permissions).
-pub const BOOT_PROMPT_ENV: &str = "OPENCODE_BOOT_PROMPT";
-pub const BOOT_AUTO_ENV: &str = "OPENCODE_BOOT_AUTO";
-
 #[allow(clippy::too_many_lines)]
 async fn dispatch(cli: Cli) -> i32 {
     let server = ServerParams { standalone: cli.standalone, server: cli.server.clone() };
@@ -72,8 +62,6 @@ async fn dispatch(cli: Cli) -> i32 {
                 cli.directory.as_deref(),
                 cli.continue_,
                 cli.session.clone(),
-                cli.prompt.clone(),
-                cli.permission.effective_auto(),
                 &server,
             )
             .await
