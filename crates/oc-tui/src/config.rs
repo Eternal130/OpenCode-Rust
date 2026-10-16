@@ -145,7 +145,11 @@ pub struct TuiConfig {
     /// pane when space permits (>120 cols), "hide" never — default
     /// auto.
     pub session_sidebar: crate::components::sidebar::SidebarMode,
-    /// The `model` field — the shared config's default model
+    /// `mouse` (config/index.tsx:247, default true at :311): the
+    /// terminal mouse-capture gate — `false` keeps the terminal's
+    /// native text selection (v2's documented opt-out; see
+    /// `crate::mouse_modes`).
+    pub mouse: bool,
     /// The file this was loaded from (`None` when no config file
     /// exists — all defaults).
     pub path: Option<PathBuf>,
@@ -188,6 +192,9 @@ impl TuiConfig {
             Some("hide") => crate::components::sidebar::SidebarMode::Hide,
             _ => crate::components::sidebar::SidebarMode::Auto,
         };
+        // `mouse` (config/index.tsx:247 + :311): absent = true (v2's
+        // `input.mouse ?? true`).
+        let mouse = value.get("mouse").and_then(Value::as_bool).unwrap_or(true);
         Self {
             keybinds: value.get("keybinds").cloned().unwrap_or(Value::Null),
             theme,
@@ -196,6 +203,7 @@ impl TuiConfig {
             session_image_preview,
             tabs,
             session_sidebar,
+            mouse,
             path,
         }
     }
@@ -231,8 +239,7 @@ mod tests {
     /// `session.sidebar` (config/index.tsx:151-152): "auto" default,
     /// "hide" the only other value — anything else falls back to auto.
     #[test]
-    fn parses_session_sidebar_mode() {
-        assert_eq!(
+    fn parses_session_sidebar_mode() {        assert_eq!(
             TuiConfig::parse("{}", None).session_sidebar,
             crate::components::sidebar::SidebarMode::Auto
         );
@@ -248,6 +255,21 @@ mod tests {
             TuiConfig::parse(r#"{"session": {"sidebar": "bogus"}}"#, None).session_sidebar,
             crate::components::sidebar::SidebarMode::Auto,
             "unknown values degrade to the default"
+        );
+    }
+
+    /// `mouse` (config/index.tsx:247, default `true` at :311 — v2's
+    /// `input.mouse ?? true`): the terminal mouse-capture gate, the
+    /// selection escape hatch auditC P1 says the port silently
+    /// dropped.
+    #[test]
+    fn parses_the_mouse_gate() {
+        assert!(TuiConfig::parse("{}", None).mouse, "absent = the true default");
+        assert!(TuiConfig::parse(r#"{"mouse": true}"#, None).mouse);
+        assert!(!TuiConfig::parse(r#"{"mouse": false}"#, None).mouse);
+        assert!(
+            TuiConfig::parse(r#"{"mouse": "bogus"}"#, None).mouse,
+            "non-bool values degrade to the default"
         );
     }
 
