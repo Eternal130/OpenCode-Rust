@@ -390,11 +390,16 @@ fn markdown_spans() -> Vec<StyledSpan> {
     let bold = base.add_modifier(Modifier::BOLD);
     vec![
         StyledSpan {
+            link: None,
             text: "alpha bravo charlie delta echo foxtrot golf hotel india ".into(),
             style: base,
         },
-        StyledSpan { text: "juliet kilo lima mike november oscar papa".into(), style: bold },
-        StyledSpan { text: " quebec".into(), style: base },
+        StyledSpan {
+            text: "juliet kilo lima mike november oscar papa".into(),
+            style: bold,
+            link: None,
+        },
+        StyledSpan { text: " quebec".into(), style: base, link: None },
     ]
 }
 
