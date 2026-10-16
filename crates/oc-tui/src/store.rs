@@ -867,6 +867,10 @@ pub struct Store {
     /// `session-tabs.tsx:387-391`): the set of EXPANDED group row
     /// keys (`group:Reasoning:…`) for each session.
     expanded_groups: std::cell::RefCell<HashMap<String, std::collections::HashSet<String>>>,
+    /// Per-session COLLAPSED thought rows (`"{message_id}:{part_id}"`
+    /// keys — the minimal-mode thought disclosure, message-parts.tsx:
+    /// 66-86; absent ⇒ expanded, the default render).
+    collapsed_thoughts: std::cell::RefCell<HashMap<String, std::collections::HashSet<String>>>,
     /// The last frame's clickable transcript rows ([`render_session`]
     /// writes them like `frame_images`): the reasoning-group headers
     /// whose absolute `[y, y+height)` rect a mouse release can toggle.
@@ -1011,9 +1015,18 @@ pub struct PickerEntry {
 /// What a transcript hit does when released (`onMouseUp`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptHitAction {
-    /// Toggle the reasoning group's disclosure ([`group-view.tsx`]
-    /// `InlineToolRow` `onMouseUp={toggle}`).
+    /// Toggle a group disclosure ([`group-view.tsx`]'s
+    /// `onMouseUp={toggle}` — armed for EVERY group kind: Reasoning
+    /// :183, Exploration :152, Activity :219, Instructions :256; the
+    /// plugin rules table's kinds ride `GroupContent` too).
     ToggleGroup(String),
+    /// Toggle one thought's disclosure (the minimal-mode
+    /// `ReasoningHeader` box, message-parts.tsx:80-86: `toggleable`,
+    /// the body behind `<Show when={expanded}>`). The port's
+    /// `thought:{mid}:{pid}` rows are the equivalent surface —
+    /// collapsed renders the one-line `+ Thought: {title}` header,
+    /// expanded the bordered body.
+    ToggleThought { message_id: String, part_id: String },
     /// Open the user message's "Message Actions" select
     /// ([`UserMessage`]'s `onMouseUp` → `dialog.replace(DialogMessage)`,
     /// session/index.tsx:2243-2249).
@@ -1027,7 +1040,7 @@ impl TranscriptHitAction {
     pub fn toggle_key(&self) -> Option<&str> {
         match self {
             Self::ToggleGroup(key) => Some(key.as_str()),
-            Self::MessageActions { .. } => None,
+            Self::ToggleThought { .. } | Self::MessageActions { .. } => None,
         }
     }
 }
@@ -1418,6 +1431,7 @@ impl Store {
             graphics_protocol: Cell::new(crate::image::GraphicsProtocol::None),
             frame_images: std::cell::RefCell::new(Vec::new()),
             expanded_groups: std::cell::RefCell::new(HashMap::new()),
+            collapsed_thoughts: std::cell::RefCell::new(HashMap::new()),
             transcript_hit_rows: std::cell::RefCell::new(Vec::new()),
             dialog_frame_rect: std::cell::RefCell::new(None),
             dialog_option_rows: std::cell::RefCell::new(Vec::new()),
@@ -2574,6 +2588,45 @@ impl Store {
     #[must_use]
     pub fn expanded_group_keys(&self, session_id: &str) -> std::collections::HashSet<String> {
         self.expanded_groups.borrow().get(session_id).cloned().unwrap_or_default()
+    }
+
+    /// Toggle one thought row's disclosure (the minimal-mode
+    /// `ReasoningHeader` toggle, message-parts.tsx:66-86) and report
+    /// the new EXPANDED value (absent ⇒ expanded).
+    pub fn toggle_thought_expanded(
+        &self,
+        session_id: &str,
+        message_id: &str,
+        part_id: &str,
+    ) -> bool {
+        let key = format!("{message_id}:{part_id}");
+        let mut thoughts = self.collapsed_thoughts.borrow_mut();
+        let set = thoughts.entry(session_id.to_owned()).or_default();
+        if set.remove(&key) {
+            true
+        } else {
+            set.insert(key);
+            false
+        }
+    }
+
+    /// Whether a thought row renders expanded (`thought:{mid}:{pid}`
+    /// — the render option input; default true).
+    #[must_use]
+    pub fn thought_expanded(&self, session_id: &str, message_id: &str, part_id: &str) -> bool {
+        let key = format!("{message_id}:{part_id}");
+        !self
+            .collapsed_thoughts
+            .borrow()
+            .get(session_id)
+            .is_some_and(|set| set.contains(&key))
+    }
+
+    /// The session's collapsed thought keys (`"{mid}:{pid}"` — the
+    /// transcript render options input).
+    #[must_use]
+    pub fn collapsed_thought_keys(&self, session_id: &str) -> std::collections::HashSet<String> {
+        self.collapsed_thoughts.borrow().get(session_id).cloned().unwrap_or_default()
     }
 
     /// The last frame's clickable transcript rows (reasoning headers).
