@@ -9,6 +9,11 @@
 //!   registration order over the SAME mutable event (the essence of
 //!   every session-hook test): two plugins' `session.context` edits
 //!   compose A-then-B, driven e2e through the session port;
+//! * `hook mutation replacement shapes` (D-03) — the v2-guaranteed
+//!   mutation surfaces (whole-field replacement, scalar rewrite, key
+//!   deletion) are host-observable through the copy-in/copy-out
+//!   bridge, while the registered divergences (post-return mutation
+//!   invisibility, non-JSON stash coercion) hold as documented;
 //! * `config-sourced plugin options` — core/test/plugin.test.ts "loads
 //!   a local plugin with its configured options": the plugin entry's
 //!   `options` reach `ctx.options`.
@@ -87,6 +92,63 @@ fn corpus_hook_mutation_ordering() {
         text, "original text [mutated-by-A] [mutated-by-B]",
         "sequential same-object mutation in registration order"
     );
+    host.shutdown();
+}
+
+/// D-03 (mutation shapes): the v2-guaranteed mutation surfaces —
+/// whole-field replacement (the `event.input = repair(...)` pattern,
+/// v2 tool-input-repair.ts:33), scalar rewrite, and key deletion —
+/// are host-observable through the copy-in/copy-out bridge: the guest
+/// returns the mutated event (host.js `handleHookDispatch`), the port
+/// chain feeds each plugin the serialized result of the previous one
+/// (cross-plugin visibility of every shape). The registered-divergence
+/// arms are asserted as DOCUMENTED behavior: a post-return mutation is
+/// provably invisible to the host and later plugins (R2 — the
+/// isolation benefit of the process boundary), and a non-JSON stash
+/// value crosses only as its JSON coercion (R4). See FINDINGS.md §5.
+#[test]
+fn corpus_hook_mutation_replacement_shapes() {
+    let sandbox = common::sandbox("corpus-hookswap");
+    // Entry order = registration order: A (mutator) then B (observer).
+    let a = common::copy_fixture(&sandbox, "hookswap-a.ts");
+    let b = common::copy_fixture(&sandbox, "hookswap-b.ts");
+    let recording = Arc::new(common::RecordingSessionPort::default());
+    let config = PluginHostConfig {
+        env: vec![("OC_PLUGIN_TEST_SANDBOX".to_owned(), sandbox.display().to_string())],
+        session_port: Some(recording.clone()),
+        ..PluginHostConfig::default()
+    };
+    let host = PluginHost::detect().start_detached_with(config, &[a, b]);
+    if !host.enabled() {
+        eprintln!("bun unavailable; skipping");
+        return;
+    }
+    assert!(host.wait_ready(Duration::from_secs(15)));
+
+    let asked = host.execute_command("hookswap-a.ask", None, Duration::from_secs(5));
+    assert!(asked.is_ok(), "the prompt survived the hook chain: {asked:?}");
+    // Give A's post-return guest-side timer ample time to fire: the
+    // late write must STILL be invisible (it lands on the guest-local
+    // object; the host snapshot crossed the boundary at reply time).
+    std::thread::sleep(Duration::from_millis(300));
+    let contexts = recording.contexts.lock().unwrap();
+    let event = contexts.last().expect("the context event captured");
+    // Scalar rewrite + key deletion, observed host-side.
+    assert_eq!(event["sessionID"], "ses_rewritten_by_A", "scalar rewrite propagates");
+    assert!(
+        event.get("system").is_none(),
+        "deleted key stays deleted across the boundary: {}",
+        event.get("system").map(|v| v.to_string()).unwrap_or_default()
+    );
+    // Whole-field replacement, observed by the host AND by the next
+    // plugin in the chain (B composed its marker onto A's message id).
+    assert_eq!(event["messages"][0]["id"], "msg_replaced", "A's replacement is the live event");
+    let text = event["messages"][0]["content"][0]["text"].as_str().unwrap_or_default();
+    assert_eq!(
+        text, "replaced-by-A [seen-by-B stash=string system=deleted]",
+        "B observed A's replacement/deletion; the Date stash crossed as its JSON coercion (R4)"
+    );
+    assert!(!text.contains("late-by-A"), "R2: post-return mutation never reaches the host");
     host.shutdown();
 }
 
