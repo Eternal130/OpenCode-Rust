@@ -43,8 +43,12 @@ pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
         ("reasoning_strength", reasoning_strength),
         ("tool_enablement", tool_enablement),
     ]);
-    let merged = merge_records(&[base.as_ref(), Some(&native), request.http.as_ref().and_then(|h| h.body.as_ref())])
-        .unwrap_or_default();
+    let merged = merge_records(&[
+        base.as_ref(),
+        Some(&native),
+        request.http.as_ref().and_then(|h| h.body.as_ref()),
+    ])
+    .unwrap_or_default();
     Ok(Body::json(merged))
 }
 
@@ -58,7 +62,10 @@ pub fn check_unsupported(request: &ImageRequest) -> Result<(), AiError> {
 }
 
 /// `decodeResponse` (meta-images.ts:103-132).
-pub fn decode(output: &TextOutput, context: &DecodeContext<ImageRequest>) -> Result<ImageResponse, AiError> {
+pub fn decode(
+    output: &TextOutput,
+    context: &DecodeContext<ImageRequest>,
+) -> Result<ImageResponse, AiError> {
     let decoded = output.decode_json(output.body)?;
     let requested = context
         .body
@@ -87,12 +94,13 @@ pub fn decode(output: &TextOutput, context: &DecodeContext<ImageRequest>) -> Res
     if images.is_empty() {
         return Err(output.invalid("Meta Images returned no images"));
     }
-    let usage = decoded.get("usage").filter(|value| !value.is_null()).map(|value| MediaUsage::Tokens {
-        input: value.get("input_tokens").and_then(|v| v.as_f64()),
-        output: value.get("output_tokens").and_then(|v| v.as_f64()),
-        total: value.get("total_tokens").and_then(|v| v.as_f64()),
-        details: Some(serde_json::from_value(value.clone()).unwrap_or_default()),
-    });
+    let usage =
+        decoded.get("usage").filter(|value| !value.is_null()).map(|value| MediaUsage::Tokens {
+            input: value.get("input_tokens").and_then(|v| v.as_f64()),
+            output: value.get("output_tokens").and_then(|v| v.as_f64()),
+            total: value.get("total_tokens").and_then(|v| v.as_f64()),
+            details: Some(serde_json::from_value(value.clone()).unwrap_or_default()),
+        });
     let mut meta = std::collections::BTreeMap::new();
     meta.insert("outputFormat".to_string(), serde_json::json!(format));
     let mut metadata = crate::schema::ProviderMetadata::new();
@@ -132,7 +140,11 @@ impl InlineProtocol for MetaImages {
         }
     }
 
-    fn decode(&self, output: &TextOutput, context: &DecodeContext<ImageRequest>) -> Result<ImageResponse, AiError> {
+    fn decode(
+        &self,
+        output: &TextOutput,
+        context: &DecodeContext<ImageRequest>,
+    ) -> Result<ImageResponse, AiError> {
         decode(output, context)
     }
 }
@@ -158,10 +170,8 @@ mod tests {
     #[test]
     fn edit_sources_become_image_urls() {
         let mut image_request = request();
-        image_request.images = vec![
-            media::url("https://x/a.png", None, None),
-            media::base64("AQID", "image/png"),
-        ];
+        image_request.images =
+            vec![media::url("https://x/a.png", None, None), media::base64("AQID", "image/png")];
         let body = body_from(&image_request).unwrap();
         let Body::Json { value, .. } = body else { panic!() };
         assert_eq!(
@@ -194,7 +204,10 @@ mod tests {
         assert_eq!(response.images.len(), 2);
         assert_eq!(response.images[0].media_type, "image/webp");
         assert_eq!(response.images[1].url(), Some("https://x/1.webp"));
-        assert_eq!(response.provider_metadata.as_ref().unwrap()["meta"]["outputFormat"], json!("webp"));
+        assert_eq!(
+            response.provider_metadata.as_ref().unwrap()["meta"]["outputFormat"],
+            json!("webp")
+        );
         assert!(matches!(response.usage, Some(MediaUsage::Tokens { total: Some(7.0), .. })));
     }
 

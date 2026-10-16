@@ -5,8 +5,12 @@
 use std::collections::BTreeMap;
 
 use crate::media::body::{merge_records, Body};
-use crate::media::model::{image_field_present, ImageRequest, ImageResponse, PollContext, Snapshot, Started, Status};
-use crate::media::protocol::{Identity, MediaProtocolBase, QueuedProtocol, TextOutput, status as table_status};
+use crate::media::model::{
+    image_field_present, ImageRequest, ImageResponse, PollContext, Snapshot, Started, Status,
+};
+use crate::media::protocol::{
+    status as table_status, Identity, MediaProtocolBase, QueuedProtocol, TextOutput,
+};
 use crate::media::utils::{media_reference, MediaRefKind};
 use crate::schema::media::{self, Asset};
 use crate::schema::{AiError, MediaUsage};
@@ -53,7 +57,9 @@ fn status_table() -> BTreeMap<&'static str, Status> {
 pub fn is_official(model: &str) -> bool {
     let mut parts = model.split('/');
     match (parts.next(), parts.next(), parts.next()) {
-        (Some(owner), Some(name), None) => !owner.is_empty() && !name.is_empty() && !model.contains(':'),
+        (Some(owner), Some(name), None) => {
+            !owner.is_empty() && !name.is_empty() && !model.contains(':')
+        }
         _ => false,
     }
 }
@@ -94,7 +100,10 @@ pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
         serde_json::json!({ "version": request.model, "input": input })
     };
     let merged = merge_records(&[
-        Some(serde_json::from_value::<crate::schema::options::JsonRecord>(base).unwrap_or_default()).as_ref(),
+        Some(
+            serde_json::from_value::<crate::schema::options::JsonRecord>(base).unwrap_or_default(),
+        )
+        .as_ref(),
         request.http.as_ref().and_then(|http| http.body.as_ref()),
     ])
     .unwrap_or_default();
@@ -145,14 +154,25 @@ pub fn decode_start(output: &TextOutput) -> Result<Started<Token>, AiError> {
         snapshot: Snapshot { id: id.clone(), status, progress: None, position: None },
         token: Token {
             id,
-            get_url: prediction.pointer("/urls/get").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-            cancel_url: prediction.pointer("/urls/cancel").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+            get_url: prediction
+                .pointer("/urls/get")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            cancel_url: prediction
+                .pointer("/urls/cancel")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
         },
     })
 }
 
 /// `decodeStatus` (replicate-images.ts:115-121).
-pub fn decode_status(output: &TextOutput, context: &PollContext<Token>) -> Result<Snapshot, AiError> {
+pub fn decode_status(
+    output: &TextOutput,
+    context: &PollContext<Token>,
+) -> Result<Snapshot, AiError> {
     let prediction = decode_prediction(output)?;
     let raw = prediction.get("status").and_then(|v| v.as_str()).unwrap_or_default();
     Ok(Snapshot {
@@ -164,7 +184,10 @@ pub fn decode_status(output: &TextOutput, context: &PollContext<Token>) -> Resul
 }
 
 /// `decodeResult` (replicate-images.ts:123-151).
-pub fn decode_result(output: &TextOutput, context: &PollContext<Token>) -> Result<ImageResponse, AiError> {
+pub fn decode_result(
+    output: &TextOutput,
+    context: &PollContext<Token>,
+) -> Result<ImageResponse, AiError> {
     let prediction = decode_prediction(output)?;
     let raw = prediction.get("status").and_then(|v| v.as_str()).unwrap_or_default();
     let status = table_status(&status_table(), raw, output)?;
@@ -210,11 +233,16 @@ pub fn decode_result(output: &TextOutput, context: &PollContext<Token>) -> Resul
         }
     };
     if urls.is_empty() {
-        return Err(output.invalid(format!("Replicate prediction {} returned no images", context.token.id)));
+        return Err(
+            output.invalid(format!("Replicate prediction {} returned no images", context.token.id))
+        );
     }
     let predict_time = prediction.pointer("/metrics/predict_time").and_then(|v| v.as_f64());
     let mut replicate = std::collections::BTreeMap::new();
-    replicate.insert("predictionId".to_string(), serde_json::json!(prediction.get("id").cloned().unwrap_or_default()));
+    replicate.insert(
+        "predictionId".to_string(),
+        serde_json::json!(prediction.get("id").cloned().unwrap_or_default()),
+    );
     let mut metadata = crate::schema::ProviderMetadata::new();
     metadata.insert("replicate".to_string(), replicate);
     Ok(ImageResponse {
@@ -268,7 +296,11 @@ impl QueuedProtocol for ReplicateImages {
         token.get_url.clone()
     }
 
-    fn decode_status(&self, output: &TextOutput, context: &PollContext<Token>) -> Result<Snapshot, AiError> {
+    fn decode_status(
+        &self,
+        output: &TextOutput,
+        context: &PollContext<Token>,
+    ) -> Result<Snapshot, AiError> {
         decode_status(output, context)
     }
 
@@ -276,7 +308,11 @@ impl QueuedProtocol for ReplicateImages {
         token.get_url.clone()
     }
 
-    fn decode_result(&self, output: &TextOutput, context: &PollContext<Token>) -> Result<ImageResponse, AiError> {
+    fn decode_result(
+        &self,
+        output: &TextOutput,
+        context: &PollContext<Token>,
+    ) -> Result<ImageResponse, AiError> {
         decode_result(output, context)
     }
 
@@ -310,17 +346,25 @@ mod tests {
 
     #[test]
     fn versioned_model_pins_the_version() {
-        let Body::Json { value, .. } = body_from(&request("owner/name:abc123")).unwrap() else { panic!() };
+        let Body::Json { value, .. } = body_from(&request("owner/name:abc123")).unwrap() else {
+            panic!()
+        };
         assert_eq!(value["version"], json!("owner/name:abc123"));
     }
 
     #[test]
     fn asset_options_lower_to_urls() {
         let mut options = crate::schema::ProviderOptions::new();
-        options.insert("image".to_string(), serde_json::to_value(media::url("https://x/a.png", None, None)).unwrap());
+        options.insert(
+            "image".to_string(),
+            serde_json::to_value(media::url("https://x/a.png", None, None)).unwrap(),
+        );
         options.insert(
             "refs".to_string(),
-            json!([serde_json::to_value(media::url("https://x/b.png", None, None)).unwrap(), "plain"]),
+            json!([
+                serde_json::to_value(media::url("https://x/b.png", None, None)).unwrap(),
+                "plain"
+            ]),
         );
         let mut image_request = request("owner/name");
         image_request.provider_options = Some(options);
@@ -333,7 +377,11 @@ mod tests {
     fn decode_result_expires_urls_and_reports_compute() {
         let identity = identity();
         let auth = BTreeMap::new();
-        let token = Token { id: "p1".into(), get_url: "https://get".into(), cancel_url: "https://cancel".into() };
+        let token = Token {
+            id: "p1".into(),
+            get_url: "https://get".into(),
+            cancel_url: "https://cancel".into(),
+        };
         let context = PollContext { token: &token, auth: &auth };
         let output = TextOutput {
             identity: &identity,

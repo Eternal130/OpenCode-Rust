@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 
 use crate::media::body::{merge_records, Body};
 use crate::media::fal_queue::{self, FalToken};
-use crate::media::model::{image_field_present, ImageRequest, ImageResponse, PollContext, Snapshot, Started};
+use crate::media::model::{
+    image_field_present, ImageRequest, ImageResponse, PollContext, Snapshot, Started,
+};
 use crate::media::protocol::{Identity, MediaProtocolBase, QueuedProtocol, TextOutput};
 use crate::media::utils::dimensions;
 use crate::schema::media::{self, Notice, NoticeType};
@@ -60,7 +62,9 @@ pub fn validate(request: &ImageRequest) -> Result<(), AiError> {
         return Err(identity().unsupported("media.size", format!("{id} sizes by aspectRatio")));
     }
     if request.aspect_ratio.is_some() && field == Some(Sizing::ImageSize) {
-        return Err(identity().unsupported("media.aspectRatio", format!("{id} sizes by size (image_size)")));
+        return Err(
+            identity().unsupported("media.aspectRatio", format!("{id} sizes by size (image_size)"))
+        );
     }
     if request.images.len() > 1 && !takes_image_list(id) {
         return Err(identity().unsupported(
@@ -81,7 +85,9 @@ pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
     let list = takes_image_list(&request.model);
     let (width, height) = request.size.as_deref().map(dimensions).unwrap_or((None, None));
     let image_size = match (width, height) {
-        (Some(width), Some(height)) => Some(serde_json::json!({ "width": width as u32, "height": height as u32 })),
+        (Some(width), Some(height)) => {
+            Some(serde_json::json!({ "width": width as u32, "height": height as u32 }))
+        }
         _ => None,
     };
     let base = crate::media::body::record([
@@ -92,7 +98,10 @@ pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
         ("aspect_ratio", request.aspect_ratio.clone().map(|ratio| serde_json::json!(ratio))),
         ("output_format", request.format.clone().map(|format| serde_json::json!(format))),
         ("image_urls", (list && !images.is_empty()).then(|| serde_json::json!(images))),
-        ("image_url", (!list).then(|| images.first().cloned()).flatten().map(|url| serde_json::json!(url))),
+        (
+            "image_url",
+            (!list).then(|| images.first().cloned()).flatten().map(|url| serde_json::json!(url)),
+        ),
         (
             "mask_url",
             match &request.mask {
@@ -112,18 +121,18 @@ pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
 
 /// `decodeResult` (fal-images.ts:109-136). With the safety checker on,
 /// flagged images come back blacked out rather than omitted.
-pub fn decode_result(output: &TextOutput, context: &PollContext<FalToken>) -> Result<ImageResponse, AiError> {
+pub fn decode_result(
+    output: &TextOutput,
+    context: &PollContext<FalToken>,
+) -> Result<ImageResponse, AiError> {
     let value = output.decode_json(output.body)?;
     let images = value.get("images").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     if images.is_empty() {
         return Err(output.invalid("fal Images returned no images"));
     }
     let seed = value.get("seed").filter(|v| !v.is_null()).cloned();
-    let nsfw = value
-        .get("has_nsfw_concepts")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let nsfw =
+        value.get("has_nsfw_concepts").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let flagged: Vec<usize> = nsfw
         .iter()
         .enumerate()
@@ -137,7 +146,11 @@ pub fn decode_result(output: &TextOutput, context: &PollContext<FalToken>) -> Re
         let media_type = image.get("content_type").and_then(|v| v.as_str()).map(str::to_string);
         let info = media::Info { width, height, ..media::Info::default() };
         // `sync_mode: true` returns data URIs instead of hosted URLs.
-        assets.push(media::parse_data_url(url).unwrap_or_else(|| media::url(url, media_type, None)).tap_info(info));
+        assets.push(
+            media::parse_data_url(url)
+                .unwrap_or_else(|| media::url(url, media_type, None))
+                .tap_info(info),
+        );
     }
     let mut fal = std::collections::BTreeMap::new();
     fal.insert("requestId".to_string(), serde_json::json!(context.token.request_id));
@@ -220,7 +233,11 @@ impl QueuedProtocol for FalImages {
         token.status_url.clone()
     }
 
-    fn decode_status(&self, output: &TextOutput, context: &PollContext<FalToken>) -> Result<Snapshot, AiError> {
+    fn decode_status(
+        &self,
+        output: &TextOutput,
+        context: &PollContext<FalToken>,
+    ) -> Result<Snapshot, AiError> {
         fal_queue::decode_status(output, context)
     }
 
@@ -228,7 +245,11 @@ impl QueuedProtocol for FalImages {
         token.response_url.clone()
     }
 
-    fn decode_result(&self, output: &TextOutput, context: &PollContext<FalToken>) -> Result<ImageResponse, AiError> {
+    fn decode_result(
+        &self,
+        output: &TextOutput,
+        context: &PollContext<FalToken>,
+    ) -> Result<ImageResponse, AiError> {
         decode_result(output, context)
     }
 
@@ -309,7 +330,10 @@ mod tests {
         assert_eq!(response.images[0].url(), Some("https://x/1.png"));
         assert_eq!(response.images[0].info.as_ref().unwrap().width, Some(512.0));
         assert_eq!(response.notices.as_ref().unwrap().len(), 1);
-        assert_eq!(response.notices.as_ref().unwrap()[0].message, "fal Images flagged image 1 as NSFW");
+        assert_eq!(
+            response.notices.as_ref().unwrap()[0].message,
+            "fal Images flagged image 1 as NSFW"
+        );
         assert_eq!(response.provider_metadata.as_ref().unwrap()["fal"]["requestId"], json!("req1"));
         assert_eq!(response.provider_metadata.as_ref().unwrap()["fal"]["seed"], json!(7));
         assert_eq!(response.provider_metadata.as_ref().unwrap()["fal"]["extra"], json!("kept"));

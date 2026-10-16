@@ -45,8 +45,12 @@ pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
         ("n", request.n.map(|n| serde_json::json!(n))),
         ("aspect_ratio", request.aspect_ratio.clone().map(|ratio| serde_json::json!(ratio))),
     ]);
-    let merged = merge_records(&[base.as_ref(), Some(&native), request.http.as_ref().and_then(|h| h.body.as_ref())])
-        .unwrap_or_default();
+    let merged = merge_records(&[
+        base.as_ref(),
+        Some(&native),
+        request.http.as_ref().and_then(|h| h.body.as_ref()),
+    ])
+    .unwrap_or_default();
     Ok(Body::json(merged))
 }
 
@@ -59,20 +63,22 @@ pub fn check_unsupported(request: &ImageRequest) -> Result<(), AiError> {
 }
 
 /// `decodeResponse` (xai-images.ts:89-110).
-pub fn decode(output: &TextOutput, _context: &DecodeContext<ImageRequest>) -> Result<ImageResponse, AiError> {
+pub fn decode(
+    output: &TextOutput,
+    _context: &DecodeContext<ImageRequest>,
+) -> Result<ImageResponse, AiError> {
     let decoded = output.decode_json(output.body)?;
     let data = decoded.get("data").and_then(|value| value.as_array()).cloned().unwrap_or_default();
     let mut images = Vec::new();
     for (index, item) in data.iter().enumerate() {
         let revised_prompt = item.get("revised_prompt").and_then(|value| value.as_str());
         let mut xai = std::collections::BTreeMap::new();
-        let metadata = revised_prompt
-            .map(|prompt| {
-                xai.insert("revisedPrompt".to_string(), serde_json::json!(prompt));
-                let mut metadata = crate::schema::ProviderMetadata::new();
-                metadata.insert("xai".to_string(), xai.clone());
-                metadata
-            });
+        let metadata = revised_prompt.map(|prompt| {
+            xai.insert("revisedPrompt".to_string(), serde_json::json!(prompt));
+            let mut metadata = crate::schema::ProviderMetadata::new();
+            metadata.insert("xai".to_string(), xai.clone());
+            metadata
+        });
         images.push(image_output(
             |message| output.invalid(message),
             &format!("xAI Images result {index}"),
@@ -121,10 +127,18 @@ impl InlineProtocol for XAIImages {
     }
 
     fn path(&self, request: &ImageRequest) -> String {
-        if request.images.is_empty() { PATH.to_string() } else { EDIT_PATH.to_string() }
+        if request.images.is_empty() {
+            PATH.to_string()
+        } else {
+            EDIT_PATH.to_string()
+        }
     }
 
-    fn decode(&self, output: &TextOutput, context: &DecodeContext<ImageRequest>) -> Result<ImageResponse, AiError> {
+    fn decode(
+        &self,
+        output: &TextOutput,
+        context: &DecodeContext<ImageRequest>,
+    ) -> Result<ImageResponse, AiError> {
         decode(output, context)
     }
 }
@@ -186,7 +200,10 @@ mod tests {
             response.images[0].provider_metadata.as_ref().unwrap()["xai"]["revisedPrompt"],
             json!("a better cat")
         );
-        assert_eq!(response.provider_metadata.as_ref().unwrap()["xai"]["usage"]["cost_in_usd_ticks"], json!(8));
+        assert_eq!(
+            response.provider_metadata.as_ref().unwrap()["xai"]["usage"]["cost_in_usd_ticks"],
+            json!(8)
+        );
         assert!(response.usage.is_none());
     }
 }

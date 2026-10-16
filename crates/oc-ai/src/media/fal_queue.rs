@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use crate::media::model::{PollContext, Snapshot, Started, Status};
-use crate::media::protocol::{Identity, TextOutput, status as table_status};
+use crate::media::protocol::{status as table_status, Identity, TextOutput};
 use crate::schema::AiError;
 
 pub const DEFAULT_BASE_URL: &str = "https://queue.fal.run";
@@ -27,9 +27,13 @@ pub fn media_url(asset: &crate::schema::media::Asset, name: &str) -> Result<Stri
 }
 
 fn status_table() -> BTreeMap<&'static str, Status> {
-    [("IN_QUEUE", Status::Queued), ("IN_PROGRESS", Status::Running), ("COMPLETED", Status::Completed)]
-        .into_iter()
-        .collect()
+    [
+        ("IN_QUEUE", Status::Queued),
+        ("IN_PROGRESS", Status::Running),
+        ("COMPLETED", Status::Completed),
+    ]
+    .into_iter()
+    .collect()
 }
 
 /// Decode a fal queue submission into the token + first snapshot
@@ -37,7 +41,8 @@ fn status_table() -> BTreeMap<&'static str, Status> {
 pub fn decode_start(output: &TextOutput) -> Result<Started<FalToken>, AiError> {
     let value = output.decode_json(output.body)?;
     let position = value.get("queue_position").and_then(|v| v.as_f64());
-    let request_id = value.get("request_id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let request_id =
+        value.get("request_id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
     Ok(Started {
         snapshot: Snapshot {
             id: request_id.clone(),
@@ -47,9 +52,21 @@ pub fn decode_start(output: &TextOutput) -> Result<Started<FalToken>, AiError> {
         },
         token: FalToken {
             request_id,
-            status_url: value.get("status_url").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-            response_url: value.get("response_url").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-            cancel_url: value.get("cancel_url").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+            status_url: value
+                .get("status_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            response_url: value
+                .get("response_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            cancel_url: value
+                .get("cancel_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
         },
     })
 }

@@ -3,8 +3,12 @@
 //! character alignment timestamps ride the `/with-timestamps` path.
 
 use crate::media::body::{merge_records, Body};
-use crate::media::model::{speech_field_present, Addressed, Mode, SpeechEvent, SpeechRequest, ResponseContext};
-use crate::media::protocol::{Frame, Framing, Identity, MediaProtocolBase, StreamProtocol, TextOutput};
+use crate::media::model::{
+    speech_field_present, Addressed, Mode, ResponseContext, SpeechEvent, SpeechRequest,
+};
+use crate::media::protocol::{
+    Frame, Framing, Identity, MediaProtocolBase, StreamProtocol, TextOutput,
+};
 use crate::media::utils::speech_stream::{self, Audio, PcmEncoding};
 use crate::schema::AiError;
 
@@ -105,10 +109,8 @@ pub fn body_from(request: &Addressed<SpeechRequest>) -> Result<Body, AiError> {
 }
 
 pub fn check_unsupported(request: &SpeechRequest) -> Result<(), AiError> {
-    let present: Vec<&str> = ["instructions"]
-        .into_iter()
-        .filter(|field| speech_field_present(request, field))
-        .collect();
+    let present: Vec<&str> =
+        ["instructions"].into_iter().filter(|field| speech_field_present(request, field)).collect();
     identity().reject_unsupported(&present).map_or(Ok(()), Err)
 }
 
@@ -128,7 +130,18 @@ fn url_encode(value: &str) -> String {
     let mut out = String::new();
     for byte in value.bytes() {
         match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')' => {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'!'
+            | b'~'
+            | b'*'
+            | b'\''
+            | b'('
+            | b')' => {
                 out.push(byte as char);
             }
             _ => out.push_str(&format!("%{byte:02X}")),
@@ -143,14 +156,17 @@ pub fn on_record(state: &mut State, frame: &str) -> Result<Vec<SpeechEvent>, AiE
     let output = TextOutput { identity: &identity(), body: frame, http: None };
     let record = output.decode_frame(frame)?;
     let data = record.get("audio_base64").and_then(|value| value.as_str()).unwrap_or_default();
-    let chunk = crate::protocols::shared::decode_base64(data)
-        .map_err(|_| identity().frame_error("ElevenLabs audio contains invalid base64 data", frame.to_string()))?;
+    let chunk = crate::protocols::shared::decode_base64(data).map_err(|_| {
+        identity().frame_error("ElevenLabs audio contains invalid base64 data", frame.to_string())
+    })?;
     let mut events = speech_stream::delta(state, chunk);
     if let Some(alignment) = record.get("alignment").filter(|value| !value.is_null()) {
         let texts: Vec<String> = alignment
             .get("characters")
             .and_then(|value| value.as_array())
-            .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect())
+            .map(|items| {
+                items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect()
+            })
             .unwrap_or_default();
         let starts: Vec<f64> = alignment
             .get("character_start_times_seconds")
@@ -193,7 +209,11 @@ fn describe_output(format: &str) -> speech_stream::Output {
 
 /// `finish` (elevenlabs-speech.ts:172-183): `character-cost` is billed
 /// credits, not a character count.
-pub fn finish(state: &State, request: &Addressed<SpeechRequest>, headers: &std::collections::BTreeMap<String, String>) -> Result<Vec<SpeechEvent>, AiError> {
+pub fn finish(
+    state: &State,
+    request: &Addressed<SpeechRequest>,
+    headers: &std::collections::BTreeMap<String, String>,
+) -> Result<Vec<SpeechEvent>, AiError> {
     let format = output_format(request)?;
     let header = |name: &str| headers.get(name).map(String::as_str);
     let provider_metadata = header("request-id").map(|id| {
@@ -247,10 +267,18 @@ impl StreamProtocol for ElevenLabsSpeech {
         if request.request.timestamps != Some(true) {
             return Framing::Bytes;
         }
-        if request.mode == Mode::Stream { Framing::Lines } else { Framing::Document }
+        if request.mode == Mode::Stream {
+            Framing::Lines
+        } else {
+            Framing::Document
+        }
     }
 
-    fn finish(&self, state: &Self::State, context: &ResponseContext<SpeechRequest>) -> Result<Vec<SpeechEvent>, AiError> {
+    fn finish(
+        &self,
+        state: &Self::State,
+        context: &ResponseContext<SpeechRequest>,
+    ) -> Result<Vec<SpeechEvent>, AiError> {
         let headers: std::collections::BTreeMap<String, String> = context
             .http
             .headers
@@ -278,14 +306,19 @@ mod tests {
 
     #[test]
     fn body_carries_text_model_and_output_format_query() {
-        let Body::Json { value, query } = body_from(&Addressed::new(request(), Mode::Generate)).unwrap() else {
+        let Body::Json { value, query } =
+            body_from(&Addressed::new(request(), Mode::Generate)).unwrap()
+        else {
             panic!()
         };
         assert_eq!(value["text"], json!("hello"));
         assert_eq!(value["model_id"], json!("eleven_flash_v2_5"));
         assert!(value.get("voice_settings").is_none());
         let query = query.unwrap();
-        assert_eq!(query.0["output_format"], crate::media::body::QueryValue::One("mp3_44100_128".to_string()));
+        assert_eq!(
+            query.0["output_format"],
+            crate::media::body::QueryValue::One("mp3_44100_128".to_string())
+        );
     }
 
     #[test]
@@ -298,7 +331,10 @@ mod tests {
         wav.format = Some("wav".into());
         let error = output_format(&Addressed::new(wav, Mode::Stream)).unwrap_err();
         assert!(error.message().contains("use generate for WAV"));
-        assert_eq!(output_format(&Addressed::new(request(), Mode::Generate)).unwrap(), "mp3_44100_128");
+        assert_eq!(
+            output_format(&Addressed::new(request(), Mode::Generate)).unwrap(),
+            "mp3_44100_128"
+        );
     }
 
     #[test]
@@ -307,7 +343,10 @@ mod tests {
         let mut options = crate::schema::ProviderOptions::new();
         options.insert("outputFormat".to_string(), json!("ulaw_8000"));
         speech_request.provider_options = Some(options);
-        assert_eq!(output_format(&Addressed::new(speech_request, Mode::Generate)).unwrap(), "ulaw_8000");
+        assert_eq!(
+            output_format(&Addressed::new(speech_request, Mode::Generate)).unwrap(),
+            "ulaw_8000"
+        );
     }
 
     #[test]
@@ -355,7 +394,9 @@ mod tests {
         headers.insert("request-id".to_string(), "req-1".to_string());
         headers.insert("character-cost".to_string(), "3".to_string());
         let events = finish(&state, &Addressed::new(pcm, Mode::Generate), &headers).unwrap();
-        let SpeechEvent::Finish { audio, usage, provider_metadata, .. } = &events[0] else { panic!() };
+        let SpeechEvent::Finish { audio, usage, provider_metadata, .. } = &events[0] else {
+            panic!()
+        };
         assert_eq!(audio.media_type, "audio/pcm");
         assert_eq!(audio.info.as_ref().unwrap().sample_rate, Some(24_000.0));
         assert_eq!(usage, &Some(crate::schema::MediaUsage::Credits { credits: 3.0 }));
