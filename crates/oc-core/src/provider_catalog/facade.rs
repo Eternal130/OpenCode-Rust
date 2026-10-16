@@ -13,9 +13,21 @@
 //! - `google` → the Gemini route (`google_route`),
 //! - `openai-compatible` → `openai_compatible_chat_configured` — the seam
 //!   for the ~25 catalog-only providers and user-defined custom providers,
-//! - everything whose protocol is not ported (Bedrock, Vertex native, the
-//!   `aisdk:` shims) → the typed [`ProviderError::UnsupportedProtocol`]
-//!   clean error (oracle gate 3, Task 5 acceptance).
+//! - Bedrock (BE-4): the plain package → the Converse route (SigV4 or
+//!   bearer auth, AWS event-stream framing); the Mantle split → the
+//!   `OpenAI` chat / open-responses protocols on the mantle base URL,
+//! - Vertex native (BE-4) → the aiplatform deployment of the Gemini
+//!   protocol (project/location routing, tuned endpoints, ADC bearer),
+//! - `github-copilot` (BE-4) → the Copilot chat route (openai-compatible
+//!   protocol + the Copilot client/request header policy),
+//! - everything whose protocol is not ported (the `aisdk:` shims) → the
+//!   typed [`ProviderError::UnsupportedProtocol`] clean error (oracle gate
+//!   3, Task 5 acceptance).
+
+#![allow(
+    clippy::doc_markdown, // package/provider identifiers in prose stay unquoted
+    clippy::too_many_lines, // build_route mirrors the v2 family dispatch table
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -23,13 +35,18 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use oc_ai::protocols::anthropic_messages::{anthropic_messages_route, anthropic_route};
+use oc_ai::protocols::bedrock::{self as bedrock_lane, BedrockAuthOptions};
+use oc_ai::protocols::copilot::{copilot_chat_route, CopilotConfig};
 use oc_ai::protocols::gemini::{google_route, GoogleConfig};
 use oc_ai::protocols::openai_chat::{
     alibaba_chat_route, deepseek_chat_route, groq_chat_route, openai_chat_route,
     openrouter_chat_route, venice_chat_route, zai_chat_route,
 };
-use oc_ai::protocols::openai_compatible::openai_compatible_chat_configured;
+use oc_ai::protocols::openai_compatible::{
+    openai_compatible_chat_configured, openai_compatible_responses_route,
+};
 use oc_ai::protocols::openai_responses::{openai_responses_route, OpenAIResponsesRouteSpec};
+use oc_ai::protocols::vertex::{vertex_route_for_model, VertexConfig};
 use oc_ai::route::auth::{self, Secret};
 use oc_ai::route::client::{Route, RouteDefaults, RoutePatch};
 use oc_ai::route::endpoint::EndpointPatch;
@@ -135,6 +152,16 @@ pub enum ProtocolFamily {
     OpenAIResponses,
     Gemini,
     OpenAICompatible,
+    /// Bedrock Converse (SigV4/bearer + AWS event-stream framing).
+    BedrockConverse,
+    /// Bedrock Mantle: the OpenAI chat protocol on `bedrock-mantle`.
+    BedrockMantleChat,
+    /// Bedrock Mantle: the open-responses protocol on `bedrock-mantle`.
+    BedrockMantleResponses,
+    /// Vertex native: Gemini generateContent on aiplatform.
+    VertexGemini,
+    /// GitHub Copilot: openai-compatible chat + the Copilot header policy.
+    CopilotChat,
 }
 
 /// Classify a native package into a ported family (`None` → unsupported).
@@ -183,7 +210,19 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         | "@opencode/ai/providers/vercel-ai-gateway" => ProtocolFamily::OpenAIChat,
 
         "@opencode/ai/providers/google" => ProtocolFamily::Gemini,
+        // Vertex native (BE-4): the Gemini protocol deployed on aiplatform.
+        "@opencode/ai/providers/google-vertex" => ProtocolFamily::VertexGemini,
         "@opencode/ai/providers/openai-compatible" => ProtocolFamily::OpenAICompatible,
+
+        // Bedrock (BE-4): Converse for the plain package, the Mantle
+        // OpenAI-chat / open-responses deployments for the mantle split
+        // (native.rs `mantle()` — gpt-oss models chat, the rest responses).
+        "@opencode/ai/providers/amazon-bedrock"
+        | "@opencode/ai/providers/amazon-bedrock/mantle" => ProtocolFamily::BedrockConverse,
+        "@opencode/ai/providers/amazon-bedrock/mantle/chat" => ProtocolFamily::BedrockMantleChat,
+        "@opencode/ai/providers/amazon-bedrock/mantle/responses" => {
+            ProtocolFamily::BedrockMantleResponses
+        }
 
         _ => return None,
     })
@@ -207,10 +246,19 @@ pub fn language_model(
             ProviderError::UnknownModel(provider_id.to_string(), model_id.to_string())
         })?;
     let package = model.package.as_deref().unwrap_or(&snapshot.info.package);
-    let family = family_of(package).ok_or_else(|| ProviderError::UnsupportedProtocol {
-        provider: provider_id.to_string(),
-        package: package.to_string(),
-    })?;
+    // Copilot: the catalog entry is plain openai-compatible, but the bound
+    // credential transport (BE-3b CredentialBindings) + the Copilot header
+    // policy make it its own family (github-copilot.ts:434-505).
+    let family = if provider_id == "github-copilot"
+        && package == "@opencode/ai/providers/openai-compatible"
+    {
+        ProtocolFamily::CopilotChat
+    } else {
+        family_of(package).ok_or_else(|| ProviderError::UnsupportedProtocol {
+            provider: provider_id.to_string(),
+            package: package.to_string(),
+        })?
+    };
 
     // catalog api (settings.baseURL) is the default; user settings override
     let catalog_base = snapshot
@@ -223,7 +271,8 @@ pub fn language_model(
     let base_url = connection.base_url.clone().or(catalog_base);
     let env = &snapshot.environment;
 
-    let route = build_route(context, family, provider_id, package, base_url, env, connection)?;
+    let route =
+        build_route(context, family, provider_id, package, base_url, env, connection, model)?;
     // Connection headers ride the route defaults (transport headers) —
     // the seam credential-driven providers (copilot) use for their
     // client headers; model overlays apply after and win per key.
@@ -265,6 +314,7 @@ fn with_base_url(route: Route, base_url: Option<String>) -> Route {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_route(
     context: &FacadeContext,
     family: ProtocolFamily,
@@ -273,10 +323,89 @@ fn build_route(
     base_url: Option<String>,
     env: &[String],
     connection: &ModelConnection,
+    model: &ModelInfo,
 ) -> Result<Route, ProviderError> {
     let transport = Arc::clone(&context.transport);
     let api_key = connection.secret();
     match family {
+        ProtocolFamily::BedrockConverse => {
+            let auth = bedrock_lane::BedrockAuthOptions {
+                api_key: connection.api_key.clone(),
+                ..Default::default()
+            };
+            let mut route = bedrock_lane::bedrock_converse_route(transport, auth);
+            if let Some(base_url) = base_url {
+                route = with_base_url(route, Some(base_url));
+            }
+            Ok(route)
+        }
+        ProtocolFamily::BedrockMantleChat => {
+            let region = bedrock_lane::resolve_region(None, None);
+            let auth = bedrock_lane::resolve_auth(
+                &BedrockAuthOptions { api_key: connection.api_key.clone(), ..Default::default() },
+                "bedrock-mantle",
+                "Bedrock Mantle",
+            );
+            let base =
+                base_url.unwrap_or_else(|| format!("https://bedrock-mantle.{region}.api.aws/v1"));
+            Ok(openai_chat_route(transport).with(RoutePatch {
+                id: Some("bedrock-mantle-chat".to_string()),
+                provider: Some(provider_id.to_string()),
+                provider_metadata_key: Some("mantle".to_string()),
+                auth: Some(auth),
+                endpoint: Some(EndpointPatch { base_url: Some(base), path: None, query: None }),
+                ..Default::default()
+            }))
+        }
+        ProtocolFamily::BedrockMantleResponses => {
+            let region = bedrock_lane::resolve_region(None, None);
+            let auth = bedrock_lane::resolve_auth(
+                &BedrockAuthOptions { api_key: connection.api_key.clone(), ..Default::default() },
+                "bedrock-mantle",
+                "Bedrock Mantle",
+            );
+            let base =
+                base_url.unwrap_or_else(|| format!("https://bedrock-mantle.{region}.api.aws/v1"));
+            Ok(openai_compatible_responses_route(transport).with(RoutePatch {
+                id: Some("bedrock-mantle-responses".to_string()),
+                provider: Some(provider_id.to_string()),
+                provider_metadata_key: Some("mantle".to_string()),
+                auth: Some(auth),
+                endpoint: Some(EndpointPatch { base_url: Some(base), path: None, query: None }),
+                ..Default::default()
+            }))
+        }
+        ProtocolFamily::VertexGemini => {
+            // connection.api_key carries the resolved access token (the
+            // integration ADC binding or an explicit config token); the
+            // Express API key rides its own env chain.
+            let access_token =
+                api_key.or_else(|| env_first(env, "GOOGLE_OAUTH_ACCESS_TOKEN").map(Secret::Env));
+            let route = vertex_route_for_model(
+                transport,
+                VertexConfig {
+                    access_token,
+                    api_key: env_first(env, "GOOGLE_VERTEX_API_KEY").map(Secret::Env),
+                    base_url,
+                    ..Default::default()
+                },
+                model.id.as_str(),
+            );
+            Ok(route
+                .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }))
+        }
+        ProtocolFamily::CopilotChat => Ok(copilot_chat_route(
+            transport,
+            CopilotConfig {
+                base_url: base_url.clone(),
+                token: api_key.or_else(|| {
+                    env.iter()
+                        .find(|name| name.as_str() == "GITHUB_TOKEN")
+                        .map(|name| Secret::Env(name.clone()))
+                }),
+            },
+        )
+        .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() })),
         ProtocolFamily::AnthropicMessages => {
             if provider_id == "anthropic" {
                 // v2 anthropic facade: x-api-key, ANTHROPIC_API_KEY fallback
@@ -355,6 +484,12 @@ fn build_route(
                 .with(RoutePatch { auth: Some(bearer_auth(api_key, env)), ..Default::default() }))
         }
     }
+}
+
+/// First env name in the catalog list matching `name` (the catalog env
+/// order is the provider's documented precedence).
+fn env_first(env: &[String], name: &str) -> Option<String> {
+    env.iter().find(|candidate| candidate.as_str() == name).cloned()
 }
 
 /// Chat factories with their own baked base URL (no catalog api needed).
@@ -562,30 +697,163 @@ mod tests {
     fn provider_facade_unsupported_protocol_typed_error() {
         let context = context();
         let catalog = Catalog::embedded();
-        // bedrock: catalog-listed, protocol not ported
-        let bedrock = catalog.provider("amazon-bedrock").expect("bedrock in catalog");
-        let model_id = bedrock.models.first().expect("bedrock has models").id.as_str().to_string();
+        // Find a catalog provider whose package still has no ported
+        // protocol (the `aisdk:` shims) — bedrock/vertex/copilot now bind.
+        let unsupported = catalog
+            .providers()
+            .iter()
+            .find_map(|snapshot| {
+                let model = snapshot.models.first()?;
+                let package = model.package.as_deref().unwrap_or(&snapshot.info.package);
+                (package.starts_with("aisdk:") && family_of(package).is_none()).then_some((
+                    snapshot.info.id.0.clone(),
+                    package.to_string(),
+                    model.id.as_str().to_string(),
+                ))
+            })
+            .expect("an aisdk: shim provider exists in the catalog");
         let error = language_model(
             &context,
             catalog,
-            "amazon-bedrock",
-            &model_id,
+            &unsupported.0,
+            &unsupported.2,
             &ModelConnection::default(),
         )
         .unwrap_err();
         assert_eq!(
             error,
             ProviderError::UnsupportedProtocol {
-                provider: "amazon-bedrock".into(),
-                package: bedrock
-                    .models
-                    .first()
-                    .and_then(|m| m.package.clone())
-                    .unwrap_or_else(|| bedrock.info.package.clone())
+                provider: unsupported.0.clone(),
+                package: unsupported.1.clone(),
             },
             "clean typed error for unported protocol"
         );
         assert!(error.to_string().contains("no ported protocol"));
+    }
+
+    /// BE-4 item 1: Bedrock catalog models bind — the mantle split routes
+    /// gpt-oss models to the Mantle chat deployment and the rest to the
+    /// Mantle open-responses deployment, both over the shared Bedrock auth
+    /// (bearer `AWS_BEARER_TOKEN_BEDROCK` / SigV4) and mantle base URL.
+    #[test]
+    fn provider_facade_bedrock_bindings() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let bedrock = catalog.provider("amazon-bedrock").expect("bedrock in catalog");
+        let chat_model = bedrock
+            .models
+            .iter()
+            .find(|model| {
+                model.package.as_deref().unwrap_or(&bedrock.info.package)
+                    == "@opencode/ai/providers/amazon-bedrock/mantle/chat"
+            })
+            .expect("a mantle-chat (gpt-oss) bedrock model exists");
+        let model = language_model(
+            &context,
+            catalog,
+            "amazon-bedrock",
+            chat_model.id.as_str(),
+            &ModelConnection { api_key: Some("bedrock-bearer".into()), ..Default::default() },
+        )
+        .expect("gpt-oss bedrock binds to mantle chat");
+        assert_eq!(model.route.id, "bedrock-mantle-chat");
+        assert_eq!(
+            model.route.endpoint.base_url.as_deref(),
+            Some("https://bedrock-mantle.us-east-1.api.aws/v1")
+        );
+
+        let other = bedrock
+            .models
+            .iter()
+            .find(|model| {
+                model.package.as_deref().unwrap_or(&bedrock.info.package)
+                    == "@opencode/ai/providers/amazon-bedrock/mantle/responses"
+            })
+            .expect("a mantle-responses bedrock model exists");
+        let model = language_model(
+            &context,
+            catalog,
+            "amazon-bedrock",
+            other.id.as_str(),
+            &ModelConnection { api_key: Some("bedrock-bearer".into()), ..Default::default() },
+        )
+        .expect("bedrock binds to mantle responses");
+        assert_eq!(model.route.id, "bedrock-mantle-responses");
+        assert_eq!(
+            model.route.endpoint.base_url.as_deref(),
+            Some("https://bedrock-mantle.us-east-1.api.aws/v1")
+        );
+    }
+
+    /// BE-4 item 2: Vertex native models bind through the aiplatform
+    /// deployment with the access token from the connection (the ADC
+    /// credential binding) as the bearer.
+    #[test]
+    fn provider_facade_vertex_native_binding() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let vertex = catalog.provider("google-vertex").expect("vertex in catalog");
+        let gemini_model = vertex
+            .models
+            .iter()
+            .find(|model| {
+                model.package.as_deref().unwrap_or(&vertex.info.package)
+                    == "@opencode/ai/providers/google-vertex"
+            })
+            .expect("a native-package vertex model exists");
+        let model = language_model(
+            &context,
+            catalog,
+            "google-vertex",
+            gemini_model.id.as_str(),
+            &ModelConnection { api_key: Some("ya29.adc".into()), ..Default::default() },
+        )
+        .expect("vertex native binds");
+        assert_eq!(model.route.id, "google-vertex-gemini");
+        let route = Arc::clone(&model.route);
+        let base = route.endpoint.base_url.as_deref().unwrap_or_default().to_string();
+        assert!(base.contains("-aiplatform.googleapis.com/v1beta1/projects/"), "{base}");
+        // authorization comes from the resolved access token at request time
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let prepared = route.prepare_request(&request);
+        let body = route.build_body(&prepared).expect("body");
+        let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
+        assert_eq!(transport_request.header("authorization"), Some("Bearer ya29.adc"));
+        assert!(transport_request.url.contains(":streamGenerateContent?alt=sse"));
+    }
+
+    /// BE-4 item 3: Copilot chat binds the openai-compatible protocol with
+    /// the Copilot header policy over the credential-bound transport.
+    #[test]
+    fn provider_facade_copilot_chat_binding() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let copilot = catalog.provider("github-copilot").expect("copilot in catalog");
+        let model_id = copilot.models.first().expect("copilot has models").id.as_str().to_string();
+        let model = language_model(
+            &context,
+            catalog,
+            "github-copilot",
+            &model_id,
+            &ModelConnection {
+                base_url: None,
+                api_key: Some("ghu_bound_token".into()),
+                headers: BTreeMap::new(),
+            },
+        )
+        .expect("copilot binds");
+        assert_eq!(model.route.id, "copilot-chat");
+        assert_eq!(model.route.endpoint.base_url.as_deref(), Some("https://api.githubcopilot.com"));
+        let route = Arc::clone(&model.route);
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let prepared = route.prepare_request(&request);
+        let body = route.build_body(&prepared).expect("body");
+        let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
+        assert_eq!(transport_request.url, "https://api.githubcopilot.com/chat/completions");
+        assert_eq!(transport_request.header("authorization"), Some("Bearer ghu_bound_token"));
+        assert_eq!(transport_request.header("X-GitHub-Api-Version"), Some("2026-08-01"));
     }
 
     #[test]

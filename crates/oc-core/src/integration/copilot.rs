@@ -100,6 +100,11 @@ impl IntegrationHost {
         if let Some(binding) = copilot_binding(self).await {
             next.insert("github-copilot".to_owned(), binding);
         }
+        // Google Vertex ADC (BE-4): the refreshed authorized-user token
+        // rides the same snapshot; failures keep the previous entry.
+        if let Some(binding) = self.vertex_binding().await {
+            next.insert("google-vertex".to_owned(), binding);
+        }
         self.provider_bindings_shared.swap(next);
     }
 
