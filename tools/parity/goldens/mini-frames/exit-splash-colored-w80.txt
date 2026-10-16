@@ -1,0 +1,4 @@
+
+█⟨fg=idx:8|bg=none⟩▀⟨fg=idx:8|bg=none⟩▀⟨fg=idx:8|bg=none⟩█⟨fg=idx:8|bg=none⟩              ⟨fg=idx:8|bg=none⟩Session  ⟨fg=idx:8|bg=none⟩fix parser⟨fg=idx:255|bg=none+bold⟩
+█⟨fg=idx:8|bg=none⟩ ⟨fg=idx:8|bg=idx:233⟩ ⟨fg=idx:8|bg=idx:233⟩█⟨fg=idx:8|bg=none⟩              ⟨fg=idx:8|bg=none⟩Continue ⟨fg=idx:8|bg=none⟩opencode mini -s ses_123⟨fg=idx:255|bg=none+bold⟩
+▀⟨fg=idx:8|bg=none⟩▀⟨fg=idx:8|bg=none⟩▀⟨fg=idx:8|bg=none⟩▀⟨fg=idx:8|bg=none⟩
