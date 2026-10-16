@@ -137,6 +137,13 @@ pub enum DialogKind {
     /// (dialog-shell-output.tsx). The content materializes from the
     /// transcript's tool part state.
     ToolOutput { session_id: String, message_id: String, part_id: String },
+    /// SURF-2: the diff source select (`diff.switch_source`,
+    /// diff-viewer.tsx:735-767): All / Committed / Uncommitted
+    /// (+ Last turn from a session route).
+    DiffSource,
+    /// SURF-2: the diff shortcuts dialog (`DiffViewerHelpDialog`,
+    /// diff-viewer.tsx:1100-1192) — `diff.help`.
+    DiffHelp,
 }
 
 /// One stack entry: the dialog kind, chrome size and content state.
@@ -965,6 +972,14 @@ pub struct Store {
     mcp_servers: Signal<Vec<McpServerRow>>,
     /// The MCP section's collapse state (mcp.tsx's `view.open`).
     sidebar_mcp_open: Signal<bool>,
+    /// SURF-2 the diff viewer's live state (the `diff` plugin route —
+    /// feature-plugins/system/diff-viewer.tsx): mounted fullscreen
+    /// while `open`, own key layer, `diff.close` returns to
+    /// `return_route`.
+    diff_viewer: Signal<DiffViewerLive>,
+    /// The diff fetch seam (`vcs.base`/`vcs.diff` through the loop
+    /// fetcher; tests record).
+    diff_sink: std::cell::RefCell<Rc<dyn DiffSink>>,
 }
 
 /// One staged revert (`session.revert.staged`'s `revert` payload).
@@ -1014,6 +1029,196 @@ pub struct McpServerRow {
     pub status: &'static str,
     /// The failed/`needs_auth` error text (`DialogMcp`'s details view).
     pub error: Option<String>,
+}
+
+/// The diff viewer's source (`DIFF_SOURCES`, diff-viewer.tsx:73-78):
+/// branch (All), committed (Committed), working (Uncommitted), turn
+/// (Last turn — only reachable from a session route).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiffSource {
+    /// "All" — branch + local changes.
+    #[default]
+    Branch,
+    /// "Committed" — branch commits only (needs a base).
+    Committed,
+    /// "Uncommitted" — local changes only.
+    Working,
+    /// "Last turn" — the latest session turn.
+    Turn,
+}
+
+impl DiffSource {
+    /// `DIFF_SOURCES[mode].label` (the toolbar's bold word).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Branch => "All",
+            Self::Committed => "Committed",
+            Self::Working => "Uncommitted",
+            Self::Turn => "Last turn",
+        }
+    }
+
+    /// `DIFF_SOURCES[mode].description` (the source dialog's row copy).
+    #[must_use]
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Branch => "Branch + local changes",
+            Self::Committed => "Branch commits only",
+            Self::Working => "Local changes only",
+            Self::Turn => "Latest session turn",
+        }
+    }
+
+    /// Parse the wire/config spelling (`diffs.source`, `vcs.diff`'s
+    /// `mode`); unknown values degrade to branch.
+    #[must_use]
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "committed" => Self::Committed,
+            "working" => Self::Working,
+            "turn" => Self::Turn,
+            _ => Self::Branch,
+        }
+    }
+
+    /// The `vcs.diff` mode (`Vcs.Mode` — turn maps onto branch there).
+    #[must_use]
+    pub const fn vcs_mode(self) -> &'static str {
+        match self {
+            Self::Branch | Self::Turn => "branch",
+            Self::Committed => "committed",
+            Self::Working => "working",
+        }
+    }
+}
+
+/// The viewer's fetch phase — v2's `createResource` states plus the
+/// `unavailable` arm (committed without base metadata,
+/// diff-viewer.tsx:861-867).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum DiffPhase {
+    #[default]
+    Loading,
+    /// The resource errored (base or diff fetch).
+    Failed(String),
+    /// `committed && !base` — comparison unavailable.
+    Unavailable,
+    /// Loaded file list (empty = the "No changes to show" body).
+    Loaded(Vec<crate::components::diff_viewer::DiffFile>),
+}
+
+/// The diff viewer's full live state (`DiffViewer`'s signals +
+/// `DiffViewerContent`'s preferences, diff-viewer.tsx:84-200).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiffViewerLive {
+    pub open: bool,
+    /// The plugin route's `returnRoute` (diff-viewer.tsx:1206-1216) —
+    /// `diff.close` navigates back here.
+    pub return_route: Route,
+    /// The route session (`sessionID` — enables the "turn" source).
+    pub session_id: Option<String>,
+    /// `memory.source` — the sticky source between opens
+    /// (`props.context.storage.memory("review")`).
+    pub mode: DiffSource,
+    /// The fetch state machine.
+    pub phase: DiffPhase,
+    /// The resolved base's display name (`sourceDetail`'s `vs {name}`).
+    pub base: Option<String>,
+    /// The interactive preferences (tree/view/single/selection/reviewed).
+    pub viewer: crate::components::diff_viewer::DiffViewerState,
+    /// The patch column's scroll offset (`scroll.scrollTop`).
+    pub scroll: usize,
+    /// The fetch generation — results from an older request than the
+    /// current are dropped (v2's `input !== diffInput()` re-check).
+    pub generation: u64,
+}
+
+impl Default for DiffViewerLive {
+    fn default() -> Self {
+        Self {
+            open: false,
+            return_route: Route::Home,
+            session_id: None,
+            mode: DiffSource::default(),
+            phase: DiffPhase::default(),
+            base: None,
+            viewer: crate::components::diff_viewer::DiffViewerState::default(),
+            scroll: 0,
+            generation: 0,
+        }
+    }
+}
+
+impl DiffViewerLive {
+    /// `sourceDetail` (diff-viewer.tsx:182-190).
+    #[must_use]
+    pub fn source_detail(&self) -> String {
+        if self.mode == DiffSource::Turn {
+            return if matches!(self.phase, DiffPhase::Failed(_)) {
+                "Diff unavailable".to_owned()
+            } else {
+                String::new()
+            };
+        }
+        if self.mode == DiffSource::Working {
+            return "vs HEAD".to_owned();
+        }
+        if matches!(self.phase, DiffPhase::Failed(_)) {
+            return "Base or diff unavailable".to_owned();
+        }
+        if matches!(self.phase, DiffPhase::Loading) {
+            return "Resolving diff…".to_owned();
+        }
+        match &self.base {
+            Some(base) => format!("vs {base}"),
+            None => "Base not reported".to_owned(),
+        }
+    }
+
+    /// The visible files (`visiblePatchFiles`, diff-viewer.tsx:466-476):
+    /// single-patch shows only the selected file.
+    #[must_use]
+    pub fn visible_files(&self) -> &[crate::components::diff_viewer::DiffFile] {
+        let files: &[crate::components::diff_viewer::DiffFile] = match &self.phase {
+            DiffPhase::Loaded(files) => files,
+            _ => &[],
+        };
+        if self.viewer.single_patch {
+            if let Some(index) = self.viewer.selected_file {
+                return files.get(index).map_or(&[] as &[crate::components::diff_viewer::DiffFile], std::slice::from_ref);
+            }
+            return &[];
+        }
+        files
+    }
+}
+
+/// The diff fetch seam (`client.api.vcs.base/vcs.diff`,
+/// diff-viewer.tsx:144-168): the run loop wires the HTTP worker;
+/// tests record.
+pub trait DiffSink {
+    /// Fetch `mode` (with the viewer's session for `turn`).
+    fn fetch(&self, mode: DiffSource, session_id: Option<String>, generation: u64);
+}
+
+/// The default no-op sink.
+pub struct NoDiffSink;
+
+impl DiffSink for NoDiffSink {
+    fn fetch(&self, _mode: DiffSource, _session_id: Option<String>, _generation: u64) {}
+}
+
+/// The recording sink (tests).
+#[derive(Default)]
+pub struct RecordingDiffSink {
+    pub calls: std::cell::RefCell<Vec<(DiffSource, Option<String>, u64)>>,
+}
+
+impl DiffSink for RecordingDiffSink {
+    fn fetch(&self, mode: DiffSource, session_id: Option<String>, generation: u64) {
+        self.calls.borrow_mut().push((mode, session_id, generation));
+    }
 }
 
 /// The composer panel's tab (`ComposerTab` — registration order:
@@ -1431,6 +1636,7 @@ struct StoreSignals {
     expanded_tools: Signal<std::collections::HashSet<String>>,
     mcp_servers: Signal<Vec<McpServerRow>>,
     sidebar_mcp_open: Signal<bool>,
+    diff_viewer: Signal<DiffViewerLive>,
 }
 
 impl Store {
@@ -1478,6 +1684,7 @@ impl Store {
                 watchers.expanded_tools.get(),
                 watchers.mcp_servers.get(),
                 watchers.sidebar_mcp_open.get(),
+                watchers.diff_viewer.get(),
                 watch_clock.get(),
             );
             bump.set(bump.get() + 1);
@@ -1532,6 +1739,7 @@ impl Store {
             expanded_tools,
             mcp_servers,
             sidebar_mcp_open,
+            diff_viewer,
         } = signals;
         Self {
             runtime,
@@ -1611,6 +1819,8 @@ impl Store {
             expanded_tools,
             mcp_servers,
             sidebar_mcp_open,
+            diff_viewer,
+            diff_sink: std::cell::RefCell::new(Rc::new(NoDiffSink)),
             interrupt_sink: std::cell::RefCell::new(Rc::new(RecordingInterruptSink::default())),
             model_ring_dirty: Cell::new(false),
             revert_sink: std::cell::RefCell::new(Rc::new(RecordingRevertSink::default())),
@@ -1666,6 +1876,7 @@ impl Store {
         let expanded_tools = Signal::new(&runtime, std::collections::HashSet::<String>::new());
         let mcp_servers = Signal::new(&runtime, Vec::<McpServerRow>::new());
         let sidebar_mcp_open = Signal::new(&runtime, true);
+        let diff_viewer = Signal::new(&runtime, DiffViewerLive::default());
         Self::build(
             runtime,
             StoreSignals {
@@ -1706,6 +1917,7 @@ impl Store {
                 expanded_tools,
                 mcp_servers,
                 sidebar_mcp_open,
+                diff_viewer,
             },
         )
     }
@@ -3207,6 +3419,157 @@ impl Store {
 
     pub fn set_sidebar_mcp_open(&self, open: bool) {
         self.sidebar_mcp_open.set(open);
+    }
+
+    // -- diff viewer (SURF-2: the `diff` plugin route) ----------------------
+
+    /// The diff viewer's live state (render + dispatcher input).
+    #[must_use]
+    pub fn diff_viewer(&self) -> DiffViewerLive {
+        self.diff_viewer.get()
+    }
+
+    /// Whether the diff viewer currently owns the screen + the `diff`
+    /// key layer.
+    #[must_use]
+    pub fn diff_viewer_open(&self) -> bool {
+        self.diff_viewer.get().open
+    }
+
+    /// `diff.open` (diff-viewer.tsx:1198-1226): capture the return
+    /// route + session, mark loading, kick the fetch, clear dialogs.
+    pub fn open_diff_viewer(&self, default_mode: Option<DiffSource>) {
+        let (return_route, session_id) = match self.route() {
+            Route::Session { session_id } => {
+                (Route::Session { session_id: session_id.clone() }, Some(session_id))
+            }
+            Route::Home => (Route::Home, None),
+        };
+        let generation = self.diff_viewer.get().generation.wrapping_add(1);
+        let mut mode = self.diff_viewer.get().mode;
+        if !self.diff_viewer.get().open {
+            // Fresh open: the sticky memory mode or the caller's
+            // default (`initialMode`, diff-viewer.tsx:103-104); "turn"
+            // is only valid with a session.
+            mode = default_mode.unwrap_or(mode);
+        }
+        if mode == DiffSource::Turn && session_id.is_none() {
+            mode = DiffSource::Branch;
+        }
+        self.diff_viewer.set(DiffViewerLive {
+            open: true,
+            return_route,
+            session_id: session_id.clone(),
+            mode,
+            phase: DiffPhase::Loading,
+            base: None,
+            viewer: crate::components::diff_viewer::DiffViewerState::default(),
+            scroll: 0,
+            generation,
+        });
+        self.clear_dialogs();
+        let sink = self.diff_sink.borrow().clone();
+        sink.fetch(mode, session_id, generation);
+    }
+
+    /// `diff.close` (diff-viewer.tsx:554-557): unmount + navigate back
+    /// to the captured return route.
+    pub fn close_diff_viewer(&self) {
+        let mut live = self.diff_viewer.get();
+        if !live.open {
+            return;
+        }
+        live.open = false;
+        let back = live.return_route.clone();
+        self.diff_viewer.set(live);
+        self.navigate(back);
+    }
+
+    /// `diff.switch_source`'s selection (the source dialog's
+    /// `onSelect` → `props.onSwitchSource`, diff-viewer.tsx:748-751):
+    /// sticky mode change + refetch (scroll resets).
+    pub fn switch_diff_source(&self, mode: DiffSource) {
+        let mut live = self.diff_viewer.get();
+        if !live.open || live.mode == mode {
+            return;
+        }
+        if mode == DiffSource::Turn && live.session_id.is_none() {
+            return;
+        }
+        let generation = live.generation.wrapping_add(1);
+        live.mode = mode;
+        live.phase = DiffPhase::Loading;
+        live.base = None;
+        live.viewer.selected_file = None;
+        live.scroll = 0;
+        live.generation = generation;
+        let session_id = live.session_id.clone();
+        self.diff_viewer.set(live);
+        let sink = self.diff_sink.borrow().clone();
+        sink.fetch(mode, session_id, generation);
+    }
+
+    /// A fetch result landing (the HTTP worker's reply): stale
+    /// generations drop (v2's `input !== diffInput()` guard).
+    pub fn diff_fetch_result(
+        &self,
+        generation: u64,
+        result: Result<(Option<String>, Vec<crate::components::diff_viewer::DiffFile>), String>,
+    ) {
+        let mut live = self.diff_viewer.get();
+        if !live.open || live.generation != generation {
+            return;
+        }
+        match result {
+            Ok((base, files)) => {
+                // `committed && !base` — the unavailable body
+                // (diff-viewer.tsx:158-160, 861-867).
+                if live.mode == DiffSource::Committed && base.is_none() {
+                    live.phase = DiffPhase::Unavailable;
+                } else {
+                    live.base = base;
+                    live.phase = DiffPhase::Loaded(files);
+                    live.scroll = 0;
+                }
+            }
+            Err(error) => {
+                live.phase = DiffPhase::Failed(error);
+            }
+        }
+        self.diff_viewer.set(live);
+    }
+
+    /// Mutate the viewer state (the `diff.*` preference commands).
+    pub fn update_diff_viewer(
+        &self,
+        update: impl FnOnce(&mut DiffViewerLive) -> bool,
+    ) -> bool {
+        let mut live = self.diff_viewer.get();
+        let changed = update(&mut live);
+        if changed {
+            self.diff_viewer.set(live);
+        }
+        changed
+    }
+
+    /// The diff fetch seam (tests inject; the run loop installs the
+    /// HTTP worker). The closure form accepts the loop-fetcher sender.
+    pub fn set_diff_sink(&self, sink: Rc<dyn DiffSink>) {
+        *self.diff_sink.borrow_mut() = sink;
+    }
+
+    /// Closure-based sink install (the run loop's HTTP worker).
+    pub fn set_diff_sink_fn(
+        &self,
+        fetch: impl Fn(DiffSource, Option<String>, u64) + 'static,
+    ) {
+        struct FnDiffSink<F: Fn(DiffSource, Option<String>, u64)>(F);
+        impl<F: Fn(DiffSource, Option<String>, u64)> DiffSink for FnDiffSink<F> {
+            fn fetch(&self, mode: DiffSource, session_id: Option<String>, generation: u64) {
+                (self.0)(mode, session_id, generation);
+            }
+        }
+        *self.diff_sink.borrow_mut() = Rc::new(FnDiffSink(fetch));
     }
 
     // -- queued prompts (Wave A: mini/queue.rs lifted into the main store) ----
