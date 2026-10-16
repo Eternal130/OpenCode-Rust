@@ -31,6 +31,10 @@ pub fn info_response(state: &AppState) -> Response {
         "pid": std::process::id(),
         "urls": urls,
         "paths": { "tmp": state.tmp_dir.display().to_string() },
+        // v2 handlers/server.ts:23-32 — the SDK's capability gate for the
+        // persistent-PTY surface (`PersistentPty.available` =
+        // `platform !== "win32"`, binary.node.ts:2; workerd serves false).
+        "capabilities": { "persistentPty": cfg!(not(target_os = "windows")) },
     });
     let mut response = json_response(status, &body);
     if let Ok(value) = HeaderValue::from_str(BUILD_STAMP) {
