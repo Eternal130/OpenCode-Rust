@@ -111,10 +111,17 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     // spawn→ready timestamps. Logging only — no behavior change.
     let trace_boot = std::env::var("OPENCODE_TRACE_BOOT").ok().as_deref() == Some("1");
     let boot_start = std::time::Instant::now();
+    // The global config dir is the SHARED v2 one (`~/.config/opencode`)
+    // — the same source every other config consumer reads
+    // (handlers/config.rs, handlers/agent.rs, announce.rs) and the dir
+    // the v2 reference reads (xdg config/opencode). dogfood2 bug 3:
+    // seeding providers from the `opencode-rust`-suffixed dir bound
+    // ZERO config providers, so `providers.own` never reached the
+    // model list and the boot default fell to the catalog fallback.
     let loader = Loader::new(
         config_location.clone(),
         GlobalDirs {
-            config: options.home.join(".config").join(oc_util::global_roots::APP_NAME),
+            config: options.home.join(".config").join("opencode"),
             home: options.home.clone(),
         },
     );
@@ -295,7 +302,9 @@ pub fn location_config(
     Loader::new(
         location.as_path().to_path_buf(),
         GlobalDirs {
-            config: engine.home.join(".config").join(oc_util::global_roots::APP_NAME),
+            // The shared v2 global config dir — same source as the boot
+            // seeding and every other config consumer (dogfood2 bug 3).
+            config: engine.home.join(".config").join("opencode"),
             home: engine.home.clone(),
         },
     )
