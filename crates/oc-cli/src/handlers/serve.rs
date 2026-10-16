@@ -125,6 +125,35 @@ pub async fn run(options: Options) -> i32 {
         }
     };
 
+    // Installation notices (v2 process.ts:115-117): the CLI's detached
+    // update checker cannot hold the engine, so `serve` — the one mode
+    // whose process owns the server — forwards its notices onto the bus as
+    // `installation.update-available` / `installation.updated` `{version}`
+    // for SSE consumers.
+    if let Some(mut notices) = crate::services::autoupdate::take_installation_receiver() {
+        let bus = handle.state.engine.bus.clone();
+        let mut shutdown = handle.shutdown.subscribe();
+        tokio::spawn(async move {
+            loop {
+                // Receive outside the publish await: the watch guard is not
+                // Send and must not live across the publish.
+                let notice = tokio::select! {
+                    notice = notices.recv() => notice,
+                    _ = shutdown.wait_for(|flag| *flag) => break,
+                };
+                match notice {
+                    Some(crate::services::autoupdate::InstallationNotice::Available(version)) => {
+                        oc_server::announce::publish_installation_event(&bus, true, &version).await;
+                    }
+                    Some(crate::services::autoupdate::InstallationNotice::Installed(version)) => {
+                        oc_server::announce::publish_installation_event(&bus, false, &version).await;
+                    }
+                    None => break,
+                }
+            }
+        });
+    }
+
     let cleanup = if service {
         if config.password.is_none() {
             let _ = service_config::password(Some(&password));

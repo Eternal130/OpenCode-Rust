@@ -29,3 +29,27 @@
   - installation.updated / installation.update-available {version} —
     schema/installation-event.ts; publisher server/src/process.ts:115-117
     (updater callbacks).
+
+## Phase 2 — publishers for the 14 types
+
+- oc-core session/execution.rs: `session.status` {sessionID,status:{type:busy|idle}}
+  published after session.execution.started / after each terminal execution
+  event; `session.idle` {sessionID} alongside the idle status (deprecated
+  frame, event-manifest.ts:74-77). Best-effort ephemeral.
+- oc-core provider_catalog/refresh.rs: CatalogService::with_bus publishes
+  `models-dev.refreshed` {} (global) after RefreshOutcome::Updated
+  (models-dev.ts:416-422); SkippedDigest stays silent.
+- oc-server handlers/credential.rs: credential.updated/switched on
+  create/update/activate/remove with v2's exact pick ordering
+  (desc(active),desc(time_created),desc(id)); replacement pick
+  desc(time_created),desc(id); global routing.
+- oc-server handlers/project.rs: `worktree.updated` {projectID} on
+  row-owning create + successful remove (worktree.ts:131,228,270), routed
+  to the project's location.
+- oc-server announce.rs: location HEAD watcher (port of
+  core/filesystem/location-watcher.ts) on the existing 250ms poll —
+  publishes `filesystem.changed` {file,event:"change"} on HEAD change and
+  `vcs.branch.updated` {branch} when the branch moved (vcs.ts:118-152).
+- installation.*: oc-server announce::publish_installation_event (port of
+  process.ts:115-117) + oc-cli autoupdate notice channel; serve drains it
+  onto the in-process bus. serve.rs wiring, no-op elsewhere.
