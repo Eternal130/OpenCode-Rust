@@ -467,7 +467,8 @@ impl Engine {
                         options.custom_providers.clone(),
                         options.default_model.clone(),
                     )
-                    .with_credentials(Arc::clone(&integration.credential_bindings())),
+                    .with_credentials(Arc::clone(&integration.credential_bindings()))
+                    .with_console(Arc::clone(&integration.console_providers())),
                 )
             });
 
@@ -476,6 +477,7 @@ impl Engine {
         // (v2 re-resolves per attempt; the snapshot keeps bind()
         // synchronous).
         integration.refresh_provider_bindings().await;
+        integration.refresh_console().await;
         {
             use futures::StreamExt as _;
             let host = Arc::clone(&integration);
@@ -487,6 +489,7 @@ impl Engine {
             tokio::spawn(async move {
                 while subscription.next().await.is_some() {
                     host.refresh_provider_bindings().await;
+                    host.refresh_console().await;
                 }
             });
         }
@@ -652,7 +655,8 @@ impl Engine {
                         location_providers.custom,
                         location_providers.default_model,
                     )
-                    .with_credentials(Arc::clone(&self.integration.credential_bindings())),
+                    .with_credentials(Arc::clone(&self.integration.credential_bindings()))
+                    .with_console(Arc::clone(&self.integration.console_providers())),
                     Arc::clone(&self.resolver),
                 ))
             };

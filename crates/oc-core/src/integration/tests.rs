@@ -505,18 +505,52 @@ impl MockOAuth {
             routes.into_iter().map(|(prefix, bodies)| (prefix, bodies.into())).collect();
         let handle = tokio::spawn(async move {
             while let Ok((mut stream, _)) = listener.accept().await {
-                let mut buffer = [0u8; 8192];
-                let read = stream.read(&mut buffer).await.unwrap_or(0);
-                let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
+                let mut buffer = Vec::with_capacity(4096);
+                let mut chunk = [0u8; 4096];
+                // Read until the header terminator AND any content-length
+                // body (single reads can split the head).
+                loop {
+                    let read = stream.read(&mut chunk).await.unwrap_or(0);
+                    if read == 0 {
+                        break;
+                    }
+                    buffer.extend_from_slice(&chunk[..read]);
+                    let Some(head_end) = buffer.windows(4).position(|window| window == b"\r\n\r\n")
+                    else {
+                        continue;
+                    };
+                    let head = String::from_utf8_lossy(&buffer[..head_end]).into_owned();
+                    let length = head
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.trim()
+                                .eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    if buffer.len() >= head_end + 4 + length {
+                        break;
+                    }
+                }
+                let request = String::from_utf8_lossy(&buffer).into_owned();
+                let read = request.len();
                 let path = request.split_whitespace().nth(1).unwrap_or_default().to_owned();
                 let body_start = request.find("\r\n\r\n").map_or(read, |index| index + 4);
                 let form_body = request[body_start..].to_owned();
-                let auth_header = request
+                let headers = request
                     .lines()
-                    .find(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+                    .skip(1)
+                    .take_while(|line| !line.is_empty())
+                    .filter(|line| {
+                        let lowered = line.to_ascii_lowercase();
+                        lowered.starts_with("authorization:") || lowered.starts_with("x-org-id:")
+                    })
                     .map(std::borrow::ToOwned::to_owned)
-                    .unwrap_or_default();
-                log_handle.lock().push(format!("{path} {form_body} | {auth_header}"));
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                log_handle.lock().push(format!("{path} {form_body} | {headers}"));
                 let route = cursors.iter_mut().find(|(prefix, _)| path.starts_with(prefix));
                 let (status, response_body) = match route {
                     Some((_, bodies)) => bodies.pop_front().unwrap_or((404, Value::Null)),
@@ -1609,4 +1643,191 @@ async fn copilot_resolver_binds_route_from_credential() {
         Ok(_) => {}
         Err(error) => panic!("copilot route should bind from the credential: {error:?}"),
     }
+}
+
+// -- BE-3b: console ingestion + status reporters (items 4+5) -----------------------
+
+#[tokio::test]
+async fn console_config_fetch_and_provider_projection() {
+    let mock = MockOAuth::start(vec![(
+        "/api/v2/config",
+        vec![json!({
+            "providers": {
+                "acme-ai": {
+                    "name": "Acme AI",
+                    "settings": { "baseURL": "https://gw.acme.test/v1", "apiKey": "secret-never" },
+                    "headers": { "x-acme-team": "platform" },
+                    "models": {
+                        "acme-large": { "name": "Acme Large" },
+                        "acme-hidden": { "name": "Hidden", "disabled": true }
+                    }
+                }
+            }
+        })],
+    )])
+    .await;
+    let credential = OAuthValue {
+        method_id: "device".into(),
+        refresh: "r".into(),
+        access: "console-access".into(),
+        expires: crate::database::migrations::now_ms() + 3_600_000,
+        metadata: Some(BTreeMap::from([
+            ("server".to_owned(), Value::String(mock.base.clone())),
+            ("orgID".to_owned(), Value::String("org_1".into())),
+        ])),
+    };
+    let config = super::console::fetch_config(&credential).await.expect("fetch").expect("some");
+    let providers = super::console::to_custom_providers(&config);
+    assert_eq!(providers.len(), 1);
+    let provider = &providers[0];
+    assert_eq!(provider.id, "acme-ai");
+    assert_eq!(provider.name, "Acme AI");
+    assert_eq!(provider.base_url, "https://gw.acme.test/v1");
+    let headers = provider.headers.clone().unwrap_or_default();
+    assert_eq!(headers.get("x-acme-team").map(String::as_str), Some("platform"));
+    // Disabled models drop; enabled models carry their names.
+    assert_eq!(provider.models.len(), 1);
+    assert_eq!(provider.models[0].id, "acme-large");
+    assert_eq!(provider.models[0].name.as_deref(), Some("Acme Large"));
+    // Request shape: bearer + org header against the metadata server.
+    let requests = mock.requests().join("\n").to_ascii_lowercase();
+    assert!(requests.contains("authorization: bearer console-access"), "{requests}");
+    assert!(requests.contains("x-org-id: org_1"), "{requests}");
+    // Credentials never ride provider settings (withoutCredentials).
+    assert!(provider.body.is_none());
+}
+
+#[tokio::test]
+async fn console_refresh_reports_sso_required_status() {
+    let mock = MockOAuth::start_with_status(vec![(
+        "/api/v2/config",
+        vec![(403, json!({ "_tag": "SsoRequired", "orgId": "org_9", "connectionId": "conn_42" }))],
+    )])
+    .await;
+    let host = host().await;
+    let value = CredentialValue::OAuth(OAuthValue {
+        method_id: "device".into(),
+        refresh: "r".into(),
+        access: "console-access".into(),
+        expires: crate::database::migrations::now_ms() + 3_600_000,
+        metadata: Some(BTreeMap::from([("server".to_owned(), Value::String(mock.base.clone()))])),
+    });
+    host.store()
+        .create(credential::CreateInput {
+            id: None,
+            integration_id: "opencode",
+            label: Some("org"),
+            value: &value,
+            activate: None,
+        })
+        .await
+        .expect("create");
+    host.refresh_console().await;
+    let info = host.get("opencode").await.expect("get").expect("present");
+    let ConnectionInfo::Credential { status: Some(status), .. } = &info.connections[0] else {
+        panic!("expected a reported status, got {:?}", info.connections)
+    };
+    assert_eq!(status.status, "needs_auth");
+    assert!(status.message.contains("Sign in with SSO"), "{}", status.message);
+    let expected_url = format!("{}/auth/sso/conn_42/start?redirectTo=%2F", mock.base);
+    assert_eq!(status.url.as_deref(), Some(expected_url.as_str()));
+}
+
+#[tokio::test]
+async fn console_refresh_reports_signed_out_and_clears_on_success() {
+    let mock = MockOAuth::start_with_status(vec![(
+        "/api/v2/config",
+        vec![(401, json!({ "_tag": "Unauthorized" }))],
+    )])
+    .await;
+    let host = host().await;
+    let value = CredentialValue::OAuth(OAuthValue {
+        method_id: "device".into(),
+        refresh: "r".into(),
+        access: "console-access".into(),
+        expires: crate::database::migrations::now_ms() + 3_600_000,
+        metadata: Some(BTreeMap::from([("server".to_owned(), Value::String(mock.base.clone()))])),
+    });
+    host.store()
+        .create(credential::CreateInput {
+            id: None,
+            integration_id: "opencode",
+            label: Some("org"),
+            value: &value,
+            activate: None,
+        })
+        .await
+        .expect("create");
+    host.refresh_console().await;
+    let info = host.get("opencode").await.expect("get").expect("present");
+    let ConnectionInfo::Credential { status: Some(status), .. } = &info.connections[0] else {
+        panic!("expected status")
+    };
+    assert!(status.message.contains("Reconnect OpenCode Console"), "{}", status.message);
+
+    // A healthy 404 (no console config) clears the status (item 5).
+    let healthy =
+        MockOAuth::start_with_status(vec![("/api/v2/config", vec![(404, Value::Null)])]).await;
+    let cleared = CredentialValue::OAuth(OAuthValue {
+        method_id: "device".into(),
+        refresh: "r".into(),
+        access: "console-access".into(),
+        expires: crate::database::migrations::now_ms() + 3_600_000,
+        metadata: Some(BTreeMap::from([(
+            "server".to_owned(),
+            Value::String(healthy.base.clone()),
+        )])),
+    });
+    let ConnectionInfo::Credential { id, .. } =
+        host.connection_active("opencode").await.expect("active").expect("some")
+    else {
+        panic!()
+    };
+    host.store().update(&id, None, Some(&cleared)).await.expect("update");
+    host.refresh_console().await;
+    let info = host.get("opencode").await.expect("get 2").expect("present");
+    let ConnectionInfo::Credential { status, .. } = &info.connections[0] else { panic!() };
+    assert!(status.is_none(), "cleared: {status:?}");
+}
+
+#[tokio::test]
+async fn console_provider_resolves_through_the_snapshot() {
+    use crate::engine::resolver::CatalogModelResolver;
+    use crate::provider_catalog::facade::FacadeContext;
+    let host = host().await;
+    let config = serde_json::from_value::<super::console::ConsoleConfig>(json!({
+        "providers": {
+            "acme-ai": {
+                "settings": { "baseURL": "https://gw.acme.test/v1" },
+                "models": { "acme-large": {} }
+            }
+        }
+    }))
+    .expect("config");
+    host.console_providers().swap_for_test(super::console::to_custom_providers(&config));
+    let catalog_text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/provider_catalog/models-dev-snapshot.txt"
+    ))
+    .expect("snapshot");
+    let catalog = std::sync::Arc::new(
+        crate::provider_catalog::catalog::Catalog::parse(&catalog_text).expect("catalog"),
+    );
+    let transport: oc_ai::route::SharedTransport =
+        std::sync::Arc::new(oc_ai::route::transport::reqwest_transport::ReqwestTransport::new());
+    let resolver = CatalogModelResolver::new(
+        FacadeContext::new(transport),
+        catalog,
+        BTreeMap::new(),
+        Vec::new(),
+        None,
+    )
+    .with_console(std::sync::Arc::clone(host.console_providers()));
+    resolver
+        .bind(&oc_schema::model::Ref {
+            provider_id: oc_schema::id::ProviderId::parse("acme-ai".to_owned()),
+            id: oc_schema::id::ModelId::parse("acme-large".to_owned()),
+            variant: None,
+        })
+        .expect("console provider binds");
 }
