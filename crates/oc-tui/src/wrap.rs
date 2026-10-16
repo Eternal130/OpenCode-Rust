@@ -384,7 +384,7 @@ pub fn styled_runs(line: &[Atom]) -> Vec<StyledSpan> {
     for atom in line {
         match runs.last_mut() {
             Some(run) if run.style == atom.style && run.link == atom.link => {
-                run.text.push_str(&atom.text)
+                run.text.push_str(&atom.text);
             }
             _ => runs.push(StyledSpan {
                 text: atom.text.clone(),
