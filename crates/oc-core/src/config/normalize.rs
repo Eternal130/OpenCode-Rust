@@ -2434,6 +2434,78 @@ mod tests {
         }
     }
 
+    /// dogfood2 bug 3 — the sanitized REAL-WORLD provider shape (a live
+    /// config probe, synthetic values) survives normalize untouched:
+    /// `providers.<id>` with camelCase keys, `settings`{apiKey,baseURL},
+    /// per-model overlays whose `cost` is an ARRAY of {input,output}
+    /// entries, a mixed-case top-level `model` selection ("Own/glm-5.3"
+    /// — the providerID keeps its case exactly like v2's
+    /// `Model.Ref.parse`, schema model.ts:27-42), and `small_model`
+    /// migrating into the title agent's model (normalize.ts:137-150).
+    /// A silent drop here hides every config-defined model from the
+    /// picker — the dogfood2 boot-model bug.
+    #[test]
+    fn config_normalize_keeps_the_real_shape_custom_provider() {
+        let (encoded, diagnostics) = normalized(
+            r#"{
+                "providers": {
+                    "own": {
+                        "name": "Own",
+                        "package": "@opencode/ai/providers/anthropic",
+                        "settings": { "apiKey": "sk-SYNTHETIC", "baseURL": "https://synth.invalid/v1" },
+                        "models": {
+                            "glm-5.3": {
+                                "name": "GLM-5.3",
+                                "family": "glm",
+                                "capabilities": { "tools": true, "input": ["text"], "output": ["text"] },
+                                "cost": [ { "input": 0, "output": 0 } ],
+                                "limit": { "context": 600000, "output": 131072 }
+                            }
+                        }
+                    }
+                },
+                "model": "Own/glm-5.3",
+                "small_model": "Own/glm-5.3-flash"
+            }"#,
+        );
+        assert!(diagnostics.is_empty(), "no diagnostics for the real shape: {diagnostics:?}");
+        let own = get(&encoded, "providers").get("own").expect("the provider survives");
+        assert_eq!(own.get("name").and_then(Json::as_str), Some("Own"));
+        assert_eq!(
+            own.get("package").and_then(Json::as_str),
+            Some("@opencode/ai/providers/anthropic")
+        );
+        assert_eq!(
+            own.get("settings").and_then(|s| s.get("baseURL")).and_then(Json::as_str),
+            Some("https://synth.invalid/v1")
+        );
+        let model = own.get("models").and_then(|m| m.get("glm-5.3")).expect("the model survives");
+        assert!(
+            model.get("cost").and_then(Json::as_array).is_some_and(|cost| cost.len() == 1),
+            "the cost ARRAY decodes one-or-many and re-encodes as the list"
+        );
+        assert!(
+            model.get("limit").and_then(|l| l.get("context")).is_some_and(|v| {
+                matches!(v, Json::Number(number) if number.as_i64() == Some(600_000))
+            }),
+            "the limit context survives"
+        );
+        // The selection keeps its case (v2 is case-preserving here).
+        let selection = get(&encoded, "model");
+        assert_eq!(selection.get("providerID").and_then(Json::as_str), Some("Own"));
+        assert_eq!(selection.get("model").and_then(Json::as_str), Some("glm-5.3"));
+        // small_model migrates into the title agent's model.
+        let title = get(get(&encoded, "agents"), "title");
+        assert_eq!(
+            title.get("model").and_then(|m| m.get("providerID")).and_then(Json::as_str),
+            Some("Own")
+        );
+        assert_eq!(
+            title.get("model").and_then(|m| m.get("model")).and_then(Json::as_str),
+            Some("glm-5.3-flash")
+        );
+    }
+
     #[test]
     fn config_normalize_keeps_native_fields_alongside_legacy() {
         let (encoded, _) = normalized(

@@ -295,12 +295,18 @@ impl App {
         let width = usize::from(self.size.0);
         let col = usize::from(mouse.column);
         let row = usize::from(mouse.row);
-        // The strip renders on row 0 of the session route while tabs
-        // are enabled and nothing modal owns the screen.
+        // The strip renders on row 0 while tabs are enabled and nothing
+        // modal owns the screen — on EVERY non-plugin route, exactly
+        // like v2's app-wide mount (`app.tsx:1353-1355` seats
+        // `<SessionTabs/>` above the route `<Switch>`; `tabsAvailable()`
+        // gates on `route.data.type !== "plugin"` only, `app.tsx:576-579`
+        // — home included, no active pill). The dogfood2 repro: restored
+        // tabs on the home route painted but took no clicks because this
+        // gate was session-only.
         let strip_live = self.store.tabs_enabled()
             && self.store.dialogs().is_empty()
             && !self.permission_live()
-            && matches!(self.store.route(), Route::Session { .. });
+            && !self.store.tabs().tabs.is_empty();
         let active = match self.store.route() {
             Route::Session { session_id } => Some(session_id),
             Route::Home => None,
@@ -3652,6 +3658,38 @@ fn mouse_strip_hover_close_select_and_add() {
     app.mouse_event(&mouse(MouseEventKind::Moved, 40, 5));
     assert_eq!(app.store.tabs().hover, None);
     assert!(!app.store.tabs().add_hovered);
+}
+
+/// dogfood2 bug 1 — the strip is a POINTER surface on the HOME route
+/// too: v2 mounts `<SessionTabs/>` app-wide (app.tsx:1353-1355, above
+/// the route `<Switch>`; `tabsAvailable()` = `enabled() &&
+/// tabs().length > 0 && route.data.type !== "plugin"`,
+/// app.tsx:576-579 — never session-route-gated), and `select()` is a
+/// bare route navigate (context/session-tabs.tsx:393-396). Restored
+/// tabs painted at home but took no clicks when this gate was
+/// session-only.
+#[test]
+fn mouse_home_strip_click_selects_the_restored_tab() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut app = App::new((80, 24));
+    app.store.restore_tabs(vec![
+        crate::store::SessionTab { session_id: "r1".into(), title: Some("Restored One".into()) },
+        crate::store::SessionTab { session_id: "r2".into(), title: Some("Restored Two".into()) },
+    ]);
+    assert_eq!(app.store.route(), Route::Home, "restore never moves the boot route");
+    // Hover arms on home exactly like the session route.
+    app.mouse_event(&mouse(MouseEventKind::Moved, 5, 0));
+    assert_eq!(app.store.tabs().hover.as_deref(), Some("r1"));
+    // The body release selects: home → the restored session's route.
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 0));
+    assert_eq!(app.store.route(), Route::Session { session_id: "r1".to_owned() });
+    // The ` + ` affordance still navigates home from the session...
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 65, 0));
+    assert_eq!(app.store.route(), Route::Home);
+    // ...and the second restored tab's body selects from home (tab 2
+    // spans x=32..64 on the 32+32 layout).
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 40, 0));
+    assert_eq!(app.store.route(), Route::Session { session_id: "r2".to_owned() });
 }
 
 /// beta.8 bug 4 — the `+ Thought` disclosure through the pump: a
