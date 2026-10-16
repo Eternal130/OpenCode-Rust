@@ -108,6 +108,17 @@ pub struct ToolState {
     /// `state.metadata` (the subagent tool's progress payload carries
     /// the child `sessionID`).
     pub metadata: std::collections::BTreeMap<String, String>,
+    /// The RAW metadata JSON (`state.metadata` verbatim) — the detail
+    /// cells read STRUCTURED fields the stringified map flattens away
+    /// (`loaded` arrays, `files` objects, `toolCalls`).
+    pub metadata_json: Option<serde_json::Value>,
+    /// `state.content`'s joined text blocks (`toolDisplayContent`,
+    /// util/tool-display.ts:59-62) — the shell output / read output
+    /// the detail cells preview.
+    pub output: Option<String>,
+    /// `state.error.message` on `failed` — the error row + the
+    /// `DialogExecute` error variant.
+    pub error: Option<String>,
 }
 
 /// The tool part status (`state.status`).
@@ -226,9 +237,39 @@ pub enum Message {
         id: String,
         created: u64,
     },
+    /// `compaction` message — the `──── Compaction ────` divider row
+    /// (`CompactionMessage`, session/index.tsx:2002-2068). The wire
+    /// union's three statuses project onto these fields (running →
+    /// `running`, completed → summary/tokens, failed → error/cancel).
     Compaction {
         id: String,
+        created: u64,
+        /// `status === "running"`.
         running: bool,
+        /// `status === "failed"`.
+        failed: bool,
+        /// failed AND `error.type === "aborted"` — the `· cancelled`
+        /// suffix (index.tsx:2008); suppresses the error color.
+        cancelled: bool,
+        /// failed (not cancelled) → `error.message` — the divider
+        /// paints it in the error color instead of a summary.
+        error: Option<String>,
+        /// running/completed → `summary` (the markdown body under the
+        /// divider, paddingTop 1 paddingLeft 3).
+        summary: Option<String>,
+        /// `tokens.input + cache.read + cache.write` — the `N in`
+        /// numerator (`CompactionMessage`'s usage, index.tsx:2021-2029).
+        tokens_in: Option<u64>,
+        /// `tokens.output + reasoning` — the `M out` numerator.
+        tokens_out: Option<u64>,
+        /// `providerContext` set on completion → "Provider compaction".
+        provider_compaction: bool,
+    },
+    /// `skill` message — the `→ Skill {name}` inline row
+    /// (`SessionSkillMessage`, session/index.tsx:1993-1999).
+    Skill {
+        id: String,
+        name: String,
         created: u64,
     },
     /// `synthetic` message: an instruction load (`metadata.instruction`)
@@ -250,6 +291,7 @@ impl Message {
             | Self::Assistant { id, .. }
             | Self::Idle { id, .. }
             | Self::Compaction { id, .. }
+            | Self::Skill { id, .. }
             | Self::Synthetic { id, .. } => id,
         }
     }
@@ -270,6 +312,7 @@ impl Message {
             | Self::Assistant { time: PartTime { created: Some(created), .. }, .. }
             | Self::Idle { created, .. }
             | Self::Compaction { created, .. }
+            | Self::Skill { created, .. }
             | Self::Synthetic { created, .. } => *created,
             Self::Assistant { .. } => 0,
         }
@@ -530,6 +573,7 @@ pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
             }
             Message::User { id, .. }
             | Message::Compaction { id, .. }
+            | Message::Skill { id, .. }
             | Message::Synthetic { id, .. } => {
                 projections.push(Projection {
                     entry: Entry::Message { message_id: id.clone() },
