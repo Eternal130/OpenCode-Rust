@@ -196,9 +196,42 @@ pub struct SidebarPaint {
     pub onboarding_hits: Option<crate::store::SidebarOnboardingHits>,
 }
 
-/// Render the sidebar pane over `height` rows.
+/// The content slot's viewport height (rows between the title and
+/// the footer stack) — the scroll clamp's input, the same bound
+/// [`render_sidebar_scrolled`] clips against.
+#[must_use]
+pub fn sidebar_content_viewport(view: &SidebarView, theme: &ThemeStyles, height: usize) -> usize {
+    let footer_top = if view.onboarding {
+        let card_h = card_height(theme);
+        height.saturating_sub(4).saturating_sub(card_h).saturating_add(1)
+    } else {
+        height.saturating_sub(2)
+    };
+    footer_top.saturating_sub(2)
+}
+
+/// Render the sidebar pane over `height` rows: the title, the
+/// scrolling CONTENT SLOT (the plugin sections — the wheel surface,
+/// auditA #1) and the bottom footer stack (location row + onboarding
+/// card), which stay put. Sections sit at their natural positions
+/// (the golden fixtures' view); the wheel path uses
+/// [`render_sidebar_scrolled`].
 #[must_use]
 pub fn render_sidebar(view: &SidebarView, theme: &ThemeStyles, height: usize) -> SidebarPaint {
+    render_sidebar_scrolled(view, theme, height, 0)
+}
+
+/// [`render_sidebar`] with the content slot's wheel offset — rows
+/// scrolled out of the slot's viewport (bounded by the footer
+/// stack's top) are dropped, like v2's `sidebar.content` scrollbox
+/// clipping its children.
+#[must_use]
+pub fn render_sidebar_scrolled(
+    view: &SidebarView,
+    theme: &ThemeStyles,
+    height: usize,
+    scroll: usize,
+) -> SidebarPaint {
     let raised = theme.background_raised;
     let fg_base = theme.text.fg.unwrap_or(crate::components::tool_rows::DEFAULT_FOREGROUND);
     let fg_muted = theme.text_muted.fg.unwrap_or(fg_base);
@@ -217,38 +250,59 @@ pub fn render_sidebar(view: &SidebarView, theme: &ThemeStyles, height: usize) ->
         tag: Some("sidebar.title".into()),
     });
 
+    // The content slot's viewport: rows [2, footer_top) — the footer
+    // stack (location row at height−2, the onboarding card above it)
+    // owns everything below `footer_top`.
+    let footer_top = if view.onboarding {
+        let card_h = card_height(theme);
+        height.saturating_sub(4).saturating_sub(card_h).saturating_add(1)
+    } else {
+        height.saturating_sub(2)
+    };
+
     // The content slot (`sidebar.content`): one blank row after the
     // title, then every plugin section — a bold header row plus
     // muted rows, 2 columns in, 1-row gap between sections. Empty
-    // sections render nothing (the golden fixture's shape).
-    let mut y = 2;
+    // sections render nothing (the golden fixture's shape). The
+    // wheel offset shifts the slot; rows outside the viewport drop.
+    let mut y = 0usize;
+    let slot_row = |y: usize| y.checked_sub(scroll).map(|visible| visible + 2);
     for section in &view.sections.plugins {
         if section.title.is_empty() && section.rows.is_empty() {
             continue;
         }
-        if !section.title.is_empty() {
-            let title = crate::wrap::take_width(&section.title, SESSION_SIDEBAR_WIDTH - 4);
+        let place_slot = |paint: &mut SidebarPaint, text: &str, y: usize| {
+            let Some(row) = slot_row(y) else { return };
+            if row >= footer_top {
+                return;
+            }
+            let text = crate::wrap::take_width(text, SESSION_SIDEBAR_WIDTH - 4);
             paint.placed.push(Placed {
                 x: 2,
-                y,
-                width: crate::wrap::display_width(&title),
+                y: row,
+                width: crate::wrap::display_width(&text),
                 lines: vec![PlacedLine::plain(
-                    title,
+                    text,
                     Style::new().fg(fg_base).bg(raised).add_modifier(Modifier::BOLD),
                 )],
                 tag: Some("sidebar.plugin-section".into()),
             });
+        };
+        if !section.title.is_empty() {
+            place_slot(&mut paint, &section.title, y);
             y += 1;
         }
         for row in &section.rows {
-            let text = crate::wrap::take_width(row, SESSION_SIDEBAR_WIDTH - 4);
-            paint.placed.push(Placed {
-                x: 2,
-                y,
-                width: crate::wrap::display_width(&text),
-                lines: vec![PlacedLine::plain(text, Style::new().fg(fg_muted).bg(raised))],
-                tag: None,
-            });
+            if let Some(slot) = slot_row(y).filter(|slot| *slot < footer_top) {
+                let text = crate::wrap::take_width(row, SESSION_SIDEBAR_WIDTH - 4);
+                paint.placed.push(Placed {
+                    x: 2,
+                    y: slot,
+                    width: crate::wrap::display_width(&text),
+                    lines: vec![PlacedLine::plain(text, Style::new().fg(fg_muted).bg(raised))],
+                    tag: None,
+                });
+            }
             y += 1;
         }
         y += 1; // the inter-section gap
@@ -486,5 +540,52 @@ mod tests {
         );
         // The empty section painted nothing at row 5.
         assert!(paint.placed.iter().all(|p| p.y != 5), "the gap row stays blank");
+    }
+
+    /// The wheel offset re-slices the content slot (auditA #1): the
+    /// sections shift up by `scroll`, rows scrolled past the slot's
+    /// viewport drop, and the title + footer chrome stay put — v2's
+    /// `sidebar.content` scrollbox clipping.
+    #[test]
+    fn scrolled_content_slot_shifts_sections_and_keeps_chrome() {
+        let theme = theme();
+        let mut view = SidebarView::fixture("Sidebar fixture", "/tmp/opencode/x:main");
+        view.onboarding = false;
+        view.sections.plugins = vec![SidebarSection {
+            plugin_id: "omos".into(),
+            title: "Preset".into(),
+            rows: (0..8).map(|index| format!("row {index}")).collect(),
+        }];
+        let paint = render_sidebar_scrolled(&view, &theme, 12, 2);
+        let slot: Vec<(usize, String)> = paint
+            .placed
+            .iter()
+            .filter(|p| p.y >= 2 && p.y < 10)
+            .map(|p| (p.y, p.lines.iter().map(PlacedLine::text).collect::<String>()))
+            .collect();
+        assert_eq!(
+            slot,
+            vec![
+                (2, "row 1".to_owned()),
+                (3, "row 2".to_owned()),
+                (4, "row 3".to_owned()),
+                (5, "row 4".to_owned()),
+                (6, "row 5".to_owned()),
+                (7, "row 6".to_owned()),
+                (8, "row 7".to_owned()),
+            ],
+            "scroll 2 hides the section title + first body row; the rest shift up (the slot ends above the location row at 10)"
+        );
+        // Chrome: the title never moves; the location row stays at
+        // height − 2.
+        let title =
+            paint.placed.iter().find(|p| p.tag.as_deref() == Some("sidebar.title")).expect("title");
+        assert_eq!(title.y, 1, "the title is chrome — it never scrolls");
+        let location = paint
+            .placed
+            .iter()
+            .find(|p| p.tag.as_deref() == Some("sidebar.footer.location"))
+            .expect("location");
+        assert_eq!(location.y, 10, "the footer stack stays pinned to the bottom");
     }
 }
