@@ -1,0 +1,189 @@
+# if — oc-tui serial chain, lane 4 (input foundations: auditA top interaction gaps)
+
+Worktree `.worktrees/lane-if` (branch `lane/if`, off main c0986d3).
+Evidence base: docs/auditA-interactions.md findings #1, #2, #4, #5, #6.
+All cargo via `tools/dev-gate.sh` with `OPENCODE_DEV_GATE_DIR` pinned to
+the worktree.
+
+Items (1:1 with v2 semantics):
+
+1. Mouse-wheel everywhere (auditA #1) — `Scroll*` unhandled; wire wheel
+   deltas into the scroll paths (transcript half-page per the E1 rules,
+   dialog lists, sidebar; diff hook point documented).
+2. Hit-registry lifetime + route gating (auditA #2) — stale
+   `transcript_hit_rows`/`footer_location_hit` fire phantom clicks on
+   Home; clear on route change + route-gate `mouse_event`.
+3. Permission prompt pointer-dead (auditA #4) — wire the pointer arms
+   (pills move+select/run; reject-stage confirm/cancel buttons).
+4. Disclosure arming 1-of-5 (auditA #5) — arm all five group surfaces
+   with v2's toggle semantics.
+5. Dialog ✕ family (auditA #6) — the shared header close affordance +
+   the Help `ok` button row (the port's existing dialogs' v2 buttons).
+
+## Item 2 — hit-registry lifetime + route gating (auditA #2) — DONE (commit ae5524f)
+
+Root cause: `set_transcript_hit_rows` (session.rs:304) and
+`set_footer_location_hit` (session.rs:660) were written only by the
+session render; `navigate()` (store.rs:3018, the only `route.set`)
+never cleared them, and `mouse_event`'s Up(Left)/Moved arms read both
+registries without a route gate — after Session → Home a release on a
+stale row rect toggled the previous session's group / opened
+WorkingDirectory with stale coords, and Moved could flip hover.
+
+Fix: `Store::clear_route_pointer_registries()` on every navigate
+(+ sidebar wheel geometry, item 1); Up(Left) transcript loop requires
+`hit.session_id == route session`; footer-location Up + Moved hover
+gated on `Route::Session`. Tests:
+`route_change_clears_the_pointer_registries`,
+`home_release_fires_no_stale_transcript_or_location_hits` (pins the
+clear AND the gate independently via a re-injected stale row).
+
+## Item 1 — mouse wheel everywhere (auditA #1) — DONE (commit e630880)
+
+Root cause: `MouseEventKind::Scroll*` matched the catch-all `_ => {}`
+arm — no wheel surface existed.
+
+Fix (modal-first routing in `mouse_event`):
+- dialog → `SelectState::scroll_window_by` (3 rows/notch, window
+  only — the selection never moves, v2's dialog scrollbox);
+- permission → consumed (the body renders all lines; no leak);
+- sidebar columns → `Store::sidebar_scroll_by` (3/notch, clamped by
+  `content_height - viewport`, geometry recorded by the session
+  render; hidden pane/route change resets);
+- transcript → one notch = `session.page.up/down` through the SAME
+  `ScrollCommand::PageUp/PageDown` driver the keys use — the E1
+  half-page math (±viewport/2, js_round half→+∞, sticky re-arm);
+  `wheel_scrolls_the_transcript_half_a_page_per_notch` asserts the
+  numeric landing AND equality with the `pageup` key path;
+- diff-viewer hook point documented at the arm (dead code until it
+  mounts — auditA §2.12).
+Sidebar render: `render_sidebar_scrolled` (chrome pinned, slot
+clipped at the footer stack); solid path threads the offset.
+
+## Item 3 — permission pointer arms (auditA #4) — DONE (commit b98a8ce)
+
+Root cause: the ask's pills/buttons render in
+`footer/permission.rs` but `mouse_event`'s arms all early-returned
+under `permission_live()` (app.rs:420) — v2 renders them as the
+screen's only interactive surface (permission.tsx:375-400, 583-587).
+
+Fix: `permission_pointer_hits()` (the pure layout twin of
+`render_permission_controls`: pills from x=2 label+2-wide with 1-gap;
+the reject stage's right-aligned `enter confirm`/`esc cancel` button
+extents ending at width−4) + the store registry (recorded by
+`App::frame`'s permission mount at absolute cells, controls row =
+size.1−2; cleared on `permission_replied` and when no ask is live).
+`mouse_event`: Moved over a pill selects; Up on a pill sets the
+selection then runs the keyboard-enter path (reply through
+`permission_replies` + local resolution); Up on the reject hint
+buttons maps to the reject-stage enter/escape. The
+transcript-protecting early return now sits INSIDE the permission
+branch, after its own targets. Tests:
+`permission_allow_once_via_pointer` (hover-select + reply + rect
+teardown), `permission_reject_confirm_and_cancel_via_pointer` (the
+full reject cycle + stray-release negative).
+
+## Item 4 — all five disclosure surfaces (auditA #5) — DONE (commit f6ec08e)
+
+Root cause: session.rs:313 armed only `group:Reasoning:` keys; the
+`group:Exploration:`/`group:Activity:`/`group:Instructions:` rows
+(message/list.rs:526's `row_key`) and the `thought:{mid}:{pid}` rows
+(list.rs:216) rendered with the affordance but had no hit rows.
+
+Fix: hit rows arm EVERY `group:` key (v2's `useDisclosure` toggle:
+group-view.tsx:152/183/219/256 — plugin-rule kinds ride GroupContent
+too) with the same glyph-tight rect; thought rows arm as
+`ToggleThought` (the minimal-mode ReasoningHeader toggle,
+message-parts.tsx:66-86) with the first line's glyphs. The render
+honors a per-session collapsed set: a collapsed thought renders its
+one-line `+ Thought: {title}` header (via `reasoning_header_row`)
+instead of the bordered body — the port's stand-in for v2's
+toggleable inline header (the always-grouping reducer never produces
+the ungrouped form). Default renders unchanged — zero golden churn.
+Expanded Exploration/Instructions CONTENT rides the missing tool-row
+surface (auditA #9, out of lane): the state flip is v2-exact
+(`setGroupExpanded`), the children render nothing yet either way.
+Tests: `exploration_group_header_toggles`,
+`thought_rows_toggle_their_disclosure`.
+
+## Item 5 — the dialog close family (auditA #6) — DONE (commit df0a7eb)
+
+Root cause: the port's dialog chrome renders the header's muted
+`esc`/`esc/enter` label (v2's ~22 per-dialog close affordances, e.g.
+dialog-help.tsx:25, dialog-confirm.tsx:64) and the Help `ok` pill —
+all dead (backdrop/escape only).
+
+Fix: `dialog_chrome_button_hits()` in dialog_solid.rs — the close
+label's rect per family (select/plugin-rows paddingRight 4,
+prompt/help paddingRight 2; Help's label is `esc/enter`) + the Help
+ok pill (the button BOX: padding 3 + ok + padding 3, right-justified
+on the last content row). v2's labels carry no hover styling — the
+hit rect alone is the affordance. `render_overlay` records them with
+the frame rect (cleared together); the Up(Left) dialog branch checks
+the buttons FIRST (child-first bubbling): Close pops the dialog (the
+port's per-dialog esc parity), HelpOk clears the stack
+(dialog-help.tsx:39). Tests:
+`dialog_header_close_label_releases_closed` (the rect hugs the
+painted `esc` glyphs), `help_dialog_ok_button_and_esc_label_close`.
+Note: the confirm-OK/export/error-details button rows belong to
+dialogs the port does not have ((c) missing surfaces, auditA §2.7) —
+out of this item's ✕-family scope.
+
+## Bonus fix — the footer-location hit rect was one row high
+
+The PTY proof clicked the PAINTED label and nothing opened: the rect
+said `height−2` (session.rs:714) but the opentui-solid bridge paints
+the prompt mount's footer row — the label — at `height−1`. Rect
+fixed to the painted row (pre-existing since M3; no prior test
+pinned the screen row — the unit tests inject the rect).
+
+## Verification (chain tier: affected crates + targeted + PTY proofs + rig --quick)
+
+* **Affected-crate nextest** (`-p oc-tui -p oc-cli --no-fail-fast`):
+  **906 passed, 2 skipped** (pre-existing), 1 known flake
+  (pty_engine_cycle, load class, green on retry).
+* **New unit tests (in the 906)**: item 2 — registry clear on
+  navigate + the phantom-click negative (clear AND gate pinned
+  independently); item 1 — wheel half-page parity vs the `pageup`
+  key (numeric js_round equality), dialog window-vs-selection,
+  sidebar column gate + clamp, the scrolled render slice; item 3 —
+  allow-once + reject confirm/cancel via pointer; item 4 —
+  exploration header toggle + per-thought collapse/expand; item 5 —
+  close-label rect hugging the painted `esc` + Help ok pill.
+* **New PTY proofs** (`pty_lane_if.rs`, 5, run under `--profile pty`
+  + a `retries = 2` nextest override — the spawn-contention class):
+  wheel cycle (SGR 64/65: one notch = a half-page-class step, tail
+  leaves, down-notches re-stick; exact math unit-pinned), the
+  phantom-click negative (positive control on the session route,
+  then the SAME coords on Home open nothing), permission
+  allow-once via the pill + reject via pill → `enter confirm`
+  (a queued second ask, both zero-keystroke), the reasoning-group +
+  per-thought disclosure cycle, the palette close label.
+  Harness additions: `sgr_scroll_up/down` + an OPT-IN `/api/vcs`
+  stub (`fake.arm_vcs()` — opt-in because the resolved label's
+  hover lift is a real cell response the hover sweeps would flag;
+  their baselines stay unchanged).
+* **fmt --all --check: clean; clippy -p oc-tui -p oc-cli
+  --all-targets: 0 warnings.**
+* **Rig --quick (live ref)**, lane @ 80×24:
+  - boot-home: 3/3 mismatching steps' first-diff = row 13, the
+    registered (b)-coin placeholder (styles identical).
+  - multi-session: first-diffs = digit drift (26,8 `Nms`) +
+    backdrop-fg idx15 + bg idx0↔idx232 — all registered classes.
+  - thought-expand(-structural): placeholder coin + idx15 + the
+    registered idx94/idx215 `+ Thought · Nms` class.
+  - palette: placeholder coin + idx15.
+  - **A/B vs main (same scripts, live both sides): palette and
+    thought-expand mismatch tables BYTE-IDENTICAL to main's own
+    runs** — zero new divergence classes.
+* Notes/limits: (1) the PTY wheel proof pins the half-page CLASS +
+  re-stick live (the store's viewport differs from the visible
+  marker count by the pane's chrome rows; the exact landing is
+  unit-pinned against the pageup key); (2) v2's wheel acceleration
+  (`MacOSScrollAccel`) is unmodelled — crossterm wheel events carry
+  no timestamps to feed it (documented at the arm); (3) the
+  diff-viewer wheel hook point is documented in code at the Scroll
+  arm (the viewer mounts nowhere — auditA §2.12); (4) dialog-list
+  wheel = 3 rows/notch (opentui's own terminal wheel delta), not
+  the transcript's half-page (v2's dialog scrollboxes are
+  line-scrollers).

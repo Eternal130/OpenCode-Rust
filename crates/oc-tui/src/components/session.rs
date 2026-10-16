@@ -253,6 +253,7 @@ pub fn render_session(
                 .expanded_group_keys(session_id)
                 .into_iter()
                 .collect::<Vec<String>>(),
+            collapsed_thoughts: store.collapsed_thought_keys(session_id),
             image_strip: crate::components::message::rows::ImageStripOptions {
                 enabled: store.image_preview(),
                 protocol: store.graphics_protocol(),
@@ -310,7 +311,18 @@ pub fn render_session(
                 if screen_y >= content_top + transcript_height {
                     return None;
                 }
-                if row.key.starts_with("group:Reasoning:") {
+                // The disclosure toggles: EVERY group kind arms
+                // (lane/if item 4 — v2's `useDisclosure` toggle rides
+                // `GroupContent`'s InlineToolRow for Reasoning AND
+                // Exploration, Activity's and Instructions' own rows:
+                // group-view.tsx:152/183/219/256) with a TIGHT rect:
+                // v2's toggle box is the InlineToolRow content
+                // (paddingLeft 3 + the 2-wide icon slot + the label's
+                // own glyphs, `group-view.tsx:176-190`), not the whole
+                // row. The thought rows arm as the minimal-mode
+                // ReasoningHeader toggle (message-parts.tsx:80-86) —
+                // the first line's glyphs.
+                if row.key.starts_with("group:") {
                     let heads = row.placed.iter().filter(|item| item.y == row.y);
                     let x = heads.clone().map(|item| item.x).min().unwrap_or_default();
                     let end = heads
@@ -334,6 +346,40 @@ pub fn render_session(
                         action: crate::store::TranscriptHitAction::ToggleGroup(row.key.clone()),
                         y: screen_y,
                         height: row.height,
+                        x,
+                        width: end - x,
+                    })
+                } else if let Some(rest) = row.key.strip_prefix("thought:") {
+                    // `thought:{message_id}:{part_id}` — the part ids
+                    // may contain colons themselves; split at the
+                    // FIRST (the message id never does).
+                    let (message_id, part_id) = rest.split_once(':')?;
+                    let heads = row.placed.iter().filter(|item| item.y == row.y);
+                    let x = heads.clone().map(|item| item.x).min().unwrap_or_default();
+                    let end = heads
+                        .map(|item| {
+                            item.x
+                                + item
+                                    .lines
+                                    .first()
+                                    .map(|line| {
+                                        line.runs
+                                            .iter()
+                                            .map(|run| crate::wrap::display_width(&run.text))
+                                            .sum::<usize>()
+                                    })
+                                    .unwrap_or_default()
+                        })
+                        .max()
+                        .unwrap_or_default();
+                    (end > x).then(|| crate::store::TranscriptHitRow {
+                        session_id: session_id.to_owned(),
+                        action: crate::store::TranscriptHitAction::ToggleThought {
+                            message_id: message_id.to_owned(),
+                            part_id: part_id.to_owned(),
+                        },
+                        y: screen_y,
+                        height: 1,
                         x,
                         width: end - x,
                     })
@@ -427,8 +473,29 @@ pub fn render_session(
         // Lane M5 dual-path — the flag selects the opentui-solid pane
         // tree (`sidebar_solid`) or the hand-rolled placed-runs walk
         // (the `OC_SIDEBAR_OPENTUI=0` fallback, one release); BOTH
-        // consume the same `render_sidebar` geometry.
-        let pane = crate::components::sidebar_solid::sidebar_pane_frame(&view, styles, pane_height);
+        // consume the same `render_sidebar` geometry. The content
+        // slot's wheel offset (auditA #1) rides the same walk.
+        let scroll = store.sidebar_scroll().offset;
+        let pane = crate::components::sidebar_solid::sidebar_pane_frame(
+            &view,
+            styles,
+            pane_height,
+            scroll,
+        );
+        let origin_x = if sidebar_docked {
+            column
+        } else {
+            width.saturating_sub(crate::components::session_tabs::SESSION_SIDEBAR_WIDTH)
+        };
+        // The wheel geometry: the content slot's height + the rows it
+        // can show (the same bound the render clips against), plus
+        // the pane's absolute columns — `mouse_event`'s Scroll* arm
+        // gates on them.
+        store.set_sidebar_scroll_geometry(
+            view.sections.content_height(),
+            crate::components::sidebar::sidebar_content_viewport(&view, styles, pane_height),
+            Some((origin_x, crate::components::session_tabs::SESSION_SIDEBAR_WIDTH)),
+        );
         // The onboarding card's pointer targets at ABSOLUTE cells: the
         // same `render_sidebar` geometry the pane painted, translated
         // by the paste origin (docked at the transcript column, or the
@@ -436,13 +503,9 @@ pub fn render_session(
         // runs while the card is up; a hidden card clears the rects
         // (stale hits after a dismiss would zombie-click).
         let hits = view.onboarding.then(|| {
-            crate::components::sidebar::render_sidebar(&view, styles, pane_height).onboarding_hits
+            crate::components::sidebar::render_sidebar_scrolled(&view, styles, pane_height, scroll)
+                .onboarding_hits
         });
-        let origin_x = if sidebar_docked {
-            column
-        } else {
-            width.saturating_sub(crate::components::session_tabs::SESSION_SIDEBAR_WIDTH)
-        };
         store.set_sidebar_onboarding_hits(hits.flatten().map(|mut hits| {
             let shift = |rect: &mut crate::store::HitRect| {
                 rect.x += origin_x;
@@ -461,6 +524,9 @@ pub fn render_session(
         }
     } else {
         store.set_sidebar_onboarding_hits(None);
+        // The pane unmounted — v2's scrollbox goes with it (the
+        // offset resets, no x extent gates the wheel).
+        store.set_sidebar_scroll_geometry(0, 0, None);
     }
     frame
 }
@@ -642,10 +708,13 @@ fn composer_mount_frame(
         rail,
         caret: None,
     };
-    // #33 — the location label's hit rect (the status row docks at
-    // `height - 2`; the label's painted extent from the same math the
-    // row paints with). Empty label ⇒ no hit.
-    let status_row = height.saturating_sub(2);
+    // #33 — the location label's hit rect (the footer row is the
+    // prompt mount's LAST row: pasted at `height - prompt_height`,
+    // its footer row lands on `height - 1` — the lane/if PTY proof
+    // clicked the painted label and caught the rect one row high).
+    // The label's painted extent comes from the same math the row
+    // paints with. Empty label ⇒ no hit.
+    let status_row = height.saturating_sub(1);
     let location_hit = crate::components::composer::render::footer_location_extent(&view, width)
         .map(|(x, label_width)| crate::store::FooterLocationHit {
             directory: view

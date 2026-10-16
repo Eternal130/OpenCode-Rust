@@ -867,6 +867,10 @@ pub struct Store {
     /// `session-tabs.tsx:387-391`): the set of EXPANDED group row
     /// keys (`group:Reasoning:…`) for each session.
     expanded_groups: std::cell::RefCell<HashMap<String, std::collections::HashSet<String>>>,
+    /// Per-session COLLAPSED thought rows (`"{message_id}:{part_id}"`
+    /// keys — the minimal-mode thought disclosure, message-parts.tsx:
+    /// 66-86; absent ⇒ expanded, the default render).
+    collapsed_thoughts: std::cell::RefCell<HashMap<String, std::collections::HashSet<String>>>,
     /// The last frame's clickable transcript rows ([`render_session`]
     /// writes them like `frame_images`): the reasoning-group headers
     /// whose absolute `[y, y+height)` rect a mouse release can toggle.
@@ -881,6 +885,23 @@ pub struct Store {
     /// The sidebar onboarding card's pointer targets (the render
     /// pass's absolute rects; `None` while the card is hidden).
     sidebar_onboarding_hits: std::cell::RefCell<Option<SidebarOnboardingHits>>,
+    /// The session sidebar's wheel-scroll state (auditA #1): the
+    /// content-slot offset plus the geometry the last render saw
+    /// (content rows, viewport rows, absolute x extent). v2's
+    /// `sidebar.content` is a scrollbox (`feature-plugins/sidebar`
+    /// mounts it in one); the port's pane is one flat walk, so the
+    /// wheel drives this offset and the render re-slices.
+    sidebar_scroll: std::cell::RefCell<SidebarScrollState>,
+    /// The permission body's pointer targets (auditA #4) at
+    /// ABSOLUTE screen cells — recorded by the render (`App::frame`,
+    /// the body's mount), cleared when the ask resolves.
+    permission_pointer_hits:
+        std::cell::RefCell<Option<crate::components::footer::permission::PermissionPointerHits>>,
+    /// The top dialog's chrome buttons (auditA #6: the header close
+    /// label + the Help `ok` pill) at absolute cells — recorded by
+    /// the overlay render alongside `dialog_frame_rect`, cleared with
+    /// it.
+    dialog_button_hits: std::cell::RefCell<Vec<DialogButtonHit>>,
     /// The location label's hover state (`hovered()`).
     location_hovered: std::cell::Cell<bool>,
     /// Per-session scroll state (Wave A's scroll driver over
@@ -999,9 +1020,18 @@ pub struct PickerEntry {
 /// What a transcript hit does when released (`onMouseUp`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptHitAction {
-    /// Toggle the reasoning group's disclosure ([`group-view.tsx`]
-    /// `InlineToolRow` `onMouseUp={toggle}`).
+    /// Toggle a group disclosure ([`group-view.tsx`]'s
+    /// `onMouseUp={toggle}` — armed for EVERY group kind: Reasoning
+    /// :183, Exploration :152, Activity :219, Instructions :256; the
+    /// plugin rules table's kinds ride `GroupContent` too).
     ToggleGroup(String),
+    /// Toggle one thought's disclosure (the minimal-mode
+    /// `ReasoningHeader` box, message-parts.tsx:80-86: `toggleable`,
+    /// the body behind `<Show when={expanded}>`). The port's
+    /// `thought:{mid}:{pid}` rows are the equivalent surface —
+    /// collapsed renders the one-line `+ Thought: {title}` header,
+    /// expanded the bordered body.
+    ToggleThought { message_id: String, part_id: String },
     /// Open the user message's "Message Actions" select
     /// ([`UserMessage`]'s `onMouseUp` → `dialog.replace(DialogMessage)`,
     /// session/index.tsx:2243-2249).
@@ -1015,7 +1045,7 @@ impl TranscriptHitAction {
     pub fn toggle_key(&self) -> Option<&str> {
         match self {
             Self::ToggleGroup(key) => Some(key.as_str()),
-            Self::MessageActions { .. } => None,
+            Self::ToggleThought { .. } | Self::MessageActions { .. } => None,
         }
     }
 }
@@ -1084,6 +1114,60 @@ impl HitRect {
 pub struct SidebarOnboardingHits {
     pub dismiss: HitRect,
     pub connect: HitRect,
+}
+
+/// The sidebar's wheel-scroll model (auditA #1): the content-slot
+/// offset plus the last render's geometry — the max offset is
+/// `content_height - viewport` (v2's scrollbar clamp), and the
+/// absolute x extent gates which wheel events belong to the pane.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SidebarScrollState {
+    /// The content slot's scrolled offset (rows hidden above).
+    pub offset: usize,
+    /// Rows the sections paint in total.
+    pub content_height: usize,
+    /// Rows the content slot can show (between title and footer).
+    pub viewport: usize,
+    /// The pane's absolute columns (`[x, x + width)`), when shown.
+    pub x_extent: Option<(usize, usize)>,
+}
+
+impl SidebarScrollState {
+    /// The maximum offset (0 when the content fits).
+    #[must_use]
+    pub fn max_offset(self) -> usize {
+        self.content_height.saturating_sub(self.viewport)
+    }
+
+    /// Whether a wheel event at column `col` belongs to the pane.
+    #[must_use]
+    pub fn contains_col(self, col: usize) -> bool {
+        self.x_extent.is_some_and(|(x, width)| col >= x && col < x + width)
+    }
+}
+
+/// What a dialog chrome button does on release (auditA #6 — v2's
+/// per-dialog close affordances).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogButtonAction {
+    /// The title row's muted close label (`esc` / `esc/enter`) —
+    /// every dialog header carries one (`dialog-help.tsx:25`,
+    /// `dialog-confirm.tsx:64`, `dialog-update.tsx:98`, ~22 v2
+    /// files): `onMouseUp={() => dialog.clear()}`. v2's label carries
+    /// NO hover styling (plain muted text) — the hit rect alone is
+    /// the affordance.
+    Close,
+    /// The Help dialog's right-justified `ok` button
+    /// (`dialog-help.tsx:33-40`: the focused-action pill,
+    /// `onMouseUp={() => dialog.clear()}`).
+    HelpOk,
+}
+
+/// One dialog chrome button's pointer target (absolute cells).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DialogButtonHit {
+    pub action: DialogButtonAction,
+    pub rect: HitRect,
 }
 
 /// One queued prompt (`session.inbox` row with `delivery: "queue"`,
@@ -1376,11 +1460,15 @@ impl Store {
             graphics_protocol: Cell::new(crate::image::GraphicsProtocol::None),
             frame_images: std::cell::RefCell::new(Vec::new()),
             expanded_groups: std::cell::RefCell::new(HashMap::new()),
+            collapsed_thoughts: std::cell::RefCell::new(HashMap::new()),
             transcript_hit_rows: std::cell::RefCell::new(Vec::new()),
             dialog_frame_rect: std::cell::RefCell::new(None),
             dialog_option_rows: std::cell::RefCell::new(Vec::new()),
             footer_location_hit: std::cell::RefCell::new(None),
             sidebar_onboarding_hits: std::cell::RefCell::new(None),
+            sidebar_scroll: std::cell::RefCell::new(SidebarScrollState::default()),
+            permission_pointer_hits: std::cell::RefCell::new(None),
+            dialog_button_hits: std::cell::RefCell::new(Vec::new()),
             location_hovered: std::cell::Cell::new(false),
             scroll: std::cell::RefCell::new(HashMap::new()),
             transcript_metrics: std::cell::RefCell::new(HashMap::new()),
@@ -2532,9 +2620,60 @@ impl Store {
         self.expanded_groups.borrow().get(session_id).cloned().unwrap_or_default()
     }
 
+    /// Toggle one thought row's disclosure (the minimal-mode
+    /// `ReasoningHeader` toggle, message-parts.tsx:66-86) and report
+    /// the new EXPANDED value (absent ⇒ expanded).
+    pub fn toggle_thought_expanded(
+        &self,
+        session_id: &str,
+        message_id: &str,
+        part_id: &str,
+    ) -> bool {
+        let key = format!("{message_id}:{part_id}");
+        let mut thoughts = self.collapsed_thoughts.borrow_mut();
+        let set = thoughts.entry(session_id.to_owned()).or_default();
+        if set.remove(&key) {
+            true
+        } else {
+            set.insert(key);
+            false
+        }
+    }
+
+    /// Whether a thought row renders expanded (`thought:{mid}:{pid}`
+    /// — the render option input; default true).
+    #[must_use]
+    pub fn thought_expanded(&self, session_id: &str, message_id: &str, part_id: &str) -> bool {
+        let key = format!("{message_id}:{part_id}");
+        !self.collapsed_thoughts.borrow().get(session_id).is_some_and(|set| set.contains(&key))
+    }
+
+    /// The session's collapsed thought keys (`"{mid}:{pid}"` — the
+    /// transcript render options input).
+    #[must_use]
+    pub fn collapsed_thought_keys(&self, session_id: &str) -> std::collections::HashSet<String> {
+        self.collapsed_thoughts.borrow().get(session_id).cloned().unwrap_or_default()
+    }
+
     /// The last frame's clickable transcript rows (reasoning headers).
     pub fn set_transcript_hit_rows(&self, rows: Vec<TranscriptHitRow>) {
         *self.transcript_hit_rows.borrow_mut() = rows;
+    }
+
+    /// Disarm every route-scoped pointer registry (auditA §4.1): the
+    /// transcript hit rows, the footer-location rect and the sidebar
+    /// onboarding card all belong to the SESSION render that recorded
+    /// them — v2's renderables unmount with the route, so the port's
+    /// absolute rects must not outlive it. Called on every
+    /// [`Store::navigate`] (the only `route.set` site); the next
+    /// session render re-records what paints.
+    pub fn clear_route_pointer_registries(&self) {
+        self.transcript_hit_rows.borrow_mut().clear();
+        *self.footer_location_hit.borrow_mut() = None;
+        *self.sidebar_onboarding_hits.borrow_mut() = None;
+        // The sidebar's wheel geometry is route-scoped the same way
+        // (the pane unmounts with the session route).
+        *self.sidebar_scroll.borrow_mut() = SidebarScrollState::default();
     }
 
     /// The last frame's top-dialog frame rect (absolute screen cells)
@@ -2545,6 +2684,9 @@ impl Store {
         *self.dialog_frame_rect.borrow_mut() = rect;
         if rect.is_none() {
             self.set_dialog_option_rows(Vec::new());
+            // The chrome buttons die with the frame (auditA #6 —
+            // no dialog, no close label).
+            self.dialog_button_hits.borrow_mut().clear();
         }
     }
 
@@ -2569,6 +2711,18 @@ impl Store {
         self.dialog_option_rows.borrow().clone()
     }
 
+    /// Record the top dialog's chrome buttons (the overlay render,
+    /// each frame — auditA #6).
+    pub fn set_dialog_button_hits(&self, hits: Vec<DialogButtonHit>) {
+        *self.dialog_button_hits.borrow_mut() = hits;
+    }
+
+    /// The top dialog's chrome buttons from the last render.
+    #[must_use]
+    pub fn dialog_button_hits(&self) -> Vec<DialogButtonHit> {
+        self.dialog_button_hits.borrow().clone()
+    }
+
     /// #33 — the footer location label's hit rect from the last
     /// render (`useWorkingDirectoryActions`: hover lifts the label,
     /// a release opens the Working directory select).
@@ -2588,12 +2742,58 @@ impl Store {
     pub fn set_sidebar_onboarding_hits(&self, hits: Option<SidebarOnboardingHits>) {
         *self.sidebar_onboarding_hits.borrow_mut() = hits;
     }
-
     /// The recorded onboarding targets (`None` while the card is
     /// hidden — the render clears them every pass).
     #[must_use]
     pub fn sidebar_onboarding_hits(&self) -> Option<SidebarOnboardingHits> {
         *self.sidebar_onboarding_hits.borrow()
+    }
+
+    /// Record the sidebar's scroll geometry (the session render, each
+    /// frame — same cadence as the onboarding rects above).
+    pub fn set_sidebar_scroll_geometry(
+        &self,
+        content_height: usize,
+        viewport: usize,
+        x_extent: Option<(usize, usize)>,
+    ) {
+        let mut state = self.sidebar_scroll.borrow_mut();
+        // A hidden pane unmounts v2's scrollbox — the offset resets.
+        if x_extent.is_none() {
+            state.offset = 0;
+        }
+        state.content_height = content_height;
+        state.viewport = viewport;
+        state.x_extent = x_extent;
+        state.offset = state.offset.min(state.max_offset());
+    }
+
+    /// The sidebar's current scroll state (render input + the wheel
+    /// gate).
+    #[must_use]
+    pub fn sidebar_scroll(&self) -> SidebarScrollState {
+        *self.sidebar_scroll.borrow()
+    }
+
+    /// Wheel-scroll the sidebar's content slot by `delta` rows
+    /// (negative up); `true` when the offset moved (the redraw key).
+    /// v2's scrollbox wheel is a LINE scroll (opentui's terminal
+    /// wheel delta: 3 rows a notch — `direction === "up" ? -3 : 3`
+    /// in the core's own embedded-terminal translation); no
+    /// acceleration model (the port's wheel stream carries no
+    /// timestamps to feed v2's `MacOSScrollAccel`).
+    pub fn sidebar_scroll_by(&self, delta: i32) -> bool {
+        let mut state = self.sidebar_scroll.borrow_mut();
+        let max = state.max_offset();
+        let offset = i64::try_from(state.offset).unwrap_or(i64::MAX);
+        let ceiling = i64::try_from(max).unwrap_or(i64::MAX);
+        let next = offset.saturating_add(i64::from(delta)).clamp(0, ceiling);
+        let next = usize::try_from(next).unwrap_or(0);
+        if next == state.offset {
+            return false;
+        }
+        state.offset = next;
+        true
     }
 
     /// The location label's hover transition (returns whether it
@@ -3016,6 +3216,16 @@ impl Store {
     // -- route / dialogs / theme / connection --------------------------------
 
     pub fn navigate(&self, route: Route) {
+        // Pointer-registry lifetime (auditA §4.1, finding #2): v2's
+        // hit targets are per-render-frame renderables — leaving a
+        // route must disarm its recorded rects. `render_session`
+        // re-records the transcript rows, the footer-location rect
+        // and the sidebar onboarding card on its next pass; without
+        // this clear, a release on the HOME screen could fire a
+        // stale transcript toggle / open the WorkingDirectory dialog
+        // with the previous session's directory (the phantom-click
+        // hazard — the inverse of dogfood2's home-strip bug).
+        self.clear_route_pointer_registries();
         if let Route::Session { session_id } = &route {
             // v2's session-tabs context roots every routed session
             // (context/session-tabs.tsx:138, 188): navigating into a
@@ -3817,6 +4027,28 @@ impl Store {
     /// the SSE `permission.replied` reducer share this).
     pub fn permission_replied(&self, request_id: &str) {
         self.footer.update(|footer| footer.permission_replied(request_id));
+        // The ask's pointer targets die with it (auditA #4: the
+        // pills/buttons belong to the live body — a resolved ask
+        // must leave no zombie rects).
+        *self.permission_pointer_hits.borrow_mut() = None;
+    }
+
+    /// Record the permission body's pointer targets at ABSOLUTE
+    /// screen cells (the render pass — `App::frame`'s permission
+    /// mount; the layout math lives with the body renderer).
+    pub fn set_permission_pointer_hits(
+        &self,
+        hits: Option<crate::components::footer::permission::PermissionPointerHits>,
+    ) {
+        *self.permission_pointer_hits.borrow_mut() = hits;
+    }
+
+    /// The permission body's pointer targets from the last render.
+    #[must_use]
+    pub fn permission_pointer_hits(
+        &self,
+    ) -> Option<crate::components::footer::permission::PermissionPointerHits> {
+        self.permission_pointer_hits.borrow().clone()
     }
 
     // -- event ingest ----------------------------------------------------------

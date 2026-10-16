@@ -60,7 +60,7 @@ use opentui_solid::{box_, for_list, map, text, Element, Signal, SolidRenderer};
 
 use crate::components::session_tabs::SESSION_SIDEBAR_WIDTH;
 use crate::components::session_tabs_solid::frame_from_buffer;
-use crate::components::sidebar::{render_sidebar, SidebarView};
+use crate::components::sidebar::SidebarView;
 use crate::layout::{Placed, PlacedLine};
 use crate::render::Frame;
 use crate::theme::ThemeStyles;
@@ -258,8 +258,8 @@ fn merged_line_chunks(
 /// and the card's fill always precedes its own glyphs). The text
 /// units' attribute words are pre-merged through the same
 /// accumulation order (see [`merged_line_chunks`]).
-fn shape(view: &SidebarView, theme: &ThemeStyles, height: usize) -> Vec<PaneItem> {
-    let paint = render_sidebar(view, theme, height);
+fn shape(view: &SidebarView, theme: &ThemeStyles, height: usize, scroll: usize) -> Vec<PaneItem> {
+    let paint = crate::components::sidebar::render_sidebar_scrolled(view, theme, height, scroll);
     // Pass 1 — the attribute accumulation grid: every text unit ORs
     // its modifier word onto the cells it covers, in paint order
     // (fills carry no modifiers).
@@ -524,13 +524,18 @@ thread_local! {
 /// fused: shape the units from the SHARED walk, sync + flush the
 /// mount, copy the cells.
 #[must_use]
-pub fn paint_solid_sidebar_pane(view: &SidebarView, theme: &ThemeStyles, height: usize) -> Frame {
+pub fn paint_solid_sidebar_pane(
+    view: &SidebarView,
+    theme: &ThemeStyles,
+    height: usize,
+    scroll: usize,
+) -> Frame {
     if height == 0 {
         // The old pane painter's degenerate shape.
         return Frame { cells: vec![Vec::new(); height], width: SESSION_SIDEBAR_WIDTH, height };
     }
     let colors = PaneColors::of(theme);
-    let items = shape(view, theme, height);
+    let items = shape(view, theme, height, scroll);
     SIDEBAR.with_borrow_mut(|slot| {
         let mount = slot.get_or_insert_with(|| {
             SolidSidebar::new(height, colors, &PaneInputs { items: items.clone() })
@@ -550,11 +555,18 @@ pub fn paint_solid_sidebar_pane(view: &SidebarView, theme: &ThemeStyles, height:
 /// pane frame the route compositor pastes (docked at the right edge,
 /// or floating over the scrim in the ≤120 manual-open overlay).
 #[must_use]
-pub fn sidebar_pane_frame(view: &SidebarView, theme: &ThemeStyles, height: usize) -> Frame {
+pub fn sidebar_pane_frame(
+    view: &SidebarView,
+    theme: &ThemeStyles,
+    height: usize,
+    scroll: usize,
+) -> Frame {
     // Lane M5 (retired): the pane renders through its opentui-solid
     // tree — the only renderer since the retirement lane deleted the
-    // hand-rolled placed-runs fallback.
-    paint_solid_sidebar_pane(view, theme, height)
+    // hand-rolled placed-runs fallback. `scroll` is the content
+    // slot's wheel offset (auditA #1) — the render re-slices the
+    // sections; the title/footer chrome stays put.
+    paint_solid_sidebar_pane(view, theme, height, scroll)
 }
 
 #[cfg(test)]
@@ -573,7 +585,7 @@ mod tests {
         let mut seen: Vec<(String, Frame)> = Vec::new();
         for title in ["First title", "Renamed", "First title"] {
             view.title = title.to_owned();
-            let frame = paint_solid_sidebar_pane(&view, &theme, 30);
+            let frame = paint_solid_sidebar_pane(&view, &theme, 30, 0);
             if let Some((_, prior)) = seen.iter().find(|(t, _)| *t == view.title) {
                 assert_eq!(&frame, prior, "same inputs paint the same pane: {title:?}");
             }
@@ -584,7 +596,7 @@ mod tests {
             title: "Preset".into(),
             rows: vec!["zhipuai · own/glm-5.3".into()],
         }];
-        let with_plugin = paint_solid_sidebar_pane(&view, &theme, 30);
+        let with_plugin = paint_solid_sidebar_pane(&view, &theme, 30, 0);
         let grid = with_plugin.text_grid().join("\n");
         assert!(grid.contains("Preset"), "the plugin section paints: {grid}");
         SIDEBAR.with_borrow(|slot| {
@@ -602,7 +614,7 @@ mod tests {
         let view = SidebarView::fixture("Resize", "/w:main");
         let mut first: Option<Frame> = None;
         for height in [30usize, 24, 40, 30] {
-            let frame = paint_solid_sidebar_pane(&view, &theme, height);
+            let frame = paint_solid_sidebar_pane(&view, &theme, height, 0);
             assert_eq!(frame.height, height, "full-height pane at height {height}");
             if height == 30 {
                 match &first {
