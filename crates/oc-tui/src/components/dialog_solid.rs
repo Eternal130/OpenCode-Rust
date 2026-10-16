@@ -165,6 +165,10 @@ enum Family {
     Help,
     /// The delegation payload's rows-only shape.
     PluginRows,
+    /// The tab context menu (lane KM — `TabContextMenu`'s scrollbox,
+    /// session-tabs.tsx:449-534): a rows-only column — no title
+    /// block, no filter input, no footer.
+    Menu,
 }
 
 /// One rendered row of the scroll window — the same walk the old
@@ -298,6 +302,8 @@ fn content_height(inputs: &DialogInputs) -> usize {
         Family::Help => inputs.hint_lines.len() + 6,
         // title, gap, rows, root paddingBottom.
         Family::PluginRows => inputs.plugin_rows.len() + 3,
+        // rows only (the menu's scrollbox).
+        Family::Menu => inputs.window.len(),
     }
 }
 
@@ -756,6 +762,15 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
 // the prompt family (ui/dialog-prompt.tsx / dialog-worktree-name.tsx)
 // ---------------------------------------------------------------------------
 
+/// The menu family tree (lane KM — `TabContextMenu`'s scrollbox,
+/// session-tabs.tsx:449-478): a bare column of option rows — width
+/// `100%`, one row each, the SELECTED row painting the raised-high
+/// action background (`actionHovered`) over the rest. The rows reuse
+/// the select window's `For` (keyed, identity-stable).
+fn menu_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    box_().children_dyn(window_for(inputs))
+}
+
 /// The prompt-family footer: `enter submit` (worktree name adds
 /// `tab generate one` as a second pair — the tsx row's gap 2). Each
 /// hint is one text whose leading label run (space included) carries
@@ -1041,11 +1056,14 @@ fn chrome_element(
         Family::WorktreeNamePrompt => prompt_builder(&family_inputs, true),
         Family::Help => help_builder(&family_inputs),
         Family::PluginRows => plugin_rows_builder(&family_inputs),
+        Family::Menu => menu_builder(&family_inputs),
     };
     box_()
         .width(width as f32)
         .height(height as f32)
-        .padding_top(1.0)
+        // The menu's scrollbox has no paddingTop (every other family
+        // seats its content under the chrome's 1-row pad).
+        .padding_top(if family == Family::Menu { 0.0 } else { 1.0 })
         .dyn_prop(
             "backgroundColor",
             dyn_color(map(inputs.clone(), |i: &DialogInputs| i.colors.surface)),
@@ -1122,19 +1140,47 @@ pub fn render_overlay_solid(
     let width = usize::from(terminal.0);
     let height = usize::from(terminal.1);
 
-    // Backdrop: alpha-composite black@150 over every covered cell —
-    // the raster's observable semantics, applied at the bridge (the
-    // solid renderer cannot see the route frame beneath).
-    for row in &mut base.cells {
-        for cell in row {
-            crate::components::dialog::blend_backdrop(cell);
+    // The tab menu (lane KM — `TabContextMenu`'s geometry,
+    // session-tabs.tsx:428-436): sized by its actions (≥ 20, ≤ 50 +
+    // 2 padding, terminal-capped), seated AT the pointer (left
+    // clamped into the terminal, top one row under the press),
+    // with NO backdrop dim (v2's capture layer is invisible).
+    let tab_menu = matches!(entry.kind, DialogKind::TabMenu { .. }).then(|| (entry, props));
+    let (box_width, box_x, box_y, dim_backdrop) = if let Some((entry, props)) = tab_menu {
+        let longest = props
+            .options
+            .iter()
+            .map(|option| crate::wrap::display_width(&option.title).min(50) + 2)
+            .max()
+            .unwrap_or(0);
+        // The option rows reuse the select's marker column (title
+        // starts 4 cells in), so the box adds that padding over
+        // v2's 1-left scrollbox rows — registered approximation.
+        let menu_width = width.min(longest.max(20) + 6);
+        let menu_height = (props.options.len()).min(height).max(1) + 1;
+        let DialogKind::TabMenu { x, y, .. } = &entry.kind else {
+            unreachable!("the TabMenu guard")
+        };
+        let left = (*x).min(width.saturating_sub(menu_width));
+        let top = (*y + 1).min(height.saturating_sub(menu_height));
+        (menu_width, left, top, false)
+    } else {
+        // Backdrop: alpha-composite black@150 over every covered
+        // cell — the raster's observable semantics, applied at the
+        // bridge (the solid renderer cannot see the route frame
+        // beneath).
+        let box_width = entry.size.width().min(width.saturating_sub(2));
+        let box_x = (width - box_width) / 2;
+        let box_y = (height + 2) / 4;
+        (box_width, box_x, box_y, true)
+    };
+    if dim_backdrop {
+        for row in &mut base.cells {
+            for cell in row {
+                crate::components::dialog::blend_backdrop(cell);
+            }
         }
     }
-
-    // Chrome geometry — identical math to the old path.
-    let box_width = entry.size.width().min(width.saturating_sub(2));
-    let box_x = (width - box_width) / 2;
-    let box_y = (height + 2) / 4;
 
     let inputs = build_inputs(entry, props, plugin, colors, box_width, height);
     let box_height = 1 + content_height(&inputs);
@@ -1187,10 +1233,15 @@ fn dialog_chrome_button_hits(
     if box_width < 8 {
         return hits;
     }
+    // The tab menu has no chrome buttons (v2's menu carries none —
+    // backdrop/escape/right-press close it).
+    if matches!(inputs.family, Family::Menu) {
+        return hits;
+    }
     let title_row = box_y + 1;
     let (label, pad) = match inputs.family {
         Family::Select | Family::PluginRows => ("esc", 4usize),
-        Family::RenamePrompt | Family::WorktreeNamePrompt => ("esc", 2),
+        Family::RenamePrompt | Family::WorktreeNamePrompt | Family::Menu => ("esc", 2),
         Family::Help => ("esc/enter", 2),
     };
     let label_width = label.chars().count();
@@ -1232,13 +1283,14 @@ fn build_inputs(
         DialogKind::SessionRename { .. } => Family::RenamePrompt,
         DialogKind::WorktreeName => Family::WorktreeNamePrompt,
         DialogKind::Help => Family::Help,
+        DialogKind::TabMenu { .. } => Family::Menu,
         DialogKind::Plugin { .. } if plugin.is_some_and(|content| !content.is_select()) => {
             Family::PluginRows
         }
         _ => Family::Select,
     };
     match family {
-        Family::Select => {
+        Family::Select | Family::Menu => {
             let (window, flat) = visible_window(props, &entry.select, terminal_height);
             DialogInputs {
                 family,
