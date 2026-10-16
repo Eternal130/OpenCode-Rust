@@ -572,6 +572,28 @@ impl App {
                                     crate::store::DialogSize::Medium,
                                 );
                             }
+                            crate::store::TranscriptHitAction::ToggleToolDetail {
+                                message_id,
+                                part_id,
+                            } => {
+                                self.store.toggle_tool_expanded(&format!("{message_id}:{part_id}"));
+                            }
+                            crate::store::TranscriptHitAction::OpenToolDialog {
+                                message_id,
+                                part_id,
+                            } => {
+                                self.store.open_dialog(
+                                    crate::store::DialogKind::ToolOutput {
+                                        session_id: hit.session_id.clone(),
+                                        message_id: message_id.clone(),
+                                        part_id: part_id.clone(),
+                                    },
+                                    crate::store::DialogSize::Large,
+                                );
+                            }
+                            crate::store::TranscriptHitAction::DismissRevert { session_id } => {
+                                self.store.revert_dismiss(session_id);
+                            }
                         }
                         self.store.request_redraw();
                         return;
@@ -3280,6 +3302,11 @@ pub async fn run_with_size(
         }
         for id in open_now {
             if fetched_transcripts.insert(id.clone()) {
+                // SURF-1: the in-flight window is the "Loading session
+                // history…" state (v2's firstJump hold while
+                // `message.sync` runs, index.tsx:1425-1427) — armed at
+                // request time, cleared when the fetch lands either way.
+                app.store.set_history_loading(&id, true);
                 let _ = loop_fetch_tx.send(LoopRequest::Transcript(id));
             }
         }
@@ -3287,15 +3314,19 @@ pub async fn run_with_size(
         // session-list refetch) through the store's single ingest path.
         while let Ok(fetch) = loop_fetch_rx.try_recv() {
             match fetch {
-                LoopFetch::Transcript { session_id, result } => match result {
-                    Ok(messages) => {
-                        app.store.ingest_all([Ingest::MessagesSnapshot { session_id, messages }]);
+                LoopFetch::Transcript { session_id, result } => {
+                    app.store.set_history_loading(&session_id, false);
+                    match result {
+                        Ok(messages) => {
+                            app.store
+                                .ingest_all([Ingest::MessagesSnapshot { session_id, messages }]);
+                        }
+                        Err(error) => {
+                            crate::keymap::log_skip(&format!("transcript fetch {error}"));
+                            fetched_transcripts.remove(&session_id);
+                        }
                     }
-                    Err(error) => {
-                        crate::keymap::log_skip(&format!("transcript fetch {error}"));
-                        fetched_transcripts.remove(&session_id);
-                    }
-                },
+                }
                 LoopFetch::SessionList(Ok(sessions)) => {
                     let unread = crate::data::resync_unread(&sessions);
                     app.store.ingest_all([Ingest::Resync {

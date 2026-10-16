@@ -40,8 +40,7 @@ use crate::components::message::model::{
     Message, Part, Row,
 };
 use crate::components::message::rows::{
-    assistant_footer_row, completed_tool_row, reasoning_header_row, running_tool_row,
-    user_message_row, RowRender,
+    completed_tool_row, reasoning_header_row, running_tool_row, user_message_row, RowRender,
 };
 use crate::layout::{Placed, PlacedLine};
 use crate::render::Fill;
@@ -77,6 +76,10 @@ pub struct TranscriptOptions {
     /// Plugin-provided grouping rules (wave 3's open rules table);
     /// empty = the native closed set only.
     pub group_rules: crate::components::message::model::GroupRules,
+    /// SURF-1: inline-expanded tool cells (`{mid}:{pid}` keys — the
+    /// shell block's full output / the execute calls' input rows /
+    /// the generic tool's error row).
+    pub expanded_tools: std::collections::HashSet<String>,
     /// The user-message image strip (R-07): disabled by default — the
     /// goldens predate it; `render_session` enables it per config.
     pub image_strip: crate::components::message::rows::ImageStripOptions,
@@ -93,6 +96,17 @@ pub struct TranscriptOptions {
     /// session/index.tsx:2200; `None` → the walk's first-hue default
     /// for fixtures). Set by `render_session` from the registry.
     pub user_rail: Option<ratatui::style::Color>,
+    /// SURF-1: the staged revert (`session.revert`) — messages at/after
+    /// `message_id` filter out (rows.ts:63-66) and the `RevertMessage`
+    /// banner renders after the last row (index.tsx:1413-1418).
+    pub revert: Option<crate::store::RevertState>,
+    /// SURF-1: queued-compaction inbox ids — one `◇ Compaction queued`
+    /// divider each, spliced after the reduced rows (rows.ts:72-79;
+    /// `queuedStart` degenerates to the tail with no pending inputs).
+    pub pending_compactions: Vec<String>,
+    /// SURF-1: the redo shortcut label for the banner's footer
+    /// (`Keymap.useShortcut("session.redo")`, index.tsx:2153).
+    pub redo_key: String,
 }
 
 impl Default for TranscriptOptions {
@@ -104,10 +118,14 @@ impl Default for TranscriptOptions {
             expanded_groups: Vec::new(),
             collapsed_thoughts: std::collections::HashSet::new(),
             group_rules: crate::components::message::model::GroupRules::empty(),
+            expanded_tools: std::collections::HashSet::new(),
             image_strip: crate::components::message::rows::ImageStripOptions::default(),
             model_names: Vec::new(),
             subagent_running: std::collections::HashMap::new(),
             user_rail: None,
+            revert: None,
+            pending_compactions: Vec::new(),
+            redo_key: "R".to_owned(),
         }
     }
 }
@@ -159,6 +177,29 @@ pub fn render_transcript(
 ) -> Transcript {
     let inset = if width < 44 { 1 } else { 2 };
     let content_width = width.saturating_sub(inset * 2);
+    // The staged-revert boundary (rows.ts:63-66): messages at/after
+    // the boundary id hide until the revert clears or commits
+    // (lexicographic id compare — the ref's `message.id < boundary`).
+    // `revert_user_count` = the USER messages FROM the boundary (the
+    // banner's "N messages reverted" numerator, index.tsx:1415).
+    let (bounded, revert_user_count) = match &options.revert {
+        Some(revert) if !revert.message_id.is_empty() => (
+            messages
+                .iter()
+                .filter(|message| message.id() < revert.message_id.as_str())
+                .cloned()
+                .collect::<Vec<Message>>(),
+            messages
+                .iter()
+                .filter(|message| {
+                    matches!(message, Message::User { .. })
+                        && message.id() >= revert.message_id.as_str()
+                })
+                .count(),
+        ),
+        _ => (messages.to_vec(), 0),
+    };
+    let messages = bounded.as_slice();
     let rows: Vec<Row> = reduce_rows_with_rules(
         messages,
         &std::collections::HashSet::<String>::new(),
@@ -193,10 +234,15 @@ pub fn render_transcript(
         };
     for row in &rows {
         // The disclosure expansion: an expanded reasoning group emits
-        // the header unit plus one unit per thought child.
+        // the header unit plus one unit per thought child; an expanded
+        // exploration/activity group emits the header plus one detail
+        // CELL per tool child (`Children mode="tool"`,
+        // group-view.tsx:186-188 — `props.entry(entry, false)`).
         if let Row::Group { kind, .. } = row {
+            let expanded =
+                options.expanded_groups.iter().any(|key| key == &row_key(row));
             if matches!(kind, crate::components::message::model::GroupKind::Reasoning)
-                && options.expanded_groups.iter().any(|key| key == &row_key(row))
+                && expanded
             {
                 let header = render_row(row, messages, options, theme, &markdown, content_width);
                 let height = header.height;
@@ -252,10 +298,62 @@ pub fn render_transcript(
                 }
                 continue;
             }
+            if matches!(
+                kind,
+                crate::components::message::model::GroupKind::Exploration
+                    | crate::components::message::model::GroupKind::Activity
+            ) && expanded
+            {
+                let header = render_row(row, messages, options, theme, &markdown, content_width);
+                place(header, row_key(row), &mut measured, &mut y);
+                for (message_id, part_id) in row.part_refs() {
+                    let Some(Message::Assistant { parts, .. }) =
+                        messages.iter().find(|m| m.id() == message_id.as_str())
+                    else {
+                        continue;
+                    };
+                    let Some(Part::Tool { name, state, .. }) = resolve_part(parts, &part_id)
+                    else {
+                        continue;
+                    };
+                    let expanded_key = format!("{message_id}:{part_id}");
+                    let cell = crate::components::message::tool_detail::tool_detail_row(
+                        &canonical_tool_name(name).to_owned(),
+                        state,
+                        options.expanded_tools.contains(&expanded_key),
+                        options.clock_ms,
+                        theme,
+                        content_width,
+                    );
+                    place(cell, format!("tool:{message_id}:{part_id}"), &mut measured, &mut y);
+                }
+                continue;
+            }
         }
         let render = render_row(row, messages, options, theme, &markdown, content_width);
         let key = row_key(row);
         place(render, key, &mut measured, &mut y);
+    }
+    // The queued-compaction dividers (`CompactionQueued`,
+    // index.tsx:2070-2081) — one per pending inbox id, spliced at the
+    // pending boundary (the tail when no input rows are pending).
+    for inbox_id in &options.pending_compactions {
+        let render = crate::components::message::rows::compaction_queued_row(theme, content_width);
+        place(render, format!("compaction-queued:{inbox_id}"), &mut measured, &mut y);
+    }
+    // The staged-revert banner (`RevertMessage`, index.tsx:1413-1418 +
+    // 2084-2158): after every row, with its own marginTop 1 (the
+    // `place` closure adds the row margin).
+    if options.revert.is_some() {
+        let files = options.revert.as_ref().map_or(&[][..], |revert| revert.files.as_slice());
+        let render = crate::components::message::rows::revert_banner_row(
+            revert_user_count,
+            files,
+            &options.redo_key,
+            theme,
+            content_width,
+        );
+        place(render, "revert:banner".to_owned(), &mut measured, &mut y);
     }
     Transcript { rows: measured, content_height: y, inset, images }
 }
@@ -283,9 +381,53 @@ fn render_row(
                     width,
                     &options.image_strip,
                 ),
-                // Idle markers render nothing; compaction rows are wave 3
-                // (message.list resync).
-                _ => RowRender::default(),
+                // The compaction divider (`CompactionMessage`,
+                // index.tsx:2002-2068): running spinner / `✗` failed
+                // / `· cancelled` / `Provider compaction` / usage +
+                // the markdown summary body.
+                Message::Compaction {
+                    running,
+                    failed,
+                    cancelled,
+                    error,
+                    summary,
+                    tokens_in,
+                    tokens_out,
+                    provider_compaction,
+                    ..
+                } => {
+                    // `text()` (index.tsx:2008-2011): failed → the
+                    // error message (cancelled → none), else the
+                    // summary — the markdown body under the divider.
+                    let body = if *failed && !*cancelled {
+                        error.clone()
+                    } else {
+                        summary.clone()
+                    }
+                    .filter(|text| !text.trim().is_empty())
+                    .map(|text| render_markdown(text.trim(), width.saturating_sub(3), markdown))
+                    .unwrap_or_default();
+                    crate::components::message::rows::compaction_message_row(
+                        *running,
+                        *failed,
+                        *cancelled,
+                        *provider_compaction,
+                        *tokens_in,
+                        *tokens_out,
+                        &body,
+                        options.clock_ms,
+                        theme,
+                        width,
+                    )
+                }
+                // The `→ Skill {name}` row (`SessionSkillMessage`,
+                // index.tsx:1993-1999).
+                Message::Skill { name, .. } => {
+                    crate::components::message::rows::skill_message_row(name, theme, width)
+                }
+                // Idle markers render nothing.
+                Message::Idle { .. } | Message::Synthetic { .. } => RowRender::default(),
+                Message::Assistant { .. } => RowRender::default(),
             }
         }
         Row::Entry(Entry::Part { message_id, part_id }) => {
@@ -300,9 +442,7 @@ fn render_row(
             match part {
                 Part::Text { text, .. } => text_part_row(text, markdown, width),
                 // The subagent tool renders its InlineTool card (#40 —
-                // `Subagent`, session/index.tsx:3087-3120); other
-                // ungrouped tools stay wave-2 surfaces (exploration
-                // tools render through their group header).
+                // `Subagent`, session/index.tsx:3087-3120).
                 Part::Tool { name, state, .. } if canonical_tool_name(name) == "subagent" => {
                     let session_running = state
                         .metadata
@@ -316,11 +456,23 @@ fn render_row(
                         width,
                     )
                 }
-                // Ungrouped tool parts (non-exploration tools) render via
-                // the tool_rows component (wave 2 integration surface);
-                // the golden transcript only carries grouped exploration
-                // tools, which render through their group header.
-                Part::Tool { .. } | Part::Reasoning { .. } => RowRender::default(),
+                // SURF-1: ungrouped tool parts render their detail cell
+                // (`ToolPart`, index.tsx:2373-2446) — the shell block,
+                // read/glob/grep rows, write/edit blocks, the execute
+                // card, the generic row (exploration tools reach this
+                // through their group header when grouped).
+                Part::Tool { name, state, .. } => {
+                    let expanded_key = format!("{message_id}:{part_id}");
+                    crate::components::message::tool_detail::tool_detail_row(
+                        &canonical_tool_name(name).to_owned(),
+                        state,
+                        options.expanded_tools.contains(&expanded_key),
+                        options.clock_ms,
+                        theme,
+                        width,
+                    )
+                }
+                Part::Reasoning { .. } => RowRender::default(),
             }
         }
         Row::Entry(Entry::AssistantFooter { message_id }) => {
@@ -351,12 +503,17 @@ fn render_row(
                 }
                 _ => None,
             };
-            assistant_footer_row(
+            // `interrupted` (index.tsx:1872): the step error IS the
+            // interrupt marker — no `Error:` row, a ` · interrupted`
+            // suffix instead.
+            let interrupted = error.as_deref() == Some("Step interrupted");
+            crate::components::message::rows::assistant_footer_row_ext(
                 agent,
                 &model_display,
                 duration,
                 tps,
                 error.as_deref(),
+                interrupted,
                 theme,
                 width,
             )
