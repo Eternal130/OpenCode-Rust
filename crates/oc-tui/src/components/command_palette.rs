@@ -571,6 +571,50 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             };
             SelectProps::new("Plugins", options)
         }
+        // The tab context menu (lane KM — `TabContextMenu`'s actions,
+        // session-tabs.tsx:391-417): a tab-scoped menu carries New
+        // session/Rename/Copy session ID/Close; the strip-scoped one
+        // (no session) lists the recently-closed tabs (≤ 10) with
+        // reopen actions, else the muted empty row. Values carry the
+        // action verb for the submit path.
+        DialogKind::TabMenu { session_id, .. } => {
+            // A tab-scoped menu: New session / Rename / Copy session
+            // ID / Close. A strip-scoped one (no session): the
+            // recently-closed list (≤ 10) with reopen actions, else
+            // the muted empty row. Values carry the action verb for
+            // the submit path.
+            if session_id.is_some() {
+                let options = vec![
+                    SelectOption::titled(
+                        crate::store::NEW_SESSION_TAB_TITLE.to_owned(),
+                        "tab:new".to_owned(),
+                    ),
+                    SelectOption::titled("Rename".to_owned(), "tab:rename".to_owned()),
+                    SelectOption::titled("Copy session ID".to_owned(), "tab:copy".to_owned()),
+                    SelectOption::titled("Close".to_owned(), "tab:close".to_owned()),
+                ];
+                SelectProps::new("", options).flat(true)
+            } else {
+                let closed = store.tabs().closed;
+                let mut options = vec![status_option("Recently closed tabs")];
+                if closed.is_empty() {
+                    options.push(status_option("No recently closed tabs"));
+                } else {
+                    for entry in closed.iter().rev().take(10) {
+                        let title = entry
+                            .tab
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| "Untitled session".to_owned());
+                        options.push(SelectOption::titled(
+                            title,
+                            format!("tab:reopen:{}", entry.tab.session_id),
+                        ));
+                    }
+                }
+                SelectProps::new("", options).flat(true)
+            }
+        }
         DialogKind::Mcp => {
             let mut servers = store.mcp_servers();
             servers.sort_by(|left, right| left.name.cmp(&right.name));

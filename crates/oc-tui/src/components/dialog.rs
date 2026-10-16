@@ -85,6 +85,7 @@ pub fn handle_dialog_key(
         | DialogKind::ThemeList
         | DialogKind::Help
         | DialogKind::Plugins
+        | DialogKind::TabMenu { .. }
         | DialogKind::Worktrees
         | DialogKind::WorktreeDeleteConfirm { .. }
         | DialogKind::MessageActions { .. }
@@ -386,6 +387,7 @@ pub fn render_overlay_with_options(
         | DialogKind::DiffSource
         | DialogKind::DiffHelp
         | DialogKind::Plugins
+        | DialogKind::TabMenu { .. }
         | DialogKind::Mcp
         | DialogKind::McpError { .. }
         | DialogKind::Status
@@ -567,6 +569,45 @@ pub fn execute_submission(
             | DialogKind::Plugins,
         ) => {
             store.clear_dialogs();
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // The tab context menu's actions (`TabContextMenu`'s `run`
+        // closures, session-tabs.tsx:391-417 — lane KM): New session
+        // (the add), Rename (the rename dialog), Copy session ID (the
+        // clipboard + toast), Close, and the recently-closed reopen
+        // rows. Status rows (no `run`) just close.
+        Some(DialogKind::TabMenu { session_id, .. }) => {
+            let session_id = session_id.clone();
+            store.clear_dialogs();
+            if let Some(id) = value.strip_prefix("tab:reopen:") {
+                let _ = store.reopen_tab(Some(id));
+            } else if value == "tab:new" {
+                store.navigate(crate::store::Route::Home);
+            } else if value == "tab:rename" {
+                if let Some(session_id) = session_id {
+                    store.replace_dialog(
+                        DialogKind::SessionRename { session_id },
+                        DialogSize::Medium,
+                    );
+                }
+            } else if value == "tab:copy" {
+                if let Some(session_id) = session_id.clone().or_else(|| match store.route() {
+                    crate::store::Route::Session { session_id } => Some(session_id),
+                    crate::store::Route::Home => None,
+                }) {
+                    if store.clipboard_write(&session_id).is_ok() {
+                        store.toast_show(crate::components::toast::ToastOptions {
+                            message: "Session ID copied to clipboard".to_owned(),
+                            variant: "info",
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    }
+                }
+            } else if value == "tab:close" {
+                if let Some(session_id) = session_id {
+                    store.close_tab(Some(&session_id));
+                }
+            }
             return crate::components::command_palette::Dispatch::Handled;
         }
         // `DialogMcp`'s `select` (dialog-mcp.tsx:100-109): a failed /

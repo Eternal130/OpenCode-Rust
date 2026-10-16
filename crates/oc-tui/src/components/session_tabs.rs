@@ -275,6 +275,88 @@ pub enum StripHit {
     Outside,
 }
 
+/// `heldSessionTabLayout` (session-tabs.tsx:240-278 — lane KM, auditA
+/// #8b): the frozen layout a ✕ close leaves behind for
+/// [`MOUSE_CLOSE_HOLD_MS`]. Valid only while the tab list still
+/// matches the snapshot (unchanged) or matches it minus the closed
+/// tab (removed) — any other mutation releases the hold. On the
+/// removed shape the TARGET tab's width stretches so its ✕ cell sits
+/// at the pointer's column (the close glyph renders one cell in from
+/// the right edge: `x = tab start + width − 2`).
+#[must_use]
+pub fn held_session_tab_layout(
+    hold: &crate::store::CloseHold,
+    tabs: &[SessionTab],
+) -> Option<AdaptiveLayout> {
+    let ids: Vec<&str> = tabs.iter().map(|tab| tab.session_id.as_str()).collect();
+    let expected: Vec<&str> =
+        hold.items.iter().filter(|id| id.as_str() != hold.closed).map(String::as_str).collect();
+    let unchanged = ids.len() == hold.items.len()
+        && ids.iter().zip(hold.items.iter()).all(|(live, held)| *live == held.as_str());
+    let removed = ids.len() == expected.len()
+        && ids.iter().zip(expected.iter()).all(|(live, held)| *live == *held);
+    if !unchanged && !removed {
+        return None;
+    }
+    let mut visible_ids: Vec<&str> =
+        hold.ids.iter().filter(|id| ids.contains(&id.as_str())).map(String::as_str).collect();
+    if removed && !visible_ids.contains(&hold.target.as_str()) {
+        visible_ids.push(hold.target.as_str());
+        visible_ids
+            .sort_by_key(|id| ids.iter().position(|live| *live == *id).unwrap_or(usize::MAX));
+    }
+    let start =
+        visible_ids.first().and_then(|first| ids.iter().position(|live| *live == *first))?;
+    if visible_ids
+        .iter()
+        .enumerate()
+        .any(|(offset, id)| ids.iter().position(|live| *live == *id) != Some(start + offset))
+    {
+        return None;
+    }
+    let visible: Vec<SessionTab> = visible_ids
+        .iter()
+        .filter_map(|id| tabs.iter().find(|tab| tab.session_id.as_str() == *id).cloned())
+        .collect();
+    if visible.len() != visible_ids.len() {
+        return None;
+    }
+    let mut widths: Vec<usize> = visible_ids
+        .iter()
+        .map(|id| {
+            hold.ids
+                .iter()
+                .position(|held| held.as_str() == *id)
+                .and_then(|index| hold.widths.get(index).copied())
+                .unwrap_or(1)
+        })
+        .collect();
+    if removed {
+        let index = visible_ids.iter().position(|id| **id == *hold.target.as_str())?;
+        let leading = if start > 0 { session_tab_overflow_width(start) } else { 0 };
+        let preceding: usize = widths.iter().take(index).sum();
+        // The ✕ glyph sits one cell in from the right edge; a column
+        // that cannot reach it releases the hold (v2's `width < 1`).
+        let width = isize::try_from(hold.x)
+            .ok()?
+            .saturating_sub(isize::try_from(leading + preceding).ok()?)
+            .saturating_add(2);
+        if width < 1 {
+            return None;
+        }
+        widths[index] = usize::try_from(width).ok()?;
+    }
+    let total: usize = widths.iter().sum();
+    Some(AdaptiveLayout {
+        before: start,
+        after: tabs.len().saturating_sub(start + visible.len()),
+        start,
+        tabs: visible,
+        widths,
+        total,
+    })
+}
+
 /// Resolve pointer column `col` (strip-local) against the strip's
 /// layout. `hover` gates the close cell exactly like v2: the mark
 /// only renders on the hovered tab, and a release elsewhere selects.
@@ -287,12 +369,31 @@ pub fn strip_hit(
     col: usize,
     hover: Option<&str>,
 ) -> StripHit {
-    let layout = adaptive_session_tab_layout(
-        tabs,
-        active,
-        width.saturating_sub(if show_plus { ADD_TAB_WIDTH } else { 0 }),
-        0,
-    );
+    strip_hit_with_layout(tabs, active, show_plus, width, col, hover, None)
+}
+
+/// [`strip_hit`] over an explicit layout override (the close-hold's
+/// frozen geometry — lane KM, auditA #8b: while the hold is live the
+/// pointer's column addresses the HELD widths, so the ✕ cell of the
+/// neighbor stays under the stationary pointer).
+#[must_use]
+pub fn strip_hit_with_layout(
+    tabs: &[SessionTab],
+    active: Option<&str>,
+    show_plus: bool,
+    width: usize,
+    col: usize,
+    hover: Option<&str>,
+    held: Option<&AdaptiveLayout>,
+) -> StripHit {
+    let layout = held.cloned().unwrap_or_else(|| {
+        adaptive_session_tab_layout(
+            tabs,
+            active,
+            width.saturating_sub(if show_plus { ADD_TAB_WIDTH } else { 0 }),
+            0,
+        )
+    });
     let mut x = if layout.before > 0 { session_tab_overflow_width(layout.before) } else { 0 };
     for (index, tab) in layout.tabs.iter().enumerate() {
         let tab_width = layout.widths[index];
