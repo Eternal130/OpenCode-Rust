@@ -4,8 +4,12 @@
 //! raw audio body instead.
 
 use crate::media::body::{merge_records, Body};
-use crate::media::model::{speech_field_present, Addressed, Mode, SpeechEvent, SpeechRequest, ResponseContext};
-use crate::media::protocol::{Frame, Framing, Identity, MediaProtocolBase, StreamProtocol, TextOutput};
+use crate::media::model::{
+    speech_field_present, Addressed, Mode, ResponseContext, SpeechEvent, SpeechRequest,
+};
+use crate::media::protocol::{
+    Frame, Framing, Identity, MediaProtocolBase, StreamProtocol, TextOutput,
+};
 use crate::media::utils::speech_stream::{self, Audio};
 use crate::schema::{AiError, MediaUsage};
 
@@ -25,7 +29,10 @@ pub fn identity() -> Identity {
 /// `supportsSse` (openai-speech.ts:61).
 #[must_use]
 pub fn supports_sse(model: &str) -> bool {
-    !(model.starts_with("tts-1-hd-") || model == "tts-1-hd" || model.starts_with("tts-1-") || model == "tts-1")
+    !(model.starts_with("tts-1-hd-")
+        || model == "tts-1-hd"
+        || model.starts_with("tts-1-")
+        || model == "tts-1")
 }
 
 /// Parser state (openai-speech.ts:50-54).
@@ -41,7 +48,9 @@ pub fn body_from(request: &Addressed<SpeechRequest>) -> Result<Body, AiError> {
     // Not in `unsupported`: that list would also reject
     // `timestamps: false`, which asks for nothing.
     if request.request.timestamps == Some(true) {
-        return Err(identity().unsupported("media.timestamps", "OpenAI Speech does not return timestamps"));
+        return Err(
+            identity().unsupported("media.timestamps", "OpenAI Speech does not return timestamps")
+        );
     }
     if let Some(format) = &request.request.format {
         if !FORMATS.contains(&format.as_str()) {
@@ -58,13 +67,16 @@ pub fn body_from(request: &Addressed<SpeechRequest>) -> Result<Body, AiError> {
         ("input", Some(serde_json::json!(request.request.text))),
         (
             "voice",
-            request
-                .request
-                .voice
-                .as_ref()
-                .map(|voice| serde_json::json!(speech_stream::voice_id(&request.request.voice).unwrap_or_default())),
+            request.request.voice.as_ref().map(|voice| {
+                serde_json::json!(
+                    speech_stream::voice_id(&request.request.voice).unwrap_or_default()
+                )
+            }),
         ),
-        ("instructions", request.request.instructions.clone().map(|value| serde_json::json!(value))),
+        (
+            "instructions",
+            request.request.instructions.clone().map(|value| serde_json::json!(value)),
+        ),
         ("response_format", request.request.format.clone().map(|value| serde_json::json!(value))),
         ("speed", request.request.speed.map(|value| serde_json::json!(value))),
         ("stream_format", stream_format),
@@ -79,10 +91,8 @@ pub fn body_from(request: &Addressed<SpeechRequest>) -> Result<Body, AiError> {
 }
 
 pub fn check_unsupported(request: &SpeechRequest) -> Result<(), AiError> {
-    let present: Vec<&str> = ["language"]
-        .into_iter()
-        .filter(|field| speech_field_present(request, field))
-        .collect();
+    let present: Vec<&str> =
+        ["language"].into_iter().filter(|field| speech_field_present(request, field)).collect();
     identity().reject_unsupported(&present).map_or(Ok(()), Err)
 }
 
@@ -99,18 +109,23 @@ pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<SpeechEvent>, AiEr
     let event_type = event.get("type").and_then(|value| value.as_str()).unwrap_or_default();
     if event_type == "speech.audio.delta" {
         let data = event.get("audio").and_then(|value| value.as_str()).unwrap_or_default();
-        let chunk = crate::protocols::shared::decode_base64(data)
-            .map_err(|_| identity().frame_error("OpenAI Speech partial audio contains invalid base64 data", frame.to_string()))?;
+        let chunk = crate::protocols::shared::decode_base64(data).map_err(|_| {
+            identity().frame_error(
+                "OpenAI Speech partial audio contains invalid base64 data",
+                frame.to_string(),
+            )
+        })?;
         return Ok(speech_stream::delta(&mut state.audio, chunk));
     }
     if event_type == "speech.audio.done" {
         state.done = true;
-        state.usage = event.get("usage").filter(|value| !value.is_null()).map(|value| MediaUsage::Tokens {
-            input: value.get("input_tokens").and_then(|v| v.as_f64()),
-            output: value.get("output_tokens").and_then(|v| v.as_f64()),
-            total: value.get("total_tokens").and_then(|v| v.as_f64()),
-            details: Some(serde_json::from_value(value.clone()).unwrap_or_default()),
-        });
+        state.usage =
+            event.get("usage").filter(|value| !value.is_null()).map(|value| MediaUsage::Tokens {
+                input: value.get("input_tokens").and_then(|v| v.as_f64()),
+                output: value.get("output_tokens").and_then(|v| v.as_f64()),
+                total: value.get("total_tokens").and_then(|v| v.as_f64()),
+                details: Some(serde_json::from_value(value.clone()).unwrap_or_default()),
+            });
     }
     Ok(Vec::new())
 }
@@ -170,10 +185,18 @@ impl StreamProtocol for OpenAISpeech {
     }
 
     fn framing(&self, _request: &Addressed<SpeechRequest>, body: &Body) -> Framing {
-        if is_sse(body) { Framing::Sse } else { Framing::Bytes }
+        if is_sse(body) {
+            Framing::Sse
+        } else {
+            Framing::Bytes
+        }
     }
 
-    fn finish(&self, state: &Self::State, context: &ResponseContext<SpeechRequest>) -> Result<Vec<SpeechEvent>, AiError> {
+    fn finish(
+        &self,
+        state: &Self::State,
+        context: &ResponseContext<SpeechRequest>,
+    ) -> Result<Vec<SpeechEvent>, AiError> {
         finish(state, context.body)
     }
 }
@@ -194,7 +217,9 @@ mod tests {
         speech_request.voice = Some(SpeechVoice::Name("alloy".into()));
         speech_request.format = Some("mp3".into());
         speech_request.speed = Some(1.2);
-        let Body::Json { value, .. } = body_from(&Addressed::new(speech_request, Mode::Generate)).unwrap() else {
+        let Body::Json { value, .. } =
+            body_from(&Addressed::new(speech_request, Mode::Generate)).unwrap()
+        else {
             panic!()
         };
         assert_eq!(value["model"], json!("gpt-4o-mini-tts"));
@@ -209,7 +234,9 @@ mod tests {
     fn custom_voice_objects_lower_to_their_id() {
         let mut speech_request = request("gpt-4o-mini-tts", "hi");
         speech_request.voice = Some(SpeechVoice::Custom { id: "vr_custom".into() });
-        let Body::Json { value, .. } = body_from(&Addressed::new(speech_request, Mode::Generate)).unwrap() else {
+        let Body::Json { value, .. } =
+            body_from(&Addressed::new(speech_request, Mode::Generate)).unwrap()
+        else {
             panic!()
         };
         assert_eq!(value["voice"], json!("vr_custom"));
@@ -217,13 +244,16 @@ mod tests {
 
     #[test]
     fn stream_mode_adds_sse_except_on_tts1() {
-        let Body::Json { value, .. } = body_from(&Addressed::new(request("gpt-4o-mini-tts", "x"), Mode::Stream)).unwrap()
+        let Body::Json { value, .. } =
+            body_from(&Addressed::new(request("gpt-4o-mini-tts", "x"), Mode::Stream)).unwrap()
         else {
             panic!()
         };
         assert_eq!(value["stream_format"], json!("sse"));
 
-        let Body::Json { value, .. } = body_from(&Addressed::new(request("tts-1-hd", "x"), Mode::Stream)).unwrap() else {
+        let Body::Json { value, .. } =
+            body_from(&Addressed::new(request("tts-1-hd", "x"), Mode::Stream)).unwrap()
+        else {
             panic!()
         };
         assert!(value.get("stream_format").is_none());
@@ -247,9 +277,14 @@ mod tests {
     #[test]
     fn sse_deltas_accumulate_and_finish_describes_pcm() {
         let mut state = State::default();
-        let events = on_event(&mut state, r#"{"type":"speech.audio.delta","audio":"AQID"}"#).unwrap();
+        let events =
+            on_event(&mut state, r#"{"type":"speech.audio.delta","audio":"AQID"}"#).unwrap();
         assert!(matches!(&events[0], SpeechEvent::AudioDelta { chunk } if chunk == &vec![1, 2, 3]));
-        on_event(&mut state, r#"{"type":"speech.audio.done","usage":{"input_tokens":2,"total_tokens":3}}"#).unwrap();
+        on_event(
+            &mut state,
+            r#"{"type":"speech.audio.done","usage":{"input_tokens":2,"total_tokens":3}}"#,
+        )
+        .unwrap();
         assert!(state.done);
         let mut body = crate::schema::options::JsonRecord::new();
         body.insert("response_format".to_string(), json!("pcm"));
@@ -271,7 +306,9 @@ mod tests {
         let events = finish(&state, &Body::json(body)).unwrap();
         let SpeechEvent::Finish { audio, .. } = &events[0] else { panic!() };
         assert_eq!(audio.media_type, "audio/ogg");
-        let CollectedResponse::Speech(response) = collect_speech_response(&events) else { panic!() };
+        let CollectedResponse::Speech(response) = collect_speech_response(&events) else {
+            panic!()
+        };
         assert_eq!(response.audio.media_type, "audio/ogg");
     }
 

@@ -9,7 +9,9 @@ use crate::media::body::{merge_records, Body, Form};
 use crate::media::model::{
     image_field_present, Addressed, ImageEvent, ImageRequest, ImageResponse, Mode, ResponseContext,
 };
-use crate::media::protocol::{Frame, Framing, Identity, MediaProtocolBase, StreamProtocol, TextOutput};
+use crate::media::protocol::{
+    Frame, Framing, Identity, MediaProtocolBase, StreamProtocol, TextOutput,
+};
 use crate::media::utils::{self, media_reference, MediaRefKind};
 use crate::schema::media::{self, Info};
 use crate::schema::{AiError, MediaUsage, ProviderId};
@@ -27,7 +29,9 @@ pub fn identity() -> Identity {
 /// smuggle replacements for them (openai-images.ts:110).
 const RESERVED_FORM_FIELDS: &[&str] = &["model", "prompt", "image", "image[]", "images", "mask"];
 
-fn native_options(options: &crate::schema::ProviderOptions) -> Option<crate::schema::ProviderOptions> {
+fn native_options(
+    options: &crate::schema::ProviderOptions,
+) -> Option<crate::schema::ProviderOptions> {
     let mut native = options.clone();
     let output_compression = native.remove("outputCompression");
     let partial_images = native.remove("partialImages");
@@ -40,7 +44,9 @@ fn native_options(options: &crate::schema::ProviderOptions) -> Option<crate::sch
 
 /// `streamOptions` (openai-images.ts:118-125): stream mode asks for SSE
 /// partials; more than one image is a typed rejection.
-fn stream_options(request: &Addressed<ImageRequest>) -> Result<Option<crate::schema::ProviderOptions>, AiError> {
+fn stream_options(
+    request: &Addressed<ImageRequest>,
+) -> Result<Option<crate::schema::ProviderOptions>, AiError> {
     if request.mode != Mode::Stream {
         return Ok(None);
     }
@@ -90,30 +96,29 @@ pub fn body_from(request: &Addressed<ImageRequest>) -> Result<Body, AiError> {
         crate::media::body::record([
             ("n", request.request.n.map(|n| serde_json::json!(n))),
             ("size", request.request.size.clone().map(|size| serde_json::json!(size))),
-            ("output_format", request.request.format.clone().map(|format| serde_json::json!(format))),
+            (
+                "output_format",
+                request.request.format.clone().map(|format| serde_json::json!(format)),
+            ),
         ])
         .as_ref(),
         stream_options(request)?.as_ref(),
-        native_options(request.request.provider_options.as_ref().unwrap_or(&Default::default())).as_ref(),
+        native_options(request.request.provider_options.as_ref().unwrap_or(&Default::default()))
+            .as_ref(),
         request.request.http.as_ref().and_then(|http| http.body.as_ref()),
     ]);
 
     // Owned bytes go through multipart edits; remote URLs and file IDs use
     // the JSON edits body instead (openai-images.ts:148-162).
-    let all_inline = !images.is_empty() && images.iter().all(is_inline) && mask.as_ref().is_none_or(is_inline);
+    let all_inline =
+        !images.is_empty() && images.iter().all(is_inline) && mask.as_ref().is_none_or(is_inline);
     if all_inline {
         let mut form = Form::new();
         let owned: Vec<(String, serde_json::Value)> = vec![
             ("model".to_string(), serde_json::json!(request.request.model)),
             ("prompt".to_string(), serde_json::json!(request.request.prompt)),
         ];
-        utils::append_fields(
-            &mut form,
-            owned,
-            fields.as_ref(),
-            RESERVED_FORM_FIELDS,
-            None,
-        );
+        utils::append_fields(&mut form, owned, fields.as_ref(), RESERVED_FORM_FIELDS, None);
         for (index, image) in images.iter().enumerate() {
             let data = utils::inline_bytes(ID, image)?;
             form.append_file("image[]", format!("image-{index}"), image.media_type.clone(), data);
@@ -173,7 +178,8 @@ fn usage_of(value: &serde_json::Value) -> Option<MediaUsage> {
         output: value.get("output_tokens").and_then(|v| v.as_f64()),
         total: value.get("total_tokens").and_then(|v| v.as_f64()),
         details: Some(
-            serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(value.clone()).unwrap_or_default(),
+            serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(value.clone())
+                .unwrap_or_default(),
         ),
     })
 }
@@ -192,18 +198,28 @@ fn event_image(
     format: &str,
     size: Option<&str>,
 ) -> Result<media::Asset, AiError> {
-    utils::decoded_asset(invalid, label, data, Some(&format!("image/{format}")), Some(info_of(format, size)), None)
+    utils::decoded_asset(
+        invalid,
+        label,
+        data,
+        Some(&format!("image/{format}")),
+        Some(info_of(format, size)),
+        None,
+    )
 }
 
 /// `onEvent` (openai-images.ts:211-230) — one SSE frame.
 pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<ImageEvent>, AiError> {
     let invalid = |message: String| identity().frame_error(message, frame.to_string());
-    let event = TextOutput { identity: &identity(), body: frame, http: None }.decode_frame(frame)?;
+    let event =
+        TextOutput { identity: &identity(), body: frame, http: None }.decode_frame(frame)?;
     let event_type = event.get("type").and_then(|value| value.as_str()).unwrap_or_default();
-    let format = event.get("output_format").and_then(|value| value.as_str()).unwrap_or_default().to_string();
+    let format =
+        event.get("output_format").and_then(|value| value.as_str()).unwrap_or_default().to_string();
     if event_type.ends_with("partial_image") {
         let data = event.get("b64_json").and_then(|value| value.as_str()).unwrap_or_default();
-        let index = event.get("partial_image_index").and_then(|value| value.as_f64()).unwrap_or_default();
+        let index =
+            event.get("partial_image_index").and_then(|value| value.as_f64()).unwrap_or_default();
         let image = event_image(
             |message| invalid(message),
             "OpenAI Images partial image",
@@ -232,7 +248,11 @@ pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<ImageEvent>, AiErr
 }
 
 /// `onDocument` (openai-images.ts:232-253) — the `generate` frame.
-pub fn on_document(state: &mut State, document: &str, requested: Option<&str>) -> Result<Vec<ImageEvent>, AiError> {
+pub fn on_document(
+    state: &mut State,
+    document: &str,
+    requested: Option<&str>,
+) -> Result<Vec<ImageEvent>, AiError> {
     let invalid = |message: String| {
         AiError::new(crate::schema::AiErrorReason::InvalidProviderOutput {
             fields: crate::schema::ReasonFields {
@@ -274,7 +294,8 @@ pub fn on_document(state: &mut State, document: &str, requested: Option<&str>) -
     state.format = Some(format);
     state.size = size.map(str::to_string);
     state.quality = decoded.get("quality").and_then(|value| value.as_str()).map(str::to_string);
-    state.background = decoded.get("background").and_then(|value| value.as_str()).map(str::to_string);
+    state.background =
+        decoded.get("background").and_then(|value| value.as_str()).map(str::to_string);
     state.usage = usage_of(decoded.get("usage").unwrap_or(&serde_json::Value::Null));
     Ok(images
         .into_iter()
@@ -287,7 +308,9 @@ pub fn on_document(state: &mut State, document: &str, requested: Option<&str>) -
 pub fn step(state: &mut State, frame: &Frame) -> Result<Vec<ImageEvent>, AiError> {
     match frame {
         Frame::Text(text) => on_event(state, text),
-        Frame::Document { document, requested } => on_document(state, document, requested.as_deref()),
+        Frame::Document { document, requested } => {
+            on_document(state, document, requested.as_deref())
+        }
         Frame::Bytes(_) => Ok(Vec::new()),
     }
 }
@@ -343,14 +366,26 @@ impl StreamProtocol for OpenAiImages {
     }
 
     fn path(&self, request: &Addressed<ImageRequest>) -> String {
-        if request.request.images.is_empty() { PATH.to_string() } else { EDIT_PATH.to_string() }
+        if request.request.images.is_empty() {
+            PATH.to_string()
+        } else {
+            EDIT_PATH.to_string()
+        }
     }
 
     fn framing(&self, request: &Addressed<ImageRequest>, _body: &Body) -> Framing {
-        if request.mode == Mode::Stream { Framing::Sse } else { Framing::Document }
+        if request.mode == Mode::Stream {
+            Framing::Sse
+        } else {
+            Framing::Document
+        }
     }
 
-    fn finish(&self, state: &Self::State, _context: &ResponseContext<ImageRequest>) -> Result<Vec<ImageEvent>, AiError> {
+    fn finish(
+        &self,
+        state: &Self::State,
+        _context: &ResponseContext<ImageRequest>,
+    ) -> Result<Vec<ImageEvent>, AiError> {
         finish(state)
     }
 }
@@ -367,11 +402,8 @@ mod tests {
 
     #[test]
     fn generate_lowers_a_json_body() {
-        let body = body_from(&Addressed::new(
-            request("gpt-image-1", "a cat"),
-            Mode::Generate,
-        ))
-        .unwrap();
+        let body =
+            body_from(&Addressed::new(request("gpt-image-1", "a cat"), Mode::Generate)).unwrap();
         let Body::Json { value, .. } = body else { panic!("json body") };
         assert_eq!(value["model"], json!("gpt-image-1"));
         assert_eq!(value["prompt"], json!("a cat"));
@@ -450,18 +482,27 @@ mod tests {
         assert_eq!(image.info.as_ref().unwrap().width, Some(1024.0));
         assert_eq!(image.info.as_ref().unwrap().height, Some(768.0));
         let finish_events = finish(&state).unwrap();
-        let ImageEvent::Finish { usage, provider_metadata, .. } = &finish_events[0] else { panic!() };
-        assert_eq!(usage.as_ref().unwrap(), &MediaUsage::Tokens {
-            input: Some(10.0),
-            output: None,
-            total: Some(12.0),
-            details: Some(json!({"input_tokens": 10, "total_tokens": 12}).as_object().unwrap().clone()),
-        });
+        let ImageEvent::Finish { usage, provider_metadata, .. } = &finish_events[0] else {
+            panic!()
+        };
+        assert_eq!(
+            usage.as_ref().unwrap(),
+            &MediaUsage::Tokens {
+                input: Some(10.0),
+                output: None,
+                total: Some(12.0),
+                details: Some(
+                    json!({"input_tokens": 10, "total_tokens": 12}).as_object().unwrap().clone()
+                ),
+            }
+        );
         assert_eq!(provider_metadata.as_ref().unwrap()["openai"]["outputFormat"], json!("webp"));
 
         // Requested-format fallback when the document omits it.
         let mut state = State::default();
-        let events = on_document(&mut state, r#"{"data": [{"b64_json": "AQID"}]}"#, Some("jpeg".into())).unwrap();
+        let events =
+            on_document(&mut state, r#"{"data": [{"b64_json": "AQID"}]}"#, Some("jpeg".into()))
+                .unwrap();
         let ImageEvent::Image { image, .. } = &events[0] else { panic!() };
         assert_eq!(image.media_type, "image/jpeg");
     }
@@ -472,7 +513,9 @@ mod tests {
         let error = on_document(&mut state, r#"{"data": []}"#, None).unwrap_err();
         assert!(error.message().contains("returned no images"));
         match error.reason {
-            crate::schema::AiErrorReason::InvalidProviderOutput { route: Some(route), .. } => assert_eq!(route, ID),
+            crate::schema::AiErrorReason::InvalidProviderOutput { route: Some(route), .. } => {
+                assert_eq!(route, ID)
+            }
             other => panic!("wrong reason {other:?}"),
         }
     }
@@ -491,7 +534,11 @@ mod tests {
         assert_eq!(*index, 0.0);
         assert_eq!(state.completed, 1);
         // collectResponse runs over the whole event stream, not just finish.
-        let all = [vec![ImageEvent::Image { index: 0.0, image: media::base64("AQID", "image/png") }], finish(&state).unwrap()].concat();
+        let all = [
+            vec![ImageEvent::Image { index: 0.0, image: media::base64("AQID", "image/png") }],
+            finish(&state).unwrap(),
+        ]
+        .concat();
         let CollectedResponse::Image(response) = collect_image_response(&all) else { panic!() };
         assert_eq!(response.images.len(), 1);
     }
