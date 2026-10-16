@@ -341,38 +341,47 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         caret: Some(composer.caret()),
     };
     let _ = theme;
-    let (mut frame, caret_screen) = render_home_view(&view, &state, size);
-    store.set_caret_cell(
-        caret_screen.map(|(x, y)| (u16::try_from(x).unwrap_or(0), u16::try_from(y).unwrap_or(0))),
-    );
-
     // F9 — the tab strip leads the HOME route while tabs are open (v2
     // app.tsx:576-579 `tabsAvailable`: `sessionTabs.enabled() &&
     // tabs().length > 0` — the SessionTabs mount is app-wide, never
     // session-route-gated; home simply has no active pill). The
     // golden harness never opens tabs, so `home.w*` stays byte-exact.
+    //
+    // v2 lays the home content out INSIDE the remaining height: the
+    // strip is row 0 of the same column (`app.tsx:1349-1361` seats
+    // `<SessionTabs/>` directly above the route `<Switch>`), so Home's
+    // own layout sees `height - 1` and the caret rides the shifted
+    // subtree. The dogfood2 repro caught this port computing the
+    // caret at the UNSHIFTED row (one row above the composer) and
+    // clipping the bottom status row (full-height layout + truncate):
+    // render the sub-frame at height-1, prepend the strip row, then
+    // set the caret cell shifted by the strip's one row.
     let tabs = store.tabs();
-    if store.tabs_enabled() && !tabs.tabs.is_empty() {
+    let strip_shows = store.tabs_enabled() && !tabs.tabs.is_empty() && usize::from(size.1) > 1;
+    let sub_size = (
+        size.0,
+        if strip_shows { size.1 - 1 } else { size.1 },
+    );
+    let (mut frame, caret_screen) = render_home_view(&view, &state, sub_size);
+    if strip_shows {
         let (width, height) = (usize::from(size.0), usize::from(size.1));
-        if height > 1 {
-            let strip = crate::components::session::paint_live_tabs_bar(
-                store,
-                None,
-                width,
-                &state.styles(),
-            );
-            // Shift the home view down one row under the strip.
-            let mut cells = vec![frame.cells[0].clone()];
-            cells.extend(frame.cells.clone());
-            cells.truncate(height);
-            frame = Frame { cells, width, height };
-            for (row, strip_row) in strip.cells.iter().enumerate() {
-                if let Some(slot) = frame.cells.get_mut(row) {
-                    slot.clone_from(strip_row);
-                }
-            }
-        }
+        let strip = crate::components::session::paint_live_tabs_bar(
+            store,
+            None,
+            width,
+            &state.styles(),
+        );
+        // Prepend the strip's row (height 1); the sub-frame already
+        // fits height-1 beneath it — nothing truncates.
+        let mut cells = strip.cells.clone();
+        cells.extend(frame.cells.clone());
+        cells.truncate(height);
+        frame = Frame { cells, width, height };
     }
+    store.set_caret_cell(caret_screen.map(|(x, y)| {
+        let y = y + usize::from(strip_shows);
+        (u16::try_from(x).unwrap_or(0), u16::try_from(y).unwrap_or(0))
+    }));
     frame
 }
 

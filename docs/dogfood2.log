@@ -78,3 +78,38 @@ sessions whose directory is /opt/lobechat + /opt/new-api — none for the cwd):
 - home.rs render_home: lay the home view out in height-1 when the strip shows (v2:
   strip is row 0 of the SAME column — app.tsx:1349-1361), prepend the strip row, and
   shift the caret cell +1 (caret inside the shifted subtree).
+
+## Phase 5 — bug 3: boot model ignores config providers (Own/glm-5.3)
+Real shape (sanitized probe of the live config): `providers.own` (camelCase keys,
+package @opencode/ai/providers/anthropic, settings{apiKey,baseURL}, models with
+cost as an ARRAY of {input,output}) + `model: "Own/glm-5.3"` + small_model.
+
+ROOT CAUSE (ours only): the provider/model seeding read the global config from the
+`opencode-rust`-suffixed dir — boot.rs:116 (engine seeding), boot.rs:297
+(location_config), engine/mod.rs:534 (per-location assemble) — while every other
+config consumer (handlers/config.rs:27, handlers/agent.rs:103, announce.rs:296) and
+the REF read the SHARED v2 dir `~/.config/opencode`. Result: zero config providers
+bound → `own` missing from /api/model (10 models vs ref's 38) → default fell to the
+catalog fallback ("opencode zen fledge alpha free").
+- normalize + provider decode are FINE (probe: providers.own + cost array + agents
+  .title.model small_model migration all survive; matches ref /api/config exactly).
+- Fix: the three sites join "opencode" like the rest of the pipeline.
+
+SECONDARY (miss-path parity): model_default's configured-but-unresolvable branch
+served a synthetic stub {providerID:"Own", id:"glm-5.3"}; v2 Model.default()
+(model.ts:260-266) serves `available.find(supportsText)` — the first text model of
+the SAME ordering /api/model serves. Extracted location_model_entries + supports_text
+(model.rs); both fallback paths now use it. (Also removed v2-divergent
+"first model of the provider" or_else.)
+
+GROUND TRUTH (ref beta.12, live probes, synthetic config):
+- matched case (synth/synth-1): ref default = synth/synth-1 "Synth One"; OURS = same ✓
+- mismatched case (Synth/synth-1): ref default = opencode/nemotron-3.5-super-vl-free
+  (its catalog vintage's first available text model); OURS = opencode/fledge-alpha-free
+  (OUR catalog vintage's first) — same semantics, different models.dev snapshot
+  (ref live-fetches; ours vendors). The providerID case miss is v2.0.24 behavior
+  (byProvider.get exact match, model.ts:263) — kept 1:1, NOT "fixed" case-insensitively.
+- user's real shape: ref lists own/{glm-5.3,glm-5.3-flash,gemini-3.8-flash,
+  qwen3.8-flash-next}; OURS (fixed) lists the same 4 ✓; both default→fallback.
+- NOT in scope (left): engine/mod.rs:761 global AGENTS.md discovery still uses the
+  suffixed dir; models.dev snapshot vintage drift (ref live vs ours vendored).
