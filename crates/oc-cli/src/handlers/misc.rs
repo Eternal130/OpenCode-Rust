@@ -11,11 +11,15 @@ use crate::util;
 /// replace), then launch the TUI against the resolved endpoint
 /// (the Phase-7.2 port; errors clearly without a TTY). The boot
 /// flags follow v2's route rules (`app.tsx:364-371`): default = home,
-/// `--continue`/`--session` route a session.
+/// `--continue`/`--session` route a session; `--prompt` seeds the
+/// booted composer and auto-submits the first turn, `--auto` arms
+/// permission autoaccept (`handlers/default.ts:110-118`'s args).
 pub async fn root(
     directory: Option<&str>,
     continue_last: bool,
     session: Option<String>,
+    prompt: Option<String>,
+    auto: bool,
     server: &crate::cli::ServerParams,
 ) -> i32 {
     if let Some(directory) = directory {
@@ -40,7 +44,7 @@ pub async fn root(
     // The TUI owns the terminal from here; the ensured server stays
     // alive for the duration (the guard drops after).
     let client = resolved.endpoint.client();
-    let boot = oc_tui::app::BootArgs { continue_last, session };
+    let boot = oc_tui::app::BootArgs { continue_last, session, prompt, auto };
     match oc_tui::app::run(client, boot).await {
         Ok(()) => 0,
         Err(message) => {

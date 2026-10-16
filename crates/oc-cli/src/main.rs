@@ -62,6 +62,8 @@ async fn dispatch(cli: Cli) -> i32 {
                 cli.directory.as_deref(),
                 cli.continue_,
                 cli.session.clone(),
+                cli.prompt.clone(),
+                auto,
                 &server,
             )
             .await
