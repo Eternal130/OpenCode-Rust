@@ -22,16 +22,13 @@
 mod vt_harness;
 
 use std::time::Duration;
-use vt_harness::{pty_lock, run_tui, sandbox_env, standard_sessions, FakeLlm, LiveHarness, WORDMARK};
+use vt_harness::{
+    pty_lock, run_tui, sandbox_env, standard_sessions, FakeLlm, LiveHarness, WORDMARK,
+};
 
 fn find_row(h: &vt_harness::HarnessHandle, needle: &str) -> Option<usize> {
     let grid = h.grid_now();
-    for row in 0..grid.rows {
-        if grid.row_text(row).contains(needle) {
-            return Some(row);
-        }
-    }
-    None
+    (0..grid.rows).find(|row| grid.row_text(*row).contains(needle))
 }
 
 fn wait_row(h: &vt_harness::HarnessHandle, needle: &str, timeout: Duration) -> Option<usize> {
@@ -65,7 +62,7 @@ fn pty_four_commands_open_real_surfaces() {
     let url = server.url.clone();
     let harness = LiveHarness::attach(100, 30);
     let mut driver = harness.handle();
-    let mut exit_driver = harness.handle();
+    let exit_driver = harness.handle();
     std::thread::spawn(move || run_tui(&url, 100, 30, Duration::from_secs(90)));
     drop(sandbox);
     assert!(driver.wait_for(WORDMARK, Duration::from_secs(10)), "the wordmark rendered");
@@ -116,8 +113,12 @@ fn pty_four_commands_open_real_surfaces() {
         "the expiry copy"
     );
     assert!(
-        wait_row(&driver, "http://localhost:4096/auth/connect/pair-code-123", Duration::from_secs(3))
-            .is_some(),
+        wait_row(
+            &driver,
+            "http://localhost:4096/auth/connect/pair-code-123",
+            Duration::from_secs(3)
+        )
+        .is_some(),
         "the localhost link"
     );
     driver.write(b"\x1b");
@@ -142,7 +143,8 @@ fn pty_four_commands_open_real_surfaces() {
     assert!(find_row(&driver, "Select variant").is_none(), "no variant dialog mounted");
 
     server.stop();
-    let _ = exit_driver.write(b"\x03");
+    let mut exit_driver = exit_driver;
+    exit_driver.write(b"\x03");
 }
 
 /// The diff viewer cycle: `/diff` mounts → the empty body paints →
@@ -156,7 +158,7 @@ fn pty_diff_viewer_cycle() {
     let url = server.url.clone();
     let harness = LiveHarness::attach(120, 30);
     let mut driver = harness.handle();
-    let mut exit_driver = harness.handle();
+    let exit_driver = harness.handle();
     std::thread::spawn(move || run_tui(&url, 120, 30, Duration::from_secs(60)));
     drop(sandbox);
     assert!(driver.wait_for(WORDMARK, Duration::from_secs(10)), "the wordmark rendered");
@@ -181,18 +183,19 @@ fn pty_diff_viewer_cycle() {
     std::thread::sleep(Duration::from_millis(150));
     // The source switch dialog (d) and back.
     driver.write(b"d");
-    assert!(wait_row(&driver, "Diff source", Duration::from_secs(3)).is_some(), "the source dialog");
+    assert!(
+        wait_row(&driver, "Diff source", Duration::from_secs(3)).is_some(),
+        "the source dialog"
+    );
     assert!(find_row(&driver, "Branch + local changes").is_some(), "the All row copy");
     driver.write(b"\x1b");
     std::thread::sleep(Duration::from_millis(200));
     // q closes back to the home route (the wordmark returns).
     let mark = driver.raw_len().saturating_sub(8192);
     driver.write(b"q");
-    assert!(
-        driver.wait_for_after(WORDMARK, mark, Duration::from_secs(3)),
-        "closed back to home"
-    );
+    assert!(driver.wait_for_after(WORDMARK, mark, Duration::from_secs(3)), "closed back to home");
 
     server.stop();
-    let _ = exit_driver.write(b"\x03");
+    let mut exit_driver = exit_driver;
+    exit_driver.write(b"\x03");
 }

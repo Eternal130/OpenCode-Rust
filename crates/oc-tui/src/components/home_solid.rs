@@ -353,6 +353,68 @@ fn styled_label(label: &str, fg: Rgb) -> StyledText {
     }
 }
 
+/// The home footer's LEFT label (SURF-2, auditB #7): the MCP status
+/// cell's colored `⊙ ` + count (success/error), the muted `/mcps`
+/// hint, then the plugin actions — one multi-chunk `StyledText`
+/// (footer.tsx:30-46 + the wave-3 actions).
+fn footer_left_label(
+    plan: &crate::components::home::HomePlan,
+    theme: &ThemeState,
+    muted: Rgb,
+) -> StyledText {
+    let mut chunks: Vec<TextChunk> = Vec::new();
+    if let Some((failed, label, hint, _)) = &plan.mcp {
+        let feedback = &theme.resolved.tokens.text.feedback;
+        let (dot, base) = if *failed {
+            (feedback.error.base, theme.resolved.tokens.text.base)
+        } else {
+            (feedback.success.base, theme.resolved.tokens.text.base)
+        };
+        chunks.push(TextChunk {
+            text: "⊙ ".to_owned(),
+            fg: Some(rgba(theme_cell(dot))),
+            bg: None,
+            attributes: 0,
+            link: None,
+        });
+        chunks.push(TextChunk {
+            text: label.clone(),
+            fg: Some(rgba(theme_cell(base))),
+            bg: None,
+            attributes: 0,
+            link: None,
+        });
+        if *hint {
+            chunks.push(TextChunk {
+                text: " /mcps".to_owned(),
+                fg: Some(rgba(muted)),
+                bg: None,
+                attributes: 0,
+                link: None,
+            });
+        }
+        if !plan.actions.is_empty() {
+            chunks.push(TextChunk {
+                text: "  ".to_owned(),
+                fg: Some(rgba(muted)),
+                bg: None,
+                attributes: 0,
+                link: None,
+            });
+        }
+    }
+    if !plan.actions.is_empty() {
+        chunks.push(TextChunk {
+            text: plan.actions.clone(),
+            fg: Some(rgba(muted)),
+            bg: None,
+            attributes: 0,
+            link: None,
+        });
+    }
+    StyledText::new(chunks)
+}
+
 /// Paint the home route through the opentui-solid path — the
 /// new-path twin of [`crate::components::home::render_home_view`]'s
 /// old painter: resolve the SHARED plan, render the chrome mount,
@@ -378,7 +440,7 @@ pub fn paint_solid_home_view(
         } else {
             StyledText::new(Vec::new())
         },
-        actions: styled_label(&plan.actions, muted),
+        actions: footer_left_label(&plan, theme, muted),
     };
     let mut frame = HOME.with_borrow_mut(|slot| {
         let key = (width, height, colors.base, plan.clone());
@@ -483,6 +545,7 @@ mod tests {
             metadata: crate::components::composer::render::MetadataLine::default(),
             plugin_hints: Vec::new(),
             plugin_actions: scenario.actions.clone(),
+            mcp: None,
             autocomplete: scenario.autocomplete.clone(),
             rail: None,
             caret: scenario.caret,

@@ -18,7 +18,7 @@
 //!   deferred (see docs/surf2.log).
 
 use crate::components::diff_viewer::{
-    diff_layout, render_diff_viewer, DiffFile, DiffViewerOptions, DiffView, PatchRow,
+    diff_layout, render_diff_viewer, DiffFile, DiffView, DiffViewerOptions, PatchRow,
 };
 use crate::render::{Cell, CellColor, Frame};
 use crate::store::{DiffPhase, DiffSource, DiffViewerLive, Store};
@@ -28,9 +28,7 @@ use crate::theme::ThemeStyles;
 #[must_use]
 pub fn is_diff_image_file(file: &str) -> bool {
     let lower = file.to_ascii_lowercase();
-    [".png", ".jpg", ".jpeg", ".webp", ".gif"]
-        .iter()
-        .any(|extension| lower.ends_with(extension))
+    [".png", ".jpg", ".jpeg", ".webp", ".gif"].iter().any(|extension| lower.ends_with(extension))
 }
 
 /// One file card's position inside the patch column's content space
@@ -39,7 +37,7 @@ pub fn is_diff_image_file(file: &str) -> bool {
 pub struct FileCardLayout {
     /// The card's top row (its header row) in content space.
     pub top: usize,
-    /// Each hunk's (header_row, first_patch_row) — the header row is
+    /// Each hunk's (`header_row`, `first_patch_row`) — the header row is
     /// `None` when the hunk starts at line 1 (hidden, :25 note).
     pub hunks: Vec<(Option<usize>, usize)>,
 }
@@ -85,6 +83,7 @@ pub fn diff_content_layout(
 
 /// The split view's row count: contexts emit one pair, deletion runs
 /// zip with addition runs (`split_pairs`, :461-511).
+#[allow(clippy::items_after_statements)] // the nested flush reads best here
 fn split_row_count(rows: &[PatchRow]) -> usize {
     let mut pairs = 0usize;
     let mut pending_dels = 0usize;
@@ -141,11 +140,7 @@ pub fn render_diff_mount(
         for (offset, ch) in text.chars().enumerate() {
             if let Some(cell) = frame.cells.get_mut(2).and_then(|line| line.get_mut(2 + offset)) {
                 cell.ch = ch;
-                cell.fg = if error {
-                    CellColor::from(styles.error)
-                } else {
-                    muted_fg(styles)
-                };
+                cell.fg = if error { CellColor::from(styles.error) } else { muted_fg(styles) };
             }
         }
         frame
@@ -192,10 +187,8 @@ fn render_diff_scrolled(
     // Render into the content-sized frame (toolbar + tree paint at
     // the top; the patch column flows past the viewport).
     let oversized = content_height.max(height) + 2;
-    let options = DiffViewerOptions {
-        source_label: live.mode.label(),
-        source_detail: &live.source_detail(),
-    };
+    let options =
+        DiffViewerOptions { source_label: live.mode.label(), source_detail: &live.source_detail() };
     let content = render_diff_viewer(files, &live.viewer, &options, styles, width, oversized);
     // Composite per-column: patch cells shift by `scroll`, the tree
     // pane + the toolbar row stay at their content positions.
@@ -256,7 +249,7 @@ pub fn diff_scroll_command(live: &mut DiffViewerLive, command: &str, viewport: u
     true
 }
 
-/// (content_height, cards) over the CURRENTLY VISIBLE files at a
+/// (`content_height`, cards) over the CURRENTLY VISIBLE files at a
 /// representative width (the render recomputes per frame; the command
 /// math only needs the content height).
 fn content_metrics(live: &DiffViewerLive) -> (usize, Vec<FileCardLayout>) {
@@ -388,8 +381,10 @@ mod tests {
 
     #[test]
     fn scroll_commands_clamp_and_jump() {
-        let mut live =
-            DiffViewerLive { phase: DiffPhase::Loaded(diff_viewer_fixture()), ..Default::default() };
+        let mut live = DiffViewerLive {
+            phase: DiffPhase::Loaded(diff_viewer_fixture()),
+            ..Default::default()
+        };
         assert!(diff_scroll_command(&mut live, "diff.down", 10));
         assert_eq!(live.scroll, 1);
         assert!(diff_scroll_command(&mut live, "diff.last", 10));
@@ -410,8 +405,10 @@ mod tests {
     /// scroll and the pinned tree column does not shift.
     #[test]
     fn scrolled_render_crops_the_patch_column() {
-        let mut live =
-            DiffViewerLive { phase: DiffPhase::Loaded(diff_viewer_fixture()), ..Default::default() };
+        let mut live = DiffViewerLive {
+            phase: DiffPhase::Loaded(diff_viewer_fixture()),
+            ..Default::default()
+        };
         let theme = theme();
         let store = crate::store::Store::new(crate::reactive::Runtime::new());
         store.update_diff_viewer(|state| {

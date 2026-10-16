@@ -482,9 +482,14 @@ impl Keymap {
             let def = self
                 .registry
                 .values()
-                .find(|def| (def.command == entry.name || def.bind_name == entry.name) && def.layer == "base")
+                .find(|def| {
+                    (def.command == entry.name || def.bind_name == entry.name)
+                        && def.layer == "base"
+                })
                 .or_else(|| {
-                    self.registry.values().find(|def| def.command == entry.name || def.bind_name == entry.name)
+                    self.registry
+                        .values()
+                        .find(|def| def.command == entry.name || def.bind_name == entry.name)
                 })
                 .copied();
             let Some(def) = def else {
