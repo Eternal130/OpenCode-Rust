@@ -429,18 +429,38 @@ pub fn render_session(
         // (the `OC_SIDEBAR_OPENTUI=0` fallback, one release); BOTH
         // consume the same `render_sidebar` geometry.
         let pane = crate::components::sidebar_solid::sidebar_pane_frame(&view, styles, pane_height);
+        // The onboarding card's pointer targets at ABSOLUTE cells: the
+        // same `render_sidebar` geometry the pane painted, translated
+        // by the paste origin (docked at the transcript column, or the
+        // right edge under the overlay scrim). The extra walk only
+        // runs while the card is up; a hidden card clears the rects
+        // (stale hits after a dismiss would zombie-click).
+        let hits = view.onboarding.then(|| {
+            crate::components::sidebar::render_sidebar(&view, styles, pane_height).onboarding_hits
+        });
+        let origin_x = if sidebar_docked {
+            column
+        } else {
+            width.saturating_sub(crate::components::session_tabs::SESSION_SIDEBAR_WIDTH)
+        };
+        store.set_sidebar_onboarding_hits(hits.flatten().map(|mut hits| {
+            let shift = |rect: &mut crate::store::HitRect| {
+                rect.x += origin_x;
+                rect.y += content_top;
+            };
+            shift(&mut hits.dismiss);
+            shift(&mut hits.connect);
+            hits
+        }));
         if sidebar_docked {
             paste(&mut frame, &pane, column, content_top);
         } else if sidebar_overlay {
             let scrim = scrim_frame(width, pane_height);
             paste(&mut frame, &scrim, 0, content_top);
-            paste(
-                &mut frame,
-                &pane,
-                width.saturating_sub(crate::components::session_tabs::SESSION_SIDEBAR_WIDTH),
-                content_top,
-            );
+            paste(&mut frame, &pane, origin_x, content_top);
         }
+    } else {
+        store.set_sidebar_onboarding_hits(None);
     }
     frame
 }
@@ -483,7 +503,9 @@ fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarV
             mcp: Vec::new(),
             plugins: store.plugin_sidebar_sections(),
         },
-        onboarding: height >= 22 && !store.sidebar_onboarding_dismissed(),
+        onboarding: height >= 22
+            && !store.sidebar_onboarding_dismissed()
+            && !store.server_lists().connected,
         location: None,
     }
 }

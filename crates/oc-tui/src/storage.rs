@@ -166,6 +166,20 @@ pub const KEY_SESSION_LIST: &str = "session-list";
 /// TUI-side stand-in, last toggle wins).
 pub const KEY_SIDEBAR: &str = "sidebar";
 
+/// The sidebar onboarding card's dismissal (`getting-started` — v2's
+/// `storage.store("getting-started", { initial: { dismissed: false } })`,
+/// feature-plugins/sidebar/footer.tsx:11-13; auditC's state table
+/// `<state>/<ch>/tui/getting-started.json`).
+pub const KEY_GETTING_STARTED: &str = "getting-started";
+
+/// The persisted onboarding document (`{"dismissed": bool}` — the
+/// v2 storage draft's shape).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GettingStartedDoc {
+    #[serde(default)]
+    pub dismissed: bool,
+}
+
 /// The persisted sidebar document (`{"mode": "auto"|"hide"}`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SidebarDoc {
@@ -186,7 +200,7 @@ pub const MIGRATED_FROM_FIELD: &str = "migrated-from-local";
 
 /// The keys [`ChannelStorage::open_default_migrated`] carries over from
 /// the legacy channel (everything the TUI persists).
-pub const MIGRATED_KEYS: &[&str] = &[KEY_TABS, KEY_SESSION_LIST];
+pub const MIGRATED_KEYS: &[&str] = &[KEY_TABS, KEY_SESSION_LIST, KEY_GETTING_STARTED];
 
 /// The one-time `local`→expected-channel migration (D-06), mirroring
 /// v2's v1→v2 idiom: source read-only, completion observable at the
