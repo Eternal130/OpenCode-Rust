@@ -138,7 +138,7 @@ fn corpus_hook_mutation_replacement_shapes() {
     assert!(
         event.get("system").is_none(),
         "deleted key stays deleted across the boundary: {}",
-        event.get("system").map(|v| v.to_string()).unwrap_or_default()
+        event.get("system").map(std::string::ToString::to_string).unwrap_or_default()
     );
     // Whole-field replacement, observed by the host AND by the next
     // plugin in the chain (B composed its marker onto A's message id).
