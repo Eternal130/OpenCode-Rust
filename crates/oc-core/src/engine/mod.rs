@@ -330,6 +330,9 @@ pub struct Engine {
     /// boot [`Engine::catalog`] is its snapshot; `get()` serves refreshes
     /// (the server's model surface reads it live).
     pub catalog_service: Arc<crate::provider_catalog::refresh::CatalogService>,
+    /// The integration/auth host (BE-3): auth-method registry, credential
+    /// connections, OAuth/command attempt lifecycle, token refresh.
+    pub integration: Arc<crate::integration::IntegrationHost>,
     clock: Arc<dyn Clock>,
     ids: Arc<dyn IdGen>,
     rng: Arc<dyn RngSource>,
@@ -478,6 +481,15 @@ impl Engine {
             PluginSupervisor::new(),
         );
         let locations = Arc::new(LocationServiceMap::new(Arc::new(globals)));
+        // The integration/auth host (BE-3): registry over the catalog's
+        // key/env surface + the named OAuth providers; credential rows +
+        // events ride the engine's database and bus.
+        let integration = crate::integration::IntegrationHost::new(
+            Arc::clone(&db),
+            Arc::clone(&bus),
+            &catalog,
+            &crate::session::runner::model_request::useragent(&options.app),
+        );
         let engine = Engine {
             data_root: options.data_root.clone(),
             home: options.home.clone(),
@@ -485,6 +497,7 @@ impl Engine {
             bus,
             catalog,
             catalog_service,
+            integration,
             clock: options.clock.clone(),
             ids: options.ids.clone(),
             rng: options.rng.clone(),

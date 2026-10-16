@@ -95,3 +95,40 @@ no IntegrationService in oc-core). This lane lands the host.
 - oc-cli `auth list/login/logout/export/import` exists (890 L) against oc-client —
   dead-ends at the stubbed routes.
 - Engine exposes `db`, `bus`, `catalog_service` (engine/mod.rs:323-331) — host hangs off these.
+
+## Phase 2 — oc-core integration host (WIP, green)
+
+- `integration::types` — v2 wire shapes: Method/ConnectionInfo/Info/Attempt/
+  AttemptStatus/CommandAttempt(Status) tag-unions (camelCase), CredentialValue
+  (oauth|key), typed `IntegrationError` (CodeRequired/Authorization/AttemptNotFound/
+  MethodNotFound) (types.rs).
+- `integration::credential::CredentialStore` — the v2 credential.ts port over the
+  shared `credential` table: all/list/get/create/activate/update/remove with the
+  exact picked-active ordering (`desc(active),desc(created),desc(id)`), replacement
+  promotion on remove, legacy-NULL pinning, and global `credential.updated` /
+  `credential.switched` publishes (credential.rs).
+- `integration::IntegrationHost` — registry (update_integration/update_method/
+  remove_method with v2 slot-dedupe), list/get projections (credential rows
+  newest-first + env connections), connection active/resolve (refresh when
+  `expires <= now+5min`), connect_key (form validation + label derivation
+  `name`, `name 2`, …), connection_status projection + `integration.updated`
+  notify, OAuth attempts (10-min lifetime, auto-fork settle, complete/cancel,
+  CodeRequired, persisting guard), command attempts (spawn, stderr → message,
+  stdout → key), 30-s scrub (mod.rs).
+- `integration::flows` — PKCE S256, state nonces, device-code request/poll
+  engine (pending/slow_down, +3s margins), loopback callback listener (HTTP/1.1
+  on tokio; bootstrap POST-back page for implicit flows, success page for code
+  redirects) (flows.rs).
+- `integration::providers` — built-ins 1:1 with v2: catalog-wide key/env
+  methods incl. the azure `_API_KEY` filter; OpenCode Console (zen) device flow
+  + refresh + orgName label; GitHub Copilot device flow (clientID Ov23li8tweQw6odWQebz,
+  enterprise form, entitlement check, key method removed); xAI device + refresh;
+  DigitalOcean implicit (port 1456 bootstrap page); Poe code+PKCE (providers.rs).
+- Engine boots `pub integration: Arc<IntegrationHost>`; bus registry gained
+  `integration.updated` (append-only).
+- Tests (13, all green): registry projections, env connections, store
+  activation+events, key-label derivation, code/auto attempt lifecycles,
+  failure messages, command sourcing (success+failure), refresh-on-resolve
+  (persisted), zen device round-trip against a local mock (request shapes
+  asserted), loopback listener params/HTML, v2 wire serialization.
+- cargo fmt + clippy (pedantic) clean; oc-core nextest 795/795.

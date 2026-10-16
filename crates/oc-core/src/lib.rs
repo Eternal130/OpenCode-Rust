@@ -10,6 +10,7 @@ pub mod file_mutation;
 pub mod formatter;
 pub mod forms;
 pub mod hooks;
+pub mod integration;
 pub mod jobs;
 pub mod location;
 pub mod location_services;
