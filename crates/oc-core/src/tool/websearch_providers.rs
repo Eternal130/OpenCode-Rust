@@ -1,7 +1,8 @@
 //! Ports of `packages/core/src/plugin/websearch/*` — the search providers
 //! (exa, firecrawl, parallel, tinyfish, tavily; the MCP-hosted provider is
 //! TODO(wave-D)). Each provider implements the v2 HTTP contracts; API keys
-//! resolve through a credential seam that defaults to keyless modes.
+//! resolve through the v2 env connection-method names (the integration
+//! host itself is a later lane).
 
 use std::time::Duration;
 
@@ -474,16 +475,53 @@ impl SearchProvider for TinyFishProvider {
     }
 }
 
-/// The default provider set (keyless until credentials land with wave D's
-/// integration lane).
-pub fn default_providers() -> Vec<std::sync::Arc<dyn SearchProvider>> {
-    vec![
-        std::sync::Arc::new(ExaProvider { key: None }),
-        std::sync::Arc::new(FirecrawlProvider { key: None }),
-        std::sync::Arc::new(ParallelProvider { key: None }),
-        std::sync::Arc::new(TavilyProvider { key: None }),
-        std::sync::Arc::new(TinyFishProvider { key: None }),
-    ]
+/// The v2 integration `env` connection-method names — one provider is
+/// eligible when its key resolves through one of these
+/// (`plugin/websearch/*.ts`: `editor.method.update({ integrationID,
+/// method: { type: "env", names: [...] } })`). The integration host is a
+/// later lane, so this port resolves the same names from the process
+/// environment.
+pub fn env_key_name(id: &str) -> Option<&'static str> {
+    match id {
+        "exa" => Some("EXA_API_KEY"),
+        "firecrawl" => Some("FIRECRAWL_API_KEY"),
+        "parallel" => Some("PARALLEL_API_KEY"),
+        "tavily" => Some("TAVILY_API_KEY"),
+        "tinyfish" => Some("TINYFISH_API_KEY"),
+        _ => None,
+    }
+}
+
+/// The configured provider set: every provider whose API key resolves is
+/// registered (v2 registers the provider unconditionally and resolves the
+/// credential at execute time through `integration.connection.active`;
+/// without the integration host, key presence is the eligibility gate and
+/// an empty set leaves the typed `ProviderRequired` error path).
+pub fn providers_with_keys(
+    key_for: impl Fn(&str) -> Option<String>,
+) -> Vec<std::sync::Arc<dyn SearchProvider>> {
+    let mut providers = Vec::new();
+    for id in ["exa", "firecrawl", "parallel", "tavily", "tinyfish"] {
+        let Some(key) = key_for(id) else { continue };
+        let provider: std::sync::Arc<dyn SearchProvider> = match id {
+            "exa" => std::sync::Arc::new(ExaProvider { key: Some(key) }),
+            "firecrawl" => std::sync::Arc::new(FirecrawlProvider { key: Some(key) }),
+            "parallel" => std::sync::Arc::new(ParallelProvider { key: Some(key) }),
+            "tavily" => std::sync::Arc::new(TavilyProvider { key: Some(key) }),
+            _ => std::sync::Arc::new(TinyFishProvider { key: Some(key) }),
+        };
+        providers.push(provider);
+    }
+    providers
+}
+
+/// The wired default: env-key resolution (v2 env connection methods).
+pub fn providers_from_env() -> Vec<std::sync::Arc<dyn SearchProvider>> {
+    providers_with_keys(|id| {
+        env_key_name(id)
+            .and_then(|name| std::env::var(name).ok())
+            .filter(|key| !key.trim().is_empty())
+    })
 }
 
 #[cfg(test)]
@@ -514,8 +552,23 @@ mod tests {
 
     #[test]
     fn tool_websearch_providers_default_set_sorted_by_service() {
-        let providers = default_providers();
+        // v2 order (`WebSearchPlugins`): exa, firecrawl, parallel, tavily,
+        // tinyfish — filtered to the providers whose key resolves.
+        let providers = providers_with_keys(|id| (id != "parallel").then(|| "k".into()));
         let ids: Vec<&str> = providers.iter().map(|provider| provider.id()).collect();
-        assert_eq!(ids, vec!["exa", "firecrawl", "parallel", "tavily", "tinyfish"]);
+        assert_eq!(ids, vec!["exa", "firecrawl", "tavily", "tinyfish"]);
+        // No configured key anywhere ⇒ no eligible provider (the typed
+        // `ProviderRequired` path).
+        assert!(providers_with_keys(|_| None).is_empty());
+        // The env-key table matches the v2 integration env method names.
+        for (id, name) in [
+            ("exa", "EXA_API_KEY"),
+            ("firecrawl", "FIRECRAWL_API_KEY"),
+            ("parallel", "PARALLEL_API_KEY"),
+            ("tavily", "TAVILY_API_KEY"),
+            ("tinyfish", "TINYFISH_API_KEY"),
+        ] {
+            assert_eq!(env_key_name(id), Some(name));
+        }
     }
 }
