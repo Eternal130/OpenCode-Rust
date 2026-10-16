@@ -30,9 +30,9 @@
 //! no thread, no network.
 
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::{LazyLock, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -56,10 +56,12 @@ pub enum InstallationNotice {
     Installed(String),
 }
 
-static INSTALLATION_CHANNEL: LazyLock<(
+type InstallationChannel = (
     tokio::sync::mpsc::UnboundedSender<InstallationNotice>,
     Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<InstallationNotice>>>,
-)> = LazyLock::new(|| {
+);
+
+static INSTALLATION_CHANNEL: LazyLock<InstallationChannel> = LazyLock::new(|| {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     (tx, Mutex::new(Some(rx)))
 });
@@ -71,9 +73,9 @@ fn notify_installation(notice: InstallationNotice) {
 
 /// Takes the receiver the server-hosting process drains (`serve`); only
 /// the first caller gets one.
-pub fn take_installation_receiver()
--> Option<tokio::sync::mpsc::UnboundedReceiver<InstallationNotice>> {
-    INSTALLATION_CHANNEL.1.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take()
+pub fn take_installation_receiver(
+) -> Option<tokio::sync::mpsc::UnboundedReceiver<InstallationNotice>> {
+    INSTALLATION_CHANNEL.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
 }
 
 /// How often the background checker re-runs.

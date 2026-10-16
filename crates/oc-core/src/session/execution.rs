@@ -813,11 +813,9 @@ impl ExecutionHooks {
             )?;
             Ok(())
         }));
-        self.bus
-            .publish(def, data, options)
-            .await
-            .map(|_| ())
-            .map_err(|err| RunError::Defect(format!("failed to publish execution started: {err}")))?;
+        self.bus.publish(def, data, options).await.map(|_| ()).map_err(|err| {
+            RunError::Defect(format!("failed to publish execution started: {err}"))
+        })?;
         // `session.status` busy (schema/session-status-event.ts:35-43): the
         // public busy/idle push consumers subscribe to (the ref client
         // derives the same union from the execution events,
