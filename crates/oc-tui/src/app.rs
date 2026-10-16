@@ -338,6 +338,16 @@ impl App {
                     }
                     return;
                 }
+                // The permission pills track the pointer (auditA #4 —
+                // permission.tsx:583: `onMouseMove` moves the
+                // selection; the ask's own surface is the screen's
+                // only interactive one while it holds the footer).
+                if self.permission_live() {
+                    if self.permission_hover_select(col, row) {
+                        self.store.request_redraw();
+                    }
+                    return;
+                }
                 // #33 — the footer location label's hover lift
                 // (`useWorkingDirectoryActions`: muted → text.base).
                 // Route-gated (auditA §4.1): a stale session rect
@@ -376,6 +386,22 @@ impl App {
                         }
                     }
                     self.store.request_redraw();
+                    return;
+                }
+                // The permission ask's own pointer surface (auditA
+                // #4): v2 renders the pills and the reject stage's
+                // `enter confirm` / `esc cancel` hints as the ONLY
+                // interactive boxes while the ask holds the footer
+                // (permission.tsx:375-400, 583-590) — the early
+                // return that protects the transcript must not kill
+                // them. Release on a pill: select + run (the keyboard
+                // enter path with the selection set); release on the
+                // reject buttons: confirm sends the reject reply /
+                // cancel returns to the ask.
+                if self.permission_live() {
+                    if self.permission_release(col, row) {
+                        self.store.request_redraw();
+                    }
                     return;
                 }
                 if strip_live && row == 0 {
@@ -801,6 +827,133 @@ impl App {
     /// A permission ask is the live footer view.
     fn permission_live(&self) -> bool {
         matches!(self.store.footer().view, FooterView::Permission { .. })
+    }
+
+    /// The pill under (`col`, `row`), when the pointer sits on the
+    /// controls row inside one of the offered pills' extents.
+    fn permission_pill_at(
+        &self,
+        col: usize,
+        row: usize,
+    ) -> Option<crate::components::footer::permission::PermissionOption> {
+        use crate::components::footer::permission::PermissionOption;
+        let hits = self.store.permission_pointer_hits()?;
+        if row != hits.row {
+            return None;
+        }
+        hits.pills
+            .iter()
+            .find(|(_, (x, width))| col >= *x && col < *x + *width)
+            .map(|(option, _)| *option)
+    }
+
+    /// Pointer motion over a pill moves the selection (v2
+    /// `onMouseMove={() => setStore("selected", option)}`,
+    /// permission.tsx:583); `true` when the state changed.
+    fn permission_hover_select(&mut self, col: usize, row: usize) -> bool {
+        let Some(option) = self.permission_pill_at(col, row) else { return false };
+        let FooterView::Permission { request } = self.store.footer().view.clone() else {
+            return false;
+        };
+        let state = self
+            .permission_states
+            .get(&request.id)
+            .cloned()
+            .unwrap_or_else(|| create_permission_body_state(&request));
+        if state.selected == option {
+            return false;
+        }
+        self.permission_states.insert(
+            request.id.clone(),
+            crate::components::footer::permission::PermissionBodyState {
+                selected: option,
+                ..state
+            },
+        );
+        true
+    }
+
+    /// A release on the permission body's pointer targets (auditA
+    /// #4): a pill selects + RUNS (the keyboard enter path with the
+    /// selection set — `onMouseUp` sets the selection then fires
+    /// `onSelect`, permission.tsx:584-587); the reject stage's
+    /// confirm/cancel buttons map to the reject-stage enter/escape
+    /// (`onConfirm`/`onCancel`, permission.tsx:381/395). `true` when
+    /// a target consumed the release.
+    fn permission_release(&mut self, col: usize, row: usize) -> bool {
+        use crate::components::footer::permission::{permission_key, PermissionKey};
+        let hits = self.store.permission_pointer_hits();
+        let FooterView::Permission { request } = self.store.footer().view.clone() else {
+            return false;
+        };
+        let state = self
+            .permission_states
+            .get(&request.id)
+            .cloned()
+            .unwrap_or_else(|| create_permission_body_state(&request));
+        // The reject stage's hint buttons: `enter confirm` sends the
+        // reject reply (with the typed message), `esc cancel` returns
+        // to the ask with the selection on Reject.
+        let key = if row == hits.as_ref().map_or(usize::MAX, |hits| hits.row) {
+            if let (Some(hits), true) =
+                (&hits, state.stage == crate::components::footer::permission::PermissionStage::Reject)
+            {
+                let inside = |rect: Option<&(usize, usize)>| {
+                    rect.is_some_and(|(x, width)| col >= *x && col < *x + *width)
+                };
+                if inside(hits.confirm.as_ref()) {
+                    Some("enter")
+                } else if inside(hits.cancel.as_ref()) {
+                    Some("escape")
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let Some(key) = key else {
+            // Not on the hint buttons — the pills (Permission/Always
+            // stages): set the selection, then run the enter path.
+            return match self.permission_pill_at(col, row) {
+                Some(option) => {
+                    let state = crate::components::footer::permission::PermissionBodyState {
+                        selected: option,
+                        ..state
+                    };
+                    match permission_key(&state, &request, "enter") {
+                        PermissionKey::State(next) => {
+                            self.permission_states.insert(request.id.clone(), next);
+                        }
+                        PermissionKey::Reply(reply, next) => {
+                            self.permission_replies.push(reply.clone());
+                            self.permission_states.insert(request.id.clone(), next);
+                            // The reply resolves the ask server-side
+                            // (`permission.replied`) — the view falls
+                            // back.
+                            self.store.permission_replied(&reply.request_id);
+                        }
+                        _ => {}
+                    }
+                    true
+                }
+                None => false,
+            };
+        };
+        match permission_key(&state, &request, key) {
+            PermissionKey::State(next) => {
+                self.permission_states.insert(request.id.clone(), next);
+            }
+            PermissionKey::Reply(reply, next) => {
+                self.permission_replies.push(reply.clone());
+                self.permission_states.insert(request.id.clone(), next);
+                self.store.permission_replied(&reply.request_id);
+            }
+            _ => {}
+        }
+        true
     }
 
     /// v2's overlay-sidebar keymap gate (routes/session/index.tsx:244):
@@ -1278,16 +1431,35 @@ impl App {
                 .cloned()
                 .unwrap_or_else(|| create_permission_body_state(&request));
             let mount_height = PERMISSION_MOUNT_HEIGHT.min(usize::from(self.size.1));
+            let width = usize::from(self.size.0);
             let body = crate::components::footer::permission::render_permission_body(
                 &request,
                 &state,
-                usize::from(self.size.0),
+                width,
                 mount_height,
                 &footer_theme,
             );
             let y = usize::from(self.size.1) - mount_height;
             paste_frame(&mut frame, &body, y);
+            // The pointer surface (auditA #4): the same layout math
+            // the controls row paints with, translated by the mount
+            // origin — the body mounts full-width (x is already
+            // absolute), the controls row sits at screen row
+            // `size.1 − 2`.
+            let mut hits =
+                crate::components::footer::permission::permission_pointer_hits(
+                    &request,
+                    &state,
+                    width,
+                    mount_height,
+                );
+            hits.row = usize::from(self.size.1).saturating_sub(2);
+            self.store.set_permission_pointer_hits(Some(hits));
         } else {
+            // No live body — no pointer targets (the else branch also
+            // owns the picker mount below; the ask's rects must not
+            // outlive the view).
+            self.store.set_permission_pointer_hits(None);
             // A footer picker panel mounts over the composer from LIVE
             // store data (the mini footer family's docked pickers).
             let footer = self.store.footer();
@@ -5438,5 +5610,143 @@ mod core_interaction_tests {
         // transcript — the sidebar offset must not move.
         app.mouse_event(&mouse(MouseEventKind::ScrollDown, 10, 10));
         assert_eq!(app.store.sidebar_scroll().offset, 27, "the transcript wheel left the pane alone");
+    }
+
+    // -- lane/if item 3: the permission pointer arms (auditA #4) ----------
+
+    /// Stage one permission ask (SSE ingest shape) with `save`
+    /// patterns (the "Always allow" pill's gate).
+    fn stage_permission_ask(app: &mut App, id: &str, save: serde_json::Value) {
+        app.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "permission.asked",
+            serde_json::json!({
+                "id": id,
+                "sessionID": "ses",
+                "action": "read",
+                "resources": ["src/index.ts"],
+                "save": save,
+            }),
+        ))]);
+    }
+
+    /// The pills move the selection on hover and RUN on release (v2
+    /// permission.tsx:583-587: `onMouseMove` selects, `onMouseUp`
+    /// selects + `onSelect`): Allow-once replies `once` through the
+    /// same queue the keyboard enter uses and resolves the ask.
+    #[test]
+    fn permission_allow_once_via_pointer() {
+        use crate::components::footer::permission::PermissionOption;
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        stage_permission_ask(&mut app, "p1", serde_json::json!([]));
+        assert!(app.permission_live(), "the ask holds the screen");
+        let _ = app.frame();
+        let hits = app.store.permission_pointer_hits().expect("the render armed the pills");
+        assert_eq!(hits.row, 22, "the controls row at size.1 − 2");
+        let pills: Vec<(PermissionOption, (usize, usize))> = hits.pills.clone();
+        assert_eq!(pills.len(), 2, "no save patterns ⇒ no Always pill: {pills:?}");
+        assert_eq!(pills[0].0, PermissionOption::Once, "Allow once leads");
+        assert_eq!(pills[1].0, PermissionOption::Reject);
+
+        // Hover the Reject pill: the selection tracks the pointer.
+        let (_, (reject_x, reject_width)) = pills[1];
+        let mid = reject_x + reject_width / 2;
+        app.mouse_event(&mouse(MouseEventKind::Moved, u16::try_from(mid).unwrap_or(u16::MAX), 22));
+        assert_eq!(
+            app.permission_states.get("p1").map(|state| state.selected),
+            Some(PermissionOption::Reject),
+            "pointer motion selected the Reject pill"
+        );
+
+        // Release on the ALLOW-ONCE pill: the run replies `once` and
+        // resolves the ask (the keyboard enter path with the
+        // selection set by the release itself).
+        let (once_x, once_width) = pills[0].1;
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(once_x + once_width / 2).unwrap_or(u16::MAX),
+            22,
+        ));
+        assert_eq!(app.permission_replies.len(), 1, "one reply");
+        assert_eq!(app.permission_replies[0].decision, "once");
+        assert_eq!(app.permission_replies[0].request_id, "p1");
+        assert!(!app.permission_live(), "the ask resolved locally");
+        assert!(
+            app.store.permission_pointer_hits().is_none(),
+            "the resolved ask left no zombie rects"
+        );
+    }
+
+    /// The reject flow through the pointer: the Reject pill opens the
+    /// reject stage (no reply), `enter confirm` sends the reject
+    /// reply, `esc cancel` returns to the ask — v2's two hint
+    /// BUTTONS (permission.tsx:375-400), not dead labels.
+    #[test]
+    fn permission_reject_confirm_and_cancel_via_pointer() {
+        use crate::components::footer::permission::{PermissionOption, PermissionStage};
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        stage_permission_ask(&mut app, "p2", serde_json::json!(["src/**"]));
+        let _ = app.frame();
+        let hits = app.store.permission_pointer_hits().expect("armed");
+        let pills: Vec<(PermissionOption, (usize, usize))> = hits.pills.clone();
+        assert_eq!(pills.len(), 3, "save patterns arm the Always pill: {pills:?}");
+        // Reject is the third pill: release opens the reject stage.
+        let (reject_x, reject_width) = pills[2].1;
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(reject_x + reject_width / 2).unwrap_or(u16::MAX),
+            22,
+        ));
+        assert!(app.permission_replies.is_empty(), "the reject stage sends nothing yet");
+        let staged = app.permission_states.get("p2").cloned().expect("staged");
+        assert_eq!(staged.stage, PermissionStage::Reject, "the pill run opened the stage");
+        let _ = app.frame();
+        let hits = app.store.permission_pointer_hits().expect("re-armed for the stage");
+        let (confirm_x, confirm_width) = hits.confirm.expect("the confirm button armed");
+        let (cancel_x, cancel_width) = hits.cancel.expect("the cancel button armed");
+        assert!(confirm_x + confirm_width < cancel_x, "the buttons sit in the hint block");
+
+        // `esc cancel` first: back to the ask, selection on Reject.
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(cancel_x + cancel_width / 2).unwrap_or(u16::MAX),
+            22,
+        ));
+        let cancelled = app.permission_states.get("p2").cloned().expect("staged");
+        assert_eq!(cancelled.stage, PermissionStage::Permission, "cancel returned to the ask");
+        assert_eq!(cancelled.selected, PermissionOption::Reject);
+
+        // Re-open and `enter confirm`: the reject reply fires.
+        let _ = app.frame();
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(reject_x + reject_width / 2).unwrap_or(u16::MAX),
+            22,
+        ));
+        let _ = app.frame();
+        let hits = app.store.permission_pointer_hits().expect("re-armed");
+        let (confirm_x, confirm_width) = hits.confirm.expect("the confirm button armed");
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(confirm_x + confirm_width / 2).unwrap_or(u16::MAX),
+            22,
+        ));
+        assert_eq!(app.permission_replies.len(), 1, "the confirm button sent the reply");
+        assert_eq!(app.permission_replies[0].decision, "reject");
+        assert!(!app.permission_live(), "the ask resolved");
+
+        // A release on the transcript rows under a live ask stays
+        // dead (the early return that protects the transcript must
+        // not fire anything).
+        stage_permission_ask(&mut app, "p3", serde_json::json!([]));
+        let _ = app.frame();
+        app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 10, 5));
+        assert!(app.permission_live(), "a stray transcript release toggled nothing");
+        assert_eq!(app.permission_replies.len(), 1, "no extra reply");
     }
 }

@@ -673,6 +673,68 @@ fn render_permission_controls(
     canvas.spans_right(y, width - 4, &hint);
 }
 
+// -- the pointer surface (lane/if item 3, auditA #4) -------------------------
+
+/// The permission body's pointer targets, at the SAME body-local
+/// coordinates the canvas paints (`render_permission_controls`'s
+/// layout): the offered option pills (stages Permission/Always) and,
+/// in the reject stage, the `enter confirm` / `esc cancel` hint
+/// BUTTONS (v2 renders both as `onMouseUp` boxes — permission.tsx:
+/// 375-400). The caller translates by the mount origin.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PermissionPointerHits {
+    /// The controls row (body-local y).
+    pub row: usize,
+    /// The offered pills left-to-right: the option + its rect.
+    pub pills: Vec<(PermissionOption, (usize, usize))>,
+    /// The reject stage's confirm button rect (`enter confirm`) —
+    /// `(x, width)`, body-local.
+    pub confirm: Option<(usize, usize)>,
+    /// The reject stage's cancel button rect (`esc cancel`).
+    pub cancel: Option<(usize, usize)>,
+}
+
+/// The controls row's pointer layout — mirrors
+/// [`render_permission_controls`]: pills from x=2, each
+/// `label.chars().count() + 2` wide with a 1-column gap (index > 0);
+/// the reject-stage hints right-align as buttons ending at
+/// `width - 4` (the row's paddingRight 3 + the canvas's 1-col rim).
+#[must_use]
+pub fn permission_pointer_hits(
+    request: &PermissionRequest,
+    state: &PermissionBodyState,
+    width: usize,
+    height: usize,
+) -> PermissionPointerHits {
+    let mut hits = PermissionPointerHits { row: height.saturating_sub(2), ..Default::default() };
+    if height < 2 {
+        return PermissionPointerHits::default();
+    }
+    let options = permission_offered_options(state.stage, request);
+    let mut x = 2usize;
+    for (index, option) in options.iter().enumerate() {
+        let label = permission_option_label(*option);
+        let pill_width = label.chars().count() + 2;
+        if index > 0 {
+            x += 1; // the inter-pill gap
+        }
+        hits.pills.push((*option, (x, pill_width)));
+        x += pill_width;
+    }
+    if state.stage == PermissionStage::Reject {
+        // The right-aligned hint block: `enter confirm  esc cancel`
+        // (25 columns) ending at width - 4; each BUTTON is its own
+        // label's extent (v2's two sibling boxes).
+        let block = "enter confirm".chars().count() + 2 + "esc cancel".chars().count();
+        let start = (width.saturating_sub(4)).saturating_sub(block);
+        let confirm_width = "enter confirm".chars().count();
+        let cancel_width = "esc cancel".chars().count();
+        hits.confirm = Some((start, confirm_width));
+        hits.cancel = Some((start + confirm_width + 2, cancel_width));
+    }
+    hits
+}
+
 /// Render the standalone [`RejectField`] (`permission-reject-field`
 /// golden): a full-width focused textarea whose placeholder is the
 /// muted prompt over the formfield focused background.
