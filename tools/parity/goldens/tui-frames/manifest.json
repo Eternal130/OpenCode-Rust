@@ -1410,6 +1410,54 @@
           }
         }
       ]
+    },
+    {
+      "id": "surf1-detail-states",
+      "source": "local fixture: session route with the SURF-1 detail states (shell cell, skill row, compaction dividers, revert banner)",
+      "description": "Transcript detail states golden: shell tool block ($ cmd + collapsed preview), Skill row, queued + completed compaction dividers with usage and summary, staged revert banner with file rows",
+      "componentClass": "session-route",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 80,
+          "height": 30,
+          "rows": 30,
+          "cols": 80,
+          "txt": {
+            "bytes": 2818,
+            "sha256": "a7fc2fe9ea37675bf74fb4a0e67c42f0210339abe53770f0fd2d07705b0e01db"
+          },
+          "ansi": {
+            "bytes": 7113,
+            "sha256": "b4c82cda8ab884f4decf1b36b36035d7fe2429f16acff13450a98bac7dcd5d14"
+          }
+        }
+      ]
+    },
+    {
+      "id": "surf1-sidebar-live",
+      "source": "local fixture: session route with the SURF-1 sidebar live sections",
+      "description": "Sidebar live-content golden: Context tokens/percent/cost rows, collapsed MCP header + status dots, {dir}:{branch} location footer",
+      "componentClass": "sidebar",
+      "class": "tier-a",
+      "comparisonDepth": "truecolor-canonical",
+      "variants": [
+        {
+          "width": 160,
+          "height": 30,
+          "rows": 30,
+          "cols": 160,
+          "txt": {
+            "bytes": 5087,
+            "sha256": "361b526a0309330ff2d89110f9c18d861a24b08a7697dde88b9506b4d5ff91ec"
+          },
+          "ansi": {
+            "bytes": 10015,
+            "sha256": "174b5780604f2c87d81cd041adec1e3546ec10dde6b4400371d24b7fb4537742"
+          }
+        }
+      ]
     }
   ],
   "replay": [
