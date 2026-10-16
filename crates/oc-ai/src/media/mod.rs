@@ -21,6 +21,7 @@
 //! closes; these modules are the protocol layer exactly as v2 defines it.
 
 pub mod body;
+pub mod fal_queue;
 pub mod image;
 pub mod model;
 pub mod protocol;
