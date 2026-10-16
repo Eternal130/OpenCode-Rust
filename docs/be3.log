@@ -169,3 +169,60 @@ already-completing attempt, oauth connect with unknown method) surface as
 instead of defect; wellknown `config`/`remote_config` resolution into the
 provider config graph is the config lane's surface (route + registration land
 here; resolution deferred).
+
+## Phase 4 — copilot + refresh mock round-trips; final verification
+
+- `copilot_urls` keeps explicit `http(s)://` enterprise origins verbatim
+  (scheme+host+port) — self-hosted GHE with explicit origins and loopback
+  tests; bare domains keep v2's `https://api.{domain}` mapping.
+- Mock harness upgraded: path-prefix routing, per-response status codes,
+  shared request log (no more eprintln-only captures).
+- New round-trips (oc-core integration::tests, 17 total green):
+  - `copilot_device_flow_round_trip_against_mock` — device request shape
+    (client_id Ov23li8tweQw6odWQebz, scope read:user, device grant),
+    entitlement probe, credential shape (access == refresh, expires 0,
+    metadata enterpriseUrl + apiEndpoint honored from
+    `endpoints.api` with trailing-slash trim).
+  - `copilot_entitlement_denial_fails_the_attempt` — `chat_enabled: false`
+    fails the attempt with the denial message and stores nothing.
+  - `zen_refresh_round_trip_against_mock` — expired console credential
+    resolves through the refresh impl: rotated access/refresh persisted,
+    request shape (`grant_type=refresh_token`, refresh_token, client_id).
+  - `zen_refresh_invalid_grant_reports_reconnect` — HTTP 400
+    `invalid_grant` → "Reconnect OpenCode Console to continue".
+
+## Final report
+
+Landed (auditE-core #1 — the whole provider-login pipeline):
+- oc-core `integration` host: registry + credential store + OAuth
+  (device + code + PKCE-loopback engines) + command/env sourcing + refresh
+  + scrub lifecycle + `integration.updated`; Engine boots it.
+- Providers: catalog key/env (azure filter), zen/OpenCode Console device
+  + refresh + orgName label, GitHub Copilot device (enterprise form,
+  entitlement, key-method removal), xAI device + refresh, DigitalOcean
+  implicit (port 1456), Poe code+PKCE.
+- oc-server: 11 routes live over the host with v2 error mapping;
+  wellknown discovery + kv persistence + boot re-registration.
+- CLI: `oc auth login/list/logout` e2e green against a real spawned
+  server (zen flow via mock IdP + hidden `server` answer).
+- Events: credential.updated/switched published through the shared bus
+  (SSE-verified); integration.updated registered + published.
+
+Verification: fmt + clippy (pedantic) clean; nextest 1184→1188/1188
+across oc-core + oc-server + oc-cli (0 failures); no oc-tui changes.
+
+Deferred remainder (for successor lanes):
+- OAuth flows not ported: chatgpt browser/headless token-sharing,
+  azure Entra ID (CLI), gitlab, snowflake external-browser, openai codex
+  variants (each needs its own authorize/refresh pair on the same host
+  skeleton — providers.rs is the extension point).
+- Copilot provider TRANSPORT (token exchange → Copilot API bearer,
+  models sync, responses prep) — the audit's separate "no copilot
+  binding in facade.rs" row; auth host hands out the credential only.
+- Wellknown `config`/`remote_config` resolution into the provider config
+  graph (config.ts:292-311) — the config lane's surface.
+- Zen remote provider catalog ingestion (console /providers → provider
+  overlay), managed policy statements, Console MCP servers — consumer
+  side of the console credential.
+- v2's runtime `connection.status` reporting by provider plugins
+  (needs_auth projection) is plumbed but no reporter is wired yet.

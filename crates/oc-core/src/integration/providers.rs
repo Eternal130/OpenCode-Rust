@@ -317,17 +317,30 @@ fn install_github_copilot(host: &IntegrationHost) {
     host.remove_method("github-copilot", &Method::Key { label: None, form: None });
 }
 
-/// `normalizeDomain` (github-copilot.ts): accept a URL or bare domain.
+/// `normalizeDomain` (github-copilot.ts): accept a URL or bare domain. An
+/// explicit `http(s)://` origin (self-hosted GHE, loopback tests) is kept
+/// verbatim — scheme, host, and port.
 fn copilot_domain(input: &str) -> String {
-    let trimmed = input
-        .trim()
+    let trimmed = input.trim().trim_end_matches('/');
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return trimmed.to_owned();
+    }
+    trimmed
         .trim_start_matches("https://")
         .trim_start_matches("http://")
-        .trim_end_matches('/');
-    trimmed.to_owned()
+        .trim_end_matches('/')
+        .to_owned()
 }
 
 fn copilot_urls(domain: &str) -> (String, String, String) {
+    if domain.starts_with("http://") || domain.starts_with("https://") {
+        let origin = domain.trim_end_matches('/');
+        return (
+            format!("{origin}/login/device/code"),
+            format!("{origin}/login/oauth/access_token"),
+            origin.to_owned(),
+        );
+    }
     let base = if domain == "github.com" {
         "https://github.com".to_owned()
     } else {
