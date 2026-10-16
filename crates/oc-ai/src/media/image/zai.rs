@@ -52,25 +52,26 @@ pub fn decode(
     _context: &DecodeContext<ImageRequest>,
 ) -> Result<ImageResponse, AiError> {
     let decoded = output.decode_json(output.body)?;
-    let data = decoded.get("data").and_then(|value| value.as_array()).cloned().unwrap_or_default();
+    let data =
+        decoded.get("data").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
     if data.is_empty() {
         return Err(output.invalid("Z.ai Images returned no images"));
     }
     let filters = decoded
         .get("content_filter")
-        .and_then(|value| value.as_array())
+        .and_then(serde_json::Value::as_array)
         .cloned()
         .unwrap_or_default();
     let mut images = Vec::new();
     for item in &data {
-        let url = item.get("url").and_then(|value| value.as_str()).unwrap_or_default();
+        let url = item.get("url").and_then(serde_json::Value::as_str).unwrap_or_default();
         images.push(crate::media::protocol::expiring_url(url, OUTPUT_RETENTION_MS, None, None));
     }
     let notices: Vec<Notice> = filters
         .iter()
         .map(|filter| {
-            let role = filter.get("role").and_then(|value| value.as_str());
-            let level = filter.get("level").and_then(|value| value.as_f64());
+            let role = filter.get("role").and_then(serde_json::Value::as_str);
+            let level = filter.get("level").and_then(serde_json::Value::as_f64);
             let mut zai = std::collections::BTreeMap::new();
             zai.insert("role".to_string(), serde_json::json!(role));
             zai.insert("level".to_string(), serde_json::json!(level));

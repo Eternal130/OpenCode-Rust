@@ -51,11 +51,14 @@ pub struct SessionRunner {
     inbox: SessionInbox,
     #[allow(dead_code)]
     store: SessionStore,
-    context: Arc<SessionContext>,
+    pub(crate) context: Arc<SessionContext>,
     compaction: Arc<SessionCompaction>,
     title: Arc<SessionTitle>,
-    llm: Arc<dyn LlmClient>,
-    requests: Arc<SessionModelRequest>,
+    pub(crate) llm: Arc<dyn LlmClient>,
+    pub(crate) requests: Arc<SessionModelRequest>,
+    /// The one-shot generation service (`session/generate.ts`) — exposed
+    /// for the server's `session.generate` route; never mutates sessions.
+    pub(crate) generate_service: Arc<crate::session::runner::SessionGenerate>,
     clock: Arc<dyn Clock>,
     rng: Arc<dyn RngSource>,
     ids: Arc<dyn IdGen>,
@@ -90,15 +93,21 @@ impl SessionRunner {
         location_closed: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Self {
         Self {
-            db,
+            db: db.clone(),
             bus,
             inbox,
             store,
-            context,
+            context: Arc::clone(&context),
             compaction,
             title,
-            llm,
-            requests,
+            llm: Arc::clone(&llm),
+            requests: Arc::clone(&requests),
+            generate_service: Arc::new(crate::session::runner::SessionGenerate::new(
+                db.clone(),
+                Arc::clone(&context),
+                Arc::clone(&requests),
+                Arc::clone(&llm),
+            )),
             clock,
             rng,
             ids,
@@ -107,6 +116,18 @@ impl SessionRunner {
             tool_output: None,
             title_tasks: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// One-shot generation over the session context (`session.generate`
+    /// route backing) — no session side effects.
+    pub fn generation(&self) -> &Arc<crate::session::runner::SessionGenerate> {
+        &self.generate_service
+    }
+
+    /// The runner's LLM client seam (the one-shot `experimental.generate`
+    /// route streams through it directly).
+    pub fn llm(&self) -> &Arc<dyn LlmClient> {
+        &self.llm
     }
 
     /// Attaches the snapshot service (Wave C1): step settlements capture
