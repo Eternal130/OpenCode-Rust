@@ -22,3 +22,48 @@ Scope (v2 items, 1:1):
   diff.help ?,shift+?,shift+/ (was n / p / ?).
 - diff-layer app.exit ctrl+d ("Close diff viewer" — diff-viewer.tsx:726-732
   shadows the base exit while the viewer is open).
+
+## Phase 2 — the diff viewer mount (auditB #6, auditA #7/§2.12)
+- store: DiffViewerLive (open/return_route/session_id/mode/phase/base/
+  viewer/scroll/generation) + DiffSource (branch/committed/working/
+  turn with v2 labels/descriptions) + DiffPhase (Loading/Failed/
+  Unavailable/Loaded) + the DiffSink fetch seam (NoDiffSink default,
+  RecordingDiffSink tests, set_diff_sink_fn closure install).
+  open_diff_viewer (captures returnRoute+session, clears dialogs,
+  kicks fetch, generation-guarded), close_diff_viewer (navigates
+  back), switch_diff_source (sticky mode + refetch),
+  diff_fetch_result (stale generations drop; committed&&!base →
+  Unavailable), update_diff_viewer.
+- diff_viewer_mount.rs (NEW): body states (Loading "Loading diff…",
+  error ×2 copy variants needs-base vs reopen, Unavailable, Empty
+  "No changes to show" — diff-viewer.tsx:846-872); the content
+  y-walk (diff_content_layout mirrors the painter, drift-pinned by
+  unit test); scroll crop render (patch column shifts by scroll,
+  tree pane + toolbar pinned, `? help` footer re-pinned to the
+  viewport bottom); diff_scroll_command / diff_jump_hunk (] and [,
+  FILE_HEADER_HEIGHT offset) / diff_jump_file (n/p, single-patch
+  resets scroll).
+- diff_viewer.rs painter: DiffFile.image (isDiffImageFile
+  \.(png|jpe?g|webp|gif)$) — header shows "Image" instead of +N/−N
+  (:990-997); no-patch fallback rows (committed/deleted/generic
+  copy, :1012-1024); diff_layout saturating (0-width guard).
+- command_palette: `diff.open` palette row (group VCS, slash /diff);
+  dispatcher arms for the full diff.* family (open/close/scroll×8/
+  hunks/files/preferences/switch_source/help) over the store state;
+  DialogKind::DiffSource (source select, current marker, turn only
+  from a session) + DialogKind::DiffHelp (3 key groups, live binding
+  displays, "unbound" placeholders).
+- app: render_app mounts the viewer fullscreen while open (dialogs
+  still overlay); sync_modes pushes the "diff" mode (no input mode —
+  the route carries no composer); stroke_in_diff consumes every
+  stroke (diff layer above base; ctrl+d = the layer's app.exit
+  rebind CLOSES, base exit chords still exit — diff-viewer.tsx:726).
+- run loop: LoopRequest::Diff → fetch_diff (vcs.base + vcs.diff
+  context=12 / session.diff for turn) → LoopFetch::Diff →
+  diff_fetch_result; HTTP sink installed via set_diff_sink_fn.
+- Tests: mount walker/scroll/jump/image/goldens + the dispatcher
+  open→fetch→scroll→switch→close cycle (747 oc-tui tests green).
+DEFERRED: the image card's working-tree halfblock preview
+(DiffViewerImage's loaded bitmap — R-07 surface, needs the file
+fetch + halfblock mount); export dialogs (dialog-export-* — v2 diff
+export menu); file right-click menu (no context-menu model, auditA).
