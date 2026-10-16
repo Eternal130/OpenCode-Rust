@@ -88,6 +88,10 @@ pub struct DiffFile {
     pub status: FileStatus,
     /// The raw unified patch (`--- a/…`, `+++ b/…`, hunks).
     pub patch: String,
+    /// `isDiffImageFile` (diff-viewer-image.tsx:9): the header shows
+    /// `Image` instead of `+N/−N` and the body carries the
+    /// no-preview fallback copy.
+    pub image: bool,
 }
 
 /// One parsed hunk row.
@@ -240,7 +244,8 @@ pub fn diff_layout(width: usize, tree_enabled: bool, file_count: usize) -> DiffL
     let show_tree = width >= FILE_TREE_BREAKPOINT && tree_enabled && file_count > 0;
     let tree_width =
         if show_tree { (width / 4).clamp(FILE_TREE_MIN_WIDTH, FILE_TREE_MAX_WIDTH) } else { 0 };
-    let patch_pane_width = width - if show_tree { tree_width + 4 } else { 4 };
+    let patch_pane_width =
+        width.saturating_sub(if show_tree { tree_width + 4 } else { 4 }).max(1);
     let split_available = patch_pane_width >= MIN_SPLIT_WIDTH;
     DiffLayout { show_tree, tree_width, patch_pane_width, split_available }
 }
@@ -401,6 +406,7 @@ pub fn diff_viewer_fixture() -> Vec<DiffFile> {
         deletions: 3,
         status: FileStatus::Modified,
         patch: "--- a/src/file.txt\n+++ b/src/file.txt\n@@ -1,3 +1,3 @@\n const first = true\n-const oldFirst = true\n+const newFirst = true\n const afterFirst = true\n@@ -20,3 +20,3 @@\n const second = true\n-const oldSecond = true\n+const newSecond = true\n const afterSecond = true\n@@ -40,3 +40,3 @@\n const third = true\n-const oldThird = true\n+const newThird = true\n const afterThird = true".into(),
+        image: false,
     }]
 }
 
@@ -729,34 +735,48 @@ pub fn render_diff_viewer(
         });
         // The counts: "+N" (added), one frame-default space, "-N"
         // (removed — the minus belongs to the count, the gap to the
-        // fill).
-        let added = format!("+{}", file.additions);
-        let removed = format!("-{}", file.deletions);
-        let counts_w = added.chars().count() + 1 + removed.chars().count();
-        placed.push(Placed {
-            x: patch_x + patch_w - 1 - counts_w,
-            y,
-            width: counts_w,
-            lines: vec![PlacedLine {
-                runs: vec![
-                    StyledSpan {
-                        text: added,
-                        style: Style::new().fg(diff.text_added).bg(diff.background_context),
-                    },
-                    StyledSpan {
-                        text: " ".to_owned(),
-                        style: Style::new()
-                            .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
-                            .bg(diff.background_context),
-                    },
-                    StyledSpan {
-                        text: removed,
-                        style: Style::new().fg(diff.text_removed).bg(diff.background_context),
-                    },
-                ],
-            }],
-            tag: None,
-        });
+        // fill). Image files carry the `Image` label instead
+        // (diff-viewer.tsx:990-997, `countsWidth` = 6).
+        if file.image {
+            placed.push(Placed {
+                x: patch_x + patch_w - 1 - 5,
+                y,
+                width: 5,
+                lines: vec![PlacedLine::plain(
+                    "Image".to_owned(),
+                    Style::new().fg(fg_muted).bg(diff.background_context),
+                )],
+                tag: None,
+            });
+        } else {
+            let added = format!("+{}", file.additions);
+            let removed = format!("-{}", file.deletions);
+            let counts_w = added.chars().count() + 1 + removed.chars().count();
+            placed.push(Placed {
+                x: patch_x + patch_w - 1 - counts_w,
+                y,
+                width: counts_w,
+                lines: vec![PlacedLine {
+                    runs: vec![
+                        StyledSpan {
+                            text: added,
+                            style: Style::new().fg(diff.text_added).bg(diff.background_context),
+                        },
+                        StyledSpan {
+                            text: " ".to_owned(),
+                            style: Style::new()
+                                .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
+                                .bg(diff.background_context),
+                        },
+                        StyledSpan {
+                            text: removed,
+                            style: Style::new().fg(diff.text_removed).bg(diff.background_context),
+                        },
+                    ],
+                }],
+                tag: None,
+            });
+        }
         y += 2; // header row + its paddingBottom
 
         // The hunks. R-01b: the file's rows highlight through oc-syntax
@@ -766,6 +786,34 @@ pub fn render_diff_viewer(
         // extensions (`.txt`, …) leave `highlighted` None — today's
         // plain rows, byte-exact.
         let hunks = file.hunks();
+        if hunks.is_empty() {
+            // The no-patch fallback row (diff-viewer.tsx:1012-1024):
+            // image files carry their mode-specific copy, anything
+            // else the generic notice.
+            let text = if file.image {
+                if options.source_label == "Committed" {
+                    "Committed image preview unavailable. The working-tree image is not shown."
+                } else if file.status == FileStatus::Deleted {
+                    "Deleted image. The previous revision is not available for preview."
+                } else {
+                    "No patch available for this file."
+                }
+            } else {
+                "No patch available for this file."
+            };
+            placed.push(Placed {
+                x: patch_x + 1,
+                y,
+                width: crate::wrap::display_width(text),
+                lines: vec![PlacedLine::plain(
+                    text.to_owned(),
+                    Style::new().fg(fg_muted).bg(diff.background_context),
+                )],
+                tag: None,
+            });
+            y += 1;
+            continue;
+        }
         let row_texts: Vec<&str> =
             hunks.iter().flat_map(|hunk| hunk.rows.iter().map(row_text)).collect();
         let source = row_texts.join("\n");
@@ -1072,9 +1120,10 @@ mod tests {
             ("s", "diff.single_patch"),
             ("d", "diff.switch_source"),
             ("v", "diff.toggle_view"),
-            ("enter", "diff.toggle"),
-            ("space", "diff.toggle"),
-            ("tab", "diff.switch_focus"),
+            ("j", "diff.down"),
+            ("k", "diff.up"),
+            ("m", "diff.mark_reviewed"),
+            ("ctrl+d", "diff.half_page.down"),
             ("]", "diff.next_hunk"),
             ("[", "diff.previous_hunk"),
             ("?", "diff.help"),
@@ -1083,6 +1132,11 @@ mod tests {
         ];
         for (key, command) in cases {
             assert_eq!(diff_command_for_key(key), Some(command), "key {key}");
+        }
+        // The five deprecated v1-era tree bindings ship "none" — the
+        // file tree is mouse-controlled in v2 (keybind.ts:75-79).
+        for key in ["enter", "space", "tab", "right", "left", "E"] {
+            assert_eq!(diff_command_for_key(key), None, "deprecated key {key} unbound");
         }
         assert_eq!(diff_command_for_key("x"), None);
         assert_eq!(diff_command_for_key("none"), None);
@@ -1150,6 +1204,7 @@ mod tests {
             deletions: 1,
             status: FileStatus::Modified,
             patch: patch.into(),
+            image: false,
         }];
         let frame = render_diff_viewer(
             &files,

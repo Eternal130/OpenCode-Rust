@@ -837,6 +837,8 @@ impl App {
         self.sync_modes();
         if self.store.focus() == Focus::Dialog {
             self.stroke_in_dialog(stroke);
+        } else if self.diff_live() {
+            self.stroke_in_diff(stroke);
         } else if self.permission_live() {
             self.stroke_in_permission(expanded);
         } else if self.error_toast_live() {
@@ -875,6 +877,39 @@ impl App {
     fn picker_live(&self) -> bool {
         matches!(self.store.route(), crate::store::Route::Session { session_id }
             if self.store.picker_live(&session_id))
+    }
+
+    /// The diff viewer's plugin route is mounted (SURF-2).
+    fn diff_live(&self) -> bool {
+        self.store.diff_viewer_open()
+    }
+
+    /// One stroke while the diff viewer owns the screen: the `diff`
+    /// layer resolves ABOVE base (mode "diff"), every other stroke is
+    /// consumed — the route carries no composer (v2's router replaces
+    /// the session frame, diff-viewer.tsx:1217-1225). `ctrl+d` rides
+    /// the layer's own `app.exit` rebind (CLOSES the viewer,
+    /// diff-viewer.tsx:726-732); the base exit chords (ctrl+c,
+    /// `<leader>q`) still exit.
+    fn stroke_in_diff(&mut self, stroke: KeyStroke) {
+        if let Outcome::Command { command, args } = self.keymap.lookup(stroke.clone(), &self.clock)
+        {
+            if command == "app.exit" {
+                if stroke.ctrl && !stroke.alt && stroke.key == "d" {
+                    self.store.close_diff_viewer();
+                } else {
+                    self.request_exit();
+                }
+            } else {
+                let dispatch = self.dispatcher.dispatch(&self.store, &command, args.as_deref());
+                if let Dispatch::ServerPending(reason) = dispatch {
+                    let _ = reason;
+                }
+            }
+            self.keymap.clear_pending();
+        }
+        // Pending leader/sequence continuations and unbound strokes:
+        // consumed — nothing types under the viewer.
     }
 
     /// One stroke while the picker panel is mounted: the composer
@@ -1472,7 +1507,11 @@ impl App {
     /// hazards when a dialog opens over the input mode).
     fn sync_modes(&mut self) {
         let dialog = !self.store.dialogs().is_empty();
-        let input = !dialog && !self.permission_live();
+        // The diff viewer's route replaces the session frame — no
+        // composer under it, the `diff` layer owns the keys
+        // (diff-viewer.tsx:798-800 mounts the layer while live).
+        let diff = self.store.diff_viewer_open();
+        let input = !dialog && !self.permission_live() && !diff;
         let picker = input && self.picker_live();
         let mut modes: Vec<&str> = Vec::new();
         if input {
@@ -1483,6 +1522,11 @@ impl App {
         }
         if dialog {
             modes.push("dialog");
+        }
+        if diff && !dialog {
+            // Current mode = the stack's last entry: `diff` shadows
+            // base while the viewer is mounted.
+            modes.push("diff");
         }
         self.keymap.set_modes(&modes);
         self.dialog_mode = dialog;
@@ -2535,6 +2579,14 @@ pub enum LoopRequest {
     SessionList,
     /// `vcs.get` for one directory (the footer's branch lookup).
     LocationVcs(String),
+    /// The diff viewer's fetch (SURF-2): `vcs.base` + `vcs.diff` for
+    /// branch/committed/working, `session.diff` for turn.
+    Diff {
+        mode: crate::store::DiffSource,
+        session_id: Option<String>,
+        generation: u64,
+        directory: String,
+    },
 }
 
 /// One resolved [`LoopRequest`].
@@ -2548,6 +2600,14 @@ pub enum LoopFetch {
     LocationVcs {
         directory: String,
         branch: Result<Option<String>, String>,
+    },
+    /// The diff viewer's fetch result (base name + files, or error).
+    Diff {
+        generation: u64,
+        result: Result<
+            (Option<String>, Vec<crate::components::diff_viewer::DiffFile>),
+            String,
+        >,
     },
 }
 
@@ -2603,6 +2663,15 @@ pub fn spawn_loop_fetcher(
                         let _ = tx.send(LoopFetch::LocationVcs { directory, branch });
                     });
                 }
+                LoopRequest::Diff { mode, session_id, generation, directory } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result =
+                            fetch_diff(&client, mode, session_id.as_deref(), &directory).await;
+                        let _ = tx.send(LoopFetch::Diff { generation, result });
+                    });
+                }
             }
         }
     });
@@ -2621,6 +2690,89 @@ impl crate::store::SessionListSink for HttpSessionListSink {
     fn refresh(&self) {
         let _ = self.tx.send(LoopRequest::SessionList);
     }
+}
+
+/// The diff viewer's resource fetch (`createResource(diffInput)`,
+/// diff-viewer.tsx:144-168): `turn` reads `session.diff`; the VCS
+/// modes resolve the lazy base first (branch/committed), then
+/// `vcs.diff` with `context: 12` (`VCS_DIFF_CONTEXT_LINES`). A
+/// base-needing mode that resolves no base yields the unavailable
+/// body (committed) / a base-less branch diff.
+async fn fetch_diff(
+    client: &oc_client::Client,
+    mode: crate::store::DiffSource,
+    session_id: Option<&str>,
+    directory: &str,
+) -> Result<(Option<String>, Vec<crate::components::diff_viewer::DiffFile>), String> {
+    use crate::components::diff_viewer::{DiffFile, FileStatus};
+    let location = || {
+        Some(oc_client::types::QueryLocation { directory: Some(directory.to_owned()) })
+    };
+    let normalize = |entries: Vec<oc_client::types::FileDiffInfo>| -> Vec<DiffFile> {
+        entries
+            .into_iter()
+            .map(|item| {
+                let image =
+                    crate::components::diff_viewer_mount::is_diff_image_file(&item.file);
+                DiffFile {
+                    file: item.file,
+                    additions: item.additions.max(0) as u64,
+                    deletions: item.deletions.max(0) as u64,
+                    status: match item.status {
+                        oc_client::types::FileDiffInfoStatus::Added => FileStatus::Added,
+                        oc_client::types::FileDiffInfoStatus::Deleted => FileStatus::Deleted,
+                        oc_client::types::FileDiffInfoStatus::Modified => FileStatus::Modified,
+                    },
+                    patch: item.patch,
+                    image,
+                }
+            })
+            .collect()
+    };
+    if mode == crate::store::DiffSource::Turn {
+        let session_id = session_id.ok_or("turn diff requires a session")?;
+        let response = client
+            .session()
+            .diff(
+                session_id,
+                &oc_client::types::SessionDiffQuery {
+                    context: Some("12".to_owned()),
+                    from: None,
+                    to: None,
+                },
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        return Ok((None, normalize(response)));
+    }
+    // The lazy base lookup (branch/committed).
+    let mut base: Option<(String, String)> = None;
+    if matches!(mode, crate::store::DiffSource::Branch | crate::store::DiffSource::Committed) {
+        let resolved = client
+            .vcs()
+            .base(&oc_client::types::VcsBaseQuery { location: location() })
+            .await
+            .map_err(|error| error.to_string())?;
+        if let Some(info) = resolved.data {
+            base = Some((info.name, info.ref_));
+        }
+    }
+    if mode == crate::store::DiffSource::Committed && base.is_none() {
+        // `committed && !base` — the unavailable body (:158-160).
+        return Ok((None, Vec::new()));
+    }
+    let query = oc_client::types::VcsDiffQuery {
+        location: location(),
+        mode: match mode {
+            crate::store::DiffSource::Committed => oc_client::types::VcsMode::Committed,
+            crate::store::DiffSource::Working => oc_client::types::VcsMode::Working,
+            _ => oc_client::types::VcsMode::Branch,
+        },
+        base: base.as_ref().map(|(_, r)| r.clone()),
+        context: Some("12".to_owned()),
+    };
+    let response = client.vcs().diff(&query).await.map_err(|error| error.to_string())?;
+    Ok((base.map(|(name, _)| name), normalize(response.data)))
 }
 
 /// Spawn the SSE connection against a resolved server (the run loop's
@@ -2955,6 +3107,20 @@ pub async fn run_with_size(
     // ids seed `fetched_transcripts`) + the /sessions dialog's
     // open-time session-list refetch.
     let (loop_fetch_tx, mut loop_fetch_rx) = spawn_loop_fetcher(client.clone());
+    // SURF-2: the diff viewer's fetch seam — the loop fetcher's
+    // `vcs.base`/`vcs.diff`/`session.diff` worker.
+    {
+        let tx = loop_fetch_tx.clone();
+        let directory = directory.clone();
+        app.store.set_diff_sink_fn(move |mode, session_id, generation| {
+            let _ = tx.send(LoopRequest::Diff {
+                mode,
+                session_id,
+                generation,
+                directory: directory.clone(),
+            });
+        });
+    }
     let mut fetched_transcripts: std::collections::HashSet<String> =
         app.store.open_session_ids().into_iter().collect();
     app.store
@@ -3429,6 +3595,11 @@ pub async fn run_with_size(
                 // a user-facing error surface).
                 LoopFetch::LocationVcs { branch: Err(error), .. } => {
                     eprintln!("opencode tui: vcs lookup skipped: {error}");
+                }
+                // The diff viewer's resource result (stale
+                // generations drop inside the store).
+                LoopFetch::Diff { generation, result } => {
+                    app.store.diff_fetch_result(generation, result);
                 }
             }
         }
