@@ -93,3 +93,58 @@ export menu); file right-click menu (no context-menu model, auditA).
   dropped SSE streams → overlay appears after the threshold and
   clears on the 4th connect (harness: Shared.sse_drops).
 - 752 oc-tui tests green.
+
+## Phase 4-6 — the six commands, F-1 halves, home cell (committed)
+See git log: 0d-ciphered commits "commands: the six pure-TUI
+wirings…", "config: F-1 consumption halves…", "home: the MCP status
+cell…".
+
+## Phase 6 — verification (final)
+
+### Per-item disposition
+| Item | Disposition | Citation |
+|---|---|---|
+| 1 Diff viewer mount | PORTED (mounted) | diff.open palette row + /diff slash (diff-viewer.tsx:1198-1226) → DiffViewerLive fullscreen mount; diff.* layer wired (scroll family, hunks/files/mark/tree/single/view/source/help + ctrl+d close rebind :726-732); body states Loading/Error×2/Unavailable/Empty (:846-872); scroll crop + pinned tree/toolbar; vcs.base+vcs.diff+session.diff fetch (context 12) with generation guards (:144-168) |
+| 1 Image diffs | PARTIAL | header "Image" + the 3 no-patch fallback copies (:990-1024); the working-tree halfblock PREVIEW (DiffViewerImage) DEFERRED — needs the file fetch + halfblock mount (R-07 surface) |
+| 2 Reconnecting | PORTED | scrim RGBA(0,0,0,150), 48-wide box, "Connection lost…" + auto-reconnect copy; 1s retry / 5s initial thresholds (app.tsx:1294-1315, reconnecting.tsx) |
+| 2 StartupLoading | PORTED | bottom=1 pill, 500ms wait, 3s hold, copy flip (startup-loading.tsx) |
+| 3 /mcps | PORTED | DialogMcp rows (status footers, name sort), enter→error details, space=dialog.mcp.toggle→mcp.connect/disconnect (dialog-mcp.tsx) |
+| 3 /status | PORTED | "N MCP servers" + bullet rows + error text / "No MCP servers" (dialog-status.tsx) |
+| 3 /variants | PORTED | Default+variants flat list w/ current marker; no-variants toast guard + palette row REMOVED (app.tsx:919-934's palette: undefined) |
+| 3 /pair | PORTED (QR deferred) | loading/error/links/localhost/port-preserving rewrite/minutes/loopback hint (dialog-pair.tsx:21-38,99-127); the uqr QR block DEFERRED (no port) |
+| 3 /debug | PORTED | Version/Date/OS/Terminal/Session/Model + enter-copy + toast (dialog-debug.tsx:25-53) |
+| 3 /timeline | PORTED | user turns newest-first, short-time footers, submit→MessageActions (dialog-timeline.tsx) |
+| 4 F-1 delegation | PORTED | TuiConfig::load(roots)→CliConfig::get (JSONC/v1/env overlay); CliConfig::document() added |
+| 4 theme-mode pin | PORTED | theme.switch_mode / theme.mode.lock persist theme.mode (app.tsx:1054-1073); themes.set persists the name |
+| 4 sidebar toggle | PORTED | session.sidebar write-through replaces the channel-storage diversion (legacy doc = read fallback) |
+| 5 MCP status cell | PORTED | ⊙ N MCP / N MCP failed + /mcps hint ≥64 (footer.tsx:15-46); dot colors success/error |
+| 5 plugins-failed cell | DEFERRED | needs a plugin-status source (TuiPluginRuntime exposes no failures) — registered |
+| 5 UpdateNotification | DEFERRED (task-allowed) | updater surface absent (auditB #9, product decision) |
+
+### Verification evidence
+- Affected-crate nextest (oc-tui + oc-tui-core + oc-core):
+  **1689 passed, 1 skipped** (pre-existing).
+- clippy -D warnings: oc-tui + oc-tui-core all-targets CLEAN.
+  oc-core all-targets carries 7 PRE-EXISTING lints in F-1's test
+  code (confirmed identical on main via stash-free run — untouched).
+- cargo fmt --all --check: clean.
+- PTY proofs (tests/pty_surf2.rs):
+  - the six commands: /mcps rows + footers + error-details drill +
+    toggle sink; /status inventory; /pair loading→links/localhost/
+    expiry; /debug entries; /variants guard toast (no dialog);
+  - the diff viewer: /diff → file rows paint → source dialog →
+    close back home;
+  - Reconnecting (pty_core_interactions.rs): 3 dropped SSE streams →
+    "Connection lost…" after the threshold, clears on the 4th
+    connect (harness: Shared.sse_drops; vt_harness pair/info/vcs
+    fixtures).
+- Golden: session-slash-palette regenerated (PARITY_UPDATE=1) — the
+  /diff row shifts the popup window; manifest sha/bytes updated.
+  The old capture predates the plugin's slash registration.
+- Rig --quick (live ref, 80x24): boot-home, multi-session, palette,
+  subagent-basic — every mismatch first-diff decomposes into the
+  REGISTERED classes only ((b)-coin placeholder/stats digits,
+  backdrop-fg idx15, models-dialog idx0↔232). ZERO new divergence
+  classes. The multi-session/subagent `variant-dismiss` steps' only
+  first-diff is the placeholder coin — live A/B evidence the new
+  DialogVariant matches the ref.
