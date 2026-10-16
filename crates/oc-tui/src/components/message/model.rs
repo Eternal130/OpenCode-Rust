@@ -452,10 +452,10 @@ enum PartKind {
 /// and non-exploration tools stand alone (verbosity medium — "low"'s
 /// activity wrapping is out of scope). Plugin rules are checked AFTER
 /// the native kinds (wave 3's open rules table).
-fn part_path(part: &PartKind, rules: &GroupRules) -> Vec<GroupKind> {
+fn part_path(part: &PartKind, rules: &GroupRules, group_exploration: bool) -> Vec<GroupKind> {
     match part {
         PartKind::Reasoning => vec![GroupKind::Reasoning],
-        PartKind::Tool(name) if EXPLORATION_TOOLS.contains(&name.as_str()) => {
+        PartKind::Tool(name) if group_exploration && EXPLORATION_TOOLS.contains(&name.as_str()) => {
             vec![GroupKind::Exploration]
         }
         PartKind::Tool(name) => rules.group_for(name).map(|kind| vec![kind]).unwrap_or_default(),
@@ -483,7 +483,7 @@ pub fn reduce_rows<S: std::hash::BuildHasher>(
     messages: &[Message],
     inputs: &std::collections::HashSet<String, S>,
 ) -> Vec<Row> {
-    reduce_rows_with_rules(messages, inputs, &GroupRules::empty())
+    reduce_rows_with_rules(messages, inputs, &GroupRules::empty(), true)
 }
 
 /// [`reduce_rows`] with the plugin-provided grouping rules (wave 3's
@@ -493,6 +493,7 @@ pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
     messages: &[Message],
     inputs: &std::collections::HashSet<String, S>,
     rules: &GroupRules,
+    group_exploration: bool,
 ) -> Vec<Row> {
     let mut pending: std::collections::HashSet<String> = inputs
         .iter()
@@ -541,7 +542,7 @@ pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
                     projections.push(Projection {
                         entry: Entry::Part { message_id: id.clone(), part_id },
                         part: Some(kind.clone()),
-                        path: part_path(&kind, rules),
+                        path: part_path(&kind, rules, group_exploration),
                         closes_previous: None,
                         reasoning_completed: part.time().completed.is_some(),
                     });

@@ -607,12 +607,14 @@ pub fn render_diff_viewer(
                         vec![]
                     } else {
                         vec![StyledSpan {
+                            link: None,
                             text: indent,
                             style: Style::new().fg(rail).bg(styles.background_raised),
                         }]
                     })
                     .into_iter()
                     .chain([StyledSpan {
+                        link: None,
                         text: marker.to_owned(),
                         style: Style::new().fg(faint).bg(styles.background_raised),
                     }])
@@ -758,16 +760,19 @@ pub fn render_diff_viewer(
                 lines: vec![PlacedLine {
                     runs: vec![
                         StyledSpan {
+                            link: None,
                             text: added,
                             style: Style::new().fg(diff.text_added).bg(diff.background_context),
                         },
                         StyledSpan {
+                            link: None,
                             text: " ".to_owned(),
                             style: Style::new()
                                 .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
                                 .bg(diff.background_context),
                         },
                         StyledSpan {
+                            link: None,
                             text: removed,
                             style: Style::new().fg(diff.text_removed).bg(diff.background_context),
                         },

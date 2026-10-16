@@ -206,6 +206,7 @@ pub fn render_transcript(
         messages,
         &std::collections::HashSet::<String>::new(),
         &options.group_rules,
+        options.group_exploration,
     );
     let markdown = MarkdownStyles::from_theme(theme);
     let mut measured: Vec<MeasuredRow> = Vec::new();

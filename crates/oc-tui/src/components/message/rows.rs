@@ -502,6 +502,7 @@ fn paint_blocks(
         let runs = line
             .iter()
             .map(|cell| crate::layout::StyledSpan {
+                link: None,
                 text: cell.glyph.to_string(),
                 style: Style::new()
                     .fg(Color::Rgb(cell.fg[0], cell.fg[1], cell.fg[2]))
@@ -637,6 +638,7 @@ pub fn assistant_footer_row_ext(
     let agent = titlecase(agent);
     let duration = if duration_ms > 0 { locale_duration(duration_ms) } else { String::new() };
     let mut spans = vec![StyledSpan {
+        link: None,
         text: agent,
         style: if error.is_some() {
             muted
@@ -649,16 +651,16 @@ pub fn assistant_footer_row_ext(
     let show_model = width >= 28;
     let show_duration = !(28..36).contains(&width);
     if show_model && !model.is_empty() {
-        spans.push(StyledSpan { text: format!(" · {model}"), style: muted });
+        spans.push(StyledSpan { text: format!(" · {model}"), style: muted, link: None });
     }
     if show_duration && !duration.is_empty() {
-        spans.push(StyledSpan { text: format!(" · {duration}"), style: muted });
+        spans.push(StyledSpan { text: format!(" · {duration}"), style: muted, link: None });
     }
     if let Some(tps) = tps.filter(|tps| *tps > 0.0) {
-        spans.push(StyledSpan { text: format!(" · {tps:.1} tok/s"), style: muted });
+        spans.push(StyledSpan { text: format!(" · {tps:.1} tok/s"), style: muted, link: None });
     }
     if interrupted {
-        spans.push(StyledSpan { text: " · interrupted".to_owned(), style: muted });
+        spans.push(StyledSpan { text: " · interrupted".to_owned(), style: muted, link: None });
     }
     let label_width = width.saturating_sub(ROW_PADDING_LEFT);
     let placed = wrap_atoms(&crate::wrap::flatten_spans(&spans), label_width)
