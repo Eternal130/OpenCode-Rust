@@ -6,8 +6,12 @@
 use std::collections::BTreeMap;
 
 use crate::media::body::{merge_records, Body};
-use crate::media::model::{image_field_present, ImageRequest, ImageResponse, PollContext, Snapshot, Started, Status};
-use crate::media::protocol::{Identity, MediaProtocolBase, QueuedProtocol, TextOutput, status as table_status};
+use crate::media::model::{
+    image_field_present, ImageRequest, ImageResponse, PollContext, Snapshot, Started, Status,
+};
+use crate::media::protocol::{
+    status as table_status, Identity, MediaProtocolBase, QueuedProtocol, TextOutput,
+};
 use crate::media::utils::{self, dimensions};
 use crate::schema::media;
 use crate::schema::{AiError, MediaUsage};
@@ -54,15 +58,40 @@ pub fn capabilities(model: &str) -> Capabilities {
     } else if model.starts_with("flux-pro-1.0-expand") {
         Capabilities { sizing: Sizing::None, image_field: "image", max_images: 1, mask: false }
     } else if model.starts_with("flux-kontext") {
-        Capabilities { sizing: Sizing::AspectRatio, image_field: "input_image", max_images: 4, mask: false }
+        Capabilities {
+            sizing: Sizing::AspectRatio,
+            image_field: "input_image",
+            max_images: 4,
+            mask: false,
+        }
     } else if model.starts_with("flux-pro-1.1-ultra") {
-        Capabilities { sizing: Sizing::AspectRatio, image_field: "image_prompt", max_images: 1, mask: false }
+        Capabilities {
+            sizing: Sizing::AspectRatio,
+            image_field: "image_prompt",
+            max_images: 1,
+            mask: false,
+        }
     } else if model.starts_with("flux-pro-1.1") || model.starts_with("flux-dev") {
-        Capabilities { sizing: Sizing::Dimensions, image_field: "image_prompt", max_images: 1, mask: false }
+        Capabilities {
+            sizing: Sizing::Dimensions,
+            image_field: "image_prompt",
+            max_images: 1,
+            mask: false,
+        }
     } else if model.starts_with("flux-2-klein") {
-        Capabilities { sizing: Sizing::Dimensions, image_field: "input_image", max_images: 4, mask: false }
+        Capabilities {
+            sizing: Sizing::Dimensions,
+            image_field: "input_image",
+            max_images: 4,
+            mask: false,
+        }
     } else {
-        Capabilities { sizing: Sizing::Dimensions, image_field: "input_image", max_images: 8, mask: false }
+        Capabilities {
+            sizing: Sizing::Dimensions,
+            image_field: "input_image",
+            max_images: 8,
+            mask: false,
+        }
     }
 }
 
@@ -71,19 +100,29 @@ pub fn validate(request: &ImageRequest, model: Capabilities) -> Result<(), AiErr
     let id = &request.model;
     let images = request.images.len();
     if request.n.is_some_and(|n| n > 1) {
-        return Err(identity().unsupported("media.n", format!("{id} generates one image per request; call it once per image")));
+        return Err(identity().unsupported(
+            "media.n",
+            format!("{id} generates one image per request; call it once per image"),
+        ));
     }
     if request.size.is_some() && model.sizing != Sizing::Dimensions {
-        return Err(identity().unsupported("media.size", format!("{id} does not take size (width and height)")));
+        return Err(identity()
+            .unsupported("media.size", format!("{id} does not take size (width and height)")));
     }
     if request.aspect_ratio.is_some() && model.sizing != Sizing::AspectRatio {
-        return Err(identity().unsupported("media.aspectRatio", format!("{id} does not take aspectRatio")));
+        return Err(
+            identity().unsupported("media.aspectRatio", format!("{id} does not take aspectRatio"))
+        );
     }
     if images > model.max_images {
-        return Err(identity().unsupported("media.images", format!("{id} takes at most {} images", model.max_images)));
+        return Err(identity().unsupported(
+            "media.images",
+            format!("{id} takes at most {} images", model.max_images),
+        ));
     }
     if request.mask.is_some() && !model.mask {
-        return Err(identity().unsupported("media.mask", format!("{id} does not inpaint; use flux-pro-1.0-fill")));
+        return Err(identity()
+            .unsupported("media.mask", format!("{id} does not inpaint; use flux-pro-1.0-fill")));
     }
     Ok(())
 }
@@ -94,7 +133,11 @@ fn image_input(asset: &media::Asset) -> Result<String, AiError> {
         .inline()
         .map(|inline| inline.base64)
         .or_else(|| asset.url().map(str::to_string))
-        .ok_or_else(|| crate::protocols::shared::invalid_request("Black Forest Labs accepts inline images or https URLs"))
+        .ok_or_else(|| {
+            crate::protocols::shared::invalid_request(
+                "Black Forest Labs accepts inline images or https URLs",
+            )
+        })
 }
 
 /// `fromRequest` (bfl-images.ts:126-149): `input_image` numbers extra
@@ -110,11 +153,19 @@ pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
         ("prompt", Some(serde_json::json!(request.prompt))),
         (
             "width",
-            request.size.as_deref().and_then(|size| dimensions(size).0).map(|w| serde_json::json!(w as u32)),
+            request
+                .size
+                .as_deref()
+                .and_then(|size| dimensions(size).0)
+                .map(|w| serde_json::json!(w as u32)),
         ),
         (
             "height",
-            request.size.as_deref().and_then(|size| dimensions(size).1).map(|h| serde_json::json!(h as u32)),
+            request
+                .size
+                .as_deref()
+                .and_then(|size| dimensions(size).1)
+                .map(|h| serde_json::json!(h as u32)),
         ),
         ("aspect_ratio", request.aspect_ratio.clone().map(|ratio| serde_json::json!(ratio))),
         ("seed", request.seed.map(|seed| serde_json::json!(seed))),
@@ -167,17 +218,29 @@ pub fn decode_start(output: &TextOutput) -> Result<Started<Token>, AiError> {
     let value = output.decode_json(output.body)?;
     let id = value.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
     Ok(Started {
-        snapshot: Snapshot { id: id.clone(), status: Status::Queued, progress: None, position: None },
+        snapshot: Snapshot {
+            id: id.clone(),
+            status: Status::Queued,
+            progress: None,
+            position: None,
+        },
         token: Token {
             id,
-            polling_url: value.get("polling_url").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+            polling_url: value
+                .get("polling_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
             cost: value.get("cost").and_then(|v| v.as_f64()),
         },
     })
 }
 
 /// `decodeStatus` (bfl-images.ts:166-172).
-pub fn decode_status(output: &TextOutput, context: &PollContext<Token>) -> Result<Snapshot, AiError> {
+pub fn decode_status(
+    output: &TextOutput,
+    context: &PollContext<Token>,
+) -> Result<Snapshot, AiError> {
     let value = output.decode_json(output.body)?;
     let raw = value.get("status").and_then(|v| v.as_str()).unwrap_or_default();
     Ok(Snapshot {
@@ -191,7 +254,10 @@ pub fn decode_status(output: &TextOutput, context: &PollContext<Token>) -> Resul
 /// `decodeResult` (bfl-images.ts:174-198). The `sample` URL expires 10
 /// minutes after the result is ready, so the route materializes it (the
 /// returned asset stays a `url` here; downloading is route-side).
-pub fn decode_result(output: &TextOutput, context: &PollContext<Token>) -> Result<ImageResponse, AiError> {
+pub fn decode_result(
+    output: &TextOutput,
+    context: &PollContext<Token>,
+) -> Result<ImageResponse, AiError> {
     let value = output.decode_json(output.body)?;
     let raw = value.get("status").and_then(|v| v.as_str()).unwrap_or_default().to_string();
     let status = table_status(&status_table(), &raw, output)?;
@@ -209,15 +275,22 @@ pub fn decode_result(output: &TextOutput, context: &PollContext<Token>) -> Resul
         return Err(output.pending(&context.token.id));
     }
     let Some(result) = value.get("result").filter(|result| !result.is_null()) else {
-        return Err(output.invalid(format!("Black Forest Labs generation {} has no result", context.token.id)));
+        return Err(output
+            .invalid(format!("Black Forest Labs generation {} has no result", context.token.id)));
     };
     let sample = result.get("sample").and_then(|v| v.as_str()).unwrap_or_default();
     // A settled `cost` on the result supersedes the submit-time cost.
     let cost = value.get("cost").and_then(|v| v.as_f64()).or(context.token.cost);
     let mut bfl = std::collections::BTreeMap::new();
     bfl.insert("id".to_string(), serde_json::json!(context.token.id));
-    bfl.insert("seed".to_string(), result.get("seed").filter(|v| !v.is_null()).cloned().unwrap_or(serde_json::Value::Null));
-    bfl.insert("prompt".to_string(), result.get("prompt").filter(|v| !v.is_null()).cloned().unwrap_or(serde_json::Value::Null));
+    bfl.insert(
+        "seed".to_string(),
+        result.get("seed").filter(|v| !v.is_null()).cloned().unwrap_or(serde_json::Value::Null),
+    );
+    bfl.insert(
+        "prompt".to_string(),
+        result.get("prompt").filter(|v| !v.is_null()).cloned().unwrap_or(serde_json::Value::Null),
+    );
     if let Some(fields) = result.as_object() {
         for (key, field) in fields {
             if key != "sample" && key != "seed" && key != "prompt" {
@@ -271,7 +344,11 @@ impl QueuedProtocol for BlackForestLabsImages {
         token.polling_url.clone()
     }
 
-    fn decode_status(&self, output: &TextOutput, context: &PollContext<Token>) -> Result<Snapshot, AiError> {
+    fn decode_status(
+        &self,
+        output: &TextOutput,
+        context: &PollContext<Token>,
+    ) -> Result<Snapshot, AiError> {
         decode_status(output, context)
     }
 
@@ -279,7 +356,11 @@ impl QueuedProtocol for BlackForestLabsImages {
         token.polling_url.clone()
     }
 
-    fn decode_result(&self, output: &TextOutput, context: &PollContext<Token>) -> Result<ImageResponse, AiError> {
+    fn decode_result(
+        &self,
+        output: &TextOutput,
+        context: &PollContext<Token>,
+    ) -> Result<ImageResponse, AiError> {
         decode_result(output, context)
     }
 }
@@ -295,12 +376,55 @@ mod tests {
 
     #[test]
     fn capability_matrix_matches_v2() {
-        assert_eq!(capabilities("flux-pro-1.0-fill"), Capabilities { sizing: Sizing::None, image_field: "image", max_images: 1, mask: true });
-        assert_eq!(capabilities("flux-kontext-max"), Capabilities { sizing: Sizing::AspectRatio, image_field: "input_image", max_images: 4, mask: false });
-        assert_eq!(capabilities("flux-pro-1.1-ultra"), Capabilities { sizing: Sizing::AspectRatio, image_field: "image_prompt", max_images: 1, mask: false });
-        assert_eq!(capabilities("flux-dev"), Capabilities { sizing: Sizing::Dimensions, image_field: "image_prompt", max_images: 1, mask: false });
-        assert_eq!(capabilities("flux-2-klein"), Capabilities { sizing: Sizing::Dimensions, image_field: "input_image", max_images: 4, mask: false });
-        assert_eq!(capabilities("other"), Capabilities { sizing: Sizing::Dimensions, image_field: "input_image", max_images: 8, mask: false });
+        assert_eq!(
+            capabilities("flux-pro-1.0-fill"),
+            Capabilities { sizing: Sizing::None, image_field: "image", max_images: 1, mask: true }
+        );
+        assert_eq!(
+            capabilities("flux-kontext-max"),
+            Capabilities {
+                sizing: Sizing::AspectRatio,
+                image_field: "input_image",
+                max_images: 4,
+                mask: false
+            }
+        );
+        assert_eq!(
+            capabilities("flux-pro-1.1-ultra"),
+            Capabilities {
+                sizing: Sizing::AspectRatio,
+                image_field: "image_prompt",
+                max_images: 1,
+                mask: false
+            }
+        );
+        assert_eq!(
+            capabilities("flux-dev"),
+            Capabilities {
+                sizing: Sizing::Dimensions,
+                image_field: "image_prompt",
+                max_images: 1,
+                mask: false
+            }
+        );
+        assert_eq!(
+            capabilities("flux-2-klein"),
+            Capabilities {
+                sizing: Sizing::Dimensions,
+                image_field: "input_image",
+                max_images: 4,
+                mask: false
+            }
+        );
+        assert_eq!(
+            capabilities("other"),
+            Capabilities {
+                sizing: Sizing::Dimensions,
+                image_field: "input_image",
+                max_images: 8,
+                mask: false
+            }
+        );
     }
 
     #[test]
@@ -319,10 +443,8 @@ mod tests {
     fn kontext_numbers_extra_images() {
         let mut image_request = request("flux-kontext-max");
         image_request.aspect_ratio = Some("16:9".into());
-        image_request.images = vec![
-            media::url("https://x/1.png", None, None),
-            media::base64("AQID", "image/png"),
-        ];
+        image_request.images =
+            vec![media::url("https://x/1.png", None, None), media::base64("AQID", "image/png")];
         let Body::Json { value, .. } = body_from(&image_request).unwrap() else { panic!() };
         assert_eq!(value["aspect_ratio"], json!("16:9"));
         assert_eq!(value["input_image"], json!("https://x/1.png"));
@@ -360,11 +482,19 @@ mod tests {
         assert_eq!(response.provider_metadata.as_ref().unwrap()["bfl"]["seed"], json!(9));
         assert_eq!(response.provider_metadata.as_ref().unwrap()["bfl"]["extra"], json!(true));
 
-        let moderated = TextOutput { identity: &identity, body: r#"{"id":"t1","status":"Content Moderated"}"#, http: None };
+        let moderated = TextOutput {
+            identity: &identity,
+            body: r#"{"id":"t1","status":"Content Moderated"}"#,
+            http: None,
+        };
         let error = decode_result(&moderated, &context).unwrap_err();
         assert!(matches!(error.reason, crate::schema::AiErrorReason::ContentPolicy { .. }));
 
-        let pending = TextOutput { identity: &identity, body: r#"{"id":"t1","status":"Generating"}"#, http: None };
+        let pending = TextOutput {
+            identity: &identity,
+            body: r#"{"id":"t1","status":"Generating"}"#,
+            http: None,
+        };
         let error = decode_result(&pending, &context).unwrap_err();
         assert!(error.message().contains("has not finished"));
     }

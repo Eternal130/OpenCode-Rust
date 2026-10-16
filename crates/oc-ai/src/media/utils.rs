@@ -2,7 +2,7 @@
 //! `packages/ai/src/protocols/utils/{media-input,media-type,speech-stream,
 //! speaker-turns}.ts`).
 
-use crate::media::body::{merge_records, Body, Form, Query, QueryValue, normalize_numbers};
+use crate::media::body::{merge_records, normalize_numbers, Body, Form, Query, QueryValue};
 use crate::media::protocol::TextOutput;
 use crate::schema::media::{self, Asset};
 use crate::schema::{AiError, ProviderId, ProviderOptions};
@@ -28,7 +28,10 @@ pub fn inline_bytes(route: &str, asset: &Asset) -> Result<Vec<u8>, AiError> {
 
 /// Build a query from a JSON record (media-input.ts:28-36): scalars pass
 /// through, scalar arrays repeat, non-scalars fail typed.
-pub fn query_from(route: &str, values: &serde_json::Map<String, serde_json::Value>) -> Result<Query, AiError> {
+pub fn query_from(
+    route: &str,
+    values: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Query, AiError> {
     let mut out = Query::default();
     for (key, value) in values {
         if value.is_null() {
@@ -49,11 +52,14 @@ pub fn query_from(route: &str, values: &serde_json::Map<String, serde_json::Valu
                     && items.iter().all(|item| {
                         matches!(
                             item,
-                            serde_json::Value::String(_) | serde_json::Value::Number(_) | serde_json::Value::Bool(_)
+                            serde_json::Value::String(_)
+                                | serde_json::Value::Number(_)
+                                | serde_json::Value::Bool(_)
                         )
                     }) =>
             {
-                out.0.insert(key.clone(), QueryValue::Many(items.iter().map(scalar_text).collect()));
+                out.0
+                    .insert(key.clone(), QueryValue::Many(items.iter().map(scalar_text).collect()));
             }
             _ => {
                 return Err(crate::protocols::shared::invalid_request(format!(
@@ -97,7 +103,8 @@ pub fn decoded_asset(
 ) -> Result<Asset, AiError> {
     let bytes = crate::protocols::shared::decode_base64(data)
         .map_err(|_| invalid(format!("{label} contains invalid base64 data")))?;
-    let sniffed = media_type.map(str::to_string).or_else(|| detect_media_type(&bytes).map(str::to_string));
+    let sniffed =
+        media_type.map(str::to_string).or_else(|| detect_media_type(&bytes).map(str::to_string));
     let mut asset = media::bytes(bytes, sniffed);
     asset.info = info;
     asset.provider_metadata = provider_metadata;
@@ -152,19 +159,30 @@ pub fn append_fields(
         .unwrap_or_default();
     let Some(merged) = crate::media::body::merge_records(&[
         (!fields.is_empty()).then(|| serde_json::Map::from_iter(fields)).as_ref(),
-        (!filtered.is_empty()).then(|| filtered.into_iter().collect::<serde_json::Map<String, serde_json::Value>>()).as_ref(),
+        (!filtered.is_empty())
+            .then(|| filtered.into_iter().collect::<serde_json::Map<String, serde_json::Value>>())
+            .as_ref(),
     ]) else {
         return;
     };
     for (key, value) in merged {
         let is_scalar = |value: &serde_json::Value| {
-            matches!(value, serde_json::Value::String(_) | serde_json::Value::Number(_) | serde_json::Value::Bool(_))
+            matches!(
+                value,
+                serde_json::Value::String(_)
+                    | serde_json::Value::Number(_)
+                    | serde_json::Value::Bool(_)
+            )
         };
         if let (Some(mode), serde_json::Value::Array(items)) = (repeat_arrays, &value) {
             if !items.is_empty() && items.iter().all(is_scalar) {
                 for item in items {
                     form.append_field(
-                        if mode == RepeatArrays::Bracket { format!("{key}[]") } else { key.clone() },
+                        if mode == RepeatArrays::Bracket {
+                            format!("{key}[]")
+                        } else {
+                            key.clone()
+                        },
                         scalar_text(item),
                     );
                 }
@@ -173,10 +191,13 @@ pub fn append_fields(
         }
         // Strings append as-is; other values as JSON (media-input.ts:92)
         // with JS-number formatting.
-        form.append_field(key, match &value {
-            serde_json::Value::String(text) => text.clone(),
-            other => serde_json::to_string(&normalize_numbers(other)).unwrap_or_default(),
-        });
+        form.append_field(
+            key,
+            match &value {
+                serde_json::Value::String(text) => text.clone(),
+                other => serde_json::to_string(&normalize_numbers(other)).unwrap_or_default(),
+            },
+        );
     }
 }
 
@@ -205,7 +226,8 @@ fn scalar_text(value: &serde_json::Value) -> String {
 /// provider-declared type.
 #[must_use]
 pub fn detect_media_type(bytes: &[u8]) -> Option<&'static str> {
-    let starts_with = |prefix: &[u8]| bytes.len() >= prefix.len() && &bytes[..prefix.len()] == prefix;
+    let starts_with =
+        |prefix: &[u8]| bytes.len() >= prefix.len() && &bytes[..prefix.len()] == prefix;
     if starts_with(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) {
         return Some("image/png");
     }
@@ -423,7 +445,11 @@ pub mod gemini {
         let mut metadata = crate::schema::ProviderMetadata::new();
         metadata.insert("google".to_string(), google);
         Some(vec![Notice {
-            kind: if content_filtered(Some(reason)) { NoticeType::Filtered } else { NoticeType::Other },
+            kind: if content_filtered(Some(reason)) {
+                NoticeType::Filtered
+            } else {
+                NoticeType::Other
+            },
             message: format!("{name} finished with {reason}"),
             provider_metadata: Some(metadata),
         }])
@@ -459,7 +485,9 @@ pub mod gemini {
     #[must_use]
     pub fn path(model: &str, mode: crate::media::model::Mode) -> String {
         match mode {
-            crate::media::model::Mode::Stream => format!("/models/{model}:streamGenerateContent?alt=sse"),
+            crate::media::model::Mode::Stream => {
+                format!("/models/{model}:streamGenerateContent?alt=sse")
+            }
             crate::media::model::Mode::Generate => format!("/models/{model}:generateContent"),
         }
     }
@@ -478,7 +506,9 @@ pub mod gemini {
     /// the accepted inputs.
     pub fn media_part(route: &str, asset: &media::Asset) -> Result<serde_json::Value, AiError> {
         if let Some(file_uri) = super::ref_id(asset, &crate::schema::ProviderId::new("google")) {
-            return Ok(serde_json::json!({ "fileData": { "mimeType": asset.media_type, "fileUri": file_uri } }));
+            return Ok(
+                serde_json::json!({ "fileData": { "mimeType": asset.media_type, "fileUri": file_uri } }),
+            );
         }
         let inline = super::require_inline(route, asset)?;
         Ok(serde_json::json!({ "inlineData": { "mimeType": inline.mime, "data": inline.base64 } }))
@@ -494,7 +524,6 @@ pub mod gemini {
     #[allow(dead_code)]
     fn _identity_bound(_: &Identity) {}
 }
-
 
 // ===========================================================================
 // speaker-turns.ts
@@ -631,18 +660,24 @@ pub mod speech_stream {
 
     /// `SpeechStream.pcm` (speech-stream.ts:70-73).
     #[must_use]
-    pub fn pcm(encoding: PcmEncoding, sample_rate: Option<f64>, media_type: Option<&str>) -> Output {
+    pub fn pcm(
+        encoding: PcmEncoding,
+        sample_rate: Option<f64>,
+        media_type: Option<&str>,
+    ) -> Output {
         Output {
             media_type: Some(media_type.unwrap_or(encoding.media_type()).to_string()),
             info: Some(Info {
                 format: Some("pcm".to_string()),
-                encoding: Some(match encoding {
-                    PcmEncoding::pcm_s16le => "pcm_s16le",
-                    PcmEncoding::pcm_f32le => "pcm_f32le",
-                    PcmEncoding::pcm_mulaw => "pcm_mulaw",
-                    PcmEncoding::pcm_alaw => "pcm_alaw",
-                }
-                .to_string()),
+                encoding: Some(
+                    match encoding {
+                        PcmEncoding::pcm_s16le => "pcm_s16le",
+                        PcmEncoding::pcm_f32le => "pcm_f32le",
+                        PcmEncoding::pcm_mulaw => "pcm_mulaw",
+                        PcmEncoding::pcm_alaw => "pcm_alaw",
+                    }
+                    .to_string(),
+                ),
                 sample_rate,
                 channels: Some(1.0),
                 ..Info::default()
@@ -738,7 +773,9 @@ pub fn media_reference(
     if let Some(url) = asset.url() {
         return Ok((MediaRefKind::Url, url.to_string()));
     }
-    if let (Some(provider), media::Source::Ref { provider: source, id, .. }) = (provider, &asset.source) {
+    if let (Some(provider), media::Source::Ref { provider: source, id, .. }) =
+        (provider, &asset.source)
+    {
         if source == provider {
             return Ok((MediaRefKind::Ref, id.clone()));
         }
@@ -766,9 +803,7 @@ pub enum MediaRefKind {
 
 /// `ProviderShared.requireInlineMedia` (shared.ts:188-191).
 pub fn require_inline(route: &str, asset: &Asset) -> Result<media::Inline, AiError> {
-    asset
-        .inline()
-        .ok_or_else(|| crate::protocols::shared::inline_required(route, asset))
+    asset.inline().ok_or_else(|| crate::protocols::shared::inline_required(route, asset))
 }
 
 /// `ProviderShared.mediaUrl` (shared.ts:199).
@@ -809,7 +844,10 @@ mod tests {
     #[test]
     fn query_from_rejects_objects() {
         let values: serde_json::Map<String, serde_json::Value> =
-            [("a", json!(1)), ("b", json!(["x", "y"]))].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+            [("a", json!(1)), ("b", json!(["x", "y"]))]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect();
         let query = query_from("r", &values).unwrap();
         assert_eq!(query.0["a"], QueryValue::One("1".to_string()));
         assert_eq!(query.0["b"], QueryValue::Many(vec!["x".to_string(), "y".to_string()]));
@@ -834,7 +872,10 @@ mod tests {
 
     #[test]
     fn detect_media_type_sniffs_magic_bytes() {
-        assert_eq!(detect_media_type(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Some("image/png"));
+        assert_eq!(
+            detect_media_type(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+            Some("image/png")
+        );
         assert_eq!(detect_media_type(&[0xff, 0xd8, 0xff, 0xe0]), Some("image/jpeg"));
         assert_eq!(detect_media_type(&[0x1a, 0x45, 0xdf, 0xa3, 0x00]), Some("video/webm"));
         assert_eq!(detect_media_type(&[0x00, 0x01]), None);
@@ -872,18 +913,36 @@ mod tests {
 
     #[test]
     fn speech_stream_finish_fails_without_audio() {
-        let identity = crate::media::protocol::Identity::new("openai-speech", "OpenAI Speech", "openai");
+        let identity =
+            crate::media::protocol::Identity::new("openai-speech", "OpenAI Speech", "openai");
         let state = speech_stream::Audio::default();
-        let error = speech_stream::finish(&identity, &state, speech_stream::container("mp3", None), None, None, None, None)
-            .unwrap_err();
+        let error = speech_stream::finish(
+            &identity,
+            &state,
+            speech_stream::container("mp3", None),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
         assert_eq!(error.message(), "The provider returned no audio");
         let mut state = speech_stream::Audio::default();
         speech_stream::delta(&mut state, vec![1, 2]);
         speech_stream::delta(&mut state, vec![3]);
-        let events =
-            speech_stream::finish(&identity, &state, speech_stream::container("mp3", None), None, None, None, None)
-                .unwrap();
-        assert!(matches!(&events[0], crate::media::model::SpeechEvent::Finish { audio, .. } if matches!(audio.source, media::Source::Bytes { .. })));
+        let events = speech_stream::finish(
+            &identity,
+            &state,
+            speech_stream::container("mp3", None),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(
+            matches!(&events[0], crate::media::model::SpeechEvent::Finish { audio, .. } if matches!(audio.source, media::Source::Bytes { .. }))
+        );
     }
 
     #[test]
@@ -892,7 +951,10 @@ mod tests {
             speech_stream::header_usage("characters", Some("123")),
             Some(crate::schema::MediaUsage::Characters { characters: 123.0 })
         );
-        assert_eq!(speech_stream::header_usage("credits", Some("3")), Some(crate::schema::MediaUsage::Credits { credits: 3.0 }));
+        assert_eq!(
+            speech_stream::header_usage("credits", Some("3")),
+            Some(crate::schema::MediaUsage::Credits { credits: 3.0 })
+        );
         assert_eq!(speech_stream::header_usage("credits", Some("nan")), None);
         assert_eq!(speech_stream::header_usage("credits", None), None);
     }

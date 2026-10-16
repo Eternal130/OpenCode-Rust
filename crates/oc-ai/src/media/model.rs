@@ -37,10 +37,7 @@ pub enum Status {
 /// Whether the status is one the generation will not leave (generation.ts:54).
 #[must_use]
 pub fn is_terminal(status: Status) -> bool {
-    matches!(
-        status,
-        Status::Completed | Status::Failed | Status::Cancelled | Status::Expired
-    )
+    matches!(status, Status::Completed | Status::Failed | Status::Cancelled | Status::Expired)
 }
 
 /// Provider-neutral view of one generation observation (generation.ts:8-14).
@@ -146,15 +143,9 @@ pub enum ImageEvent {
     GenerationProgress(ProgressEvent),
     /// The `index`-th lower-fidelity preview; the `image` event supersedes it.
     #[serde(rename = "image-partial")]
-    ImagePartial {
-        index: f64,
-        image: Asset,
-    },
+    ImagePartial { index: f64, image: Asset },
     #[serde(rename = "image")]
-    Image {
-        index: f64,
-        image: Asset,
-    },
+    Image { index: f64, image: Asset },
     #[serde(rename = "finish")]
     Finish {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -400,6 +391,24 @@ pub struct TranscriptionRequest {
     pub provider_options: Option<ProviderOptions>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http: Option<HttpOptions>,
+}
+
+impl Default for TranscriptionRequest {
+    /// The embedded asset has no empty form, so the default carries empty
+    /// octet-stream bytes.
+    fn default() -> Self {
+        Self {
+            model: String::new(),
+            audio: crate::schema::media::bytes(Vec::new(), None),
+            language: None,
+            prompt: None,
+            timestamps: None,
+            diarize: None,
+            speakers: None,
+            provider_options: None,
+            http: None,
+        }
+    }
 }
 
 /// `Transcription.Segment` — speaker labels are provider-native
@@ -682,7 +691,10 @@ pub fn speech_field_present(request: &SpeechRequest, field: &str) -> bool {
 #[must_use]
 pub fn video_field_present(request: &VideoRequest, field: &str) -> bool {
     match field {
-        "frames" => request.frames.as_ref().is_some_and(|frames| frames.first.is_some() || frames.last.is_some()),
+        "frames" => request
+            .frames
+            .as_ref()
+            .is_some_and(|frames| frames.first.is_some() || frames.last.is_some()),
         "references" => !request.references.is_empty(),
         "video" => request.video.is_some(),
         "durationSeconds" => request.duration_seconds.is_some(),
@@ -715,7 +727,10 @@ mod tests {
 
     #[test]
     fn image_events_round_trip_the_v2_tags() {
-        let event = ImageEvent::Image { index: 0.0, image: crate::schema::media::base64("AQID", "image/png") };
+        let event = ImageEvent::Image {
+            index: 0.0,
+            image: crate::schema::media::base64("AQID", "image/png"),
+        };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "image");
         assert_eq!(json["index"], 0.0);
@@ -743,7 +758,12 @@ mod tests {
         let events = vec![
             ImageEvent::Image { index: 0.0, image: asset.clone() },
             ImageEvent::Finish {
-                usage: Some(MediaUsage::Tokens { input: Some(1.0), output: None, total: None, details: None }),
+                usage: Some(MediaUsage::Tokens {
+                    input: Some(1.0),
+                    output: None,
+                    total: None,
+                    details: None,
+                }),
                 notices: None,
                 provider_metadata: None,
             },

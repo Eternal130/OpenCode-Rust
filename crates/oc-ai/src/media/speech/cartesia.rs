@@ -4,8 +4,12 @@
 //! support raw PCM.
 
 use crate::media::body::{merge_records, Body};
-use crate::media::model::{speech_field_present, Addressed, Mode, SpeechEvent, SpeechRequest, ResponseContext};
-use crate::media::protocol::{Frame, Framing, Identity, MediaProtocolBase, StreamProtocol, TextOutput};
+use crate::media::model::{
+    speech_field_present, Addressed, Mode, ResponseContext, SpeechEvent, SpeechRequest,
+};
+use crate::media::protocol::{
+    Frame, Framing, Identity, MediaProtocolBase, StreamProtocol, TextOutput,
+};
 use crate::media::utils::speech_stream::{self, Audio, PcmEncoding};
 use crate::schema::AiError;
 
@@ -48,7 +52,13 @@ pub struct OutputFormat {
 
 pub fn output_format(request: &Addressed<SpeechRequest>) -> Result<OutputFormat, AiError> {
     let sse = uses_sse(request);
-    let format = request.request.format.clone().unwrap_or_else(|| if sse { "pcm".to_string() } else { "mp3".to_string() });
+    let format = request.request.format.clone().unwrap_or_else(|| {
+        if sse {
+            "pcm".to_string()
+        } else {
+            "mp3".to_string()
+        }
+    });
     let Some((_, container)) = CONTAINERS.iter().find(|(known, _)| *known == format) else {
         return Err(identity().unsupported(
             "media.format",
@@ -83,7 +93,10 @@ pub fn output_format(request: &Addressed<SpeechRequest>) -> Result<OutputFormat,
 }
 
 /// The `output_format` body value Cartesia expects.
-fn output_format_body(format: &OutputFormat, request: &Addressed<SpeechRequest>) -> serde_json::Value {
+fn output_format_body(
+    format: &OutputFormat,
+    request: &Addressed<SpeechRequest>,
+) -> serde_json::Value {
     let bit_rate = request
         .request
         .provider_options
@@ -128,10 +141,7 @@ pub fn body_from(request: &Addressed<SpeechRequest>) -> Result<Body, AiError> {
         ("language", request.request.language.clone().map(|value| serde_json::json!(value))),
         (
             "generation_config",
-            request
-                .request
-                .speed
-                .map(|speed| serde_json::json!({ "speed": speed })),
+            request.request.speed.map(|speed| serde_json::json!({ "speed": speed })),
         ),
         (
             "add_timestamps",
@@ -148,10 +158,8 @@ pub fn body_from(request: &Addressed<SpeechRequest>) -> Result<Body, AiError> {
 }
 
 pub fn check_unsupported(request: &SpeechRequest) -> Result<(), AiError> {
-    let present: Vec<&str> = ["instructions"]
-        .into_iter()
-        .filter(|field| speech_field_present(request, field))
-        .collect();
+    let present: Vec<&str> =
+        ["instructions"].into_iter().filter(|field| speech_field_present(request, field)).collect();
     identity().reject_unsupported(&present).map_or(Ok(()), Err)
 }
 
@@ -164,8 +172,10 @@ pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<SpeechEvent>, AiEr
     let event_type = event.get("type").and_then(|value| value.as_str()).unwrap_or_default();
     if event_type == "chunk" {
         if let Some(data) = event.get("data").and_then(|value| value.as_str()) {
-            let chunk = crate::protocols::shared::decode_base64(data)
-                .map_err(|_| identity().frame_error("Cartesia chunk contains invalid base64 data", frame.to_string()))?;
+            let chunk = crate::protocols::shared::decode_base64(data).map_err(|_| {
+                identity()
+                    .frame_error("Cartesia chunk contains invalid base64 data", frame.to_string())
+            })?;
             return Ok(speech_stream::delta(&mut state.audio, chunk));
         }
         return Ok(Vec::new());
@@ -175,7 +185,9 @@ pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<SpeechEvent>, AiEr
             let texts: Vec<String> = words
                 .get("words")
                 .and_then(|value| value.as_array())
-                .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect())
+                .map(|items| {
+                    items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect()
+                })
                 .unwrap_or_default();
             let starts: Vec<f64> = words
                 .get("start")
@@ -197,7 +209,8 @@ pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<SpeechEvent>, AiEr
     }
     if event_type == "error" {
         let title = event.get("title").and_then(|value| value.as_str());
-        let message = event.get("message").and_then(|value| value.as_str()).unwrap_or("unknown error");
+        let message =
+            event.get("message").and_then(|value| value.as_str()).unwrap_or("unknown error");
         let status = event.get("status_code").and_then(|value| value.as_u64());
         let text = format!(
             "Cartesia stream failed{}: {message}",
@@ -211,9 +224,9 @@ pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<SpeechEvent>, AiEr
 /// The `error` record's `classifyProviderFailure` mapping.
 fn classify_stream_error(message: String, frame: &str, status: Option<u64>) -> AiError {
     let classification = match status {
-        Some(400..=499) => "InvalidRequest",
         Some(401 | 403) => "Authentication",
         Some(429) => "RateLimit",
+        Some(400..=499) => "InvalidRequest",
         _ => "ProviderInternal",
     };
     let reason = match classification {
@@ -268,7 +281,10 @@ pub fn step(state: &mut State, frame: &Frame) -> Result<Vec<SpeechEvent>, AiErro
 }
 
 /// `finish` (cartesia-speech.ts:143-156).
-pub fn finish(state: &State, request: &Addressed<SpeechRequest>) -> Result<Vec<SpeechEvent>, AiError> {
+pub fn finish(
+    state: &State,
+    request: &Addressed<SpeechRequest>,
+) -> Result<Vec<SpeechEvent>, AiError> {
     if uses_sse(request) && !state.done {
         return Err(identity().incomplete());
     }
@@ -313,14 +329,26 @@ impl StreamProtocol for CartesiaSpeech {
     }
 
     fn path(&self, request: &Addressed<SpeechRequest>) -> String {
-        if uses_sse(request) { SSE_PATH.to_string() } else { BYTES_PATH.to_string() }
+        if uses_sse(request) {
+            SSE_PATH.to_string()
+        } else {
+            BYTES_PATH.to_string()
+        }
     }
 
     fn framing(&self, request: &Addressed<SpeechRequest>, _body: &Body) -> Framing {
-        if uses_sse(request) { Framing::Sse } else { Framing::Bytes }
+        if uses_sse(request) {
+            Framing::Sse
+        } else {
+            Framing::Bytes
+        }
     }
 
-    fn finish(&self, state: &Self::State, context: &ResponseContext<SpeechRequest>) -> Result<Vec<SpeechEvent>, AiError> {
+    fn finish(
+        &self,
+        state: &Self::State,
+        context: &ResponseContext<SpeechRequest>,
+    ) -> Result<Vec<SpeechEvent>, AiError> {
         finish(state, context.request)
     }
 }
@@ -342,7 +370,11 @@ mod tests {
 
     #[test]
     fn generate_defaults_to_mp3_with_bit_rate() {
-        let Body::Json { value, .. } = body_from(&Addressed::new(request(), Mode::Generate)).unwrap() else { panic!() };
+        let Body::Json { value, .. } =
+            body_from(&Addressed::new(request(), Mode::Generate)).unwrap()
+        else {
+            panic!()
+        };
         assert_eq!(value["model_id"], json!("sonic-3"));
         assert_eq!(value["transcript"], json!("hello"));
         assert_eq!(value["voice"], json!("voice-1"));
@@ -356,10 +388,15 @@ mod tests {
     fn stream_or_timestamps_select_raw_pcm_sse() {
         let mut sse_request = request();
         sse_request.timestamps = Some(true);
-        let Body::Json { value, .. } = body_from(&Addressed::new(sse_request.clone(), Mode::Generate)).unwrap() else {
+        let Body::Json { value, .. } =
+            body_from(&Addressed::new(sse_request.clone(), Mode::Generate)).unwrap()
+        else {
             panic!()
         };
-        assert_eq!(value["output_format"], json!({ "container": "raw", "encoding": "pcm_s16le", "sample_rate": 44100 }));
+        assert_eq!(
+            value["output_format"],
+            json!({ "container": "raw", "encoding": "pcm_s16le", "sample_rate": 44100 })
+        );
         assert_eq!(value["add_timestamps"], json!(true));
         assert_eq!(CartesiaSpeech.path(&Addressed::new(sse_request, Mode::Generate)), SSE_PATH);
     }
@@ -403,8 +440,11 @@ mod tests {
         on_event(&mut state, r#"{"type":"done"}"#).unwrap();
         assert!(state.done);
 
-        let error = on_event(&mut state, r#"{"type":"error","status_code":500,"title":"boom","message":"it broke"}"#)
-            .unwrap_err();
+        let error = on_event(
+            &mut state,
+            r#"{"type":"error","status_code":500,"title":"boom","message":"it broke"}"#,
+        )
+        .unwrap_err();
         assert!(error.message().contains("Cartesia stream failed (boom): it broke"));
         assert!(matches!(error.reason, crate::schema::AiErrorReason::ProviderInternal { .. }));
     }
