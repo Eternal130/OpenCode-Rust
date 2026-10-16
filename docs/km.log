@@ -143,3 +143,45 @@ Verification: affected-crate nextest + PTY proofs + rig --quick
   (preview + persist + plain-click no-reorder),
   mouse_strip_close_hold_freezes_the_layout_for_rapid_closes
   (second ✕ at the same column + expiry). oc-tui lib: 680/680.
+
+## Phase 3 — tool-row affordances (auditA #9)
+- tool_cell_hit now follows v2's per-family arm table
+  (session/index.tsx): execute + background shells → the detail
+  dialog on click AND error-click (:3207-3218, unchanged from
+  SURF-1); the Subagent/Task row → NavigateToSession via metadata
+  sessionID/sessionId (:3083-3112); write/edit/patch BlockTool
+  cards NEVER arm (no onClick, :2989-3016); read/glob/grep/
+  webfetch/websearch arm only while FAILED (the InlineTool error
+  reveal, :2656-2668); the generic tool arms while expandable
+  (input present) or failed (:2548). Registered approximation: the
+  shell card arms always (v2 gates on shellID||overflow — the
+  port's shell block always carries collapsible output); the
+  execute CALL rows toggle through the part-level disclosure (v2
+  arms each ExecuteCallView; the port's expanded model is
+  per-part).
+- The failed InlineTool families render the error reveal
+  (tool_detail.rs error_reveal): expanded → assistant_error_row
+  stacked under the head, for read/glob/grep/webfetch/websearch.
+- Clickable links (ui/link.tsx:27): StyledSpan + Atom carry the
+  markdown chunk `link` URLs end-to-end (chunk_span →
+  flatten_spans → wrap_atoms → styled_runs → the placed runs); the
+  transcript hit walk arms one tight rect per link LABEL run
+  (part: text/reasoning rows) → TranscriptHitAction::OpenLink →
+  Store::open_url (xdg-open detached; a test sink observes).
+  hyperlinks_supported stays false (v2 headless parity — enabling
+  it shifts the pipeline's conceal/highlight resolution; the two
+  debug-dump syntax goldens re-pinned for the new span field).
+  Registered limitation: bare URLs (no markdown label) need the
+  OSC-8 profile — only labeled [label](url) links arm.
+- session.toggle.exploration_grouping now actually ungroups:
+  part_path consults the flag (v2 index.tsx:233/240), threaded
+  through reduce_rows_with_rules.
+- The strip close-hold releases when the pointer leaves the strip
+  (the onMouseOut bounds check) — the pty_interactions close test
+  routes off-strip before the ` + ` click (v2-faithful freeze
+  would otherwise pin the plus past the pointer).
+- Tests: subagent_row_navigates_to_the_child_session,
+  tool_row_arms_follow_the_v2_table (failed read arms + reveals,
+  settled read/write never arm, generic expandable),
+  markdown_link_click_opens_the_url (sink-recorded openUrl).
+  Full: oc-tui + oc-tui-core 845/845.

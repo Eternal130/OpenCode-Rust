@@ -532,7 +532,7 @@ pub fn tool_detail_row(
                 })
                 .unwrap_or_default();
             if loaded.is_empty() {
-                return head;
+                return error_reveal(head, state, expanded, theme, width);
             }
             let mut rows = Vec::new();
             for path in loaded {
@@ -547,12 +547,18 @@ pub fn tool_detail_row(
                     placed.push(item);
                 }
             }
-            RowRender {
-                placed,
-                fills: head.fills.clone(),
-                height: head.height + body_height,
-                images: Vec::new(),
-            }
+            error_reveal(
+                RowRender {
+                    placed,
+                    fills: head.fills.clone(),
+                    height: head.height + body_height,
+                    images: Vec::new(),
+                },
+                state,
+                expanded,
+                theme,
+                width,
+            )
         }
         "glob" | "grep" => {
             let count_key = if tool == "glob" { "count" } else { "matches" };
@@ -570,16 +576,30 @@ pub fn tool_detail_row(
             if matches!(state.status, ToolStatus::Running | ToolStatus::Streaming) {
                 running_tool_row(&label, clock_ms, theme, width)
             } else {
-                completed_tool_row('✱', label.trim(), theme, width)
+                error_reveal(
+                    completed_tool_row('✱', label.trim(), theme, width),
+                    state,
+                    expanded,
+                    theme,
+                    width,
+                )
             }
         }
         "webfetch" => {
             let label = format!("WebFetch {}", input("url"));
-            detail_inline_row(&label, "Fetching from the web…", state, clock_ms, theme, width)
+            detail_inline_row(
+                &label,
+                "Fetching from the web…",
+                state,
+                clock_ms,
+                theme,
+                width,
+                expanded,
+            )
         }
         "websearch" => {
             let label = format!("Web Search \"{}\"", input("query"));
-            detail_inline_row(&label, "Searching web…", state, clock_ms, theme, width)
+            detail_inline_row(&label, "Searching web…", state, clock_ms, theme, width, expanded)
         }
         "execute" => {
             // `Execute` (index.tsx:3197-3238): the `execute` InlineTool
@@ -716,13 +736,32 @@ fn detail_inline_row(
     clock_ms: u64,
     theme: &ThemeStyles,
     width: usize,
+    expanded: bool,
 ) -> RowRender {
-    if matches!(state.status, ToolStatus::Running | ToolStatus::Streaming) {
+    let head = if matches!(state.status, ToolStatus::Running | ToolStatus::Streaming) {
         running_tool_row(pending, clock_ms, theme, width)
     } else {
         let icon = if matches!(state.status, ToolStatus::Error) { '✗' } else { '✱' };
         completed_tool_row(icon, label, theme, width)
-    }
+    };
+    // Lane KM (auditA #9): the failed InlineTool's error reveal —
+    // `errorExpanded` renders the error row under the head (the
+    // failed mouseup branch, index.tsx:2656-2668).
+    error_reveal(head, state, expanded, theme, width)
+}
+
+/// The failed-row error reveal shared by the InlineTool families:
+/// `expanded` gates the error row stacked under the head.
+fn error_reveal(
+    head: RowRender,
+    state: &ToolState,
+    expanded: bool,
+    theme: &ThemeStyles,
+    width: usize,
+) -> RowRender {
+    let Some(error) = state.error.as_deref().filter(|_| expanded) else { return head };
+    let error_row = crate::components::message::rows::assistant_error_row(error, theme, width);
+    crate::components::message::rows::stack_rows(head, error_row)
 }
 
 /// The `{n} tokens` label for the sidebar's context section

@@ -54,6 +54,11 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 pub struct StyledSpan {
     pub text: String,
     pub style: PaintStyle,
+    /// Hyperlink URL (lane KM, auditA #9): markdown chunks carrying
+    /// `link: { url }` keep it through wrap/paint — the transcript's
+    /// hit walk reads it to arm clickable links (`ui/link.tsx:27`).
+    /// `None` on every non-markdown span.
+    pub link: Option<String>,
 }
 
 /// One grapheme-cluster atom of the flattened text stream: the cluster
@@ -65,6 +70,8 @@ pub struct Atom {
     pub text: String,
     pub width: usize,
     pub style: PaintStyle,
+    /// The source span's hyperlink URL (see [`StyledSpan::link`]).
+    pub link: Option<String>,
 }
 
 /// Display width of a string in the renderer's "unicode" width method
@@ -162,7 +169,7 @@ fn is_regional_indicator(ch: char) -> bool {
 /// [`flatten_spans`]).
 #[must_use]
 pub fn flatten(text: &str, style: PaintStyle) -> Vec<Atom> {
-    flatten_spans(&[StyledSpan { text: text.to_owned(), style }])
+    flatten_spans(&[StyledSpan { text: text.to_owned(), style, link: None }])
 }
 
 /// Flatten styled spans into ONE text stream of cluster atoms. The
@@ -181,6 +188,7 @@ pub fn flatten_spans(spans: &[StyledSpan]) -> Vec<Atom> {
     let mut atoms: Vec<Atom> = Vec::new();
     for span in spans {
         let style = span.style;
+        let link = span.link.clone();
         let mut cluster = String::new();
         let mut indicators = 0u8;
         let mut after_virama = false;
@@ -196,7 +204,12 @@ pub fn flatten_spans(spans: &[StyledSpan]) -> Vec<Atom> {
             if !joins {
                 if !cluster.is_empty() {
                     let width = atom_width(&cluster);
-                    atoms.push(Atom { text: std::mem::take(&mut cluster), width, style });
+                    atoms.push(Atom {
+                        text: std::mem::take(&mut cluster),
+                        width,
+                        style,
+                        link: link.clone(),
+                    });
                 }
                 indicators = 0;
             }
@@ -207,7 +220,7 @@ pub fn flatten_spans(spans: &[StyledSpan]) -> Vec<Atom> {
         }
         if !cluster.is_empty() {
             let width = atom_width(&cluster);
-            atoms.push(Atom { text: cluster, width, style });
+            atoms.push(Atom { text: cluster, width, style, link: link.clone() });
         }
     }
     atoms
@@ -370,8 +383,14 @@ pub fn styled_runs(line: &[Atom]) -> Vec<StyledSpan> {
     let mut runs: Vec<StyledSpan> = Vec::new();
     for atom in line {
         match runs.last_mut() {
-            Some(run) if run.style == atom.style => run.text.push_str(&atom.text),
-            _ => runs.push(StyledSpan { text: atom.text.clone(), style: atom.style }),
+            Some(run) if run.style == atom.style && run.link == atom.link => {
+                run.text.push_str(&atom.text)
+            }
+            _ => runs.push(StyledSpan {
+                text: atom.text.clone(),
+                style: atom.style,
+                link: atom.link.clone(),
+            }),
         }
     }
     runs
@@ -424,7 +443,7 @@ mod tests {
     const STYLE: PaintStyle = PaintStyle::new();
 
     fn span(text: &str, style: PaintStyle) -> StyledSpan {
-        StyledSpan { text: text.to_owned(), style }
+        StyledSpan { text: text.to_owned(), style, link: None }
     }
 
     fn line_texts(lines: &[Vec<Atom>]) -> Vec<String> {

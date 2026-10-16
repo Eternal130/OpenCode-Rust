@@ -459,10 +459,12 @@ pub fn render_sidebar_scrolled(
                 lines: vec![PlacedLine {
                     runs: vec![
                         crate::layout::StyledSpan {
+                            link: None,
                             text: marker.to_owned(),
                             style: Style::new().fg(fg_base).bg(raised),
                         },
                         crate::layout::StyledSpan {
+                            link: None,
                             text: header.clone(),
                             style: Style::new().fg(fg_base).bg(raised).add_modifier(Modifier::BOLD),
                         },
@@ -506,10 +508,12 @@ pub fn render_sidebar_scrolled(
                         lines: vec![PlacedLine {
                             runs: vec![
                                 crate::layout::StyledSpan {
+                                    link: None,
                                     text: "• ".to_owned(),
                                     style: Style::new().fg(dot_color).bg(raised),
                                 },
                                 crate::layout::StyledSpan {
+                                    link: None,
                                     text: name,
                                     style: Style::new()
                                         .fg(fg_base)

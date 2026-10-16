@@ -336,6 +336,12 @@ impl App {
         }
         match mouse.kind {
             MouseEventKind::Moved => {
+                // The strip's close-hold releases when the pointer
+                // leaves the strip bounds (the onMouseOut check,
+                // session-tabs.tsx:1536-1543 — lane KM).
+                if row != 0 {
+                    self.store.clear_close_hold();
+                }
                 // A modal select's option rows track the pointer
                 // (`dialog-select.tsx:762-767`: `onMouseMove` moves
                 // the selection).
@@ -486,7 +492,7 @@ impl App {
                                 let tabs = self.store.tabs();
                                 let fallback = tabs.tabs.last().map(|tab| tab.session_id.clone());
                                 if let Some(session_id) = fallback {
-                                    self.store.select_tab(&session_id);
+                                    self.store.select_tab(session_id);
                                 }
                             } else {
                                 // The close-hold (session-tabs.tsx:
@@ -657,6 +663,16 @@ impl App {
                             crate::store::TranscriptHitAction::DismissRevert { session_id } => {
                                 self.store.revert_dismiss(session_id);
                             }
+                            // Lane KM (auditA #9): the Subagent row's
+                            // child-session navigation (index.tsx:
+                            // 3107-3112) and the markdown link's
+                            // openUrl (ui/link.tsx:27).
+                            crate::store::TranscriptHitAction::NavigateToSession { session_id } => {
+                                self.store.select_tab(session_id);
+                            }
+                            crate::store::TranscriptHitAction::OpenLink { url } => {
+                                self.store.open_url(url);
+                            }
                         }
                         self.store.request_redraw();
                         return;
@@ -686,7 +702,7 @@ impl App {
                             let fallback =
                                 self.store.tabs().tabs.last().map(|tab| tab.session_id.clone());
                             if let Some(session_id) = fallback {
-                                self.store.select_tab(&session_id);
+                                self.store.select_tab(session_id);
                             }
                         } else {
                             self.store.close_tab(Some(&id));
@@ -6947,4 +6963,258 @@ fn mouse_strip_close_hold_freezes_the_layout_for_rapid_closes() {
     });
     app.advance_clock(crate::store::MOUSE_CLOSE_HOLD_MS + 1);
     assert!(app.store.close_hold().is_none(), "the hold expired");
+}
+
+// -- lane KM (auditA #9): the tool-row affordance table -------------
+
+/// The Subagent/Task row navigates to the child session
+/// (index.tsx:3107-3112 — `onClick` → navigate, the metadata's
+/// sessionID).
+#[test]
+fn subagent_row_navigates_to_the_child_session() {
+    use crate::components::message::model::{Message, Part, PartTime, ToolState};
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut app = App::new((80, 24));
+    let mut state = ToolState::default();
+    state.metadata.insert("sessionID".into(), "child-1".into());
+    app.store.set_messages(
+        "s1",
+        vec![
+            Message::User { id: "u1".into(), text: "go".into(), created: 0, files: Vec::new() },
+            Message::Assistant {
+                id: "a1".into(),
+                agent: "build".into(),
+                model: "fixture/fixture".into(),
+                parts: vec![Part::Tool {
+                    id: "tool-task".into(),
+                    name: "task".into(),
+                    time: PartTime { created: Some(1), completed: Some(2) },
+                    state,
+                }],
+                finish: Some("success".into()),
+                error: None,
+                time: PartTime { created: Some(1), completed: Some(3) },
+                tokens: None,
+                usage_total: None,
+            },
+        ],
+    );
+    app.store.open_tab("s1", Some("Parent".to_owned()));
+    let _ = app.frame();
+    let hit = app
+        .store
+        .transcript_hit_rows()
+        .iter()
+        .find(|row| {
+            matches!(
+                &row.action,
+                crate::store::TranscriptHitAction::NavigateToSession { session_id }
+                    if session_id == "child-1"
+            )
+        })
+        .expect("the subagent row armed the child navigation")
+        .clone();
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        10,
+        u16::try_from(hit.y).unwrap_or(u16::MAX),
+    ));
+    assert_eq!(
+        app.store.route(),
+        Route::Session { session_id: "child-1".to_owned() },
+        "the release navigated to the child session"
+    );
+}
+
+/// The failed InlineTool families' error reveal (read/glob/grep/
+/// webfetch/websearch arm ONLY while failed — index.tsx:2656-2668)
+/// and the un-expandable surfaces that never arm (write/edit
+/// BlockTool cards, a settled read, an input-less generic tool).
+#[test]
+fn tool_row_arms_follow_the_v2_table() {
+    use crate::components::message::model::{Message, Part, PartTime, ToolState};
+    let mut app = App::new((80, 24));
+    // Grouping OFF → the tool rows render as ungrouped part rows.
+    app.store.toggle_exploration_grouping();
+    let failed_read = ToolState {
+        status: crate::components::message::model::ToolStatus::Error,
+        error: Some("boom: path missing".into()),
+        ..ToolState::default()
+    };
+    let mut ok_read = ToolState::default();
+    ok_read.status = crate::components::message::model::ToolStatus::Completed;
+    let mut write = ToolState::default();
+    write.status = crate::components::message::model::ToolStatus::Completed;
+    write.input.insert("path".into(), "a.rs".into());
+    write.input.insert("content".into(), "fn main() {}".into());
+    let mut generic = ToolState::default();
+    generic.status = crate::components::message::model::ToolStatus::Completed;
+    generic.input.insert("target".into(), "x".into());
+    app.store.set_messages(
+        "s1",
+        vec![
+            Message::User { id: "u1".into(), text: "go".into(), created: 0, files: Vec::new() },
+            Message::Assistant {
+                id: "a1".into(),
+                agent: "build".into(),
+                model: "fixture/fixture".into(),
+                parts: vec![
+                    Part::Tool {
+                        id: "t-failed-read".into(),
+                        name: "read".into(),
+                        time: PartTime { created: Some(1), completed: Some(2) },
+                        state: failed_read,
+                    },
+                    Part::Tool {
+                        id: "t-ok-read".into(),
+                        name: "read".into(),
+                        time: PartTime { created: Some(3), completed: Some(4) },
+                        state: ok_read,
+                    },
+                    Part::Tool {
+                        id: "t-write".into(),
+                        name: "write".into(),
+                        time: PartTime { created: Some(5), completed: Some(6) },
+                        state: write,
+                    },
+                    Part::Tool {
+                        id: "t-generic".into(),
+                        name: "deploy".into(),
+                        time: PartTime { created: Some(7), completed: Some(8) },
+                        state: generic,
+                    },
+                ],
+                finish: Some("success".into()),
+                error: None,
+                time: PartTime { created: Some(1), completed: Some(9) },
+                tokens: None,
+                usage_total: None,
+            },
+        ],
+    );
+    app.store.open_tab("s1", Some("Tools".to_owned()));
+    let _ = app.frame();
+    let hits = app.store.transcript_hit_rows();
+    assert!(
+        hits.iter().any(|row| matches!(
+            &row.action,
+            crate::store::TranscriptHitAction::ToggleToolDetail { part_id, .. }
+                if part_id == "t-failed-read"
+        )),
+        "the FAILED read arms the error reveal"
+    );
+    assert!(
+        !hits.iter().any(|row| matches!(
+            &row.action,
+            crate::store::TranscriptHitAction::ToggleToolDetail { part_id, .. }
+                if part_id == "t-ok-read"
+        )),
+        "a settled read never arms (no onClick in v2)"
+    );
+    assert!(
+        !hits.iter().any(|row| matches!(
+            &row.action,
+            crate::store::TranscriptHitAction::ToggleToolDetail { part_id, .. }
+                if part_id == "t-write"
+        )),
+        "the write BlockTool card never arms"
+    );
+    assert!(
+        hits.iter().any(|row| matches!(
+            &row.action,
+            crate::store::TranscriptHitAction::ToggleToolDetail { part_id, .. }
+                if part_id == "t-generic"
+        )),
+        "the generic tool arms while expandable (input present)"
+    );
+
+    // The failed read's release reveals the error row (the
+    // errorExpanded branch) — the message text renders after the
+    // click and hides again on the second release.
+    let hit = hits
+        .iter()
+        .find(|row| {
+            matches!(
+                &row.action,
+                crate::store::TranscriptHitAction::ToggleToolDetail { part_id, .. }
+                    if part_id == "t-failed-read"
+            )
+        })
+        .expect("the failed read's hit")
+        .clone();
+    use crossterm::event::{MouseButton, MouseEventKind};
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        10,
+        u16::try_from(hit.y).unwrap_or(u16::MAX),
+    ));
+    let expanded = app.frame_text();
+    assert!(expanded.contains("boom: path missing"), "the error revealed: {expanded}");
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        10,
+        u16::try_from(hit.y).unwrap_or(u16::MAX),
+    ));
+    let collapsed = app.frame_text();
+    assert!(
+        !collapsed.contains("boom: path missing"),
+        "the second release hid the error: {collapsed}"
+    );
+}
+
+/// A markdown link's label run arms and the release opens the URL
+/// (`ui/link.tsx:27` — `openUrl(href).catch(() => {})`).
+#[test]
+fn markdown_link_click_opens_the_url() {
+    use crate::components::message::model::{Message, Part, PartTime};
+    use crossterm::event::{MouseButton, MouseEventKind};
+    use std::rc::Rc;
+    let mut app = App::new((80, 24));
+    app.store.set_messages(
+        "s1",
+        vec![
+            Message::User { id: "u1".into(), text: "docs?".into(), created: 0, files: Vec::new() },
+            Message::Assistant {
+                id: "a1".into(),
+                agent: "build".into(),
+                model: "fixture/fixture".into(),
+                parts: vec![Part::Text {
+                    text: "see [the docs](https://example.com/router) for details".into(),
+                    time: PartTime::default(),
+                }],
+                finish: Some("success".into()),
+                error: None,
+                time: PartTime { created: Some(1), completed: Some(2) },
+                tokens: None,
+                usage_total: None,
+            },
+        ],
+    );
+    app.store.open_tab("s1", Some("Links".to_owned()));
+    let opened = Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    let recorder = Rc::clone(&opened);
+    app.store.set_open_url_sink(Some(Rc::new(move |url: String| {
+        recorder.borrow_mut().push(url);
+    })));
+    let _ = app.frame();
+    let hit = app
+            .store
+            .transcript_hit_rows()
+            .iter()
+            .find(|row| matches!(
+                &row.action,
+                crate::store::TranscriptHitAction::OpenLink { url } if url == "https://example.com/router"
+            ))
+            .expect("the link label armed a hit rect")
+            .clone();
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        u16::try_from(hit.x + hit.width / 2).unwrap_or(u16::MAX),
+        u16::try_from(hit.y).unwrap_or(u16::MAX),
+    ));
+    assert_eq!(
+        opened.borrow().as_slice(),
+        ["https://example.com/router"],
+        "the release opened the href"
+    );
 }

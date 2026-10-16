@@ -75,7 +75,7 @@ pub fn line_spans(
         .map(|span| {
             let mut style = span.style;
             style.bg = background;
-            StyledSpan { text: span.text, style }
+            StyledSpan { text: span.text, style, link: None }
         })
         .collect()
 }
@@ -84,7 +84,10 @@ pub fn line_spans(
 /// single base-styled spans (what unknown extensions render).
 #[must_use]
 pub fn plain_lines(content: &str, base: Style) -> Vec<StyledSpan> {
-    content.lines().map(|line| StyledSpan { text: line.to_owned(), style: base }).collect()
+    content
+        .lines()
+        .map(|line| StyledSpan { text: line.to_owned(), style: base, link: None })
+        .collect()
 }
 
 /// Clip a line's styled spans at `width` display columns — the styled
@@ -103,7 +106,7 @@ pub fn clip_spans(spans: Vec<StyledSpan>, width: usize) -> Vec<StyledSpan> {
             break;
         }
         remaining -= crate::wrap::display_width(&text);
-        out.push(StyledSpan { text, style: span.style });
+        out.push(StyledSpan { text, style: span.style, link: None });
     }
     out
 }

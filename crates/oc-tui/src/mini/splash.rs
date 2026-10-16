@@ -293,14 +293,26 @@ pub fn exit_splash_styled_rows(
                 mark.get(index).map_or_else(Vec::new, |row| mark_cells(row, colors));
             match index {
                 0 => {
-                    spans.push(StyledSpan { text: indent.clone(), style: left_style });
-                    spans.push(StyledSpan { text: session.to_owned(), style: left_style });
-                    spans.push(StyledSpan { text: clean_title.clone(), style: right_bold });
+                    spans.push(StyledSpan { text: indent.clone(), style: left_style, link: None });
+                    spans.push(StyledSpan {
+                        text: session.to_owned(),
+                        style: left_style,
+                        link: None,
+                    });
+                    spans.push(StyledSpan {
+                        text: clean_title.clone(),
+                        style: right_bold,
+                        link: None,
+                    });
                 }
                 1 => {
-                    spans.push(StyledSpan { text: indent.clone(), style: left_style });
-                    spans.push(StyledSpan { text: label.to_owned(), style: left_style });
-                    spans.push(StyledSpan { text: command.clone(), style: right_bold });
+                    spans.push(StyledSpan { text: indent.clone(), style: left_style, link: None });
+                    spans.push(StyledSpan {
+                        text: label.to_owned(),
+                        style: left_style,
+                        link: None,
+                    });
+                    spans.push(StyledSpan { text: command.clone(), style: right_bold, link: None });
                 }
                 _ => {}
             }
@@ -310,7 +322,7 @@ pub fn exit_splash_styled_rows(
         // Narrow terminals: the command wraps at char width from
         // column 0 (`splash.ts:220-229`, `wrapMode: "char"`).
         for line in wrap_label(&command, width) {
-            rows.push(vec![StyledSpan { text: line, style: right_bold }]);
+            rows.push(vec![StyledSpan { text: line, style: right_bold, link: None }]);
         }
     }
     rows
@@ -338,7 +350,7 @@ pub fn mark_cells(row: &str, colors: &SplashColors) -> Vec<crate::layout::Styled
                 '^' | '~' => '▀',
                 other => other,
             };
-            StyledSpan { text: glyph.to_string(), style }
+            StyledSpan { text: glyph.to_string(), style, link: None }
         })
         .collect()
 }

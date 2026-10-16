@@ -153,6 +153,14 @@ impl MarkdownStyles {
             bg: ot_rgba(self.background.bg.unwrap_or(Color::Reset)),
             conceal: Some(true),
             conceal_code: None,
+            // Lane KM (auditA #9): stays `false` — v2's headless
+            // profile parity (enabling it shifts the pipeline's
+            // conceal/highlight resolution; golden-pinned). LABELED
+            // markdown links still carry `link: {url}` chunks (the
+            // detect-links filter keeps label≠url ranges without
+            // hyperlink raster support); the transcript's hit walk
+            // reads those for clickable rects. Bare URLs need the
+            // OSC-8 profile — registered limitation.
             hyperlinks_supported: false,
         }
     }
@@ -202,10 +210,11 @@ fn render_spec(
                     let mut spans: Vec<StyledSpan> = block
                         .line_spans(index, styles.code_block, &styles.syntax_defs)
                         .into_iter()
-                        .map(|span| StyledSpan { text: span.text, style: span.style })
+                        .map(|span| StyledSpan { text: span.text, style: span.style, link: None })
                         .collect();
                     if spans.is_empty() {
                         spans.push(StyledSpan {
+                            link: None,
                             text: crate::wrap::take_width(line, content_width),
                             style: styles.code_block,
                         });
@@ -227,8 +236,8 @@ fn render_spec(
                 .map_or(styles.quote_border, |color| styles.quote_border.fg(color));
             for line in body {
                 let mut runs = vec![
-                    StyledSpan { text: "│".into(), style: border },
-                    StyledSpan { text: " ".into(), style: styles.quote_border },
+                    StyledSpan { text: "│".into(), style: border, link: None },
+                    StyledSpan { text: " ".into(), style: styles.quote_border, link: None },
                 ];
                 runs.extend(line.0);
                 lines.push(MarkdownLine(runs));
@@ -240,6 +249,7 @@ fn render_spec(
                 .and_then(ratatui_color)
                 .map_or(styles.rule, |color| styles.rule.fg(color));
             lines.push(MarkdownLine(vec![StyledSpan {
+                link: None,
                 text: "─".repeat(content_width),
                 style: rule,
             }]));
@@ -277,6 +287,7 @@ fn render_list(
                 runs.push(marker.clone());
             } else {
                 runs.push(StyledSpan {
+                    link: None,
                     text: " ".repeat(marker_width),
                     style: styles.markdown_text,
                 });
@@ -406,7 +417,11 @@ fn chunk_span(chunk: &opentui_core::styled_text::TextChunk, styles: &MarkdownSty
     if chunk.attributes & 0x80 != 0 {
         modifier |= Modifier::CROSSED_OUT;
     }
-    StyledSpan { text: chunk.text.clone(), style: style.add_modifier(modifier) }
+    StyledSpan {
+        text: chunk.text.clone(),
+        style: style.add_modifier(modifier),
+        link: chunk.link.clone(),
+    }
 }
 
 /// The pipeline's styled output, memoized by (content, options,
