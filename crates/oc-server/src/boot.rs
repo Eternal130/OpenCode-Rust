@@ -159,6 +159,13 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     let mut engine_options = EngineOptions::new(options.data_root.clone(), options.home.clone());
     engine_options.custom_providers = providers.custom;
     engine_options.default_model = providers.default_model;
+    // The production server runs the models-dev refresh loop (v2
+    // `ModelsDev` layer spawns it whenever `fetch` is on — the CLI
+    // default); direct engine boots stay hermetic.
+    engine_options.catalog_fetch = true;
+    if let Ok(url) = std::env::var("OPENCODE_MODELS_DEV_URL") {
+        engine_options.catalog_url = Some(url);
+    }
 
     // The production plugin host (wave-12): boot from the resolved
     // config's `plugins[]` BEFORE `Engine::boot` — the engine options
