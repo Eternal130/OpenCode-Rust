@@ -193,8 +193,11 @@ pub enum Commands {
         /// Fork the session when continuing
         #[arg(long)]
         fork: bool,
-        /// Restore session history on resume and resize (disable with --no-replay)
-        #[arg(long, default_value_t = true, overrides_with = "mini_no_replay")]
+        /// Restore session history on resume and resize (disable with
+        /// --no-replay). Absent means "consult `mini.replay` in
+        /// cli.json, then default on" (v2
+        /// `input.replay ?? resolved.mini?.replay ?? true`).
+        #[arg(long, overrides_with = "mini_no_replay")]
         replay: bool,
         /// `--no-replay` (v2 `Flag.boolean("replay").optional`'s
         /// negation form).

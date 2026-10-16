@@ -20,6 +20,24 @@ use crate::util;
 /// `INTERACTIVE_INPUT_ERROR` (`mini-host.ts:9`).
 pub const INTERACTIVE_INPUT_ERROR: &str = "opencode mini requires a controlling terminal for input";
 
+/// `input.replay ?? resolved.mini?.replay ?? true`
+/// (`handlers/mini.ts:37`): the CLI flag (present as `--replay` /
+/// `--no-replay`) wins, then the `mini.replay` cli.json key, then
+/// replay defaults ON.
+#[must_use]
+pub fn resolve_replay(flag: Option<bool>, config: Option<bool>) -> bool {
+    flag.or(config).unwrap_or(true)
+}
+
+/// `input.replayLimit ?? resolved.mini?.replay_limit`
+/// (`handlers/mini.ts:38`): the `--replay-limit` flag wins, then the
+/// `mini.replay_limit` cli.json key; no default here (the mini host
+/// applies its own).
+#[must_use]
+pub fn resolve_replay_limit(flag: Option<u32>, config: Option<u32>) -> Option<u32> {
+    flag.or(config)
+}
+
 /// `MiniCommandInput` (the handler-facing subset, `mini.ts:10-27`).
 #[allow(clippy::struct_excessive_bools)] // the v2 flag surface, mirrored
 pub struct MiniInput {
@@ -258,6 +276,26 @@ mod tests {
         assert_eq!(merge_input(Some("piped".into()), None).as_deref(), Some("piped"));
         assert_eq!(merge_input(None, Some("prompt".into())).as_deref(), Some("prompt"));
         assert_eq!(merge_input(None, None), None);
+    }
+
+    /// The `mini.replay`/`mini.replay_limit` cli.json fallbacks
+    /// (auditF 1.2 #5): flag > config > default.
+    #[test]
+    fn replay_resolves_flag_config_default() {
+        // replay: flag ?? config ?? true
+        assert!(resolve_replay(None, None), "default on");
+        assert!(!resolve_replay(Some(false), None), "--no-replay wins");
+        assert!(resolve_replay(Some(true), None), "--replay wins");
+        assert!(!resolve_replay(None, Some(false)), "config off applies");
+        assert!(resolve_replay(None, Some(true)), "config on applies");
+        assert!(!resolve_replay(Some(false), Some(true)), "flag beats config");
+        assert!(resolve_replay(Some(true), Some(false)), "flag beats config");
+
+        // replay_limit: flag ?? config (no default here)
+        assert_eq!(resolve_replay_limit(None, None), None);
+        assert_eq!(resolve_replay_limit(Some(10), None), Some(10));
+        assert_eq!(resolve_replay_limit(None, Some(50)), Some(50));
+        assert_eq!(resolve_replay_limit(Some(10), Some(50)), Some(10));
     }
 
     #[test]
