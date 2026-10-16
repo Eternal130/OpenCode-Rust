@@ -1834,6 +1834,9 @@ pub enum ServerListEvent {
     Agents(Result<Vec<crate::store::ServerAgent>, String>),
     /// `useConnected()` — any integration has connections.
     Connected(bool),
+    /// SURF-1: the `mcp.list` rows (`location.mcp.server.list` — the
+    /// sidebar MCP section + DialogStatus source).
+    Mcp(Vec<crate::store::McpServerRow>),
 }
 
 /// One `worktree.list` call mapped into the dialog's row type.
@@ -2154,6 +2157,45 @@ pub fn spawn_server_lists(
                     .collect()
             })))
             .await;
+        // SURF-1: the MCP server inventory (`location.mcp.server.list`)
+        // — the sidebar's MCP section rows. A failed fetch leaves the
+        // section hidden (the ref's `?? []`); the status string maps
+        // the wire union's variants.
+        let mcps = client
+            .mcp()
+            .list(&oc_client::types::McpListQuery { location: None })
+            .await
+            .map(|response| {
+                response
+                    .data
+                    .iter()
+                    .map(|server| {
+                        let status = match &server.status {
+                            oc_client::types::McpServerStatus::Connected(_) => "connected",
+                            oc_client::types::McpServerStatus::Pending(_) => "pending",
+                            oc_client::types::McpServerStatus::Failed(_) => "failed",
+                            oc_client::types::McpServerStatus::Disabled(_) => "disabled",
+                            oc_client::types::McpServerStatus::NeedsAuth(_) => "needs_auth",
+                        };
+                        let error = match &server.status {
+                            oc_client::types::McpServerStatus::Failed(failed) => {
+                                Some(failed.error.clone())
+                            }
+                            oc_client::types::McpServerStatus::NeedsAuth(auth) => {
+                                Some(auth.error.clone())
+                            }
+                            _ => None,
+                        };
+                        crate::store::McpServerRow {
+                            name: server.name.clone(),
+                            status,
+                            error,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let _ = tx.send(ServerListEvent::Mcp(mcps)).await;
     });
     (rx, task)
 }
@@ -3096,6 +3138,9 @@ pub async fn run_with_size(
                 }
                 ServerListEvent::Connected(connected) => {
                     app.store.set_integration_connected(connected);
+                }
+                ServerListEvent::Mcp(rows) => {
+                    app.store.set_mcp_servers(rows);
                 }
             }
         }
