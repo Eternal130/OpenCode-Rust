@@ -26,8 +26,8 @@
 // Sidebar geometry is terminal-bounded (heights/widths far below 2^16).
 #![allow(clippy::cast_possible_truncation)]
 
-use crate::components::session_tabs::SESSION_SIDEBAR_WIDTH;
 use crate::components::message::rows::locale_number;
+use crate::components::session_tabs::SESSION_SIDEBAR_WIDTH;
 use crate::layout::{Placed, PlacedLine};
 use crate::render::Fill;
 use crate::theme::ThemeStyles;
@@ -167,10 +167,7 @@ impl SidebarMcpWidget {
     #[must_use]
     pub fn counts(&self) -> (usize, usize) {
         (
-            self.servers
-                .iter()
-                .filter(|server| server.status == "connected")
-                .count(),
+            self.servers.iter().filter(|server| server.status == "connected").count(),
             self.servers
                 .iter()
                 .filter(|server| server.status == "failed" || server.status == "needs_auth")
@@ -221,12 +218,13 @@ impl SidebarSections {
         if self.mcp.is_shown() {
             total += self.mcp.height() + 1;
         }
-        total + self
-            .plugins
-            .iter()
-            .filter(|section| !section.title.is_empty() || !section.rows.is_empty())
-            .map(|section| section.height() + 1)
-            .sum::<usize>()
+        total
+            + self
+                .plugins
+                .iter()
+                .filter(|section| !section.title.is_empty() || !section.rows.is_empty())
+                .map(|section| section.height() + 1)
+                .sum::<usize>()
     }
 }
 
@@ -313,6 +311,10 @@ pub struct SidebarPaint {
     /// coordinates (v2's two `onMouseUp` boxes, footer.tsx:45-70);
     /// `None` when the card didn't paint.
     pub onboarding_hits: Option<crate::store::SidebarOnboardingHits>,
+    /// The MCP section's pointer targets (mcp.tsx:26-33/76-84) at the
+    /// same column-local coordinates — the header's collapse toggle
+    /// and the per-server rows.
+    pub mcp_hits: crate::store::SidebarMcpHits,
 }
 
 /// The content slot's viewport height (rows between the title and
@@ -344,6 +346,8 @@ pub fn render_sidebar(view: &SidebarView, theme: &ThemeStyles, height: usize) ->
 /// scrolled out of the slot's viewport (bounded by the footer
 /// stack's top) are dropped, like v2's `sidebar.content` scrollbox
 /// clipping its children.
+// The SURF-1 context/MCP sections pushed the walk past the budget.
+#[allow(clippy::too_many_lines)]
 #[must_use]
 pub fn render_sidebar_scrolled(
     view: &SidebarView,
@@ -438,9 +442,15 @@ pub fn render_sidebar_scrolled(
         } else {
             "MCP".to_owned()
         };
-        let marker = (view.sections.mcp.servers.len() > 2)
-            .then(|| if collapsed { "▶ " } else { "▼ " })
-            .unwrap_or_default();
+        let marker = if view.sections.mcp.servers.len() > 2 {
+            if collapsed {
+                "▶ "
+            } else {
+                "▼ "
+            }
+        } else {
+            ""
+        };
         if let Some(row) = slot_row(y).filter(|row| *row < footer_top) {
             paint.placed.push(Placed {
                 x: 2,
@@ -453,13 +463,23 @@ pub fn render_sidebar_scrolled(
                             style: Style::new().fg(fg_base).bg(raised),
                         },
                         crate::layout::StyledSpan {
-                            text: header,
+                            text: header.clone(),
                             style: Style::new().fg(fg_base).bg(raised).add_modifier(Modifier::BOLD),
                         },
                     ],
                 }],
                 tag: Some("sidebar.mcp".into()),
             });
+            // The header's toggle surface (mcp.tsx:26-33): only past
+            // two servers does the release flip `view.open`.
+            if view.sections.mcp.servers.len() > 2 {
+                paint.mcp_hits.header = Some(crate::store::HitRect {
+                    x: 2,
+                    y: row,
+                    width: crate::wrap::display_width(&header) + 2,
+                    height: 1,
+                });
+            }
         }
         y += 1;
         if !collapsed {
@@ -475,9 +495,8 @@ pub fn render_sidebar_scrolled(
                     let status_width = crate::wrap::display_width(status);
                     // `• {name}` truncated to leave the right-aligned
                     // status its columns (gap 1).
-                    let name_budget = SESSION_SIDEBAR_WIDTH
-                        .saturating_sub(4 + 2 + 1 + status_width + 1)
-                        .max(2);
+                    let name_budget =
+                        SESSION_SIDEBAR_WIDTH.saturating_sub(4 + 2 + 1 + status_width + 1).max(2);
                     let name = crate::wrap::take_width(&server.name, name_budget);
                     let name_width = crate::wrap::display_width(&name);
                     paint.placed.push(Placed {
@@ -492,7 +511,9 @@ pub fn render_sidebar_scrolled(
                                 },
                                 crate::layout::StyledSpan {
                                     text: name,
-                                    style: Style::new().fg(fg_base).bg(raised)
+                                    style: Style::new()
+                                        .fg(fg_base)
+                                        .bg(raised)
                                         .add_modifier(Modifier::BOLD),
                                 },
                             ],
@@ -506,15 +527,22 @@ pub fn render_sidebar_scrolled(
                         lines: vec![PlacedLine::plain(
                             status,
                             Style::new()
-                                .fg(if server.status == "failed" {
-                                    theme.error
-                                } else {
-                                    fg_muted
-                                })
+                                .fg(if server.status == "failed" { theme.error } else { fg_muted })
                                 .bg(raised),
                         )],
                         tag: None,
                     });
+                    // The row's click surface (mcp.tsx:76-84):
+                    // release opens the MCP dialog on this server.
+                    paint.mcp_hits.rows.push((
+                        server.name.clone(),
+                        crate::store::HitRect {
+                            x: 2,
+                            y: slot,
+                            width: SESSION_SIDEBAR_WIDTH - 4,
+                            height: 1,
+                        },
+                    ));
                 }
                 y += 1;
             }
@@ -842,5 +870,108 @@ mod tests {
             .find(|p| p.tag.as_deref() == Some("sidebar.footer.location"))
             .expect("location");
         assert_eq!(location.y, 10, "the footer stack stays pinned to the bottom");
+    }
+}
+
+#[cfg(test)]
+mod surf1_tests {
+    use super::*;
+
+    fn theme() -> ThemeStyles {
+        crate::theme::ThemeState::v2_dark().styles()
+    }
+
+    #[test]
+    fn context_widget_rows_match_the_ref_labels() {
+        let widget = SidebarContextWidget {
+            tokens: Some(60_400),
+            percent: Some(12),
+            cost: Some("$0.42".to_owned()),
+        };
+        assert!(widget.is_shown());
+        assert_eq!(widget.height(), 4);
+        assert_eq!(widget.rows(), vec!["60,400 tokens", "12% used", "$0.42 spent"]);
+        assert!(!SidebarContextWidget::default().is_shown());
+        // Cost alone still shows (`state() || cost > 0`).
+        assert!(
+            SidebarContextWidget { cost: Some("$0.01".into()), ..Default::default() }.is_shown()
+        );
+    }
+
+    #[test]
+    fn mcp_widget_collapses_past_two_servers() {
+        let servers = |status: &'static str, count: usize| {
+            (0..count)
+                .map(|index| crate::store::McpServerRow {
+                    name: format!("srv{index}"),
+                    status,
+                    error: None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // ≤ 2 servers: rows always visible, no toggle.
+        let two = SidebarMcpWidget { servers: servers("connected", 2), open: false };
+        assert!(two.rows_visible());
+        assert_eq!(two.height(), 3);
+        // 3 servers closed: rows hide, the header carries the counts.
+        let three = SidebarMcpWidget { servers: servers("connected", 3), open: false };
+        assert!(!three.rows_visible());
+        assert_eq!(three.height(), 1);
+        assert_eq!(three.counts(), (3, 0));
+        // failed + needs_auth count as errors.
+        let mut bad = servers("failed", 1);
+        bad.push(crate::store::McpServerRow {
+            name: "auth".into(),
+            status: "needs_auth",
+            error: None,
+        });
+        let widget = SidebarMcpWidget { servers: bad, open: true };
+        assert_eq!(widget.counts(), (0, 2));
+        assert_eq!(SidebarMcpWidget::status_label("needs_auth"), "Sign in");
+        assert_eq!(SidebarMcpWidget::status_label("pending"), "Connecting");
+    }
+
+    #[test]
+    fn live_sections_paint_context_mcp_and_location() {
+        let view = SidebarView {
+            title: "S".to_owned(),
+            sections: SidebarSections {
+                context: SidebarContextWidget { tokens: Some(60_400), percent: None, cost: None },
+                mcp: SidebarMcpWidget {
+                    servers: vec![
+                        crate::store::McpServerRow {
+                            name: "github".into(),
+                            status: "connected",
+                            error: None,
+                        },
+                        crate::store::McpServerRow {
+                            name: "broken".into(),
+                            status: "failed",
+                            error: Some("ECONNREFUSED".into()),
+                        },
+                    ],
+                    open: true,
+                },
+                plugins: Vec::new(),
+            },
+            onboarding: false,
+            location: Some("/tmp/opencode:main".to_owned()),
+        };
+        let paint = render_sidebar(&view, &theme(), 30);
+        let frame = crate::render::paint_placed_with_fills(
+            &paint.placed,
+            &paint.fills,
+            (42, 30),
+            crate::components::tool_rows::fill_style(&theme()),
+        );
+        let grid = frame.text_grid().join("\n");
+        assert!(grid.contains("Context"), "{grid}");
+        assert!(grid.contains("60,400 tokens"), "{grid}");
+        assert!(grid.contains("MCP"), "{grid}");
+        assert!(grid.contains("github"), "{grid}");
+        assert!(grid.contains("Connected"), "{grid}");
+        assert!(grid.contains("Error"), "the failed server's status: {grid}");
+        assert!(grid.contains("/tmp/opencode:main"), "the location row: {grid}");
+        assert_eq!(view.sections.content_height(), 7, "context(2+gap) + mcp(3+gap)");
     }
 }

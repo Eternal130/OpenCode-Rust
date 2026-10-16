@@ -168,6 +168,8 @@ pub use oc_tui_core::scroll::FollowState;
 /// children (`<Show when={expanded()}>`, `group-view.tsx:190-193`) —
 /// one extra measured unit per child, each carrying its own
 /// `marginTop 1` (`ThoughtEntry`'s anchor margin).
+// The disclosure loop grew past the line budget with the SURF-1 tool
+#[allow(clippy::too_many_lines)]
 #[must_use]
 pub fn render_transcript(
     messages: &[Message],
@@ -239,11 +241,8 @@ pub fn render_transcript(
         // CELL per tool child (`Children mode="tool"`,
         // group-view.tsx:186-188 — `props.entry(entry, false)`).
         if let Row::Group { kind, .. } = row {
-            let expanded =
-                options.expanded_groups.iter().any(|key| key == &row_key(row));
-            if matches!(kind, crate::components::message::model::GroupKind::Reasoning)
-                && expanded
-            {
+            let expanded = options.expanded_groups.iter().any(|key| key == &row_key(row));
+            if matches!(kind, crate::components::message::model::GroupKind::Reasoning) && expanded {
                 let header = render_row(row, messages, options, theme, &markdown, content_width);
                 let height = header.height;
                 place(header, row_key(row), &mut measured, &mut y);
@@ -312,13 +311,12 @@ pub fn render_transcript(
                     else {
                         continue;
                     };
-                    let Some(Part::Tool { name, state, .. }) = resolve_part(parts, &part_id)
-                    else {
+                    let Some(Part::Tool { name, state, .. }) = resolve_part(parts, &part_id) else {
                         continue;
                     };
                     let expanded_key = format!("{message_id}:{part_id}");
                     let cell = crate::components::message::tool_detail::tool_detail_row(
-                        &canonical_tool_name(name).to_owned(),
+                        canonical_tool_name(name),
                         state,
                         options.expanded_tools.contains(&expanded_key),
                         options.clock_ms,
@@ -359,6 +357,8 @@ pub fn render_transcript(
 }
 
 /// Render one reduced row.
+// The per-kind match grew with the SURF-1 detail arms.
+#[allow(clippy::too_many_lines)]
 fn render_row(
     row: &Row,
     messages: &[Message],
@@ -399,14 +399,10 @@ fn render_row(
                     // `text()` (index.tsx:2008-2011): failed → the
                     // error message (cancelled → none), else the
                     // summary — the markdown body under the divider.
-                    let body = if *failed && !*cancelled {
-                        error.clone()
-                    } else {
-                        summary.clone()
-                    }
-                    .filter(|text| !text.trim().is_empty())
-                    .map(|text| render_markdown(text.trim(), width.saturating_sub(3), markdown))
-                    .unwrap_or_default();
+                    let body = if *failed && !*cancelled { error.clone() } else { summary.clone() }
+                        .filter(|text| !text.trim().is_empty())
+                        .map(|text| render_markdown(text.trim(), width.saturating_sub(3), markdown))
+                        .unwrap_or_default();
                     crate::components::message::rows::compaction_message_row(
                         *running,
                         *failed,
@@ -426,8 +422,9 @@ fn render_row(
                     crate::components::message::rows::skill_message_row(name, theme, width)
                 }
                 // Idle markers render nothing.
-                Message::Idle { .. } | Message::Synthetic { .. } => RowRender::default(),
-                Message::Assistant { .. } => RowRender::default(),
+                Message::Idle { .. } | Message::Synthetic { .. } | Message::Assistant { .. } => {
+                    RowRender::default()
+                }
             }
         }
         Row::Entry(Entry::Part { message_id, part_id }) => {
@@ -464,7 +461,7 @@ fn render_row(
                 Part::Tool { name, state, .. } => {
                     let expanded_key = format!("{message_id}:{part_id}");
                     crate::components::message::tool_detail::tool_detail_row(
-                        &canonical_tool_name(name).to_owned(),
+                        canonical_tool_name(name),
                         state,
                         options.expanded_tools.contains(&expanded_key),
                         options.clock_ms,
@@ -546,7 +543,7 @@ fn text_part_row(text: &str, markdown: &MarkdownStyles, width: usize) -> RowRend
 
 /// A group row: the collapsed header (exploration/reasoning) or, when
 /// expanded (disclosure), the header plus child rows.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn group_row(
     kind: crate::components::message::model::GroupKind,
     children: &[Row],
@@ -1069,5 +1066,117 @@ mod tests {
         assert!(matches!(resolve_part(&parts, "reasoning:0"), Some(Part::Reasoning { .. })));
         assert!(matches!(resolve_part(&parts, "t9"), Some(Part::Tool { .. })));
         assert!(resolve_part(&parts, "text:2").is_none());
+    }
+}
+
+#[cfg(test)]
+mod surf1_tests {
+    use super::*;
+    use crate::components::message::model::PartTime;
+    use crate::theme::ThemeState;
+
+    fn theme() -> ThemeStyles {
+        ThemeState::v2_dark().styles()
+    }
+
+    fn frame_of(transcript: &Transcript) -> crate::render::Frame {
+        transcript.paint(FollowState::Sticky, &theme(), (80, 30), None)
+    }
+
+    #[test]
+    fn compaction_and_skill_rows_render_through_the_transcript() {
+        let messages = vec![
+            Message::User { id: "u1".into(), text: "hello".into(), created: 1, files: Vec::new() },
+            Message::Compaction {
+                id: "c1".into(),
+                created: 2,
+                running: false,
+                failed: false,
+                cancelled: false,
+                error: None,
+                summary: Some("The early turns.".into()),
+                tokens_in: Some(1_200),
+                tokens_out: Some(200),
+                provider_compaction: false,
+            },
+            Message::Skill { id: "sk1".into(), name: "commitlint".into(), created: 3 },
+        ];
+        let options = TranscriptOptions {
+            pending_compactions: vec!["inbox_cq".into()],
+            ..TranscriptOptions::default()
+        };
+        let transcript = render_transcript(&messages, &options, &theme(), 80);
+        let text = frame_of(&transcript).text_grid().join("\n");
+        assert!(text.contains("Compaction · 1,200 in · 200 out"), "{text}");
+        assert!(text.contains("The early turns."), "the summary body: {text}");
+        assert!(text.contains("◇ Compaction queued"), "{text}");
+        assert!(text.contains("→ Skill commitlint"), "{text}");
+    }
+
+    #[test]
+    fn revert_boundary_filters_rows_and_paints_the_banner() {
+        let messages = vec![
+            Message::User {
+                id: "msg_a".into(),
+                text: "kept".into(),
+                created: 1,
+                files: Vec::new(),
+            },
+            Message::User {
+                id: "msg_z".into(),
+                text: "hidden".into(),
+                created: 2,
+                files: Vec::new(),
+            },
+        ];
+        let options = TranscriptOptions {
+            revert: Some(crate::store::RevertState {
+                message_id: "msg_z".into(),
+                files: vec![crate::store::RevertFile {
+                    file: "a.py".into(),
+                    status: "modified".into(),
+                    additions: 2,
+                    deletions: 0,
+                }],
+            }),
+            ..TranscriptOptions::default()
+        };
+        let transcript = render_transcript(&messages, &options, &theme(), 80);
+        let text = frame_of(&transcript).text_grid().join("\n");
+        assert!(text.contains("kept"), "the pre-boundary row stays: {text}");
+        assert!(!text.contains("hidden"), "the boundary row hides: {text}");
+        assert!(text.contains("1 message reverted"), "{text}");
+        assert!(text.contains("M a.py +2"), "{text}");
+    }
+
+    #[test]
+    fn ungrouped_tool_parts_render_their_detail_cell() {
+        let messages = vec![Message::Assistant {
+            id: "a1".into(),
+            agent: "build".into(),
+            model: "fixture/fixture".into(),
+            parts: vec![Part::Tool {
+                id: "t1".into(),
+                name: "bash".into(),
+                time: PartTime::default(),
+                state: crate::components::message::model::ToolState {
+                    status: crate::components::message::model::ToolStatus::Completed,
+                    input: [("command".to_owned(), "echo hi".to_owned())].into_iter().collect(),
+                    metadata: std::collections::BTreeMap::new(),
+                    metadata_json: None,
+                    output: Some("hi".to_owned()),
+                    error: None,
+                },
+            }],
+            finish: Some("stop".into()),
+            error: None,
+            time: PartTime::default(),
+            tokens: None,
+            usage_total: None,
+        }];
+        let transcript = render_transcript(&messages, &TranscriptOptions::default(), &theme(), 80);
+        let text = frame_of(&transcript).text_grid().join("\n");
+        assert!(text.contains("$ echo hi"), "the shell cell: {text}");
+        assert!(text.contains("hi"), "the output preview: {text}");
     }
 }
