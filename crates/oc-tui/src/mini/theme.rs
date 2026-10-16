@@ -32,6 +32,11 @@
 //! (`color.ts:43-47`'s `tint` rounds `r * 255` back), so this port
 //! takes `[u8; 3]` and divides by 255.0 — bit-identical inputs.
 
+// The oklab matrix coefficients stay VERBATIM from `theme.ts:85-91`
+// (no digit separators) so the port is textually diffable against
+// the ref source; the parity corpus pins their behavior.
+#![allow(clippy::unreadable_literal)]
+
 use crate::render::CellColor;
 
 /// `srgbToLinear` (`theme.ts:77-79`):
@@ -53,7 +58,9 @@ struct OkLab {
 }
 
 /// `oklab(color)` (`theme.ts:81-93`) over an sRGB `[u8; 3]` (the ref
-/// feeds `RGBA` 0..1 floats — see the module header).
+/// feeds `RGBA` 0..1 floats — see the module header). The binding
+/// names mirror the ref (`r/g/b`, LMS `l/m/s`, `theme.ts:82-87`).
+#[allow(clippy::many_single_char_names)] // verbatim ref naming
 fn oklab(rgb: [u8; 3]) -> OkLab {
     let r = srgb_to_linear(f64::from(rgb[0]) / 255.0);
     let g = srgb_to_linear(f64::from(rgb[1]) / 255.0);
@@ -97,7 +104,8 @@ fn cube_val(x: usize) -> u8 {
     if x == 0 {
         0
     } else {
-        (x * 40 + 55) as u8
+        // x <= 5 ⇒ 255 max (`color.ts:31`'s domain is the 6-level cube)
+        u8::try_from(x * 40 + 55).expect("cube level below 6")
     }
 }
 
@@ -123,7 +131,8 @@ pub fn palette_rgb(index: u8) -> [u8; 3] {
     // tail is gray 238; the black fallthrough (:40) only exists for
     // code >= 256, which the `Array.from({length: 256})` build
     // (`theme.ts:74`) never produces.
-    let gray = ((usize::from(index) - 232) * 10 + 8) as u8;
+    let gray =
+        u8::try_from((usize::from(index) - 232) * 10 + 8).expect("index <= 255 ⇒ gray <= 238");
     [gray, gray, gray]
 }
 
@@ -178,7 +187,7 @@ mod tests {
     /// node with an `RGBA` float shim; the tracked-index walk was
     /// cross-checked against the untouched `nearestIndexed` reduce).
     ///
-    /// Groups: (a) the v2 default-theme constants mini's scrollback()
+    /// Groups: (a) the v2 default-theme constants mini's `scrollback()`
     /// and splash triple feed the quantizer (`theme.ts:165-190`,
     /// `:173-175`), (b) a deterministic cube sweep
     /// `(i·89, i·151+37, i·37+113) mod 256`, (c) structural probes
