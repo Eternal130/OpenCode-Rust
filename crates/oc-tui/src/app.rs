@@ -494,6 +494,29 @@ impl App {
                             return;
                         }
                     }
+                    // The MCP section's targets (mcp.tsx:26-33/76-84):
+                    // the header toggles the collapse (past two
+                    // servers); a row release opens the MCP servers
+                    // dialog focused on that server (`mcp.list`).
+                    let mcp = self.store.sidebar_mcp_hits();
+                    if let Some(header) = &mcp.header {
+                        if header.contains(col, row) {
+                            self.store.set_sidebar_mcp_open(!self.store.sidebar_mcp_open());
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
+                    for (name, rect) in &mcp.rows {
+                        if rect.contains(col, row) {
+                            let _ = name;
+                            let dispatch = self.dispatcher.dispatch(&self.store, "mcp.list", None);
+                            if let Dispatch::ServerPending(reason) = dispatch {
+                                let _ = reason;
+                            }
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
                 }
                 // #33 — the footer location label opens the Working
                 // directory select on release
@@ -571,6 +594,28 @@ impl App {
                                     },
                                     crate::store::DialogSize::Medium,
                                 );
+                            }
+                            crate::store::TranscriptHitAction::ToggleToolDetail {
+                                message_id,
+                                part_id,
+                            } => {
+                                self.store.toggle_tool_expanded(&format!("{message_id}:{part_id}"));
+                            }
+                            crate::store::TranscriptHitAction::OpenToolDialog {
+                                message_id,
+                                part_id,
+                            } => {
+                                self.store.open_dialog(
+                                    crate::store::DialogKind::ToolOutput {
+                                        session_id: hit.session_id.clone(),
+                                        message_id: message_id.clone(),
+                                        part_id: part_id.clone(),
+                                    },
+                                    crate::store::DialogSize::Large,
+                                );
+                            }
+                            crate::store::TranscriptHitAction::DismissRevert { session_id } => {
+                                self.store.revert_dismiss(session_id);
                             }
                         }
                         self.store.request_redraw();
@@ -1812,6 +1857,10 @@ pub enum ServerListEvent {
     Agents(Result<Vec<crate::store::ServerAgent>, String>),
     /// `useConnected()` — any integration has connections.
     Connected(bool),
+    /// SURF-1: the `mcp.list` rows
+    /// (`location.mcp.server.list` — the sidebar MCP section +
+    /// `DialogStatus` source).
+    Mcp(Vec<crate::store::McpServerRow>),
 }
 
 /// One `worktree.list` call mapped into the dialog's row type.
@@ -2047,6 +2096,9 @@ fn configured_model_from_entries(
 }
 
 #[must_use]
+// The boot fetch chain (one block per list — the SURF-1 mcp.list hop
+// pushed it past the budget).
+#[allow(clippy::too_many_lines)]
 pub fn spawn_server_lists(
     client: oc_client::Client,
 ) -> (tokio::sync::mpsc::Receiver<ServerListEvent>, tokio::task::JoinHandle<()>) {
@@ -2132,6 +2184,41 @@ pub fn spawn_server_lists(
                     .collect()
             })))
             .await;
+        // SURF-1: the MCP server inventory (`location.mcp.server.list`)
+        // — the sidebar's MCP section rows. A failed fetch leaves the
+        // section hidden (the ref's `?? []`); the status string maps
+        // the wire union's variants.
+        let mcps = client
+            .mcp()
+            .list(&oc_client::types::McpListQuery { location: None })
+            .await
+            .map(|response| {
+                response
+                    .data
+                    .iter()
+                    .map(|server| {
+                        let status = match &server.status {
+                            oc_client::types::McpServerStatus::Connected(_) => "connected",
+                            oc_client::types::McpServerStatus::Pending(_) => "pending",
+                            oc_client::types::McpServerStatus::Failed(_) => "failed",
+                            oc_client::types::McpServerStatus::Disabled(_) => "disabled",
+                            oc_client::types::McpServerStatus::NeedsAuth(_) => "needs_auth",
+                        };
+                        let error = match &server.status {
+                            oc_client::types::McpServerStatus::Failed(failed) => {
+                                Some(failed.error.clone())
+                            }
+                            oc_client::types::McpServerStatus::NeedsAuth(auth) => {
+                                Some(auth.error.clone())
+                            }
+                            _ => None,
+                        };
+                        crate::store::McpServerRow { name: server.name.clone(), status, error }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let _ = tx.send(ServerListEvent::Mcp(mcps)).await;
     });
     (rx, task)
 }
@@ -3075,6 +3162,9 @@ pub async fn run_with_size(
                 ServerListEvent::Connected(connected) => {
                     app.store.set_integration_connected(connected);
                 }
+                ServerListEvent::Mcp(rows) => {
+                    app.store.set_mcp_servers(rows);
+                }
             }
         }
         // Drain the worktree worker (R-05): project resolution, list
@@ -3280,6 +3370,11 @@ pub async fn run_with_size(
         }
         for id in open_now {
             if fetched_transcripts.insert(id.clone()) {
+                // SURF-1: the in-flight window is the "Loading session
+                // history…" state (v2's firstJump hold while
+                // `message.sync` runs, index.tsx:1425-1427) — armed at
+                // request time, cleared when the fetch lands either way.
+                app.store.set_history_loading(&id, true);
                 let _ = loop_fetch_tx.send(LoopRequest::Transcript(id));
             }
         }
@@ -3287,15 +3382,19 @@ pub async fn run_with_size(
         // session-list refetch) through the store's single ingest path.
         while let Ok(fetch) = loop_fetch_rx.try_recv() {
             match fetch {
-                LoopFetch::Transcript { session_id, result } => match result {
-                    Ok(messages) => {
-                        app.store.ingest_all([Ingest::MessagesSnapshot { session_id, messages }]);
+                LoopFetch::Transcript { session_id, result } => {
+                    app.store.set_history_loading(&session_id, false);
+                    match result {
+                        Ok(messages) => {
+                            app.store
+                                .ingest_all([Ingest::MessagesSnapshot { session_id, messages }]);
+                        }
+                        Err(error) => {
+                            crate::keymap::log_skip(&format!("transcript fetch {error}"));
+                            fetched_transcripts.remove(&session_id);
+                        }
                     }
-                    Err(error) => {
-                        crate::keymap::log_skip(&format!("transcript fetch {error}"));
-                        fetched_transcripts.remove(&session_id);
-                    }
-                },
+                }
                 LoopFetch::SessionList(Ok(sessions)) => {
                     let unread = crate::data::resync_unread(&sessions);
                     app.store.ingest_all([Ingest::Resync {
@@ -6018,4 +6117,26 @@ mod core_interaction_tests {
         ));
         assert!(app.store.dialogs().is_empty(), "the esc/enter label closed it");
     }
+}
+
+/// SURF-1: the jump slot's "Loading session history…" label — the
+/// in-flight transcript fetch's live state (v2's `firstJump()` hold,
+/// index.tsx:1425-1427), right-aligned over the slot row while no
+/// rows have landed.
+#[test]
+fn history_loading_paints_the_jump_slot_label() {
+    let app = App::new((120, 24));
+    app.store.open_tab("s1", Some("S".to_owned()));
+    app.store.set_history_loading("s1", true);
+    let frame = app.frame_text();
+    assert!(
+        frame.contains("Loading session history…"),
+        "the loading label paints while the fetch is in flight: {frame}"
+    );
+    app.store.set_history_loading("s1", false);
+    let settled = app.frame_text();
+    assert!(
+        !settled.contains("Loading session history…"),
+        "the label clears once the fetch lands: {settled}"
+    );
 }

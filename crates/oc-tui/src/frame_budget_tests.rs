@@ -491,7 +491,9 @@ fn frame_budget_sidebar_pane() {
 }
 
 fn sidebar_pane_budget_body() {
-    use crate::components::sidebar::{SidebarSection, SidebarSections, SidebarView};
+    use crate::components::sidebar::{
+        SidebarContextWidget, SidebarMcpWidget, SidebarSection, SidebarSections, SidebarView,
+    };
     use crate::reactive::Runtime;
     use crate::store::Store;
 
@@ -503,8 +505,8 @@ fn sidebar_pane_budget_body() {
     let view = || SidebarView {
         title: "Sidebar budget".to_owned(),
         sections: SidebarSections {
-            context: Vec::new(),
-            mcp: Vec::new(),
+            context: SidebarContextWidget::default(),
+            mcp: SidebarMcpWidget::default(),
             plugins: store.plugin_sidebar_sections(),
         },
         onboarding: true,
