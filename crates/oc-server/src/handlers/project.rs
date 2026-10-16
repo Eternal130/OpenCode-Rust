@@ -231,6 +231,8 @@ fn body_project_id(body: &Value) -> String {
 
 /// v2 `Slug.create()` (util/slug.ts) — a random adjective-noun pair.
 mod slug {
+    use rand::seq::SliceRandom;
+
     const ADJECTIVES: [&str; 29] = [
         "brave", "calm", "clever", "cosmic", "crisp", "curious", "eager", "gentle", "glowing",
         "happy", "hidden", "jolly", "kind", "lucky", "mighty", "misty", "neon", "nimble",
@@ -246,7 +248,6 @@ mod slug {
 
     pub fn create() -> String {
         let mut rng = rand::thread_rng();
-        use rand::seq::SliceRandom;
         format!(
             "{}-{}",
             ADJECTIVES.choose(&mut rng).unwrap_or(&"swift"),
@@ -283,8 +284,9 @@ fn configured_worktree_directory(
         },
     );
     let snapshot = loader.load();
-    let directory =
-        oc_core::config::latest(&snapshot.entries, |info| info.worktree.as_ref().map(|wt| wt.directory.clone()))?;
+    let directory = oc_core::config::latest(&snapshot.entries, |info| {
+        info.worktree.as_ref().map(|wt| wt.directory.clone())
+    })?;
     let path = if let Some(rest) = directory.strip_prefix("~/") {
         state.engine.home.join(rest)
     } else {
@@ -293,6 +295,7 @@ fn configured_worktree_directory(
     Some(path)
 }
 
+#[allow(clippy::too_many_lines)] // one v2 Effect chain (worktree.ts:192-238)
 async fn worktree_create(
     State(state): State<SharedState>,
     axum::Json(body): axum::Json<Value>,
@@ -323,12 +326,7 @@ async fn worktree_create(
                 .query_row(
                     "SELECT worktree, commands FROM project WHERE id = ?1",
                     (lookup_id,),
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, Option<String>>(1)?,
-                        ))
-                    },
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
                 )
                 .ok())
         })
@@ -391,14 +389,11 @@ async fn worktree_create(
 
     // Name + collision suffixes (v2: `name-2` … `name-10`, then
     // `DestinationExistsError`).
-    let name = name.map(String::from).unwrap_or_else(slug::create);
+    let name = name.map_or_else(slug::create, String::from);
     let mut worktree_directory = None;
     for suffix in 1..=10u32 {
-        let candidate = if suffix == 1 {
-            parent.join(&name)
-        } else {
-            parent.join(format!("{name}-{suffix}"))
-        };
+        let candidate =
+            if suffix == 1 { parent.join(&name) } else { parent.join(format!("{name}-{suffix}")) };
         if !candidate.exists() {
             worktree_directory = Some(candidate);
             break;
@@ -407,7 +402,10 @@ async fn worktree_create(
     let Some(worktree_directory) = worktree_directory else {
         return Err(ApiError::worktree(
             "destination_exists",
-            format!("Worktree destination already exists: {}", parent.join(format!("{name}-10")).display()),
+            format!(
+                "Worktree destination already exists: {}",
+                parent.join(format!("{name}-10")).display()
+            ),
             None,
         ));
     };
@@ -420,8 +418,7 @@ async fn worktree_create(
         .current_dir(&source)
         .stdin(std::process::Stdio::null())
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false);
+        .is_ok_and(|output| output.status.success());
     if !inside_repo {
         return Err(ApiError::worktree(
             "directory_unavailable",
@@ -429,7 +426,7 @@ async fn worktree_create(
             None,
         ));
     }
-    let reference = branch.as_deref().unwrap_or("HEAD");
+    let reference = branch.unwrap_or("HEAD");
     let added = std::process::Command::new("git")
         .args(["worktree", "add", "--detach", "--"])
         .arg(&worktree_directory)
@@ -508,7 +505,11 @@ async fn worktree_create(
             }
             Err(error) => {
                 crate::errors::debug_cause("worktree:start", &error);
-                return Err(ApiError::worktree("operation", format!("Start command failed: {error}"), None));
+                return Err(ApiError::worktree(
+                    "operation",
+                    format!("Start command failed: {error}"),
+                    None,
+                ));
             }
         }
     }

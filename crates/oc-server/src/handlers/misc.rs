@@ -282,8 +282,10 @@ async fn websearch_query(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
-    let payload: oc_schema::misc::WebSearchInput = serde_json::from_value(body)
-        .map_err(|error| ApiError::invalid_request(format!("Invalid websearch payload: {error}")))?;
+    let payload: oc_schema::misc::WebSearchInput =
+        serde_json::from_value(body).map_err(|error| {
+            ApiError::invalid_request(format!("Invalid websearch payload: {error}"))
+        })?;
     // v2 handlers/websearch.ts — the location's WebSearch service with the
     // tagged-error mapping (ProviderRequired/ProviderNotFound/Disabled →
     // 400 kinds; Request → 503 `service`).
@@ -338,8 +340,5 @@ async fn websearch_providers(
         .into_iter()
         .map(|(id, name)| json!({ "id": id, "name": name }))
         .collect();
-    Ok(json_location_data(
-        &location.as_path().to_string_lossy(),
-        Value::Array(providers),
-    ))
+    Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(providers)))
 }

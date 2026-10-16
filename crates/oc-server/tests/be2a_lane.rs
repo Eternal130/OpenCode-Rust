@@ -86,7 +86,7 @@ async fn be2a_websearch_providers_empty_without_keys() {
         .providers(&WebsearchProvidersQuery::default())
         .await
         .expect("providers");
-    assert!(response.data.is_empty());
+    assert_eq!(response.data, Vec::new(), "no providers without keys");
 }
 
 /// An env API key (the v2 `env` connection method names) makes the
@@ -111,11 +111,8 @@ async fn be2a_websearch_env_key_lists_provider() {
 // ---------------------------------------------------------------------------
 
 fn git(dir: &std::path::Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git spawn");
+    let output =
+        std::process::Command::new("git").args(args).current_dir(dir).output().expect("git spawn");
     assert!(
         output.status.success(),
         "git {args:?} in {} failed: {}",
@@ -152,9 +149,11 @@ async fn expect_frame(
             return text;
         }
         seen.push(text);
-        if seen.len() > 500 {
-            panic!("{context}: frame not found after 500 frames:\n{}", seen.join("\n"));
-        }
+        assert!(
+            seen.len() <= 500,
+            "{context}: frame not found after 500 frames:\n{}",
+            seen.join("\n")
+        );
     }
 }
 
@@ -186,13 +185,11 @@ async fn be2a_worktree_create_runs_git_add_and_publishes() {
         .engine
         .db
         .transaction(|tx| {
-            Ok(tx
-                .conn()
-                .query_row(
-                    "SELECT id, worktree FROM project ORDER BY time_created LIMIT 1",
-                    [],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                )?)
+            Ok(tx.conn().query_row(
+                "SELECT id, worktree FROM project ORDER BY time_created LIMIT 1",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?)
         })
         .await
         .expect("project row");
@@ -226,7 +223,9 @@ async fn be2a_worktree_create_runs_git_add_and_publishes() {
         git(&workspace, &["rev-parse", "HEAD"]).trim(),
         "checked out at the source commit"
     );
-    assert!(std::fs::read_to_string(directory.join("README.md")).expect("file present").contains("seed"));
+    assert!(std::fs::read_to_string(directory.join("README.md"))
+        .expect("file present")
+        .contains("seed"));
 
     // The row is owned by the git strategy (v2 stores `selected.id`).
     let strategy_project = project_id.clone();
@@ -236,13 +235,11 @@ async fn be2a_worktree_create_runs_git_add_and_publishes() {
         .engine
         .db
         .transaction(move |tx| {
-            Ok(tx
-                .conn()
-                .query_row(
-                    "SELECT strategy FROM worktree WHERE project_id = ?1 AND directory = ?2",
-                    (&strategy_project, strategy_directory.as_str()),
-                    |row| row.get::<_, Option<String>>(0),
-                )?)
+            Ok(tx.conn().query_row(
+                "SELECT strategy FROM worktree WHERE project_id = ?1 AND directory = ?2",
+                (&strategy_project, strategy_directory.as_str()),
+                |row| row.get::<_, Option<String>>(0),
+            )?)
         })
         .await
         .expect("row");
@@ -279,9 +276,7 @@ async fn be2a_worktree_create_source_and_suffix_semantics() {
         .transaction(|tx| {
             Ok(tx
                 .conn()
-                .query_row("SELECT id FROM project LIMIT 1", [], |row| {
-                    row.get::<_, String>(0)
-                })?)
+                .query_row("SELECT id FROM project LIMIT 1", [], |row| row.get::<_, String>(0))?)
         })
         .await
         .expect("project row");
@@ -323,4 +318,3 @@ async fn be2a_worktree_create_source_and_suffix_semantics() {
     assert_eq!(std::path::PathBuf::from(&created.directory), parent.join("dupe-2"));
     assert!(std::path::PathBuf::from(&created.directory).join(".git").exists());
 }
-

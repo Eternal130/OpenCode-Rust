@@ -75,9 +75,11 @@ async fn expect_frame(
             return text;
         }
         seen.push(text);
-        if seen.len() > 500 {
-            panic!("{context}: frame not found after 500 frames:\n{}", seen.join("\n"));
-        }
+        assert!(
+            seen.len() <= 500,
+            "{context}: frame not found after 500 frames:\n{}",
+            seen.join("\n")
+        );
     }
 }
 
@@ -397,7 +399,9 @@ async fn be1_fork_copies_history_and_fork_styles_the_title() {
         SessionForkBoundary::Through(variant) => {
             assert_eq!(variant.message_id, "msg_assistant_root", "through = newest message");
         }
-        other => panic!("expected through boundary, got {other:?}"),
+        other @ SessionForkBoundary::Before(_) => {
+            panic!("expected through boundary, got {other:?}")
+        }
     }
     assert_eq!(fork.title.as_deref(), Some("fork me (fork #1)"), "fork-styled title");
 
