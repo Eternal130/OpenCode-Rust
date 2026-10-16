@@ -32,7 +32,20 @@
 //!    * config: every regular FILE directly in the legacy config dir
 //!      (no recursion, no `*.lock`/`*.tmp`/dotfiles);
 //!    * plugin caches: the legacy `npm/` and managed-bun `bin/`
-//!      subtrees (recursive, skip existing, skip `*.lock`).
+//!      subtrees (recursive, skip existing, skip `*.lock`);
+//!    * STATE ROOT (auditF 3.3 — the migration hole that silently lost
+//!      tabs, prefs, and registrations): `service[-<channel>].json`
+//!      registrations; the model-preference doc `model.json` (written
+//!      to BOTH v2's canonical `<state>/model.json` and the port's
+//!      current read seam `<data>/tui/model.json` — auditC S3's
+//!      split-brain bridge); the pinned-sessions doc `session.json`;
+//!      every `<channel>/tui/*.json` channel-storage document (the
+//!      `tabs` doc is CONVERTED into the port's versioned shape —
+//!      `read_tabs` leaves foreign docs untouched, so the migrator
+//!      adopting v2's shape explicitly is the sanctioned path; every
+//!      other key copies verbatim); and the prompt history family
+//!      (`prompt-history.jsonl`, `frecency.jsonl`,
+//!      `prompt-stash.jsonl` — consumed by the TUI lane's readers).
 //!    * `log/`, `repos/`, and everything else are intentionally NOT
 //!      copied.
 //!      All copies are idempotent: a destination that already exists is
@@ -82,13 +95,20 @@ pub struct Report {
     pub copied_databases: Vec<PathBuf>,
     /// Every other file copied (auth, config, npm/bin cache files).
     pub copied_files: Vec<PathBuf>,
+    /// State-root artifacts carried into our state/data roots
+    /// (service registrations, model/session docs, channel-storage
+    /// documents, prompt history).
+    #[serde(default)]
+    pub copied_state: Vec<PathBuf>,
 }
 
 impl Report {
     /// Whether anything was actually copied (drives the one-line summary).
     #[must_use]
     pub fn copied_anything(&self) -> bool {
-        !self.copied_databases.is_empty() || !self.copied_files.is_empty()
+        !self.copied_databases.is_empty()
+            || !self.copied_files.is_empty()
+            || !self.copied_state.is_empty()
     }
 }
 
@@ -140,12 +160,14 @@ pub fn ensure_migrated() -> Result<Report, MigrationError> {
         source_data: legacy.data.clone(),
         copied_databases: Vec::new(),
         copied_files: Vec::new(),
+        copied_state: Vec::new(),
     };
     copy_databases(&legacy, &ours, &mut report);
     copy_auth(&legacy, &ours, &mut report);
     copy_config_files(&legacy, &ours, &mut report);
     copy_cache_subtree(&legacy.cache.join("npm"), &ours.cache.join("npm"), &mut report);
     copy_cache_subtree(&legacy.cache.join("bin"), &ours.cache.join("bin"), &mut report);
+    copy_state_root(&legacy, &ours, &mut report);
 
     report.completed_at = unix_now();
     write_marker(&marker, &report)?;
@@ -388,6 +410,180 @@ fn copy_config_files(legacy: &Roots, ours: &Roots, report: &mut Report) {
     }
 }
 
+// --- the state root --------------------------------------------------------
+
+/// The version stamp the port's open-tabs `tabs` document carries
+/// (oc-tui `storage::TABS_VERSION`; a doc without it is v2's shape and
+/// is left untouched by the TUI's reader).
+const TABS_VERSION: u32 = 2;
+
+/// Is `name` a valid channel/storage segment (the reference's
+/// `^[a-zA-Z0-9][a-zA-Z0-9._-]*`, rejecting `.` and `..`)?
+fn is_state_segment(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name.chars().next().is_some_and(|ch| ch.is_ascii_alphanumeric())
+        && name.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+}
+
+/// Carry v2's STATE root into ours (auditF 3.3): service
+/// registrations, the model-preference doc (both canonical and
+/// back-compat destinations), pinned sessions, every channel's TUI
+/// storage documents (tabs ADOPTED into the port's versioned shape),
+/// and the prompt-history family. Sources are read-only; destinations
+/// that already exist win (idempotence).
+fn copy_state_root(legacy: &Roots, ours: &Roots, report: &mut Report) {
+    if !legacy.state.is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(&legacy.state) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
+        if meta.is_file() {
+            match name.as_str() {
+                // Service registrations (`service[-<channel>].json`,
+                // service-config.ts:30-43): custom hostname/port/env
+                // settings survive the switch. The version field inside
+                // matches our 2.0.24 build, so the port's
+                // `version_belongs_to_channel` check accepts them.
+                _ if is_service_filename(&name) => {
+                    copy_state_file(&entry.path(), ours.state.join(&name), report);
+                }
+                // The model-preference doc (`local.tsx:154`): v2's
+                // canonical state path AND the port's current read seam
+                // (`<data>/tui/model.json`, auditC S3) — the split-brain
+                // bridge until the TUI lane unifies the reader on the
+                // state path.
+                "model.json" => {
+                    copy_state_file(&entry.path(), ours.state.join(&name), report);
+                    copy_state_file(&entry.path(), ours.data.join("tui").join(&name), report);
+                }
+                // Pinned sessions (`{pinned: [...]}`, local.tsx:504-523:
+                // the file lands where the unified reader will look — the
+                // TUI currently keeps pins in memory, TUI-lane half) and
+                // the prompt history family (`prompt/history.tsx:93`,
+                // `frecency.tsx:42`, `stash.tsx:40`), preserved for the
+                // TUI lane's readers.
+                "session.json"
+                | "prompt-history.jsonl"
+                | "frecency.jsonl"
+                | "prompt-stash.jsonl" => {
+                    copy_state_file(&entry.path(), ours.state.join(&name), report);
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if !meta.is_dir() || !is_state_segment(&name) || name == "locks" {
+            continue;
+        }
+        // A channel directory: carry its `tui/` storage documents.
+        let channel_tui = entry.path().join("tui");
+        if !channel_tui.is_dir() {
+            continue;
+        }
+        let Ok(documents) = fs::read_dir(&channel_tui) else { continue };
+        for document in documents.flatten() {
+            let Ok(document_meta) = document.metadata() else { continue };
+            if !document_meta.is_file() {
+                continue;
+            }
+            let Some(document_name) = document.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if matches!(
+                Path::new(&document_name).extension().and_then(|ext| ext.to_str()),
+                Some("lock" | "tmp")
+            ) {
+                continue;
+            }
+            let target = ours.state.join(&name).join("tui").join(&document_name);
+            if document_name == "tabs.json" {
+                // ADOPT v2's shape (`{global, cwd}` without a version)
+                // into the port's versioned document — the sanctioned
+                // conversion (the TUI's `read_tabs` leaves foreign docs
+                // untouched, so without this the tab list would reset).
+                // A doc already stamped with our version (or any other
+                // shape) copies verbatim only when the field is absent;
+                // anything unrecognizable is left for the tolerant
+                // reader.
+                if target.exists() {
+                    continue;
+                }
+                if let Some(adopted) = adopt_v2_tabs(&document.path()) {
+                    if let Some(parent) = target.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    match serde_json::to_vec_pretty(&adopted)
+                        .map_err(|error| error.to_string())
+                        .and_then(|body| {
+                            fs::write(&target, body)
+                                .map_err(|error| format!("write {}: {error}", target.display()))
+                        }) {
+                        Ok(()) => report.copied_state.push(target),
+                        Err(error) => {
+                            eprintln!("opencode-rust: v2 migration: {error} (skipped)");
+                            let _ = fs::remove_file(&target);
+                        }
+                    }
+                    continue;
+                }
+            }
+            copy_state_file(&document.path(), target, report);
+        }
+    }
+}
+
+/// `service.json` or `service-<channel>.json` (sanitized channel).
+fn is_service_filename(name: &str) -> bool {
+    name == "service.json"
+        || (name.starts_with("service-")
+            && Path::new(name).extension() == Some(std::ffi::OsStr::new("json"))
+            && is_state_segment(name.trim_start_matches("service-").trim_end_matches(".json")))
+}
+
+/// Copy one state file when the destination is absent (idempotent,
+/// ours-wins); record it under `copied_state`.
+fn copy_state_file(source: &Path, dest: PathBuf, report: &mut Report) {
+    if dest.exists() || !source.is_file() {
+        return;
+    }
+    if let Some(parent) = dest.parent() {
+        if fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    match fs::copy(source, &dest) {
+        Ok(_) => report.copied_state.push(dest),
+        Err(error) => {
+            eprintln!("opencode-rust: v2 migration: copy {}: {error} (skipped)", source.display());
+        }
+    }
+}
+
+/// Convert v2's tabs document (`{global, cwd}` — session-tabs.tsx's
+/// `PersistedState`) into the port's versioned shape: parse, verify
+/// the v2 fields exist, stamp `version: TABS_VERSION`. Returns `None`
+/// for anything that is not a v2 tabs doc (already-versioned,
+/// malformed, or unrelated JSON — copied verbatim by the caller
+/// instead).
+fn adopt_v2_tabs(source: &Path) -> Option<serde_json::Value> {
+    let bytes = fs::read(source).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let object = value.as_object()?;
+    let looks_like_v2 = object.contains_key("global") || object.contains_key("cwd");
+    if !looks_like_v2 || object.contains_key("version") {
+        return None;
+    }
+    let mut adopted = object.clone();
+    adopted.insert("version".to_owned(), serde_json::Value::from(u64::from(TABS_VERSION)));
+    Some(serde_json::Value::Object(adopted))
+}
+
 /// Recursive copy of a cache subtree (`npm/`, managed-bun `bin/`),
 /// skipping destinations that already exist and `*.lock` files.
 fn copy_cache_subtree(source: &Path, dest: &Path, report: &mut Report) {
@@ -481,8 +677,10 @@ mod tests {
     }
 
     /// A fake v2 home: real sqlite `opencode.db` + channel db, auth.json,
-    /// flat config files (+ junk that must NOT copy), npm/bin caches, and
-    /// log/repos dirs that must never be copied.
+    /// flat config files (+ junk that must NOT copy), npm/bin caches, the
+    /// full v2 STATE root (service registrations, model prefs, pinned
+    /// sessions, per-channel TUI storage, prompt history), and log/repos
+    /// dirs that must never be copied.
     struct LegacyHome {
         root: PathBuf,
     }
@@ -517,7 +715,66 @@ mod tests {
             let bun_dir = home.join(".cache/opencode/bin");
             std::fs::create_dir_all(&bun_dir).expect("bun dir");
             std::fs::write(bun_dir.join("bun"), "#!/bin/sh\necho bun\n").expect("managed bun");
+            legacy.stage_state_root();
             legacy
+        }
+
+        /// The v2 state root: `<state>/opencode/…`.
+        fn stage_state_root(&self) {
+            let state = self.state_root();
+            std::fs::create_dir_all(&state).expect("state");
+            // Service registrations (global + channel).
+            std::fs::write(
+                state.join("service.json"),
+                r#"{"id":"srv","version":"2.0.24","url":"http://127.0.0.1:49343","pid":1}"#,
+            )
+            .expect("service.json");
+            std::fs::write(
+                state.join("service-stable.json"),
+                r#"{"id":"srv2","version":"0.0.0-stable-2.0.24","url":"http://127.0.0.1:49344","pid":2}"#,
+            )
+            .expect("channel service");
+            // Model preferences (v2 canonical state path).
+            std::fs::write(
+                state.join("model.json"),
+                r#"{"recent":[{"providerID":"anthropic","modelID":"claude"}],"favorite":[],"variant":{"anthropic/claude":"think"}}"#,
+            )
+            .expect("model.json");
+            // Pinned sessions.
+            std::fs::write(state.join("session.json"), r#"{"pinned":["ses_a","ses_b"]}"#)
+                .expect("session.json");
+            // Prompt history family.
+            std::fs::write(state.join("prompt-history.jsonl"), "{\"text\":\"fix the build\"}\n")
+                .expect("history");
+            std::fs::write(state.join("frecency.jsonl"), "{\"text\":\"tests\",\"count\":3}\n")
+                .expect("frecency");
+            std::fs::write(state.join("prompt-stash.jsonl"), "{\"text\":\"draft\"}\n")
+                .expect("stash");
+            // Channel storage: v2-shaped tabs + plain prefs keys.
+            let stable_tui = state.join("stable/tui");
+            std::fs::create_dir_all(&stable_tui).expect("stable tui");
+            std::fs::write(
+                stable_tui.join("tabs.json"),
+                r#"{"global":{"tabs":[{"sessionID":"ses_a","title":"Build fix"},{"sessionID":"ses_b"}],"unread":{}},"cwd":{"/work":{"tabs":[{"sessionID":"ses_c"}],"unread":{}}}}"#,
+            )
+            .expect("v2 tabs");
+            std::fs::write(stable_tui.join("session-list.json"), r#"{"all_projects":false}"#)
+                .expect("session-list");
+            std::fs::write(stable_tui.join("getting-started.json"), r#"{"dismissed":true}"#)
+                .expect("getting-started");
+            std::fs::write(stable_tui.join("view.json"), r#"{"mcp":true}"#).expect("view");
+            std::fs::write(stable_tui.join("scratch.tmp"), "tmp").expect("tmp junk");
+            // A second channel directory + a junk directory that is NOT a
+            // valid channel segment (must not copy).
+            let local_tui = state.join("local/tui");
+            std::fs::create_dir_all(&local_tui).expect("local tui");
+            std::fs::write(local_tui.join("tabs.json"), r#"{"global":{"tabs":[],"unread":{}}}"#)
+                .expect("local tabs");
+            std::fs::create_dir_all(state.join("we ird/tui")).expect("junk channel");
+            std::fs::write(state.join("we ird/tui/tabs.json"), "{}").expect("junk tabs");
+            // Locks directory (never copied).
+            std::fs::create_dir_all(state.join("locks")).expect("locks");
+            std::fs::write(state.join("locks/cli-json.lock"), "").expect("lock");
         }
 
         fn write_db(&self, name: &str, seed: &str) {
@@ -532,6 +789,10 @@ mod tests {
 
         fn legacy_data(&self) -> PathBuf {
             self.home().join(".local/share/opencode")
+        }
+
+        fn state_root(&self) -> PathBuf {
+            self.home().join(".local/state/opencode")
         }
     }
 
@@ -580,8 +841,12 @@ mod tests {
     fn migrates_the_v2_layout_without_touching_sources() {
         let legacy = LegacyHome::stage();
         let home = legacy.home();
-        let legacy_roots =
-            [legacy.legacy_data(), home.join(".config/opencode"), home.join(".cache/opencode")];
+        let legacy_roots = [
+            legacy.legacy_data(),
+            home.join(".config/opencode"),
+            home.join(".cache/opencode"),
+            legacy.state_root(),
+        ];
         let before: Vec<_> = legacy_roots.iter().map(|root| snapshot_tree(root)).collect();
         let _env = Env::redirect(&home);
 
@@ -640,6 +905,95 @@ mod tests {
         }
         // Lock cleaned up.
         assert!(!home.join(".local/state/opencode-rust/locks").join(LOCK_FILENAME).exists());
+    }
+
+    /// The state-root carry (auditF 3.3): every v2 state artifact lands
+    /// in our shapes — tabs ADOPTED (version stamped, data preserved),
+    /// model prefs written to BOTH destinations, junk skipped.
+    #[test]
+    fn migrates_the_v2_state_root_end_to_end() {
+        let legacy = LegacyHome::stage();
+        let home = legacy.home();
+        let _env = Env::redirect(&home);
+
+        let report = ensure_migrated().expect("migration succeeds");
+        let state = home.join(".local/state/opencode-rust");
+
+        // Service registrations copied (global + channel).
+        assert!(state.join("service.json").is_file());
+        assert!(state.join("service-stable.json").is_file());
+
+        // Model preferences: v2's canonical path AND the port's current
+        // read seam (auditC S3's split-brain bridge).
+        let model = r#"{"recent":[{"providerID":"anthropic","modelID":"claude"}],"favorite":[],"variant":{"anthropic/claude":"think"}}"#;
+        assert_eq!(std::fs::read_to_string(state.join("model.json")).expect("state model"), model);
+        assert_eq!(
+            std::fs::read_to_string(home.join(".local/share/opencode-rust/tui/model.json"))
+                .expect("data/tui model"),
+            model
+        );
+
+        // Pinned sessions + the prompt history family.
+        assert_eq!(
+            std::fs::read_to_string(state.join("session.json")).expect("pinned"),
+            r#"{"pinned":["ses_a","ses_b"]}"#
+        );
+        assert!(state.join("prompt-history.jsonl").is_file());
+        assert!(state.join("frecency.jsonl").is_file());
+        assert!(state.join("prompt-stash.jsonl").is_file());
+
+        // Tabs: v2's shape ADOPTED into the port's versioned document —
+        // every scope and tab preserved, `version: 2` stamped.
+        let tabs: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(state.join("stable/tui/tabs.json")).expect("tabs"),
+        )
+        .expect("tabs json");
+        assert_eq!(tabs["version"], serde_json::json!(2), "stamped with our version");
+        assert_eq!(tabs["global"]["tabs"][0]["sessionID"], serde_json::json!("ses_a"));
+        assert_eq!(tabs["global"]["tabs"][0]["title"], serde_json::json!("Build fix"));
+        assert_eq!(tabs["global"]["tabs"][1]["sessionID"], serde_json::json!("ses_b"));
+        assert_eq!(tabs["cwd"]["/work"]["tabs"][0]["sessionID"], serde_json::json!("ses_c"));
+
+        // The other channel-storage keys copy verbatim; junk does not.
+        assert_eq!(
+            std::fs::read_to_string(state.join("stable/tui/session-list.json")).expect("prefs"),
+            r#"{"all_projects":false}"#
+        );
+        assert_eq!(
+            std::fs::read_to_string(state.join("stable/tui/getting-started.json"))
+                .expect("onboarding"),
+            r#"{"dismissed":true}"#
+        );
+        assert!(state.join("stable/tui/view.json").is_file(), "foreign keys preserved");
+        assert!(!state.join("stable/tui/scratch.tmp").exists());
+        assert!(state.join("local/tui/tabs.json").is_file(), "every channel carries");
+        assert!(!state.join("we ird").exists(), "invalid channel segments skipped");
+        assert!(
+            !state.join("locks/cli-json.lock").exists(),
+            "the legacy lock file is never copied (our own empty locks/ dir is fine)"
+        );
+
+        // The report counts the state carries.
+        assert!(
+            report.copied_state.iter().any(|path| path == &state.join("stable/tui/tabs.json")),
+            "state carries recorded: {:?}",
+            report.copied_state
+        );
+
+        // Ours-wins: a pre-existing state artifact is NOT overwritten.
+        let marker = home.join(".local/share/opencode-rust").join(MARKER_FILENAME);
+        let _ = std::fs::remove_file(&marker);
+        std::fs::write(state.join("session-list.json"), r#"{"all_projects":true}"#).expect("ours");
+        ensure_migrated().expect("second run after marker reset");
+        assert_eq!(
+            std::fs::read_to_string(state.join("stable/tui/session-list.json")).expect("prefs"),
+            r#"{"all_projects":false}"#,
+            "the stable channel's file is still v2's (ours won earlier)"
+        );
+        assert_eq!(
+            std::fs::read_to_string(state.join("session-list.json")).expect("ours wins"),
+            r#"{"all_projects":true}"#
+        );
     }
 
     #[test]
