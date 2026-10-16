@@ -32,6 +32,7 @@ fn view(draft: &PromptDraft) -> HomeView<'_> {
         plugin_hints: Vec::new(),
         plugin_actions: Vec::new(),
         mcp: None,
+        plugins_failed: None,
         autocomplete: None,
         rail: None,
         caret: None,

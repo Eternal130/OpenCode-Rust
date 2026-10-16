@@ -361,6 +361,22 @@ impl App {
                     }
                     return;
                 }
+                // Lane KM (auditA #10): the toast's hover pause
+                // (ui/toast.tsx:57-59 — `onHover(true)` pauses, false
+                // resumes). Over the panel: paused; off it: running.
+                if !self.store.dialogs().is_empty() || self.permission_live() {
+                    // A modal owns the pointer; leave the countdown be.
+                } else if self.store.toasts().current().is_some() {
+                    let rect = self.toast_hit_rect();
+                    let inside = rect.is_some_and(|(x, y, w, h)| {
+                        col >= x && row >= y && col < x + w && row < y + h
+                    });
+                    let paused = self.store.toasts().is_paused();
+                    if inside != paused {
+                        self.store.toast_set_paused(inside, self.store.clock());
+                        self.store.request_redraw();
+                    }
+                }
                 // #33 — the footer location label's hover lift
                 // (`useWorkingDirectoryActions`: muted → text.base).
                 // Route-gated (auditA §4.1): a stale session rect
@@ -440,6 +456,34 @@ impl App {
                     }
                     return;
                 }
+                // Lane KM (auditA #10): the toast's pointer surface
+                // (ui/toast.tsx:57-59) — hover PAUSES the countdown,
+                // leaving RESUMES it, a release inside the panel
+                // ACTIVATES (the action command, else dismiss). The
+                // toast overlays the transcript; dialogs and the
+                // permission ask keep their precedence above it.
+                if self.store.toasts().current().is_some() {
+                    let rect = self.toast_hit_rect();
+                    let inside = rect.is_some_and(|(x, y, w, h)| {
+                        col >= x && row >= y && col < x + w && row < y + h
+                    });
+                    let paused = self.store.toasts().is_paused();
+                    if inside != paused {
+                        self.store.toast_set_paused(inside, self.store.clock());
+                        self.store.request_redraw();
+                    }
+                    if inside {
+                        let command = self.store.toast_activate();
+                        self.store.request_redraw();
+                        if let Some(command) = command {
+                            let dispatch = self.dispatcher.dispatch(&self.store, &command, None);
+                            if let Dispatch::ServerPending(reason) = dispatch {
+                                let _ = reason;
+                            }
+                        }
+                        return;
+                    }
+                }
                 if strip_live && row == 0 {
                     let hit = {
                         let (tabs, active, show_plus, held) = self.strip_effective_layout();
@@ -514,6 +558,35 @@ impl App {
                     // re-hits the stationary pointer.
                     self.refresh_strip_hover(width);
                     return;
+                }
+                // Lane KM (auditA #10): the home footer's status chips
+                // (`onMouseUp` → `keymap.dispatch`, footer.tsx:24/64) —
+                // the MCP cell (success or failure) opens the MCP
+                // servers dialog, the plugins-failed cell the plugin
+                // manager.
+                if matches!(self.store.route(), Route::Home) {
+                    if let Some(chips) = self.store.home_footer_chip_hits() {
+                        let hit = |rect: &Option<crate::store::HitRect>| {
+                            rect.as_ref().is_some_and(|rect| {
+                                row == rect.y && col >= rect.x && col < rect.x + rect.width
+                            })
+                        };
+                        let command = if hit(&chips.mcp) {
+                            Some("mcp.list")
+                        } else if hit(&chips.plugins) {
+                            Some("plugins.list")
+                        } else {
+                            None
+                        };
+                        if let Some(command) = command {
+                            let dispatch = self.dispatcher.dispatch(&self.store, command, None);
+                            if let Dispatch::ServerPending(reason) = dispatch {
+                                let _ = reason;
+                            }
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
                 }
                 // The sidebar onboarding card's two pointer targets
                 // (footer.tsx:45-70): the `✕` release persists
@@ -913,6 +986,21 @@ impl App {
             moved = top.select.scroll_window_by(&props, height, delta);
         });
         moved
+    }
+
+    /// The toast panel's hit rect (lane KM, auditA #10) — the same
+    /// geometry the overlay paints (`toast_geometry` + the panel's
+    /// row count): absolute `(x, y, width, height)`.
+    fn toast_hit_rect(&self) -> Option<(usize, usize, usize, usize)> {
+        let toasts = self.store.toasts();
+        let toast = toasts.current()?;
+        let width = usize::from(self.size.0);
+        let message_width = crate::wrap::display_width(&toast.message);
+        let title_width = toast.title.as_deref().map_or(0, crate::wrap::display_width);
+        let (left, panel_width, top) =
+            crate::components::toast::toast_geometry(message_width, title_width, width);
+        let rows = crate::components::toast::panel_rows_public(toast);
+        Some((left, top, panel_width, rows))
     }
 
     /// The strip's layout inputs RIGHT NOW: the store tabs (drag-
@@ -3688,6 +3776,9 @@ pub async fn run_with_size(
         None
     };
     if let Some(runtime) = &plugin_runtime {
+        // Lane KM (auditA #10): the plugins-failed chip's source —
+        // the boot resolution's failures (footer.tsx:48-72).
+        app.store.set_plugins_failed(runtime.booted.resolution.failures.len());
         let projection = runtime.attach(&app.store);
         app.set_plugin_commands(projection.owned);
         app.set_plugin_themes(projection.themes);
@@ -7224,5 +7315,167 @@ fn markdown_link_click_opens_the_url() {
         opened.borrow().as_slice(),
         ["https://example.com/router"],
         "the release opened the href"
+    );
+}
+
+// -- lane KM (auditA #10): toast action + home footer chips -------
+
+/// The toast's pointer surface (ui/toast.tsx:57-59): hover pauses
+/// the countdown, a release inside the panel ACTIVATES — the
+/// action's command dispatches (the MCP-failure toast carries
+/// `mcp.list`), a toast without an action just dismisses.
+#[test]
+fn toast_pointer_surface_pauses_and_activates() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut app = App::new((80, 24));
+    app.store.open_tab("s1", Some("T".to_owned()));
+    app.store.toast_show(
+        crate::components::toast::ToastOptions {
+            title: Some("MCP server failed: broken".to_owned()),
+            message: "Run /mcps to view details.".to_owned(),
+            variant: "error",
+            duration_ms: 60_000,
+            ..crate::components::toast::ToastOptions::info("")
+        }
+        .with_action("Open MCP servers", "mcp.list"),
+    );
+    let (x, y, w, h) = app.toast_hit_rect().expect("the toast painted");
+    // Hover inside: paused.
+    app.mouse_event(&mouse(
+        MouseEventKind::Moved,
+        u16::try_from(x + 2).unwrap_or(0),
+        u16::try_from(y + 1).unwrap_or(0),
+    ));
+    assert!(app.store.toasts().is_paused(), "hover paused the countdown");
+    // A click OUTSIDE the panel (first) leaves it live.
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 20));
+    assert!(app.store.toasts().current().is_some(), "an outside release kept the toast");
+    // Release inside: activate — the MCP dialog opened, the toast
+    // dismissed.
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        u16::try_from(x + w / 2).unwrap_or(0),
+        u16::try_from(y + h / 2).unwrap_or(0),
+    ));
+    assert!(app.store.toasts().current().is_none(), "activate dismissed the toast");
+    assert!(
+        matches!(
+            app.store.top_dialog().map(|entry| entry.kind),
+            Some(crate::store::DialogKind::Mcp)
+        ),
+        "the action dispatched mcp.list"
+    );
+    app.press("escape");
+}
+
+/// The keyboard reach (PORT ADDITION `toast.activate`, ctrl+alt+t):
+/// the chord activates the current toast's action from the input
+/// layer.
+#[test]
+fn toast_activate_chord_fires_the_action() {
+    let mut app = App::new((80, 24));
+    app.store.open_tab("s1", Some("T".to_owned()));
+    app.store.toast_show(
+        crate::components::toast::ToastOptions::info("plugins failed")
+            .with_action("Open plugins", "plugins.list"),
+    );
+    app.press("ctrl+alt+t");
+    assert!(app.store.toasts().current().is_none(), "the chord dismissed the toast");
+    assert!(
+        matches!(
+            app.store.top_dialog().map(|entry| entry.kind),
+            Some(crate::store::DialogKind::Plugins)
+        ),
+        "the action dispatched plugins.list"
+    );
+    app.press("escape");
+}
+
+/// The MCP alert toasts (app.tsx:522-545): a server ENTERING a
+/// failed state toasts once with the `mcp.list` action; a refresh
+/// with the same status never re-toasts.
+#[test]
+fn mcp_failure_transitions_toast_once() {
+    let app = App::new((80, 24));
+    app.store.set_mcp_servers(vec![crate::store::McpServerRow {
+        name: "github".to_owned(),
+        status: "connected",
+        error: None,
+    }]);
+    assert!(app.store.toasts().current().is_none(), "healthy servers never toast");
+    app.store.set_mcp_servers(vec![crate::store::McpServerRow {
+        name: "github".to_owned(),
+        status: "failed",
+        error: Some("connect ECONNREFUSED".to_owned()),
+    }]);
+    let toast = app.store.toasts().current().expect("the failure toasted").clone();
+    assert_eq!(toast.title.as_deref(), Some("MCP server failed: github"));
+    assert_eq!(toast.action_label.as_deref(), Some("Open MCP servers"));
+    assert_eq!(toast.action_command.as_deref(), Some("mcp.list"));
+    assert!(!toast.modal, "the MCP toast never blocks typing (v2 rule)");
+    app.store.toast_dismiss();
+    // The same status on refresh: no re-toast.
+    app.store.set_mcp_servers(vec![crate::store::McpServerRow {
+        name: "github".to_owned(),
+        status: "failed",
+        error: Some("connect ECONNREFUSED".to_owned()),
+    }]);
+    assert!(app.store.toasts().current().is_none(), "the same status never re-toasts");
+}
+
+/// The home footer's status chips (footer.tsx:24/64): the MCP cell
+/// (success or failure) dispatches `mcp.list`, the plugins-failed
+/// cell `plugins.list` — both hit-testable at their painted cells.
+#[test]
+fn home_footer_chips_are_clickable() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut app = App::new((80, 24));
+    app.store.restore_tabs(vec![crate::store::SessionTab {
+        session_id: "r1".to_owned(),
+        title: Some("Restored".to_owned()),
+    }]);
+    app.store.set_mcp_servers(vec![
+        crate::store::McpServerRow { name: "fs".to_owned(), status: "connected", error: None },
+        crate::store::McpServerRow {
+            name: "broken".to_owned(),
+            status: "failed",
+            error: Some("boom".to_owned()),
+        },
+    ]);
+    app.store.set_plugins_failed(2);
+    let _ = app.frame();
+    let frame = app.frame_text();
+    assert!(frame.contains("1 MCP failed"), "the error cell: {frame}");
+    assert!(frame.contains("2 plugins failed"), "the plugins chip: {frame}");
+    let chips = app.store.home_footer_chip_hits().expect("the chips armed");
+    // The MCP cell first: a release inside opens the MCP dialog.
+    let mcp = chips.mcp.expect("the mcp rect");
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        u16::try_from(mcp.x + mcp.width / 2).unwrap_or(0),
+        u16::try_from(mcp.y).unwrap_or(0),
+    ));
+    assert!(
+        matches!(
+            app.store.top_dialog().map(|entry| entry.kind),
+            Some(crate::store::DialogKind::Mcp)
+        ),
+        "the MCP chip dispatched mcp.list"
+    );
+    app.press("escape");
+    // The plugins chip after the gap.
+    let plugins = chips.plugins.expect("the plugins rect");
+    assert!(plugins.x > mcp.x + mcp.width, "the plugins chip sits after the MCP cell");
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        u16::try_from(plugins.x + plugins.width / 2).unwrap_or(0),
+        u16::try_from(plugins.y).unwrap_or(0),
+    ));
+    assert!(
+        matches!(
+            app.store.top_dialog().map(|entry| entry.kind),
+            Some(crate::store::DialogKind::Plugins)
+        ),
+        "the plugins chip dispatched plugins.list"
     );
 }
