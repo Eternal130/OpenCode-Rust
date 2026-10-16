@@ -888,6 +888,11 @@ pub struct Store {
     /// mounts it in one); the port's pane is one flat walk, so the
     /// wheel drives this offset and the render re-slices.
     sidebar_scroll: std::cell::RefCell<SidebarScrollState>,
+    /// The permission body's pointer targets (auditA #4) at
+    /// ABSOLUTE screen cells — recorded by the render (`App::frame`,
+    /// the body's mount), cleared when the ask resolves.
+    permission_pointer_hits:
+        std::cell::RefCell<Option<crate::components::footer::permission::PermissionPointerHits>>,
     /// The location label's hover state (`hovered()`).
     location_hovered: std::cell::Cell<bool>,
     /// Per-session scroll state (Wave A's scroll driver over
@@ -1419,6 +1424,7 @@ impl Store {
             footer_location_hit: std::cell::RefCell::new(None),
             sidebar_onboarding_hits: std::cell::RefCell::new(None),
             sidebar_scroll: std::cell::RefCell::new(SidebarScrollState::default()),
+            permission_pointer_hits: std::cell::RefCell::new(None),
             location_hovered: std::cell::Cell::new(false),
             scroll: std::cell::RefCell::new(HashMap::new()),
             transcript_metrics: std::cell::RefCell::new(HashMap::new()),
@@ -3924,6 +3930,28 @@ impl Store {
     /// the SSE `permission.replied` reducer share this).
     pub fn permission_replied(&self, request_id: &str) {
         self.footer.update(|footer| footer.permission_replied(request_id));
+        // The ask's pointer targets die with it (auditA #4: the
+        // pills/buttons belong to the live body — a resolved ask
+        // must leave no zombie rects).
+        *self.permission_pointer_hits.borrow_mut() = None;
+    }
+
+    /// Record the permission body's pointer targets at ABSOLUTE
+    /// screen cells (the render pass — `App::frame`'s permission
+    /// mount; the layout math lives with the body renderer).
+    pub fn set_permission_pointer_hits(
+        &self,
+        hits: Option<crate::components::footer::permission::PermissionPointerHits>,
+    ) {
+        *self.permission_pointer_hits.borrow_mut() = hits;
+    }
+
+    /// The permission body's pointer targets from the last render.
+    #[must_use]
+    pub fn permission_pointer_hits(
+        &self,
+    ) -> Option<crate::components::footer::permission::PermissionPointerHits> {
+        self.permission_pointer_hits.borrow().clone()
     }
 
     // -- event ingest ----------------------------------------------------------
