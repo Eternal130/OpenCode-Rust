@@ -4303,8 +4303,116 @@ fn user_message_release_opens_message_actions() {
     )));
 }
 
-/// The select dialog's pointer surface (`dialog-select.tsx:757-775`):
-/// pointer motion over an option row moves the selection, a release
+/// The sidebar onboarding card's pointer surface (footer.tsx:45-70):
+/// the `✕` release dismisses the card — the store flip the run loop's
+/// persistence check writes the `getting-started` doc from — and the
+/// "Connect provider" row dispatches `provider.connect` (the palette
+/// row's own handler opens the server-list dialog). The rects clear
+/// with the card (no zombie clicks on a dismissed card).
+#[test]
+fn onboarding_card_pointer_routes_dismiss_and_connect() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let mut app = App::new((160, 30));
+    app.store.open_tab("s1", Some("Bug hunt".to_owned()));
+    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+    let _ = app.frame(); // the render pass records the hit rects
+    let hits = app.store.sidebar_onboarding_hits().expect("the card painted");
+    // The dismiss rect IS the painted ✕ cell; the connect rect spans
+    // the action row (label + /connect hint).
+    let grid = app.frame().text_grid();
+    assert_eq!(
+        grid[hits.dismiss.y].chars().nth(hits.dismiss.x),
+        Some('✕'),
+        "the dismiss target is the ✕ glyph"
+    );
+    let connect_row: String = grid[hits.connect.y]
+        .chars()
+        .skip(hits.connect.x)
+        .take(hits.connect.width)
+        .collect();
+    assert!(connect_row.contains("Connect provider"), "row: {connect_row}");
+    assert!(connect_row.contains("/connect"), "row: {connect_row}");
+    // Release on the ✕ dismisses; the re-render drops the rects.
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        u16::try_from(hits.dismiss.x).unwrap_or(u16::MAX),
+        u16::try_from(hits.dismiss.y).unwrap_or(u16::MAX),
+    ));
+    assert!(app.store.sidebar_onboarding_dismissed(), "the ✕ flipped the dismissal");
+    let _ = app.frame();
+    assert!(app.store.sidebar_onboarding_hits().is_none(), "the rects cleared");
+
+    // The connect row on a fresh card dispatches `provider.connect`.
+    let mut app = App::new((160, 30));
+    app.store.open_tab("s2", Some("Second".to_owned()));
+    app.store.navigate(Route::Session { session_id: "s2".to_owned() });
+    let _ = app.frame();
+    let hits = app.store.sidebar_onboarding_hits().expect("the card painted again");
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        u16::try_from(hits.connect.x).unwrap_or(u16::MAX),
+        u16::try_from(hits.connect.y).unwrap_or(u16::MAX),
+    ));
+    assert!(
+        matches!(
+            app.store.dialogs().last().map(|entry| &entry.kind),
+            Some(crate::store::DialogKind::ServerList { command: "provider.connect", .. })
+        ),
+        "provider.connect opened the server-list dialog: {:?}",
+        app.store.dialogs()
+    );
+}
+
+/// `--auto`'s autoaccept (v2 session/index.tsx:252-262): while armed,
+/// a live permission ask auto-replies `once` through the same queue
+/// a keyboard allow uses, resolves locally (the ask footer falls
+/// back), and never double-answers the same request id.
+#[test]
+fn autoaccept_auto_answers_permission_asks_once() {
+    let mut app = App::new((80, 24));
+    let ask = crate::data::Ingest::Event(crate::data::BusEvent::new(
+        "permission.asked",
+        serde_json::json!({
+            "id": "p1",
+            "sessionID": "ses",
+            "action": "read",
+            "resources": ["src/index.ts"],
+        }),
+    ));
+    // Unarmed: the ask surfaces (the keyboard path owns the reply).
+    app.store.ingest_all([ask.clone()]);
+    app.autoanswer_permissions();
+    assert!(app.permission_live(), "the ask footer holds the screen");
+    assert!(app.permission_replies.is_empty(), "no reply while disarmed");
+    // Armed (--auto): the SAME ask answers once — decision `once`,
+    // the footer falls back, and a second drain does not duplicate.
+    app.autoaccept = true;
+    app.autoanswer_permissions();
+    assert!(!app.permission_live(), "the ask resolved locally");
+    assert_eq!(app.permission_replies.len(), 1, "one reply");
+    assert_eq!(app.permission_replies[0].request_id, "p1");
+    assert_eq!(app.permission_replies[0].session_id, "ses");
+    assert_eq!(app.permission_replies[0].decision, "once");
+    app.autoanswer_permissions();
+    assert_eq!(app.permission_replies.len(), 1, "the autoApproved set dedupes");
+    // A NEW ask under the arm answers immediately (the pump's
+    // post-ingest call site).
+    app.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+        "permission.asked",
+        serde_json::json!({
+            "id": "p2",
+            "sessionID": "ses",
+            "action": "bash",
+            "resources": ["rm -rf /tmp/x"],
+        }),
+    ))]);
+    app.autoanswer_permissions();
+    assert_eq!(app.permission_replies.len(), 2, "each ask answered");
+    assert_eq!(app.permission_replies[1].request_id, "p2");
+}
+
+/// The select dialog's pointer surface (`dialog-select.tsx:757-775`):/// pointer motion over an option row moves the selection, a release
 /// submits it (the same path as enter), a release outside the frame
 /// dismisses.
 #[test]
