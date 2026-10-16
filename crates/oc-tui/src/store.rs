@@ -2645,11 +2645,7 @@ impl Store {
     #[must_use]
     pub fn thought_expanded(&self, session_id: &str, message_id: &str, part_id: &str) -> bool {
         let key = format!("{message_id}:{part_id}");
-        !self
-            .collapsed_thoughts
-            .borrow()
-            .get(session_id)
-            .is_some_and(|set| set.contains(&key))
+        !self.collapsed_thoughts.borrow().get(session_id).is_some_and(|set| set.contains(&key))
     }
 
     /// The session's collapsed thought keys (`"{mid}:{pid}"` — the
@@ -2745,7 +2741,8 @@ impl Store {
     /// origin).
     pub fn set_sidebar_onboarding_hits(&self, hits: Option<SidebarOnboardingHits>) {
         *self.sidebar_onboarding_hits.borrow_mut() = hits;
-    }    /// The recorded onboarding targets (`None` while the card is
+    }
+    /// The recorded onboarding targets (`None` while the card is
     /// hidden — the render clears them every pass).
     #[must_use]
     pub fn sidebar_onboarding_hits(&self) -> Option<SidebarOnboardingHits> {
@@ -2788,7 +2785,9 @@ impl Store {
     pub fn sidebar_scroll_by(&self, delta: i32) -> bool {
         let mut state = self.sidebar_scroll.borrow_mut();
         let max = state.max_offset();
-        let next = (state.offset as i64).saturating_add(i64::from(delta)).clamp(0, max as i64);
+        let offset = i64::try_from(state.offset).unwrap_or(i64::MAX);
+        let ceiling = i64::try_from(max).unwrap_or(i64::MAX);
+        let next = offset.saturating_add(i64::from(delta)).clamp(0, ceiling);
         let next = usize::try_from(next).unwrap_or(0);
         if next == state.offset {
             return false;

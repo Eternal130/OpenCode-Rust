@@ -434,12 +434,19 @@ impl SelectState {
     /// scrollbox wheel). Terminal-wheel semantics: 3 rows a notch
     /// (opentui's own `direction === "up" ? -3 : 3` delta); `true`
     /// when the window moved (the redraw key).
-    pub fn scroll_window_by(&mut self, props: &SelectProps, terminal_height: usize, delta: i32) -> bool {
+    pub fn scroll_window_by(
+        &mut self,
+        props: &SelectProps,
+        terminal_height: usize,
+        delta: i32,
+    ) -> bool {
         let groups = grouped(props, &self.filter);
         let rows = content_rows(&groups);
         let viewport = viewport_height(rows, terminal_height);
         let max = rows.saturating_sub(viewport);
-        let next = (self.scroll as i64).saturating_add(i64::from(delta)).clamp(0, max as i64);
+        let current = i64::try_from(self.scroll).unwrap_or(i64::MAX);
+        let ceiling = i64::try_from(max).unwrap_or(i64::MAX);
+        let next = current.saturating_add(i64::from(delta)).clamp(0, ceiling);
         let next = usize::try_from(next).unwrap_or(0);
         if next == self.scroll {
             return false;
