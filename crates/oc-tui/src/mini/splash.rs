@@ -220,15 +220,17 @@ impl SplashColors {
         }
     }
 
-    /// From the mini runtime's theme: left = `muted`
-    /// (`nearestIndexed(text.muted)`), right = `text`,
-    /// shadow = `shade` (`background.raised.base`).
+    /// From the mini runtime's theme: left = `muted`, right = `text`,
+    /// shadow = `shade` (`background.raised.base`) — v2 maps all
+    /// three through the oklab `nearestIndexed` quantizer
+    /// (`mini/theme.ts:172-175`), so the splash's scrollback cells
+    /// emit xterm-256 indexes, never truecolor.
     #[must_use]
     pub fn from_footer_theme(theme: &crate::components::footer::FooterTheme) -> Self {
         Self {
-            left: cell_color(theme.muted),
-            right: cell_color(theme.text),
-            shadow: cell_color(theme.shade),
+            left: cell_color(super::theme::scrollback_color(theme.muted)),
+            right: cell_color(super::theme::scrollback_color(theme.text)),
+            shadow: cell_color(super::theme::scrollback_color(theme.shade)),
         }
     }
 }
@@ -344,6 +346,19 @@ pub fn mark_cells(row: &str, colors: &SplashColors) -> Vec<crate::layout::Styled
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn footer_theme_splash_triple_quantizes_through_oklab() {
+        // `mini/theme.ts:172-175` maps the triple through
+        // `nearestIndexed` — the fallback-dark inputs (muted 808080,
+        // text eeeeee, shade 141414) pin to the v2 corpus outputs.
+        let colors = SplashColors::from_footer_theme(
+            &crate::components::footer::FooterTheme::fallback_dark(),
+        );
+        assert_eq!(colors.left, ratatui::style::Color::Indexed(8), "muted #808080 → idx 8");
+        assert_eq!(colors.right, ratatui::style::Color::Indexed(255), "text #eeeeee → idx 255");
+        assert_eq!(colors.shadow, ratatui::style::Color::Indexed(233), "shade #141414 → idx 233");
+    }
 
     #[test]
     fn titles_collapse_whitespace_and_fall_back() {
