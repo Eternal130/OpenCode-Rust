@@ -91,7 +91,14 @@ pub fn handle_dialog_key(
         | DialogKind::ServerList { .. }
         | DialogKind::ToolOutput { .. }
         | DialogKind::DiffSource
-        | DialogKind::DiffHelp => true,
+        | DialogKind::DiffHelp
+        | DialogKind::Mcp
+        | DialogKind::McpError { .. }
+        | DialogKind::Status
+        | DialogKind::Variant
+        | DialogKind::Pair
+        | DialogKind::Debug
+        | DialogKind::Timeline { .. } => true,
     };
     let is_help = matches!(entry.kind, DialogKind::Help);
     let is_static = is_help
@@ -162,6 +169,36 @@ pub fn handle_dialog_key(
     // v2 wires these as DialogSelect `actions` through the keymap
     // (`dialog.move_session.*`, config/keybind.ts:268-271); the name
     // dialog's tab is `dialog.worktree.generate` (:267).
+    // -- SURF-2: DialogMcp's toggle (dialog-mcp.tsx:145-153's action)
+    // + DialogDebug's copy (dialog-debug.tsx:50-53) ---------------
+    if let DialogKind::Mcp = entry.kind {
+        let selected = entry.select.submit(&props).map(|option| option.value.clone());
+        if keymap.stroke_triggers(&stroke, "dialog.mcp.toggle") {
+            if let Some(server) = selected {
+                store.mcp_toggle(&server);
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+    }
+    if let DialogKind::Debug = entry.kind {
+        // `Keymap.createLayer`'s "Copy debug info" return binding
+        // (dialog-debug.tsx:50-53): clipboard + the info toast.
+        if stroke.key == "return" && !stroke.ctrl && !stroke.alt {
+            let text = props
+                .options
+                .iter()
+                .map(|option| option.title.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let _ = store.clipboard_write(&text);
+            store.toast_show(crate::components::toast::ToastOptions {
+                message: "Debug info copied to clipboard".to_owned(),
+                variant: "info",
+                ..crate::components::toast::ToastOptions::info("")
+            });
+            return DialogKeyOutcome::Consumed;
+        }
+    }
     if let DialogKind::QueuedPrompts = entry.kind {
         // The queued-prompts manager's action layer (v2
         // index.tsx:641-672): `queued_prompt.delete` (ctrl+d) removes
@@ -346,7 +383,14 @@ pub fn render_overlay_with_options(
         | DialogKind::WorkingDirectory { .. }
         | DialogKind::ToolOutput { .. }
         | DialogKind::DiffSource
-        | DialogKind::DiffHelp => true,
+        | DialogKind::DiffHelp
+        | DialogKind::Mcp
+        | DialogKind::McpError { .. }
+        | DialogKind::Status
+        | DialogKind::Variant
+        | DialogKind::Pair
+        | DialogKind::Debug
+        | DialogKind::Timeline { .. } => true,
         // A plugin dialog records rows only when its content is a
         // select (rows-only dialogs render statically).
         DialogKind::Plugin { .. } => {
@@ -512,6 +556,56 @@ pub fn execute_submission(
         // The shortcuts dialog's rows are informational (`unbound`
         // placeholders never submit anything).
         Some(DialogKind::DiffHelp) => {
+            store.clear_dialogs();
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // `DialogMcp`'s `select` (dialog-mcp.tsx:100-109): a failed /
+        // needs-auth server opens its error details.
+        Some(DialogKind::Mcp) => {
+            let server = store
+                .mcp_servers()
+                .into_iter()
+                .find(|server| server.name == value);
+            if let Some(server) = server {
+                if server.error.is_some() {
+                    store.replace_dialog(
+                        DialogKind::McpError { name: server.name },
+                        DialogSize::Medium,
+                    );
+                    return crate::components::command_palette::Dispatch::Handled;
+                }
+            }
+            store.clear_dialogs();
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // The error details' back (dialog-mcp.tsx:171-173): return to
+        // the server list at medium size.
+        Some(DialogKind::McpError { .. }) => {
+            store.replace_dialog(DialogKind::Mcp, DialogSize::Medium);
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // `DialogVariant`'s onSelect (dialog-variant.tsx:14-28):
+        // clear + commit ("default" clears the variant).
+        Some(DialogKind::Variant) => {
+            let variant = value.to_owned();
+            store.clear_dialogs();
+            store.set_current_model_variant(Some(&variant));
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // `DialogTimeline`'s onSelect (dialog-timeline.tsx:30-34):
+        // replace with the message actions over that user message.
+        Some(DialogKind::Timeline { session_id }) => {
+            let session_id = session_id.clone();
+            let message_id = value.to_owned();
+            store.replace_dialog(
+                DialogKind::MessageActions { session_id, message_id },
+                DialogSize::Medium,
+            );
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // The rows-only surfaces (status/pair/debug): informational
+        // submits just close.
+        Some(DialogKind::Status | DialogKind::Pair | DialogKind::Debug) => {
             store.clear_dialogs();
             return crate::components::command_palette::Dispatch::Handled;
         }
