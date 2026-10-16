@@ -207,3 +207,59 @@ browser flows extend it directly.
   merges (custom-provider material carries headers/body only), managed
   policy statements, console models list cache. The provider-resolution
   core (fetch → status → bind) is complete and event-driven.
+
+## Phase 5 — wellknown config-graph resolution (item 3, WIP, green)
+
+- `integration/wellknown_config.rs` (new): manifest fetch
+  (`{origin}/.well-known/opencode`), `{env:NAME}` substitution
+  (credential variables → process env, wellknown.ts:74-79), and the
+  document projection — `manifest.config` + resolved `remote_config`
+  (url + headers substituted) as config documents with the credential
+  env attached (config.ts:145-170 `loadWellknownEntry`: newest KEY
+  credential of the origin integration supplies `{auth.env}`).
+- `HostWellknownSource` implements the config Loader's existing
+  `WellknownSource` seam (the prior `NoWellknown` placeholder was the
+  injection point); `Engine::location` now wires it, so well-known
+  documents are the LOWEST-priority config layer, exactly v2's load
+  order. Refresh runs on credential events + a 10-minute interval
+  (config.ts:292-317) alongside the copilot/console refreshes.
+- Host: `db` handle exposed for the kv sources read (the oc-server
+  wellknown.add handler persists `wellknown:sources` — BE-3).
+- Tests (3 new, 39 integration tests green): full resolution (static
+  config + token-substituted remote_config URL asserted on the mock +
+  credential env exposure), skip-without-key-credential, and the Loader
+  round-trip (a well-known provider reaches `Loaded.entries.providers`).
+- fmt + clippy clean; oc-core + oc-server nextest 1024/1024.
+
+## Final report (BE-3b)
+
+All five items dispositioned:
+
+1. **OAuth variants — LANDED** (gitlab, azure-cli, snowflake, openai
+   browser+headless, chatgpt token-sharing; providers_enterprise.rs) with
+   mock round-trips + request-shape asserts. Gap: chatgpt id_token RS256/
+   JWKS signature verification (claims-only checks) — no JWT crate in the
+   workspace; adding one is a workspace decision.
+2. **Copilot transport — LANDED** (copilot.rs + resolver `with_credentials`
+   + facade connection-headers): credential snapshot → base URL/bearer/
+   headers; `github-copilot/*` binds end-to-end. Deferred: per-request
+   x-initiator escalation + remote models-list sync.
+3. **Wellknown config — LANDED** (wellknown_config.rs): resolution +
+   loader injection + event/interval refresh. Deferred: none for the
+   resolution path; wellknown.updated-style SSE re-load cascades ride the
+   existing config watch surface.
+4. **Console ingestion — LANDED (core)** (console.rs): `/api/v2/config`
+   fetch, error-shape mapping, provider projection onto resolver-bindable
+   customs, credential-event refresh. Deferred: websearch/mcp/policies
+   sections, per-model baseURL/capability/cost overlays, models caching.
+5. **Status reporters — LANDED (console)**: SsoRequired → needs_auth with
+   the SSO start URL, SignedOut → needs_auth, healthy loads clear,
+   transient failures silent — via `host.connection_status` (the statuses
+   project onto `integration.get/list` connections per BE-3). Deferred:
+   reporters for non-console providers (none exist in v2 beyond copilot
+   model-sync warnings).
+
+Verification: fmt + clippy (pedantic) clean on oc-core + oc-server;
+nextest 1024/1024 across both crates (39 integration-host tests); no
+oc-tui changes; no secrets committed (all flows tested against
+127.0.0.1 mocks).
