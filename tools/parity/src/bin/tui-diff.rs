@@ -35,6 +35,13 @@
 //!   probe instead of the corpus: both stacks loop a deterministically
 //!   failing tool call for a fixed window (default 10 s); exits 1 when
 //!   our request rate exceeds ~2x the ref's.
+//! * `--term-profile NAME` — lane/termatrix: run under a different
+//!   terminal ENVIRONMENT (TERM/COLORTERM + canned answers to DA1 /
+//!   DA2 / XTVERSION / kitty `CSI ? u` / OSC 11 / DECRQM queries, or
+//!   inside a real tmux session). Both TUIs see identical answers.
+//!   Forces `--no-ref-cache` semantics (baseline entries must never
+//!   replay under another environment). `--list-term-profiles` prints
+//!   the registry.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -143,6 +150,7 @@ fn parse_args() -> anyhow::Result<Cli> {
     let mut probe: Option<String> = None;
     let mut probe_window = 10_u64;
     let mut measure_stability: Option<usize> = None;
+    let mut list_requested = false;
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         match flag.as_str() {
@@ -181,6 +189,18 @@ fn parse_args() -> anyhow::Result<Cli> {
                 measure_stability = args.next().and_then(|v| v.parse().ok()).or(Some(5));
             }
             "--strict" => strict = true,
+            "--term-profile" => {
+                let name = args.next().unwrap_or_default();
+                let profile = parity::termatrix::find_term_profile(&name)
+                    .ok_or_else(|| anyhow::anyhow!("unknown term profile {name:?}"))?;
+                cfg.term_profile = Some(profile);
+                // Environment changes invalidate every baseline capture
+                // — never replay across environments.
+                cfg.ref_cache = None;
+            }
+            "--list-term-profiles" => {
+                list_requested = true;
+            }
             "--probe" => {
                 probe = args.next();
                 if probe.is_some() {
@@ -191,6 +211,20 @@ fn parse_args() -> anyhow::Result<Cli> {
             }
             other => anyhow::bail!("unknown flag {other}"),
         }
+    }
+    if list_requested {
+        for id in parity::termatrix::term_profile_ids() {
+            let profile = parity::termatrix::find_term_profile(id).expect("registry id resolves");
+            println!(
+                "{:<16} TERM={:<16} COLORTERM={:<10} tmux={:<5} {}",
+                profile.id,
+                profile.term,
+                profile.colorterm.unwrap_or("-"),
+                profile.tmux,
+                profile.description
+            );
+        }
+        std::process::exit(0);
     }
     Ok(Cli { cfg, strict, probe, probe_window, measure_stability })
 }
