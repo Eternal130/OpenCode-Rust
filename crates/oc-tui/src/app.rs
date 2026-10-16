@@ -338,12 +338,25 @@ impl App {
                     }
                     return;
                 }
+                // The permission pills track the pointer (auditA #4 —
+                // permission.tsx:583: `onMouseMove` moves the
+                // selection; the ask's own surface is the screen's
+                // only interactive one while it holds the footer).
+                if self.permission_live() {
+                    if self.permission_hover_select(col, row) {
+                        self.store.request_redraw();
+                    }
+                    return;
+                }
                 // #33 — the footer location label's hover lift
                 // (`useWorkingDirectoryActions`: muted → text.base).
-                let location_hover =
-                    self.store.footer_location_hit().is_some_and(|hit| {
+                // Route-gated (auditA §4.1): a stale session rect
+                // must not flip the hover state on Home.
+                let location_hover = matches!(self.store.route(), Route::Session { .. })
+                    && self.store.footer_location_hit().is_some_and(|hit| {
                         row == hit.row && col >= hit.x && col < hit.x + hit.width
-                    }) && !self.permission_live();
+                    })
+                    && !self.permission_live();
                 let changed_location = self.store.set_location_hovered(location_hover);
                 let (hover, close, add) = if strip_live && row == 0 {
                     self.strip_hover_at(col, width)
@@ -363,8 +376,31 @@ impl App {
                 // dismisses on an OUTSIDE release (`ui/dialog.tsx:
                 // 34-63`: the full-screen backdrop box closes on
                 // mouseup; the inner chrome box's own mouseup stops
-                // propagation).
+                // propagation). The chrome's OWN buttons (auditA #6)
+                // fire FIRST — v2's child-first bubbling: the header
+                // close label (`dialog.clear()`, every dialog family)
+                // and the Help `ok` pill.
                 if !self.store.dialogs().is_empty() {
+                    for button in self.store.dialog_button_hits() {
+                        if button.rect.contains(col, row) {
+                            match button.action {
+                                crate::store::DialogButtonAction::Close => {
+                                    // The port's per-dialog esc parity
+                                    // (one chord a pop — v2's
+                                    // `dialog.clear()` empties the
+                                    // stack; the M2 ruling kept the
+                                    // port's pop-one).
+                                    self.store.close_dialog();
+                                }
+                                crate::store::DialogButtonAction::HelpOk => {
+                                    // `ok` clears (dialog-help.tsx:39).
+                                    self.store.clear_dialogs();
+                                }
+                            }
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
                     if let Some(index) = self.dialog_option_at(col, row) {
                         self.submit_dialog_option(index);
                     } else if let Some((x, y, width, height)) = self.store.dialog_frame_rect() {
@@ -373,6 +409,22 @@ impl App {
                         }
                     }
                     self.store.request_redraw();
+                    return;
+                }
+                // The permission ask's own pointer surface (auditA
+                // #4): v2 renders the pills and the reject stage's
+                // `enter confirm` / `esc cancel` hints as the ONLY
+                // interactive boxes while the ask holds the footer
+                // (permission.tsx:375-400, 583-590) — the early
+                // return that protects the transcript must not kill
+                // them. Release on a pill: select + run (the keyboard
+                // enter path with the selection set); release on the
+                // reject buttons: confirm sends the reject reply /
+                // cancel returns to the ask.
+                if self.permission_live() {
+                    if self.permission_release(col, row) {
+                        self.store.request_redraw();
+                    }
                     return;
                 }
                 if strip_live && row == 0 {
@@ -446,8 +498,11 @@ impl App {
                 // #33 — the footer location label opens the Working
                 // directory select on release
                 // (`useWorkingDirectoryActions.openMenu`,
-                // prompt/index.tsx:1932-1934).
-                if !self.permission_live() {
+                // prompt/index.tsx:1932-1934). Route-gated (auditA
+                // §4.1): the rect belongs to the session render —
+                // v2's label unmounts with the route, so a stale
+                // rect must never fire on Home.
+                if !self.permission_live() && matches!(self.store.route(), Route::Session { .. }) {
                     if let Some(hit) = self.store.footer_location_hit() {
                         if row == hit.row && col >= hit.x && col < hit.x + hit.width {
                             self.store.open_dialog(
@@ -472,10 +527,23 @@ impl App {
                 //   select (`UserMessage`'s `onMouseUp`,
                 //   session/index.tsx:2210-2250).
                 // Nothing pointer-driven happens under a modal.
+                // Route-gated (auditA §4.1): each row carries its
+                // session id — the release only fires while THAT
+                // session is the live route (v2's rows unmount with
+                // the route; the belt to `navigate`'s registry
+                // clear, covering the window between a route flip
+                // and the next render pass).
                 if self.permission_live() {
                     return;
                 }
+                let route_session = match self.store.route() {
+                    Route::Session { session_id } => Some(session_id),
+                    Route::Home => None,
+                };
                 for hit in self.store.transcript_hit_rows() {
+                    if route_session.as_deref() != Some(hit.session_id.as_str()) {
+                        continue;
+                    }
                     if row >= hit.y
                         && row < hit.y + hit.height
                         && col >= hit.x
@@ -484,6 +552,16 @@ impl App {
                         match &hit.action {
                             crate::store::TranscriptHitAction::ToggleGroup(key) => {
                                 self.store.toggle_group_expanded(&hit.session_id, key);
+                            }
+                            crate::store::TranscriptHitAction::ToggleThought {
+                                message_id,
+                                part_id,
+                            } => {
+                                self.store.toggle_thought_expanded(
+                                    &hit.session_id,
+                                    message_id,
+                                    part_id,
+                                );
                             }
                             crate::store::TranscriptHitAction::MessageActions { message_id } => {
                                 self.store.open_dialog(
@@ -500,6 +578,68 @@ impl App {
                     }
                 }
             }
+            // The wheel (auditA #1 — `MouseEventKind::Scroll*` was
+            // unhandled anywhere): v2 forwards wheel events into the
+            // focused scrollbox (`session-frame.tsx:310-317` hands
+            // the transcript's scroll renderable
+            // `processMouseEvent`; every dialog list is a scrollbox;
+            // the sidebar's content slot is one). Routing order
+            // mirrors the modal-first pointer table: dialog →
+            // permission → sidebar columns → the transcript.
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let down = matches!(mouse.kind, MouseEventKind::ScrollDown);
+                // A modal select's option window scrolls WITHOUT
+                // moving the selection (v2's scrollbox; the rows
+                // keep their own pointer tracking). Terminal-wheel
+                // semantics: 3 rows a notch (opentui's own
+                // `direction === "up" ? -3 : 3` delta).
+                if !self.store.dialogs().is_empty() {
+                    if self.dialog_scroll_window_by(if down { 3 } else { -3 }) {
+                        self.store.request_redraw();
+                    }
+                    return;
+                }
+                // The permission body's content region doesn't
+                // window in the port (it renders every line) — the
+                // wheel is consumed, never leaked to the transcript
+                // underneath (v2's overlay owns the pointer).
+                if self.permission_live() {
+                    return;
+                }
+                if let Route::Session { session_id } = self.store.route() {
+                    // The sidebar's content slot: wheel over the
+                    // pane's columns scrolls the sections (v2's
+                    // `sidebar.content` scrollbox).
+                    if self.store.sidebar_scroll().contains_col(col)
+                        && self.store.sidebar_scroll_by(if down { 3 } else { -3 })
+                    {
+                        self.store.request_redraw();
+                        return;
+                    }
+                    // The transcript: v2's wheel drives the scroll
+                    // renderable; the port routes it through the
+                    // SAME driver the page keys use — one notch =
+                    // `session.page.up/down` (the E1 half-page math:
+                    // ±viewport/2 with js_round, sticky re-arming at
+                    // the tail — `scroll_driver_matches_the_ported_
+                    // scrollbar_math` pins the exact landing).
+                    let command = if down {
+                        oc_tui_core::scroll::ScrollCommand::PageDown
+                    } else {
+                        oc_tui_core::scroll::ScrollCommand::PageUp
+                    };
+                    self.store.scroll_command(&session_id, command);
+                    self.store.request_redraw();
+                }
+                // Home has no scroll surface. DIFF-VIEWER HOOK POINT:
+                // when `components/diff_viewer.rs` mounts (auditA
+                // §2.12 — currently dead code: no route, no
+                // dispatcher arm), its file tree + hunk panes own the
+                // wheel here (v2 `diff-viewer.tsx`: two scrollboxes),
+                // gated on the viewer's route/layer ABOVE the
+                // transcript arm — wire `diff.down/up` line steps,
+                // not the page math.
+            }
             _ => {}
         }
     }
@@ -513,6 +653,22 @@ impl App {
             return None;
         }
         self.store.dialog_option_rows().into_iter().position(|option_row| option_row == Some(row))
+    }
+
+    /// Wheel-scroll the top dialog's option window (auditA #1): v2's
+    /// dialog lists are scrollboxes — the wheel moves the WINDOW,
+    /// never the selection (the rows' own pointer tracking stays
+    /// independent, `dialog-select.tsx`'s scrollbox wheel). `false`
+    /// when the window cannot move (short list / already at an end).
+    fn dialog_scroll_window_by(&self, delta: i32) -> bool {
+        let Some(entry) = self.store.top_dialog() else { return false };
+        let props = crate::components::command_palette::select_props_for_entry(&entry, &self.store);
+        let height = usize::from(self.size.1);
+        let mut moved = false;
+        self.store.update_dialog(|top| {
+            moved = top.select.scroll_window_by(&props, height, delta);
+        });
+        moved
     }
 
     /// The strip's layout inputs RIGHT NOW: the store tabs plus the
@@ -704,6 +860,133 @@ impl App {
     /// A permission ask is the live footer view.
     fn permission_live(&self) -> bool {
         matches!(self.store.footer().view, FooterView::Permission { .. })
+    }
+
+    /// The pill under (`col`, `row`), when the pointer sits on the
+    /// controls row inside one of the offered pills' extents.
+    fn permission_pill_at(
+        &self,
+        col: usize,
+        row: usize,
+    ) -> Option<crate::components::footer::permission::PermissionOption> {
+        let hits = self.store.permission_pointer_hits()?;
+        if row != hits.row {
+            return None;
+        }
+        hits.pills
+            .iter()
+            .find(|(_, (x, width))| col >= *x && col < *x + *width)
+            .map(|(option, _)| *option)
+    }
+
+    /// Pointer motion over a pill moves the selection (v2
+    /// `onMouseMove={() => setStore("selected", option)}`,
+    /// permission.tsx:583); `true` when the state changed.
+    fn permission_hover_select(&mut self, col: usize, row: usize) -> bool {
+        let Some(option) = self.permission_pill_at(col, row) else { return false };
+        let FooterView::Permission { request } = self.store.footer().view.clone() else {
+            return false;
+        };
+        let state = self
+            .permission_states
+            .get(&request.id)
+            .cloned()
+            .unwrap_or_else(|| create_permission_body_state(&request));
+        if state.selected == option {
+            return false;
+        }
+        self.permission_states.insert(
+            request.id.clone(),
+            crate::components::footer::permission::PermissionBodyState {
+                selected: option,
+                ..state
+            },
+        );
+        true
+    }
+
+    /// A release on the permission body's pointer targets (auditA
+    /// #4): a pill selects + RUNS (the keyboard enter path with the
+    /// selection set — `onMouseUp` sets the selection then fires
+    /// `onSelect`, permission.tsx:584-587); the reject stage's
+    /// confirm/cancel buttons map to the reject-stage enter/escape
+    /// (`onConfirm`/`onCancel`, permission.tsx:381/395). `true` when
+    /// a target consumed the release.
+    fn permission_release(&mut self, col: usize, row: usize) -> bool {
+        use crate::components::footer::permission::{permission_key, PermissionKey};
+        let hits = self.store.permission_pointer_hits();
+        let FooterView::Permission { request } = self.store.footer().view.clone() else {
+            return false;
+        };
+        let state = self
+            .permission_states
+            .get(&request.id)
+            .cloned()
+            .unwrap_or_else(|| create_permission_body_state(&request));
+        // The reject stage's hint buttons: `enter confirm` sends the
+        // reject reply (with the typed message), `esc cancel` returns
+        // to the ask with the selection on Reject.
+        let key = if row == hits.as_ref().map_or(usize::MAX, |hits| hits.row) {
+            if let (Some(hits), true) = (
+                &hits,
+                state.stage == crate::components::footer::permission::PermissionStage::Reject,
+            ) {
+                let inside = |rect: Option<&(usize, usize)>| {
+                    rect.is_some_and(|(x, width)| col >= *x && col < *x + *width)
+                };
+                if inside(hits.confirm.as_ref()) {
+                    Some("enter")
+                } else if inside(hits.cancel.as_ref()) {
+                    Some("escape")
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let Some(key) = key else {
+            // Not on the hint buttons — the pills (Permission/Always
+            // stages): set the selection, then run the enter path.
+            return match self.permission_pill_at(col, row) {
+                Some(option) => {
+                    let state = crate::components::footer::permission::PermissionBodyState {
+                        selected: option,
+                        ..state
+                    };
+                    match permission_key(&state, &request, "enter") {
+                        PermissionKey::State(next) => {
+                            self.permission_states.insert(request.id.clone(), next);
+                        }
+                        PermissionKey::Reply(reply, next) => {
+                            self.permission_replies.push(reply.clone());
+                            self.permission_states.insert(request.id.clone(), next);
+                            // The reply resolves the ask server-side
+                            // (`permission.replied`) — the view falls
+                            // back.
+                            self.store.permission_replied(&reply.request_id);
+                        }
+                        _ => {}
+                    }
+                    true
+                }
+                None => false,
+            };
+        };
+        match permission_key(&state, &request, key) {
+            PermissionKey::State(next) => {
+                self.permission_states.insert(request.id.clone(), next);
+            }
+            PermissionKey::Reply(reply, next) => {
+                self.permission_replies.push(reply.clone());
+                self.permission_states.insert(request.id.clone(), next);
+                self.store.permission_replied(&reply.request_id);
+            }
+            _ => {}
+        }
+        true
     }
 
     /// v2's overlay-sidebar keymap gate (routes/session/index.tsx:244):
@@ -1181,16 +1464,34 @@ impl App {
                 .cloned()
                 .unwrap_or_else(|| create_permission_body_state(&request));
             let mount_height = PERMISSION_MOUNT_HEIGHT.min(usize::from(self.size.1));
+            let width = usize::from(self.size.0);
             let body = crate::components::footer::permission::render_permission_body(
                 &request,
                 &state,
-                usize::from(self.size.0),
+                width,
                 mount_height,
                 &footer_theme,
             );
             let y = usize::from(self.size.1) - mount_height;
             paste_frame(&mut frame, &body, y);
+            // The pointer surface (auditA #4): the same layout math
+            // the controls row paints with, translated by the mount
+            // origin — the body mounts full-width (x is already
+            // absolute), the controls row sits at screen row
+            // `size.1 − 2`.
+            let mut hits = crate::components::footer::permission::permission_pointer_hits(
+                &request,
+                &state,
+                width,
+                mount_height,
+            );
+            hits.row = usize::from(self.size.1).saturating_sub(2);
+            self.store.set_permission_pointer_hits(Some(hits));
         } else {
+            // No live body — no pointer targets (the else branch also
+            // owns the picker mount below; the ask's rects must not
+            // outlive the view).
+            self.store.set_permission_pointer_hits(None);
             // A footer picker panel mounts over the composer from LIVE
             // store data (the mini footer family's docked pickers).
             let footer = self.store.footer();
@@ -4503,9 +4804,12 @@ fn footer_location_hover_and_click() {
     let mut app = App::new((80, 24));
     let clipboard = std::rc::Rc::new(crate::clipboard::RecordingClipboardSink::default());
     app.store.set_clipboard_sink(std::rc::Rc::clone(&clipboard) as std::rc::Rc<_>);
-    // The hit rect is recorded by the render pass whenever the label
-    // paints (the live routes render it once the #4 footer-slot lane
-    // lands; the seam is exercised directly here).
+    // The hit rect is recorded by the SESSION render whenever the
+    // label paints (route-gated since lane/if — a stale rect must
+    // never fire on Home); the seam is exercised directly here on
+    // the session route it belongs to.
+    app.store.open_tab("s1", Some("S".to_owned()));
+    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
     app.store.set_footer_location_hit(Some(crate::store::FooterLocationHit {
         directory: "/tmp/opencode/project".into(),
         row: 22,
@@ -5057,5 +5361,661 @@ mod core_interaction_tests {
         assert!(app.store.sidebar_shown("s1", 160), "the wide pane docks");
         app.press("escape");
         assert!(app.store.sidebar_shown("s1", 160), "escape left the docked pane alone");
+    }
+
+    // -- lane/if item 2: hit-registry lifetime + route gating (auditA #2) --
+
+    /// A staged session with one reasoning group (the transcript hit
+    /// rows' source) — shared by the phantom-click proofs.
+    fn staged_reasoning_session(app: &mut App) {
+        use crate::components::message::model::{Message, Part, PartTime};
+        app.store.set_messages(
+            "s1",
+            vec![
+                Message::User {
+                    id: "u1".into(),
+                    text: "think".into(),
+                    created: 0,
+                    files: Vec::new(),
+                },
+                Message::Assistant {
+                    id: "a1".into(),
+                    agent: "build".into(),
+                    model: "fixture/fixture".into(),
+                    parts: vec![Part::Reasoning {
+                        text: "Pondering the parser edges".into(),
+                        time: PartTime { created: Some(1), completed: Some(2) },
+                    }],
+                    finish: Some("success".into()),
+                    error: None,
+                    time: PartTime { created: Some(1), completed: Some(2) },
+                    tokens: None,
+                    usage_total: None,
+                },
+            ],
+        );
+        app.store.open_tab("s1", Some("Thoughts".to_owned()));
+        // The footer location label (its hit rect's source): v2's
+        // `{cwd}:{branch}` — empty label ⇒ no rect.
+        app.store.set_footer_location("/w:main:feature".to_owned());
+        // The session render records the hit rows + the footer rect.
+        let _ = app.frame_text();
+    }
+
+    /// Route change disarms the session's pointer registries (auditA
+    /// §4.1): `navigate` is the only `route.set` site — leaving the
+    /// session clears the transcript rows, the footer-location rect
+    /// and the onboarding card, exactly like v2's renderables
+    /// unmounting with the route.
+    #[test]
+    fn route_change_clears_the_pointer_registries() {
+        let mut app = App::new((80, 24));
+        staged_reasoning_session(&mut app);
+        assert!(!app.store.transcript_hit_rows().is_empty(), "the session render armed rows");
+        assert!(
+            app.store.footer_location_hit().is_some(),
+            "the session render armed the footer rect"
+        );
+        app.store.navigate(Route::Home);
+        assert!(app.store.transcript_hit_rows().is_empty(), "navigate cleared the transcript rows");
+        assert!(app.store.footer_location_hit().is_none(), "navigate cleared the footer rect");
+        assert!(app.store.sidebar_onboarding_hits().is_none(), "the onboarding card disarmed");
+    }
+
+    /// The phantom-click negative: after Session → Home, a release on
+    /// the coordinates the stale rows used to occupy toggles nothing
+    /// and opens no dialog — twice over (the registry clear AND the
+    /// route gate in `mouse_event`, so either regressing alone stays
+    /// pinned).
+    #[test]
+    fn home_release_fires_no_stale_transcript_or_location_hits() {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let mut app = App::new((80, 24));
+        staged_reasoning_session(&mut app);
+        let stale =
+            app.store.transcript_hit_rows().first().cloned().expect("the session armed a hit row");
+        let stale_footer = app.store.footer_location_hit().expect("the footer rect armed");
+        app.store.navigate(Route::Home);
+
+        // The cleared registry: nothing under the old rects.
+        let row = u16::try_from(stale.y).unwrap_or(u16::MAX);
+        app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 10, row));
+        assert!(
+            !app.store.group_expanded(&stale.session_id, "group:Reasoning:a1:reasoning:0"),
+            "no stale toggle fired on home"
+        );
+        assert!(app.store.dialogs().is_empty(), "no dialog opened on home");
+
+        // The route gate, exercised directly: a re-injected stale row
+        // (the registry clear's failure mode) still cannot fire — the
+        // release only lands while the row's session is the route.
+        app.store.set_transcript_hit_rows(vec![stale]);
+        app.store.set_footer_location_hit(Some(stale_footer.clone()));
+        app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 10, row));
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(stale_footer.x).unwrap_or(u16::MAX),
+            u16::try_from(stale_footer.row).unwrap_or(u16::MAX),
+        ));
+        assert!(
+            !app.store.group_expanded("s1", "group:Reasoning:a1:reasoning:0"),
+            "the route gate blocked the re-injected row"
+        );
+        assert!(
+            app.store.dialogs().is_empty(),
+            "the route gate blocked the stale footer rect (no WorkingDirectory dialog)"
+        );
+        // A hover over the stale footer rect cannot flip the home
+        // label's hover state either.
+        app.mouse_event(&mouse(
+            MouseEventKind::Moved,
+            u16::try_from(stale_footer.x).unwrap_or(u16::MAX),
+            u16::try_from(stale_footer.row).unwrap_or(u16::MAX),
+        ));
+        assert!(!app.store.location_hovered(), "the stale rect cannot arm hover on home");
+    }
+
+    // -- lane/if item 1: the wheel (auditA #1) ------------------------------
+
+    /// `Math.round` with halves toward +∞ (opentui's `js_round` — the
+    /// E1 scroll math's rounding rule). The test feeds non-negative
+    /// offsets only.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn js_round(value: f64) -> usize {
+        value.floor().max(0.0) as usize + usize::from(value.fract() >= 0.5)
+    }
+
+    /// The transcript wheel runs the E1 half-page math (auditA #1 +
+    /// ROADMAP wave E1): one notch = `session.page.up/down` —
+    /// ±viewport/2 with `js_round` (15-row viewport: −7/+8), sticky
+    /// re-arming at the tail — and lands EXACTLY where the page keys
+    /// land.
+    #[test]
+    fn wheel_scrolls_the_transcript_half_a_page_per_notch() {
+        use crate::components::message::model::{Message, Part, PartTime};
+        use crossterm::event::MouseEventKind;
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("Long".to_owned()));
+        let mut messages = Vec::new();
+        for index in 0..20 {
+            messages.push(Message::User {
+                id: format!("u{index}"),
+                text: format!("turn {index} of the long transcript"),
+                created: index,
+                files: Vec::new(),
+            });
+            messages.push(Message::Assistant {
+                id: format!("a{index}"),
+                agent: "build".into(),
+                model: "fixture/fixture".into(),
+                parts: vec![Part::Text {
+                    text: format!("answer {index}"),
+                    time: PartTime::default(),
+                }],
+                finish: Some("stop".into()),
+                error: None,
+                time: PartTime::default(),
+                tokens: None,
+                usage_total: None,
+            });
+        }
+        app.store.set_messages("s1", messages);
+        let sticky = app.frame_text();
+        assert!(sticky.contains("answer 19"), "sticky at the tail: {sticky}");
+        let metrics = app.store.transcript_metrics("s1");
+        let viewport = metrics.viewport;
+        let max = metrics.content_height.saturating_sub(viewport);
+        assert_eq!(app.store.scroll_offset("s1"), max, "sticky sits at the maximum");
+
+        // One wheel notch up: -(viewport/2) with js_round (half toward
+        // +∞) — the E1 numbers (15-row viewport ⇒ −7).
+        app.mouse_event(&mouse(MouseEventKind::ScrollUp, 40, 10));
+        #[allow(clippy::cast_precision_loss)]
+        let expected = js_round(
+            f64::from(u32::try_from(max).unwrap_or(u32::MAX))
+                - f64::from(u32::try_from(viewport).unwrap_or(0)) / 2.0,
+        );
+        assert_eq!(
+            app.store.scroll_offset("s1"),
+            expected,
+            "wheel-up = pageup's half-page math (viewport {viewport}, max {max})"
+        );
+        let freed = app.frame_text();
+        assert!(!freed.contains("answer 19"), "the tail left the view: {freed}");
+
+        // The wheel and the KEY land on the same offset: re-stick,
+        // then pageup — identical math, identical result.
+        app.press("end");
+        assert_eq!(app.store.scroll_offset("s1"), max, "end re-sticks");
+        app.press("pageup");
+        assert_eq!(app.store.scroll_offset("s1"), expected, "the page key and the wheel agree");
+
+        // Wheel down from the head: +(viewport/2) js_round (⇒ +8) —
+        // then repeated notches re-reach the tail (sticky re-arms).
+        for _ in 0..8 {
+            app.mouse_event(&mouse(MouseEventKind::ScrollDown, 40, 10));
+        }
+        let bottom = app.frame_text();
+        assert!(
+            bottom.contains("answer 19"),
+            "enough wheel notches re-stick to the tail: {bottom}"
+        );
+        assert_eq!(app.store.scroll_offset("s1"), max, "sticky at the maximum again");
+    }
+
+    /// The dialog wheel scrolls the option WINDOW, never the
+    /// selection (v2's dialog lists are scrollboxes; the rows keep
+    /// their own pointer tracking) — 3 rows a notch (opentui's
+    /// terminal wheel delta), clamped at both ends.
+    #[test]
+    fn wheel_scrolls_the_dialog_window_without_moving_the_selection() {
+        use crate::store::DialogKind;
+        let mut app = App::new((80, 24));
+        // The command palette: the registry is long enough to window
+        // at 24 rows (viewport = 24/2 − 6 = 6); the frame records the
+        // rows, the selection starts at 0.
+        app.store.open_dialog(DialogKind::CommandPalette, crate::store::DialogSize::Medium);
+        let _ = app.frame();
+        let before = app
+            .store
+            .top_dialog()
+            .map(|entry| (entry.select.selected, entry.select.scroll))
+            .expect("the dialog is open");
+        assert_eq!(before.0, 0, "the selection starts at the first row");
+        assert!(
+            app.store.dialog_option_rows().iter().any(Option::is_some),
+            "the palette windows (rows recorded)"
+        );
+
+        app.mouse_event(&mouse(crossterm::event::MouseEventKind::ScrollDown, 40, 12));
+        let after = app
+            .store
+            .top_dialog()
+            .map(|entry| (entry.select.selected, entry.select.scroll))
+            .expect("the dialog stays open");
+        assert_eq!(after.0, 0, "the selection did NOT move");
+        assert_eq!(after.1, before.1 + 3, "the window moved 3 rows (one notch)");
+        // Up returns (clamped at 0, never negative).
+        app.mouse_event(&mouse(crossterm::event::MouseEventKind::ScrollUp, 40, 12));
+        app.mouse_event(&mouse(crossterm::event::MouseEventKind::ScrollUp, 40, 12));
+        let back = app
+            .store
+            .top_dialog()
+            .map(|entry| (entry.select.selected, entry.select.scroll))
+            .expect("the dialog stays open");
+        assert_eq!(back.1, 0, "the window clamped at the top");
+        assert_eq!(back.0, 0, "the selection still did not move");
+    }
+
+    /// The sidebar wheel: over the pane's columns the content slot
+    /// scrolls (3 a notch, clamped by content − viewport); outside
+    /// them the same event falls through to the transcript.
+    #[test]
+    fn wheel_over_the_sidebar_columns_scrolls_the_content_slot() {
+        use crossterm::event::MouseEventKind;
+        let mut app = App::new((160, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        // A rendered docked pane records the geometry; force an
+        // overflowing content slot (content 40 rows, viewport 10).
+        app.store.set_sidebar_scroll_geometry(40, 10, Some((118, 42)));
+
+        app.mouse_event(&mouse(MouseEventKind::ScrollDown, 130, 10));
+        assert_eq!(app.store.sidebar_scroll().offset, 3, "one notch = 3 rows down");
+        for _ in 0..9 {
+            app.mouse_event(&mouse(MouseEventKind::ScrollDown, 130, 10));
+        }
+        assert_eq!(
+            app.store.sidebar_scroll().offset,
+            30,
+            "clamped at content − viewport (40 − 10)"
+        );
+        app.mouse_event(&mouse(MouseEventKind::ScrollUp, 130, 10));
+        assert_eq!(app.store.sidebar_scroll().offset, 27, "up steps back 3");
+        // Outside the pane's columns the wheel belongs to the
+        // transcript — the sidebar offset must not move.
+        app.mouse_event(&mouse(MouseEventKind::ScrollDown, 10, 10));
+        assert_eq!(
+            app.store.sidebar_scroll().offset,
+            27,
+            "the transcript wheel left the pane alone"
+        );
+    }
+
+    // -- lane/if item 3: the permission pointer arms (auditA #4) ----------
+
+    /// Stage one permission ask (SSE ingest shape) with `save`
+    /// patterns (the "Always allow" pill's gate).
+    fn stage_permission_ask(app: &mut App, id: &str, save: &serde_json::Value) {
+        app.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "permission.asked",
+            serde_json::json!({
+                "id": id,
+                "sessionID": "ses",
+                "action": "read",
+                "resources": ["src/index.ts"],
+                "save": save.clone(),
+            }),
+        ))]);
+    }
+
+    /// The pills move the selection on hover and RUN on release (v2
+    /// permission.tsx:583-587: `onMouseMove` selects, `onMouseUp`
+    /// selects + `onSelect`): Allow-once replies `once` through the
+    /// same queue the keyboard enter uses and resolves the ask.
+    #[test]
+    fn permission_allow_once_via_pointer() {
+        use crate::components::footer::permission::PermissionOption;
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        stage_permission_ask(&mut app, "p1", &serde_json::json!([]));
+        assert!(app.permission_live(), "the ask holds the screen");
+        let _ = app.frame();
+        let hits = app.store.permission_pointer_hits().expect("the render armed the pills");
+        assert_eq!(hits.row, 22, "the controls row at size.1 − 2");
+        let pills: Vec<(PermissionOption, (usize, usize))> = hits.pills.clone();
+        assert_eq!(pills.len(), 2, "no save patterns ⇒ no Always pill: {pills:?}");
+        assert_eq!(pills[0].0, PermissionOption::Once, "Allow once leads");
+        assert_eq!(pills[1].0, PermissionOption::Reject);
+
+        // Hover the Reject pill: the selection tracks the pointer.
+        let (_, (reject_x, reject_width)) = pills[1];
+        let mid = reject_x + reject_width / 2;
+        app.mouse_event(&mouse(MouseEventKind::Moved, u16::try_from(mid).unwrap_or(u16::MAX), 22));
+        assert_eq!(
+            app.permission_states.get("p1").map(|state| state.selected),
+            Some(PermissionOption::Reject),
+            "pointer motion selected the Reject pill"
+        );
+
+        // Release on the ALLOW-ONCE pill: the run replies `once` and
+        // resolves the ask (the keyboard enter path with the
+        // selection set by the release itself).
+        let (once_x, once_width) = pills[0].1;
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(once_x + once_width / 2).unwrap_or(u16::MAX),
+            22,
+        ));
+        assert_eq!(app.permission_replies.len(), 1, "one reply");
+        assert_eq!(app.permission_replies[0].decision, "once");
+        assert_eq!(app.permission_replies[0].request_id, "p1");
+        assert!(!app.permission_live(), "the ask resolved locally");
+        assert!(
+            app.store.permission_pointer_hits().is_none(),
+            "the resolved ask left no zombie rects"
+        );
+    }
+
+    /// The reject flow through the pointer: the Reject pill opens the
+    /// reject stage (no reply), `enter confirm` sends the reject
+    /// reply, `esc cancel` returns to the ask — v2's two hint
+    /// BUTTONS (permission.tsx:375-400), not dead labels.
+    #[test]
+    fn permission_reject_confirm_and_cancel_via_pointer() {
+        use crate::components::footer::permission::{PermissionOption, PermissionStage};
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        stage_permission_ask(&mut app, "p2", &serde_json::json!(["src/**"]));
+        let _ = app.frame();
+        let hits = app.store.permission_pointer_hits().expect("armed");
+        let pills: Vec<(PermissionOption, (usize, usize))> = hits.pills.clone();
+        assert_eq!(pills.len(), 3, "save patterns arm the Always pill: {pills:?}");
+        // Reject is the third pill: release opens the reject stage.
+        let (reject_x, reject_width) = pills[2].1;
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(reject_x + reject_width / 2).unwrap_or(u16::MAX),
+            22,
+        ));
+        assert!(app.permission_replies.is_empty(), "the reject stage sends nothing yet");
+        let staged = app.permission_states.get("p2").cloned().expect("staged");
+        assert_eq!(staged.stage, PermissionStage::Reject, "the pill run opened the stage");
+        let _ = app.frame();
+        let hits = app.store.permission_pointer_hits().expect("re-armed for the stage");
+        let (confirm_x, confirm_width) = hits.confirm.expect("the confirm button armed");
+        let (cancel_x, cancel_width) = hits.cancel.expect("the cancel button armed");
+        assert!(confirm_x + confirm_width < cancel_x, "the buttons sit in the hint block");
+
+        // `esc cancel` first: back to the ask, selection on Reject.
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(cancel_x + cancel_width / 2).unwrap_or(u16::MAX),
+            22,
+        ));
+        let cancelled = app.permission_states.get("p2").cloned().expect("staged");
+        assert_eq!(cancelled.stage, PermissionStage::Permission, "cancel returned to the ask");
+        assert_eq!(cancelled.selected, PermissionOption::Reject);
+
+        // Re-open and `enter confirm`: the reject reply fires.
+        let _ = app.frame();
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(reject_x + reject_width / 2).unwrap_or(u16::MAX),
+            22,
+        ));
+        let _ = app.frame();
+        let hits = app.store.permission_pointer_hits().expect("re-armed");
+        let (confirm_x, confirm_width) = hits.confirm.expect("the confirm button armed");
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(confirm_x + confirm_width / 2).unwrap_or(u16::MAX),
+            22,
+        ));
+        assert_eq!(app.permission_replies.len(), 1, "the confirm button sent the reply");
+        assert_eq!(app.permission_replies[0].decision, "reject");
+        assert!(!app.permission_live(), "the ask resolved");
+
+        // A release on the transcript rows under a live ask stays
+        // dead (the early return that protects the transcript must
+        // not fire anything).
+        stage_permission_ask(&mut app, "p3", &serde_json::json!([]));
+        let _ = app.frame();
+        app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 10, 5));
+        assert!(app.permission_live(), "a stray transcript release toggled nothing");
+        assert_eq!(app.permission_replies.len(), 1, "no extra reply");
+    }
+
+    // -- lane/if item 4: all five disclosure surfaces (auditA #5) --------
+
+    /// The Exploration group's header arms and toggles (v2
+    /// group-view.tsx:152 — `onMouseUp={toggle}` on the `InlineToolRow`;
+    /// previously only `group:Reasoning:` rows had hit rows, so the
+    /// affordance rendered but swallowed clicks).
+    #[test]
+    fn exploration_group_header_toggles() {
+        use crate::components::message::model::{Message, Part, PartTime, ToolState};
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let mut app = App::new((80, 24));
+        app.store.set_messages(
+            "s1",
+            vec![
+                Message::User {
+                    id: "u1".into(),
+                    text: "look".into(),
+                    created: 0,
+                    files: Vec::new(),
+                },
+                Message::Assistant {
+                    id: "a1".into(),
+                    agent: "build".into(),
+                    model: "fixture/fixture".into(),
+                    parts: vec![
+                        Part::Tool {
+                            id: "tool-read".into(),
+                            name: "read".into(),
+                            time: PartTime { created: Some(1), completed: Some(2) },
+                            state: ToolState::default(),
+                        },
+                        Part::Text { text: "done".into(), time: PartTime::default() },
+                    ],
+                    finish: Some("success".into()),
+                    error: None,
+                    time: PartTime { created: Some(1), completed: Some(3) },
+                    tokens: None,
+                    usage_total: None,
+                },
+            ],
+        );
+        app.store.open_tab("s1", Some("Explore".to_owned()));
+        let frame = app.frame_text();
+        assert!(frame.contains("Explored"), "the exploration header renders: {frame}");
+        let hit = app
+            .store
+            .transcript_hit_rows()
+            .iter()
+            .find(|row| matches!(
+                &row.action,
+                crate::store::TranscriptHitAction::ToggleGroup(key) if key.starts_with("group:Exploration:")
+            ))
+            .expect("the exploration header recorded a hit row")
+            .clone();
+        let key = hit.action.toggle_key().expect("a group toggle").to_owned();
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            10,
+            u16::try_from(hit.y).unwrap_or(u16::MAX),
+        ));
+        assert!(
+            app.store.group_expanded(&hit.session_id, &key),
+            "the release armed the disclosure"
+        );
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            10,
+            u16::try_from(hit.y).unwrap_or(u16::MAX),
+        ));
+        assert!(
+            !app.store.group_expanded(&hit.session_id, &key),
+            "the second release collapsed it (v2 setGroupExpanded semantics)"
+        );
+    }
+
+    /// The thought rows toggle their own disclosure (v2's minimal-mode
+    /// `ReasoningHeader`, message-parts.tsx:66-86): the `thought:` row's
+    /// first line is the hit target; collapsed renders the one-line
+    /// `+ Thought: {title}` header, expanded the bordered body.
+    #[test]
+    fn thought_rows_toggle_their_disclosure() {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let mut app = App::new((80, 24));
+        staged_reasoning_session(&mut app);
+        // Expand the reasoning group (its header is the wired toggle).
+        let group_hit = app
+            .store
+            .transcript_hit_rows()
+            .iter()
+            .find(|row| matches!(
+                &row.action,
+                crate::store::TranscriptHitAction::ToggleGroup(key) if key.starts_with("group:Reasoning:")
+            ))
+            .cloned()
+            .expect("the group header hit");
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            10,
+            u16::try_from(group_hit.y).unwrap_or(u16::MAX),
+        ));
+        let expanded = app.frame_text();
+        assert!(expanded.contains("Pondering the parser edges"), "the body shows: {expanded}");
+
+        // The thought row is armed as its own toggle (the first
+        // body line's glyphs).
+        let thought_hit = app
+            .store
+            .transcript_hit_rows()
+            .iter()
+            .find(|row| {
+                matches!(
+                    &row.action,
+                    crate::store::TranscriptHitAction::ToggleThought { message_id, part_id }
+                        if message_id == "a1" && part_id == "reasoning:0"
+                )
+            })
+            .cloned()
+            .expect("the thought row recorded a hit");
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            10,
+            u16::try_from(thought_hit.y).unwrap_or(u16::MAX),
+        ));
+        assert!(
+            !app.store.thought_expanded(&hit_session(&thought_hit), "a1", "reasoning:0"),
+            "the release collapsed the thought"
+        );
+        let collapsed = app.frame_text();
+        assert!(collapsed.contains("+ Thought"), "the collapsed header renders: {collapsed}");
+        assert!(
+            !collapsed.contains("Pondering the parser edges"),
+            "the body is behind the toggle: {collapsed}"
+        );
+        // Release again: the body returns.
+        let thought_hit = app
+            .store
+            .transcript_hit_rows()
+            .iter()
+            .find(|row| {
+                matches!(&row.action, crate::store::TranscriptHitAction::ToggleThought { .. })
+            })
+            .cloned()
+            .expect("the collapsed header re-recorded its hit");
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            10,
+            u16::try_from(thought_hit.y).unwrap_or(u16::MAX),
+        ));
+        let reopened = app.frame_text();
+        assert!(reopened.contains("Pondering the parser edges"), "the body returned: {reopened}");
+    }
+
+    /// The hit row's owning session (test helper).
+    fn hit_session(hit: &crate::store::TranscriptHitRow) -> String {
+        hit.session_id.clone()
+    }
+
+    // -- lane/if item 5: the dialog close family (auditA #6) ---------
+
+    /// Every dialog family's title row carries the muted close label
+    /// (`esc` / `esc/enter`) — v2's ~22 headers all wire
+    /// `onMouseUp={() => dialog.clear()}`; the port rendered the label
+    /// dead. The select family here; the Help family below.
+    #[test]
+    fn dialog_header_close_label_releases_closed() {
+        use crate::store::DialogKind;
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let mut app = App::new((80, 24));
+        app.store.open_dialog(DialogKind::CommandPalette, crate::store::DialogSize::Medium);
+        let _ = app.frame();
+        let close = app
+            .store
+            .dialog_button_hits()
+            .into_iter()
+            .find(|button| matches!(button.action, crate::store::DialogButtonAction::Close))
+            .expect("the close label armed");
+        // The rect points at the painted `esc` glyphs (the label's
+        // own extent, right-aligned against the paddingRight-4 edge).
+        let line = app.frame_text().lines().nth(close.rect.y).unwrap_or_default().to_owned();
+        let painted = line.chars().skip(close.rect.x).take(close.rect.width).collect::<String>();
+        assert_eq!(painted.trim(), "esc", "the hit rect hugs the label: {line}");
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(close.rect.x).unwrap_or(u16::MAX),
+            u16::try_from(close.rect.y).unwrap_or(u16::MAX),
+        ));
+        assert!(app.store.dialogs().is_empty(), "the close label released the dialog");
+    }
+
+    /// The Help dialog's own button row (`dialog-help.tsx:33-40`):
+    /// the right-justified `ok` pill clears the dialog — and its
+    /// `esc/enter` label closes the same way.
+    #[test]
+    fn help_dialog_ok_button_and_esc_label_close() {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let mut app = App::new((80, 24));
+        app.store.open_dialog(crate::store::DialogKind::Help, crate::store::DialogSize::Medium);
+        let _ = app.frame();
+        let hits = app.store.dialog_button_hits();
+        let ok = hits
+            .iter()
+            .find(|button| matches!(button.action, crate::store::DialogButtonAction::HelpOk))
+            .expect("the ok pill armed");
+        let close = hits
+            .iter()
+            .find(|button| matches!(button.action, crate::store::DialogButtonAction::Close))
+            .expect("the esc/enter label armed");
+        assert_eq!(close.rect.width, 9, "Help's label is `esc/enter`");
+        // The ok pill's rect is the painted button box (padding 3 +
+        // `ok` + padding 3 = 8 wide, right-justified).
+        let line = app.frame_text().lines().nth(ok.rect.y).unwrap_or_default().to_owned();
+        let painted = line.chars().skip(ok.rect.x).take(ok.rect.width).collect::<String>();
+        assert_eq!(painted.trim(), "ok", "the hit rect is the pill: {line}");
+
+        // The ok pill clears.
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(ok.rect.x + 4).unwrap_or(u16::MAX),
+            u16::try_from(ok.rect.y).unwrap_or(u16::MAX),
+        ));
+        assert!(app.store.dialogs().is_empty(), "the ok pill cleared the help dialog");
+
+        // The esc/enter label closes a re-opened Help too.
+        app.store.open_dialog(crate::store::DialogKind::Help, crate::store::DialogSize::Medium);
+        let _ = app.frame();
+        let close = app
+            .store
+            .dialog_button_hits()
+            .into_iter()
+            .find(|button| matches!(button.action, crate::store::DialogButtonAction::Close))
+            .expect("re-armed");
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(close.rect.x).unwrap_or(u16::MAX),
+            u16::try_from(close.rect.y).unwrap_or(u16::MAX),
+        ));
+        assert!(app.store.dialogs().is_empty(), "the esc/enter label closed it");
     }
 }
