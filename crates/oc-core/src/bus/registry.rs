@@ -317,6 +317,46 @@ pub const PTY_DELETED: &str = "pty.deleted";
 pub const PERSISTENT_PTY_ADDED: &str = "persistent-pty.added";
 /// Type of the persistent-PTY lifecycle event (`schema/persistent-pty.ts`, wave D).
 pub const PERSISTENT_PTY_REMOVED: &str = "persistent-pty.removed";
+/// Type of the form lifecycle events (`schema/form.ts`, `Event.Definitions`).
+pub const FORM_CREATED: &str = "form.created";
+/// Type of the form lifecycle events (`schema/form.ts`, `Event.Definitions`).
+pub const FORM_REPLIED: &str = "form.replied";
+/// Type of the form lifecycle events (`schema/form.ts`, `Event.Definitions`).
+pub const FORM_CANCELLED: &str = "form.cancelled";
+/// Type of the shell lifecycle events (`schema/shell.ts:55-58`).
+pub const SHELL_CREATED: &str = "shell.created";
+/// Type of the shell lifecycle events (`schema/shell.ts:55-58`).
+pub const SHELL_EXITED: &str = "shell.exited";
+/// Type of the shell lifecycle events (`schema/shell.ts:55-58`).
+pub const SHELL_DELETED: &str = "shell.deleted";
+/// `session.status` `{sessionID, status}` (`schema/session-status-event.ts:35-43`).
+pub const SESSION_STATUS: &str = "session.status";
+/// Deprecated `session.idle` `{sessionID}` (`session-status-event.ts:46-51`).
+pub const SESSION_IDLE: &str = "session.idle";
+/// `filesystem.changed` `{file, event}` (`schema/filesystem.ts`).
+pub const FILESYSTEM_CHANGED: &str = "filesystem.changed";
+/// `worktree.updated` `{projectID}` (`schema/worktree.ts:55-58`).
+pub const WORKTREE_UPDATED: &str = "worktree.updated";
+/// `vcs.branch.updated` `{branch?}` (`schema/vcs-event.ts`).
+pub const VCS_BRANCH_UPDATED: &str = "vcs.branch.updated";
+/// `credential.updated` `{}` (`schema/credential.ts:17-20`).
+pub const CREDENTIAL_UPDATED: &str = "credential.updated";
+/// `credential.switched` `{integrationID, credentialID}` (`credential.ts:21-24`).
+pub const CREDENTIAL_SWITCHED: &str = "credential.switched";
+/// `models-dev.refreshed` `{}` (`schema/models-dev.ts:5-8`).
+pub const MODELS_DEV_REFRESHED: &str = "models-dev.refreshed";
+/// `tui.prompt.append` `{text}` (`schema/tui-event.ts`).
+pub const TUI_PROMPT_APPEND: &str = "tui.prompt.append";
+/// `tui.command.execute` `{command}` (`schema/tui-event.ts`).
+pub const TUI_COMMAND_EXECUTE: &str = "tui.command.execute";
+/// `tui.toast.show` `{title?, message, variant, duration}` (`schema/tui-event.ts`).
+pub const TUI_TOAST_SHOW: &str = "tui.toast.show";
+/// `tui.session.select` `{sessionID}` (`schema/tui-event.ts`).
+pub const TUI_SESSION_SELECT: &str = "tui.session.select";
+/// `installation.updated` `{version}` (`schema/installation-event.ts`).
+pub const INSTALLATION_UPDATED: &str = "installation.updated";
+/// `installation.update-available` `{version}` (`installation-event.ts`).
+pub const INSTALLATION_UPDATE_AVAILABLE: &str = "installation.update-available";
 
 static NON_SESSION: LazyLock<Vec<EventDefinition>> = LazyLock::new(|| {
     vec![
@@ -335,6 +375,33 @@ static NON_SESSION: LazyLock<Vec<EventDefinition>> = LazyLock::new(|| {
         EventDefinition::ephemeral(PTY_DELETED),
         EventDefinition::ephemeral(PERSISTENT_PTY_ADDED),
         EventDefinition::ephemeral(PERSISTENT_PTY_REMOVED),
+        // The six published-but-SSE-filtered types (auditD §3.4): oc-core
+        // forms/shell publish them; the public-event lookup must resolve
+        // them so the SSE feed stops dropping the frames.
+        EventDefinition::ephemeral(FORM_CREATED),
+        EventDefinition::ephemeral(FORM_REPLIED),
+        EventDefinition::ephemeral(FORM_CANCELLED),
+        EventDefinition::ephemeral(SHELL_CREATED),
+        EventDefinition::ephemeral(SHELL_EXITED),
+        EventDefinition::ephemeral(SHELL_DELETED),
+        // The fourteen v2 public types the port never published (auditD
+        // §3.4): registered here so publishers (execution hooks, credential
+        // handlers, worktree/vcs, catalog refresh, installation) reach the
+        // public stream, exactly like v2's `EventManifest.ServerDefinitions`.
+        EventDefinition::ephemeral(SESSION_STATUS),
+        EventDefinition::ephemeral(SESSION_IDLE),
+        EventDefinition::ephemeral(FILESYSTEM_CHANGED),
+        EventDefinition::ephemeral(WORKTREE_UPDATED),
+        EventDefinition::ephemeral(VCS_BRANCH_UPDATED),
+        EventDefinition::ephemeral(CREDENTIAL_UPDATED),
+        EventDefinition::ephemeral(CREDENTIAL_SWITCHED),
+        EventDefinition::ephemeral(MODELS_DEV_REFRESHED),
+        EventDefinition::ephemeral(TUI_PROMPT_APPEND),
+        EventDefinition::ephemeral(TUI_COMMAND_EXECUTE),
+        EventDefinition::ephemeral(TUI_TOAST_SHOW),
+        EventDefinition::ephemeral(TUI_SESSION_SELECT),
+        EventDefinition::ephemeral(INSTALLATION_UPDATED),
+        EventDefinition::ephemeral(INSTALLATION_UPDATE_AVAILABLE),
     ]
 });
 

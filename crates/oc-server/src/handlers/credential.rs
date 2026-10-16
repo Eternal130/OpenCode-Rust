@@ -9,6 +9,26 @@ use serde_json::{json, Value};
 
 use super::common::{json_data, no_content, ApiError, SharedState};
 
+/// Publishes one of v2's global credential frames
+/// (`credential.updated` / `credential.switched`, credential.ts:160-316 —
+/// both always `{ global: true }`). Best-effort: a failed notification
+/// never fails the mutation.
+async fn publish_global(state: &SharedState, type_: &str, data: Value) {
+    if let Some(definition) = oc_core::bus::registry::by_type(type_) {
+        let options = oc_core::bus::PublishOptions { global: true, ..Default::default() };
+        let _ = state.engine.bus.publish(definition, data, options).await;
+    }
+}
+
+/// v2's per-integration "active" pick: top row by
+/// `desc(active), desc(time_created), desc(id)` (credential.ts:186-192).
+const ACTIVE_PICK_SQL: &str =
+    "SELECT id FROM credential WHERE integration_id = ?1 ORDER BY active DESC, time_created DESC, id DESC LIMIT 1";
+/// v2's replacement pick after the active credential is removed:
+/// `desc(time_created), desc(id)` (credential.ts:287-293).
+const REPLACEMENT_PICK_SQL: &str =
+    "SELECT id FROM credential WHERE integration_id = ?1 ORDER BY time_created DESC, id DESC LIMIT 1";
+
 pub fn routes() -> axum::Router<SharedState> {
     axum::Router::new()
         .route("/api/credential", axum::routing::get(list))
@@ -142,6 +162,17 @@ async fn create(
         let id = body["id"].as_str().unwrap_or_default();
         return Err(ApiError::conflict(format!("Credential already exists: {id}")));
     };
+    // credential.ts:160-168 — `credential.updated` always; plus
+    // `credential.switched` when the new row was created active.
+    publish_global(&state, oc_core::bus::registry::CREDENTIAL_UPDATED, json!({})).await;
+    if activate {
+        publish_global(
+            &state,
+            oc_core::bus::registry::CREDENTIAL_SWITCHED,
+            json!({ "integrationID": body["integrationID"], "credentialID": id }),
+        )
+        .await;
+    }
     Ok(json_data(json!({
         "id": id,
         "integrationID": body["integrationID"],
@@ -160,19 +191,34 @@ async fn update(
     let label = body["label"].as_str().unwrap_or_default();
     let db = state.engine.db.clone();
     let (credential_id, label) = (credential_id, label.to_owned());
-    let updated = db
+    let changed = db
         .transaction(move |tx| {
+            // credential.ts:236-253 — a no-op update (same label) skips the
+            // notification; a missing row logs-and-returns.
+            let previous: Option<String> = tx
+                .conn()
+                .query_row(
+                    "SELECT label FROM credential WHERE id = ?1",
+                    (credential_id.clone(),),
+                    |row| row.get(0),
+                )
+                .ok();
+            let changed = previous.as_deref().is_some_and(|old| old != label);
             tx.execute(
                 "UPDATE credential SET label = ?2, time_updated = ?3 WHERE id = ?1",
                 (credential_id, label, oc_core::database::migrations::now_ms()),
-            )
+            )?;
+            Ok(changed)
         })
         .await
         .map_err(|error| {
             crate::errors::debug_cause("credential:unknown_ref", &error);
             ApiError::unknown_ref()
         })?;
-    let _ = updated;
+    if changed {
+        // credential.ts:253 — label-visible updates notify `credential.updated`.
+        publish_global(&state, oc_core::bus::registry::CREDENTIAL_UPDATED, json!({})).await;
+    }
     Ok(no_content())
 }
 
@@ -189,8 +235,15 @@ async fn activate(
                 |row| row.get(0),
             );
             let Ok(integration) = integration else {
-                return Ok(false);
+                return Ok(None);
             };
+            // credential.ts:186-192 — already the picked-active row: no-op
+            // (and no `credential.switched` event).
+            let current: Option<String> =
+                tx.conn().query_row(ACTIVE_PICK_SQL, (integration.clone(),), |row| row.get(0)).ok();
+            if current.as_deref() == Some(credential_id.as_str()) {
+                return Ok(None);
+            }
             tx.execute(
                 // v2 deactivates siblings with `set({ active: false })`
                 // (credential.ts:124-126) — a real 0, never NULL (NULL is
@@ -198,20 +251,28 @@ async fn activate(
                 // NULLs are migrated rows). Writing NULL here would skew
                 // the `desc(active)` selection order v2 relies on.
                 "UPDATE credential SET active = 0 WHERE integration_id = ?1",
-                (integration,),
+                (integration.clone(),),
             )?;
             tx.execute(
                 "UPDATE credential SET active = 1, time_updated = ?2 WHERE id = ?1",
                 (credential_id.clone(), oc_core::database::migrations::now_ms()),
             )?;
-            Ok(true)
+            Ok(Some((integration, credential_id)))
         })
         .await
         .map_err(|error| {
             crate::errors::debug_cause("credential:unknown_ref", &error);
             ApiError::unknown_ref()
         })?;
-    let _ = result;
+    if let Some((integration, id)) = result {
+        // credential.ts:200-203 — activation notifies `credential.switched`.
+        publish_global(
+            &state,
+            oc_core::bus::registry::CREDENTIAL_SWITCHED,
+            json!({ "integrationID": integration, "credentialID": id }),
+        )
+        .await;
+    }
     Ok(no_content())
 }
 
@@ -221,14 +282,71 @@ async fn remove(
 ) -> Result<Response, ApiError> {
     let db = state.engine.db.clone();
     let credential_id = credential_id.clone();
-    db.transaction(move |tx| {
-        tx.execute("DELETE FROM credential WHERE id = ?1", (credential_id,))?;
-        Ok(())
-    })
-    .await
-    .map_err(|error| {
-        crate::errors::debug_cause("credential:unknown_ref", &error);
-        ApiError::unknown_ref()
-    })?;
+    let removed = db
+        .transaction(move |tx| {
+            // credential.ts:262-301 — capture the removed row, whether it
+            // was the picked-active one, and the replacement (if any) in
+            // one transaction; promotion mirrors v2 exactly.
+            let row: Option<(Option<String>,)> = tx
+                .conn()
+                .query_row(
+                    "SELECT integration_id FROM credential WHERE id = ?1",
+                    (credential_id.clone(),),
+                    |row| Ok((row.get(0)?,)),
+                )
+                .ok();
+            let Some((integration_id,)) = row else {
+                return Ok(None);
+            };
+            let mut switched = None;
+            if let Some(integration) = &integration_id {
+                let active: Option<String> =
+                    tx.conn().query_row(ACTIVE_PICK_SQL, (integration,), |row| row.get(0)).ok();
+                if active.as_deref() == Some(credential_id.as_str()) {
+                    tx.execute("DELETE FROM credential WHERE id = ?1", (credential_id.clone(),))?;
+                    let replacement: Option<String> = tx
+                        .conn()
+                        .query_row(REPLACEMENT_PICK_SQL, (integration,), |row| row.get(0))
+                        .ok();
+                    tx.execute(
+                        "UPDATE credential SET active = 0 WHERE integration_id = ?1",
+                        (integration,),
+                    )?;
+                    if let Some(replacement) = &replacement {
+                        tx.execute(
+                            "UPDATE credential SET active = 1 WHERE id = ?1",
+                            (replacement,),
+                        )?;
+                    }
+                    switched = Some((integration.clone(), replacement));
+                    return Ok(Some((integration_id, switched)));
+                }
+            }
+            tx.execute("DELETE FROM credential WHERE id = ?1", (credential_id.clone(),))?;
+            Ok(Some((integration_id, switched)))
+        })
+        .await
+        .map_err(|error| {
+            crate::errors::debug_cause("credential:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
+    if let Some((integration_id, switched)) = removed {
+        // credential.ts:312-320 — `credential.updated` for every removal;
+        // `credential.switched` (replacement id or null) when the removed
+        // row was the active one.
+        publish_global(&state, oc_core::bus::registry::CREDENTIAL_UPDATED, json!({})).await;
+        if let Some((integration, replacement)) = switched {
+            publish_global(
+                &state,
+                oc_core::bus::registry::CREDENTIAL_SWITCHED,
+                json!({
+                    "integrationID": integration,
+                    "credentialID": replacement,
+                }),
+            )
+            .await;
+        }
+        let _ = integration_id;
+    }
     Ok(no_content())
 }

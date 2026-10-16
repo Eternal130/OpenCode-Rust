@@ -68,6 +68,10 @@ pub struct CatalogService {
     kv: Arc<dyn CatalogKv>,
     clock: Arc<dyn Clock>,
     ttl: Duration,
+    /// Optional bus: publishes `models-dev.refreshed` after every
+    /// `RefreshOutcome::Updated` (v2 models-dev.ts:416-422 — the refresh
+    /// loop's digest-change notification; `SkipDigest` stays silent).
+    bus: Option<crate::bus::Bus>,
 }
 
 impl CatalogService {
@@ -84,6 +88,7 @@ impl CatalogService {
             kv,
             clock,
             ttl: REFRESH_TTL,
+            bus: None,
         }
     }
 
@@ -91,6 +96,15 @@ impl CatalogService {
     #[must_use]
     pub fn with_ttl(mut self, ttl: Duration) -> Self {
         self.ttl = ttl;
+        self
+    }
+
+    /// Attach the bus for `models-dev.refreshed` publication
+    /// (`models-dev.ts:422` — published globally, empty payload, only
+    /// after a digest-changing refresh).
+    #[must_use]
+    pub fn with_bus(mut self, bus: crate::bus::Bus) -> Self {
+        self.bus = Some(bus);
         self
     }
 
@@ -133,6 +147,17 @@ impl CatalogService {
         self.kv.set(CACHE_KEY, &entry.to_string()).await;
         *self.catalog.write() = Arc::new(catalog);
         self.version.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // v2 publishes `ModelsDev.Event.Refreshed` ({}) after a
+        // digest-changing refresh (models-dev.ts:416-422) — best-effort:
+        // a failed notification never fails the refresh.
+        if let Some(bus) = &self.bus {
+            if let Some(def) =
+                crate::bus::registry::by_type(crate::bus::registry::MODELS_DEV_REFRESHED)
+            {
+                let options = crate::bus::PublishOptions { global: true, ..Default::default() };
+                let _ = bus.publish(def, serde_json::json!({}), options).await;
+            }
+        }
         Ok(RefreshOutcome::Updated)
     }
 }
@@ -226,6 +251,43 @@ mod tests {
             }
         })
         .to_string()
+    }
+
+    #[tokio::test]
+    async fn provider_refresh_publishes_models_dev_refreshed_after_update() {
+        // v2 models-dev.ts:416-422 — a digest-changing refresh publishes
+        // `models-dev.refreshed` ({}); a byte-identical body stays silent.
+        use futures::StreamExt;
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let db = crate::database::Database::open_file(dir.path().join("t.db")).await.expect("db");
+        let bus = crate::bus::Bus::new(db, crate::bus::BusOptions::deterministic());
+        let mut subscription = bus.subscribe();
+        let source = FakeSource::new(&tiny_catalog());
+        let kv = Arc::new(MemoryKv::default());
+        let clock = Arc::new(SteppedClock(parking_lot::Mutex::new(1_000)));
+        let service = CatalogService::new(
+            Arc::clone(&source) as Arc<dyn CatalogSource>,
+            Arc::clone(&kv) as Arc<dyn CatalogKv>,
+            Arc::clone(&clock) as Arc<dyn Clock>,
+        )
+        .with_ttl(Duration::from_millis(50))
+        .with_bus(bus);
+
+        assert_eq!(service.refresh(false).await.unwrap(), RefreshOutcome::Updated);
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), subscription.next())
+            .await
+            .expect("timeout")
+            .expect("event");
+        assert_eq!(frame.type_, "models-dev.refreshed");
+        assert_eq!(frame.data, serde_json::json!({}));
+
+        // Past the TTL with an identical body: digest skip, no second
+        // event (force would bypass the digest gate by design).
+        *clock.0.lock() += 1_000;
+        assert_eq!(service.refresh(false).await.unwrap(), RefreshOutcome::SkippedDigest);
+        let none =
+            tokio::time::timeout(std::time::Duration::from_millis(50), subscription.next()).await;
+        assert!(none.is_err(), "no event on digest skip");
     }
 
     #[tokio::test]
