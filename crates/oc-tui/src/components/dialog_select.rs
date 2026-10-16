@@ -427,6 +427,34 @@ impl SelectState {
         }
     }
 
+    /// Wheel-scroll the option WINDOW `delta` content rows (negative
+    /// up), clamped by the scrollbar's extent — v2's dialog scrollbox
+    /// scrolls the viewport WITHOUT moving the selection (the rows
+    /// track the pointer independently, `dialog-select.tsx`'s
+    /// scrollbox wheel). Terminal-wheel semantics: 3 rows a notch
+    /// (opentui's own `direction === "up" ? -3 : 3` delta); `true`
+    /// when the window moved (the redraw key).
+    pub fn scroll_window_by(
+        &mut self,
+        props: &SelectProps,
+        terminal_height: usize,
+        delta: i32,
+    ) -> bool {
+        let groups = grouped(props, &self.filter);
+        let rows = content_rows(&groups);
+        let viewport = viewport_height(rows, terminal_height);
+        let max = rows.saturating_sub(viewport);
+        let current = i64::try_from(self.scroll).unwrap_or(i64::MAX);
+        let ceiling = i64::try_from(max).unwrap_or(i64::MAX);
+        let next = current.saturating_add(i64::from(delta)).clamp(0, ceiling);
+        let next = usize::try_from(next).unwrap_or(0);
+        if next == self.scroll {
+            return false;
+        }
+        self.scroll = next;
+        true
+    }
+
     /// Center the selection in the scroll window (`scrollToSelection(
     /// true)`: `scrollBy(y - floor(height / 2))`, clamped by the
     /// scrollbar's `round(clamp(…))` at the ends) — the mount/focus
