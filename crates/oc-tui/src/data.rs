@@ -399,7 +399,29 @@ pub fn tool_state_from_json(
         status: crate::components::message::model::ToolStatus::parse(status),
         input: stringify_map(input),
         metadata: stringify_map(metadata),
+        metadata_json: metadata.filter(|value| !value.is_null()).cloned(),
+        output: None,
+        error: None,
     }
+}
+
+/// The joined text blocks of a completed/failed tool's `content`
+/// (`toolDisplayContent(...).flatMap(text).join("\n")`,
+/// session/index.tsx:2385-2392).
+fn tool_output_from_content(content: &[oc_client::types::ToolContent]) -> Option<String> {
+    let text = content
+        .iter()
+        .filter_map(|item| match item {
+            oc_client::types::ToolContent::TextContent(text) => {
+                Some(text.text.clone()).filter(|text| !text.is_empty())
+            }
+            oc_client::types::ToolContent::FileContent(file) => {
+                Some(file.name.clone().unwrap_or_else(|| file.uri.clone()))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
 }
 
 /// Build a [`ToolState`] from the typed wire union (message.list
@@ -438,6 +460,9 @@ pub fn tool_state_from_wire(
                 status: crate::components::message::model::ToolStatus::Running,
                 input,
                 metadata,
+                metadata_json: Some(serde_json::to_value(&running.metadata).unwrap_or_default()),
+                output: None,
+                error: None,
             }
         }
         Wire::Completed(completed) => {
@@ -446,6 +471,12 @@ pub fn tool_state_from_wire(
                 status: crate::components::message::model::ToolStatus::Completed,
                 input,
                 metadata,
+                metadata_json: completed
+                    .metadata
+                    .as_ref()
+                    .map(|map| serde_json::to_value(map).unwrap_or_default()),
+                output: tool_output_from_content(&completed.content),
+                error: None,
             }
         }
         Wire::Error(error) => {
@@ -454,6 +485,12 @@ pub fn tool_state_from_wire(
                 status: crate::components::message::model::ToolStatus::Error,
                 input,
                 metadata,
+                metadata_json: error
+                    .metadata
+                    .as_ref()
+                    .map(|map| serde_json::to_value(map).unwrap_or_default()),
+                output: error.content.as_deref().and_then(tool_output_from_content),
+                error: Some(error.error.message.clone()),
             }
         }
     }
@@ -498,6 +535,9 @@ fn assistant_snapshot_stats(
 /// assistant-with-parts / idle; other kinds are skipped, matching the
 /// SSE reducers).
 #[must_use]
+// One arm per wire message kind (the SURF-1 compaction/skill arms
+// pushed it past the budget).
+#[allow(clippy::too_many_lines)]
 pub fn message_from_info(
     info: &SessionMessageInfo,
 ) -> Option<crate::components::message::model::Message> {
@@ -571,6 +611,71 @@ pub fn message_from_info(
         SessionMessageInfo::Idle(idle) => Some(Message::Idle {
             id: idle.id.clone(),
             created: epoch(Some(idle.time.created)).unwrap_or(0),
+        }),
+        SessionMessageInfo::Compaction(compaction) => {
+            use oc_client::types::SessionMessageCompaction as Wire;
+            // The `N in · M out` numerators (index.tsx:2021-2029):
+            // input+cache.read+cache.write / output+reasoning.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let usage = |tokens: &Option<oc_client::types::TokenUsageInfo>| {
+                tokens.as_ref().map(|tokens| {
+                    let input = tokens.input + tokens.cache.read + tokens.cache.write;
+                    let output = tokens.output + tokens.reasoning;
+                    (input.max(0.0).round() as u64, output.max(0.0).round() as u64)
+                })
+            };
+            match compaction {
+                Wire::Running(running) => Some(Message::Compaction {
+                    id: running.id.clone(),
+                    created: epoch(Some(running.time.created)).unwrap_or(0),
+                    running: true,
+                    failed: false,
+                    cancelled: false,
+                    error: None,
+                    summary: Some(running.summary.clone()),
+                    tokens_in: None,
+                    tokens_out: None,
+                    provider_compaction: false,
+                }),
+                Wire::Completed(completed) => {
+                    let (tokens_in, tokens_out) =
+                        usage(&completed.tokens).map_or((None, None), |(i, o)| (Some(i), Some(o)));
+                    Some(Message::Compaction {
+                        id: completed.id.clone(),
+                        created: epoch(Some(completed.time.created)).unwrap_or(0),
+                        running: false,
+                        failed: false,
+                        cancelled: false,
+                        error: None,
+                        summary: Some(completed.summary.clone()),
+                        tokens_in,
+                        tokens_out,
+                        provider_compaction: completed.provider_context.is_some(),
+                    })
+                }
+                Wire::Failed(failed) => {
+                    let cancelled = failed.error.type_ == "aborted";
+                    let (tokens_in, tokens_out) =
+                        usage(&failed.tokens).map_or((None, None), |(i, o)| (Some(i), Some(o)));
+                    Some(Message::Compaction {
+                        id: failed.id.clone(),
+                        created: epoch(Some(failed.time.created)).unwrap_or(0),
+                        running: false,
+                        failed: true,
+                        cancelled,
+                        error: (!cancelled).then(|| failed.error.message.clone()),
+                        summary: None,
+                        tokens_in,
+                        tokens_out,
+                        provider_compaction: false,
+                    })
+                }
+            }
+        }
+        SessionMessageInfo::Skill(skill) => Some(Message::Skill {
+            id: skill.id.clone(),
+            name: skill.name.clone(),
+            created: epoch(Some(skill.time.created)).unwrap_or(0),
         }),
         _ => None,
     }
