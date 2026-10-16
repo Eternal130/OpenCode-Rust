@@ -24,6 +24,17 @@ pub struct ToastOptions {
     pub variant: &'static str,
     pub duration_ms: u64,
     pub action_label: Option<String>,
+    /// Lane KM (auditA #10): v2's `action.run` closure materialized as
+    /// the dot command it dispatches (`mcp.list`, `plugins.list` —
+    /// app.tsx:534/541, plugin/context.tsx:484/559); `activate()`
+    /// fires it through the palette dispatcher.
+    pub action_command: Option<String>,
+    /// The F11 modal gate: `true` only for the "Session failed" /
+    /// "Failed to send prompt" surfaces whose keystroke-swallowing
+    /// the F11 lane pinned. Every other toast (v2's rule,
+    /// ui/toast.tsx) NEVER blocks typing — the lane KM MCP-failure
+    /// toasts ride the non-modal path.
+    pub modal: bool,
 }
 
 impl ToastOptions {
@@ -35,7 +46,17 @@ impl ToastOptions {
             variant: "info",
             duration_ms: 5000,
             action_label: None,
+            action_command: None,
+            modal: false,
         }
+    }
+
+    /// An actionable toast (`action: { label, run: () => dispatch }`).
+    #[must_use]
+    pub fn with_action(mut self, label: &str, command: &str) -> Self {
+        self.action_label = Some(label.to_owned());
+        self.action_command = Some(command.to_owned());
+        self
     }
 }
 
@@ -311,6 +332,8 @@ mod tests {
             variant: "info",
             duration_ms: 60_000,
             action_label: None,
+            action_command: None,
+            modal: false,
         }
     }
 

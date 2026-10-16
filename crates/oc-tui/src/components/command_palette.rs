@@ -125,6 +125,18 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         bindings: &[],
     },
     PaletteCommand {
+        command: "session.copy.id",
+        title: "Copy session ID",
+        group: "Session",
+        bindings: &[],
+    },
+    PaletteCommand {
+        command: "session.cd",
+        title: "Change working directory",
+        group: "Session",
+        bindings: &[],
+    },
+    PaletteCommand {
         command: "session.rename",
         title: "Rename session",
         group: "Session",
@@ -179,6 +191,13 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         bindings: &["ctrl+x a"],
     },
     PaletteCommand { command: "mcp.list", title: "MCP servers", group: "Agent", bindings: &[] },
+    PaletteCommand { command: "plugins.list", title: "Plugins", group: "System", bindings: &[] },
+    PaletteCommand {
+        command: "toast.activate",
+        title: "Activate the current toast action",
+        group: "Prompt",
+        bindings: &["ctrl+alt+t"],
+    },
     PaletteCommand {
         command: "variant.cycle",
         title: "Variant cycle",
@@ -533,6 +552,25 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         // SURF-2 `DialogMcp` (`/mcps`, dialog-mcp.tsx:70-81): the
         // name-sorted server rows with the status footer text
         // (`Status`, :20-34).
+        // `plugins.list` (lane KM): the plugin manager select — one
+        // row per registered plugin id (commands + home actions),
+        // empty → the muted status row.
+        DialogKind::Plugins => {
+            let mut ids: Vec<String> = store
+                .plugin_commands()
+                .into_iter()
+                .map(|entry| entry.plugin_id)
+                .chain(store.plugin_home_actions().into_iter().map(|action| action.plugin_id))
+                .collect();
+            ids.sort();
+            ids.dedup();
+            let options = if ids.is_empty() {
+                vec![status_option("No plugins registered")]
+            } else {
+                ids.iter().map(|id| SelectOption::titled(id.clone(), id.clone())).collect()
+            };
+            SelectProps::new("Plugins", options)
+        }
         DialogKind::Mcp => {
             let mut servers = store.mcp_servers();
             servers.sort_by(|left, right| left.name.cmp(&right.name));
@@ -1606,6 +1644,136 @@ impl CommandDispatcher for StoreDispatcher {
                 );
                 Dispatch::Handled
             }
+            // -- lane KM (auditA #8a): dispatchers for the newly-bound
+            // v2 commands --------------------------------------------
+            // The tab-history walks (keybind.ts:114-115): back/forward
+            // through the in-memory navigation stack.
+            "session.tab.history.back" => {
+                let _ = store.tab_history_back();
+                Dispatch::Handled
+            }
+            "session.tab.history.forward" => {
+                let _ = store.tab_history_forward();
+                Dispatch::Handled
+            }
+            // `queued_prompt.undo` (index.tsx:653 + mini/footer.command.
+            // tsx:979): removes the LAST queued prompt of the route's
+            // session (v2 toasts on a miss).
+            "queued_prompt.undo" => {
+                let Route::Session { session_id } = store.route() else {
+                    return Dispatch::Handled;
+                };
+                if !store.undo_queued_prompt(&session_id) {
+                    store.toast_show(crate::components::toast::ToastOptions {
+                        message: "No queued prompt to undo".to_owned(),
+                        variant: "error",
+                        ..crate::components::toast::ToastOptions::info("")
+                    });
+                }
+                Dispatch::Handled
+            }
+            // `session.copy.id` (index.tsx:1170): the id to the
+            // clipboard + the info toast.
+            "session.copy.id" => {
+                let session_id = match store.route() {
+                    Route::Session { session_id } => session_id,
+                    Route::Home => return Dispatch::Handled,
+                };
+                match store.clipboard_write(&session_id) {
+                    Ok(()) => store.toast_show(crate::components::toast::ToastOptions {
+                        message: "Session ID copied to clipboard".to_owned(),
+                        variant: "info",
+                        ..crate::components::toast::ToastOptions::info("")
+                    }),
+                    Err(_) => store.toast_show(crate::components::toast::ToastOptions {
+                        message: "Failed to copy to clipboard".to_owned(),
+                        variant: "error",
+                        ..crate::components::toast::ToastOptions::info("")
+                    }),
+                }
+                Dispatch::Handled
+            }
+            // `session.cd` (prompt/index.tsx:267-289): the full command
+            // takes a directory ARGUMENT over the slash route; the
+            // palette/dispatch path opens the working-directory select
+            // (the footer label's dialog) — the port's pick surface.
+            "session.cd" => {
+                let directory = store.footer_location();
+                store
+                    .replace_dialog(DialogKind::WorkingDirectory { directory }, DialogSize::Medium);
+                Dispatch::Handled
+            }
+            // `session.toggle.exploration_grouping` (index.tsx:
+            // 1049-1061): flip the transcript's grouping flag.
+            "session.toggle.exploration_grouping" => {
+                store.toggle_exploration_grouping();
+                Dispatch::Handled
+            }
+            // `plugins.list` (feature-plugins' DialogPlugins): the
+            // plugin manager select — the port's approximation lists
+            // the registered plugin ids (enable/disable state is not
+            // modeled; submits close).
+            "plugins.list" => {
+                store.replace_dialog(DialogKind::Plugins, DialogSize::Medium);
+                Dispatch::Handled
+            }
+            // `app.clear` (mini/footer.view.tsx:553): clears the MINI
+            // screen — the main TUI has no mini surface, so the stroke
+            // consumes and redraws (v2's keymap eats the event too).
+            "app.clear" => {
+                store.request_redraw();
+                Dispatch::Handled
+            }
+            // `toast.activate` (PORT ADDITION, lane KM — auditA #10):
+            // v2's toast action is pointer-only (ui/toast.tsx:57-59);
+            // the port additionally reaches it from the input layer —
+            // dismiss + dispatch the action's command (the MCP
+            // failure/needs-auth toasts carry `mcp.list`).
+            "toast.activate" => {
+                let action = store.toast_activate();
+                match action {
+                    Some(command) => self.dispatch(store, &command, None),
+                    None => Dispatch::Handled,
+                }
+            }
+            // The registered-but-surfaceless families (v2 parity: the
+            // keymap consumes the stroke; no component answers):
+            // terminal pane trio + pane focus (terminal-pane.tsx),
+            // which-key panel (the keymap addon's surface), scrap/
+            // debug panel, service restart, aside mode, verbosity
+            // model, plugin install flow, the integrations + plugin
+            // dialog actions, the picker's terminals tab.
+            "terminal.toggle"
+            | "terminal.select"
+            | "terminal.close"
+            | "pane.focus.left"
+            | "pane.focus.right"
+            | "app.debug"
+            | "app.scrap"
+            | "service.restart"
+            | "session.aside"
+            | "session.verbosity.cycle"
+            | "plugins.install"
+            | "dialog.integration.rename"
+            | "dialog.integration.delete"
+            | "dialog.plugins.error"
+            | "dialog.plugins.install"
+            | "dialog.plugins.update"
+            | "dialog.plugins.check"
+            | "composer.terminal.up"
+            | "composer.terminal.down"
+            | "composer.terminal.select"
+            | "which-key.toggle"
+            | "which-key.layout.toggle"
+            | "which-key.pending.toggle"
+            | "which-key.group.previous"
+            | "which-key.group.next"
+            | "which-key.scroll.up"
+            | "which-key.scroll.down"
+            | "which-key.page.up"
+            | "which-key.page.down"
+            | "which-key.home"
+            | "which-key.end" => Dispatch::Handled,
             "app.exit" => {
                 store.clear_dialogs();
                 // The app shell exits the run loop (wave 3); the replay
