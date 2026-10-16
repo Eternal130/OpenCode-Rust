@@ -494,10 +494,8 @@ mod tests {
     /// threaded; dogfood3 wires them into the TUI's `BootArgs`).
     #[test]
     fn prompt_and_auto_flags_parse_on_the_root() {
-        let cli = Cli::try_parse_from([
-            "opencode", "--prompt", "ship the fix", "--auto", "--yolo",
-        ])
-        .expect("parse");
+        let cli = Cli::try_parse_from(["opencode", "--prompt", "ship the fix", "--auto", "--yolo"])
+            .expect("parse");
         assert_eq!(cli.prompt.as_deref(), Some("ship the fix"));
         assert!(cli.permission.auto, "--auto");
         assert!(cli.permission.effective_auto(), "--yolo folds into effective_auto");
