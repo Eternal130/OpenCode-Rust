@@ -891,6 +891,8 @@ pub struct Store {
     /// The sidebar onboarding card's pointer targets (the render
     /// pass's absolute rects; `None` while the card is hidden).
     sidebar_onboarding_hits: std::cell::RefCell<Option<SidebarOnboardingHits>>,
+    /// The MCP section's pointer targets (SURF-1).
+    sidebar_mcp_hits: std::cell::RefCell<SidebarMcpHits>,
     /// The session sidebar's wheel-scroll state (auditA #1): the
     /// content-slot offset plus the geometry the last render saw
     /// (content rows, viewport rows, absolute x extent). v2's
@@ -958,7 +960,7 @@ pub struct Store {
     /// inline expand): expanded `{mid}:{pid}` keys.
     expanded_tools: Signal<std::collections::HashSet<String>>,
     /// SURF-1 MCP server list (`location.mcp.server.list` — the
-    /// sidebar's MCP section + DialogStatus source). Fetched by the
+    /// sidebar's MCP section + `DialogStatus` source). Fetched by the
     /// server-lists worker; statuses drive the per-server dot.
     mcp_servers: Signal<Vec<McpServerRow>>,
     /// The MCP section's collapse state (mcp.tsx's `view.open`).
@@ -1008,9 +1010,9 @@ impl RevertSink for RecordingRevertSink {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct McpServerRow {
     pub name: String,
-    /// `connected` | `pending` | `failed` | `disabled` | `needs_auth`.
+    /// `connected`, `pending`, `failed`, `disabled` or `needs_auth`.
     pub status: &'static str,
-    /// The failed/needs_auth error text (DialogMcp's details view).
+    /// The failed/`needs_auth` error text (`DialogMcp`'s details view).
     pub error: Option<String>,
 }
 
@@ -1210,6 +1212,18 @@ impl HitRect {
 pub struct SidebarOnboardingHits {
     pub dismiss: HitRect,
     pub connect: HitRect,
+}
+
+/// The sidebar MCP section's pointer targets (SURF-1, mcp.tsx:26-33 +
+/// 76-84): the header row (the collapse toggle, only past two
+/// servers) and one rect per visible server row (click → the MCP
+/// dialog focused on that server).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SidebarMcpHits {
+    /// `None` while `list.length <= 2` (no toggle).
+    pub header: Option<HitRect>,
+    /// `(server name, rect)` in paint order.
+    pub rows: Vec<(String, HitRect)>,
 }
 
 /// The sidebar's wheel-scroll model (auditA #1): the content-slot
@@ -1580,6 +1594,7 @@ impl Store {
             dialog_option_rows: std::cell::RefCell::new(Vec::new()),
             footer_location_hit: std::cell::RefCell::new(None),
             sidebar_onboarding_hits: std::cell::RefCell::new(None),
+            sidebar_mcp_hits: std::cell::RefCell::new(SidebarMcpHits::default()),
             sidebar_scroll: std::cell::RefCell::new(SidebarScrollState::default()),
             permission_pointer_hits: std::cell::RefCell::new(None),
             dialog_button_hits: std::cell::RefCell::new(Vec::new()),
@@ -1646,11 +1661,9 @@ impl Store {
         let model_ring = Signal::new(&runtime, ModelRing::default());
         let picker = Signal::new(&runtime, PickerState::default());
         let reverts = Signal::new(&runtime, HashMap::<String, RevertState>::new());
-        let pending_compactions =
-            Signal::new(&runtime, HashMap::<String, Vec<String>>::new());
+        let pending_compactions = Signal::new(&runtime, HashMap::<String, Vec<String>>::new());
         let history_loading = Signal::new(&runtime, HashMap::<String, bool>::new());
-        let expanded_tools =
-            Signal::new(&runtime, std::collections::HashSet::<String>::new());
+        let expanded_tools = Signal::new(&runtime, std::collections::HashSet::<String>::new());
         let mcp_servers = Signal::new(&runtime, Vec::<McpServerRow>::new());
         let sidebar_mcp_open = Signal::new(&runtime, true);
         Self::build(
@@ -2876,6 +2889,16 @@ impl Store {
     /// origin).
     pub fn set_sidebar_onboarding_hits(&self, hits: Option<SidebarOnboardingHits>) {
         *self.sidebar_onboarding_hits.borrow_mut() = hits;
+    }
+    /// The recorded MCP-section targets (absolute cells; empty while
+    /// the section is hidden).
+    pub fn set_sidebar_mcp_hits(&self, hits: SidebarMcpHits) {
+        *self.sidebar_mcp_hits.borrow_mut() = hits;
+    }
+    /// The recorded MCP-section targets from the last render.
+    #[must_use]
+    pub fn sidebar_mcp_hits(&self) -> SidebarMcpHits {
+        self.sidebar_mcp_hits.borrow().clone()
     }
     /// The recorded onboarding targets (`None` while the card is
     /// hidden — the render clears them every pass).
@@ -4442,6 +4465,7 @@ impl Store {
     }
 
     #[allow(clippy::too_many_lines)] // one match over the event alphabet
+    #[allow(clippy::too_many_lines)] // the SSE reducer table (one arm per event)
     fn reduce_event(&self, event: &BusEvent) {
         match event.type_.as_str() {
             "session.updated" | "session.renamed" => {
@@ -4783,11 +4807,19 @@ impl Store {
                         blocks
                             .iter()
                             .filter_map(|block| {
-                                let text = block.get("text").and_then(Value::as_str).map(str::to_owned);
+                                let text =
+                                    block.get("text").and_then(Value::as_str).map(str::to_owned);
                                 text.or_else(|| {
-                                    block.get("name").and_then(Value::as_str).map(str::to_owned).or_else(|| {
-                                        block.get("uri").and_then(Value::as_str).map(str::to_owned)
-                                    })
+                                    block
+                                        .get("name")
+                                        .and_then(Value::as_str)
+                                        .map(str::to_owned)
+                                        .or_else(|| {
+                                            block
+                                                .get("uri")
+                                                .and_then(Value::as_str)
+                                                .map(str::to_owned)
+                                        })
                                 })
                             })
                             .filter(|text| !text.is_empty())
@@ -4797,7 +4829,11 @@ impl Store {
                     .filter(|text| !text.is_empty());
                 let error = (event.type_ == "session.tool.failed")
                     .then(|| {
-                        event.data.pointer("/error/message").and_then(Value::as_str).map(str::to_owned)
+                        event
+                            .data
+                            .pointer("/error/message")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
                     })
                     .flatten();
                 let completed = event.created;
@@ -4815,8 +4851,8 @@ impl Store {
                                     state.metadata_json =
                                         metadata.clone().filter(|value| !value.is_null());
                                 }
-                                state.output = output.clone();
-                                state.error = error.clone();
+                                state.output.clone_from(&output);
+                                state.error.clone_from(&error);
                                 time.completed = time.completed.or(completed);
                             }
                         }
@@ -4990,10 +5026,10 @@ impl Store {
                 let Some(session) = event.string("sessionID") else { return };
                 let text = event.string("text").unwrap_or_default();
                 self.update_messages(&session, |messages| {
-                    if let Some(Message::Compaction { summary, running: true, .. }) =
-                        messages.iter_mut().rev().find(|m| {
-                            matches!(m, Message::Compaction { running: true, .. })
-                        })
+                    if let Some(Message::Compaction { summary, running: true, .. }) = messages
+                        .iter_mut()
+                        .rev()
+                        .find(|m| matches!(m, Message::Compaction { running: true, .. }))
                     {
                         *summary = Some(format!("{}{}", summary.clone().unwrap_or_default(), text));
                     }
@@ -5012,75 +5048,69 @@ impl Store {
                         .iter()
                         .rposition(|m| matches!(m, Message::Compaction { running: true, .. }));
                     let fields = || {
-                        let tokens = tokens
-                            .as_ref()
-                            .map(|tokens| {
-                                let number = |field: &str| {
-                                    tokens.pointer(&format!("/{field}")).and_then(Value::as_f64)
-                                };
-                                (
-                                    number("input"),
-                                    number("cache/read"),
-                                    number("cache/write"),
-                                    number("output"),
-                                    number("reasoning"),
-                                )
-                            });
-                        let (input, output) = tokens
-                            .map(|(input, cr, cw, output, reasoning)| {
-                                (
-                                    input.unwrap_or(0.0) + cr.unwrap_or(0.0) + cw.unwrap_or(0.0),
-                                    output.unwrap_or(0.0) + reasoning.unwrap_or(0.0),
-                                )
-                            })
-                            .map(|(input, output)| {
-                                (Some(input.max(0.0) as u64), Some(output.max(0.0) as u64))
-                            })
-                            .unwrap_or((None, None));
+                        let tokens = tokens.as_ref().map(|tokens| {
+                            let number = |field: &str| {
+                                tokens.pointer(&format!("/{field}")).and_then(Value::as_f64)
+                            };
+                            (
+                                number("input"),
+                                number("cache/read"),
+                                number("cache/write"),
+                                number("output"),
+                                number("reasoning"),
+                            )
+                        });
+                        let (input, output) = tokens.map_or((None, None), |usage| {
+                            let (input, cr, cw, output, reasoning) = usage;
+                            let input =
+                                input.unwrap_or(0.0) + cr.unwrap_or(0.0) + cw.unwrap_or(0.0);
+                            let output = output.unwrap_or(0.0) + reasoning.unwrap_or(0.0);
+                            // Token counts: bounded by real usage.
+                            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                            let input = Some(input.max(0.0) as u64);
+                            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                            let output = Some(output.max(0.0) as u64);
+                            (input, output)
+                        });
                         (summary.clone().or_else(|| Some(String::new())), input, output)
                     };
-                    match position {
-                        Some(index) => {
-                            if let Some(Message::Compaction {
-                                running,
-                                failed,
-                                summary: slot,
-                                tokens_in,
-                                tokens_out,
-                                provider_compaction: slot_provider,
-                                ..
-                            }) = messages.get_mut(index)
-                            {
-                                let (summary, tokens_in_new, tokens_out_new) = fields();
-                                *running = false;
-                                *failed = false;
-                                *slot = summary;
-                                *tokens_in = tokens_in_new;
-                                *tokens_out = tokens_out_new;
-                                *slot_provider = provider_compaction;
-                            }
+                    if let Some(index) = position {
+                        if let Some(Message::Compaction {
+                            running,
+                            failed,
+                            summary: slot,
+                            tokens_in,
+                            tokens_out,
+                            provider_compaction: slot_provider,
+                            ..
+                        }) = messages.get_mut(index)
+                        {
+                            let (summary, tokens_in_new, tokens_out_new) = fields();
+                            *running = false;
+                            *failed = false;
+                            *slot = summary;
+                            *tokens_in = tokens_in_new;
+                            *tokens_out = tokens_out_new;
+                            *slot_provider = provider_compaction;
                         }
-                        None => {
-                            let id = event
-                                .string("inputID")
-                                .filter(|id| !id.is_empty())
-                                .unwrap_or_else(|| {
-                                    format!("msg_{}", event.id.trim_start_matches("evt_"))
-                                });
-                            let (summary, tokens_in, tokens_out) = fields();
-                            messages.push(Message::Compaction {
-                                id,
-                                created: event.created.unwrap_or(0),
-                                running: false,
-                                failed: false,
-                                cancelled: false,
-                                error: None,
-                                summary,
-                                tokens_in,
-                                tokens_out,
-                                provider_compaction: provider_compaction,
-                            });
-                        }
+                    } else {
+                        let id =
+                            event.string("inputID").filter(|id| !id.is_empty()).unwrap_or_else(
+                                || format!("msg_{}", event.id.trim_start_matches("evt_")),
+                            );
+                        let (summary, tokens_in, tokens_out) = fields();
+                        messages.push(Message::Compaction {
+                            id,
+                            created: event.created.unwrap_or(0),
+                            running: false,
+                            failed: false,
+                            cancelled: false,
+                            error: None,
+                            summary,
+                            tokens_in,
+                            tokens_out,
+                            provider_compaction,
+                        });
                     }
                 });
             }
@@ -5125,27 +5155,22 @@ impl Store {
                     let position = messages
                         .iter()
                         .rposition(|m| matches!(m, Message::Compaction { running: true, .. }));
-                    match position {
-                        Some(index) => {
-                            if let Some(Message::Compaction {
-                                created,
-                                failed: slot_failed,
-                                cancelled: slot_cancelled,
-                                error: slot_error,
-                                ..
-                            }) = messages.get_mut(index)
-                            {
-                                *created = event.created.unwrap_or(0);
-                                *slot_failed = true;
-                                *slot_cancelled = cancelled;
-                                *slot_error = (!cancelled).then(|| error_message.clone());
-                            }
+                    if let Some(index) = position {
+                        if let Some(Message::Compaction {
+                            created,
+                            failed: slot_failed,
+                            cancelled: slot_cancelled,
+                            error: slot_error,
+                            ..
+                        }) = messages.get_mut(index)
+                        {
+                            *created = event.created.unwrap_or(0);
+                            *slot_failed = true;
+                            *slot_cancelled = cancelled;
+                            *slot_error = (!cancelled).then(|| error_message.clone());
                         }
-                        None => {
-                            if !messages.iter().any(|m| m.id() == id.as_str()) {
-                                messages.push(failed);
-                            }
-                        }
+                    } else if !messages.iter().any(|m| m.id() == id.as_str()) {
+                        messages.push(failed);
                     }
                 });
             }
@@ -5176,8 +5201,14 @@ impl Store {
                                         .and_then(Value::as_str)
                                         .unwrap_or("modified")
                                         .to_owned(),
-                                    additions: file.get("additions").and_then(Value::as_i64).unwrap_or(0),
-                                    deletions: file.get("deletions").and_then(Value::as_i64).unwrap_or(0),
+                                    additions: file
+                                        .get("additions")
+                                        .and_then(Value::as_i64)
+                                        .unwrap_or(0),
+                                    deletions: file
+                                        .get("deletions")
+                                        .and_then(Value::as_i64)
+                                        .unwrap_or(0),
                                 })
                             })
                             .collect()
@@ -5434,6 +5465,8 @@ fn files_from_event(data: &Value) -> Vec<crate::components::message::model::User
 
 /// Parse a full message payload off `message.updated` (`SessionMessageInfo`
 /// subset).
+// One arm per message kind (the SURF-1 skill arm pushed it over).
+#[allow(clippy::too_many_lines)]
 fn message_from_event(event: &BusEvent) -> Option<Message> {
     let id = event.string("id").or_else(|| event.string("messageID"))?;
     let time = PartTime {

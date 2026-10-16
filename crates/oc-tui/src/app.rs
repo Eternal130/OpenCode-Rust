@@ -494,6 +494,29 @@ impl App {
                             return;
                         }
                     }
+                    // The MCP section's targets (mcp.tsx:26-33/76-84):
+                    // the header toggles the collapse (past two
+                    // servers); a row release opens the MCP servers
+                    // dialog focused on that server (`mcp.list`).
+                    let mcp = self.store.sidebar_mcp_hits();
+                    if let Some(header) = &mcp.header {
+                        if header.contains(col, row) {
+                            self.store.set_sidebar_mcp_open(!self.store.sidebar_mcp_open());
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
+                    for (name, rect) in &mcp.rows {
+                        if rect.contains(col, row) {
+                            let _ = name;
+                            let dispatch = self.dispatcher.dispatch(&self.store, "mcp.list", None);
+                            if let Dispatch::ServerPending(reason) = dispatch {
+                                let _ = reason;
+                            }
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
                 }
                 // #33 — the footer location label opens the Working
                 // directory select on release
@@ -1834,8 +1857,9 @@ pub enum ServerListEvent {
     Agents(Result<Vec<crate::store::ServerAgent>, String>),
     /// `useConnected()` — any integration has connections.
     Connected(bool),
-    /// SURF-1: the `mcp.list` rows (`location.mcp.server.list` — the
-    /// sidebar MCP section + DialogStatus source).
+    /// SURF-1: the `mcp.list` rows
+    /// (`location.mcp.server.list` — the sidebar MCP section +
+    /// `DialogStatus` source).
     Mcp(Vec<crate::store::McpServerRow>),
 }
 
@@ -2072,6 +2096,9 @@ fn configured_model_from_entries(
 }
 
 #[must_use]
+// The boot fetch chain (one block per list — the SURF-1 mcp.list hop
+// pushed it past the budget).
+#[allow(clippy::too_many_lines)]
 pub fn spawn_server_lists(
     client: oc_client::Client,
 ) -> (tokio::sync::mpsc::Receiver<ServerListEvent>, tokio::task::JoinHandle<()>) {
@@ -2186,11 +2213,7 @@ pub fn spawn_server_lists(
                             }
                             _ => None,
                         };
-                        crate::store::McpServerRow {
-                            name: server.name.clone(),
-                            status,
-                            error,
-                        }
+                        crate::store::McpServerRow { name: server.name.clone(), status, error }
                     })
                     .collect::<Vec<_>>()
             })
@@ -6094,4 +6117,26 @@ mod core_interaction_tests {
         ));
         assert!(app.store.dialogs().is_empty(), "the esc/enter label closed it");
     }
+}
+
+/// SURF-1: the jump slot's "Loading session history…" label — the
+/// in-flight transcript fetch's live state (v2's `firstJump()` hold,
+/// index.tsx:1425-1427), right-aligned over the slot row while no
+/// rows have landed.
+#[test]
+fn history_loading_paints_the_jump_slot_label() {
+    let app = App::new((120, 24));
+    app.store.open_tab("s1", Some("S".to_owned()));
+    app.store.set_history_loading("s1", true);
+    let frame = app.frame_text();
+    assert!(
+        frame.contains("Loading session history…"),
+        "the loading label paints while the fetch is in flight: {frame}"
+    );
+    app.store.set_history_loading("s1", false);
+    let settled = app.frame_text();
+    assert!(
+        !settled.contains("Loading session history…"),
+        "the label clears once the fetch lands: {settled}"
+    );
 }

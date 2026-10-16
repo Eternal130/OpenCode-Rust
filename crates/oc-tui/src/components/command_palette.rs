@@ -383,6 +383,7 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         // `(N earlier lines omitted)` notice when the tail truncated)
         // or the execute input/metadata rows.
         DialogKind::ToolOutput { session_id, message_id, part_id } => {
+            const SHELL_WINDOW: usize = 512;
             let part = store
                 .messages(session_id)
                 .iter()
@@ -429,34 +430,25 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             // the full viewer scrolls the same rows).
             let output = state.output.clone().unwrap_or_default();
             let lines: Vec<&str> = output.lines().collect();
-            const SHELL_WINDOW: usize = 512;
             let (omitted, visible) = if lines.len() > SHELL_WINDOW {
-                (
-                    Some(lines.len() - SHELL_WINDOW),
-                    &lines[lines.len() - SHELL_WINDOW..],
-                )
+                (Some(lines.len() - SHELL_WINDOW), &lines[lines.len() - SHELL_WINDOW..])
             } else {
                 (None, &lines[..])
             };
             let mut options = Vec::new();
             if let Some(count) = omitted {
                 options.push(
-                    SelectOption::titled(
-                        format!("({count} earlier lines omitted)"),
-                        "omitted",
-                    )
-                    .muted_placeholder(),
+                    SelectOption::titled(format!("({count} earlier lines omitted)"), "omitted")
+                        .muted_placeholder(),
                 );
             }
             if let Some(error) = &state.error {
                 options.push(SelectOption::titled(error.clone(), "error").categorized("Error"));
             }
             for (index, line) in visible.iter().enumerate() {
-                options
-                    .push(SelectOption::titled((*line).to_owned(), format!("line:{index}")));
+                options.push(SelectOption::titled((*line).to_owned(), format!("line:{index}")));
             }
-            let title = if state.error.is_some() { "Shell output" } else { "Shell output" };
-            SelectProps::new(title, options).flat(true)
+            SelectProps::new("Shell output", options).flat(true)
         }
         DialogKind::ServerList { command: "model.list", title } => {
             model_list_props(store, title).with_current(model_current_value(store))

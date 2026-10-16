@@ -399,9 +399,7 @@ pub fn tool_state_from_json(
         status: crate::components::message::model::ToolStatus::parse(status),
         input: stringify_map(input),
         metadata: stringify_map(metadata),
-        metadata_json: metadata
-            .filter(|value| !value.is_null())
-            .cloned(),
+        metadata_json: metadata.filter(|value| !value.is_null()).cloned(),
         output: None,
         error: None,
     }
@@ -537,6 +535,9 @@ fn assistant_snapshot_stats(
 /// assistant-with-parts / idle; other kinds are skipped, matching the
 /// SSE reducers).
 #[must_use]
+// One arm per wire message kind (the SURF-1 compaction/skill arms
+// pushed it past the budget).
+#[allow(clippy::too_many_lines)]
 pub fn message_from_info(
     info: &SessionMessageInfo,
 ) -> Option<crate::components::message::model::Message> {
@@ -618,8 +619,7 @@ pub fn message_from_info(
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let usage = |tokens: &Option<oc_client::types::TokenUsageInfo>| {
                 tokens.as_ref().map(|tokens| {
-                    let input =
-                        tokens.input + tokens.cache.read + tokens.cache.write;
+                    let input = tokens.input + tokens.cache.read + tokens.cache.write;
                     let output = tokens.output + tokens.reasoning;
                     (input.max(0.0).round() as u64, output.max(0.0).round() as u64)
                 })
