@@ -139,7 +139,29 @@ async fn be1_sse_credential_events_on_create_activate_and_remove() {
 /// worktree.updated publishes on a row-owning create (worktree.ts:228).
 #[tokio::test]
 async fn be1_sse_worktree_updated_on_create() {
-    let server = boot(tempfile::tempdir().expect("workspace").keep()).await;
+    // BE-2a made worktree.create run the real `git worktree add`, so the
+    // fixture needs an actual git source checkout.
+    let workspace = tempfile::tempdir().expect("workspace").keep();
+    std::fs::write(workspace.join("seed.txt"), "seed\n").expect("seed file");
+    for args in [
+        vec!["init", "--initial-branch=main"],
+        vec!["config", "user.email", "test@example.com"],
+        vec!["config", "user.name", "Test"],
+        vec!["add", "."],
+        vec!["commit", "-m", "seed"],
+    ] {
+        let output = std::process::Command::new("git")
+            .args(&args)
+            .current_dir(&workspace)
+            .output()
+            .expect("git spawn");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let server = boot(workspace).await;
     let client = &server.client;
     let session_id = create_session(client, "worktree-anchor").await;
     // The location assembly created the project row; find its id.
