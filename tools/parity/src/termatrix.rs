@@ -166,6 +166,22 @@ const PROFILES: &[TermProfile] = &[
         tmux: true,
     },
     TermProfile {
+        id: "xterm256-light",
+        description:
+            "PROBE — a LIGHT-background xterm (OSC 11 answers white): exercises the theme-mode negotiation seam (dark is the default everywhere else)",
+        term: "xterm-256color",
+        colorterm: None,
+        da1: Some("\x1b[?64;1;2;6;9;15;16;17;18;21;22c"),
+        da2: Some("\x1b[>41;371;0c"),
+        xtversion: Some("\x1bP>|xterm(371)\x1b\\"),
+        kitty: None,
+        osc11: Some("\x1b]11;rgb:ffff/ffff/ffff\x1b\\"),
+        osc10: Some("\x1b]10;rgb:0000/0000/0000\x1b\\"),
+        osc4: Some("\x1b]4;0;rgb:ffff/ffff/ffff\x1b\\"),
+        sync: Some("\x1b[?2026;2$y"),
+        tmux: false,
+    },
+    TermProfile {
         id: "kitty-yes",
         description:
             "kitty keyboard protocol ADVERTISED: kitty(0.42.2) identity, full progressive-enhancement flag set in the CSI ? u answer, truecolor, OSC 11 dark, sync-2026",
