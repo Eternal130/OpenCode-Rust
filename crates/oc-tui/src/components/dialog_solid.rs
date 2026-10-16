@@ -1116,7 +1116,7 @@ pub fn render_overlay_solid(
     plugin: Option<&PluginDialogContent>,
     theme: &ThemeState,
     terminal: (u16, u16),
-) -> (usize, usize, usize, usize) {
+) -> ((usize, usize, usize, usize), Vec<crate::store::DialogButtonHit>) {
     let styles = DialogStyles::from_theme(theme);
     let colors = DialogColors::of(&styles);
     let width = usize::from(terminal.0);
@@ -1144,7 +1144,7 @@ pub fn render_overlay_solid(
         if mount.key != mount_key(&inputs) {
             *mount = SolidDialog::new(&inputs);
         }
-        mount.paint(inputs);
+        mount.paint(inputs.clone());
         let buffer = &mount.renderer.renderer.current_render_buffer;
         let frame = crate::components::session_tabs_solid::frame_from_buffer(buffer, &[]);
         for (row, cells) in frame.cells.iter().enumerate() {
@@ -1161,7 +1161,56 @@ pub fn render_overlay_solid(
         }
     });
 
-    (box_x, box_y, box_width.min(width - box_x), box_height.min(height.saturating_sub(box_y)))
+    let rect = (box_x, box_y, box_width.min(width - box_x), box_height.min(height.saturating_sub(box_y)));
+    (rect, dialog_chrome_button_hits(entry, &inputs, rect))
+}
+
+/// The dialog chrome's pointer targets (auditA #6 — lane/if item 5):
+/// the title row's muted close label (every family renders one —
+/// v2's ~22 dialog headers all carry `onMouseUp={() => dialog.clear()}`),
+/// plus the Help dialog's `ok` pill. The rects mirror the builders'
+/// geometry: the title row is the FIRST content row under the
+/// chrome's paddingTop 1; the label right-aligns against the
+/// family's title-block padding (4 for the select/plugin-rows
+/// families, 2 for prompt/help). v2's labels carry no hover styling
+/// — the hit rect alone is the affordance.
+fn dialog_chrome_button_hits(
+    entry: &DialogEntry,
+    inputs: &DialogInputs,
+    rect: (usize, usize, usize, usize),
+) -> Vec<crate::store::DialogButtonHit> {
+    use crate::store::{DialogButtonAction, DialogButtonHit, HitRect};
+    let (box_x, box_y, box_width, _) = rect;
+    let _ = entry;
+    let mut hits = Vec::new();
+    if box_width < 8 {
+        return hits;
+    }
+    let title_row = box_y + 1;
+    let (label, pad) = match inputs.family {
+        Family::Select | Family::PluginRows => ("esc", 4usize),
+        Family::RenamePrompt | Family::WorktreeNamePrompt => ("esc", 2),
+        Family::Help => ("esc/enter", 2),
+    };
+    let label_width = label.chars().count();
+    let close_x = (box_x + box_width).saturating_sub(pad + label_width);
+    hits.push(DialogButtonHit {
+        action: DialogButtonAction::Close,
+        rect: HitRect { x: close_x, y: title_row, width: label_width, height: 1 },
+    });
+    if matches!(inputs.family, Family::Help) {
+        // The ok pill: the LAST content row (title, gap, L hint lines,
+        // hint pad, gap, button, button pad) right-justified against
+        // the root's paddingRight 2 — the BUTTON box is its padding
+        // (3) + `ok` (2) + padding (3) = 8 wide.
+        let lines = inputs.hint_lines.len();
+        let button_row = box_y + lines + 5;
+        hits.push(DialogButtonHit {
+            action: DialogButtonAction::HelpOk,
+            rect: HitRect { x: box_x + box_width - 10, y: button_row, width: 8, height: 1 },
+        });
+    }
+    hits
 }
 
 /// Assemble one frame's [`DialogInputs`] from the store's dialog

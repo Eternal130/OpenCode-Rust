@@ -897,6 +897,11 @@ pub struct Store {
     /// the body's mount), cleared when the ask resolves.
     permission_pointer_hits:
         std::cell::RefCell<Option<crate::components::footer::permission::PermissionPointerHits>>,
+    /// The top dialog's chrome buttons (auditA #6: the header close
+    /// label + the Help `ok` pill) at absolute cells — recorded by
+    /// the overlay render alongside `dialog_frame_rect`, cleared with
+    /// it.
+    dialog_button_hits: std::cell::RefCell<Vec<DialogButtonHit>>,
     /// The location label's hover state (`hovered()`).
     location_hovered: std::cell::Cell<bool>,
     /// Per-session scroll state (Wave A's scroll driver over
@@ -1139,6 +1144,30 @@ impl SidebarScrollState {
     pub fn contains_col(self, col: usize) -> bool {
         self.x_extent.is_some_and(|(x, width)| col >= x && col < x + width)
     }
+}
+
+/// What a dialog chrome button does on release (auditA #6 — v2's
+/// per-dialog close affordances).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogButtonAction {
+    /// The title row's muted close label (`esc` / `esc/enter`) —
+    /// every dialog header carries one (`dialog-help.tsx:25`,
+    /// `dialog-confirm.tsx:64`, `dialog-update.tsx:98`, ~22 v2
+    /// files): `onMouseUp={() => dialog.clear()}`. v2's label carries
+    /// NO hover styling (plain muted text) — the hit rect alone is
+    /// the affordance.
+    Close,
+    /// The Help dialog's right-justified `ok` button
+    /// (`dialog-help.tsx:33-40`: the focused-action pill,
+    /// `onMouseUp={() => dialog.clear()}`).
+    HelpOk,
+}
+
+/// One dialog chrome button's pointer target (absolute cells).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DialogButtonHit {
+    pub action: DialogButtonAction,
+    pub rect: HitRect,
 }
 
 /// One queued prompt (`session.inbox` row with `delivery: "queue"`,
@@ -1439,6 +1468,7 @@ impl Store {
             sidebar_onboarding_hits: std::cell::RefCell::new(None),
             sidebar_scroll: std::cell::RefCell::new(SidebarScrollState::default()),
             permission_pointer_hits: std::cell::RefCell::new(None),
+            dialog_button_hits: std::cell::RefCell::new(Vec::new()),
             location_hovered: std::cell::Cell::new(false),
             scroll: std::cell::RefCell::new(HashMap::new()),
             transcript_metrics: std::cell::RefCell::new(HashMap::new()),
@@ -2658,6 +2688,9 @@ impl Store {
         *self.dialog_frame_rect.borrow_mut() = rect;
         if rect.is_none() {
             self.set_dialog_option_rows(Vec::new());
+            // The chrome buttons die with the frame (auditA #6 —
+            // no dialog, no close label).
+            self.dialog_button_hits.borrow_mut().clear();
         }
     }
 
@@ -2680,6 +2713,18 @@ impl Store {
     #[must_use]
     pub fn dialog_option_rows(&self) -> Vec<Option<usize>> {
         self.dialog_option_rows.borrow().clone()
+    }
+
+    /// Record the top dialog's chrome buttons (the overlay render,
+    /// each frame — auditA #6).
+    pub fn set_dialog_button_hits(&self, hits: Vec<DialogButtonHit>) {
+        *self.dialog_button_hits.borrow_mut() = hits;
+    }
+
+    /// The top dialog's chrome buttons from the last render.
+    #[must_use]
+    pub fn dialog_button_hits(&self) -> Vec<DialogButtonHit> {
+        self.dialog_button_hits.borrow().clone()
     }
 
     /// #33 — the footer location label's hit rect from the last
