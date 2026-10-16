@@ -253,6 +253,7 @@ pub fn render_session(
                 .expanded_group_keys(session_id)
                 .into_iter()
                 .collect::<Vec<String>>(),
+            collapsed_thoughts: store.collapsed_thought_keys(session_id),
             image_strip: crate::components::message::rows::ImageStripOptions {
                 enabled: store.image_preview(),
                 protocol: store.graphics_protocol(),
@@ -310,7 +311,18 @@ pub fn render_session(
                 if screen_y >= content_top + transcript_height {
                     return None;
                 }
-                if row.key.starts_with("group:Reasoning:") {
+                // The disclosure toggles: EVERY group kind arms
+                // (lane/if item 4 — v2's `useDisclosure` toggle rides
+                // `GroupContent`'s InlineToolRow for Reasoning AND
+                // Exploration, Activity's and Instructions' own rows:
+                // group-view.tsx:152/183/219/256) with a TIGHT rect:
+                // v2's toggle box is the InlineToolRow content
+                // (paddingLeft 3 + the 2-wide icon slot + the label's
+                // own glyphs, `group-view.tsx:176-190`), not the whole
+                // row. The thought rows arm as the minimal-mode
+                // ReasoningHeader toggle (message-parts.tsx:80-86) —
+                // the first line's glyphs.
+                if row.key.starts_with("group:") {
                     let heads = row.placed.iter().filter(|item| item.y == row.y);
                     let x = heads.clone().map(|item| item.x).min().unwrap_or_default();
                     let end = heads
@@ -334,6 +346,40 @@ pub fn render_session(
                         action: crate::store::TranscriptHitAction::ToggleGroup(row.key.clone()),
                         y: screen_y,
                         height: row.height,
+                        x,
+                        width: end - x,
+                    })
+                } else if let Some(rest) = row.key.strip_prefix("thought:") {
+                    // `thought:{message_id}:{part_id}` — the part ids
+                    // may contain colons themselves; split at the
+                    // FIRST (the message id never does).
+                    let (message_id, part_id) = rest.split_once(':')?;
+                    let heads = row.placed.iter().filter(|item| item.y == row.y);
+                    let x = heads.clone().map(|item| item.x).min().unwrap_or_default();
+                    let end = heads
+                        .map(|item| {
+                            item.x
+                                + item
+                                    .lines
+                                    .first()
+                                    .map(|line| {
+                                        line.runs
+                                            .iter()
+                                            .map(|run| crate::wrap::display_width(&run.text))
+                                            .sum::<usize>()
+                                    })
+                                    .unwrap_or_default()
+                        })
+                        .max()
+                        .unwrap_or_default();
+                    (end > x).then(|| crate::store::TranscriptHitRow {
+                        session_id: session_id.to_owned(),
+                        action: crate::store::TranscriptHitAction::ToggleThought {
+                            message_id: message_id.to_owned(),
+                            part_id: part_id.to_owned(),
+                        },
+                        y: screen_y,
+                        height: 1,
                         x,
                         width: end - x,
                     })
