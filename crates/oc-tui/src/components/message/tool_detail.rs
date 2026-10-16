@@ -750,7 +750,7 @@ fn detail_inline_row(
     error_reveal(head, state, expanded, theme, width)
 }
 
-/// The failed-row error reveal shared by the InlineTool families:
+/// The failed-row error reveal shared by the `InlineTool` families:
 /// `expanded` gates the error row stacked under the head.
 fn error_reveal(
     head: RowRender,

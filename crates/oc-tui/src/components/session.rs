@@ -687,17 +687,20 @@ fn link_hit_rows(
 
 /// One tool cell's hit row (the `tool:`/`part:` arm's shared body):
 /// * `execute` + background shells: `openDetails` on click AND on
-///   error-click → the detail dialog (OpenToolDialog, :3207-3218);
-/// * the Subagent/Task row: `onClick` navigates to the child session
-///   (`metadata.sessionID ?? metadata.sessionId`, :3083-3112);
-/// * `write`/`edit`/`patch` BlockTool cards: NO onClick (:2989-3016)
-///   — never arm;
-/// * `read`/`glob`/`grep`/`webfetch`/`websearch` InlineTools carry no
-///   `onClick` (:2991-3081): arm ONLY while failed (the error
-///   reveal — `InlineTool`'s failed branch, :2656-2668);
-/// * the generic tool: `expandable() = input.length > 0` (:2548) —
-///   arm when expandable or failed;
-/// * the shell card: `expandable() = shellID || overflow` (:2927) —
+///   error-click → the detail dialog (`OpenToolDialog`, index.tsx:
+///   3207-3218);
+/// * the `Subagent`/Task row: its `onClick` navigates to the child session
+///   (`metadata.sessionID ?? metadata.sessionId`, index.tsx:3083-3112);
+/// * `write`/`edit`/`patch` `BlockTool` cards: NO `onClick`
+///   (index.tsx:2989-3016) — never arm;
+/// * `read`/`glob`/`grep`/`webfetch`/`websearch` `InlineTool`s carry
+///   no `onClick` (index.tsx:2991-3081): arm ONLY while failed (the
+///   error reveal — `InlineTool`'s failed branch, index.tsx:
+///   2656-2668);
+/// * the generic tool: `expandable() = input.length > 0`
+///   (index.tsx:2548) — arm when expandable or failed;
+/// * the shell card: `expandable() = shellID || overflow`
+///   (index.tsx:2927) —
 ///   the port approximates always-expandable (registered).
 fn tool_cell_hit(
     store: &Store,
@@ -712,11 +715,10 @@ fn tool_cell_hit(
         .iter()
         .find(|message| message.id() == message_id)
         .and_then(|message| crate::components::message::resolve_part(message.parts(), part_id))?;
-    let (name, state) = match part {
-        crate::components::message::model::Part::Tool { name, state, .. } => (name, state),
-        _ => return None,
+    let crate::components::message::model::Part::Tool { name, state, .. } = part else {
+        return None;
     };
-    let canonical = crate::components::message::model::canonical_tool_name(&name).to_owned();
+    let canonical = crate::components::message::model::canonical_tool_name(name).to_owned();
     let failed = state.error.is_some() || matches!(state.status, ToolStatus::Error);
     let background_shell = canonical == "shell" && state.metadata.contains_key("shellID");
     let action = if canonical == "execute" || background_shell {

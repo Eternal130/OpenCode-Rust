@@ -492,7 +492,7 @@ impl App {
                                 let tabs = self.store.tabs();
                                 let fallback = tabs.tabs.last().map(|tab| tab.session_id.clone());
                                 if let Some(session_id) = fallback {
-                                    self.store.select_tab(session_id);
+                                    self.store.select_tab(session_id.as_str());
                                 }
                             } else {
                                 // The close-hold (session-tabs.tsx:
@@ -668,10 +668,10 @@ impl App {
                             // 3107-3112) and the markdown link's
                             // openUrl (ui/link.tsx:27).
                             crate::store::TranscriptHitAction::NavigateToSession { session_id } => {
-                                self.store.select_tab(session_id);
+                                self.store.select_tab(session_id.as_str());
                             }
                             crate::store::TranscriptHitAction::OpenLink { url } => {
-                                self.store.open_url(url);
+                                self.store.open_url(url.as_str());
                             }
                         }
                         self.store.request_redraw();
@@ -702,7 +702,7 @@ impl App {
                             let fallback =
                                 self.store.tabs().tabs.last().map(|tab| tab.session_id.clone());
                             if let Some(session_id) = fallback {
-                                self.store.select_tab(session_id);
+                                self.store.select_tab(session_id.as_str());
                             }
                         } else {
                             self.store.close_tab(Some(&id));
@@ -7026,30 +7026,39 @@ fn subagent_row_navigates_to_the_child_session() {
     );
 }
 
-/// The failed InlineTool families' error reveal (read/glob/grep/
+/// The failed `InlineTool` families' error reveal (read/glob/grep/
 /// webfetch/websearch arm ONLY while failed — index.tsx:2656-2668)
 /// and the un-expandable surfaces that never arm (write/edit
-/// BlockTool cards, a settled read, an input-less generic tool).
+/// `BlockTool` cards, a settled read, an input-less generic tool).
 #[test]
+#[allow(clippy::too_many_lines)]
 fn tool_row_arms_follow_the_v2_table() {
-    use crate::components::message::model::{Message, Part, PartTime, ToolState};
+    use crate::components::message::model::{Message, Part, PartTime, ToolState, ToolStatus};
+    use crossterm::event::{MouseButton, MouseEventKind};
     let mut app = App::new((80, 24));
     // Grouping OFF → the tool rows render as ungrouped part rows.
     app.store.toggle_exploration_grouping();
     let failed_read = ToolState {
-        status: crate::components::message::model::ToolStatus::Error,
+        status: ToolStatus::Error,
         error: Some("boom: path missing".into()),
         ..ToolState::default()
     };
-    let mut ok_read = ToolState::default();
-    ok_read.status = crate::components::message::model::ToolStatus::Completed;
-    let mut write = ToolState::default();
-    write.status = crate::components::message::model::ToolStatus::Completed;
-    write.input.insert("path".into(), "a.rs".into());
-    write.input.insert("content".into(), "fn main() {}".into());
-    let mut generic = ToolState::default();
-    generic.status = crate::components::message::model::ToolStatus::Completed;
-    generic.input.insert("target".into(), "x".into());
+    let ok_read = ToolState { status: ToolStatus::Completed, ..ToolState::default() };
+    let write = ToolState {
+        status: ToolStatus::Completed,
+        input: [
+            ("path".to_owned(), "a.rs".to_owned()),
+            ("content".to_owned(), "fn main() {}".to_owned()),
+        ]
+        .into_iter()
+        .collect(),
+        ..ToolState::default()
+    };
+    let generic = ToolState {
+        status: ToolStatus::Completed,
+        input: [("target".to_owned(), "x".to_owned())].into_iter().collect(),
+        ..ToolState::default()
+    };
     app.store.set_messages(
         "s1",
         vec![
@@ -7142,7 +7151,6 @@ fn tool_row_arms_follow_the_v2_table() {
         })
         .expect("the failed read's hit")
         .clone();
-    use crossterm::event::{MouseButton, MouseEventKind};
     app.mouse_event(&mouse(
         MouseEventKind::Up(MouseButton::Left),
         10,
