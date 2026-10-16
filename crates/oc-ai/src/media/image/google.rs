@@ -313,7 +313,7 @@ mod tests {
         let Body::Json { value, .. } = body else { panic!() };
         assert_eq!(value["generationConfig"]["imageConfig"], json!({ "aspectRatio": "16:9", "imageSize": "2K" }));
         assert_eq!(value["generationConfig"]["thinkingConfig"], json!({ "thinkingLevel": "LOW" }));
-        assert_eq!(value["generationConfig"]["seed"], json!(7.0));
+        assert_eq!(value["generationConfig"]["seed"], json!(7));
     }
 
     #[test]
