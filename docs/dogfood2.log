@@ -168,3 +168,11 @@ The lane's model_default change is neutral on the corpus: "Build · Fake Model
 parityfake" row byte-identical both sides.
 
 ## Phase 9 — verify-lane final (phased: fmt/clippy → workspace → pty → release budgets → rig full)
+- 9A fmt --all --check: CLEAN (after one fmt pass over the new code)
+- 9B clippy --workspace --all-targets --locked -D warnings: CLEAN (fixed: is_none_or,
+       clone_into, uninlined format args, Value::is_object method ref, useless as_ref)
+- 9C nextest full workspace: 2863 passed / 13 skipped / 2 timing-flakes retried OK
+       (pty_engine_cycle…, m1_scenario_prompt_fake_llm — known classes, pass on retry)
+- 9C' nextest --profile pty (serialized): 2863 passed / 13 skipped
+- 9D release build -p oc-cli --locked: OK (3m18s); frame_budget release tests: 11/11 PASS
+- 9E rig FULL matrix (both sizes × runs 2, no ref cache): RUNNING (background)
