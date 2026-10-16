@@ -6,10 +6,10 @@
 
 use crate::media::body::{merge_records, Body};
 use crate::media::model::{
-    transcription_field_present, Addressed, Mode, ResponseContext, TranscriptionEvent,
+    transcription_field_present, Addressed, ResponseContext, TranscriptionEvent,
     TranscriptionRequest, TranscriptionWord,
 };
-use crate::media::protocol::{Frame, Identity, MediaProtocolBase, StreamProtocol};
+use crate::media::protocol::{Identity, MediaProtocolBase, StreamProtocol};
 use crate::media::utils::gemini;
 use crate::schema::{AiError, MediaUsage};
 
@@ -43,14 +43,15 @@ pub fn body_from(request: &Addressed<TranscriptionRequest>) -> Result<Body, AiEr
             // Parts carry no offsets of their own, so segment times come
             // from word offsets.
             "wordTimestamp",
-            (request.request.diarize == Some(true)
-                || request.request.timestamps
-                    == Some(crate::media::model::TranscriptionTimestamps::Word)
-                || request.request.timestamps
-                    == Some(crate::media::model::TranscriptionTimestamps::Segment))
-            .then(|| serde_json::json!(true)),
+            Some(crate::media::body::json_flag(
+                request.request.diarize == Some(true)
+                    || request.request.timestamps
+                        == Some(crate::media::model::TranscriptionTimestamps::Word)
+                    || request.request.timestamps
+                        == Some(crate::media::model::TranscriptionTimestamps::Segment),
+            )),
         ),
-        ("diarization", (request.request.diarize == Some(true)).then(|| serde_json::json!(true))),
+        ("diarization", Some(crate::media::body::json_flag(request.request.diarize == Some(true)))),
     ])
     .unwrap_or_default();
     let config = merge_records(&[
@@ -107,21 +108,25 @@ fn seconds(value: &serde_json::Value) -> Option<f64> {
 fn turn(
     part: &serde_json::Value,
 ) -> (String, Vec<TranscriptionWord>, Option<crate::media::model::TranscriptionSegment>) {
-    let text = part.get("text").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-    let speaker_label = part.get("speakerLabel").and_then(|v| v.as_str());
+    let text = part.get("text").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+    let speaker_label = part.get("speakerLabel").and_then(serde_json::Value::as_str);
     let words: Vec<TranscriptionWord> = part
         .get("words")
-        .and_then(|value| value.as_array())
+        .and_then(serde_json::Value::as_array)
         .map(|items| {
             items
                 .iter()
                 .map(|word| TranscriptionWord {
-                    text: word.get("word").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    text: word
+                        .get("word")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
                     start_seconds: word.get("startOffset").and_then(seconds).unwrap_or_default(),
                     end_seconds: word.get("endOffset").and_then(seconds).unwrap_or_default(),
                     speaker: word
                         .get("speakerLabel")
-                        .and_then(|v| v.as_str())
+                        .and_then(serde_json::Value::as_str)
                         .or(speaker_label)
                         .map(str::to_string),
                     confidence: None,
@@ -153,7 +158,7 @@ pub fn step(state: &mut State, frame: &str) -> Result<Vec<TranscriptionEvent>, A
     let mut events = Vec::new();
     for part in chunk
         .pointer("/candidates/0/content/parts")
-        .and_then(|value| value.as_array())
+        .and_then(serde_json::Value::as_array)
         .cloned()
         .unwrap_or_default()
     {
@@ -265,6 +270,7 @@ impl StreamProtocol for GoogleTranscription {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::media::model::Mode;
     use crate::schema::media;
     use serde_json::json;
 

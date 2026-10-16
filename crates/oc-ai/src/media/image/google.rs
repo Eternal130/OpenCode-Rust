@@ -8,7 +8,7 @@ use crate::media::body::{merge_records, Body};
 use crate::media::model::{image_field_present, DecodeContext, ImageRequest, ImageResponse};
 use crate::media::protocol::{Identity, InlineProtocol, MediaProtocolBase, TextOutput};
 use crate::media::utils::{self, gemini};
-use crate::schema::media::{self, Info, Notice, NoticeType};
+use crate::schema::media::{Notice, NoticeType};
 use crate::schema::{AiError, MediaUsage};
 
 pub const ID: &str = "google-images";
@@ -44,19 +44,20 @@ fn generation_config(request: &ImageRequest) -> crate::schema::ProviderOptions {
         ("responseModalities".to_string(), serde_json::json!(["IMAGE"])),
         (
             "imageConfig".to_string(),
-            (!image_config.is_empty())
-                .then(|| serde_json::Value::Object(image_config.clone()))
-                .unwrap_or(serde_json::Value::Null),
+            if image_config.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::Object(image_config.clone())
+            },
         ),
-        (
-            "seed".to_string(),
-            request.seed.map(|seed| serde_json::json!(seed)).unwrap_or(serde_json::Value::Null),
-        ),
+        ("seed".to_string(), crate::media::body::json_opt(request.seed)),
         (
             "thinkingConfig".to_string(),
-            (!thinking_config.is_empty())
-                .then(|| serde_json::Value::Object(thinking_config.clone()))
-                .unwrap_or(serde_json::Value::Null),
+            if thinking_config.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::Object(thinking_config.clone())
+            },
         ),
     ];
     let base_record: serde_json::Map<String, serde_json::Value> =
@@ -107,27 +108,17 @@ pub fn check_unsupported(request: &ImageRequest) -> Result<(), AiError> {
     identity().reject_unsupported(&present).map_or(Ok(()), Err)
 }
 
-fn value_strings(value: &serde_json::Value, key: &str) -> Vec<String> {
-    value
-        .get(key)
-        .and_then(|value| value.as_array())
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str().map(str::to_string))
-                .collect::<Vec<String>>()
-        })
-        .unwrap_or_default()
-}
-
 /// `decodeResponse` (google-images.ts:127-259).
 pub fn decode(
     output: &TextOutput,
     context: &DecodeContext<ImageRequest>,
 ) -> Result<ImageResponse, AiError> {
     let decoded = output.decode_json(output.body)?;
-    let candidates =
-        decoded.get("candidates").and_then(|value| value.as_array()).cloned().unwrap_or_default();
+    let candidates = decoded
+        .get("candidates")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
 
     // Thought parts are drafts; only non-thought inline data is a final
     // image (google-images.ts:151-166).
@@ -135,12 +126,12 @@ pub fn decode(
     for (candidate_index, candidate) in candidates.iter().enumerate() {
         let parts = candidate
             .pointer("/content/parts")
-            .and_then(|value| value.as_array())
+            .and_then(serde_json::Value::as_array)
             .cloned()
             .unwrap_or_default();
         for (part_index, part) in parts.iter().enumerate() {
             let Some(inline) = part.get("inlineData") else { continue };
-            if part.get("thought").and_then(|value| value.as_bool()) == Some(true) {
+            if part.get("thought").and_then(serde_json::Value::as_bool) == Some(true) {
                 continue;
             }
             let mut google = std::collections::BTreeMap::new();
@@ -177,8 +168,8 @@ pub fn decode(
             images.push(utils::decoded_asset(
                 |message| output.invalid(message),
                 &format!("Google Images candidate {candidate_index} part {part_index}"),
-                inline.get("data").and_then(|value| value.as_str()).unwrap_or_default(),
-                inline.get("mimeType").and_then(|value| value.as_str()),
+                inline.get("data").and_then(serde_json::Value::as_str).unwrap_or_default(),
+                inline.get("mimeType").and_then(serde_json::Value::as_str),
                 None,
                 Some(metadata),
             )?);
@@ -187,7 +178,9 @@ pub fn decode(
     if images.is_empty() {
         let reasons: Vec<String> = candidates
             .iter()
-            .filter_map(|candidate| candidate.get("finishReason").and_then(|value| value.as_str()))
+            .filter_map(|candidate| {
+                candidate.get("finishReason").and_then(serde_json::Value::as_str)
+            })
             .map(str::to_string)
             .collect();
         let suffix = if reasons.is_empty() {
@@ -218,13 +211,13 @@ pub fn decode(
         });
     }
     for (index, candidate) in candidates.iter().enumerate() {
-        let Some(reason) = candidate.get("finishReason").and_then(|value| value.as_str()) else {
+        let Some(reason) = candidate.get("finishReason").and_then(serde_json::Value::as_str) else {
             continue;
         };
         if reason == "STOP" {
             continue;
         }
-        let finish_message = candidate.get("finishMessage").and_then(|value| value.as_str());
+        let finish_message = candidate.get("finishMessage").and_then(serde_json::Value::as_str);
         let mut google = std::collections::BTreeMap::new();
         google.insert(
             "candidateIndex".to_string(),
@@ -242,7 +235,7 @@ pub fn decode(
             kind: NoticeType::Filtered,
             message: format!(
                 "Google Images candidate {} finished with {reason}{}",
-                candidate.get("index").and_then(|value| value.as_f64()).unwrap_or(index as f64),
+                candidate.get("index").and_then(serde_json::Value::as_f64).unwrap_or(index as f64),
                 finish_message.map(|message| format!(": {message}")).unwrap_or_default()
             ),
             provider_metadata: Some(metadata),
@@ -252,9 +245,10 @@ pub fn decode(
     let usage = decoded.get("usageMetadata");
     let (usage_value, output_tokens) = match usage {
         Some(value) if !value.is_null() => {
-            let prompt = value.get("promptTokenCount").and_then(|v| v.as_f64());
-            let candidates_count = value.get("candidatesTokenCount").and_then(|v| v.as_f64());
-            let thoughts = value.get("thoughtsTokenCount").and_then(|v| v.as_f64());
+            let prompt = value.get("promptTokenCount").and_then(serde_json::Value::as_f64);
+            let candidates_count =
+                value.get("candidatesTokenCount").and_then(serde_json::Value::as_f64);
+            let thoughts = value.get("thoughtsTokenCount").and_then(serde_json::Value::as_f64);
             let output = candidates_count.map(|count| count + thoughts.unwrap_or(0.0));
             (
                 Some(MediaUsage::Tokens {
@@ -263,7 +257,7 @@ pub fn decode(
                     total: crate::protocols::shared::total_tokens(
                         prompt,
                         output,
-                        value.get("totalTokenCount").and_then(|v| v.as_f64()),
+                        value.get("totalTokenCount").and_then(serde_json::Value::as_f64),
                     ),
                     details: Some(
                         serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(

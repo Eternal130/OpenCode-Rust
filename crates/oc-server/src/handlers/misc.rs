@@ -71,13 +71,87 @@ pub fn routes() -> axum::Router<SharedState> {
 // POST /api/experimental/generate
 // ---------------------------------------------------------------------------
 
+/// `Generate.UnavailableError` mapping (generate.ts:47-49).
+fn generate_unavailable(error: &oc_ai::schema::AiError) -> ApiError {
+    ApiError::service_unavailable(error.message().to_string(), Some("opencode"))
+}
+
 async fn generate_text(
     State(state): State<SharedState>,
+    uri: Uri,
+    headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let _ = (state, body["prompt"].as_str(), body["model"].as_str());
-    // One-shot generation needs the engine's LLM surface (TODO(phase-9)).
-    Err(ApiError::service_unavailable("Text generation is not available", Some("opencode")))
+    use futures::StreamExt as _;
+    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let services = services(&state, &location).await?;
+    let Some(prompt) = body["prompt"].as_str() else {
+        return Err(ApiError::invalid_request("expected string prompt"));
+    };
+    // One stateless generation over the base configuration's model
+    // (generate.ts): resolve the optional reference or the configured
+    // default, then stream one request with session-attribution headers
+    // and no stored session.
+    let synthetic = oc_core::database::schema::SessionRow::new(
+        "generate",
+        services.project.id.clone(),
+        &services.project.directory.to_string_lossy(),
+        "generate",
+        "0",
+    )
+    .map_err(|error| {
+        crate::errors::debug_cause("generate:text", &error);
+        ApiError::service_unavailable("Text generation is not available", Some("opencode"))
+    })?;
+    let resolved = match &body["model"] {
+        Value::Null => services.resolver.resolve(&synthetic).map_err(|error| match error {
+            oc_core::session::runner::ModelError::NotSelected(_) => {
+                ApiError::invalid_request("No model specified and no supported model is available")
+            }
+            other => ApiError::service_unavailable(other.to_string(), Some("opencode")),
+        })?,
+        reference => {
+            let parsed: Result<oc_schema::model::Ref, _> =
+                serde_json::from_value(reference.clone());
+            match parsed {
+                Ok(reference) => {
+                    let provider = reference.provider_id.0.clone();
+                    let model = reference.id.0.clone();
+                    services.resolver.resolve_selected(&synthetic, &reference).map_err(|error| {
+                        crate::errors::debug_cause("generate:text", &error);
+                        ApiError::invalid_request(format!("Model unavailable: {provider}/{model}"))
+                    })?
+                }
+                Err(_) => return Err(ApiError::invalid_request("expected string prompt")),
+            }
+        }
+    };
+    let mut request = oc_ai::schema::LLMRequest::new(resolved.model);
+    request.messages = vec![oc_ai::schema::messages::Message::user(prompt)];
+    // Gateways require session attribution even for a stateless call; no
+    // session is stored (generate.ts:57-59).
+    let mut http_headers = std::collections::BTreeMap::new();
+    http_headers.insert(
+        "x-opencode-session".to_string(),
+        oc_schema::id::SessionId::new().as_str().to_string(),
+    );
+    request.http = Some(oc_ai::schema::HttpOptions {
+        headers: Some(http_headers),
+        ..oc_ai::schema::HttpOptions::default()
+    });
+    let stream_result = services.runner.llm().stream(request).await;
+    let mut stream = stream_result.map_err(|error| generate_unavailable(&error))?;
+    let mut text = String::new();
+    while let Some(event) = stream.next().await {
+        match event.map_err(|error| generate_unavailable(&error))? {
+            oc_ai::schema::LLMEvent::TextDelta { text: delta, .. } => text.push_str(&delta),
+            oc_ai::schema::LLMEvent::ProviderError { message, .. } => {
+                return Err(ApiError::service_unavailable(message, Some("opencode")));
+            }
+            _ => {}
+        }
+    }
+    Ok(super::common::json_data(json!({ "text": text })))
 }
 
 // ---------------------------------------------------------------------------

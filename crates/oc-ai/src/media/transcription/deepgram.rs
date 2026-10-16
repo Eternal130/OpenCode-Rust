@@ -29,16 +29,24 @@ fn query(request: &TranscriptionRequest) -> Result<crate::media::body::Query, Ai
             ("language", request.language.clone().map(|value| serde_json::json!(value))),
             // Deepgram assumes English unless asked to detect, unlike the
             // other routes' auto-detection.
-            ("detect_language", request.language.is_none().then(|| serde_json::json!(true))),
+            ("detect_language", Some(crate::media::body::json_flag(request.language.is_none()))),
             // `diarize=true` is deprecated in favor of choosing a
             // diarization model.
-            ("diarize_model", (request.diarize == Some(true)).then(|| serde_json::json!("latest"))),
+            (
+                "diarize_model",
+                if request.diarize == Some(true) {
+                    Some(serde_json::json!("latest"))
+                } else {
+                    None
+                },
+            ),
             (
                 "utterances",
-                (request.diarize == Some(true)
-                    || request.timestamps
-                        == Some(crate::media::model::TranscriptionTimestamps::Segment))
-                .then(|| serde_json::json!(true)),
+                Some(crate::media::body::json_flag(
+                    request.diarize == Some(true)
+                        || request.timestamps
+                            == Some(crate::media::model::TranscriptionTimestamps::Segment),
+                )),
             ),
         ])
         .as_ref(),
@@ -84,8 +92,8 @@ fn speaker(value: Option<f64>) -> Option<String> {
 
 fn word_text(word: &serde_json::Value) -> String {
     word.get("punctuated_word")
-        .and_then(|value| value.as_str())
-        .unwrap_or_else(|| word.get("word").and_then(|value| value.as_str()).unwrap_or_default())
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_else(|| word.get("word").and_then(serde_json::Value::as_str).unwrap_or_default())
         .to_string()
 }
 
@@ -100,20 +108,20 @@ pub fn decode(
     let Some(alternative) = alternative else {
         return Err(output.invalid("Deepgram returned no transcript"));
     };
-    let duration = decoded.pointer("/metadata/duration").and_then(|v| v.as_f64());
-    let request_id = decoded.pointer("/metadata/request_id").and_then(|v| v.as_str());
+    let duration = decoded.pointer("/metadata/duration").and_then(serde_json::Value::as_f64);
+    let request_id = decoded.pointer("/metadata/request_id").and_then(serde_json::Value::as_str);
 
     // Utterances split on pauses, not speakers: the v2 diarizer labels a
     // whole utterance with one speaker even when its words change
     // speaker, so segments split each utterance at speaker changes.
     let utterances = decoded
         .pointer("/results/utterances")
-        .and_then(|value| value.as_array())
+        .and_then(serde_json::Value::as_array)
         .cloned()
         .unwrap_or_default();
     let mut segments = Vec::new();
     for utterance in &utterances {
-        let words = utterance.get("words").and_then(|value| value.as_array());
+        let words = utterance.get("words").and_then(serde_json::Value::as_array);
         match words {
             Some(words) if !words.is_empty() => {
                 for turn in speaker_turns::group(words, |word| word.get("speaker").cloned()) {
@@ -123,34 +131,49 @@ pub fn decode(
                         text: turn.iter().map(word_text).collect::<Vec<_>>().join(" "),
                         start_seconds: first
                             .get("start")
-                            .and_then(|v| v.as_f64())
+                            .and_then(serde_json::Value::as_f64)
                             .unwrap_or_default(),
-                        end_seconds: last.get("end").and_then(|v| v.as_f64()).unwrap_or_default(),
-                        speaker: speaker(first.get("speaker").and_then(|v| v.as_f64())),
+                        end_seconds: last
+                            .get("end")
+                            .and_then(serde_json::Value::as_f64)
+                            .unwrap_or_default(),
+                        speaker: speaker(first.get("speaker").and_then(serde_json::Value::as_f64)),
                     });
                 }
             }
             _ => segments.push(crate::media::model::TranscriptionSegment {
                 text: utterance
                     .get("transcript")
-                    .and_then(|v| v.as_str())
+                    .and_then(serde_json::Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
-                start_seconds: utterance.get("start").and_then(|v| v.as_f64()).unwrap_or_default(),
-                end_seconds: utterance.get("end").and_then(|v| v.as_f64()).unwrap_or_default(),
-                speaker: speaker(utterance.get("speaker").and_then(|v| v.as_f64())),
+                start_seconds: utterance
+                    .get("start")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or_default(),
+                end_seconds: utterance
+                    .get("end")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or_default(),
+                speaker: speaker(utterance.get("speaker").and_then(serde_json::Value::as_f64)),
             }),
         }
     }
-    let words = alternative.get("words").and_then(|value| value.as_array()).map(|words| {
+    let words = alternative.get("words").and_then(serde_json::Value::as_array).map(|words| {
         words
             .iter()
             .map(|word| crate::media::model::TranscriptionWord {
                 text: word_text(word),
-                start_seconds: word.get("start").and_then(|v| v.as_f64()).unwrap_or_default(),
-                end_seconds: word.get("end").and_then(|v| v.as_f64()).unwrap_or_default(),
-                speaker: speaker(word.get("speaker").and_then(|v| v.as_f64())),
-                confidence: word.get("confidence").and_then(|v| v.as_f64()),
+                start_seconds: word
+                    .get("start")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or_default(),
+                end_seconds: word
+                    .get("end")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or_default(),
+                speaker: speaker(word.get("speaker").and_then(serde_json::Value::as_f64)),
+                confidence: word.get("confidence").and_then(serde_json::Value::as_f64),
             })
             .collect::<Vec<_>>()
     });
@@ -164,15 +187,15 @@ pub fn decode(
     Ok(TranscriptionResponse {
         text: alternative
             .get("transcript")
-            .and_then(|v| v.as_str())
+            .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_string(),
         segments: (!segments.is_empty()).then_some(segments),
         words,
         language: channel
             .and_then(|channel| channel.get("detected_language"))
-            .and_then(|v| v.as_str())
-            .map(|value| value.to_ascii_lowercase()),
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_ascii_lowercase),
         duration_seconds: duration,
         usage: duration.map(|seconds| MediaUsage::Seconds { seconds }),
         notices: None,
