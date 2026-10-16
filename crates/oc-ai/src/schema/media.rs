@@ -160,6 +160,42 @@ impl Asset {
     }
 }
 
+/// A provider-side partial result such as stripped audio or a moderated
+/// sample; never a silent drop (port of `Media.Notice`, media.ts:87-92).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Notice {
+    #[serde(rename = "type")]
+    pub kind: NoticeType,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_metadata: Option<ProviderMetadata>,
+}
+
+/// `Media.Notice["type"]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NoticeType {
+    #[serde(rename = "moderated")]
+    Moderated,
+    #[serde(rename = "filtered")]
+    Filtered,
+    #[serde(rename = "other")]
+    Other,
+}
+
+/// `${number}:${number}` aspect ratio (media.ts:56-60); any string is
+/// accepted at runtime, this validates the documented pattern.
+#[must_use]
+pub fn is_aspect_ratio(value: &str) -> bool {
+    let parts: Vec<&str> = value.split(':').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+    [parts[0], parts[1]].iter().all(|part| {
+        !part.is_empty() && part.chars().all(|c| c.is_ascii_digit() || c == '.')
+    })
+}
+
 /// Constructors mirroring `Media.bytes/base64/url/ref`.
 #[must_use]
 pub fn bytes(data: Vec<u8>, media_type: Option<String>) -> Asset {

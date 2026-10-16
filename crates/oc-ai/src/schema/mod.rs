@@ -16,9 +16,11 @@ pub use errors::{
     CLASSIFICATION_CONTEXT_OVERFLOW, CLASSIFICATION_INCOMPLETE_STREAM,
     CLASSIFICATION_PAYLOAD_TOO_LARGE,
 };
-pub use events::{FinishReason, FinishReasonDetails, LLMEvent, LLMResponse, ResponseState, Usage};
+pub use events::{
+    FinishReason, FinishReasonDetails, LLMEvent, LLMResponse, MediaUsage, ResponseState, Usage,
+};
 pub use ids::{ContentBlockId, ModelId, ProtocolId, ProviderId, ResponseId, RouteId, ToolCallId};
-pub use media::{Asset, Kind as MediaKind, Source as MediaSource};
+pub use media::{Asset, Kind as MediaKind, Notice, NoticeType, Source as MediaSource};
 pub use messages::{
     ContentPart, LLMRequest, LLMRequestPatch, Message, MessageRole, SystemPart, ToolChoice,
     ToolContentItems, ToolDefinition, ToolEntry, ToolNamespace, ToolOutput, ToolResultValue,
