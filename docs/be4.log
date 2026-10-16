@@ -1,0 +1,55 @@
+# Lane BE-4 — missing LLM provider protocols (Bedrock, Vertex, Copilot chat) + registered remainders
+
+Scope (docs/auditE-core.md §1.8/#6): the three LLM chat protocols behind the
+typed `UnsupportedProtocol` clean error (oc-core provider_catalog/facade.rs:48-56),
+plus the BE-2b/BE-3b registered remainders that fit: `session.diff` bus
+registration, media ROUTE layer only if time allows. oc-core/oc-ai only.
+
+Worktree: `.worktrees/lane-be4` (branch lane/be4).
+
+## Phase inventory (v2 citations)
+
+1. **Bedrock** — ref `packages/ai/src/protocols/bedrock-converse.ts` (892 L) +
+   `bedrock-event-stream.ts` (142 L) + `utils/bedrock-auth.ts` (SigV4 via
+   aws4fetch; bearer `AWS_BEARER_TOKEN_BEDROCK` wins over SigV4) +
+   `utils/bedrock-cache.ts` (4-breakpoint cap, positional `cachePoint` blocks)
+   + `utils/bedrock-media.ts` (image/document blocks) + providers
+   `amazon-bedrock.ts` (converse, `bedrock-runtime.{region}.amazonaws.com`) and
+   `amazon-bedrock-mantle.ts` (`bedrock-mantle.{region}.api.aws/v1`, OpenAI
+   chat/responses + Anthropic messages protocols). Rust gap: catalog models
+   resolve to `@opencode/ai/providers/amazon-bedrock/mantle[/chat|/responses]`
+   (native.rs `mantle()`), all unbound today.
+2. **Vertex** — ref `providers/google-vertex.ts` + `google-vertex-shared.ts`:
+   Gemini protocol reuse, `https://{location}-aiplatform.googleapis.com
+   /v1beta1/projects/{project}/locations/{location}[/publishers/google]`,
+   express mode (`aiplatform.googleapis.com/v1/publishers/google` +
+   `x-goog-api-key`), tuned `endpoints/` models, ADC bearer
+   (`google-auth-library` full chain), `labels` provider option, `serviceTier`
+   header `x-vertex-ai-llm-shared-request-type`. Rust: gemini.rs protocol is
+   already shared ("Google AI Studio and Vertex"), only the deployment
+   (endpoint/auth/project routing) is missing.
+3. **Copilot chat** — ref `plugin/provider/github-copilot.ts:434-558`:
+   openai-compatible chat over the bound transport, `copilotFetch`/
+   `applyHeaders` (Authorization bearer, `Openai-Intent: conversation-edits`,
+   `X-GitHub-Api-Version` 2026-08-01, `x-initiator` user/agent escalation,
+   `Copilot-Vision-Request`), `interactionType(kind, child)` vocabulary.
+   Credential side landed in BE-3b (`integration/copilot.rs`
+   CredentialBindings). Chat protocol = openai_compatible route + copilot
+   per-request header policy.
+4. **session.diff** — v2 `schema/src/v1/session.ts:633-639`: **ephemeral**
+   `{sessionID, diff}`; missing from oc-core bus/registry.rs DEFINITIONS.
+5. **media ROUTE layer** — optional; register if time runs out.
+
+## Log (append-only)
+
+- phase-1 (oc-ai bedrock): sigv4.rs (canonical request + HMAC chain, no new
+  deps beyond sha2), event_stream.rs (AWS event-stream frame codec + CRC32,
+  FramingKind::AwsEventStream in framing.rs), converse.rs (body lowering +
+  stream state machine + bedrock_converse_route / bedrock_invoke_route /
+  bedrock_mantle helpers). Tests: AWS SigV4 doc vector, CRC32 vector,
+  event-stream round-trip incl. error frames + mid-frame chunk splits,
+  request-shape golden, streaming decode fixture, typed error mapping.
+- phase-1 done: 689/689 oc-ai tests green (30 new bedrock + framing suite),
+  clippy 0 warnings, fmt applied. AWS docs GET SigV4 vector reproduces the
+  documented signature byte-for-byte (5d672d79...); POST variant pinned
+  against a python hmac cross-check. Committing WIP.
