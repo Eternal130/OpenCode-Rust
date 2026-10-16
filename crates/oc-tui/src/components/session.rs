@@ -427,8 +427,29 @@ pub fn render_session(
         // Lane M5 dual-path — the flag selects the opentui-solid pane
         // tree (`sidebar_solid`) or the hand-rolled placed-runs walk
         // (the `OC_SIDEBAR_OPENTUI=0` fallback, one release); BOTH
-        // consume the same `render_sidebar` geometry.
-        let pane = crate::components::sidebar_solid::sidebar_pane_frame(&view, styles, pane_height);
+        // consume the same `render_sidebar` geometry. The content
+        // slot's wheel offset (auditA #1) rides the same walk.
+        let scroll = store.sidebar_scroll().offset;
+        let pane = crate::components::sidebar_solid::sidebar_pane_frame(
+            &view,
+            styles,
+            pane_height,
+            scroll,
+        );
+        let origin_x = if sidebar_docked {
+            column
+        } else {
+            width.saturating_sub(crate::components::session_tabs::SESSION_SIDEBAR_WIDTH)
+        };
+        // The wheel geometry: the content slot's height + the rows it
+        // can show (the same bound the render clips against), plus
+        // the pane's absolute columns — `mouse_event`'s Scroll* arm
+        // gates on them.
+        store.set_sidebar_scroll_geometry(
+            view.sections.content_height(),
+            crate::components::sidebar::sidebar_content_viewport(&view, styles, pane_height),
+            Some((origin_x, crate::components::session_tabs::SESSION_SIDEBAR_WIDTH)),
+        );
         // The onboarding card's pointer targets at ABSOLUTE cells: the
         // same `render_sidebar` geometry the pane painted, translated
         // by the paste origin (docked at the transcript column, or the
@@ -436,13 +457,9 @@ pub fn render_session(
         // runs while the card is up; a hidden card clears the rects
         // (stale hits after a dismiss would zombie-click).
         let hits = view.onboarding.then(|| {
-            crate::components::sidebar::render_sidebar(&view, styles, pane_height).onboarding_hits
+            crate::components::sidebar::render_sidebar_scrolled(&view, styles, pane_height, scroll)
+                .onboarding_hits
         });
-        let origin_x = if sidebar_docked {
-            column
-        } else {
-            width.saturating_sub(crate::components::session_tabs::SESSION_SIDEBAR_WIDTH)
-        };
         store.set_sidebar_onboarding_hits(hits.flatten().map(|mut hits| {
             let shift = |rect: &mut crate::store::HitRect| {
                 rect.x += origin_x;
@@ -461,6 +478,9 @@ pub fn render_session(
         }
     } else {
         store.set_sidebar_onboarding_hits(None);
+        // The pane unmounted — v2's scrollbox goes with it (the
+        // offset resets, no x extent gates the wheel).
+        store.set_sidebar_scroll_geometry(0, 0, None);
     }
     frame
 }

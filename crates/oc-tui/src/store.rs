@@ -881,6 +881,13 @@ pub struct Store {
     /// The sidebar onboarding card's pointer targets (the render
     /// pass's absolute rects; `None` while the card is hidden).
     sidebar_onboarding_hits: std::cell::RefCell<Option<SidebarOnboardingHits>>,
+    /// The session sidebar's wheel-scroll state (auditA #1): the
+    /// content-slot offset plus the geometry the last render saw
+    /// (content rows, viewport rows, absolute x extent). v2's
+    /// `sidebar.content` is a scrollbox (`feature-plugins/sidebar`
+    /// mounts it in one); the port's pane is one flat walk, so the
+    /// wheel drives this offset and the render re-slices.
+    sidebar_scroll: std::cell::RefCell<SidebarScrollState>,
     /// The location label's hover state (`hovered()`).
     location_hovered: std::cell::Cell<bool>,
     /// Per-session scroll state (Wave A's scroll driver over
@@ -1084,6 +1091,36 @@ impl HitRect {
 pub struct SidebarOnboardingHits {
     pub dismiss: HitRect,
     pub connect: HitRect,
+}
+
+/// The sidebar's wheel-scroll model (auditA #1): the content-slot
+/// offset plus the last render's geometry — the max offset is
+/// `content_height - viewport` (v2's scrollbar clamp), and the
+/// absolute x extent gates which wheel events belong to the pane.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SidebarScrollState {
+    /// The content slot's scrolled offset (rows hidden above).
+    pub offset: usize,
+    /// Rows the sections paint in total.
+    pub content_height: usize,
+    /// Rows the content slot can show (between title and footer).
+    pub viewport: usize,
+    /// The pane's absolute columns (`[x, x + width)`), when shown.
+    pub x_extent: Option<(usize, usize)>,
+}
+
+impl SidebarScrollState {
+    /// The maximum offset (0 when the content fits).
+    #[must_use]
+    pub fn max_offset(self) -> usize {
+        self.content_height.saturating_sub(self.viewport)
+    }
+
+    /// Whether a wheel event at column `col` belongs to the pane.
+    #[must_use]
+    pub fn contains_col(self, col: usize) -> bool {
+        self.x_extent.is_some_and(|(x, width)| col >= x && col < x + width)
+    }
 }
 
 /// One queued prompt (`session.inbox` row with `delivery: "queue"`,
@@ -1381,6 +1418,7 @@ impl Store {
             dialog_option_rows: std::cell::RefCell::new(Vec::new()),
             footer_location_hit: std::cell::RefCell::new(None),
             sidebar_onboarding_hits: std::cell::RefCell::new(None),
+            sidebar_scroll: std::cell::RefCell::new(SidebarScrollState::default()),
             location_hovered: std::cell::Cell::new(false),
             scroll: std::cell::RefCell::new(HashMap::new()),
             transcript_metrics: std::cell::RefCell::new(HashMap::new()),
@@ -2548,6 +2586,9 @@ impl Store {
         self.transcript_hit_rows.borrow_mut().clear();
         *self.footer_location_hit.borrow_mut() = None;
         *self.sidebar_onboarding_hits.borrow_mut() = None;
+        // The sidebar's wheel geometry is route-scoped the same way
+        // (the pane unmounts with the session route).
+        *self.sidebar_scroll.borrow_mut() = SidebarScrollState::default();
     }
 
     /// The last frame's top-dialog frame rect (absolute screen cells)
@@ -2600,13 +2641,56 @@ impl Store {
     /// origin).
     pub fn set_sidebar_onboarding_hits(&self, hits: Option<SidebarOnboardingHits>) {
         *self.sidebar_onboarding_hits.borrow_mut() = hits;
-    }
-
-    /// The recorded onboarding targets (`None` while the card is
+    }    /// The recorded onboarding targets (`None` while the card is
     /// hidden — the render clears them every pass).
     #[must_use]
     pub fn sidebar_onboarding_hits(&self) -> Option<SidebarOnboardingHits> {
         *self.sidebar_onboarding_hits.borrow()
+    }
+
+    /// Record the sidebar's scroll geometry (the session render, each
+    /// frame — same cadence as the onboarding rects above).
+    pub fn set_sidebar_scroll_geometry(
+        &self,
+        content_height: usize,
+        viewport: usize,
+        x_extent: Option<(usize, usize)>,
+    ) {
+        let mut state = self.sidebar_scroll.borrow_mut();
+        // A hidden pane unmounts v2's scrollbox — the offset resets.
+        if x_extent.is_none() {
+            state.offset = 0;
+        }
+        state.content_height = content_height;
+        state.viewport = viewport;
+        state.x_extent = x_extent;
+        state.offset = state.offset.min(state.max_offset());
+    }
+
+    /// The sidebar's current scroll state (render input + the wheel
+    /// gate).
+    #[must_use]
+    pub fn sidebar_scroll(&self) -> SidebarScrollState {
+        *self.sidebar_scroll.borrow()
+    }
+
+    /// Wheel-scroll the sidebar's content slot by `delta` rows
+    /// (negative up); `true` when the offset moved (the redraw key).
+    /// v2's scrollbox wheel is a LINE scroll (opentui's terminal
+    /// wheel delta: 3 rows a notch — `direction === "up" ? -3 : 3`
+    /// in the core's own embedded-terminal translation); no
+    /// acceleration model (the port's wheel stream carries no
+    /// timestamps to feed v2's `MacOSScrollAccel`).
+    pub fn sidebar_scroll_by(&self, delta: i32) -> bool {
+        let mut state = self.sidebar_scroll.borrow_mut();
+        let max = state.max_offset();
+        let next = (state.offset as i64).saturating_add(i64::from(delta)).clamp(0, max as i64);
+        let next = usize::try_from(next).unwrap_or(0);
+        if next == state.offset {
+            return false;
+        }
+        state.offset = next;
+        true
     }
 
     /// The location label's hover transition (returns whether it
