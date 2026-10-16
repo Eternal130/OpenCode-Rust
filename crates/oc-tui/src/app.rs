@@ -376,8 +376,31 @@ impl App {
                 // dismisses on an OUTSIDE release (`ui/dialog.tsx:
                 // 34-63`: the full-screen backdrop box closes on
                 // mouseup; the inner chrome box's own mouseup stops
-                // propagation).
+                // propagation). The chrome's OWN buttons (auditA #6)
+                // fire FIRST — v2's child-first bubbling: the header
+                // close label (`dialog.clear()`, every dialog family)
+                // and the Help `ok` pill.
                 if !self.store.dialogs().is_empty() {
+                    for button in self.store.dialog_button_hits() {
+                        if button.rect.contains(col, row) {
+                            match button.action {
+                                crate::store::DialogButtonAction::Close => {
+                                    // The port's per-dialog esc parity
+                                    // (one chord a pop — v2's
+                                    // `dialog.clear()` empties the
+                                    // stack; the M2 ruling kept the
+                                    // port's pop-one).
+                                    self.store.close_dialog();
+                                }
+                                crate::store::DialogButtonAction::HelpOk => {
+                                    // `ok` clears (dialog-help.tsx:39).
+                                    self.store.clear_dialogs();
+                                }
+                            }
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
                     if let Some(index) = self.dialog_option_at(col, row) {
                         self.submit_dialog_option(index);
                     } else if let Some((x, y, width, height)) = self.store.dialog_frame_rect() {
@@ -5907,5 +5930,106 @@ mod core_interaction_tests {
     /// The hit row's owning session (test helper).
     fn hit_session(hit: &crate::store::TranscriptHitRow) -> String {
         hit.session_id.clone()
+    }
+
+    // -- lane/if item 5: the dialog close family (auditA #6) ---------
+
+    /// Every dialog family's title row carries the muted close label
+    /// (`esc` / `esc/enter`) — v2's ~22 headers all wire
+    /// `onMouseUp={() => dialog.clear()}`; the port rendered the label
+    /// dead. The select family here; the Help family below.
+    #[test]
+    fn dialog_header_close_label_releases_closed() {
+        use crate::store::DialogKind;
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let mut app = App::new((80, 24));
+        app.store
+            .open_dialog(DialogKind::CommandPalette, crate::store::DialogSize::Medium);
+        let _ = app.frame();
+        let close = app
+            .store
+            .dialog_button_hits()
+            .into_iter()
+            .find(|button| matches!(button.action, crate::store::DialogButtonAction::Close))
+            .expect("the close label armed");
+        // The rect points at the painted `esc` glyphs (the label's
+        // own extent, right-aligned against the paddingRight-4 edge).
+        let line = app
+            .frame_text()
+            .lines()
+            .nth(close.rect.y)
+            .unwrap_or_default()
+            .to_owned();
+        let painted = line
+            .chars()
+            .skip(close.rect.x)
+            .take(close.rect.width)
+            .collect::<String>();
+        assert_eq!(painted.trim(), "esc", "the hit rect hugs the label: {line}");
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(close.rect.x).unwrap_or(u16::MAX),
+            u16::try_from(close.rect.y).unwrap_or(u16::MAX),
+        ));
+        assert!(app.store.dialogs().is_empty(), "the close label released the dialog");
+    }
+
+    /// The Help dialog's own button row (`dialog-help.tsx:33-40`):
+    /// the right-justified `ok` pill clears the dialog — and its
+    /// `esc/enter` label closes the same way.
+    #[test]
+    fn help_dialog_ok_button_and_esc_label_close() {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let mut app = App::new((80, 24));
+        app.store.open_dialog(crate::store::DialogKind::Help, crate::store::DialogSize::Medium);
+        let _ = app.frame();
+        let hits = app.store.dialog_button_hits();
+        let ok = hits
+            .iter()
+            .find(|button| matches!(button.action, crate::store::DialogButtonAction::HelpOk))
+            .expect("the ok pill armed");
+        let close = hits
+            .iter()
+            .find(|button| matches!(button.action, crate::store::DialogButtonAction::Close))
+            .expect("the esc/enter label armed");
+        assert_eq!(close.rect.width, 9, "Help's label is `esc/enter`");
+        // The ok pill's rect is the painted button box (padding 3 +
+        // `ok` + padding 3 = 8 wide, right-justified).
+        let line = app
+            .frame_text()
+            .lines()
+            .nth(ok.rect.y)
+            .unwrap_or_default()
+            .to_owned();
+        let painted = line
+            .chars()
+            .skip(ok.rect.x)
+            .take(ok.rect.width)
+            .collect::<String>();
+        assert_eq!(painted.trim(), "ok", "the hit rect is the pill: {line}");
+
+        // The ok pill clears.
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(ok.rect.x + 4).unwrap_or(u16::MAX),
+            u16::try_from(ok.rect.y).unwrap_or(u16::MAX),
+        ));
+        assert!(app.store.dialogs().is_empty(), "the ok pill cleared the help dialog");
+
+        // The esc/enter label closes a re-opened Help too.
+        app.store.open_dialog(crate::store::DialogKind::Help, crate::store::DialogSize::Medium);
+        let _ = app.frame();
+        let close = app
+            .store
+            .dialog_button_hits()
+            .into_iter()
+            .find(|button| matches!(button.action, crate::store::DialogButtonAction::Close))
+            .expect("re-armed");
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            u16::try_from(close.rect.x).unwrap_or(u16::MAX),
+            u16::try_from(close.rect.y).unwrap_or(u16::MAX),
+        ));
+        assert!(app.store.dialogs().is_empty(), "the esc/enter label closed it");
     }
 }
