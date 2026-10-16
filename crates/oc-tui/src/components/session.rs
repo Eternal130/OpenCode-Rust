@@ -1293,7 +1293,8 @@ mod tests {
 
     /// A subagent session never mounts the pane (session-frame.tsx:108).
     #[test]
-    fn subagent_session_never_shows_the_sidebar() {        let store = Store::new(Runtime::new());
+    fn subagent_session_never_shows_the_sidebar() {
+        let store = Store::new(Runtime::new());
         store.open_tab("sub", None);
         store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
             "session.created",
