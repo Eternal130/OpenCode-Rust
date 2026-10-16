@@ -76,6 +76,9 @@ pub struct CatalogModelResolver {
     /// Credential-driven provider bindings (copilot transport), shared
     /// with the integration host and refreshed on credential events.
     credentials: Option<Arc<crate::integration::copilot::CredentialBindings>>,
+    /// Console-issued providers (integration `opencode`), shared with the
+    /// host and refreshed on credential events.
+    console: Option<Arc<crate::integration::console::ConsoleProviders>>,
 }
 
 impl CatalogModelResolver {
@@ -88,7 +91,7 @@ impl CatalogModelResolver {
         custom: Vec<CustomProvider>,
         default: Option<oc_schema::config::ModelSelection>,
     ) -> Self {
-        Self { context, catalog, connections, custom, default, credentials: None }
+        Self { context, catalog, connections, custom, default, credentials: None, console: None }
     }
 
     /// Attaches the credential-driven provider bindings.
@@ -98,6 +101,16 @@ impl CatalogModelResolver {
         bindings: Arc<crate::integration::copilot::CredentialBindings>,
     ) -> Self {
         self.credentials = Some(bindings);
+        self
+    }
+
+    /// Attaches the console-issued provider snapshot.
+    #[must_use]
+    pub fn with_console(
+        mut self,
+        console: Arc<crate::integration::console::ConsoleProviders>,
+    ) -> Self {
+        self.console = Some(console);
         self
     }
 
@@ -172,6 +185,35 @@ impl CatalogModelResolver {
                 variant: reference.variant.clone(),
             };
             return Ok((model, info, canonical));
+        }
+        // Console-issued providers (integration `opencode`): resolved
+        // before the catalog exactly like config customs — the console
+        // owns these ids (opencode.ts:243-268 `providers.update/add`).
+        if let Some(console) = &self.console {
+            if let Some(provider) = console.get(&reference.provider_id.0).or_else(|| {
+                self.console.as_ref().and_then(|console| {
+                    console
+                        .entries_iter()
+                        .find(|(key, _)| key.eq_ignore_ascii_case(&reference.provider_id.0))
+                        .map(|(_, value)| value.clone())
+                })
+            }) {
+                let canonical_model = provider
+                    .models
+                    .iter()
+                    .find(|model| model.id.eq_ignore_ascii_case(&reference.id.0))
+                    .map(|model| model.id.clone())
+                    .unwrap_or_else(|| reference.id.0.clone());
+                let model = custom_language_model(&self.context, &provider, &canonical_model)
+                    .map_err(|error| map_custom(error, &provider.id, &canonical_model))?;
+                let info = custom_model_info(&provider);
+                let canonical = oc_schema::model::Ref {
+                    provider_id: oc_schema::id::ProviderId::parse(provider.id.clone()),
+                    id: oc_schema::id::ModelId::parse(canonical_model),
+                    variant: reference.variant.clone(),
+                };
+                return Ok((model, info, canonical));
+            }
         }
         // Catalog providers: canonicalize the prefix, keep the model id
         // exact (catalog ids are authoritative — v2's runner compares
