@@ -151,3 +151,101 @@
 [2026-10-16T06:20:29Z] RUN profile=kitty-no script=palette runs=2 size=80x24 live-ref
 [tui-diff]   done in 39.7s — 6 steps, 6 mismatch, 0 text-only (ok)
 [tui-diff]   done in 39.7s — 6 steps, 6 mismatch, 0 text-only (ok)
+[2026-10-16T06:24:16Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=truecolor script=boot-home runs=2 size=80x24 live-ref
+[tui-diff]   done in 33.8s — 3 steps, 3 mismatch, 0 text-only (ok)
+[tui-diff]   done in 33.8s — 3 steps, 3 mismatch, 0 text-only (ok)
+[2026-10-16T06:25:24Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=truecolor script=type-edit-submit runs=2 size=80x24 live-ref
+[tui-diff]   done in 59.1s — 13 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 59.8s — 13 steps, 9 mismatch, 0 text-only (ok)
+[2026-10-16T06:27:23Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=truecolor script=themes-nord runs=2 size=80x24 live-ref
+[tui-diff]   done in 45.5s — 8 steps, 7 mismatch, 0 text-only (ok)
+[tui-diff]   done in 45.3s — 8 steps, 7 mismatch, 0 text-only (ok)
+[2026-10-16T06:28:54Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=truecolor script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[tui-diff]   done in 68.3s — 17 steps, 15 mismatch, 0 text-only (ok)
+[tui-diff]   done in 68.3s — 17 steps, 15 mismatch, 0 text-only (ok)
+[2026-10-16T06:31:11Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=truecolor script=palette runs=2 size=80x24 live-ref
+[tui-diff]   done in 39.7s — 6 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 39.7s — 6 steps, 2 mismatch, 0 text-only (ok)
+[2026-10-16T06:32:31Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=screen256 script=boot-home runs=2 size=80x24 live-ref
+[tui-diff]   done in 33.8s — 3 steps, 0 mismatch, 0 text-only (ok)
+[tui-diff]   done in 33.8s — 3 steps, 3 mismatch, 0 text-only (ok)
+[2026-10-16T06:33:38Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=screen256 script=type-edit-submit runs=2 size=80x24 live-ref
+[tui-diff]   done in 58.6s — 13 steps, 9 mismatch, 0 text-only (ok)
+[tui-diff]   done in 58.6s — 13 steps, 9 mismatch, 0 text-only (ok)
+[2026-10-16T06:35:36Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=screen256 script=themes-nord runs=2 size=80x24 live-ref
+[tui-diff]   done in 45.3s — 8 steps, 2 mismatch, 0 text-only (ok)
+[tui-diff]   done in 45.3s — 8 steps, 2 mismatch, 0 text-only (ok)
+[2026-10-16T06:37:06Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=screen256 script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[tui-diff]   done in 68.4s — 17 steps, 12 mismatch, 0 text-only (ok)
+[tui-diff]   done in 68.3s — 17 steps, 12 mismatch, 0 text-only (ok)
+[2026-10-16T06:39:23Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=screen256 script=palette runs=2 size=80x24 live-ref
+[tui-diff]   done in 39.7s — 6 steps, 2 mismatch, 0 text-only (ok)
+[tui-diff]   done in 39.7s — 6 steps, 2 mismatch, 0 text-only (ok)
+[2026-10-16T06:40:43Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=tmux script=boot-home runs=2 size=80x24 live-ref
+[tui-diff]   done in 34.7s — 3 steps, 3 mismatch, 0 text-only (ok)
+[tui-diff]   done in 34.7s — 3 steps, 3 mismatch, 0 text-only (ok)
+[2026-10-16T06:41:52Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=tmux script=type-edit-submit runs=2 size=80x24 live-ref
+[tui-diff]   done in 59.5s — 13 steps, 9 mismatch, 0 text-only (ok)
+[tui-diff]   done in 59.5s — 13 steps, 9 mismatch, 0 text-only (ok)
+[2026-10-16T06:44:04Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=tmux script=themes-nord runs=2 size=80x24 live-ref
+[tui-diff]   done in 46.3s — 8 steps, 7 mismatch, 0 text-only (ok)
+[tui-diff]   done in 46.3s — 8 steps, 7 mismatch, 0 text-only (ok)
+[2026-10-16T06:45:37Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=tmux script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[tui-diff]   done in 69.3s — 17 steps, 15 mismatch, 0 text-only (ok)
+[tui-diff]   done in 69.2s — 17 steps, 12 mismatch, 0 text-only (ok)
+[2026-10-16T06:47:56Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=tmux script=palette runs=2 size=80x24 live-ref
+[tui-diff]   done in 40.7s — 6 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 40.6s — 6 steps, 2 mismatch, 0 text-only (ok)
+[2026-10-16T06:49:17Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=kitty-yes script=boot-home runs=2 size=80x24 live-ref
+[tui-diff]   done in 34.0s — 3 steps, 3 mismatch, 0 text-only (ok)
+[tui-diff]   done in 33.8s — 3 steps, 3 mismatch, 0 text-only (ok)
+[2026-10-16T06:50:25Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=kitty-yes script=type-edit-submit runs=2 size=80x24 live-ref
+[tui-diff]   done in 58.6s — 13 steps, 9 mismatch, 0 text-only (ok)
+[tui-diff]   done in 58.4s — 13 steps, 9 mismatch, 0 text-only (ok)
+[2026-10-16T06:52:22Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=kitty-yes script=themes-nord runs=2 size=80x24 live-ref
+[tui-diff]   done in 45.3s — 8 steps, 2 mismatch, 0 text-only (ok)
+[tui-diff]   done in 45.3s — 8 steps, 7 mismatch, 0 text-only (ok)
+[2026-10-16T06:53:53Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=kitty-yes script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[tui-diff]   done in 68.3s — 17 steps, 15 mismatch, 0 text-only (ok)
+[tui-diff]   done in 68.3s — 17 steps, 15 mismatch, 0 text-only (ok)
+[2026-10-16T06:56:10Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=kitty-yes script=palette runs=2 size=80x24 live-ref
+[tui-diff]   done in 39.7s — 6 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 39.7s — 6 steps, 6 mismatch, 0 text-only (ok)
+[2026-10-16T06:57:29Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=kitty-no script=boot-home runs=2 size=80x24 live-ref
+[tui-diff]   done in 33.8s — 3 steps, 3 mismatch, 0 text-only (ok)
+[tui-diff]   done in 33.8s — 3 steps, 3 mismatch, 0 text-only (ok)
+[2026-10-16T06:58:37Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=kitty-no script=type-edit-submit runs=2 size=80x24 live-ref
+[tui-diff]   done in 58.6s — 13 steps, 6 mismatch, 0 text-only (ok)
+[tui-diff]   done in 58.6s — 13 steps, 6 mismatch, 0 text-only (ok)
+[2026-10-16T07:00:34Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=kitty-no script=themes-nord runs=2 size=80x24 live-ref
+[tui-diff]   done in 45.1s — 8 steps, 7 mismatch, 0 text-only (ok)
+[tui-diff]   done in 45.3s — 8 steps, 2 mismatch, 0 text-only (ok)
+[2026-10-16T07:02:05Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=kitty-no script=mouse-hover-tabstrip runs=2 size=80x24 live-ref
+[tui-diff]   done in 68.3s — 17 steps, 12 mismatch, 0 text-only (ok)
+[tui-diff]   done in 68.3s — 17 steps, 15 mismatch, 0 text-only (ok)
+[2026-10-16T07:04:22Z] RERUN(profile report lost to root-owned outdir; ownership fixed) profile=kitty-no script=palette runs=2 size=80x24 live-ref
+[tui-diff]   done in 39.7s — 6 steps, 2 mismatch, 0 text-only (ok)
+[tui-diff]   done in 39.7s — 6 steps, 6 mismatch, 0 text-only (ok)
+[2026-10-16T07:07:57Z] RUN profile=xterm256-light script=boot-home runs=2 size=80x24 live-ref (theme-mode probe: OSC 11 answers WHITE)
+[tui-diff]   done in 33.8s — 3 steps, 3 mismatch, 0 text-only (ok)
+[tui-diff]   done in 34.0s — 3 steps, 0 mismatch, 0 text-only (ok)
+[2026-10-16T07:09:05Z] RUN profile=xterm256-light script=type-edit-submit runs=2 size=80x24 live-ref (theme-mode probe: OSC 11 answers WHITE)
+[tui-diff]   done in 58.6s — 13 steps, 9 mismatch, 0 text-only (ok)
+[tui-diff]   done in 58.6s — 13 steps, 9 mismatch, 0 text-only (ok)
+[2026-10-16T07:11:02Z] RUN profile=xterm256-light script=themes-nord runs=2 size=80x24 live-ref (theme-mode probe: OSC 11 answers WHITE)
+[tui-diff]   done in 45.3s — 8 steps, 7 mismatch, 0 text-only (ok)
+[tui-diff]   done in 45.3s — 8 steps, 7 mismatch, 0 text-only (ok)
+[2026-10-16T07:12:33Z] RUN profile=xterm256-light script=mouse-hover-tabstrip runs=2 size=80x24 live-ref (theme-mode probe: OSC 11 answers WHITE)
+[tui-diff]   done in 68.1s — 17 steps, 15 mismatch, 0 text-only (ok)
+[tui-diff]   done in 68.3s — 17 steps, 15 mismatch, 0 text-only (ok)
+[2026-10-16T07:14:50Z] RUN profile=xterm256-light script=palette runs=2 size=80x24 live-ref (theme-mode probe: OSC 11 answers WHITE)
+[tui-diff]   done in 39.7s — 6 steps, 2 mismatch, 0 text-only (ok)
+[tui-diff]   done in 39.7s — 6 steps, 6 mismatch, 0 text-only (ok)
+[2026-10-16T07:19:37Z] ANALYSIS complete (tools/parity/tui-diff/termatrix-analyze.py; raw: /tmp/opencode/termatrix/analysis.txt, regenerable).
+Step-class deltas vs baseline: ONLY placeholder-coin (P-1) flips across all 8 environments — no TERM-conditional grid divergence.
+SGR split per profile (ref|our): silent/xterm256/kitty-no idx-only; truecolor/kitty-yes truecolor-only; screen256/tmux idx-only — PARITY.
+kitty-yes: ref pushes CSI u reset + CSI>5u (flags 1|4), never pops; ours 0 kitty sequences (TM-1).
+xterm256-light: BOTH flip to light theme (bg=idx255 both) — theme-mode parity (clean bill 2).
+Universal protocol gaps registered: TM-2 ?2027h/?2031h subs, TM-3 DECSCUSR+OSC12, TM-4 mouse set (?1015/?1004), TM-5 title, TM-6 sync-2026, TM-7 cursor chatter, TM-8 probe escalation, TM-9 clipboard evidence gap, TM-10 tmux adaptation.
+Pre-existing (reproduce on unmodified main at baseline): P-1 placeholder coin, palette command-set drift, reply-stats durations, models-dialog filter drift, hover-style classes.
+Findings: docs/termatrix-findings.md (severity-ranked fix queue).
