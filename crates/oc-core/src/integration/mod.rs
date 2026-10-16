@@ -3,6 +3,7 @@
 //! attempt lifecycle (10-min lifetime, 1-min terminal retention, 30-s
 //! scrub), token refresh, and the runtime connection statuses.
 
+pub mod console;
 pub mod copilot;
 pub mod credential;
 pub mod flows;
@@ -145,6 +146,9 @@ pub struct IntegrationHost {
     /// The credential-driven provider bindings snapshot (copilot
     /// transport; `copilot.rs`) shared with model resolvers.
     provider_bindings_shared: Arc<copilot::CredentialBindings>,
+    /// The console-issued provider snapshot (`console.rs`) shared with
+    /// model resolvers.
+    console_providers_shared: Arc<console::ConsoleProviders>,
 }
 
 fn now_ms() -> i64 {
@@ -193,6 +197,7 @@ impl IntegrationHost {
             statuses: DashMap::new(),
             scrub_started: std::sync::Once::new(),
             provider_bindings_shared: copilot::CredentialBindings::new(),
+            console_providers_shared: console::ConsoleProviders::new(),
         }
     }
 
