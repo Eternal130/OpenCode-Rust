@@ -5,3 +5,6 @@
 - implemented: fixtures hookswap-a.ts/hookswap-b.ts + corpus test corpus_hook_mutation_replacement_shapes — PASS (0.417s, real bun flow) alongside the 4 existing corpus tests (5/5).
 - landed: ROADMAP.md §3 D-03 row -> resolved (equivalent semantics + permanent registrations R1-R5 with isolation-benefit write-up); FINDINGS.md §8 conclusion addendum.
 - next: fmt/clippy + full nextest oc-plugin-host & oc-core, then final commit.
+- clippy fix (redundant closure in corpus.rs assert) -> 0 warnings; fmt clean.
+- gates final: cargo fmt --all -- --check PASS; cargo clippy -p oc-plugin-host -p oc-core --all-targets 0 warnings; cargo nextest run -p oc-plugin-host -p oc-core 816/816 PASS (incl. real-bun corpus/flagship/storm/fuzz suites).
+- lane complete: D-03 resolved as equivalent semantics (copy-out at v2 apply-points) + R1-R5 permanently registered with isolation-benefit write-up (FINDINGS.md §5, §8; ROADMAP.md §3).
