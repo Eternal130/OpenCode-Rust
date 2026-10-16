@@ -153,6 +153,13 @@ impl SubscriberQueue {
 /// one of the v2 location-service frames the announcer publishes (they
 /// are schema'd public events in v2; the Rust registry inventory does not
 /// list them yet — see `announce`).
+///
+/// The registry's non-session inventory carries every v2
+/// `EventManifest.ServerDefinitions` type (auditD §3.4): the form/shell
+/// lifecycle frames oc-core already published, plus `session.status`,
+/// `session.idle`, `filesystem.changed`, `worktree.updated`,
+/// `vcs.branch.updated`, `credential.*`, `models-dev.refreshed`, `tui.*`,
+/// and `installation.*`.
 #[must_use]
 pub fn is_public_event(type_: &str) -> bool {
     type_ == "server.connected"
@@ -685,6 +692,48 @@ mod tests {
         assert!(is_public_event("rpc.custom"));
         assert!(!is_public_event("test.internal"));
         assert!(!is_public_event("weird.unknown"));
+    }
+
+    /// The 20 auditD §3.4 types: the 6 published-but-filtered form/shell
+    /// frames plus the 14 newly published ones must all pass the public
+    /// filter (v2 `EventManifest.ServerDefinitions` + `session-status`,
+    /// `tui`, `installation`, `vcs` — `event-manifest.ts:71-81`).
+    #[tokio::test]
+    async fn server_feed_public_type_filter_covers_audit_d_types() {
+        // (a) published-but-filtered.
+        for type_ in [
+            "form.created",
+            "form.replied",
+            "form.cancelled",
+            "shell.created",
+            "shell.exited",
+            "shell.deleted",
+        ] {
+            assert!(is_public_event(type_), "{type_} must be public");
+        }
+        // (b) the 14 wired in this lane.
+        for type_ in [
+            "session.status",
+            "session.idle",
+            "filesystem.changed",
+            "worktree.updated",
+            "vcs.branch.updated",
+            "credential.updated",
+            "credential.switched",
+            "models-dev.refreshed",
+            "tui.prompt.append",
+            "tui.command.execute",
+            "tui.toast.show",
+            "tui.session.select",
+            "installation.updated",
+            "installation.update-available",
+        ] {
+            assert!(is_public_event(type_), "{type_} must be public");
+        }
+        // Registry membership backs the filter (by_type resolves each).
+        for type_ in ["form.created", "shell.exited", "session.status", "installation.updated"] {
+            assert!(oc_core::bus::registry::by_type(type_).is_some(), "{type_} in registry");
+        }
     }
 
     #[tokio::test]

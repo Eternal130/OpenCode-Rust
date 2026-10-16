@@ -32,11 +32,51 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::{LazyLock, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::services::update_feed::{self, Candidate, ReleaseVer};
 use crate::services::updater;
+
+/// One installation notice for the in-process server's event bus — the
+/// port of v2's server-process updater callbacks (`process.ts:115-117`):
+/// the CLI-side updater publishes `installation.update-available` /
+/// `installation.updated` `{version}` when the process hosting the server
+/// learns of one. The detached checker thread cannot hold the engine, so
+/// notices flow through this rendezvous channel; `serve` (the one mode
+/// whose process owns a server) drains it onto the bus
+/// (`handlers/serve.rs`). With no server in process (TUI against a remote
+/// daemon, short-lived commands) sends are a silent no-op.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallationNotice {
+    /// `installation.update-available` `{version}`.
+    Available(String),
+    /// `installation.updated` `{version}`.
+    Installed(String),
+}
+
+type InstallationChannel = (
+    tokio::sync::mpsc::UnboundedSender<InstallationNotice>,
+    Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<InstallationNotice>>>,
+);
+
+static INSTALLATION_CHANNEL: LazyLock<InstallationChannel> = LazyLock::new(|| {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    (tx, Mutex::new(Some(rx)))
+});
+
+/// Sends one installation notice (no-op when nobody drains).
+fn notify_installation(notice: InstallationNotice) {
+    let _ = INSTALLATION_CHANNEL.0.send(notice);
+}
+
+/// Takes the receiver the server-hosting process drains (`serve`); only
+/// the first caller gets one.
+pub fn take_installation_receiver(
+) -> Option<tokio::sync::mpsc::UnboundedReceiver<InstallationNotice>> {
+    INSTALLATION_CHANNEL.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+}
 
 /// How often the background checker re-runs.
 pub const CHECK_INTERVAL: Duration = Duration::from_mins(10);
@@ -279,6 +319,8 @@ fn announce_available(candidate: &Candidate, current: &ReleaseVer, tui: bool) {
     } else {
         eprintln!("{line}");
     }
+    // v2 process.ts:116 — `installation.update-available` `{version}`.
+    notify_installation(InstallationNotice::Available(candidate.version.to_string()));
 }
 
 fn announce_installed(candidate: &Candidate, tui: bool) {
@@ -289,6 +331,8 @@ fn announce_installed(candidate: &Candidate, tui: bool) {
     } else {
         eprintln!("{line}");
     }
+    // v2 process.ts:117 — `installation.updated` `{version}`.
+    notify_installation(InstallationNotice::Installed(candidate.version.to_string()));
 }
 
 #[cfg(test)]
