@@ -282,15 +282,46 @@ async fn websearch_query(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
-    let query = body["query"].as_str().unwrap_or_default();
-    let provider = body["providerID"].as_str().map(String::from);
-    // The websearch tool surface needs provider credentials; without one
-    // configured the declared 503 is the v2 behavior.
-    let _ = (services, provider);
-    Err(ApiError::service_unavailable(
-        format!("No websearch provider available for query {query:?}"),
-        None,
-    ))
+    let payload: oc_schema::misc::WebSearchInput = serde_json::from_value(body)
+        .map_err(|error| ApiError::invalid_request(format!("Invalid websearch payload: {error}")))?;
+    // v2 handlers/websearch.ts — the location's WebSearch service with the
+    // tagged-error mapping (ProviderRequired/ProviderNotFound/Disabled →
+    // 400 kinds; Request → 503 `service`).
+    match services
+        .websearch
+        .query(&payload.query, None, payload.provider_id.as_ref().map(|id| id.0.as_str()))
+        .await
+    {
+        Ok(response) => Ok(json_location_data(
+            &location.as_path().to_string_lossy(),
+            serde_json::to_value(&response).unwrap_or(Value::Null),
+        )),
+        Err(error) => Err(match error {
+            oc_core::tool::websearch::WebSearchError::ProviderRequired => {
+                crate::errors::invalid_request_field(
+                    "Web search provider is required",
+                    "websearch_provider_required",
+                    "providerID",
+                )
+            }
+            oc_core::tool::websearch::WebSearchError::ProviderNotFound(provider_id) => {
+                crate::errors::invalid_request_field(
+                    format!("Web search provider not found: {provider_id}"),
+                    "websearch_provider_not_found",
+                    "providerID",
+                )
+            }
+            oc_core::tool::websearch::WebSearchError::Disabled => {
+                crate::errors::invalid_request_kind("Web search is disabled", "websearch_disabled")
+            }
+            oc_core::tool::websearch::WebSearchError::Request { provider_id, .. } => {
+                crate::errors::service_unavailable_named(
+                    format!("Web search request failed: {provider_id}"),
+                    provider_id,
+                )
+            }
+        }),
+    }
 }
 
 async fn websearch_providers(
@@ -299,9 +330,16 @@ async fn websearch_providers(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
-    let _services = services(&state, &location).await?;
-    // The catalog of configured providers (tool/websearch_providers) is
-    // empty until a websearch credential is set (TODO(phase-9) config
-    // exposure; documented empty shape).
-    Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(Vec::new())))
+    let services = services(&state, &location).await?;
+    // v2 `websearch.providers`: id/name pairs sorted by display name.
+    let providers: Vec<Value> = services
+        .websearch
+        .providers()
+        .into_iter()
+        .map(|(id, name)| json!({ "id": id, "name": name }))
+        .collect();
+    Ok(json_location_data(
+        &location.as_path().to_string_lossy(),
+        Value::Array(providers),
+    ))
 }
