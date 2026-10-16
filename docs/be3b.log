@@ -139,3 +139,36 @@ browser flows extend it directly.
   verification is NOT implemented (no JWT crate in this workspace); claims
   are validated without signature. Deferred with this note.
 - fmt + clippy (pedantic) clean; oc-core nextest 811/811.
+
+## Phase 3 — copilot transport binding (item 2, WIP, green)
+
+- `integration/copilot.rs` (new): `ProviderBinding {base_url, api_key,
+  headers}` + the shared `CredentialBindings` snapshot (DashMap).
+  `copilot_base_url` = metadata.apiEndpoint → enterprise
+  `https://copilot-api.{domain}` (explicit origins verbatim) →
+  `https://api.githubcopilot.com` (github-copilot.ts:185,359-376); token =
+  the stored GitHub token (credential.refresh, github-copilot.ts:169);
+  headers = X-GitHub-Api-Version 2026-08-01 + Openai-Intent +
+  x-initiator (github-copilot.ts:464-505).
+- Host: `refresh_provider_bindings()` (boot + on credential.switched /
+  credential.updated / integration.updated via a bus subscription spawned
+  in Engine::boot) keeps the snapshot current while `bind()` stays
+  synchronous — v2's per-attempt resolution approximated event-driven.
+- Resolver: `CatalogModelResolver::with_credentials(...)` — credential
+  bindings win over config/env connections (base_url, api_key, headers
+  merge; github-copilot's catalog package is `@ai-sdk/openai-compatible`
+  so the facade now has the baseURL it previously failed without).
+- Facade: connection headers ride `RouteDefaults.headers` (transport
+  headers) before model overlays (per-key model wins) — the seam
+  ModelConnection.headers was defined for but never applied.
+- Tests (3 new, 32 total green): snapshot resolve/clear on credential
+  removal; base-url precedence (apiEndpoint > enterprise domain > origin >
+  default); resolver-level route binding for
+  `github-copilot/<first-model>` from the credential alone (was a
+  Configuration error without baseURL).
+- fmt + clippy clean; oc-core nextest 814/814.
+- Deferred within the item: per-request `x-initiator` escalation
+  (agent/vision metadata from request bodies) and the models-list sync
+  (`GET {baseURL}/models` → catalog overlay) — the binding serves the
+  catalog's copilot models; remote model discovery belongs with item 4's
+  console ingestion (same fetch-merge shape).
