@@ -33,7 +33,7 @@ impl ApiError {
     /// Renders the envelope into an axum response (application/json).
     ///
     /// 5xx envelopes are ALWAYS logged (one line, stderr + the
-    /// `<data>/log/server.log` sink) — the catch-all guarantee that a 500
+    /// `<data>/log/opencode.log` sink) — the catch-all guarantee that a 500
     /// is never silent even at call sites without a `debug_cause` map:
     /// the envelope carries the `err_<…>` ref that correlates with the
     /// `[api-cause]` cause line. v2 parity: the TS server logs every
@@ -557,7 +557,7 @@ fn tracing_like_warn(kind: &str, reason: &str) {
 /// (G11-F3): the public error shape intentionally discards the cause
 /// (leak-prevention, mirroring v2). The one-line cause is ALWAYS captured
 /// now — written to stderr (foreground `serve` sees it live) AND appended
-/// to the server log file under `<data>/log/` (the managed/standalone
+/// to the server log file under `<data>/log/` in v2's layout (the managed/standalone
 /// daemon is spawned with stderr redirected to /dev/null unless
 /// `OPENCODE_PRINT_LOGS=1`, so stderr alone loses the line — the port gap
 /// behind "500s were silent"; v2's Effect logger writes the same
@@ -585,10 +585,12 @@ fn is_expected_readiness(body: &Value) -> bool {
 }
 
 /// Appends one line to the server log sink
-/// (`OPENCODE_LOG_FILE`, else `<data>/log/server.log`), prefixed with a
-/// unix-ms timestamp. Failures are silent — logging must never take a
-/// request down — and the file is opened per line (error rates are low;
-/// no lifecycle to manage across forked daemons).
+/// (`OPENCODE_LOG_FILE`, else v2's layout `<data>/log/opencode.log` —
+/// see [`server_log_path`]), prefixed with a unix-ms timestamp, then
+/// runs the in-place trim check ([`trim_log`]). Failures are silent —
+/// logging must never take a request down — and the file is opened per
+/// line (error rates are low; no lifecycle to manage across forked
+/// daemons).
 pub fn append_server_log(line: &str) {
     use std::io::Write as _;
     let path = server_log_path();
@@ -597,22 +599,161 @@ pub fn append_server_log(line: &str) {
             return;
         }
     }
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
         let ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |duration| duration.as_millis());
         let _ = writeln!(file, "[ts {ms}] {line}");
     }
+    // v2's file logger trims on a schedule; the per-line sink checks on
+    // append (a stat per logged line — the sink only sees errors and
+    // lifecycle transitions).
+    let _ = trim_log(&path);
 }
 
 /// The log sink location: `OPENCODE_LOG_FILE` when set (tests and
-/// embedders), else the env-resolved roots' `data/log/server.log`
-/// (`Global.Path.log` in v2).
+/// embedders), else v2's layout (`util/src/observability/logging.ts:59-61`
+/// via `loggers(app.channel === "local", app.channel)`,
+/// `observability.ts:31`): the shared `data/log/opencode.log` for every
+/// release channel, `data/log/opencode-<sanitized>.log` for the `local`
+/// dev channel.
 fn server_log_path() -> std::path::PathBuf {
     if let Some(path) = std::env::var_os("OPENCODE_LOG_FILE").filter(|v| !v.is_empty()) {
         return std::path::PathBuf::from(path);
     }
-    oc_util::global_roots::resolve().log().join("server.log")
+    let channel = oc_util::channel::current();
+    oc_util::global_roots::resolve().log().join(log_filename(&channel))
+}
+
+/// `Logging.file(local, channel)` (`logging.ts:59-62`): the global
+/// `opencode.log` unless the process runs the `local` dev channel
+/// (`local = app.channel === "local"`), which gets the channel-suffixed
+/// `opencode-<sanitized>.log` (channel chars outside
+/// `[a-zA-Z0-9._-]` become `-`).
+#[must_use]
+pub fn log_filename(channel: &str) -> String {
+    if channel == "local" {
+        let sanitized: String =
+            channel
+                .chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                        ch
+                    } else {
+                        '-'
+                    }
+                })
+                .collect();
+        format!("opencode-{sanitized}.log")
+    } else {
+        "opencode.log".to_owned()
+    }
+}
+
+/// v2's log bounds (`logging.ts:9-10`): compact in place once the file
+/// passes 50 MiB, keeping ~25 MiB (rounded forward to the next line
+/// boundary).
+const LOG_MAX_BYTES: u64 = 50 * 1024 * 1024;
+const LOG_KEEP_BYTES: u64 = 25 * 1024 * 1024;
+
+/// A trim lock older than this belongs to a dead process
+/// (`logging.ts:13`).
+const LOG_TRIM_LOCK_STALE: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// The trim copy chunk (`logging.ts:14`).
+const LOG_TRIM_CHUNK: usize = 64 * 1024;
+
+/// `Logging.trim` (`logging.ts:86-124`): compact the log IN PLACE — the
+/// head is dropped so roughly `keep` bytes remain, starting at the
+/// first line boundary at or past `size - keep`. In-place (never
+/// rename) because other processes hold the file open `O_APPEND` and a
+/// rename would strand them on the unlinked inode. The mkdir-based
+/// `<file>.trim` lock serializes concurrent trimmers; a stale lock
+/// (> 5 min) is broken but still yields this round. Best-effort: every
+/// failure is silently skipped (the next append retries).
+fn trim_log(path: &std::path::Path) -> std::io::Result<()> {
+    trim_log_options(path, LOG_MAX_BYTES, LOG_KEEP_BYTES)
+}
+
+fn trim_log_options(path: &std::path::Path, max: u64, keep: u64) -> std::io::Result<()> {
+    // mkdir as the atomic lock primitive (`create_dir` fails when the
+    // directory exists).
+    let mut lock = std::ffi::OsString::from(path.as_os_str());
+    lock.push(".trim");
+    let lock = std::path::PathBuf::from(lock);
+    match std::fs::create_dir(&lock) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let stale = std::fs::metadata(&lock)
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|modified| {
+                    modified.elapsed().ok().filter(|age| *age > LOG_TRIM_LOCK_STALE)
+                })
+                .is_some();
+            if stale {
+                let _ = std::fs::remove_dir_all(&lock);
+            }
+            return Ok(()); // another trimmer owns it (or broke our lock)
+        }
+        Err(error) => return Err(error),
+    }
+    let result = trim_locked(path, max, keep);
+    let _ = std::fs::remove_dir_all(&lock);
+    result
+}
+
+fn trim_locked(path: &std::path::Path, max: u64, keep: u64) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let size = std::fs::metadata(path)?.len();
+    if size <= max {
+        return Ok(());
+    }
+    let mut probe = std::fs::OpenOptions::new().read(true).open(path)?;
+    let start = line_start(&mut probe, size.saturating_sub(keep))?;
+    drop(probe);
+    // Read from `start` to EOF (lines appended since the stat survive);
+    // the write cursor always trails the read cursor, so the forward
+    // copy never overwrites unread bytes. Separate opens (not dup'd
+    // descriptors) so the cursors move independently.
+    let mut reader = std::fs::File::open(path)?;
+    reader.seek(SeekFrom::Start(start))?;
+    let mut writer = std::fs::OpenOptions::new().write(true).open(path)?;
+    writer.seek(SeekFrom::Start(0))?;
+    let mut written = 0u64;
+    let mut buffer = vec![0u8; LOG_TRIM_CHUNK];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        writer.write_all(&buffer[..read])?;
+        written += read as u64;
+    }
+    writer.flush()?;
+    writer.set_len(written)?;
+    Ok(())
+}
+
+/// The first byte after the first newline at or beyond `from`
+/// (`logging.ts:145-157`), or EOF when the tail has no newline.
+fn line_start(file: &mut std::fs::File, from: u64) -> std::io::Result<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut cursor = from;
+    let mut buffer = vec![0u8; LOG_TRIM_CHUNK];
+    loop {
+        file.seek(SeekFrom::Start(cursor))?;
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(cursor);
+        }
+        let Some(newline) = buffer[..read].iter().position(|byte| *byte == b'\n') else {
+            cursor += read as u64;
+            continue;
+        };
+        return Ok(cursor + newline as u64 + 1);
+    }
 }
 
 /// `OPENCODE_DEBUG_ERRORS` (resolved once; env reads are not free on the
@@ -881,5 +1022,110 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert!(!log.exists(), "4xx envelopes are not logged");
+    }
+
+    /// v2's log-file naming (`logging.ts:59-62` via `loggers(local =
+    /// channel === "local", channel)`, `observability.ts:31`): the
+    /// shared `opencode.log` for every release channel; the `local` dev
+    /// channel gets `opencode-<sanitized>.log` (auditF's "log layout
+    /// divergence" — `server.log` pointed v2 docs/scripts at nothing).
+    #[test]
+    fn log_file_name_follows_the_v2_layout() {
+        let _guard = LOG_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let saved_channel = std::env::var_os("OPENCODE_CHANNEL");
+        let saved_log = std::env::var_os("OPENCODE_LOG_FILE");
+        let saved = [
+            ("XDG_DATA_HOME", std::env::var_os("XDG_DATA_HOME")),
+            ("XDG_CONFIG_HOME", std::env::var_os("XDG_CONFIG_HOME")),
+            ("XDG_STATE_HOME", std::env::var_os("XDG_STATE_HOME")),
+            ("XDG_CACHE_HOME", std::env::var_os("XDG_CACHE_HOME")),
+        ];
+        let sandbox = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        for (name, _) in &saved {
+            std::env::remove_var(name);
+        }
+        std::env::set_var("OPENCODE_LOG_FILE", "");
+        std::env::set_var("XDG_DATA_HOME", sandbox.path().join("data"));
+
+        let restore = || {
+            for (name, value) in &saved {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+            match saved_channel.as_ref() {
+                Some(value) => std::env::set_var("OPENCODE_CHANNEL", value),
+                None => std::env::remove_var("OPENCODE_CHANNEL"),
+            }
+            match saved_log.as_ref() {
+                Some(value) => std::env::set_var("OPENCODE_LOG_FILE", value),
+                None => std::env::remove_var("OPENCODE_LOG_FILE"),
+            }
+        };
+
+        // Release channels (incl. the `latest` default): the shared file.
+        std::env::remove_var("OPENCODE_CHANNEL");
+        let path = server_log_path();
+        assert_eq!(
+            path,
+            sandbox.path().join("data/opencode-rust/log/opencode.log"),
+            "the default channel logs to v2's shared opencode.log"
+        );
+        std::env::set_var("OPENCODE_CHANNEL", "stable");
+        assert_eq!(
+            server_log_path(),
+            sandbox.path().join("data/opencode-rust/log/opencode.log"),
+            "any non-local channel shares the global file"
+        );
+        // The local dev channel: the channel-suffixed file.
+        std::env::set_var("OPENCODE_CHANNEL", "local");
+        assert_eq!(
+            server_log_path(),
+            sandbox.path().join("data/opencode-rust/log/opencode-local.log")
+        );
+        restore();
+
+        // The named unit: `file(local, channel)`.
+        assert_eq!(log_filename("local"), "opencode-local.log");
+        assert_eq!(log_filename("latest"), "opencode.log");
+    }
+
+    /// `Logging.trim` (`logging.ts:86-157`): past the max the file
+    /// compacts IN PLACE to ~keep bytes, cutting at a line boundary;
+    /// under the max it is untouched; the `.trim` lock is removed.
+    #[test]
+    fn log_trim_compacts_in_place_at_a_line_boundary() {
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let log = dir.path().join("opencode.log");
+        // 10 lines of 10 bytes; max 50 (trims), keep 20 → keeps the
+        // newest ~2-3 lines starting at a line boundary.
+        let lines: Vec<String> = (0..10).map(|index| format!("line{index:04}\n")).collect();
+        let body: String = lines.concat();
+        std::fs::write(&log, &body).expect("seed");
+        let total = body.len() as u64;
+
+        // Under the max: untouched.
+        trim_log_options(&log, total + 1, 20).expect("no-op trim");
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), body);
+
+        // Over the max: the head drops, the tail survives whole lines.
+        trim_log_options(&log, total - 1, 20).expect("trim");
+        let trimmed = std::fs::read_to_string(&log).unwrap();
+        assert!(trimmed.len() <= 30, "roughly keep bytes remain: {trimmed}");
+        assert!(trimmed.ends_with("line0009\n"), "the newest line survives");
+        assert!(trimmed.starts_with("line"), "the cut lands on a line boundary: {trimmed:?}");
+        assert!(
+            body.ends_with(&trimmed),
+            "the kept bytes are the file's tail (in-place compaction)"
+        );
+        assert!(!log.with_file_name("opencode.log.trim").exists(), "lock cleaned up");
+
+        // An existing lock defers the trim (another trimmer owns it).
+        std::fs::write(&log, &body).expect("reseed");
+        std::fs::create_dir(log.with_file_name("opencode.log.trim")).expect("lock");
+        trim_log_options(&log, total - 1, 20).expect("deferred");
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), body, "not trimmed");
+        std::fs::remove_dir(log.with_file_name("opencode.log.trim")).expect("unlock");
     }
 }
