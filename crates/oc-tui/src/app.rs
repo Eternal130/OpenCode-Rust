@@ -407,6 +407,32 @@ impl App {
                     self.refresh_strip_hover(width);
                     return;
                 }
+                // The sidebar onboarding card's two pointer targets
+                // (footer.tsx:45-70): the `✕` release persists
+                // `dismissed = true` (the run loop writes the
+                // `getting-started` document), the "Connect provider"
+                // row dispatches `provider.connect` — the palette
+                // row's own handler (the server-list dialog). Only the
+                // session route paints the card; the rects clear with
+                // it (a hidden card must not zombie-click).
+                if !self.permission_live() && matches!(self.store.route(), Route::Session { .. }) {
+                    if let Some(hits) = self.store.sidebar_onboarding_hits() {
+                        if hits.dismiss.contains(col, row) {
+                            self.store.dismiss_sidebar_onboarding();
+                            self.store.request_redraw();
+                            return;
+                        }
+                        if hits.connect.contains(col, row) {
+                            let dispatch =
+                                self.dispatcher.dispatch(&self.store, "provider.connect", None);
+                            if let Dispatch::ServerPending(reason) = dispatch {
+                                let _ = reason;
+                            }
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
+                }
                 // #33 — the footer location label opens the Working
                 // directory select on release
                 // (`useWorkingDirectoryActions.openMenu`,
@@ -2399,7 +2425,16 @@ pub async fn run_with_size(
         if doc.mode == crate::components::sidebar::SidebarMode::Hide {
             app.store.set_sidebar_mode(doc.mode);
         }
+        // Onboarding persistence (auditC S2): v2's
+        // `storage.store("getting-started", { initial: { dismissed:
+        // false } })` seeds the card's dismissal from
+        // `<state>/<ch>/tui/getting-started.json` — the `✕` release
+        // writes it back (the flip check below).
+        let doc: crate::storage::GettingStartedDoc =
+            storage.read_or_default(crate::storage::KEY_GETTING_STARTED);
+        app.store.restore_sidebar_onboarding(doc.dismissed);
     }
+    let mut persisted_onboarding = app.store.sidebar_onboarding_dismissed();
     let mut persisted_sidebar = app.store.sidebar_mode();
     let tabs_scope_cwd = directory.clone();
     if let Some(storage) = &tabs_storage {
@@ -2803,6 +2838,21 @@ pub async fn run_with_size(
                     &crate::storage::SidebarDoc { mode: sidebar_now },
                 ) {
                     eprintln!("opencode tui: failed to persist sidebar mode: {error}");
+                }
+            }
+        }
+        // Onboarding persistence (footer.tsx:48-52 — the `✕` release
+        // persists `dismissed = true`): save on the flip, v2's storage
+        // draft shape.
+        let onboarding_now = app.store.sidebar_onboarding_dismissed();
+        if onboarding_now != persisted_onboarding {
+            persisted_onboarding = onboarding_now;
+            if let Some(storage) = &tabs_storage {
+                if let Err(error) = storage.write_typed(
+                    crate::storage::KEY_GETTING_STARTED,
+                    &crate::storage::GettingStartedDoc { dismissed: onboarding_now },
+                ) {
+                    eprintln!("opencode tui: failed to persist onboarding dismissal: {error}");
                 }
             }
         }
