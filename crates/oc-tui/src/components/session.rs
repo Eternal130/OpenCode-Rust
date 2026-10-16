@@ -15,7 +15,10 @@ use crate::components::composer::autocomplete;
 use crate::components::composer::render::{AutocompleteView, FooterHints, PromptView};
 use crate::components::message::list::{render_transcript, TranscriptOptions};
 use crate::components::session_tabs::{Attention, TabStatus, TabView};
-use crate::components::sidebar::{SidebarSections, SidebarView, SIDEBAR_AUTO_BREAKPOINT};
+use crate::components::sidebar::{
+    SidebarContextWidget, SidebarMcpWidget, SidebarSections, SidebarView,
+    SIDEBAR_AUTO_BREAKPOINT,
+};
 use crate::render::{paint_placed_with_fills, Fill, Frame};
 use crate::store::{SessionTab, Store};
 use ratatui::style::Style;
@@ -665,12 +668,11 @@ fn scrim_frame(width: usize, height: usize) -> Frame {
 
 /// The live sidebar's content (`routes/session/sidebar.tsx`): the
 /// session's title (the tab list's title — the strip's "Untitled
-/// session" fallback), the plugin sections (`sidebar.content` — one
-/// per plugin through the slot bridge), the getting-started card
-/// (height ≥ 22 and not dismissed, footer.tsx:18-23) and the footer
-/// location line (absent until the live route carries a
-/// `{dir}:{branch}` source — the composer's status seam is empty
-/// too).
+/// session" fallback), the plugin sections (`sidebar.content` — the
+/// context/MCP widgets + one per plugin through the slot bridge), the
+/// getting-started card (height ≥ 22 and not dismissed, footer.tsx:18-23)
+/// and the footer location line `{dir}:{branch}` (the same source the
+/// composer footer's status reads — the location worker's vcs lookup).
 fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarView {
     // Session-title-first (the tab list's title resolution —
     // session-tabs.tsx:754), the strip's "Untitled session" fallback.
@@ -681,17 +683,77 @@ fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarV
         .find(|tab| tab.session_id == session_id)
         .and_then(|tab| store.display_title(tab))
         .unwrap_or_else(|| "Untitled session".to_owned());
+    // The context widget (`contextUsage`, util/session.ts:46-73): the
+    // LAST assistant with a token payload after the newest completed
+    // compaction; percent divides by the model catalog's context
+    // limit. The mm2 seam (docs/migration-m1-tabstrip.md): the ref's
+    // live "Context / N tokens" meter — NOW wired on our side; the
+    // rig's A/B mismatch class for it retires with this lane.
+    // `cost` (the ref's `data.session.cost()` — a per-session server
+    // total over the family) has no store source yet: the row waits
+    // for the session-info cost field (seam noted in surf1.log).
+    let messages = store.messages(session_id);
+    let compaction_index = messages
+        .iter()
+        .rposition(|message| {
+            matches!(
+                message,
+                crate::components::message::model::Message::Compaction { failed: false, running: false, .. }
+            )
+        })
+        .map_or(0, |index| index + 1);
+    let usage = messages[compaction_index..]
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            crate::components::message::model::Message::Assistant {
+                usage_total: Some(total),
+                model,
+                ..
+            } if *total > 0 => Some((*total, model.clone())),
+            _ => None,
+        });
+    let context = match usage {
+        Some((tokens, model)) => SidebarContextWidget {
+            tokens: Some(tokens),
+            percent: {
+                let lists = store.server_lists();
+                lists
+                    .models
+                    .rows()
+                    .and_then(|models| {
+                        models.iter().find(|entry| model == format!("{}/{}", entry.provider_id, entry.id))
+                    })
+                    .and_then(|entry| entry.context_limit.filter(|limit| *limit > 0))
+                    .map(|limit| {
+                        // `Math.round(tokens / limit * 100)` — display
+                        // rounding, not accounting.
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        let percent = (f64::from(i32::try_from(tokens).unwrap_or(i32::MAX))
+                            / f64::from(i32::try_from(limit).unwrap_or(i32::MAX).min(i32::MAX)))
+                            * 100.0;
+                        percent.round() as u8
+                    })
+            },
+            cost: None,
+        },
+        None => SidebarContextWidget::default(),
+    };
     SidebarView {
         title,
         sections: SidebarSections {
-            context: Vec::new(),
-            mcp: Vec::new(),
+            context,
+            mcp: SidebarMcpWidget {
+                servers: store.mcp_servers(),
+                open: store.sidebar_mcp_open(),
+            },
             plugins: store.plugin_sidebar_sections(),
         },
         onboarding: height >= 22
             && !store.sidebar_onboarding_dismissed()
             && !store.server_lists().connected,
-        location: None,
+        location: (!store.footer_location().is_empty())
+            .then(|| store.footer_location().clone()),
     }
 }
 

@@ -126,6 +126,12 @@ pub struct ThemeStyles {
     /// `text.feedback.warning.base` (the reasoning-group header tint
     /// derives from it at 0.6 alpha).
     pub warning: Color,
+    /// `text.feedback.success.base` (SURF-1: the sidebar MCP
+    /// connected dot — mcp.tsx:22).
+    pub success: Color,
+    /// `text.feedback.info.base` (SURF-1: the loading-history label,
+    /// index.tsx:1426 — and the jump row's ref fg, auditB #50).
+    pub info: Color,
     /// `text.action.secondary.base` (the diff-viewer source switch
     /// label; 7.2 wave 2 diff lane).
     pub action_secondary: Color,
@@ -236,6 +242,8 @@ impl ThemeStyles {
                 horizontal_rule: rgba(md.horizontal_rule),
             },
             warning: rgba(tokens.text.feedback.warning.base),
+            success: rgba(tokens.text.feedback.success.base),
+            info: rgba(tokens.text.feedback.info.base),
             formfield_base: rgba(tokens.text.formfield.base),
             action_focused_bg: rgba(tokens.background.action.primary.focused),
             action_focused_fg: rgba(tokens.text.action.primary.focused),
