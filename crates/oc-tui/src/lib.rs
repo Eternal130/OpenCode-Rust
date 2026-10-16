@@ -52,6 +52,7 @@ pub mod keymap;
 pub mod layout;
 pub mod message_golden_tests;
 pub mod mini;
+pub mod mouse_modes;
 pub mod notifications_plugin;
 pub mod os_notify;
 pub mod plugin_boot;
