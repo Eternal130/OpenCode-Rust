@@ -41,7 +41,8 @@ impl CredentialBindings {
         self.entries.get(provider_id).map(|entry| entry.value().clone())
     }
 
-    fn swap(&self, next: BTreeMap<String, ProviderBinding>) {
+    /// Swap the snapshot (host refresh + tests).
+    pub(crate) fn swap(&self, next: BTreeMap<String, ProviderBinding>) {
         self.entries.clear();
         for (id, binding) in next {
             self.entries.insert(id, binding);
@@ -92,6 +93,15 @@ pub fn copilot_base_url(credential: &super::types::OAuthValue) -> String {
 }
 
 impl IntegrationHost {
+    /// Test seam: install a fixed provider-binding snapshot without
+    /// standing up real credentials (BE-4 vertex ADC tests).
+    #[cfg(test)]
+    pub fn provider_bindings_shared_for_test(
+        &self,
+    ) -> &Arc<crate::integration::copilot::CredentialBindings> {
+        &self.provider_bindings_shared
+    }
+
     /// Recomputes the credential-driven provider bindings (copilot today)
     /// into the shared snapshot. Best-effort per provider: a failing
     /// resolve keeps the previous entry.

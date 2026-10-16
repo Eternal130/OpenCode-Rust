@@ -68,3 +68,116 @@ Worktree: `.worktrees/lane-be4` (branch lane/be4).
   remainder, needs RS256); session.diff registered ephemeral in the bus
   registry (bus/registry.rs, v1/session.ts:633-639). Verification: oc-ai
   704/704, oc-core 825/825, oc-server cargo check clean, clippy 0, fmt ok.
+- phase-4 (credential-store integration proofs): integration/vertex.rs
+  refresh made endpoint-injectable; tests — authorized-user ADC → mock
+  oauth2 token endpoint → CredentialBindings("google-vertex") → resolver
+  binds google-vertex-gemini with the refreshed bearer on the wire;
+  service-account ADC defers (registered remainder); the BE-3b copilot
+  credential test now also pins the copilot-chat route id + bearer +
+  X-GitHub-Api-Version on the wire. Full affected-crate verification:
+  nextest oc-ai+oc-core = 1531/1531, oc-server cargo check clean, clippy 0
+  warnings, fmt applied.
+
+## Final report — per-item dispositions
+
+### 1. Bedrock — LANDED
+- `oc-ai/src/protocols/bedrock/sigv4.rs`: canonical request / string-to-sign
+  / derived signing key over plain sha2; bearer `AWS_BEARER_TOKEN_BEDROCK`
+  wins over SigV4 (aws4fetch + utils/bedrock-auth.ts precedence);
+  static-cred + env-chain slices of the AWS default chain; region
+  resolution (explicit → creds → AWS_REGION/AWS_DEFAULT_REGION →
+  us-east-1). AWS-documentation GET vector reproduces the documented
+  signature `5d672d79…` byte-for-byte; POST variant + RFC 4231 HMAC vector
+  pinned.
+- `bedrock/event_stream.rs` + `route/framing.rs FramingKind::AwsEventStream`
+  (bedrock-event-stream.ts): `[len][headers-len][crc][headers][payload]
+  [crc]` codec with CRC32/IEEE validation (`123456789` → 0xCBF43926),
+  `:event-type`/`:exception-type`/`:error-code` re-wrapping, `p` padding
+  drop, incomplete-stream classification at EOF; mid-frame chunk splits
+  proven at every tested offset.
+- `bedrock/converse.rs` (bedrock-converse.ts): full body lowering
+  (roles/system merge, toolSpec/toolUse/toolResult incl. status +
+  image-hoisting + Mistral 9-char id projection + name sanitization +
+  empty-key stripping, reasoningText/redactedContent signature replay,
+  cachePoint positional 4-cap w/ ttl buckets, inferenceConfig,
+  additionalModelRequestFields thinking/top_k, Nova-2 maxTokens guard) and
+  the streaming state machine (tool_stream/lifecycle reuse, finish-pair
+  synthesis on halt, usage sum-up incl. cache read/write, malformed stop +
+  stream exceptions → typed errors). Routes: `bedrock_converse_route`
+  (`/model/{id}/converse-stream`) and `bedrock_invoke_route`
+  (anthropic-on-bedrock `/model/{id}/invoke-stream` over the Anthropic
+  Messages protocol). Evidence: 30 bedrock/framing tests.
+- Facade (oc-core facade.rs): `amazon-bedrock` → BedrockConverse;
+  `…/mantle/chat` → OpenAI chat on `bedrock-mantle.{region}.api.aws/v1`;
+  `…/mantle/responses` → open-responses protocol on the same base (v2
+  mantle responsesRoute incl. store:false defaults via
+  openai_compatible_responses_route); shared bedrock auth. Catalog model
+  packages verified against the snapshot (gpt-oss → chat, rest →
+  responses, plain package → converse).
+- Deferred inside Bedrock: web-identity/container/process credential
+  slices of the AWS default chain (env + static + bearer only); Bedrock
+  document-format tool results are lowered but PDF docs rely on inline
+  base64 only (no Files API).
+
+### 2. Vertex — LANDED
+- `oc-ai/src/protocols/vertex.rs` (google-vertex.ts + shared): project
+  aliases (GOOGLE_VERTEX_PROJECT/GOOGLE_CLOUD_PROJECT/GCP_PROJECT/
+  GCLOUD_PROJECT), location aliases + us-central1 default, host table
+  (global / eu|us rep domains / regional), tuned `endpoints/` models,
+  Express Mode (`aiplatform.googleapis.com/v1/publishers/google` +
+  x-goog-api-key incl. GOOGLE_VERTEX_API_KEY), `v1beta1/projects/…/
+  locations/…[/publishers/google]` base, `labels` provider option into the
+  body, `serviceTier` stripped from the body and sent as
+  `x-vertex-ai-llm-shared-request-type`, Gemini protocol reuse
+  (streamGenerateContent?alt=sse). 10 tests.
+- Credential sourcing: `GOOGLE_OAUTH_ACCESS_TOKEN` ADC env at request time
+  (oc-ai) + the integration credential binding (oc-core
+  `integration/vertex.rs`): authorized-user ADC file
+  (GOOGLE_APPLICATION_CREDENTIALS / gcloud well-known) refreshed against
+  oauth2.googleapis.com into CredentialBindings("google-vertex"), merged
+  by the resolver as the access token. Mock round-trip test incl. the
+  resolver→wire bearer.
+- Deferred: service-account key files (RS256 self-signed JWT grant — needs
+  an RSA signer; typed deferral test pins the behavior), and the
+  `google-vertex/messages|chat` partner-model families were ALREADY
+  bound (AnthropicMessages/OpenAIChat) — untouched.
+
+### 3. Copilot chat — LANDED
+- `oc-ai/src/protocols/copilot.rs` (github-copilot.ts:434-558): openai-
+  compatible chat protocol re-badged `copilot-chat` over the bound
+  transport (BE-3b CredentialBindings supply base URL/token/headers via
+  the resolver), static client headers (X-GitHub-Api-Version 2026-08-01,
+  Openai-Intent conversation-edits, x-initiator user), per-request header
+  policy: x-initiator agent escalation (last-turn analysis) +
+  Copilot-Vision-Request, GITHUB_TOKEN env fallback, interaction-type
+  vocabulary ported (`interaction_type(kind, child)`). 5 tests.
+- Facade: `github-copilot` + openai-compatible package → CopilotChat
+  family. BE-3b's resolver credential test extended to pin the wire
+  (bearer + api-version header).
+- Deferred: `X-Interaction-Type`/`X-Interaction-Id` per-request headers
+  need session kind/affinity at the route layer — the runner's LLM client
+  carries no session context through to route headers yet (v2 sets them in
+  the `session.model.request` hook); the pure vocabulary is ported and
+  tested, wiring lands with the runner seam. The `/responses` endpoint
+  preference for gpt-5+/grok/gemini/mai-code ids (live-model metadata in
+  v2) is likewise deferred until live model sync (BE catalog refresh lane).
+
+### 4. session.diff — LANDED (one-liner)
+- `oc-core/src/bus/registry.rs`: registered as ephemeral on the session
+  aggregate (v1/session.ts:633-639), manifest test updated (53
+  definitions).
+
+### 5. media ROUTE layer — REGISTERED (deferred)
+- Ref `route/media.ts` (446 L) + `media-protocol.ts` + `generation.ts`
+  polling is its own protocol family (Inline/Queued/Stream route
+  compositions, multipart/binary encoders, retry schedules); auditE §1.9
+  tracks it as a separate missing domain. Registered here with the seam
+  inventory above rather than rushed; no oc-ai surface claims media
+  support today (typed clean errors remain).
+
+## Verification chain (affected crates only)
+- nextest oc-ai: 704/704 (30 bedrock + framing, 10 vertex, 5 copilot new)
+- nextest oc-core: 827/827 (facade bindings ×4, vertex ADC ×2, copilot
+  wire extension, bus registry)
+- cargo check oc-server: clean (downstream consumer of the registry)
+- clippy oc-ai + oc-core: 0 warnings; cargo fmt applied
