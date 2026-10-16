@@ -329,10 +329,12 @@ impl ChannelStorage {
 
     /// Read the `tabs` document under the open-tabs model: a file
     /// stamped with the current [`TABS_VERSION`] decodes normally;
-    /// anything else (the field's absence, an older version) is the
-    /// legacy all-history shape — it is IGNORED (the empty document
-    /// loads) and RESET on disk, with a one-line log. Never panics on
-    /// any on-disk content (parse failures also fall back to default).
+    /// anything else (the field's absence, an older version) is not
+    /// our shape — it loads the EMPTY document in memory but is left
+    /// UNTOUCHED on disk. v2's TUI writes this same file without a
+    /// version stamp in its own shape; rewriting it here would
+    /// destroy v2's state (auditC S1) — one-way destructive interop
+    /// is forbidden. Never panics on any on-disk content.
     pub fn read_tabs(&self) -> TabsDocument {
         let Some(value) = self.read(KEY_TABS) else { return TabsDocument::default() };
         if value.get("version").and_then(serde_json::Value::as_u64) == Some(u64::from(TABS_VERSION))
@@ -340,13 +342,9 @@ impl ChannelStorage {
             return serde_json::from_value(value).unwrap_or_default();
         }
         eprintln!(
-            "opencode tui: ignoring legacy session-tabs state (pre open-tabs model); resetting"
+            "opencode tui: foreign/legacy session-tabs state found; leaving the file untouched"
         );
-        let document = TabsDocument { version: TABS_VERSION, ..TabsDocument::default() };
-        if let Err(error) = self.write_typed(KEY_TABS, &document) {
-            eprintln!("opencode tui: failed to reset session tabs: {error}");
-        }
-        document
+        TabsDocument { version: TABS_VERSION, ..TabsDocument::default() }
     }
 
     /// Write the `tabs` document stamped with the current
@@ -515,8 +513,8 @@ mod tests {
     /// is ignored, logged, and RESET on disk; corrupt files still
     /// fall back without crashing.
     #[test]
-    fn read_tabs_resets_the_legacy_all_history_shape() {
-        let root = temp_root("legacy-reset");
+    fn read_tabs_leaves_foreign_shapes_untouched_on_disk() {
+        let root = temp_root("foreign-untouched");
         let storage = ChannelStorage::open(&root, "stable").expect("open");
         // The legacy artifact: 30+ sessions in global.tabs, no version.
         let legacy_tabs: Vec<String> =
@@ -527,15 +525,15 @@ mod tests {
         );
         std::fs::write(storage.path_for(KEY_TABS), &legacy).unwrap();
 
-        // Load: ignored → empty, and the file on disk is the reset
-        // (version-stamped, empty) document.
+        // Load: ignored → empty in memory; the file on disk stays
+        // BYTE-IDENTICAL to what the foreign writer left (auditC S1:
+        // v2 writes this file without a version stamp — rewriting it
+        // would destroy v2's state).
         let document = storage.read_tabs();
-        assert!(document.global.tabs.is_empty(), "legacy tabs ignored");
+        assert!(document.global.tabs.is_empty(), "foreign tabs ignored");
         assert!(document.cwd.is_empty());
-        let reset: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(storage.path_for(KEY_TABS)).unwrap()).unwrap();
-        assert_eq!(reset["version"], json!(2), "the reset is stamped");
-        assert_eq!(reset["global"]["tabs"], json!([]));
+        let on_disk = std::fs::read(storage.path_for(KEY_TABS)).unwrap();
+        assert_eq!(on_disk, legacy.as_bytes(), "foreign file is never rewritten");
 
         // A current-version document round-trips untouched.
         let current = TabsDocument {
