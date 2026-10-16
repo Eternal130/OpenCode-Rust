@@ -877,6 +877,9 @@ pub struct Store {
     /// The footer location label's hit rect + directory from the last
     /// render (None when the label didn't paint — empty location).
     footer_location_hit: std::cell::RefCell<Option<FooterLocationHit>>,
+    /// The sidebar onboarding card's pointer targets (the render
+    /// pass's absolute rects; `None` while the card is hidden).
+    sidebar_onboarding_hits: std::cell::RefCell<Option<SidebarOnboardingHits>>,
     /// The location label's hover state (`hovered()`).
     location_hovered: std::cell::Cell<bool>,
     /// Per-session scroll state (Wave A's scroll driver over
@@ -1050,6 +1053,39 @@ pub struct FooterLocationHit {
     pub x: usize,
     /// The label's painted width.
     pub width: usize,
+}
+
+/// One pointer target's absolute screen rect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HitRect {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl HitRect {
+    /// Whether the pointer cell sits inside the rect.
+    #[must_use]
+    pub fn contains(&self, col: usize, row: usize) -> bool {
+        row >= self.y
+            && row < self.y + self.height
+            && col >= self.x
+            && col < self.x + self.width
+    }
+}
+
+/// The sidebar onboarding card's pointer targets (v2's two `onMouseUp`
+/// boxes, footer.tsx:45-70): the `✕` dismiss cell
+/// (`sidebar.footer.getting-started.dismiss` persists
+/// `dismissed = true`) and the "Connect provider" row
+/// (`sidebar.footer.getting-started.connect` dispatches
+/// `provider.connect`). Recorded by the session render at the pane's
+/// paste origin; `None` while the card is hidden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SidebarOnboardingHits {
+    pub dismiss: HitRect,
+    pub connect: HitRect,
 }
 
 /// One queued prompt (`session.inbox` row with `delivery: "queue"`,
@@ -1340,6 +1376,7 @@ impl Store {
             dialog_frame_rect: std::cell::RefCell::new(None),
             dialog_option_rows: std::cell::RefCell::new(Vec::new()),
             footer_location_hit: std::cell::RefCell::new(None),
+            sidebar_onboarding_hits: std::cell::RefCell::new(None),
             location_hovered: std::cell::Cell::new(false),
             scroll: std::cell::RefCell::new(HashMap::new()),
             transcript_metrics: std::cell::RefCell::new(HashMap::new()),
@@ -2539,6 +2576,20 @@ impl Store {
         self.footer_location_hit.borrow().clone()
     }
 
+    /// The sidebar onboarding card's pointer targets, when the card
+    /// painted (the session render records them at the pane's paste
+    /// origin).
+    pub fn set_sidebar_onboarding_hits(&self, hits: Option<SidebarOnboardingHits>) {
+        *self.sidebar_onboarding_hits.borrow_mut() = hits;
+    }
+
+    /// The recorded onboarding targets (`None` while the card is
+    /// hidden — the render clears them every pass).
+    #[must_use]
+    pub fn sidebar_onboarding_hits(&self) -> Option<SidebarOnboardingHits> {
+        *self.sidebar_onboarding_hits.borrow()
+    }
+
     /// The location label's hover transition (returns whether it
     /// CHANGED — the redraw key).
     pub fn set_location_hovered(&self, hovered: bool) -> bool {
@@ -3662,10 +3713,20 @@ impl Store {
     }
 
     /// The onboarding card's dismissal (v2 storage
-    /// `getting-started.dismissed`, footer.tsx:11-23) — the card's
-    /// only writer until mouse selection lands.
+    /// `getting-started.dismissed`, footer.tsx:11-23): the `✕`
+    /// release path (`sidebar.footer.getting-started.dismiss`) —
+    /// sets the signal; the run loop observes the flip and persists
+    /// the document.
     pub fn dismiss_sidebar_onboarding(&self) {
         self.sidebar_onboarding.set(true);
+    }
+
+    /// The boot restore (the document's `dismissed` seeds the signal —
+    /// the run loop reads `<state>/<ch>/tui/getting-started.json`
+    /// before the first frame, mirroring v2's `storage.store(...)`
+    /// initial value).
+    pub fn restore_sidebar_onboarding(&self, dismissed: bool) {
+        self.sidebar_onboarding.set(dismissed);
     }
 
     /// Whether the getting-started card was dismissed.
