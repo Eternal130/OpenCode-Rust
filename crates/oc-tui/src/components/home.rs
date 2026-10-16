@@ -341,38 +341,40 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         caret: Some(composer.caret()),
     };
     let _ = theme;
-    let (mut frame, caret_screen) = render_home_view(&view, &state, size);
-    store.set_caret_cell(
-        caret_screen.map(|(x, y)| (u16::try_from(x).unwrap_or(0), u16::try_from(y).unwrap_or(0))),
-    );
-
     // F9 — the tab strip leads the HOME route while tabs are open (v2
     // app.tsx:576-579 `tabsAvailable`: `sessionTabs.enabled() &&
     // tabs().length > 0` — the SessionTabs mount is app-wide, never
     // session-route-gated; home simply has no active pill). The
     // golden harness never opens tabs, so `home.w*` stays byte-exact.
+    //
+    // v2 lays the home content out INSIDE the remaining height: the
+    // strip is row 0 of the same column (`app.tsx:1349-1361` seats
+    // `<SessionTabs/>` directly above the route `<Switch>`), so Home's
+    // own layout sees `height - 1` and the caret rides the shifted
+    // subtree. The dogfood2 repro caught this port computing the
+    // caret at the UNSHIFTED row (one row above the composer) and
+    // clipping the bottom status row (full-height layout + truncate):
+    // render the sub-frame at height-1, prepend the strip row, then
+    // set the caret cell shifted by the strip's one row.
     let tabs = store.tabs();
-    if store.tabs_enabled() && !tabs.tabs.is_empty() {
+    let strip_shows = store.tabs_enabled() && !tabs.tabs.is_empty() && usize::from(size.1) > 1;
+    let sub_size = (size.0, if strip_shows { size.1 - 1 } else { size.1 });
+    let (mut frame, caret_screen) = render_home_view(&view, &state, sub_size);
+    if strip_shows {
         let (width, height) = (usize::from(size.0), usize::from(size.1));
-        if height > 1 {
-            let strip = crate::components::session::paint_live_tabs_bar(
-                store,
-                None,
-                width,
-                &state.styles(),
-            );
-            // Shift the home view down one row under the strip.
-            let mut cells = vec![frame.cells[0].clone()];
-            cells.extend(frame.cells.clone());
-            cells.truncate(height);
-            frame = Frame { cells, width, height };
-            for (row, strip_row) in strip.cells.iter().enumerate() {
-                if let Some(slot) = frame.cells.get_mut(row) {
-                    slot.clone_from(strip_row);
-                }
-            }
-        }
+        let strip =
+            crate::components::session::paint_live_tabs_bar(store, None, width, &state.styles());
+        // Prepend the strip's row (height 1); the sub-frame already
+        // fits height-1 beneath it — nothing truncates.
+        let mut cells = strip.cells.clone();
+        cells.extend(frame.cells.clone());
+        cells.truncate(height);
+        frame = Frame { cells, width, height };
     }
+    store.set_caret_cell(caret_screen.map(|(x, y)| {
+        let y = y + usize::from(strip_shows);
+        (u16::try_from(x).unwrap_or(0), u16::try_from(y).unwrap_or(0))
+    }));
     frame
 }
 
@@ -571,5 +573,55 @@ mod tests {
         store.set_tabs_enabled(false);
         let frame = render_home(&store, &theme.styles(), (80, 30));
         assert!(!frame.text_grid()[0].contains("Alpha"), "the strip follows the config gate");
+    }
+
+    /// dogfood2 bug 2 — the caret and the layout under the strip: v2
+    /// seats `<SessionTabs/>` in the SAME column as the route content
+    /// (app.tsx:1349-1361), so Home lays out in `height - 1`, the
+    /// composer's hardware cursor rides the SHIFTED row, and the
+    /// bottom status row never clips. The port once computed the caret
+    /// from the pre-shift layout (one row above the input line, exactly
+    /// the strip height) and rendered full-height then truncated.
+    #[test]
+    fn home_caret_sits_on_the_composer_row_under_the_strip() {
+        let theme = crate::theme::ThemeState::v2_dark();
+
+        // Without tabs the golden home shape: caret on the input row.
+        let bare = Store::new(Runtime::new());
+        let bare_frame = render_home(&bare, &theme.styles(), (80, 24));
+        let bare_grid = bare_frame.text_grid();
+        let bare_input = bare_grid
+            .iter()
+            .position(|row| row.contains("Ask anything"))
+            .expect("the bare home renders the input line");
+        let bare_caret = bare.caret_cell().expect("the bare home sets the caret");
+        assert_eq!(usize::from(bare_caret.1), bare_input, "no strip: caret on the input row");
+
+        // With a restored tab the strip takes row 0 and the whole view
+        // (caret included) shifts down one row — still ON the input row.
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Alpha".to_owned()));
+        store.navigate(crate::store::Route::Home);
+        let frame = render_home(&store, &theme.styles(), (80, 24));
+        let grid = frame.text_grid();
+        assert!(grid[0].contains("Alpha"), "the strip leads home");
+        let input = grid
+            .iter()
+            .position(|row| row.contains("Ask anything"))
+            .expect("the shifted home renders the input line");
+        assert_eq!(input, bare_input + 1, "the home content shifts by the strip's one row");
+        let caret = store.caret_cell().expect("the strip home sets the caret");
+        assert_eq!(
+            usize::from(caret.1),
+            input,
+            "the hardware cursor sits ON the composer's input row (dogfood2 bug 2)"
+        );
+        assert!(usize::from(caret.1) > 0, "never on the strip row");
+        // height-1 layout: nothing clips — the footer's version line
+        // still paints on the frame's last row region.
+        assert!(
+            grid.iter().any(|row| row.contains(env!("CARGO_PKG_VERSION"))),
+            "the bottom status row survives the strip (no full-height truncation)"
+        );
     }
 }
