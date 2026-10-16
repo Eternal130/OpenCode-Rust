@@ -1,11 +1,12 @@
 //! Attention sound playback — the port of v2's audio channel
 //! (`packages/tui/src/audio.ts` + `attention.ts`'s `playSound`).
 //!
-//! v2 decodes + plays the built-in MP3 pack through opentui's native
-//! miniaudio `Audio` API. A plain-terminal Rust TUI has no in-process
-//! audio stack (and pulling one in — `rodio`/`symphonia` — would dwarf the
-//! feature), so playback shells out to the first available system
-//! player, detached (`spawn`, stdio null) — the CLI-standard mirror:
+//! v2 decodes + plays the built-in MP3 pack in-process through opentui's
+//! native miniaudio `Audio` API. On Linux this port now does the same
+//! ([`inproc`] over the vendored miniaudio — the same engine, decode
+//! path, and silent-no-op-when-no-device semantics); on other targets
+//! the historical mirror shells out to the first available system
+//! player, detached (`spawn`, stdio null):
 //!
 //! | player                 | volume flag (v2 volume is 0..1 linear)   |
 //! | ---------------------- | --------------------------------------- |
@@ -18,10 +19,17 @@
 //! The built-in `opencode.default` pack (see `assets/audio/README.md`
 //! for provenance) is embedded with `include_bytes!` (~22 KiB) and
 //! extracted lazily to `<cache>/audio/` on first play (temp-file +
-//! rename; the native side caches decoded sounds, we cache the files).
+//! rename; v2's node build extracts assets to disk the same way —
+//! `attention-sounds.node.ts` — and both halves then `readFile` +
+//! decode, so the resolver below is shared by both paths).
 //!
-//! The spawn itself sits behind the [`SoundSpawner`] trait so tests
-//! assert the exact argv without executing anything.
+//! The spawn half sits behind the [`SoundSpawner`] trait so tests
+//! assert the exact argv without executing anything; the in-process
+//! half is exercised end-to-end (decoding needs no device).
+
+/// In-process miniaudio playback (Linux only — v2 parity).
+#[cfg(target_os = "linux")]
+pub mod inproc;
 
 use std::ffi::OsString;
 use std::io;
@@ -31,6 +39,17 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 
 use crate::attention::{AttentionEmitter, AttentionSoundName, SoundCandidate};
+
+/// The production sound half of the attention emitter: in-process
+/// miniaudio playback on Linux (v2 parity), the system-player spawn
+/// mirror elsewhere.
+#[cfg(target_os = "linux")]
+pub type SoundHalf = inproc::InprocSoundPlayer;
+
+/// The production sound half of the attention emitter outside Linux: the
+/// system-player spawn mirror.
+#[cfg(not(target_os = "linux"))]
+pub type SoundHalf = ProcessSoundPlayer;
 
 /// The embedded built-in pack (`assets/audio/`, `@opencode/ui` MIT):
 /// every sound name maps to a file (`done` reuses `bip-bop-01`, the
@@ -228,12 +247,13 @@ impl AttentionEmitter for ProcessSoundPlayer {
     }
 }
 
-/// The composite production emitter: OSC notifications over `W` +
-/// process-spawned sounds (installed by the run loop). The notifier
-/// wraps in a `RefCell` because emitting takes `&mut` on the writer.
+/// The composite production emitter: OSC notifications over `W` + the
+/// in-process (Linux) / spawn-mirrored (other) sound player (installed by
+/// the run loop). The notifier wraps in a `RefCell` because emitting takes
+/// `&mut` on the writer.
 pub struct TerminalAttention<W: io::Write> {
     pub notifier: std::cell::RefCell<crate::os_notify::OscNotifier<W>>,
-    pub sounds: ProcessSoundPlayer,
+    pub sounds: SoundHalf,
 }
 
 impl<W: io::Write> AttentionEmitter for TerminalAttention<W> {
