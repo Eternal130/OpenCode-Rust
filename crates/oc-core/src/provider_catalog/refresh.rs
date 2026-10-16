@@ -151,7 +151,9 @@ impl CatalogService {
         // digest-changing refresh (models-dev.ts:416-422) — best-effort:
         // a failed notification never fails the refresh.
         if let Some(bus) = &self.bus {
-            if let Some(def) = crate::bus::registry::by_type(crate::bus::registry::MODELS_DEV_REFRESHED) {
+            if let Some(def) =
+                crate::bus::registry::by_type(crate::bus::registry::MODELS_DEV_REFRESHED)
+            {
                 let options = crate::bus::PublishOptions { global: true, ..Default::default() };
                 let _ = bus.publish(def, serde_json::json!({}), options).await;
             }
@@ -257,9 +259,7 @@ mod tests {
         // `models-dev.refreshed` ({}); a byte-identical body stays silent.
         use futures::StreamExt;
         let dir = tempfile::TempDir::new().expect("tempdir");
-        let db = crate::database::Database::open_file(dir.path().join("t.db"))
-            .await
-            .expect("db");
+        let db = crate::database::Database::open_file(dir.path().join("t.db")).await.expect("db");
         let bus = crate::bus::Bus::new(db, crate::bus::BusOptions::deterministic());
         let mut subscription = bus.subscribe();
         let source = FakeSource::new(&tiny_catalog());
@@ -270,6 +270,7 @@ mod tests {
             Arc::clone(&kv) as Arc<dyn CatalogKv>,
             Arc::clone(&clock) as Arc<dyn Clock>,
         )
+        .with_ttl(Duration::from_millis(50))
         .with_bus(bus);
 
         assert_eq!(service.refresh(false).await.unwrap(), RefreshOutcome::Updated);

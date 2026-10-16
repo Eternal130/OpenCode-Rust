@@ -82,3 +82,29 @@
   misc::root; forwarded via documented env contract
   OPENCODE_BOOT_PROMPT / OPENCODE_BOOT_AUTO (ruling: CLI side + env
   handoff, no oc-tui edits — BootArgs is TUI-lane owned).
+
+## Phase 4 — tests + verification
+
+- New suites: crates/oc-server/tests/be1_lane.rs (10 integration tests:
+  SSE publish->stream asserts for credential.*/worktree.updated/
+  installation.*/tui.*/filesystem.changed+vcs.branch.updated/
+  session.status+session.idle over a real mock-provider turn; fork E2E;
+  shell execution E2E; config.update round-trip; info capabilities) +
+  oc-core refresh.rs unit test (models-dev.refreshed on Updated, silent
+  on SkippedDigest) + sse.rs filter tests (all 20 types).
+- Fixes during test bring-up: the shell notification synthetic must take
+  a FRESH message id (v2 passes none — reusing the caller id collides
+  with the shell-message row the started event projects); fork test
+  aligned with v2 wire shape (fork linkage rides the `fork` object,
+  parentID is NULL for forks — info.ts:21-27; the title counter derives
+  from the parent title — projector.ts:159).
+- Item 4 (--prompt/--auto): env-handoff REVERTED per the orchestrator
+  ruling (oc-tui serial chain owns it via BootArgs; no backend seam).
+- Verification (chain tier: affected crates only):
+  - oc-server nextest: 193/193 passed (after final refactor; includes the
+    10 be1_lane tests).
+  - oc-core nextest: 764/764 passed (full crate, pre-refactor) + 279/279
+    (session:: + provider_catalog after the refactor).
+  - oc-cli nextest: 184/184 passed, 1 skipped (pre-existing).
+  - cargo clippy -p oc-core -p oc-server -p oc-cli: 0 warnings.
+  - cargo fmt applied.
