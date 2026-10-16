@@ -530,6 +530,10 @@ impl App {
                             crate::store::TranscriptHitAction::ToggleGroup(key) => {
                                 self.store.toggle_group_expanded(&hit.session_id, key);
                             }
+                            crate::store::TranscriptHitAction::ToggleThought { message_id, part_id } => {
+                                self.store
+                                    .toggle_thought_expanded(&hit.session_id, message_id, part_id);
+                            }
                             crate::store::TranscriptHitAction::MessageActions { message_id } => {
                                 self.store.open_dialog(
                                     crate::store::DialogKind::MessageActions {
@@ -836,7 +840,6 @@ impl App {
         col: usize,
         row: usize,
     ) -> Option<crate::components::footer::permission::PermissionOption> {
-        use crate::components::footer::permission::PermissionOption;
         let hits = self.store.permission_pointer_hits()?;
         if row != hits.row {
             return None;
@@ -5748,5 +5751,161 @@ mod core_interaction_tests {
         app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 10, 5));
         assert!(app.permission_live(), "a stray transcript release toggled nothing");
         assert_eq!(app.permission_replies.len(), 1, "no extra reply");
+    }
+
+    // -- lane/if item 4: all five disclosure surfaces (auditA #5) --------
+
+    /// The Exploration group's header arms and toggles (v2
+    /// group-view.tsx:152 — `onMouseUp={toggle}` on the InlineToolRow;
+    /// previously only `group:Reasoning:` rows had hit rows, so the
+    /// affordance rendered but swallowed clicks).
+    #[test]
+    fn exploration_group_header_toggles() {
+        use crate::components::message::model::{Message, Part, PartTime, ToolState};
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let mut app = App::new((80, 24));
+        app.store.set_messages(
+            "s1",
+            vec![
+                Message::User {
+                    id: "u1".into(),
+                    text: "look".into(),
+                    created: 0,
+                    files: Vec::new(),
+                },
+                Message::Assistant {
+                    id: "a1".into(),
+                    agent: "build".into(),
+                    model: "fixture/fixture".into(),
+                    parts: vec![
+                        Part::Tool {
+                            id: "tool-read".into(),
+                            name: "read".into(),
+                            time: PartTime { created: Some(1), completed: Some(2) },
+                            state: ToolState::default(),
+                        },
+                        Part::Text {
+                            text: "done".into(),
+                            time: PartTime::default(),
+                        },
+                    ],
+                    finish: Some("success".into()),
+                    error: None,
+                    time: PartTime { created: Some(1), completed: Some(3) },
+                    tokens: None,
+                    usage_total: None,
+                },
+            ],
+        );
+        app.store.open_tab("s1", Some("Explore".to_owned()));
+        let frame = app.frame_text();
+        assert!(frame.contains("Explored"), "the exploration header renders: {frame}");
+        let hit = app
+            .store
+            .transcript_hit_rows()
+            .iter()
+            .find(|row| matches!(
+                &row.action,
+                crate::store::TranscriptHitAction::ToggleGroup(key) if key.starts_with("group:Exploration:")
+            ))
+            .expect("the exploration header recorded a hit row")
+            .clone();
+        let key = hit.action.toggle_key().expect("a group toggle").to_owned();
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            10,
+            u16::try_from(hit.y).unwrap_or(u16::MAX),
+        ));
+        assert!(app.store.group_expanded(&hit.session_id, &key), "the release armed the disclosure");
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            10,
+            u16::try_from(hit.y).unwrap_or(u16::MAX),
+        ));
+        assert!(
+            !app.store.group_expanded(&hit.session_id, &key),
+            "the second release collapsed it (v2 setGroupExpanded semantics)"
+        );
+    }
+
+    /// The thought rows toggle their own disclosure (v2's minimal-mode
+    /// ReasoningHeader, message-parts.tsx:66-86): the `thought:` row's
+    /// first line is the hit target; collapsed renders the one-line
+    /// `+ Thought: {title}` header, expanded the bordered body.
+    #[test]
+    fn thought_rows_toggle_their_disclosure() {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let mut app = App::new((80, 24));
+        staged_reasoning_session(&mut app);
+        // Expand the reasoning group (its header is the wired toggle).
+        let group_hit = app
+            .store
+            .transcript_hit_rows()
+            .iter()
+            .find(|row| matches!(
+                &row.action,
+                crate::store::TranscriptHitAction::ToggleGroup(key) if key.starts_with("group:Reasoning:")
+            ))
+            .cloned()
+            .expect("the group header hit");
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            10,
+            u16::try_from(group_hit.y).unwrap_or(u16::MAX),
+        ));
+        let expanded = app.frame_text();
+        assert!(expanded.contains("Pondering the parser edges"), "the body shows: {expanded}");
+
+        // The thought row is armed as its own toggle (the first
+        // body line's glyphs).
+        let thought_hit = app
+            .store
+            .transcript_hit_rows()
+            .iter()
+            .find(|row| matches!(
+                &row.action,
+                crate::store::TranscriptHitAction::ToggleThought { message_id, part_id }
+                    if message_id == "a1" && part_id == "reasoning:0"
+            ))
+            .cloned()
+            .expect("the thought row recorded a hit");
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            10,
+            u16::try_from(thought_hit.y).unwrap_or(u16::MAX),
+        ));
+        assert!(
+            !app.store.thought_expanded(&hit_session(&thought_hit), "a1", "reasoning:0"),
+            "the release collapsed the thought"
+        );
+        let collapsed = app.frame_text();
+        assert!(collapsed.contains("+ Thought"), "the collapsed header renders: {collapsed}");
+        assert!(
+            !collapsed.contains("Pondering the parser edges"),
+            "the body is behind the toggle: {collapsed}"
+        );
+        // Release again: the body returns.
+        let thought_hit = app
+            .store
+            .transcript_hit_rows()
+            .iter()
+            .find(|row| matches!(
+                &row.action,
+                crate::store::TranscriptHitAction::ToggleThought { .. }
+            ))
+            .cloned()
+            .expect("the collapsed header re-recorded its hit");
+        app.mouse_event(&mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            10,
+            u16::try_from(thought_hit.y).unwrap_or(u16::MAX),
+        ));
+        let reopened = app.frame_text();
+        assert!(reopened.contains("Pondering the parser edges"), "the body returned: {reopened}");
+    }
+
+    /// The hit row's owning session (test helper).
+    fn hit_session(hit: &crate::store::TranscriptHitRow) -> String {
+        hit.session_id.clone()
     }
 }

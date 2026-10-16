@@ -69,6 +69,11 @@ pub struct TranscriptOptions {
     pub clock_ms: u64,
     /// Expanded group keys (disclosure state; collapsed by default).
     pub expanded_groups: Vec<String>,
+    /// Collapsed thought keys (`"{mid}:{pid}"` — the minimal-mode
+    /// thought disclosure, message-parts.tsx:66-86; a collapsed row
+    /// renders its one-line `+ Thought: {title}` header instead of
+    /// the bordered body).
+    pub collapsed_thoughts: std::collections::HashSet<String>,
     /// Plugin-provided grouping rules (wave 3's open rules table);
     /// empty = the native closed set only.
     pub group_rules: crate::components::message::model::GroupRules,
@@ -97,6 +102,7 @@ impl Default for TranscriptOptions {
             group_exploration: true,
             clock_ms: 0,
             expanded_groups: Vec::new(),
+            collapsed_thoughts: std::collections::HashSet::new(),
             group_rules: crate::components::message::model::GroupRules::empty(),
             image_strip: crate::components::message::rows::ImageStripOptions::default(),
             model_names: Vec::new(),
@@ -202,17 +208,44 @@ pub fn render_transcript(
                     else {
                         continue;
                     };
-                    let Some(Part::Reasoning { text, .. }) = resolve_part(parts, &part_id) else {
+                    let Some(Part::Reasoning { text, time }) = resolve_part(parts, &part_id) else {
                         continue;
                     };
                     if text.trim().is_empty() {
                         continue;
                     }
-                    let entry = crate::components::message::rows::thought_entry_row(
-                        text,
-                        theme,
-                        content_width,
-                    );
+                    // The per-thought disclosure (message-parts.tsx:
+                    // 66-86): expanded renders the bordered body; a
+                    // collapsed key renders the one-line `+ Thought:
+                    // {title}` header (the minimal-mode
+                    // ReasoningHeader) — the port's stand-in for v2's
+                    // toggleable inline header, which the reducer's
+                    // always-grouped reasoning never produces here.
+                    let entry =
+                        if options.collapsed_thoughts.contains(&format!("{message_id}:{part_id}")) {
+                            let (title, _) = reasoning_summary(text);
+                            let duration = match (time.created, time.completed) {
+                                (Some(created), Some(completed)) => {
+                                    Some(completed.saturating_sub(created))
+                                }
+                                _ => Some(0),
+                            };
+                            reasoning_header_row(
+                                title.as_deref(),
+                                duration,
+                                time.completed.is_some(),
+                                false,
+                                options.clock_ms,
+                                theme,
+                                content_width,
+                            )
+                        } else {
+                            crate::components::message::rows::thought_entry_row(
+                                text,
+                                theme,
+                                content_width,
+                            )
+                        };
                     place(entry, format!("thought:{message_id}:{part_id}"), &mut measured, &mut y);
                 }
                 continue;
