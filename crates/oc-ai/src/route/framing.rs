@@ -25,6 +25,10 @@ pub enum FramingKind {
     Lines,
     /// The whole body as one frame.
     Document,
+    /// AWS event-stream binary framing (Bedrock Converse): each frame is
+    /// decoded (length + headers + payload + CRCs) and re-wrapped by its
+    /// `:event-type` header as one JSON string frame.
+    AwsEventStream,
 }
 
 /// One framing definition: the byte-stream-shaped seam between transport and
@@ -63,6 +67,12 @@ impl Framing {
     #[must_use]
     pub fn lines() -> Self {
         Self { id: "lines", kind: FramingKind::Lines }
+    }
+
+    /// AWS event-stream binary framing (Bedrock Converse).
+    #[must_use]
+    pub fn aws_event_stream() -> Self {
+        Self { id: "aws-event-stream", kind: FramingKind::AwsEventStream }
     }
 
     /// One frame for the whole body.
@@ -134,6 +144,8 @@ pub struct FramingDecoder {
     buffered_bytes: usize,
     // document framing
     document: String,
+    // aws event-stream byte buffer
+    event_stream_bytes: Vec<u8>,
     finished: bool,
 }
 
@@ -148,6 +160,7 @@ impl FramingDecoder {
             data_lines: Vec::new(),
             buffered_bytes: 0,
             document: String::new(),
+            event_stream_bytes: Vec::new(),
             finished: false,
         }
     }
@@ -155,6 +168,7 @@ impl FramingDecoder {
     /// Feed one chunk of raw response bytes.
     pub fn feed(&mut self, chunk: &[u8]) -> Result<Vec<String>, AiError> {
         match &self.kind {
+            FramingKind::AwsEventStream => self.feed_event_stream(chunk),
             FramingKind::Document => {
                 let text = self.utf8.feed(chunk)?;
                 self.document.push_str(&text);
@@ -187,6 +201,19 @@ impl FramingDecoder {
         }
         self.finished = true;
         match &self.kind {
+            FramingKind::AwsEventStream => {
+                if self.event_stream_bytes.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let remaining = self.event_stream_bytes.len();
+                Err(AiError::new(AiErrorReason::InvalidProviderOutput {
+                    fields: ReasonFields::new(format!(
+                        "Incomplete Bedrock Converse event-stream frame: {remaining} buffered bytes remain at end of stream"
+                    )),
+                    classification: Some(crate::schema::CLASSIFICATION_INCOMPLETE_STREAM.into()),
+                    route: Some("aws-event-stream".into()),
+                }))
+            }
             FramingKind::Document => {
                 self.utf8.finish()?;
                 Ok(vec![std::mem::take(&mut self.document)])
@@ -209,6 +236,40 @@ impl FramingDecoder {
                 self.consume_lines(vec![remainder])
             }
         }
+    }
+
+    /// AWS event-stream: accumulate raw bytes, consume whole frames (the
+    /// 4-byte total length prefix), re-wrap each by `:event-type` (port of
+    /// `consumeFrames`). Leftover bytes are reported at `finish`.
+    fn feed_event_stream(&mut self, chunk: &[u8]) -> Result<Vec<String>, AiError> {
+        self.event_stream_bytes.extend_from_slice(chunk);
+        let mut frames = Vec::new();
+        while self.event_stream_bytes.len() >= 4 {
+            let total_length = u32::from_be_bytes([
+                self.event_stream_bytes[0],
+                self.event_stream_bytes[1],
+                self.event_stream_bytes[2],
+                self.event_stream_bytes[3],
+            ]) as usize;
+            if total_length < 12 {
+                return Err(AiError::new(AiErrorReason::InvalidProviderOutput {
+                    fields: ReasonFields::new(format!(
+                        "Failed to decode Bedrock Converse event-stream frame: frame length {total_length} is shorter than the 12-byte prelude"
+                    )),
+                    classification: None,
+                    route: Some("aws-event-stream".into()),
+                }));
+            }
+            if self.event_stream_bytes.len() < total_length {
+                break;
+            }
+            let bytes: Vec<u8> = self.event_stream_bytes.drain(..total_length).collect();
+            let frame = crate::protocols::bedrock::event_stream::decode_frame(&bytes)?;
+            if let Some(wrapped) = crate::protocols::bedrock::event_stream::frame_to_json(&frame)? {
+                frames.push(wrapped);
+            }
+        }
+        Ok(frames)
     }
 
     /// Take complete lines out of `partial_line`; keeps the trailing partial

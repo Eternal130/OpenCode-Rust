@@ -50,3 +50,7 @@ pub mod cohere_chat;
 // identity normalized through the Mistral tool-id hasher, native thinking
 // blocks, [DONE] terminal over sseWithDone framing.
 pub mod mistral_chat;
+
+// Amazon Bedrock — SigV4 signing, the AWS event-stream binary framing, and
+// the Converse protocol (+ anthropic-on-bedrock invoke-stream composition).
+pub mod bedrock;
