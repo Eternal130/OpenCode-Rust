@@ -131,6 +131,12 @@ pub enum DialogKind {
     /// index.tsx:627-675): enter steers the selected prompt, ctrl+d
     /// deletes it (`queued_prompt.delete`).
     QueuedPrompts,
+    /// SURF-1: the tool detail viewer — `DialogExecute` for `execute`
+    /// (dialog-execute.tsx; `dialog.replace` at index.tsx:3207) and
+    /// `DialogShellOutput` for background shells
+    /// (dialog-shell-output.tsx). The content materializes from the
+    /// transcript's tool part state.
+    ToolOutput { session_id: String, message_id: String, part_id: String },
 }
 
 /// One stack entry: the dialog kind, chrome size and content state.
@@ -1109,6 +1115,17 @@ pub enum TranscriptHitAction {
     /// ([`UserMessage`]'s `onMouseUp` → `dialog.replace(DialogMessage)`,
     /// session/index.tsx:2243-2249).
     MessageActions { message_id: String },
+    /// Toggle a tool detail cell's INLINE disclosure
+    /// (`ShellDisplay`'s expand / `GenericTool`'s expand — the
+    /// `BlockTool`/`InlineTool` `onMouseUp`, index.tsx:2768-2786).
+    ToggleToolDetail { message_id: String, part_id: String },
+    /// Open the tool detail dialog (`Execute`'s `openDetails` →
+    /// `dialog.replace(DialogExecute)`, index.tsx:3207; the background
+    /// shell's `DialogShellOutput`).
+    OpenToolDialog { message_id: String, part_id: String },
+    /// Dismiss the staged-revert banner (`RevertMessage`'s `onMouseUp`
+    /// → `session.revert.clear`, index.tsx:2105-2111).
+    DismissRevert { session_id: String },
 }
 
 impl TranscriptHitAction {
@@ -1118,7 +1135,11 @@ impl TranscriptHitAction {
     pub fn toggle_key(&self) -> Option<&str> {
         match self {
             Self::ToggleGroup(key) => Some(key.as_str()),
-            Self::ToggleThought { .. } | Self::MessageActions { .. } => None,
+            Self::ToggleThought { .. }
+            | Self::MessageActions { .. }
+            | Self::ToggleToolDetail { .. }
+            | Self::OpenToolDialog { .. }
+            | Self::DismissRevert { .. } => None,
         }
     }
 }
@@ -3128,6 +3149,12 @@ impl Store {
                 set.insert(key.to_owned());
             }
         });
+    }
+
+    /// The expanded tool keys (the transcript render's options feed).
+    #[must_use]
+    pub fn expanded_tool_keys(&self) -> std::collections::HashSet<String> {
+        self.expanded_tools.get()
     }
 
     /// The MCP server rows (`location.mcp.server.list`).
