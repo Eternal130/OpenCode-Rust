@@ -65,6 +65,11 @@ pub struct TermProfile {
     /// OSC 11 background reply (full sequence, ST-terminated);
     /// `None` = silent (theme probe falls back to dark on both sides).
     pub osc11: Option<&'static str>,
+    /// OSC 10 foreground reply (full sequence, ST-terminated);
+    /// `None` = silent.
+    pub osc10: Option<&'static str>,
+    /// OSC 4 palette-slot-0 query reply (`OSC 4;0;?`); `None` = silent.
+    pub osc4: Option<&'static str>,
     /// Reply to DECRQM `CSI ? 2026 $ p` — full sequence (`;2$y` =
     /// supported, `;0$y` = unsupported).
     pub sync: Option<&'static str>,
@@ -91,6 +96,8 @@ const PROFILES: &[TermProfile] = &[
         xtversion: None,
         kitty: None,
         osc11: None,
+        osc10: None,
+        osc4: None,
         sync: None,
         tmux: false,
     },
@@ -105,6 +112,8 @@ const PROFILES: &[TermProfile] = &[
         xtversion: Some("\x1bP>|xterm(371)\x1b\\"),
         kitty: None,
         osc11: Some("\x1b]11;rgb:0000/0000/0000\x1b\\"),
+        osc10: Some("\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
+        osc4: Some("\x1b]4;0;rgb:0000/0000/0000\x1b\\"),
         sync: Some("\x1b[?2026;2$y"),
         tmux: false,
     },
@@ -119,6 +128,8 @@ const PROFILES: &[TermProfile] = &[
         xtversion: Some("\x1bP>|xterm(371)\x1b\\"),
         kitty: None,
         osc11: Some("\x1b]11;rgb:0000/0000/0000\x1b\\"),
+        osc10: Some("\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
+        osc4: Some("\x1b]4;0;rgb:0000/0000/0000\x1b\\"),
         sync: Some("\x1b[?2026;2$y"),
         tmux: false,
     },
@@ -133,6 +144,8 @@ const PROFILES: &[TermProfile] = &[
         xtversion: Some("\x1bP>|screen(5.0.0)\x1b\\"),
         kitty: None,
         osc11: Some("\x1b]11;rgb:0000/0000/0000\x1b\\"),
+        osc10: Some("\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
+        osc4: Some("\x1b]4;0;rgb:0000/0000/0000\x1b\\"),
         sync: Some("\x1b[?2026;0$y"),
         tmux: false,
     },
@@ -147,6 +160,8 @@ const PROFILES: &[TermProfile] = &[
         xtversion: None,
         kitty: None,
         osc11: None,
+        osc10: None,
+        osc4: None,
         sync: None,
         tmux: true,
     },
@@ -161,6 +176,8 @@ const PROFILES: &[TermProfile] = &[
         xtversion: Some("\x1bP>|kitty(0.42.2)\x1b\\"),
         kitty: Some("\x1b[?511u"),
         osc11: Some("\x1b]11;rgb:0000/0000/0000\x1b\\"),
+        osc10: Some("\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
+        osc4: Some("\x1b]4;0;rgb:0000/0000/0000\x1b\\"),
         sync: Some("\x1b[?2026;2$y"),
         tmux: false,
     },
@@ -175,6 +192,8 @@ const PROFILES: &[TermProfile] = &[
         xtversion: Some("\x1bP>|xterm(371)\x1b\\"),
         kitty: None,
         osc11: Some("\x1b]11;rgb:0000/0000/0000\x1b\\"),
+        osc10: Some("\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
+        osc4: Some("\x1b]4;0;rgb:0000/0000/0000\x1b\\"),
         sync: Some("\x1b[?2026;2$y"),
         tmux: false,
     },
@@ -213,6 +232,8 @@ impl TermProfile {
             || self.xtversion.is_some()
             || self.kitty.is_some()
             || self.osc11.is_some()
+            || self.osc10.is_some()
+            || self.osc4.is_some()
             || self.sync.is_some()
     }
 }
@@ -241,6 +262,8 @@ fn query_rules(profile: &'static TermProfile) -> Vec<QueryRule> {
     push(&[b"\x1b[>q"], profile.xtversion);
     push(&[b"\x1b[?u"], profile.kitty);
     push(&[b"\x1b]11;?\x07", b"\x1b]11;?\x1b\\"], profile.osc11);
+    push(&[b"\x1b]10;?\x07", b"\x1b]10;?\x1b\\"], profile.osc10);
+    push(&[b"\x1b]4;0;?\x07", b"\x1b]4;0;?\x1b\\"], profile.osc4);
     push(&[b"\x1b[?2026$p"], profile.sync);
     rules
 }
@@ -665,8 +688,19 @@ fn classify_osc(osc: &[u8], counts: &mut BTreeMap<String, usize>) {
         }
         "11" if text.ends_with('?') => bump("query:osc11", counts),
         "10" if text.ends_with('?') => bump("query:osc10-fg", counts),
+        "4" if text.ends_with('?') => bump("query:osc4-palette", counts),
+        "99" => {
+            if text.contains("p=?") {
+                bump("query:osc99-notify-probe", counts);
+            } else {
+                bump("osc99-notify", counts);
+            }
+        }
+        "1337" => bump("probe:osc1337-iterm2-caps", counts),
+        "66" => bump("osc66-opentui", counts),
+        "12" => bump("osc12-cursor-color", counts),
         "0" | "2" => bump("osc-title", counts),
-        "9" | "777" | "99" => bump("osc-notify", counts),
+        "9" | "777" => bump("osc-notify", counts),
         "8" => bump("osc-hyperlink", counts),
         "133" => bump("osc-shell-integration", counts),
         _ => {}
