@@ -1,0 +1,3 @@
+# BE-2b lane log — media protocols + one-shot generate + session.diff (auditE #7)
+# Worktree: .worktrees/lane-be2b (branch lane/be2b from main c0986d3)
+2026-10-16T14:00:52Z Phase 0 complete: read v2 ref (packages/ai image/speech/video/transcription + route/media-protocol + utils media-input/speech-stream/fal-queue/gemini-generate-content/speaker-turns/media-type; core session/generate.ts + generate.ts + session/diff.ts + protocol/groups/generate.ts) and Rust seams (oc-ai route/schema/protocols, oc-core runner context/model_request/title/drain, oc-server handlers/session.rs:887-907 + misc.rs:72-81). Plan: media/ module in oc-ai (Body/Identity/model types/utils + 23 protocol files), session generate service in oc-core + handlers, session diff service + handler.
