@@ -101,3 +101,41 @@ Rust seam notes (from BE-3): `integration::flows` already provides PKCE S256
 + the loopback listener (ephemeral or pinned port) + device engine;
 `providers.rs` `install()` is the registration point; gitlab/snowflake/openai
 browser flows extend it directly.
+
+## Phase 2 — the five OAuth variants landed (WIP, green)
+
+- `integration/providers_enterprise.rs` (new, ~1,180 L): gitlab PKCE
+  (fixed 8080 redirect, bundled/legacy/env client ids, instance-pin error,
+  refresh single-flight via keyed async mutexes, invalid_grant hint
+  builder), azure-cli (fake-az testable; method registered only when `az`
+  resolves; token JSON with expires_on/expiresOn RFC-1123 parsing via a
+  self-contained date parser — no chrono in tree), snowflake external
+  browser (48-byte PKCE, `session:role[-encoded]` scopes, Basic
+  LOCAL_APPLICATION token-request, env-token refresh bypass),
+  openai codex browser (pinned 1455→1457 via new
+  `flows::listen_pinned` with /cancel probe + retries; codex authorize
+  params; JWT claim account extraction) + headless device-code (usercode →
+  poll 403/404 → server-provided verifier exchange against
+  `{issuer}/deviceauth/callback`), chatgpt token-sharing connector
+  (dynamic client registration via callback `client_id`, nonce/state,
+  token-sharing scope enforcement, id_token claim checks iss/aud/exp/nonce/sub).
+- `flows.rs`: `pkce_s256_with_bytes`, `jwt_claims`, `which`,
+  `listen_pinned` (+cancel probe).
+- Exchange seams follow v2's injectable-endpoints pattern
+  (`gitlab_exchange_at`, `snowflake_token_at`, `openai_exchange_at`,
+  `chatgpt_exchange_at`, `openai_headless_authorize_at`,
+  `chatgpt_authorize_at`) — prod wrappers pin the real issuers.
+- Tests (12 new, integration suite 17→29, all green): gitlab round-trip
+  (fixed-port loopback driven as the browser, S256 challenge-vs-verifier
+  consistency recomputed, request shapes, metadata+label), gitlab
+  off-gitlab.com rejection, gitlab refresh rotation; azure fake-az
+  round-trip + method gating; snowflake token-request shape (Basic header,
+  client_id, form refresh fallback), account normalization + role scope
+  encodings; openai exchange claims extraction; headless device flow
+  round-trip; listen_pinned fallback; chatgpt round-trip (dynamic client,
+  nonce echo, request shapes incl. resource), missing-sharing-scope
+  rejection, nonce-mismatch rejection.
+- Known gap (deliberate): chatgpt id_token RS256/JWKS signature
+  verification is NOT implemented (no JWT crate in this workspace); claims
+  are validated without signature. Deferred with this note.
+- fmt + clippy (pedantic) clean; oc-core nextest 811/811.
