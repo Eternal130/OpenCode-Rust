@@ -32,12 +32,37 @@ pub struct Pkce {
 /// 32 random bytes → base64url verifier; challenge = BASE64URL(SHA256(verifier)).
 #[must_use]
 pub fn pkce_s256() -> Pkce {
-    let mut bytes = [0u8; 32];
+    pkce_s256_with_bytes(32)
+}
+
+/// `n`-random-byte PKCE pair (snowflake uses 48, gitlab/poe 32).
+#[must_use]
+pub fn pkce_s256_with_bytes(n: usize) -> Pkce {
+    let mut bytes = vec![0u8; n];
     rand::thread_rng().fill_bytes(&mut bytes);
     let verifier = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
     let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(Sha256::digest(verifier.as_bytes()));
     Pkce { verifier, challenge }
+}
+
+/// Decodes a JWT's payload claims without verification (claim extraction —
+/// `openai.ts:415-430` account id, `chatgpt.ts` nonce checks).
+#[must_use]
+pub fn jwt_claims(token: &str) -> Option<BTreeMap<String, Value>> {
+    let payload = token.split('.').nth(1)?;
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).ok()?;
+    serde_json::from_slice(&decoded).ok()
+}
+
+/// Whether an executable is on `PATH` (v2 `util/which`).
+#[must_use]
+pub fn which(program: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).find_map(|dir| {
+        let candidate = dir.join(program);
+        candidate.is_file().then_some(candidate)
+    })
 }
 
 /// `n` random bytes → base64url (OAuth `state` nonces).
@@ -46,6 +71,61 @@ pub fn random_state(n: usize) -> String {
     let mut bytes = vec![0u8; n];
     rand::thread_rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// Binds a pinned loopback port with v2's patience: on `AddrInUse`, probe
+/// the incumbent's `/cancel` endpoint (openai.ts:131-138), retry
+/// `attempts` × `retry_delay`, then try the fallback port the same way
+/// before giving up with the v2 error message.
+pub async fn listen_pinned(
+    primary: u16,
+    fallback: Option<u16>,
+    mut make: impl FnMut(u16) -> LoopbackOptions,
+    attempts: u32,
+    retry_delay: std::time::Duration,
+    describe_conflict: impl Fn(u16, u16) -> String,
+) -> Result<LoopbackListener, String> {
+    let mut ports = vec![primary];
+    ports.extend(fallback);
+    let last_port = *ports.last().expect("at least primary");
+    for port in ports {
+        for attempt in 0..attempts {
+            match listen_loopback(make(port)).await {
+                Ok(listener) => return Ok(listener),
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    // Ask a stuck incumbent to exit, then wait out the race
+                    // (openai.ts:131-138 — fetch /cancel with 2s timeout).
+                    probe_cancel(port).await;
+                    if attempt + 1 < attempts {
+                        tokio::time::sleep(retry_delay).await;
+                    }
+                }
+                Err(error) => return Err(format!("failed to bind loopback port {port}: {error}")),
+            }
+        }
+    }
+    Err(describe_conflict(primary, last_port))
+}
+
+/// Best-effort `GET /cancel` against a listener holding the pinned port.
+async fn probe_cancel(port: u16) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let Ok(Ok(mut stream)) = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::net::TcpStream::connect(("localhost", port)),
+    )
+    .await
+    else {
+        return;
+    };
+    let _ = stream
+        .write_all(
+            format!("GET /cancel HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .await;
+    let mut sink = [0u8; 512];
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), stream.read(&mut sink)).await;
 }
 
 // ---------------------------------------------------------------------------
