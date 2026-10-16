@@ -7,7 +7,7 @@ use axum::http::{HeaderMap, Uri};
 use axum::response::{IntoResponse, Response};
 use serde_json::{json, Value};
 
-use super::common::{resolve_location, ApiError, SharedState};
+use super::common::{no_content, resolve_location, ApiError, SharedState};
 
 pub fn routes() -> axum::Router<SharedState> {
     axum::Router::new()
@@ -57,8 +57,28 @@ async fn update(
     State(state): State<SharedState>,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let _ = (state, body);
-    // v2 dies with an unsupported-operation 500 on the experimental
-    // config PATCH (deep-map §3 "config.update PATCH dies 500 unsupported").
-    Err(ApiError::unknown_ref())
+    // v2 `Config.update` (core config.ts:329-349): the patch writes ONLY
+    // the `shell` key (`Config.Patch = { shell: string | null }`,
+    // schema config.ts:111-114) into the highest-precedence global config
+    // document, JSONC-preserving (jsonc_edit — the same machinery oc-cli
+    // uses), then requests a reload (the announce poller picks the change
+    // up and publishes `config.updated`).
+    let shell = match body.get("shell") {
+        Some(Value::String(shell)) => Some(shell.clone()),
+        Some(Value::Null) | None => None,
+        Some(other) => {
+            return Err(ApiError::invalid_request(format!(
+                "Expected shell to be a string or null, got: {other}"
+            )));
+        }
+    };
+    let globals = oc_core::config::GlobalDirs {
+        config: state.engine.home.join(".config").join("opencode"),
+        home: state.engine.home.clone(),
+    };
+    oc_core::config::update_shell(&globals, shell.as_deref()).map_err(|error| {
+        crate::errors::debug_cause("config:update", &error);
+        ApiError::unknown_ref()
+    })?;
+    Ok(no_content())
 }
