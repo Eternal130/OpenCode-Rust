@@ -327,7 +327,8 @@ pub fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
         }
         table
     };
-    let bytes: Vec<u8> = input.bytes().filter(|byte| !matches!(byte, b'\n' | b'\r' | b' ')).collect();
+    let bytes: Vec<u8> =
+        input.bytes().filter(|byte| !matches!(byte, b'\n' | b'\r' | b' ')).collect();
     let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
     let mut buffer: u32 = 0;
     let mut bits = 0u32;
@@ -351,7 +352,10 @@ pub fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
 
 /// `ProviderShared.requireInlineMedia` (shared.ts:188-191): inline view or
 /// a typed `InvalidRequest` for `url`/`ref` sources.
-pub fn require_inline_media(route: &str, asset: &crate::schema::media::Asset) -> Result<crate::schema::media::Inline, AiError> {
+pub fn require_inline_media(
+    route: &str,
+    asset: &crate::schema::media::Asset,
+) -> Result<crate::schema::media::Inline, AiError> {
     asset.inline().ok_or_else(|| inline_required(route, asset))
 }
 

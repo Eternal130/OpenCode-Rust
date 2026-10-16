@@ -29,8 +29,12 @@ pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
         ("prompt", Some(serde_json::json!(request.prompt))),
         ("size", request.size.clone().map(|size| serde_json::json!(size))),
     ]);
-    let merged = merge_records(&[base.as_ref(), Some(&native), request.http.as_ref().and_then(|h| h.body.as_ref())])
-        .unwrap_or_default();
+    let merged = merge_records(&[
+        base.as_ref(),
+        Some(&native),
+        request.http.as_ref().and_then(|h| h.body.as_ref()),
+    ])
+    .unwrap_or_default();
     Ok(Body::json(merged))
 }
 
@@ -43,13 +47,20 @@ pub fn check_unsupported(request: &ImageRequest) -> Result<(), AiError> {
 }
 
 /// `decodeResponse` (zai-images.ts:70-100).
-pub fn decode(output: &TextOutput, _context: &DecodeContext<ImageRequest>) -> Result<ImageResponse, AiError> {
+pub fn decode(
+    output: &TextOutput,
+    _context: &DecodeContext<ImageRequest>,
+) -> Result<ImageResponse, AiError> {
     let decoded = output.decode_json(output.body)?;
     let data = decoded.get("data").and_then(|value| value.as_array()).cloned().unwrap_or_default();
     if data.is_empty() {
         return Err(output.invalid("Z.ai Images returned no images"));
     }
-    let filters = decoded.get("content_filter").and_then(|value| value.as_array()).cloned().unwrap_or_default();
+    let filters = decoded
+        .get("content_filter")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
     let mut images = Vec::new();
     for item in &data {
         let url = item.get("url").and_then(|value| value.as_str()).unwrap_or_default();
@@ -80,7 +91,10 @@ pub fn decode(output: &TextOutput, _context: &DecodeContext<ImageRequest>) -> Re
     zai.insert("created".to_string(), decoded.get("created").cloned().unwrap_or_default());
     zai.insert("id".to_string(), decoded.get("id").cloned().unwrap_or_default());
     zai.insert("requestID".to_string(), decoded.get("request_id").cloned().unwrap_or_default());
-    zai.insert("contentFilter".to_string(), decoded.get("content_filter").cloned().unwrap_or_default());
+    zai.insert(
+        "contentFilter".to_string(),
+        decoded.get("content_filter").cloned().unwrap_or_default(),
+    );
     let mut metadata = crate::schema::ProviderMetadata::new();
     metadata.insert("zai".to_string(), zai);
     Ok(ImageResponse {
@@ -119,7 +133,11 @@ impl InlineProtocol for ZAIImages {
         PATH.to_string()
     }
 
-    fn decode(&self, output: &TextOutput, context: &DecodeContext<ImageRequest>) -> Result<ImageResponse, AiError> {
+    fn decode(
+        &self,
+        output: &TextOutput,
+        context: &DecodeContext<ImageRequest>,
+    ) -> Result<ImageResponse, AiError> {
         decode(output, context)
     }
 }
@@ -160,7 +178,10 @@ mod tests {
         assert!(response.images[0].expires_at.is_some());
         let notices = response.notices.unwrap();
         assert_eq!(notices[0].kind, NoticeType::Moderated);
-        assert_eq!(notices[0].message, "Z.ai Images applied a content filter for politics at level 2");
+        assert_eq!(
+            notices[0].message,
+            "Z.ai Images applied a content filter for politics at level 2"
+        );
     }
 
     #[test]

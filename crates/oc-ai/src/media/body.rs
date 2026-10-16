@@ -61,7 +61,10 @@ pub fn normalize_numbers(value: &Value) -> Value {
     match value {
         Value::Number(number) => {
             if let Some(float) = number.as_f64() {
-                if float.is_finite() && float.fract() == 0.0 && float.abs() < 9_007_199_254_740_992.0 {
+                if float.is_finite()
+                    && float.fract() == 0.0
+                    && float.abs() < 9_007_199_254_740_992.0
+                {
                     Value::from(float as i64)
                 } else {
                     value.clone()
@@ -72,10 +75,7 @@ pub fn normalize_numbers(value: &Value) -> Value {
         }
         Value::Array(items) => Value::Array(items.iter().map(normalize_numbers).collect()),
         Value::Object(fields) => Value::Object(
-            fields
-                .iter()
-                .map(|(key, value)| (key.clone(), normalize_numbers(value)))
-                .collect(),
+            fields.iter().map(|(key, value)| (key.clone(), normalize_numbers(value))).collect(),
         ),
         _ => value.clone(),
     }
@@ -120,7 +120,11 @@ impl Body {
 
     /// `MediaProtocol.binary(body, type, query)`.
     #[must_use]
-    pub fn binary_with_query(value: Vec<u8>, content_type: impl Into<String>, query: Query) -> Self {
+    pub fn binary_with_query(
+        value: Vec<u8>,
+        content_type: impl Into<String>,
+        query: Query,
+    ) -> Self {
         Self::Binary { value, content_type: content_type.into(), query: Some(query) }
     }
 
@@ -172,11 +176,7 @@ impl Form {
     ) {
         self.fields.push((
             key.into(),
-            FormValue::File {
-                filename: filename.into(),
-                media_type: media_type.into(),
-                data,
-            },
+            FormValue::File { filename: filename.into(), media_type: media_type.into(), data },
         ));
     }
 
@@ -186,7 +186,8 @@ impl Form {
         let mut record = JsonRecord::new();
         for (key, value) in &self.fields {
             if let FormValue::Field(text) = value {
-                let parsed: Value = serde_json::from_str(text).unwrap_or(Value::String(text.clone()));
+                let parsed: Value =
+                    serde_json::from_str(text).unwrap_or(Value::String(text.clone()));
                 record.insert(key.clone(), parsed);
             }
         }
@@ -199,7 +200,9 @@ impl Form {
         self.fields
             .iter()
             .filter_map(|(key, value)| match value {
-                FormValue::File { filename, media_type, .. } => Some((key.as_str(), filename.as_str(), media_type.as_str())),
+                FormValue::File { filename, media_type, .. } => {
+                    Some((key.as_str(), filename.as_str(), media_type.as_str()))
+                }
                 _ => None,
             })
             .collect()
@@ -224,7 +227,11 @@ pub fn record<const N: usize>(entries: [(&str, Option<Value>); N]) -> Option<Jso
             any = true;
         }
     }
-    if any { Some(out) } else { None }
+    if any {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 /// The invalid-base64 error `MediaInput.inlineBytes` reports
@@ -240,7 +247,8 @@ mod tests {
 
     #[test]
     fn merges_records_deep_with_later_winning() {
-        let a = serde_json::from_value::<JsonRecord>(json!({"x": {"y": 1, "z": 2}, "keep": true})).unwrap();
+        let a = serde_json::from_value::<JsonRecord>(json!({"x": {"y": 1, "z": 2}, "keep": true}))
+            .unwrap();
         let b = serde_json::from_value::<JsonRecord>(json!({"x": {"y": 3}})).unwrap();
         let merged = merge_records(&[Some(&a), Some(&b)]).unwrap();
         assert_eq!(merged["x"]["y"], json!(3));

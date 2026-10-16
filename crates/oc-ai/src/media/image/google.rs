@@ -44,12 +44,19 @@ fn generation_config(request: &ImageRequest) -> crate::schema::ProviderOptions {
         ("responseModalities".to_string(), serde_json::json!(["IMAGE"])),
         (
             "imageConfig".to_string(),
-            (!image_config.is_empty()).then(|| serde_json::Value::Object(image_config.clone())).unwrap_or(serde_json::Value::Null),
+            (!image_config.is_empty())
+                .then(|| serde_json::Value::Object(image_config.clone()))
+                .unwrap_or(serde_json::Value::Null),
         ),
-        ("seed".to_string(), request.seed.map(|seed| serde_json::json!(seed)).unwrap_or(serde_json::Value::Null)),
+        (
+            "seed".to_string(),
+            request.seed.map(|seed| serde_json::json!(seed)).unwrap_or(serde_json::Value::Null),
+        ),
         (
             "thinkingConfig".to_string(),
-            (!thinking_config.is_empty()).then(|| serde_json::Value::Object(thinking_config.clone())).unwrap_or(serde_json::Value::Null),
+            (!thinking_config.is_empty())
+                .then(|| serde_json::Value::Object(thinking_config.clone()))
+                .unwrap_or(serde_json::Value::Null),
         ),
     ];
     let base_record: serde_json::Map<String, serde_json::Value> =
@@ -76,7 +83,8 @@ pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
         parts.push(gemini::media_part("Google Images", image)?);
     }
     let contents = serde_json::json!([{ "role": "user", "parts": parts }]);
-    let config = serde_json::to_value(generation_config(request)).unwrap_or(serde_json::Value::Null);
+    let config =
+        serde_json::to_value(generation_config(request)).unwrap_or(serde_json::Value::Null);
     let merged = merge_records(&[
         Some(
             &serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
@@ -118,7 +126,8 @@ pub fn decode(
     context: &DecodeContext<ImageRequest>,
 ) -> Result<ImageResponse, AiError> {
     let decoded = output.decode_json(output.body)?;
-    let candidates = decoded.get("candidates").and_then(|value| value.as_array()).cloned().unwrap_or_default();
+    let candidates =
+        decoded.get("candidates").and_then(|value| value.as_array()).cloned().unwrap_or_default();
 
     // Thought parts are drafts; only non-thought inline data is a final
     // image (google-images.ts:151-166).
@@ -137,14 +146,32 @@ pub fn decode(
             let mut google = std::collections::BTreeMap::new();
             google.insert(
                 "candidateIndex".to_string(),
-                candidate.get("index").cloned().unwrap_or_else(|| serde_json::json!(candidate_index)),
+                candidate
+                    .get("index")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!(candidate_index)),
             );
             google.insert("partIndex".to_string(), serde_json::json!(part_index));
-            google.insert("finishReason".to_string(), candidate.get("finishReason").cloned().unwrap_or(serde_json::Value::Null));
-            google.insert("safetyRatings".to_string(), candidate.get("safetyRatings").cloned().unwrap_or(serde_json::Value::Null));
-            google.insert("citationMetadata".to_string(), candidate.get("citationMetadata").cloned().unwrap_or(serde_json::Value::Null));
-            google.insert("groundingMetadata".to_string(), candidate.get("groundingMetadata").cloned().unwrap_or(serde_json::Value::Null));
-            google.insert("thoughtSignature".to_string(), part.get("thoughtSignature").cloned().unwrap_or(serde_json::Value::Null));
+            google.insert(
+                "finishReason".to_string(),
+                candidate.get("finishReason").cloned().unwrap_or(serde_json::Value::Null),
+            );
+            google.insert(
+                "safetyRatings".to_string(),
+                candidate.get("safetyRatings").cloned().unwrap_or(serde_json::Value::Null),
+            );
+            google.insert(
+                "citationMetadata".to_string(),
+                candidate.get("citationMetadata").cloned().unwrap_or(serde_json::Value::Null),
+            );
+            google.insert(
+                "groundingMetadata".to_string(),
+                candidate.get("groundingMetadata").cloned().unwrap_or(serde_json::Value::Null),
+            );
+            google.insert(
+                "thoughtSignature".to_string(),
+                part.get("thoughtSignature").cloned().unwrap_or(serde_json::Value::Null),
+            );
             let mut metadata = crate::schema::ProviderMetadata::new();
             metadata.insert("google".to_string(), google);
             images.push(utils::decoded_asset(
@@ -178,7 +205,10 @@ pub fn decode(
     let mut notices: Vec<Notice> = Vec::new();
     if decoded.get("promptFeedback").is_some() {
         let mut google = std::collections::BTreeMap::new();
-        google.insert("promptFeedback".to_string(), decoded.get("promptFeedback").cloned().unwrap_or_default());
+        google.insert(
+            "promptFeedback".to_string(),
+            decoded.get("promptFeedback").cloned().unwrap_or_default(),
+        );
         let mut metadata = crate::schema::ProviderMetadata::new();
         metadata.insert("google".to_string(), google);
         notices.push(Notice {
@@ -188,16 +218,24 @@ pub fn decode(
         });
     }
     for (index, candidate) in candidates.iter().enumerate() {
-        let Some(reason) = candidate.get("finishReason").and_then(|value| value.as_str()) else { continue };
+        let Some(reason) = candidate.get("finishReason").and_then(|value| value.as_str()) else {
+            continue;
+        };
         if reason == "STOP" {
             continue;
         }
         let finish_message = candidate.get("finishMessage").and_then(|value| value.as_str());
         let mut google = std::collections::BTreeMap::new();
-        google.insert("candidateIndex".to_string(), candidate.get("index").cloned().unwrap_or_else(|| serde_json::json!(index)));
+        google.insert(
+            "candidateIndex".to_string(),
+            candidate.get("index").cloned().unwrap_or_else(|| serde_json::json!(index)),
+        );
         google.insert("finishReason".to_string(), serde_json::json!(reason));
         google.insert("finishMessage".to_string(), serde_json::json!(finish_message));
-        google.insert("safetyRatings".to_string(), candidate.get("safetyRatings").cloned().unwrap_or_default());
+        google.insert(
+            "safetyRatings".to_string(),
+            candidate.get("safetyRatings").cloned().unwrap_or_default(),
+        );
         let mut metadata = crate::schema::ProviderMetadata::new();
         metadata.insert("google".to_string(), google);
         notices.push(Notice {
@@ -222,9 +260,16 @@ pub fn decode(
                 Some(MediaUsage::Tokens {
                     input: prompt,
                     output,
-                    total: crate::protocols::shared::total_tokens(prompt, output, value.get("totalTokenCount").and_then(|v| v.as_f64())),
+                    total: crate::protocols::shared::total_tokens(
+                        prompt,
+                        output,
+                        value.get("totalTokenCount").and_then(|v| v.as_f64()),
+                    ),
                     details: Some(
-                        serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(value.clone()).unwrap_or_default(),
+                        serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
+                            value.clone(),
+                        )
+                        .unwrap_or_default(),
                     ),
                 }),
                 output,
@@ -233,9 +278,15 @@ pub fn decode(
         _ => (None, None),
     };
     let mut google = std::collections::BTreeMap::new();
-    google.insert("modelVersion".to_string(), decoded.get("modelVersion").cloned().unwrap_or_default());
+    google.insert(
+        "modelVersion".to_string(),
+        decoded.get("modelVersion").cloned().unwrap_or_default(),
+    );
     google.insert("responseId".to_string(), decoded.get("responseId").cloned().unwrap_or_default());
-    google.insert("promptFeedback".to_string(), decoded.get("promptFeedback").cloned().unwrap_or_default());
+    google.insert(
+        "promptFeedback".to_string(),
+        decoded.get("promptFeedback").cloned().unwrap_or_default(),
+    );
     let mut metadata = crate::schema::ProviderMetadata::new();
     metadata.insert("google".to_string(), google);
     let _ = context;
@@ -277,7 +328,11 @@ impl InlineProtocol for GoogleImages {
         format!("/models/{}:generateContent", request.model)
     }
 
-    fn decode(&self, output: &TextOutput, context: &DecodeContext<ImageRequest>) -> Result<ImageResponse, AiError> {
+    fn decode(
+        &self,
+        output: &TextOutput,
+        context: &DecodeContext<ImageRequest>,
+    ) -> Result<ImageResponse, AiError> {
         decode(output, context)
     }
 }
@@ -288,7 +343,11 @@ mod tests {
     use serde_json::json;
 
     fn request() -> ImageRequest {
-        ImageRequest { model: "gemini-3-pro-image-preview".into(), prompt: "a cat".into(), ..Default::default() }
+        ImageRequest {
+            model: "gemini-3-pro-image-preview".into(),
+            prompt: "a cat".into(),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -311,7 +370,10 @@ mod tests {
         image_request.provider_options = Some(options);
         let body = body_from(&image_request).unwrap();
         let Body::Json { value, .. } = body else { panic!() };
-        assert_eq!(value["generationConfig"]["imageConfig"], json!({ "aspectRatio": "16:9", "imageSize": "2K" }));
+        assert_eq!(
+            value["generationConfig"]["imageConfig"],
+            json!({ "aspectRatio": "16:9", "imageSize": "2K" })
+        );
         assert_eq!(value["generationConfig"]["thinkingConfig"], json!({ "thinkingLevel": "LOW" }));
         assert_eq!(value["generationConfig"]["seed"], json!(7));
     }
@@ -346,7 +408,10 @@ mod tests {
         let response = decode(&output, &context).unwrap();
         assert_eq!(response.images.len(), 1);
         assert_eq!(response.images[0].media_type, "image/png");
-        assert_eq!(response.provider_metadata.as_ref().unwrap()["google"]["modelVersion"], json!("gemini-3-pro"));
+        assert_eq!(
+            response.provider_metadata.as_ref().unwrap()["google"]["modelVersion"],
+            json!("gemini-3-pro")
+        );
         assert_eq!(response.usage.as_ref().unwrap().clone(), MediaUsage::Tokens {
             input: Some(5.0),
             output: Some(120.0),

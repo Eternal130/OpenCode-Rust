@@ -32,13 +32,15 @@ pub mod video;
 
 pub use body::{Body, Form, FormValue, Query, QueryValue};
 pub use model::{
-    collect_image_response, collect_speech_response, collect_video_response, Addressed, CollectedResponse,
-    DecodeContext, ImageEvent, ImageRequest, ImageResponse, MediaRequest, MediaResponse, Mode, ProgressEvent,
-    QueuedEvent, ResponseContext, Snapshot, SpeechEvent, SpeechRequest, SpeechResponse, SpeechTimestamp, SpeechVoice,
-    Started, Status, TranscriptionEvent, TranscriptionRequest, TranscriptionResponse, TranscriptionSegment,
-    TranscriptionTimestamps, TranscriptionWord, VideoEvent, VideoFrames, VideoRequest, VideoResponse, is_terminal,
+    collect_image_response, collect_speech_response, collect_video_response, is_terminal,
+    Addressed, CollectedResponse, DecodeContext, ImageEvent, ImageRequest, ImageResponse,
+    MediaRequest, MediaResponse, Mode, ProgressEvent, QueuedEvent, ResponseContext, Snapshot,
+    SpeechEvent, SpeechRequest, SpeechResponse, SpeechTimestamp, SpeechVoice, Started, Status,
+    TranscriptionEvent, TranscriptionRequest, TranscriptionResponse, TranscriptionSegment,
+    TranscriptionTimestamps, TranscriptionWord, VideoEvent, VideoFrames, VideoRequest,
+    VideoResponse,
 };
 pub use protocol::{
-    expiring_url, failure, now_millis, status, CancelSpec, Failure, Frame, Framing, Identity, InlineProtocol,
-    MediaProtocolBase, QueuedProtocol, StreamProtocol, TextOutput,
+    expiring_url, failure, now_millis, status, CancelSpec, Failure, Frame, Framing, Identity,
+    InlineProtocol, MediaProtocolBase, QueuedProtocol, StreamProtocol, TextOutput,
 };

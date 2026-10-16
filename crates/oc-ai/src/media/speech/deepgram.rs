@@ -4,10 +4,12 @@
 //! defaults their sample rate per encoding.
 
 use crate::media::body::{merge_records, Body, Query};
-use crate::media::model::{speech_field_present, Addressed, SpeechEvent, SpeechRequest, ResponseContext};
+use crate::media::model::{
+    speech_field_present, Addressed, ResponseContext, SpeechEvent, SpeechRequest,
+};
 use crate::media::protocol::{Framing, Identity, MediaProtocolBase, StreamProtocol, TextOutput};
-use crate::media::utils::{query_from, speech_stream};
 use crate::media::utils::speech_stream::PcmEncoding;
+use crate::media::utils::{query_from, speech_stream};
 use crate::schema::AiError;
 
 pub const ID: &str = "deepgram-speech";
@@ -92,7 +94,9 @@ fn query_parameters(request: &SpeechRequest) -> Result<Query, AiError> {
 /// `fromRequest` (deepgram-speech.ts:69-86).
 pub fn body_from(request: &Addressed<SpeechRequest>) -> Result<Body, AiError> {
     if request.request.timestamps == Some(true) {
-        return Err(identity().unsupported("media.timestamps", "Deepgram does not return timestamps"));
+        return Err(
+            identity().unsupported("media.timestamps", "Deepgram does not return timestamps")
+        );
     }
     if let Some(format) = &request.request.format {
         let known = FORMATS.iter().any(|(known, _, _)| known == format);
@@ -110,7 +114,8 @@ pub fn body_from(request: &Addressed<SpeechRequest>) -> Result<Body, AiError> {
         }
     }
     let base = merge_records(&[
-        crate::media::body::record([("text", Some(serde_json::json!(request.request.text)))]).as_ref(),
+        crate::media::body::record([("text", Some(serde_json::json!(request.request.text)))])
+            .as_ref(),
         request.request.http.as_ref().and_then(|http| http.body.as_ref()),
     ])
     .unwrap_or_default();
@@ -165,7 +170,9 @@ pub fn finish(
                 .as_ref()
                 .and_then(|options| options.get("sampleRate"))
                 .and_then(|value| value.as_f64());
-            let rate = speech_stream::sample_rate(media_type.as_deref()).or(requested_rate).unwrap_or(*default_rate);
+            let rate = speech_stream::sample_rate(media_type.as_deref())
+                .or(requested_rate)
+                .unwrap_or(*default_rate);
             speech_stream::finish(
                 &identity(),
                 state,
@@ -235,7 +242,11 @@ impl StreamProtocol for DeepgramSpeech {
         Framing::Bytes
     }
 
-    fn finish(&self, state: &Self::State, context: &ResponseContext<SpeechRequest>) -> Result<Vec<SpeechEvent>, AiError> {
+    fn finish(
+        &self,
+        state: &Self::State,
+        context: &ResponseContext<SpeechRequest>,
+    ) -> Result<Vec<SpeechEvent>, AiError> {
         let headers: std::collections::BTreeMap<String, String> = context
             .http
             .headers
@@ -253,17 +264,26 @@ mod tests {
     use serde_json::json;
 
     fn request() -> SpeechRequest {
-        SpeechRequest { model: "aura-2-thalia-en".into(), text: "hello".into(), ..Default::default() }
+        SpeechRequest {
+            model: "aura-2-thalia-en".into(),
+            text: "hello".into(),
+            ..Default::default()
+        }
     }
 
     #[test]
     fn query_carries_model_and_default_mp3() {
-        let Body::Json { value, query } = body_from(&Addressed::new(request(), Mode::Generate)).unwrap() else {
+        let Body::Json { value, query } =
+            body_from(&Addressed::new(request(), Mode::Generate)).unwrap()
+        else {
             panic!()
         };
         assert_eq!(value["text"], json!("hello"));
         let query = query.expect("query present");
-        assert_eq!(query.0["model"], crate::media::body::QueryValue::One("aura-2-thalia-en".to_string()));
+        assert_eq!(
+            query.0["model"],
+            crate::media::body::QueryValue::One("aura-2-thalia-en".to_string())
+        );
         assert!(!query.0.contains_key("encoding"));
     }
 
@@ -271,11 +291,16 @@ mod tests {
     fn pcm_format_lowers_linear16_none() {
         let mut speech_request = request();
         speech_request.format = Some("pcm".into());
-        let Body::Json { query, .. } = body_from(&Addressed::new(speech_request, Mode::Generate)).unwrap() else {
+        let Body::Json { query, .. } =
+            body_from(&Addressed::new(speech_request, Mode::Generate)).unwrap()
+        else {
             panic!()
         };
         let query = query.unwrap();
-        assert_eq!(query.0["encoding"], crate::media::body::QueryValue::One("linear16".to_string()));
+        assert_eq!(
+            query.0["encoding"],
+            crate::media::body::QueryValue::One("linear16".to_string())
+        );
         assert_eq!(query.0["container"], crate::media::body::QueryValue::One("none".to_string()));
     }
 
@@ -306,13 +331,12 @@ mod tests {
         headers.insert("dg-char-count".to_string(), "33".to_string());
         headers.insert("dg-request-id".to_string(), "req-9".to_string());
         let events = finish(&state, &speech_request, &headers).unwrap();
-        let SpeechEvent::Finish { audio, usage, provider_metadata, .. } = &events[0] else { panic!() };
+        let SpeechEvent::Finish { audio, usage, provider_metadata, .. } = &events[0] else {
+            panic!()
+        };
         assert_eq!(audio.media_type, "audio/pcm;rate=16000");
         assert_eq!(audio.info.as_ref().unwrap().sample_rate, Some(16_000.0));
-        assert_eq!(
-            usage,
-            &Some(crate::schema::MediaUsage::Characters { characters: 33.0 })
-        );
+        assert_eq!(usage, &Some(crate::schema::MediaUsage::Characters { characters: 33.0 }));
         assert_eq!(provider_metadata.as_ref().unwrap()["deepgram"]["requestId"], json!("req-9"));
     }
 
