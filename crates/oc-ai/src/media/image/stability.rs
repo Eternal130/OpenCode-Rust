@@ -3,16 +3,12 @@
 //! base64 JSON instead of raw bytes so the seed and finish reason arrive
 //! with the image.
 
-use std::collections::BTreeMap;
-
 use crate::media::body::{merge_records, Body, Form};
-use crate::media::model::{
-    image_field_present, ImageRequest, ImageResponse, PollContext, Snapshot, Started, Status,
-};
+use crate::media::model::{ImageRequest, ImageResponse, PollContext, Snapshot, Started, Status};
 use crate::media::protocol::{
     Identity, InlineProtocol, MediaProtocolBase, QueuedProtocol, TextOutput,
 };
-use crate::media::utils::{self, RepeatArrays};
+use crate::media::utils::{self};
 use crate::schema::media::{self, Notice, NoticeType};
 use crate::schema::{AiError, HttpContext};
 
@@ -71,10 +67,11 @@ pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
             ("mode", (target == "sd3" && edit).then(|| serde_json::json!("image-to-image"))),
         ])
         .as_ref(),
-        &merge_records(&[
+        merge_records(&[
             request.provider_options.as_ref(),
             request.http.as_ref().and_then(|http| http.body.as_ref()),
-        ]),
+        ])
+        .as_ref(),
         &request.images,
     )
 }
@@ -83,7 +80,7 @@ pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
 fn form_body(
     identity: &Identity,
     fields: Option<&crate::schema::options::JsonRecord>,
-    native: &Option<crate::schema::options::JsonRecord>,
+    native: Option<&crate::schema::options::JsonRecord>,
     source: &[media::Asset],
 ) -> Result<Body, AiError> {
     if source.len() > 1 {
@@ -94,13 +91,7 @@ fn form_body(
     let owned: Vec<(String, serde_json::Value)> = fields
         .map(|record| record.iter().map(|(key, value)| (key.clone(), value.clone())).collect())
         .unwrap_or_default();
-    utils::append_fields(
-        &mut form,
-        owned,
-        native.as_ref(),
-        &["image", "prompt", "mode", "model"],
-        None,
-    );
+    utils::append_fields(&mut form, owned, native, &["image", "prompt", "mode", "model"], None);
     if let Some(image) = source.first() {
         let data = utils::inline_bytes(identity.id, image)?;
         form.append_file("image", "image", image.media_type.clone(), data);
@@ -117,8 +108,8 @@ pub fn decode_image_document(
     let document = output.decode_json(output.body)?;
     let data = document
         .get("image")
-        .and_then(|value| value.as_str())
-        .or_else(|| document.get("result").and_then(|value| value.as_str()));
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| document.get("result").and_then(serde_json::Value::as_str));
     let Some(data) = data else {
         return Err(output.invalid(format!("{} returned no image", identity.name)));
     };
@@ -140,7 +131,7 @@ pub fn decode_image_document(
     metadata.insert("stability".to_string(), stability);
     Ok(ImageResponse {
         images: vec![image],
-        notices: (document.get("finish_reason").and_then(|v| v.as_str())
+        notices: (document.get("finish_reason").and_then(serde_json::Value::as_str)
             == Some("CONTENT_FILTERED"))
         .then(|| {
             vec![Notice {
@@ -223,10 +214,11 @@ pub fn upscale_body_from(request: &ImageRequest) -> Result<Body, AiError> {
             ("output_format", request.format.clone().map(|format| serde_json::json!(format))),
         ])
         .as_ref(),
-        &merge_records(&[
+        merge_records(&[
             request.provider_options.as_ref(),
             request.http.as_ref().and_then(|http| http.body.as_ref()),
-        ]),
+        ])
+        .as_ref(),
         &request.images,
     )
 }
@@ -234,7 +226,7 @@ pub fn upscale_body_from(request: &ImageRequest) -> Result<Body, AiError> {
 /// `decodeStart` (stability-images.ts:160-163).
 pub fn upscale_decode_start(output: &TextOutput) -> Result<Started<UpscaleToken>, AiError> {
     let value = output.decode_json(output.body)?;
-    let id = value.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let id = value.get("id").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
     Ok(Started {
         snapshot: Snapshot {
             id: id.clone(),
@@ -333,6 +325,7 @@ impl QueuedProtocol for StabilityUpscale {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     fn request(model: &str) -> ImageRequest {
         ImageRequest { model: model.into(), prompt: "a cat".into(), ..Default::default() }

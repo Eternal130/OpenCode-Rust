@@ -340,7 +340,7 @@ pub fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
         if value < 0 {
             return Err(format!("invalid base64 character 0x{byte:02x}"));
         }
-        buffer = (buffer << 6) | value as u32;
+        buffer = (buffer << 6) | u32::from(value.unsigned_abs());
         bits += 6;
         if bits >= 8 {
             bits -= 8;

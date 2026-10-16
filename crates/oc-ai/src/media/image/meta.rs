@@ -70,16 +70,17 @@ pub fn decode(
     let requested = context
         .body
         .json_field("output_format")
-        .and_then(|value| value.as_str())
+        .and_then(serde_json::Value::as_str)
         .map(str::to_string);
     let format = decoded
         .get("output_format")
-        .and_then(|value| value.as_str())
+        .and_then(serde_json::Value::as_str)
         .map(str::to_string)
         .or(requested)
         .unwrap_or_else(|| "webp".to_string());
     let media_type = format!("image/{format}");
-    let data = decoded.get("data").and_then(|value| value.as_array()).cloned().unwrap_or_default();
+    let data =
+        decoded.get("data").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
     let mut images = Vec::new();
     for (index, item) in data.iter().enumerate() {
         images.push(utils::image_output(
@@ -96,9 +97,9 @@ pub fn decode(
     }
     let usage =
         decoded.get("usage").filter(|value| !value.is_null()).map(|value| MediaUsage::Tokens {
-            input: value.get("input_tokens").and_then(|v| v.as_f64()),
-            output: value.get("output_tokens").and_then(|v| v.as_f64()),
-            total: value.get("total_tokens").and_then(|v| v.as_f64()),
+            input: value.get("input_tokens").and_then(serde_json::Value::as_f64),
+            output: value.get("output_tokens").and_then(serde_json::Value::as_f64),
+            total: value.get("total_tokens").and_then(serde_json::Value::as_f64),
             details: Some(serde_json::from_value(value.clone()).unwrap_or_default()),
         });
     let mut meta = std::collections::BTreeMap::new();

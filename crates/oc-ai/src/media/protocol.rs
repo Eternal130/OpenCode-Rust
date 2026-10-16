@@ -16,9 +16,7 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::media::body::Body;
-use crate::media::model::{
-    Addressed, DecodeContext, Mode, ResponseContext, Snapshot, Started, Status,
-};
+use crate::media::model::{Addressed, DecodeContext, ResponseContext, Snapshot, Started, Status};
 use crate::schema::media::{self, Asset};
 use crate::schema::{AiError, AiErrorReason, HttpContext, ProviderId};
 
@@ -139,7 +137,10 @@ pub struct TextOutput<'a> {
     pub http: Option<&'a HttpContext>,
 }
 
-impl<'a> TextOutput<'a> {
+// The lifetime couples `identity`/`body`/`http` borrows; eliding it would
+// change nothing but the signature shape.
+
+impl TextOutput<'_> {
     fn fields(&self, message: impl Into<String>) -> crate::schema::ReasonFields {
         crate::schema::ReasonFields {
             message: message.into(),
@@ -237,10 +238,11 @@ pub fn status(
 /// Map a provider error code through the protocol's table; missing or
 /// unmapped codes are `ProviderInternal` (media-protocol.ts:323-325).
 #[must_use]
-pub fn failure<K: std::hash::Hash + Eq + Copy>(
-    table: &std::collections::HashMap<K, Failure>,
-    code: Option<K>,
-) -> Failure {
+pub fn failure<K, S>(table: &std::collections::HashMap<K, Failure, S>, code: Option<K>) -> Failure
+where
+    K: std::hash::Hash + Eq + Copy,
+    S: std::hash::BuildHasher,
+{
     code.and_then(|code| table.get(&code).copied()).unwrap_or(Failure::ProviderInternal)
 }
 
@@ -248,7 +250,7 @@ pub fn failure<K: std::hash::Hash + Eq + Copy>(
 /// inject through `expiring_url_at`).
 #[must_use]
 pub fn now_millis() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as f64).unwrap_or(0.0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_millis() as f64)
 }
 
 /// A `url` asset whose provider-declared retention window starts `now`

@@ -1,5 +1,5 @@
 //! `elevenlabs-speech` (port of `protocols/elevenlabs-speech.ts`). Stream
-//! protocol; WAV is served only by the non-streaming endpoints, and
+//! protocol; `WAV` is served only by the non-streaming endpoints, and
 //! character alignment timestamps ride the `/with-timestamps` path.
 
 use crate::media::body::{merge_records, Body};
@@ -28,7 +28,7 @@ const OUTPUT_FORMATS: &[(&str, &str)] = &[
     ("opus", "opus_48000_64"),
 ];
 
-/// Parser state (elevenlabs-speech.ts:84).
+/// Parser state (elevenlabs-speech.ts:84) — the audio accumulator.
 pub type State = Audio;
 
 /// `outputFormat` (elevenlabs-speech.ts:98-111).
@@ -38,7 +38,7 @@ pub fn output_format(request: &Addressed<SpeechRequest>) -> Result<String, AiErr
         .provider_options
         .as_ref()
         .and_then(|options| options.get("outputFormat"))
-        .and_then(|value| value.as_str())
+        .and_then(serde_json::Value::as_str)
         .map(str::to_string)
         .or_else(|| {
             request
@@ -64,7 +64,7 @@ pub fn output_format(request: &Addressed<SpeechRequest>) -> Result<String, AiErr
         return Err(identity().unsupported(
             "media.format",
             format!(
-                "ElevenLabs has no default output format for \"{}\"; pass providerOptions.outputFormat",
+                "ElevenLabs has no default output format for \"{}\"; pass `providerOptions.outputFormat`",
                 request.request.format.clone().unwrap_or_default()
             ),
         ));
@@ -155,7 +155,7 @@ fn url_encode(value: &str) -> String {
 pub fn on_record(state: &mut State, frame: &str) -> Result<Vec<SpeechEvent>, AiError> {
     let output = TextOutput { identity: &identity(), body: frame, http: None };
     let record = output.decode_frame(frame)?;
-    let data = record.get("audio_base64").and_then(|value| value.as_str()).unwrap_or_default();
+    let data = record.get("audio_base64").and_then(serde_json::Value::as_str).unwrap_or_default();
     let chunk = crate::protocols::shared::decode_base64(data).map_err(|_| {
         identity().frame_error("ElevenLabs audio contains invalid base64 data", frame.to_string())
     })?;
@@ -163,20 +163,20 @@ pub fn on_record(state: &mut State, frame: &str) -> Result<Vec<SpeechEvent>, AiE
     if let Some(alignment) = record.get("alignment").filter(|value| !value.is_null()) {
         let texts: Vec<String> = alignment
             .get("characters")
-            .and_then(|value| value.as_array())
+            .and_then(serde_json::Value::as_array)
             .map(|items| {
                 items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect()
             })
             .unwrap_or_default();
         let starts: Vec<f64> = alignment
             .get("character_start_times_seconds")
-            .and_then(|value| value.as_array())
-            .map(|items| items.iter().filter_map(|item| item.as_f64()).collect())
+            .and_then(serde_json::Value::as_array)
+            .map(|items| items.iter().filter_map(serde_json::Value::as_f64).collect())
             .unwrap_or_default();
         let ends: Vec<f64> = alignment
             .get("character_end_times_seconds")
-            .and_then(|value| value.as_array())
-            .map(|items| items.iter().filter_map(|item| item.as_f64()).collect())
+            .and_then(serde_json::Value::as_array)
+            .map(|items| items.iter().filter_map(serde_json::Value::as_f64).collect())
             .unwrap_or_default();
         events.extend(speech_stream::timestamps(&texts, &starts, &ends));
     }
@@ -193,22 +193,23 @@ pub fn step(state: &mut State, frame: &Frame) -> Result<Vec<SpeechEvent>, AiErro
 }
 
 /// `describeOutput` (elevenlabs-speech.ts:165-170).
+const PCM_CODECS: &[(&str, PcmEncoding)] = &[
+    ("pcm", PcmEncoding::pcm_s16le),
+    ("ulaw", PcmEncoding::pcm_mulaw),
+    ("alaw", PcmEncoding::pcm_alaw),
+];
+
 fn describe_output(format: &str) -> speech_stream::Output {
     let (codec, rate) = format.split_once('_').unwrap_or((format, ""));
     let sample_rate = rate.parse::<f64>().ok();
-    const PCM_CODECS: &[(&str, PcmEncoding)] = &[
-        ("pcm", PcmEncoding::pcm_s16le),
-        ("ulaw", PcmEncoding::pcm_mulaw),
-        ("alaw", PcmEncoding::pcm_alaw),
-    ];
     match PCM_CODECS.iter().find(|(known, _)| *known == codec) {
         Some((_, encoding)) => speech_stream::pcm(*encoding, sample_rate, None),
         None => speech_stream::container(codec, sample_rate),
     }
 }
 
-/// `finish` (elevenlabs-speech.ts:172-183): `character-cost` is billed
-/// credits, not a character count.
+/// `finish` (elevenlabs-speech.ts:172-183): the `character-cost` header is
+/// billed credits, not a character count.
 pub fn finish(
     state: &State,
     request: &Addressed<SpeechRequest>,

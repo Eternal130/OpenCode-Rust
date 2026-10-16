@@ -18,6 +18,7 @@
 //! Wave B plugs the real LLM drain into [`execution::SessionExecution`];
 //! Wave A drives it with injected fakes.
 
+pub mod diff;
 pub mod execution;
 pub mod inbox;
 pub mod message_updater;
@@ -29,6 +30,8 @@ pub mod subagent_completion;
 pub mod subagent_job;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_diff;
 #[cfg(test)]
 mod tests_parity;
 

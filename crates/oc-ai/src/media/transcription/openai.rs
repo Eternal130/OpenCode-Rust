@@ -136,11 +136,11 @@ pub fn body_from(request: &Addressed<TranscriptionRequest>) -> Result<Body, AiEr
         ("model".to_string(), serde_json::json!(request.request.model)),
         (
             "language".to_string(),
-            (model.language_field == LanguageField::Language)
-                .then(|| request.request.language.clone())
-                .flatten()
-                .map(|language| serde_json::json!(language))
-                .unwrap_or(serde_json::Value::Null),
+            crate::media::body::json_opt(
+                (model.language_field == LanguageField::Language)
+                    .then(|| request.request.language.clone())
+                    .flatten(),
+            ),
         ),
         (
             "languages".to_string(),
@@ -149,19 +149,8 @@ pub fn body_from(request: &Addressed<TranscriptionRequest>) -> Result<Body, AiEr
                 _ => serde_json::Value::Null,
             },
         ),
-        (
-            "prompt".to_string(),
-            request
-                .request
-                .prompt
-                .clone()
-                .map(|v| serde_json::json!(v))
-                .unwrap_or(serde_json::Value::Null),
-        ),
-        (
-            "response_format".to_string(),
-            response_format.map(|v| serde_json::json!(v)).unwrap_or(serde_json::Value::Null),
-        ),
+        ("prompt".to_string(), crate::media::body::json_opt(request.request.prompt.clone())),
+        ("response_format".to_string(), crate::media::body::json_opt(response_format)),
         (
             "timestamp_granularities".to_string(),
             match request.request.timestamps {
@@ -182,14 +171,9 @@ pub fn body_from(request: &Addressed<TranscriptionRequest>) -> Result<Body, AiEr
         // strategy.
         (
             "chunking_strategy".to_string(),
-            model.diarize.then(|| serde_json::json!("auto")).unwrap_or(serde_json::Value::Null),
+            if model.diarize { serde_json::json!("auto") } else { serde_json::Value::Null },
         ),
-        (
-            "stream".to_string(),
-            streams_events(request)
-                .then(|| serde_json::json!(true))
-                .unwrap_or(serde_json::Value::Null),
-        ),
+        ("stream".to_string(), crate::media::body::json_flag(streams_events(request))),
     ];
     let fields: Vec<(String, serde_json::Value)> =
         fields.into_iter().filter(|(_, value)| !value.is_null()).collect();
@@ -234,14 +218,19 @@ pub struct State {
 /// `segment` (openai-transcription.ts:206-211).
 fn segment_of(value: &serde_json::Value) -> TranscriptionSegment {
     TranscriptionSegment {
-        text: value.get("text").and_then(|v| v.as_str()).unwrap_or_default().trim().to_string(),
-        start_seconds: value.get("start").and_then(|v| v.as_f64()).unwrap_or_default(),
-        end_seconds: value.get("end").and_then(|v| v.as_f64()).unwrap_or_default(),
-        speaker: value.get("speaker").and_then(|v| v.as_str()).map(str::to_string),
+        text: value
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        start_seconds: value.get("start").and_then(serde_json::Value::as_f64).unwrap_or_default(),
+        end_seconds: value.get("end").and_then(serde_json::Value::as_f64).unwrap_or_default(),
+        speaker: value.get("speaker").and_then(serde_json::Value::as_str).map(str::to_string),
     }
 }
 
-/// `onEvent` (openai-transcription.ts:213-229). OpenAI may add stream
+/// `onEvent` (openai-transcription.ts:213-229): `OpenAI` may add stream
 /// event types; frames outside `EVENT_TYPES` are ignored.
 pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<TranscriptionEvent>, AiError> {
     const EVENT_TYPES: &[&str] =
@@ -249,15 +238,15 @@ pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<TranscriptionEvent
     let output = TextOutput { identity: &identity(), body: frame, http: None };
     let peek = output.decode_frame(frame)?;
     let event_type =
-        peek.get("type").and_then(|value| value.as_str()).unwrap_or_default().to_string();
+        peek.get("type").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
     if !EVENT_TYPES.contains(&event_type.as_str()) {
         return Ok(Vec::new());
     }
     if event_type == "error" {
         let message = peek
             .get("message")
-            .and_then(|value| value.as_str())
-            .or_else(|| peek.pointer("/error/message").and_then(|value| value.as_str()))
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| peek.pointer("/error/message").and_then(serde_json::Value::as_str))
             .unwrap_or("unknown error");
         return Err(AiError::new(crate::provider_error::classify_provider_failure(
             crate::provider_error::ProviderFailure {
@@ -276,10 +265,11 @@ pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<TranscriptionEvent
         return Ok(Vec::new());
     }
     if event_type == "transcript.text.delta" {
-        let delta = peek.get("delta").and_then(|value| value.as_str()).unwrap_or_default();
-        return Ok((!delta.is_empty())
-            .then(|| vec![TranscriptionEvent::TextDelta { delta: delta.to_string() }])
-            .unwrap_or_default());
+        let delta = peek.get("delta").and_then(serde_json::Value::as_str).unwrap_or_default();
+        if delta.is_empty() {
+            return Ok(Vec::new());
+        }
+        return Ok(vec![TranscriptionEvent::TextDelta { delta: delta.to_string() }]);
     }
     let next = segment_of(&peek);
     state.segments.push(next.clone());
@@ -291,16 +281,16 @@ fn usage_of(value: &serde_json::Value) -> Option<MediaUsage> {
     if value.is_null() {
         return None;
     }
-    if value.get("type").and_then(|v| v.as_str()) == Some("duration") {
+    if value.get("type").and_then(serde_json::Value::as_str) == Some("duration") {
         return value
             .get("seconds")
-            .and_then(|v| v.as_f64())
+            .and_then(serde_json::Value::as_f64)
             .map(|seconds| MediaUsage::Seconds { seconds });
     }
     Some(MediaUsage::Tokens {
-        input: value.get("input_tokens").and_then(|v| v.as_f64()),
-        output: value.get("output_tokens").and_then(|v| v.as_f64()),
-        total: value.get("total_tokens").and_then(|v| v.as_f64()),
+        input: value.get("input_tokens").and_then(serde_json::Value::as_f64),
+        output: value.get("output_tokens").and_then(serde_json::Value::as_f64),
+        total: value.get("total_tokens").and_then(serde_json::Value::as_f64),
         details: Some(serde_json::from_value(value.clone()).unwrap_or_default()),
     })
 }
@@ -312,16 +302,26 @@ pub fn finish(state: &State) -> Result<Vec<TranscriptionEvent>, AiError> {
     };
     let transcript_segments = transcript
         .get("segments")
-        .and_then(|value| value.as_array())
+        .and_then(serde_json::Value::as_array)
         .map(|items| items.iter().map(segment_of).collect::<Vec<_>>());
     let segments = transcript_segments.unwrap_or_else(|| state.segments.clone());
-    let words = transcript.get("words").and_then(|value| value.as_array()).map(|items| {
+    let words = transcript.get("words").and_then(serde_json::Value::as_array).map(|items| {
         items
             .iter()
             .map(|word| crate::media::model::TranscriptionWord {
-                text: word.get("word").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                start_seconds: word.get("start").and_then(|v| v.as_f64()).unwrap_or_default(),
-                end_seconds: word.get("end").and_then(|v| v.as_f64()).unwrap_or_default(),
+                text: word
+                    .get("word")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                start_seconds: word
+                    .get("start")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or_default(),
+                end_seconds: word
+                    .get("end")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or_default(),
                 speaker: None,
                 confidence: None,
             })
@@ -329,15 +329,19 @@ pub fn finish(state: &State) -> Result<Vec<TranscriptionEvent>, AiError> {
     });
     let language = transcript
         .get("language")
-        .and_then(|value| value.as_str())
-        .or_else(|| transcript.pointer("/languages/0/code").and_then(|value| value.as_str()))
-        .map(|value| value.to_ascii_lowercase());
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| transcript.pointer("/languages/0/code").and_then(serde_json::Value::as_str))
+        .map(str::to_ascii_lowercase);
     Ok(vec![TranscriptionEvent::Finish(crate::media::model::TranscriptionResponse {
-        text: transcript.get("text").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        text: transcript
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
         segments: (!segments.is_empty()).then_some(segments),
         words,
         language,
-        duration_seconds: transcript.get("duration").and_then(|v| v.as_f64()),
+        duration_seconds: transcript.get("duration").and_then(serde_json::Value::as_f64),
         usage: transcript.get("usage").and_then(usage_of),
         notices: None,
         provider_metadata: None,

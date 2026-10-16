@@ -1,6 +1,6 @@
 //! `elevenlabs-transcription` (port of
-//! `protocols/elevenlabs-transcription.ts`). Inline multipart protocol;
-//! speaker turns are the only segments ElevenLabs can produce, and turn
+//! `protocols/elevenlabs-transcription.ts`) — an inline multipart protocol.
+//! speaker turns are the only segments `ElevenLabs` can produce, and turn
 //! text keeps the provider's own spacing tokens so languages written
 //! without spaces are not re-spaced.
 
@@ -21,7 +21,7 @@ pub fn identity() -> Identity {
     Identity::new(ID, "ElevenLabs Transcription", "elevenlabs")
 }
 
-/// Speaker turns are the only segments ElevenLabs can produce, and
+/// Speaker turns are the only segments `ElevenLabs` can produce, and
 /// `num_speakers` only applies to diarization
 /// (elevenlabs-transcription.ts:70-71).
 pub fn diarizes(request: &TranscriptionRequest) -> bool {
@@ -90,9 +90,7 @@ pub fn body_from(request: &TranscriptionRequest) -> Result<Body, AiError> {
         let audio = inline_bytes(ID, &request.audio)?;
         form.append_file(
             "file",
-            extension
-                .map(|extension| format!("audio.{extension}"))
-                .unwrap_or_else(|| "audio".to_string()),
+            extension.map_or_else(|| "audio".to_string(), |extension| format!("audio.{extension}")),
             request.audio.media_type.clone(),
             audio,
         );
@@ -101,26 +99,10 @@ pub fn body_from(request: &TranscriptionRequest) -> Result<Body, AiError> {
         ("model_id".to_string(), serde_json::json!(request.model)),
         // `cloud_storage_url` is deprecated in favor of `source_url`,
         // which accepts any hosted audio or video URL.
-        (
-            "source_url".to_string(),
-            url.map(|url| serde_json::json!(url)).unwrap_or(serde_json::Value::Null),
-        ),
-        (
-            "language_code".to_string(),
-            request
-                .language
-                .clone()
-                .map(|v| serde_json::json!(v))
-                .unwrap_or(serde_json::Value::Null),
-        ),
-        (
-            "diarize".to_string(),
-            diarizes(request).then(|| serde_json::json!(true)).unwrap_or(serde_json::Value::Null),
-        ),
-        (
-            "num_speakers".to_string(),
-            request.speakers.map(|v| serde_json::json!(v)).unwrap_or(serde_json::Value::Null),
-        ),
+        ("source_url".to_string(), crate::media::body::json_opt(url)),
+        ("language_code".to_string(), crate::media::body::json_opt(request.language.clone())),
+        ("diarize".to_string(), crate::media::body::json_flag(diarizes(request))),
+        ("num_speakers".to_string(), crate::media::body::json_opt(request.speakers)),
     ];
     let fields: Vec<(String, serde_json::Value)> =
         fields.into_iter().filter(|(_, value)| !value.is_null()).collect();
@@ -142,7 +124,7 @@ pub fn check_unsupported(request: &TranscriptionRequest) -> Result<(), AiError> 
     identity().reject_unsupported(&present).map_or(Ok(()), Err)
 }
 
-/// One word/spacing/audio_event token (elevenlabs-transcription.ts:47-55).
+/// One `word`/`spacing`/`audio_event` token (elevenlabs-transcription.ts:47-55).
 #[derive(Debug, Clone, PartialEq)]
 struct Token {
     text: String,
@@ -159,23 +141,30 @@ fn tokens_of(value: Option<&Vec<serde_json::Value>>) -> Vec<Token> {
             items
                 .iter()
                 .map(|item| Token {
-                    text: item.get("text").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    type_: item
-                        .get("type")
-                        .and_then(|v| v.as_str())
+                    text: item
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
                         .unwrap_or_default()
                         .to_string(),
-                    start: item.get("start").and_then(|v| v.as_f64()),
-                    end: item.get("end").and_then(|v| v.as_f64()),
-                    speaker_id: item.get("speaker_id").and_then(|v| v.as_str()).map(str::to_string),
-                    logprob: item.get("logprob").and_then(|v| v.as_f64()),
+                    type_: item
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    start: item.get("start").and_then(serde_json::Value::as_f64),
+                    end: item.get("end").and_then(serde_json::Value::as_f64),
+                    speaker_id: item
+                        .get("speaker_id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                    logprob: item.get("logprob").and_then(serde_json::Value::as_f64),
                 })
                 .collect()
         })
         .unwrap_or_default()
 }
 
-/// `speakerTurns` (elevenlabs-transcription.ts:146-164).
+/// The `speakerTurns` grouping (elevenlabs-transcription.ts:146-164).
 fn speaker_turn_segments(tokens: &[Token]) -> Vec<TranscriptionSegment> {
     let relevant: Vec<&Token> =
         tokens.iter().filter(|token| token.type_ == "word" || token.type_ == "spacing").collect();
@@ -212,9 +201,9 @@ pub fn decode(
     context: &DecodeContext<TranscriptionRequest>,
 ) -> Result<TranscriptionResponse, AiError> {
     let transcript = output.decode_json(output.body)?;
-    let tokens = tokens_of(transcript.get("words").and_then(|value| value.as_array()));
-    let duration = transcript.get("audio_duration_secs").and_then(|v| v.as_f64());
-    let transcription_id = transcript.get("transcription_id").and_then(|v| v.as_str());
+    let tokens = tokens_of(transcript.get("words").and_then(serde_json::Value::as_array));
+    let duration = transcript.get("audio_duration_secs").and_then(serde_json::Value::as_f64);
+    let transcription_id = transcript.get("transcription_id").and_then(serde_json::Value::as_str);
     let words: Vec<TranscriptionWord> = tokens
         .iter()
         .filter(|token| token.type_ == "word" && token.start.is_some() && token.end.is_some())
@@ -223,7 +212,7 @@ pub fn decode(
             start_seconds: token.start.unwrap_or_default(),
             end_seconds: token.end.unwrap_or_default(),
             speaker: token.speaker_id.clone(),
-            confidence: token.logprob.map(|logprob| logprob.exp()),
+            confidence: token.logprob.map(f64::exp),
         })
         .collect();
     let provider_metadata = transcription_id.map(|id| {
@@ -234,15 +223,19 @@ pub fn decode(
         metadata
     });
     Ok(TranscriptionResponse {
-        text: transcript.get("text").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        text: transcript
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
         segments: diarizes(context.request)
             .then(|| speaker_turn_segments(&tokens))
             .filter(|segments| !segments.is_empty()),
         words: (!words.is_empty()).then_some(words),
         language: transcript
             .get("language_code")
-            .and_then(|v| v.as_str())
-            .map(|value| value.to_ascii_lowercase()),
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_ascii_lowercase),
         duration_seconds: duration,
         usage: duration.map(|seconds| MediaUsage::Seconds { seconds }),
         notices: None,
