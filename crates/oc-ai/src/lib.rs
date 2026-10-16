@@ -59,6 +59,7 @@
 
 pub mod cache_policy;
 pub mod effort_updates;
+pub mod media;
 pub mod protocols;
 pub mod provider_error;
 pub mod route;

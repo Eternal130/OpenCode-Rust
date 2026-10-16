@@ -116,6 +116,35 @@ impl Usage {
     }
 }
 
+/// Usage reported by media routes (port of `AI.MediaUsage`, events.ts:98-113).
+///
+/// Providers bill images, video, speech, and transcription in different
+/// units, so each response carries the unit it was actually metered in
+/// instead of forcing everything into tokens.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all_fields = "camelCase")]
+pub enum MediaUsage {
+    #[serde(rename = "tokens")]
+    Tokens {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        details: Option<serde_json::Map<String, serde_json::Value>>,
+    },
+    #[serde(rename = "seconds")]
+    Seconds { seconds: f64 },
+    #[serde(rename = "characters")]
+    Characters { characters: f64 },
+    #[serde(rename = "credits")]
+    Credits { credits: f64 },
+    #[serde(rename = "compute")]
+    Compute { seconds: f64 },
+}
+
 /// Provider-neutral streaming event (port of the `LLMEvent` tagged union,
 /// events.ts:307 — all 19 variants).
 ///
