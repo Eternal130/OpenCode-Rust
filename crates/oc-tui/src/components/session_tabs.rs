@@ -38,6 +38,12 @@ pub const UNREAD_MARKER: &str = "•";
 pub const SPINNER_FRAME_0: &str = "⠋";
 /// `NEW_SESSION_TAB_TITLE`.
 pub const NEW_SESSION_TAB_TITLE: &str = "New session";
+/// `NEW_SESSION_TAB.sessionID` ("new", session-tabs.tsx:123) — the
+/// home-route pseudo-tab the strip appends while `newTab()` holds
+/// (`context/session-tabs.tsx:146`: the route IS home); the idle
+/// ` + ` affordance hides for the same window (`showPlus = add && !
+/// newTab`, session-tabs.tsx:1344).
+pub const NEW_SESSION_TAB_ID: &str = "new";
 /// Lower-half block: the glyph the above-separator pulse paints.
 pub const SEPARATOR_GLYPH: char = '▄';
 
