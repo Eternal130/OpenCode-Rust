@@ -1,0 +1,109 @@
+# Lane L1-mini-footer (worktree .worktrees/lane-l1, base a44d5cf)
+
+## Spec study (v2 citations, sweep-2 evidence mapped)
+Family = census "mini-footer family" (final-sweep-2.md:100-104) decomposed:
+1. MODELS PANEL (click-coverage-session.md:44-72 s03/s04): ref panel titled
+   "Select model" (dialog-model.tsx:122 title=provider?.name?:"Select model")
+   vs our "Switch model" (palette entry title, app.tsx:840 — the PALETTE row
+   keeps it; the mounted dialog does not). Same family: agent.list→
+   "Select agent" (dialog-agent.tsx:22), variant.list→"Select variant"
+   (dialog-variant.tsx:35), mcp.list→"MCP servers" (dialog-mcp.tsx:140).
+   Ref panel: cursor row0 (focusCurrent=false, dialog-model.tsx:171), FLAT
+   list w/ NO categories+NO row description while unconnected
+   (dialog-model.tsx:96-99 category only when connected, description only
+   "(Favorite"), footer action "View all integrations ctrl+a"
+   (dialog-model.tsx:168-176, keybind.ts:162). Cursor style = selected_bg
+   action.primary.focused (idx216) — ours renders current-row fg idx255
+   bg idx233 because we focus the CURRENT row (store.rs focus_dialog_current)
+   where v2 focuses row 0.
+2. PALETTE 'C' row (palette.md:90-130): ref suggested list = [Switch model,
+   Connect an integration, Open settings] — provider.connect is
+   suggested: !connected() (app.tsx:946-948); ours omits it.
+   connected = any integration has connections (use-connected.tsx).
+3. TAB TITLE FADE (click-coverage-session.md:116-129): ref tail 4 cells
+   idx251/246/241/236 = fadeTitleColor (session-tabs.tsx:232-236, FADE_WIDTH=4,
+   opacity .2/.44/.68/.92 toward tab bg) when marqueeOverflows(title,slot).
+   STATIC — not the shimmer (math verified: tint(#eeeeee,#1c1c1c,op) hits
+   idx251/246/241/236 exactly).
+4. TAB ✕ (mouse-hover-tabstrip.md:287): closeHovered→fg=text.base idx255
+   (session-tabs.tsx:1091); tab-hover fg=closeColor tint(muted,base,.6)=idx7
+   ✓ already ours. multi-session.md:241: ✕ persists on tab under STATIONARY
+   pointer after layout change (opentui re-hovers on re-layout).
+5. NEW-TAB/pseudo-tab (multi-session.md:191-235): home route → newTab()=true
+   (context/session-tabs.tsx:146) → strip items += NEW_SESSION_TAB
+   (session-tabs.tsx:1342, title "New session" :183, indicator "+",
+   selected→BOLD, activeID="new" :1339), showPlus=false (:1344
+   showPlus = add && !newTab). Ours renders plain " + " at home.
+
+## Implementation (commits 1ef30a9, b0e817a)
+1. command_palette.rs: dispatch mount titles (Select model/agent/
+   variant; Sessions/MCP servers unchanged); model_list_props
+   connected-gated (flat rows, no categories/descriptions, action
+   row View all integrations|Connect an integration ctrl+a);
+   suggested(provider.connect) = !ServerLists.connected.
+2. store.rs: ServerLists.connected + set_integration_connected;
+   focus_dialog_current SKIPS ServerList{model.list} (cursor row 0);
+   TabsState.hover_close + set_tab_hover(_, close).
+3. app.rs: spawn_server_lists folds integration.list → Connected
+   event; strip mouse routing via strip_layout_tabs/strip_hover_at
+   (home appends pseudo-tab NEW_SESSION_TAB_ID, showPlus=false);
+   last_pointer + refresh_strip_hover after mouse-driven strip
+   mutations (opentui re-hover semantics); pseudo ✕ → select last
+   tab (close(undefined)); Tab(pseudo) = stay home.
+4. session.rs paint_live_tabs_bar: home pseudo-tab + close_hover
+   passthrough. session_tabs_solid.rs: fade_title_color (verbatim
+   FADE_WIDTH=4 tail fade), close_chunks close-hover → text.base,
+   indicator "+" for the pseudo (tint(text,selected,0.25), bold).
+5. Tests: models_panel_golden.rs (open/selected/marker/connected),
+   pty_models_panel.rs (open→select→apply cycle), app home-strip +
+   add-release hover persistence, strip fade/close-hover/pseudo
+   unit tests, palette trio + agent/variant titles + cursor-0.
+   oc-tui full: 690/691 pass (1 pre-existing skip). clippy clean.
+NOTE (gap): model.dialog.provider ctrl+a is RENDERED but not
+   dispatched (v2 replaces with DialogIntegration — separate
+   surface, not in the census cells; no rig script triggers it).
+
+## Rig --quick evidence (final binary, 80x24, runs 1, live ref)
+RIG GOTCHA FOUND: tui-diff reuses target/debug/opencode-rust if present
+(stale-binary trap) — rebuild `cargo build -p oc-cli --bin opencode-rust`
+before rig verdicts (rigs 1-6 partially stale; 7-12 final).
+
+Before = sweep-2 (docs/msweep2-rig.log @80x24 r0) → After (L1):
+* type-edit-submit models-open:   297 mism, fd (15,7) 'e'/'w' Select↔Switch
+                            → 1   mism, fd (9,13) backdrop-idx15 (registered)
+* type-edit-submit models-filter: 107 → 4 (backdrop family only; structure
+  lines GONE — run-digest divergence cleared)
+* palette palette-open: 64 → 1; palette-down: 145 → 1 (same backdrop cell)
+* multi-session: ✕ diff cells 116 → 0 (grep); idx251/246/241/236 cells
+  24 → 0; steps 11/12 (tab-add-release, type-2) now IDENTICAL (the
+  "+ New session" pseudo-tab); rename steps 20/21 exact (prompt-dialog
+  hover reset); 6 identical steps (sweep-2 r0: 2)
+* tabs-keyboard: 40 → 39 mism/step (style-only), all first-diffs coin
+* boot-home: coin-only (placeholder 'b'↔'a') — registered (b)-class
+UNCHANGED (pre-existing, signature-identical): models-select 1920
+(variant sub-dialog surface — sweep-1 finding #11 class, out of this
+lane's census list), backdrop-fg idx15 family, bg idx0↔idx232 forms,
+home-placeholder coin, stats-row digits.
+
+## Late adds (rig-driven)
+* Painted block cursor REMOVED from the select filter input (both
+  renderers) — v2 paints no cursor cell (#8 ruling's raw-ANSI mirror);
+  models-filter 5 → 4.
+* frame() re-hovers the strip from last_pointer on every paint (the
+  render-driven re-dispatch) — fixes submit-opened-tab ✕ persistence.
+* Prompt dialogs (rename/worktree-name) clear the strip hover on open
+  (v2 census: ✕ vanishes under rename, returns after close).
+
+## Final verification (tier: affected crates + targeted + rig --quick)
+* oc-tui + parity nextest: 790 passed, 12 skipped (pre-existing skips).
+* fmt --check + clippy --all-targets (oc-tui, parity): clean (0 warnings).
+* Rig --quick (live ref, final binary): boot-home, type-edit-submit,
+  palette, tabs-keyboard, multi-session — collapse table above; zero
+  new divergence classes (every remaining first-diff maps to a
+  registered class: (b)-coin placeholder/stats, backdrop-fg idx15,
+  bg idx0↔idx232, models-select variant sub-dialog pre-existing).
+* New targeted tests: models_panel_golden (4), pty_models_panel (1),
+  app-level (2), strip unit (3), palette/dispatch unit (3) — all green
+  in the 790.
+Full workspace nextest / pty profile / release budget: DEFERRED to the
+chain-end consolidated gate per the lane's verification ruling.

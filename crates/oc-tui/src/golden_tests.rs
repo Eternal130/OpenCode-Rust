@@ -124,7 +124,7 @@ fn paint_solid_bar_sized(
     height: u16,
     styles: &crate::theme::ThemeStyles,
 ) -> crate::render::Frame {
-    let strip = paint_solid_bar(tabs, active, true, usize::from(width), styles, None, false);
+    let strip = paint_solid_bar(tabs, active, true, usize::from(width), styles, None, None, false);
     let base = crate::render::Cell {
         ch: ' ',
         attrs: 0,
