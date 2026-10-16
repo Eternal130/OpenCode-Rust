@@ -53,3 +53,32 @@
 - installation.*: oc-server announce::publish_installation_event (port of
   process.ts:115-117) + oc-cli autoupdate notice channel; serve drains it
   onto the in-process bus. serve.rs wiring, no-op elsewhere.
+
+## Phase 3 — items 2-6
+
+- item 2 (fork): handlers/session.rs fork rewritten — boundary located
+  per ref session.ts:319-355 (before → that message, 404 when missing;
+  else newest, 400 empty_session when none), instruction state + entry
+  snapshot inherited, ONE durable session.forked event with the
+  {type,messageID} boundary object (session-fork.ts:6-10); the
+  pre-create + fake synthetic-item copies are GONE so project_fork
+  (projector.rs:571) builds the row, copies settled history, fork-styles
+  the title. Response = the projected row.
+- item 3 (shell): handlers/session.rs shell rewritten per ref
+  session/session.ts:179-222 + session/shell.ts — executes through the
+  location Shell service (cwd=session dir, timeout 0, background
+  metadata), publishes session.shell.started (event id = msg_→evt_) /
+  session.shell.ended (1 MiB output preview), admits the
+  ShellResult.userNotification synthetic with resume:false. The command
+  text never reaches the model.
+- item 5 (config.update): handlers/config.rs update wired to
+  oc_core::config::update_shell (the jsonc_edit port; comment
+  preservation), 204 on success — replaces the hardcoded 500.
+- item 6 (info): /api/info body now carries
+  capabilities.persistentPty (cfg!(not(windows)), ref
+  binary.node.ts:2) — matches tools/parity/goldens/reference_api_info.json
+  which already pins the field.
+- item 4 (prompt/auto): oc-cli threads --prompt + effective auto into
+  misc::root; forwarded via documented env contract
+  OPENCODE_BOOT_PROMPT / OPENCODE_BOOT_AUTO (ruling: CLI side + env
+  handoff, no oc-tui edits — BootArgs is TUI-lane owned).
