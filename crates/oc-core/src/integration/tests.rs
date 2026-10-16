@@ -1453,3 +1453,160 @@ async fn chatgpt_connector_rejects_nonce_mismatch() {
     let error = callback_future.await.expect_err("nonce mismatch");
     assert!(error.contains("nonce"), "{error}");
 }
+
+// -- BE-3b: copilot transport binding -------------------------------------------
+
+#[tokio::test]
+async fn copilot_binding_resolves_token_base_url_and_headers() {
+    let host = host().await;
+    // Enterprise credential with an explicit api endpoint (BE-3 metadata).
+    let value = CredentialValue::OAuth(OAuthValue {
+        method_id: "device".into(),
+        refresh: "gho_transport".into(),
+        access: "gho_transport".into(),
+        expires: 0,
+        metadata: Some(BTreeMap::from([(
+            "apiEndpoint".to_owned(),
+            Value::String("https://api.githubcopilot.com".into()),
+        )])),
+    });
+    host.store()
+        .create(credential::CreateInput {
+            id: None,
+            integration_id: "github-copilot",
+            label: Some("copilot"),
+            value: &value,
+            activate: None,
+        })
+        .await
+        .expect("create");
+    host.refresh_provider_bindings().await;
+    let bindings = host.credential_bindings();
+    let binding = bindings.get("github-copilot").expect("copilot binding");
+    assert_eq!(binding.api_key, "gho_transport");
+    assert_eq!(binding.base_url.as_deref(), Some("https://api.githubcopilot.com"));
+    assert_eq!(binding.headers.get("X-GitHub-Api-Version").map(String::as_str), Some("2026-08-01"));
+    assert_eq!(
+        binding.headers.get("Openai-Intent").map(String::as_str),
+        Some("conversation-edits")
+    );
+
+    // Removing the credential clears the binding on refresh.
+    let ConnectionInfo::Credential { id, .. } =
+        host.connection_active("github-copilot").await.expect("active").expect("some")
+    else {
+        panic!()
+    };
+    host.store().remove(&id).await.expect("remove");
+    host.refresh_provider_bindings().await;
+    assert!(bindings.get("github-copilot").is_none());
+}
+
+#[tokio::test]
+async fn copilot_base_url_prefers_api_endpoint_then_enterprise() {
+    let endpoint = OAuthValue {
+        method_id: "device".into(),
+        refresh: "t".into(),
+        access: "t".into(),
+        expires: 0,
+        metadata: Some(BTreeMap::from([
+            ("apiEndpoint".to_owned(), Value::String("https://copilot.example/api".into())),
+            ("enterpriseUrl".to_owned(), Value::String("company.ghe.com".into())),
+        ])),
+    };
+    assert_eq!(super::copilot::copilot_base_url(&endpoint), "https://copilot.example/api");
+    let enterprise = OAuthValue {
+        method_id: "device".into(),
+        refresh: "t".into(),
+        access: "t".into(),
+        expires: 0,
+        metadata: Some(BTreeMap::from([(
+            "enterpriseUrl".to_owned(),
+            Value::String("company.ghe.com".into()),
+        )])),
+    };
+    assert_eq!(
+        super::copilot::copilot_base_url(&enterprise),
+        "https://copilot-api.company.ghe.com"
+    );
+    let origin = OAuthValue {
+        method_id: "device".into(),
+        refresh: "t".into(),
+        access: "t".into(),
+        expires: 0,
+        metadata: Some(BTreeMap::from([(
+            "enterpriseUrl".to_owned(),
+            Value::String("http://127.0.0.1:9/".into()),
+        )])),
+    };
+    assert_eq!(super::copilot::copilot_base_url(&origin), "http://127.0.0.1:9");
+    let plain = OAuthValue {
+        method_id: "device".into(),
+        refresh: "t".into(),
+        access: "t".into(),
+        expires: 0,
+        metadata: None,
+    };
+    assert_eq!(super::copilot::copilot_base_url(&plain), "https://api.githubcopilot.com");
+}
+
+#[tokio::test]
+async fn copilot_resolver_binds_route_from_credential() {
+    use crate::engine::resolver::CatalogModelResolver;
+    use crate::provider_catalog::facade::FacadeContext;
+    let host = host().await;
+    let value = CredentialValue::OAuth(OAuthValue {
+        method_id: "device".into(),
+        refresh: "gho_route".into(),
+        access: "gho_route".into(),
+        expires: 0,
+        metadata: Some(BTreeMap::from([(
+            "apiEndpoint".to_owned(),
+            Value::String("https://api.githubcopilot.com".into()),
+        )])),
+    });
+    host.store()
+        .create(credential::CreateInput {
+            id: None,
+            integration_id: "github-copilot",
+            label: Some("copilot"),
+            value: &value,
+            activate: None,
+        })
+        .await
+        .expect("create");
+    host.refresh_provider_bindings().await;
+
+    let catalog_text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/provider_catalog/models-dev-snapshot.txt"
+    ))
+    .expect("snapshot");
+    let catalog = std::sync::Arc::new(
+        crate::provider_catalog::catalog::Catalog::parse(&catalog_text).expect("catalog"),
+    );
+    let copilot = catalog.provider("github-copilot").expect("copilot in catalog");
+    let model_id = copilot.models.first().expect("copilot has models").id.0.clone();
+    let transport: oc_ai::route::SharedTransport =
+        std::sync::Arc::new(oc_ai::route::transport::reqwest_transport::ReqwestTransport::new());
+    let resolver = CatalogModelResolver::new(
+        FacadeContext::new(transport),
+        catalog,
+        BTreeMap::new(),
+        Vec::new(),
+        None,
+    )
+    .with_credentials(std::sync::Arc::clone(host.credential_bindings()));
+
+    // Without the credential the openai-compatible arm fails (no baseURL);
+    // with it the route binds (facade.rs build_route OpenAICompatible).
+    let bound = resolver.bind(&oc_schema::model::Ref {
+        provider_id: oc_schema::id::ProviderId::parse("github-copilot".to_owned()),
+        id: oc_schema::id::ModelId::parse(model_id),
+        variant: None,
+    });
+    match bound {
+        Ok(_) => {}
+        Err(error) => panic!("copilot route should bind from the credential: {error:?}"),
+    }
+}
