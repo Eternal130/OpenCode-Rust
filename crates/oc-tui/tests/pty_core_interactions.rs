@@ -169,6 +169,10 @@ struct Shared {
     interrupt_posts: Arc<AtomicUsize>,
     /// session.switchModel POSTs (the submit's commitModel step).
     model_posts: Arc<AtomicUsize>,
+    /// SURF-2: when > 0, the next that-many /api/event streams are
+    /// closed right after the headers (a scripted server loss — the
+    /// Reconnecting overlay's trigger).
+    sse_drops: Arc<AtomicUsize>,
     /// The SSE broadcast channel: whatever lands here is written on
     /// EVERY open /api/event stream (the scripted turn).
     broadcast: Arc<Mutex<std::collections::VecDeque<String>>>,
@@ -299,6 +303,7 @@ fn spawn_scripted_server(long_transcript: bool) -> (String, Arc<Shared>) {
         prompt_posts: Arc::new(AtomicUsize::new(0)),
         interrupt_posts: Arc::new(AtomicUsize::new(0)),
         model_posts: Arc::new(AtomicUsize::new(0)),
+        sse_drops: Arc::new(AtomicUsize::new(0)),
         broadcast,
         long_transcript,
     });
@@ -351,6 +356,13 @@ fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
         let response =
             b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\n\r\n";
         if socket.write_all(response).is_err() {
+            return;
+        }
+        // SURF-2: the scripted server loss — write the headers, then
+        // close (the client's stream ends; the reconnect loop kicks
+        // in with its backoff).
+        if shared.sse_drops.load(Ordering::SeqCst) > 0 {
+            shared.sse_drops.fetch_sub(1, Ordering::SeqCst);
             return;
         }
         // Broadcast loop: write whatever the scripted turn queued, then
@@ -1007,6 +1019,66 @@ fn pty_engine_cycle_body() {
         assert!(!empty.contains("engine draft"), "ctrl+c cleared the draft: {empty:?}");
         let _ = writer.write_all(b"\x03");
         std::thread::sleep(Duration::from_millis(200));
+        let _ = writer.write_all(b"\x03");
+    });
+}
+
+/// SURF-2 (auditB #2): the Reconnecting overlay — a scripted server
+/// loss (three dropped SSE streams) paints "Connection lost…" over the
+/// dimmed frame after the 1 s retry threshold, and clears when the
+/// connection recovers (app.tsx:1294-1315 + reconnecting.tsx).
+#[test]
+fn pty_reconnecting_overlay_on_loss_and_recovery() {
+    let sandbox = sandbox_env("reconnect");
+    let _ = sandbox;
+    let (url, shared) = spawn_scripted_server(false);
+    // Drop the first THREE event streams: attempts at +0.5 s, +1.5 s,
+    // +3.5 s fail; the 4th (≈ +7.5 s) recovers — the overlay anchors
+    // at the last transition (+3.5 s) and shows at +4.5 s.
+    shared.sse_drops.store(3, Ordering::SeqCst);
+    drive(&url, move |boot, mut writer| {
+        let probe = || Boot { output: Arc::clone(&boot.output) };
+        assert!(
+            wait_for_after(&probe(), "█▀▀█".as_bytes(), 0, Duration::from_secs(5)),
+            "the home wordmark rendered"
+        );
+        assert!(
+            wait_for_after(
+                &probe(),
+                b"Connection lost",
+                0,
+                Duration::from_secs(20),
+            ),
+            "the Reconnecting overlay appeared after the retry threshold"
+        );
+        assert!(
+            wait_for_after(&probe(), b"Reconnecting to the server automatically.", 0, Duration::from_secs(20)),
+            "the managed-copy line (unmanaged wording)"
+        );
+        // Recovery: the overlay's spinner repaints stop — the count of
+        // headline occurrences freezes once the stream reattaches.
+        let count = |needle: &[u8]| -> usize {
+            let data = boot.output.lock().expect("lock").clone();
+            data.windows(needle.len()).filter(|window| *window == needle).count()
+        };
+        let mut stable = 0usize;
+        let mut last = count(b"Connection lost");
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(500));
+            let now = count(b"Connection lost");
+            if now == last {
+                stable += 1;
+                if stable >= 6 {
+                    break;
+                }
+            } else {
+                stable = 0;
+                last = now;
+            }
+        }
+        assert!(stable >= 6, "the overlay stopped repainting (recovered) — last {last}, stable {stable}");
+        // The recovered shell still works: exit cleanly.
         let _ = writer.write_all(b"\x03");
     });
 }

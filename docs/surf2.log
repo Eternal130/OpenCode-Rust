@@ -67,3 +67,29 @@ DEFERRED: the image card's working-tree halfblock preview
 (DiffViewerImage's loaded bitmap — R-07 surface, needs the file
 fetch + halfblock mount); export dialogs (dialog-export-* — v2 diff
 export menu); file right-click menu (no context-menu model, auditA).
+
+## Phase 3 — the state overlays (auditB #2)
+- components/overlays.rs (NEW): Reconnecting (full-screen scrim
+  RGBA(0,0,0,150) via the backdrop dim math; centered 48-wide
+  maxWidth-90% raised box, pad 1/1/2/2, gap 1; "Connection lost…" +
+  muted "Reconnecting to the server automatically."; braille spinner
+  animated off the store clock — reconnecting.tsx:8-39) and
+  StartupLoading (bottom=1 centered pill, raised bg, pad 1,
+  spinner + "Loading plugins…"/"Finishing startup…" muted —
+  startup-loading.tsx:54-61).
+- store: connection transitions stamp connection_since
+  (app.tsx:1298-1315's effect re-arm); reconnecting_overlay_visible
+  thresholds — Reconnecting 1000 ms / initial+failed 5000 ms
+  (:1308-1314). StartupLoading machine (wait 500 ms → show →
+  3 s hold after ready with the copy flip, startup-loading.tsx:13-47)
+  + set_plugins_ready (the run loop fires it after plugin boot).
+- frame(): overlay_app_state paints after the toast layer
+  (StartupLoading zIndex 5000 < Reconnecting 10000, app.tsx:1390-93).
+- ingest: a Resync marks the connection Connected (a resync only
+  happens after a successful subscribe) — servers that never emit the
+  server.connected event no longer sit in Connecting forever, which
+  would have scrimmed healthy sessions.
+- PTY proof: pty_reconnecting_overlay_on_loss_and_recovery — 3
+  dropped SSE streams → overlay appears after the threshold and
+  clears on the 4th connect (harness: Shared.sse_drops).
+- 752 oc-tui tests green.
