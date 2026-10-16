@@ -84,6 +84,7 @@ pub fn handle_dialog_key(
         | DialogKind::QueuedPrompts
         | DialogKind::ThemeList
         | DialogKind::Help
+        | DialogKind::Plugins
         | DialogKind::Worktrees
         | DialogKind::WorktreeDeleteConfirm { .. }
         | DialogKind::MessageActions { .. }
@@ -384,6 +385,7 @@ pub fn render_overlay_with_options(
         | DialogKind::ToolOutput { .. }
         | DialogKind::DiffSource
         | DialogKind::DiffHelp
+        | DialogKind::Plugins
         | DialogKind::Mcp
         | DialogKind::McpError { .. }
         | DialogKind::Status
@@ -554,8 +556,16 @@ pub fn execute_submission(
             return crate::components::command_palette::Dispatch::Handled;
         }
         // The rows-only surfaces (diff shortcuts, status, pair,
-        // debug): informational submits just close.
-        Some(DialogKind::DiffHelp | DialogKind::Status | DialogKind::Pair | DialogKind::Debug) => {
+        // debug): informational submits just close. The plugin
+        // manager's rows are informational too (enable state is not
+        // modeled — lane KM).
+        Some(
+            DialogKind::DiffHelp
+            | DialogKind::Status
+            | DialogKind::Pair
+            | DialogKind::Debug
+            | DialogKind::Plugins,
+        ) => {
             store.clear_dialogs();
             return crate::components::command_palette::Dispatch::Handled;
         }

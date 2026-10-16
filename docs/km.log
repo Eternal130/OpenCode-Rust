@@ -1,0 +1,101 @@
+# Lane KM — oc-tui serial chain (after SURF-2; builds on IF, merged)
+
+Worktree: .worktrees/lane-km (branch lane/km, off main 3d7a240).
+Scope (auditA remaining findings, 1:1 with v2):
+1. #8a Keymap completion — the 53 v2 bindings with no rust entry
+   (minus SURF-2's 9 diff-family additions), the 6 rust-only
+   entries + 5 divergent diff defaults reconciliation, dispatchers
+   for orphan commands, parity_tests grown to FULL v2 coverage.
+2. #8b Tab strip advanced interactions — middle-click close,
+   right-click context menu (v2 TabContextMenu contents), drag
+   reorder, close-hold.
+3. #9 Tool-row affordances — the 10 transcript affordances
+   (expand/error-expand/BlockTool gating/task-nav/execute-details)
+   + clickable links (ui/link.tsx).
+4. #10 Toast action reachable from input (keyboard + pointer) +
+   home footer "N MCP failed" chips get hit rects.
+
+Verification: affected-crate nextest + PTY proofs + rig --quick
+(boot-home, multi-session, tabs-keyboard, tabs-live-session, palette).
+
+## Baseline survey (2026-10-17)
+- IF + SURF-2 are IN main (git merge-base main lane/if = lane/if head).
+- auditA's 53 missing: SURF-2 landed 9 (diff.down/up/page.*/half_page.*/
+  first/last/mark_reviewed). Remaining 44 = app.clear, app.debug,
+  app.scrap, opencode.settings, server.pair, service.restart,
+  location.reload, pane.focus.left/right, terminal.select/toggle/close,
+  session.copy.id, session.tab.history.back/forward, session.aside,
+  session.cd, queued_prompt.undo, session.toggle.exploration_grouping,
+  session.verbosity.cycle, composer.terminal.up/down/select,
+  dialog.integration.rename/delete, dialog.worktree.generate,
+  dialog.plugins.error/install/update/check, plugins.list,
+  plugins.install, which-key.* ×12.
+- Rust-only 6: leader (v2 has it too — auditA diff artifact),
+  app.heap_snapshot (port addition), composer.close/tab.prev/tab.next
+  (v2 layer bind: props), dialog.project_copy.generate (v2 id is
+  dialog.worktree.generate — RENAME), + found: composer.subagent.
+  toggle-activity (layer registration) and diff layer's app.exit
+  rebind (SURF-2, registered) — both to register.
+- Found a DUPLICATE table row: dialog_mcp_toggle appears twice
+  (bind names "dialog_mcp_toggle" and "dialog.mcp.toggle").
+- 5 divergent diff defaults: already "none" (SURF-2 phase 1) ✓.
+- Tool-row state: SURF-1 landed tool-cell hits (ToggleToolDetail /
+  OpenToolDialog for execute + background shells) — remaining v2
+  semantics: subagent rows navigate to the child session, un-expandable
+  families (read/glob/grep/webfetch/websearch/write/edit/patch) arm
+  only when failed (error expand), links have no hit model.
+- Toast: activate() exists (toast.rs:113) but no input path; MCP
+  failure toasts with action have no producer.
+- Home footer: MCP cell renders (SURF-2) without hit rects; the
+  plugins-failed chip does not render.
+
+## Phase 1 — keymap table completion (auditA #8a)
+- table.rs: +44 v2 entries (the 53-entry backlog minus SURF-2's 9
+  diff-family additions): app.clear ctrl+l; app.debug/app.scrap/
+  opencode.settings/server.pair/service.restart/location.reload
+  "none"; pane.focus.left/right <leader>arrows; terminal.select/
+  toggle/close <leader>down/t/up; session.copy.id, session.aside,
+  session.cd, session.toggle.exploration_grouping,
+  session.verbosity.cycle "none"; session.tab.history.back "none" /
+  forward ctrl+i; queued_prompt.undo ctrl+u (dialog layer);
+  composer.terminal.up up,k / down down,j / select return (composer
+  layer); dialog.integration.rename ctrl+r / delete ctrl+d;
+  dialog.plugins.error space / install shift+i / update ctrl+u /
+  check ctrl+r; plugins.list/plugins.install "none"; which-key ×12
+  (ctrl+alt+k family, base — v2 ships the ids without a component
+  consumer too).
+- Renamed dialog.project_copy.generate → dialog.worktree.generate
+  (v2's table id, keybind.ts:267 — auditA's id divergence).
+- Removed the DUPLICATE dialog.mcp.toggle row (two bind names, one
+  command — the new coverage test's first catch).
+- Dispatchers: tab history back/forward (store walks the recorded
+  TabHistory cursor, stack preserved across the navigate);
+  queued_prompt.undo (removes the LAST queued prompt, miss → error
+  toast); session.copy.id (OSC-52 clipboard + info toast);
+  session.cd (WorkingDirectory select); session.toggle.
+  exploration_grouping (new store signal, wired into the transcript
+  walk's group_exploration); plugins.list (DialogKind::Plugins
+  select — registered plugin ids, enable state not modeled);
+  app.clear + the surfaceless families (terminal/pane/which-key/
+  scrap/debug/restart/aside/verbosity/plugins.install/integration/
+  plugin-dialog/composer.terminal) → consumed Handled no-ops (v2's
+  keymap eats the stroke with no handler either).
+- toast.activate PORT ADDITION (ctrl+alt+t, palette Prompt): v2's
+  toast action is pointer-only; the port reaches it from the input
+  layer (auditA #10's keyboard half). ToastOptions gained
+  action_command (v2's action.run → the dot command) and modal (the
+  F11 gate narrowed to the Session-failed/send-failure surfaces —
+  v2 toasts never block typing; the new MCP-failure toasts stay
+  transparent).
+- set_mcp_servers now produces v2's toast-once alerts (app.tsx:
+  522-545): failed/needs_auth transitions, per-server dedup, action
+  "Open MCP servers" → mcp.list.
+- parity_tests: table_covers_the_full_v2_default_table — the
+  generated 242-entry v2 corpus (keybind.ts Definitions) + leader:
+  id+default equality both directions, duplicates by (id, layer),
+  registered divergences (app.exit decollision) and port additions
+  (heap_snapshot, composer layer commands, diff-layer app.exit,
+  toast.activate). The resolution-parity test grew with the table
+  (>190 spec cases) — every new binding resolves on BOTH engines.
+- Verification: cargo nextest -p oc-tui -p oc-tui-core → 838/838
+  pass; clippy 0 warnings; fmt clean.
