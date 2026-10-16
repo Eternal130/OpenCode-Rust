@@ -19,3 +19,43 @@ Items (1:1 with v2 semantics):
    with v2's toggle semantics.
 5. Dialog ✕ family (auditA #6) — the shared header close affordance +
    the Help `ok` button row (the port's existing dialogs' v2 buttons).
+
+## Item 2 — hit-registry lifetime + route gating (auditA #2) — DONE (commit ae5524f)
+
+Root cause: `set_transcript_hit_rows` (session.rs:304) and
+`set_footer_location_hit` (session.rs:660) were written only by the
+session render; `navigate()` (store.rs:3018, the only `route.set`)
+never cleared them, and `mouse_event`'s Up(Left)/Moved arms read both
+registries without a route gate — after Session → Home a release on a
+stale row rect toggled the previous session's group / opened
+WorkingDirectory with stale coords, and Moved could flip hover.
+
+Fix: `Store::clear_route_pointer_registries()` on every navigate
+(+ sidebar wheel geometry, item 1); Up(Left) transcript loop requires
+`hit.session_id == route session`; footer-location Up + Moved hover
+gated on `Route::Session`. Tests:
+`route_change_clears_the_pointer_registries`,
+`home_release_fires_no_stale_transcript_or_location_hits` (pins the
+clear AND the gate independently via a re-injected stale row).
+
+## Item 1 — mouse wheel everywhere (auditA #1) — DONE (commit e630880)
+
+Root cause: `MouseEventKind::Scroll*` matched the catch-all `_ => {}`
+arm — no wheel surface existed.
+
+Fix (modal-first routing in `mouse_event`):
+- dialog → `SelectState::scroll_window_by` (3 rows/notch, window
+  only — the selection never moves, v2's dialog scrollbox);
+- permission → consumed (the body renders all lines; no leak);
+- sidebar columns → `Store::sidebar_scroll_by` (3/notch, clamped by
+  `content_height - viewport`, geometry recorded by the session
+  render; hidden pane/route change resets);
+- transcript → one notch = `session.page.up/down` through the SAME
+  `ScrollCommand::PageUp/PageDown` driver the keys use — the E1
+  half-page math (±viewport/2, js_round half→+∞, sticky re-arm);
+  `wheel_scrolls_the_transcript_half_a_page_per_notch` asserts the
+  numeric landing AND equality with the `pageup` key path;
+- diff-viewer hook point documented at the arm (dead code until it
+  mounts — auditA §2.12).
+Sidebar render: `render_sidebar_scrolled` (chrome pinned, slot
+clipped at the footer stack); solid path threads the offset.
