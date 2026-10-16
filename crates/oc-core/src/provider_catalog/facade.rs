@@ -62,8 +62,8 @@ use crate::provider_catalog::Catalog;
 /// catalog-listed but unported provider must fail cleanly).
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ProviderError {
-    /// The provider's protocol is not ported to oc-ai (bedrock, vertex, and
-    /// the `aisdk:` shims for now).
+    /// The provider's protocol is not ported to oc-ai (the `aisdk:` shims
+    /// and any future package without a native binding).
     #[error("provider `{provider}` uses package `{package}`, which has no ported protocol (yet)")]
     UnsupportedProtocol { provider: String, package: String },
     /// No such provider in the catalog.

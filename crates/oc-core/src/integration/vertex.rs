@@ -80,7 +80,11 @@ fn parse_adc(content: &str) -> Result<Option<AuthorizedUser>, String> {
     }
 }
 
-async fn refresh(http: &reqwest::Client, adc: &AuthorizedUser) -> Result<String, String> {
+async fn refresh(
+    http: &reqwest::Client,
+    adc: &AuthorizedUser,
+    token_url: &str,
+) -> Result<String, String> {
     #[derive(serde::Deserialize)]
     struct TokenResponse {
         access_token: Option<String>,
@@ -93,7 +97,7 @@ async fn refresh(http: &reqwest::Client, adc: &AuthorizedUser) -> Result<String,
         ("grant_type", "refresh_token"),
     ];
     let response = http
-        .post(TOKEN_URL)
+        .post(token_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .header("Accept", "application/json")
         .form(&form)
@@ -121,11 +125,17 @@ impl IntegrationHost {
     /// file exists or it is a service account (env ADC still applies at
     /// request time).
     pub async fn vertex_binding(&self) -> Option<ProviderBinding> {
+        self.vertex_binding_with_token_url(TOKEN_URL).await
+    }
+
+    /// The binding against an injectable token endpoint (tests replay the
+    /// refresh through a mock).
+    pub async fn vertex_binding_with_token_url(&self, token_url: &str) -> Option<ProviderBinding> {
         let _ = CLOUD_PLATFORM_SCOPE; // scope folded into the refresh grant
         let path = adc_paths().into_iter().find(|path| path.is_file())?;
         let content = tokio::fs::read_to_string(&path).await.ok()?;
         let adc = parse_adc(&content).ok()??;
-        let token = refresh(self.http(), &adc).await.ok()?;
+        let token = refresh(self.http(), &adc, token_url).await.ok()?;
         Some(ProviderBinding {
             base_url: None,
             // The resolver merges this into the model connection as the
