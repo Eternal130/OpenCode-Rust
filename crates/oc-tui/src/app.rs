@@ -519,6 +519,68 @@ impl App {
                     }
                 }
             }
+            // The wheel (auditA #1 — `MouseEventKind::Scroll*` was
+            // unhandled anywhere): v2 forwards wheel events into the
+            // focused scrollbox (`session-frame.tsx:310-317` hands
+            // the transcript's scroll renderable
+            // `processMouseEvent`; every dialog list is a scrollbox;
+            // the sidebar's content slot is one). Routing order
+            // mirrors the modal-first pointer table: dialog →
+            // permission → sidebar columns → the transcript.
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let down = matches!(mouse.kind, MouseEventKind::ScrollDown);
+                // A modal select's option window scrolls WITHOUT
+                // moving the selection (v2's scrollbox; the rows
+                // keep their own pointer tracking). Terminal-wheel
+                // semantics: 3 rows a notch (opentui's own
+                // `direction === "up" ? -3 : 3` delta).
+                if !self.store.dialogs().is_empty() {
+                    if self.dialog_scroll_window_by(if down { 3 } else { -3 }) {
+                        self.store.request_redraw();
+                    }
+                    return;
+                }
+                // The permission body's content region doesn't
+                // window in the port (it renders every line) — the
+                // wheel is consumed, never leaked to the transcript
+                // underneath (v2's overlay owns the pointer).
+                if self.permission_live() {
+                    return;
+                }
+                if let Route::Session { session_id } = self.store.route() {
+                    // The sidebar's content slot: wheel over the
+                    // pane's columns scrolls the sections (v2's
+                    // `sidebar.content` scrollbox).
+                    if self.store.sidebar_scroll().contains_col(col)
+                        && self.store.sidebar_scroll_by(if down { 3 } else { -3 })
+                    {
+                        self.store.request_redraw();
+                        return;
+                    }
+                    // The transcript: v2's wheel drives the scroll
+                    // renderable; the port routes it through the
+                    // SAME driver the page keys use — one notch =
+                    // `session.page.up/down` (the E1 half-page math:
+                    // ±viewport/2 with js_round, sticky re-arming at
+                    // the tail — `scroll_driver_matches_the_ported_
+                    // scrollbar_math` pins the exact landing).
+                    let command = if down {
+                        oc_tui_core::scroll::ScrollCommand::PageDown
+                    } else {
+                        oc_tui_core::scroll::ScrollCommand::PageUp
+                    };
+                    self.store.scroll_command(&session_id, command);
+                    self.store.request_redraw();
+                }
+                // Home has no scroll surface. DIFF-VIEWER HOOK POINT:
+                // when `components/diff_viewer.rs` mounts (auditA
+                // §2.12 — currently dead code: no route, no
+                // dispatcher arm), its file tree + hunk panes own the
+                // wheel here (v2 `diff-viewer.tsx`: two scrollboxes),
+                // gated on the viewer's route/layer ABOVE the
+                // transcript arm — wire `diff.down/up` line steps,
+                // not the page math.
+            }
             _ => {}
         }
     }
@@ -532,6 +594,22 @@ impl App {
             return None;
         }
         self.store.dialog_option_rows().into_iter().position(|option_row| option_row == Some(row))
+    }
+
+    /// Wheel-scroll the top dialog's option window (auditA #1): v2's
+    /// dialog lists are scrollboxes — the wheel moves the WINDOW,
+    /// never the selection (the rows' own pointer tracking stays
+    /// independent, `dialog-select.tsx`'s scrollbox wheel). `false`
+    /// when the window cannot move (short list / already at an end).
+    fn dialog_scroll_window_by(&self, delta: i32) -> bool {
+        let Some(entry) = self.store.top_dialog() else { return false };
+        let props = crate::components::command_palette::select_props_for_entry(&entry, &self.store);
+        let height = usize::from(self.size.1);
+        let mut moved = false;
+        self.store.update_dialog(|top| {
+            moved = top.select.scroll_window_by(&props, height, delta);
+        });
+        moved
     }
 
     /// The strip's layout inputs RIGHT NOW: the store tabs plus the
@@ -4522,9 +4600,12 @@ fn footer_location_hover_and_click() {
     let mut app = App::new((80, 24));
     let clipboard = std::rc::Rc::new(crate::clipboard::RecordingClipboardSink::default());
     app.store.set_clipboard_sink(std::rc::Rc::clone(&clipboard) as std::rc::Rc<_>);
-    // The hit rect is recorded by the render pass whenever the label
-    // paints (the live routes render it once the #4 footer-slot lane
-    // lands; the seam is exercised directly here).
+    // The hit rect is recorded by the SESSION render whenever the
+    // label paints (route-gated since lane/if — a stale rect must
+    // never fire on Home); the seam is exercised directly here on
+    // the session route it belongs to.
+    app.store.open_tab("s1", Some("S".to_owned()));
+    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
     app.store.set_footer_location_hit(Some(crate::store::FooterLocationHit {
         directory: "/tmp/opencode/project".into(),
         row: 22,
@@ -5199,5 +5280,163 @@ mod core_interaction_tests {
             ),
         );
         assert!(!app.store.location_hovered(), "the stale rect cannot arm hover on home");
+    }
+
+    // -- lane/if item 1: the wheel (auditA #1) ------------------------------
+
+    /// `Math.round` with halves toward +∞ (opentui's js_round — the
+    /// E1 scroll math's rounding rule).
+    fn js_round(value: f64) -> usize {
+        value.floor() as usize + usize::from(value.fract() >= 0.5)
+    }
+
+    /// The transcript wheel runs the E1 half-page math (auditA #1 +
+    /// ROADMAP wave E1): one notch = `session.page.up/down` —
+    /// ±viewport/2 with js_round (15-row viewport: −7/+8), sticky
+    /// re-arming at the tail — and lands EXACTLY where the page keys
+    /// land.
+    #[test]
+    fn wheel_scrolls_the_transcript_half_a_page_per_notch() {
+        use crate::components::message::model::{Message, Part, PartTime};
+        use crossterm::event::MouseEventKind;
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("Long".to_owned()));
+        let mut messages = Vec::new();
+        for index in 0..20 {
+            messages.push(Message::User {
+                id: format!("u{index}"),
+                text: format!("turn {index} of the long transcript"),
+                created: index,
+                files: Vec::new(),
+            });
+            messages.push(Message::Assistant {
+                id: format!("a{index}"),
+                agent: "build".into(),
+                model: "fixture/fixture".into(),
+                parts: vec![Part::Text { text: format!("answer {index}"), time: PartTime::default() }],
+                finish: Some("stop".into()),
+                error: None,
+                time: PartTime::default(),
+                tokens: None,
+                usage_total: None,
+            });
+        }
+        app.store.set_messages("s1", messages);
+        let sticky = app.frame_text();
+        assert!(sticky.contains("answer 19"), "sticky at the tail: {sticky}");
+        let metrics = app.store.transcript_metrics("s1");
+        let viewport = metrics.viewport;
+        let max = metrics.content_height.saturating_sub(viewport);
+        assert_eq!(app.store.scroll_offset("s1"), max, "sticky sits at the maximum");
+
+        // One wheel notch up: -(viewport/2) with js_round (half toward
+        // +∞) — the E1 numbers (15-row viewport ⇒ −7).
+        app.mouse_event(&mouse(MouseEventKind::ScrollUp, 40, 10));
+        let expected = js_round(max as f64 - viewport as f64 / 2.0);
+        assert_eq!(
+            app.store.scroll_offset("s1"),
+            expected,
+            "wheel-up = pageup's half-page math (viewport {viewport}, max {max})"
+        );
+        let freed = app.frame_text();
+        assert!(!freed.contains("answer 19"), "the tail left the view: {freed}");
+
+        // The wheel and the KEY land on the same offset: re-stick,
+        // then pageup — identical math, identical result.
+        app.press("end");
+        assert_eq!(app.store.scroll_offset("s1"), max, "end re-sticks");
+        app.press("pageup");
+        assert_eq!(
+            app.store.scroll_offset("s1"),
+            expected,
+            "the page key and the wheel agree"
+        );
+
+        // Wheel down from the head: +(viewport/2) js_round (⇒ +8) —
+        // then repeated notches re-reach the tail (sticky re-arms).
+        for _ in 0..8 {
+            app.mouse_event(&mouse(MouseEventKind::ScrollDown, 40, 10));
+        }
+        let bottom = app.frame_text();
+        assert!(
+            bottom.contains("answer 19"),
+            "enough wheel notches re-stick to the tail: {bottom}"
+        );
+        assert_eq!(app.store.scroll_offset("s1"), max, "sticky at the maximum again");
+    }
+
+    /// The dialog wheel scrolls the option WINDOW, never the
+    /// selection (v2's dialog lists are scrollboxes; the rows keep
+    /// their own pointer tracking) — 3 rows a notch (opentui's
+    /// terminal wheel delta), clamped at both ends.
+    #[test]
+    fn wheel_scrolls_the_dialog_window_without_moving_the_selection() {
+        use crate::store::DialogKind;
+        let mut app = App::new((80, 24));
+        // The command palette: the registry is long enough to window
+        // at 24 rows (viewport = 24/2 − 6 = 6); the frame records the
+        // rows, the selection starts at 0.
+        app.store.open_dialog(DialogKind::CommandPalette, crate::store::DialogSize::Medium);
+        let _ = app.frame();
+        let before = app
+            .store
+            .top_dialog()
+            .map(|entry| (entry.select.selected, entry.select.scroll))
+            .expect("the dialog is open");
+        assert_eq!(before.0, 0, "the selection starts at the first row");
+        assert!(
+            app.store.dialog_option_rows().iter().any(Option::is_some),
+            "the palette windows (rows recorded)"
+        );
+
+        app.mouse_event(&mouse(crossterm::event::MouseEventKind::ScrollDown, 40, 12));
+        let after = app
+            .store
+            .top_dialog()
+            .map(|entry| (entry.select.selected, entry.select.scroll))
+            .expect("the dialog stays open");
+        assert_eq!(after.0, 0, "the selection did NOT move");
+        assert_eq!(after.1, before.1 + 3, "the window moved 3 rows (one notch)");
+        // Up returns (clamped at 0, never negative).
+        app.mouse_event(&mouse(crossterm::event::MouseEventKind::ScrollUp, 40, 12));
+        app.mouse_event(&mouse(crossterm::event::MouseEventKind::ScrollUp, 40, 12));
+        let back = app
+            .store
+            .top_dialog()
+            .map(|entry| (entry.select.selected, entry.select.scroll))
+            .expect("the dialog stays open");
+        assert_eq!(back.1, 0, "the window clamped at the top");
+        assert_eq!(back.0, 0, "the selection still did not move");
+    }
+
+    /// The sidebar wheel: over the pane's columns the content slot
+    /// scrolls (3 a notch, clamped by content − viewport); outside
+    /// them the same event falls through to the transcript.
+    #[test]
+    fn wheel_over_the_sidebar_columns_scrolls_the_content_slot() {
+        use crossterm::event::MouseEventKind;
+        let mut app = App::new((160, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        // A rendered docked pane records the geometry; force an
+        // overflowing content slot (content 40 rows, viewport 10).
+        app.store.set_sidebar_scroll_geometry(40, 10, Some((118, 42)));
+
+        app.mouse_event(&mouse(MouseEventKind::ScrollDown, 130, 10));
+        assert_eq!(app.store.sidebar_scroll().offset, 3, "one notch = 3 rows down");
+        for _ in 0..9 {
+            app.mouse_event(&mouse(MouseEventKind::ScrollDown, 130, 10));
+        }
+        assert_eq!(
+            app.store.sidebar_scroll().offset,
+            30,
+            "clamped at content − viewport (40 − 10)"
+        );
+        app.mouse_event(&mouse(MouseEventKind::ScrollUp, 130, 10));
+        assert_eq!(app.store.sidebar_scroll().offset, 27, "up steps back 3");
+        // Outside the pane's columns the wheel belongs to the
+        // transcript — the sidebar offset must not move.
+        app.mouse_event(&mouse(MouseEventKind::ScrollDown, 10, 10));
+        assert_eq!(app.store.sidebar_scroll().offset, 27, "the transcript wheel left the pane alone");
     }
 }
