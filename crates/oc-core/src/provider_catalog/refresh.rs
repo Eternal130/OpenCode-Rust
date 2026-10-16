@@ -68,6 +68,10 @@ pub struct CatalogService {
     kv: Arc<dyn CatalogKv>,
     clock: Arc<dyn Clock>,
     ttl: Duration,
+    /// Optional bus: publishes `models-dev.refreshed` after every
+    /// `RefreshOutcome::Updated` (v2 models-dev.ts:416-422 — the refresh
+    /// loop's digest-change notification; `SkipDigest` stays silent).
+    bus: Option<crate::bus::Bus>,
 }
 
 impl CatalogService {
@@ -84,6 +88,7 @@ impl CatalogService {
             kv,
             clock,
             ttl: REFRESH_TTL,
+            bus: None,
         }
     }
 
@@ -91,6 +96,15 @@ impl CatalogService {
     #[must_use]
     pub fn with_ttl(mut self, ttl: Duration) -> Self {
         self.ttl = ttl;
+        self
+    }
+
+    /// Attach the bus for `models-dev.refreshed` publication
+    /// (`models-dev.ts:422` — published globally, empty payload, only
+    /// after a digest-changing refresh).
+    #[must_use]
+    pub fn with_bus(mut self, bus: crate::bus::Bus) -> Self {
+        self.bus = Some(bus);
         self
     }
 
@@ -133,6 +147,15 @@ impl CatalogService {
         self.kv.set(CACHE_KEY, &entry.to_string()).await;
         *self.catalog.write() = Arc::new(catalog);
         self.version.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // v2 publishes `ModelsDev.Event.Refreshed` ({}) after a
+        // digest-changing refresh (models-dev.ts:416-422) — best-effort:
+        // a failed notification never fails the refresh.
+        if let Some(bus) = &self.bus {
+            if let Some(def) = crate::bus::registry::by_type(crate::bus::registry::MODELS_DEV_REFRESHED) {
+                let options = crate::bus::PublishOptions { global: true, ..Default::default() };
+                let _ = bus.publish(def, serde_json::json!({}), options).await;
+            }
+        }
         Ok(RefreshOutcome::Updated)
     }
 }

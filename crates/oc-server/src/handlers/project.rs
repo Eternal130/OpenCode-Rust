@@ -257,23 +257,65 @@ async fn worktree_create(
             let directory_str = directory.to_string_lossy().into_owned();
             // The git-side `worktree add` lands with the vcs lane
             // (TODO(phase-9)); the directory binding is registered now.
-            tx.execute(
+            let inserted = tx.execute(
                 "INSERT OR IGNORE INTO worktree (project_id, directory, strategy, time_created) \
                  VALUES (?1, ?2, 'manual', ?3)",
                 (after_project_id, directory_str.clone(), oc_core::database::migrations::now_ms()),
             )?;
-            Ok(Some(directory_str))
+            Ok(Some((directory_str, inserted != 0)))
         })
         .await
         .map_err(|error| {
             crate::errors::debug_cause("project:unknown_ref", &error);
             ApiError::unknown_ref()
         })?;
-    let Some(directory) = directory else {
+    let Some((directory, inserted)) = directory else {
         return Err(ApiError::project_not_found(&body_project_id(&body)));
     };
     let _ = branch;
+    // worktree.ts:228 — only a row-owning create publishes.
+    if inserted {
+        publish_worktree_updated(&state, &body_project_id(&body)).await;
+    }
     Ok(axum::Json(json!({ "directory": directory })).into_response())
+}
+
+/// `worktree.updated` `{projectID}` — v2 publishes it after every
+/// row-owning mutation (`changed(projectID, true)`, worktree.ts:128-131 +
+/// create:228 / remove:270), routed to the project's location.
+async fn publish_worktree_updated(state: &SharedState, project_id: &str) {
+    let Some(definition) = oc_core::bus::registry::by_type(oc_core::bus::registry::WORKTREE_UPDATED)
+    else {
+        return;
+    };
+    let project_id = project_id.to_owned();
+    let lookup_id = project_id.clone();
+    let directory: Option<String> = state
+        .engine
+        .db
+        .transaction(move |tx| {
+            Ok(tx
+                .conn()
+                .query_row(
+                    "SELECT worktree FROM project WHERE id = ?1",
+                    (lookup_id,),
+                    |row| row.get(0),
+                )
+                .ok())
+        })
+        .await
+        .ok()
+        .flatten();
+    let location = directory.map(|directory| oc_schema::location::Ref {
+        directory: oc_schema::common::AbsolutePath(directory),
+        workspace_id: None,
+    });
+    let options = oc_core::bus::PublishOptions { location, ..Default::default() };
+    let _ = state
+        .engine
+        .bus
+        .publish(&definition, serde_json::json!({ "projectID": project_id }), options)
+        .await;
 }
 
 async fn worktree_refresh(axum::Json(_body): axum::Json<Value>) -> Result<Response, ApiError> {
@@ -311,6 +353,10 @@ async fn worktree_remove(
             format!("Worktree not found: {outer_directory}"),
             None,
         ));
+    }
+    // worktree.ts:270 — removal of an owned row publishes `worktree.updated`.
+    if removed > 0 {
+        publish_worktree_updated(&state, &body_project_id(&body)).await;
     }
     Ok(no_content())
 }
