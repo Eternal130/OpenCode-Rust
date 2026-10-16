@@ -24,6 +24,7 @@ pub mod dialog_solid;
 pub mod dialog_worktrees;
 pub mod diff_viewer;
 pub mod diff_viewer_mount;
+pub mod overlays;
 pub mod footer;
 pub mod home;
 /// Lane M5: the home route chrome on opentui-solid (the
