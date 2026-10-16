@@ -1057,6 +1057,8 @@ pub struct Store {
     /// The diff fetch seam (`vcs.base`/`vcs.diff` through the loop
     /// fetcher; tests record).
     diff_sink: std::cell::RefCell<Rc<dyn DiffSink>>,
+    /// The open-url seam (lane KM — tests observe link clicks).
+    open_url_sink: std::cell::RefCell<Option<Rc<dyn Fn(String)>>>,
     /// SURF-2 `DialogPair`'s resource state (server.info + pair).
     pair: Signal<PairState>,
     /// SURF-2 the MCP toggle seam (mcp.connect/disconnect).
@@ -1523,6 +1525,14 @@ pub enum TranscriptHitAction {
     /// Dismiss the staged-revert banner (`RevertMessage`'s `onMouseUp`
     /// → `session.revert.clear`, index.tsx:2105-2111).
     DismissRevert { session_id: String },
+    /// Navigate to a subagent task's child session (the Subagent row's
+    /// `onClick: () => navigate({type:"session", sessionID})`,
+    /// index.tsx:3107-3112 — lane KM, auditA #9).
+    NavigateToSession { session_id: String },
+    /// Open a markdown link (`ui/link.tsx:27`'s `onMouseUp` →
+    /// `openUrl(href)` — lane KM, auditA #9). The rect is the link
+    /// label's run extent.
+    OpenLink { url: String },
 }
 
 impl TranscriptHitAction {
@@ -1536,7 +1546,9 @@ impl TranscriptHitAction {
             | Self::MessageActions { .. }
             | Self::ToggleToolDetail { .. }
             | Self::OpenToolDialog { .. }
-            | Self::DismissRevert { .. } => None,
+            | Self::DismissRevert { .. }
+            | Self::NavigateToSession { .. }
+            | Self::OpenLink { .. } => None,
         }
     }
 }
@@ -2017,6 +2029,7 @@ impl Store {
             sidebar_mcp_open,
             diff_viewer,
             diff_sink: std::cell::RefCell::new(Rc::new(NoDiffSink)),
+            open_url_sink: std::cell::RefCell::new(None),
             pair,
             mcp_toggle_sink: std::cell::RefCell::new(Rc::new(NoMcpToggleSink)),
             pair_refresh_sink: std::cell::RefCell::new(None),
@@ -4019,6 +4032,28 @@ impl Store {
     }
 
     // -- queued prompts (Wave A: mini/queue.rs lifted into the main store) ----
+
+    /// `openUrl` (`ui/link.tsx:27` → `util/open.ts`): hand a URL to
+    /// the system opener — `xdg-open` detached, the spawn error
+    /// swallowed (`openUrl(href).catch(() => {})`). A test seam
+    /// records instead of spawning (`set_open_url_sink`).
+    pub fn open_url(&self, url: &str) {
+        if let Some(sink) = self.open_url_sink.borrow().as_ref() {
+            sink(url.to_owned());
+            return;
+        }
+        let _ = std::process::Command::new("xdg-open")
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+
+    /// Swap the open-url seam (tests observe without spawning).
+    pub fn set_open_url_sink(&self, sink: Option<Rc<dyn Fn(String)>>) {
+        *self.open_url_sink.borrow_mut() = sink;
+    }
 
     /// The queued prompts of one session (the dock + manager rows).
     #[must_use]

@@ -14,6 +14,7 @@
 use crate::components::composer::autocomplete;
 use crate::components::composer::render::{AutocompleteView, FooterHints, PromptView};
 use crate::components::message::list::{render_transcript, TranscriptOptions};
+use crate::components::message::model::ToolStatus;
 use crate::components::session_tabs::{Attention, TabStatus, TabView};
 use crate::components::sidebar::{
     SidebarContextWidget, SidebarMcpWidget, SidebarSections, SidebarView, SIDEBAR_AUTO_BREAKPOINT,
@@ -329,23 +330,18 @@ pub fn render_session(
         transcript
             .rows
             .iter()
-            .filter_map(|row| {
-                let screen_y = content_top + row.y.checked_sub(scroll_offset)?;
+            .flat_map(|row| {
+                let Some(unclipped) = row.y.checked_sub(scroll_offset) else {
+                    return Vec::new();
+                };
+                let screen_y = content_top + unclipped;
                 if screen_y >= content_top + transcript_height {
-                    return None;
+                    return Vec::new();
                 }
-                // The disclosure toggles: EVERY group kind arms
-                // (lane/if item 4 — v2's `useDisclosure` toggle rides
-                // `GroupContent`'s InlineToolRow for Reasoning AND
-                // Exploration, Activity's and Instructions' own rows:
-                // group-view.tsx:152/183/219/256) with a TIGHT rect:
-                // v2's toggle box is the InlineToolRow content
-                // (paddingLeft 3 + the 2-wide icon slot + the label's
-                // own glyphs, `group-view.tsx:176-190`), not the whole
-                // row. The thought rows arm as the minimal-mode
-                // ReasoningHeader toggle (message-parts.tsx:80-86) —
-                // the first line's glyphs.
-                if row.key.starts_with("group:") {
+                // The head-extent helper: the widest first-line run
+                // extent of the row's head placed items (the tight
+                // glyph rect the disclosure toggles arm).
+                let head_extent = || -> (usize, usize) {
                     let heads = row.placed.iter().filter(|item| item.y == row.y);
                     let x = heads.clone().map(|item| item.x).min().unwrap_or_default();
                     let end = heads
@@ -364,6 +360,21 @@ pub fn render_session(
                         })
                         .max()
                         .unwrap_or_default();
+                    (x, end)
+                };
+                // The disclosure toggles: EVERY group kind arms
+                // (lane/if item 4 — v2's `useDisclosure` toggle rides
+                // `GroupContent`'s InlineToolRow for Reasoning AND
+                // Exploration, Activity's and Instructions' own rows:
+                // group-view.tsx:152/183/219/256) with a TIGHT rect:
+                // v2's toggle box is the InlineToolRow content
+                // (paddingLeft 3 + the 2-wide icon slot + the label's
+                // own glyphs, `group-view.tsx:176-190`), not the whole
+                // row. The thought rows arm as the minimal-mode
+                // ReasoningHeader toggle (message-parts.tsx:80-86) —
+                // the first line's glyphs.
+                let primary = if row.key.starts_with("group:") {
+                    let (x, end) = head_extent();
                     (end > x).then(|| crate::store::TranscriptHitRow {
                         session_id: session_id.to_owned(),
                         action: crate::store::TranscriptHitAction::ToggleGroup(row.key.clone()),
@@ -376,69 +387,53 @@ pub fn render_session(
                     // `thought:{message_id}:{part_id}` — the part ids
                     // may contain colons themselves; split at the
                     // FIRST (the message id never does).
-                    let (message_id, part_id) = rest.split_once(':')?;
-                    let heads = row.placed.iter().filter(|item| item.y == row.y);
-                    let x = heads.clone().map(|item| item.x).min().unwrap_or_default();
-                    let end = heads
-                        .map(|item| {
-                            item.x
-                                + item
-                                    .lines
-                                    .first()
-                                    .map(|line| {
-                                        line.runs
-                                            .iter()
-                                            .map(|run| crate::wrap::display_width(&run.text))
-                                            .sum::<usize>()
-                                    })
-                                    .unwrap_or_default()
+                    rest.split_once(':').and_then(|(message_id, part_id)| {
+                        let (x, end) = head_extent();
+                        (end > x).then(|| crate::store::TranscriptHitRow {
+                            session_id: session_id.to_owned(),
+                            action: crate::store::TranscriptHitAction::ToggleThought {
+                                message_id: message_id.to_owned(),
+                                part_id: part_id.to_owned(),
+                            },
+                            y: screen_y,
+                            height: 1,
+                            x,
+                            width: end - x,
                         })
-                        .max()
-                        .unwrap_or_default();
-                    (end > x).then(|| crate::store::TranscriptHitRow {
-                        session_id: session_id.to_owned(),
-                        action: crate::store::TranscriptHitAction::ToggleThought {
-                            message_id: message_id.to_owned(),
-                            part_id: part_id.to_owned(),
-                        },
-                        y: screen_y,
-                        height: 1,
-                        x,
-                        width: end - x,
                     })
                 } else if let Some(rest) = row.key.strip_prefix("tool:") {
                     // SURF-1: a tool detail cell's click surface. The
-                    // action keys on the tool: `execute` (and
-                    // background shells with a `shellID`) open the
-                    // detail dialog (`openDetails` → DialogExecute,
-                    // index.tsx:3207); the shell block / generic tool
-                    // toggle the INLINE expand (ShellDisplay:2897,
-                    // GenericTool:2548). Both the expanded-group
-                    // cells (`tool:`) and the ungrouped part rows
-                    // (`part:`) register.
-                    let (message_id, part_id) = rest.split_once(':')?;
-                    tool_cell_hit(store, session_id, message_id, part_id, row, screen_y)
+                    // action keys on the tool (see `tool_cell_hit`'s
+                    // lane-KM v2 arm table): `execute` + background
+                    // shells open the detail dialog, the subagent row
+                    // navigates to the child session, expandable
+                    // tools/failures toggle the INLINE disclosure.
+                    rest.split_once(':').and_then(|(message_id, part_id)| {
+                        tool_cell_hit(store, session_id, message_id, part_id, row, screen_y)
+                    })
                 } else if let Some(rest) = row.key.strip_prefix("part:") {
-                    let (message_id, part_id) = rest.split_once(':')?;
-                    // Only TOOL parts carry a click surface (text and
-                    // reasoning rows never arm).
-                    let is_tool = {
+                    // TOOL parts carry the tool click surface (SURF-1);
+                    // TEXT/REASONING parts arm their markdown LINK runs
+                    // (lane KM, auditA #9 — ui/link.tsx:27's onMouseUp
+                    // → openUrl).
+                    let part = rest.split_once(':').and_then(|(message_id, part_id)| {
                         let messages = store.messages(session_id);
-                        messages
+                        let part = messages
                             .iter()
                             .find(|message| message.id() == message_id)
                             .and_then(|message| {
                                 crate::components::message::resolve_part(message.parts(), part_id)
-                            })
-                            .is_some_and(|part| {
-                                matches!(part, crate::components::message::model::Part::Tool { .. })
-                            })
-                    };
-                    is_tool
-                        .then(|| {
-                            tool_cell_hit(store, session_id, message_id, part_id, row, screen_y)
+                            });
+                        part.map(|part| {
+                            matches!(part, crate::components::message::model::Part::Tool { .. })
                         })
-                        .flatten()
+                    });
+                    match part {
+                        Some(true) => rest.split_once(':').and_then(|(message_id, part_id)| {
+                            tool_cell_hit(store, session_id, message_id, part_id, row, screen_y)
+                        }),
+                        _ => None,
+                    }
                 } else if row.key == "revert:banner" {
                     // The banner's dismiss surface: the raised block's
                     // full width (`RevertMessage`'s onMouseUp,
@@ -470,7 +465,15 @@ pub fn render_session(
                     })
                 } else {
                     None
+                };
+                let mut hits: Vec<crate::store::TranscriptHitRow> = primary.into_iter().collect();
+                // Lane KM: the text/reasoning rows' LINK runs (every
+                // `part:` row whose primary arm stayed empty — the
+                // tool surfaces never render markdown links).
+                if row.key.starts_with("part:") && hits.is_empty() {
+                    hits.extend(link_hit_rows(session_id, row, screen_y));
                 }
+                hits
             })
             .collect(),
     );
@@ -650,9 +653,52 @@ pub fn render_session(
 /// area under the strip dims under the floating sidebar — v2 blends/// rgba(0,0,0,70) over the content; the text grid has no alpha, so
 /// the scrim paints opaque black (the dominant visual: a dark
 /// backdrop with the pane floating right).
+/// The row's markdown LINK runs (lane KM, auditA #9): every placed
+/// run carrying a `link` URL arms one tight rect — the run's own
+/// glyph extent on its line (`ui/link.tsx`'s `<text>` leaf; the
+/// release fires `openUrl(href)`).
+fn link_hit_rows(
+    session_id: &str,
+    row: &crate::components::message::list::MeasuredRow,
+    screen_y: usize,
+) -> Vec<crate::store::TranscriptHitRow> {
+    let mut hits = Vec::new();
+    for item in &row.placed {
+        for (line_index, line) in item.lines.iter().enumerate() {
+            let mut run_x = item.x;
+            for run in &line.runs {
+                let width = crate::wrap::display_width(&run.text);
+                if let Some(url) = run.link.clone().filter(|_| !run.text.trim().is_empty()) {
+                    hits.push(crate::store::TranscriptHitRow {
+                        session_id: session_id.to_owned(),
+                        action: crate::store::TranscriptHitAction::OpenLink { url },
+                        y: screen_y + item.y + line_index,
+                        height: 1,
+                        x: run_x,
+                        width,
+                    });
+                }
+                run_x += width;
+            }
+        }
+    }
+    hits
+}
+
 /// One tool cell's hit row (the `tool:`/`part:` arm's shared body):
-/// resolves the part, picks the action by canonical tool name and
-/// wraps the head row's glyph extent in the hit rect.
+/// * `execute` + background shells: `openDetails` on click AND on
+///   error-click → the detail dialog (OpenToolDialog, :3207-3218);
+/// * the Subagent/Task row: `onClick` navigates to the child session
+///   (`metadata.sessionID ?? metadata.sessionId`, :3083-3112);
+/// * `write`/`edit`/`patch` BlockTool cards: NO onClick (:2989-3016)
+///   — never arm;
+/// * `read`/`glob`/`grep`/`webfetch`/`websearch` InlineTools carry no
+///   `onClick` (:2991-3081): arm ONLY while failed (the error
+///   reveal — `InlineTool`'s failed branch, :2656-2668);
+/// * the generic tool: `expandable() = input.length > 0` (:2548) —
+///   arm when expandable or failed;
+/// * the shell card: `expandable() = shellID || overflow` (:2927) —
+///   the port approximates always-expandable (registered).
 fn tool_cell_hit(
     store: &Store,
     session_id: &str,
@@ -662,24 +708,46 @@ fn tool_cell_hit(
     screen_y: usize,
 ) -> Option<crate::store::TranscriptHitRow> {
     let messages = store.messages(session_id);
-    let (name, state) = messages
+    let part = messages
         .iter()
         .find(|message| message.id() == message_id)
-        .and_then(|message| crate::components::message::resolve_part(message.parts(), part_id))
-        .and_then(|part| match part {
-            crate::components::message::model::Part::Tool { name, state, .. } => {
-                Some((name.clone(), state.clone()))
-            }
-            _ => None,
-        })?;
+        .and_then(|message| crate::components::message::resolve_part(message.parts(), part_id))?;
+    let (name, state) = match part {
+        crate::components::message::model::Part::Tool { name, state, .. } => (name, state),
+        _ => return None,
+    };
     let canonical = crate::components::message::model::canonical_tool_name(&name).to_owned();
+    let failed = state.error.is_some() || matches!(state.status, ToolStatus::Error);
     let background_shell = canonical == "shell" && state.metadata.contains_key("shellID");
     let action = if canonical == "execute" || background_shell {
+        // openDetails (click AND error-click).
         crate::store::TranscriptHitAction::OpenToolDialog {
             message_id: message_id.to_owned(),
             part_id: part_id.to_owned(),
         }
+    } else if canonical == "subagent" {
+        // The child-session navigation (metadata sessionID/sessionId).
+        let child =
+            state.metadata.get("sessionID").or_else(|| state.metadata.get("sessionId"))?.clone();
+        crate::store::TranscriptHitAction::NavigateToSession { session_id: child }
+    } else if matches!(canonical.as_str(), "write" | "edit" | "patch") {
+        // BlockTool cards without onClick — never clickable (even
+        // failed: the card renders the error text inline, no toggle).
+        return None;
+    } else if matches!(canonical.as_str(), "read" | "glob" | "grep" | "webfetch" | "websearch") {
+        if !failed {
+            return None;
+        }
+        // The failed InlineTool's error reveal.
+        crate::store::TranscriptHitAction::ToggleToolDetail {
+            message_id: message_id.to_owned(),
+            part_id: part_id.to_owned(),
+        }
     } else {
+        // The generic tool: expandable (input present) or failed.
+        if state.input.is_empty() && !failed {
+            return None;
+        }
         crate::store::TranscriptHitAction::ToggleToolDetail {
             message_id: message_id.to_owned(),
             part_id: part_id.to_owned(),

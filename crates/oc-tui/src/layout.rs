@@ -86,7 +86,7 @@ pub struct PlacedLine {
 impl PlacedLine {
     #[must_use]
     pub fn plain(text: impl Into<String>, style: PaintStyle) -> Self {
-        Self { runs: vec![StyledSpan { text: text.into(), style }] }
+        Self { runs: vec![StyledSpan { text: text.into(), style, link: None }] }
     }
 
     /// The line's concatenated text (glyph content, styles aside).
@@ -509,7 +509,7 @@ mod tests {
     const BOLD: PaintStyle = PaintStyle::new().add_modifier(ratatui::style::Modifier::BOLD);
 
     fn span(text: &str, style: PaintStyle) -> StyledSpan {
-        StyledSpan { text: text.to_owned(), style }
+        StyledSpan { text: text.to_owned(), style, link: None }
     }
 
     #[test]

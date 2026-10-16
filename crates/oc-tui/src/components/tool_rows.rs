@@ -206,11 +206,11 @@ pub fn layout_tool_rows(
         .map(|row| {
             let style = row_style(theme, row.failed);
             let icon = tree.text_styled(
-                vec![StyledSpan { text: row.icon.to_string(), style }],
+                vec![StyledSpan { text: row.icon.to_string(), style, link: None }],
                 &BoxSpec::default().width(ICON_WIDTH).shrink(0.0),
             );
             let label = tree.text_styled(
-                vec![StyledSpan { text: row.label.clone(), style }],
+                vec![StyledSpan { text: row.label.clone(), style, link: None }],
                 &BoxSpec::default().grow(1.0).shrink(1.0).min_width(0.0),
             );
             let content = tree.box_node(&BoxSpec::row(), &[icon, label]);
@@ -219,7 +219,7 @@ pub fn layout_tool_rows(
             if error_expanded && row.failed {
                 if let Some(error) = &row.error {
                     let error_text = tree.text_styled(
-                        vec![StyledSpan { text: error.clone(), style }],
+                        vec![StyledSpan { text: error.clone(), style, link: None }],
                         &BoxSpec::default().grow(1.0).shrink(1.0).min_width(0.0),
                     );
                     let error_box =
@@ -256,12 +256,13 @@ fn code_body_node(
         .lines()
         .enumerate()
         .map(|(index, line)| {
-            let gutter = StyledSpan { text: format!("{:>3} ", index + 1), style: muted };
+            let gutter =
+                StyledSpan { text: format!("{:>3} ", index + 1), style: muted, link: None };
             let code_spans: Vec<StyledSpan> = match &highlighted {
                 Some(block) => {
                     crate::components::syntax::line_spans(block, index, base, &theme.syntax)
                 }
-                None => vec![StyledSpan { text: line.to_owned(), style: base }],
+                None => vec![StyledSpan { text: line.to_owned(), style: base, link: None }],
             };
             vec![gutter].into_iter().chain(code_spans).collect()
         })
@@ -270,7 +271,7 @@ fn code_body_node(
         .into_iter()
         .map(|spans| {
             let gutter = tree.text_styled(
-                vec![StyledSpan { text: spans[0].text.clone(), style: spans[0].style }],
+                vec![StyledSpan { text: spans[0].text.clone(), style: spans[0].style, link: None }],
                 &BoxSpec::default().width(CODE_GUTTER_WIDTH).shrink(0.0),
             );
             let body = tree.text_styled(

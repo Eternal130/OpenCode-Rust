@@ -412,6 +412,13 @@ fn pty_mouse_closes_a_tab_and_add_opens_home() {
             std::thread::sleep(Duration::from_millis(200));
             let _ = writer.write_all(&sgr_left_up(62, 0));
             std::thread::sleep(Duration::from_millis(700));
+            // Lane KM: the ✕ close armed v2's close-hold — the layout
+            // FREEZES (the neighbor's ✕ stays under the pointer) until
+            // the pointer leaves the strip or 5 s elapse
+            // (session-tabs.tsx:1536-1543's onMouseOut bounds check).
+            // Route the pointer off the strip to release it.
+            let _ = writer.write_all(&sgr_motion(33, 3));
+            std::thread::sleep(Duration::from_millis(250));
             // One tab left: the ` + ` affordance moved to col 32..35 —
             // a release at 33 only navigates home in the ONE-tab
             // geometry (in the two-tab geometry col 33 is Beta's body
