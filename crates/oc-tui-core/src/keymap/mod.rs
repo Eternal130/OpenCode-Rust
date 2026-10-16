@@ -284,7 +284,12 @@ impl Keymap {
         let mut registry = HashMap::new();
         let mut effective = HashMap::new();
         for def in table {
-            registry.insert(def.command, def);
+            // A command may live in several layers (app.exit also sits
+            // in the diff layer, diff-viewer.tsx:726-732): the FIRST
+            // table row — always the base one — owns the registry
+            // entry AND the effective-binding display, so overrides
+            // and palette titles target base.
+            registry.entry(def.command).or_insert(def);
             for spec in def.defaults.split(',') {
                 let spec = spec.trim();
                 if spec.is_empty() || spec == "none" {
@@ -294,15 +299,14 @@ impl Keymap {
                     layers.entry(def.layer).or_default().push((chord, def.command.to_owned()));
                 }
             }
-            effective.insert(
-                def.command.to_owned(),
+            effective.entry(def.command.to_owned()).or_insert_with(|| {
                 def.defaults
                     .split(',')
                     .map(str::trim)
                     .filter(|spec| !spec.is_empty() && *spec != "none")
                     .map(str::to_owned)
-                    .collect(),
-            );
+                    .collect()
+            });
         }
         let mut keymap = Self {
             engine: EngineSel::active(),
@@ -471,11 +475,17 @@ impl Keymap {
                 }
                 continue;
             }
-            // v2 dot command first, v1 bind name second.
+            // v2 dot command first, v1 bind name second; a command
+            // with extra layer rows (app.exit in diff) resolves to
+            // its BASE definition — the override rebinds the key, the
+            // layer handler precedence stays with the engine.
             let def = self
                 .registry
                 .values()
-                .find(|def| def.command == entry.name || def.bind_name == entry.name)
+                .find(|def| (def.command == entry.name || def.bind_name == entry.name) && def.layer == "base")
+                .or_else(|| {
+                    self.registry.values().find(|def| def.command == entry.name || def.bind_name == entry.name)
+                })
                 .copied();
             let Some(def) = def else {
                 log_skip(&format!("keybind {:?}: unknown command (skipped)", entry.name));
