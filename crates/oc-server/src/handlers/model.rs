@@ -111,9 +111,12 @@ fn supports_text(model: &Value) -> bool {
             .and_then(|caps| caps.get(key))
             .and_then(Value::as_array)
             .map_or(true, |items| {
-                items.iter().any(|item| {
-                    item.as_str().map_or(false, |text| text.starts_with("text"))
-                })
+                // `length === 0 || some(startsWith "text")` — the empty
+                // array is the wildcard, exactly like the reference.
+                items.is_empty()
+                    || items.iter().any(|item| {
+                        item.as_str().map_or(false, |text| text.starts_with("text"))
+                    })
             })
     };
     modality_has_text("input") && modality_has_text("output")
@@ -221,4 +224,56 @@ async fn provider_get(
     let snapshot =
         catalog.provider(&provider_id).ok_or_else(|| ApiError::provider_not_found(&provider_id))?;
     Ok(json_location_data(&location.as_path().to_string_lossy(), provider_json(snapshot)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Model.supportsText` (core model.ts:273-277): empty capabilities
+    /// wildcard to text; otherwise some modality must lead with `text`.
+    #[test]
+    fn supports_text_matches_the_reference_predicate() {
+        assert!(supports_text(&json!({"capabilities": {"input": [], "output": []}})));
+        assert!(
+            supports_text(&json!({"capabilities": {"input": ["text", "image"], "output": ["text"]}}))
+        );
+        assert!(!supports_text(&json!({"capabilities": {"input": ["image"], "output": ["text"]}})));
+        assert!(!supports_text(&json!({"capabilities": {"input": ["text"], "output": ["audio"]}})));
+        // Missing capability blocks wildcard to text (never a false no).
+        assert!(!supports_text(&json!({"capabilities": {"input": ["image"]}})));
+    }
+
+    /// dogfood2 bug 3's miss path — when the configured `model` selection
+    /// resolves to nothing (v2: `byProvider.get(providerID)?.get(modelID)`
+    /// is an exact-map miss, model.ts:262-263 — e.g. "Own/glm-5.3"
+    /// against a `providers.own` key), `Model.default()` serves
+    /// `available.find(supportsText)`: the FIRST text model of the very
+    /// ordering `/api/model` serves (released DESC, custom providers at
+    /// released 0 last), never a synthetic stub of the missed selection.
+    #[tokio::test]
+    async fn model_entries_fallback_is_the_first_available_text_model() {
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let engine = oc_core::engine::Engine::boot(oc_core::engine::EngineOptions::new(
+            tmp.path().to_owned(),
+            tmp.path().to_owned(),
+        ))
+        .await;
+        let location = oc_core::location::LocationRef::new(tmp.path().to_owned(), None);
+        let entries = location_model_entries(&engine, &location);
+        assert!(!entries.is_empty(), "the keyless opencode tier is available offline");
+        let fallback = entries
+            .iter()
+            .find(|model| supports_text(model))
+            .cloned()
+            .expect("an available text model exists");
+        // A REAL registry entry (full Model.Info shape), not a stub of
+        // the missed selection: providerID + id + capabilities blocks.
+        assert!(fallback.get("providerID").is_some_and(Value::is_string));
+        assert!(fallback.get("id").is_some_and(Value::is_string));
+        assert!(
+            fallback.get("capabilities").is_some_and(|caps| caps.is_object()),
+            "the fallback keeps the full Model.Info shape"
+        );
+    }
 }
