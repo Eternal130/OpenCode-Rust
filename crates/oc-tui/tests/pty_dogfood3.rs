@@ -93,7 +93,10 @@ fn pty_onboarding_dismiss_writes_the_doc() {
                 cell.ch
             ));
         }
-        let (x, row) = (dismiss_x as u16, card_row as u16);
+        let (x, row) = (
+            u16::try_from(dismiss_x).unwrap_or(u16::MAX),
+            u16::try_from(card_row).unwrap_or(u16::MAX),
+        );
         driver.sgr_motion(x, row); // hover
         driver.sgr_press(x, row);
         driver.sgr_release(x, row); // v2 acts on mouseUp
@@ -120,10 +123,7 @@ fn pty_onboarding_dismiss_writes_the_doc() {
     let doc = sandbox.join(".local/state/opencode-rust/stable/tui/getting-started.json");
     let body = std::fs::read_to_string(&doc)
         .unwrap_or_else(|error| panic!("the getting-started doc at {}: {error}", doc.display()));
-    assert!(
-        body.contains("\"dismissed\":true"),
-        "the doc carries the v2 dismissal shape: {body}"
-    );
+    assert!(body.contains("\"dismissed\":true"), "the doc carries the v2 dismissal shape: {body}");
 
     // Boot 2 (the restart read) is covered unit-side: the doc this
     // test wrote is the exact input `run_with_size`'s boot read feeds
@@ -195,8 +195,7 @@ fn pty_mouse_modes_off_pushes_nothing() {
         let from = driver.raw_len();
         if let Err(error) = assert_exit_ack(&mut driver, from) {
             let raw = driver.raw_mirror();
-            let tail =
-                String::from_utf8_lossy(&raw[raw.len().saturating_sub(800)..]).into_owned();
+            let tail = String::from_utf8_lossy(&raw[raw.len().saturating_sub(800)..]).into_owned();
             return Err(format!("teardown: {error}; raw tail: {tail:?}"));
         }
         let raw = driver.raw_mirror();
@@ -222,7 +221,7 @@ fn pty_mouse_modes_off_pushes_nothing() {
 #[test]
 fn pty_boot_prompt_auto_submits_the_first_turn() {
     let _lock = pty_lock();
-    let _sandbox = sandbox_env("dogfood3-prompt");
+    let sandbox = sandbox_env("dogfood3-prompt");
     let fake = FakeLlm::spawn(Vec::new()); // no history — the home boot
     fake.arm_script(streaming_thinking_script("ses_alpha", "kick off dogfood3"));
     let prompt_posts = Arc::clone(&fake.prompt_posts);
@@ -281,7 +280,7 @@ fn pty_boot_prompt_auto_submits_the_first_turn() {
     }
     if let Err(panic) = teardown.join() {
         // The app outlived its cap: surface the redirected stderr log.
-        let log = _sandbox.join(".local/state/opencode-rust/tui.log");
+        let log = sandbox.join(".local/state/opencode-rust/tui.log");
         if let Ok(body) = std::fs::read_to_string(&log) {
             eprintln!("tui.log tail: {}", &body[body.len().saturating_sub(3000)..]);
         }

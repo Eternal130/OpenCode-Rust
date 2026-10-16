@@ -575,7 +575,11 @@ fn pty_restored_session_renders_and_live_updates() {
 
     run_tui(
         &url,
-        oc_tui::app::BootArgs { continue_last: false, session: Some("ses_restore".to_owned()), ..oc_tui::app::BootArgs::default() },
+        oc_tui::app::BootArgs {
+            continue_last: false,
+            session: Some("ses_restore".to_owned()),
+            ..oc_tui::app::BootArgs::default()
+        },
         move |boot, writer| {
             // (a) The boot resync hydrated the restored transcript IN
             // ORDER: the sticky-bottom viewport shows the LAST turn
@@ -823,7 +827,11 @@ fn pty_restart_restores_the_durable_model() {
 
     run_tui(
         &url,
-        oc_tui::app::BootArgs { continue_last: false, session: Some("ses_restore".to_owned()), ..oc_tui::app::BootArgs::default() },
+        oc_tui::app::BootArgs {
+            continue_last: false,
+            session: Some("ses_restore".to_owned()),
+            ..oc_tui::app::BootArgs::default()
+        },
         move |boot, writer| {
             assert!(
                 wait_for(&boot, b"turn-49-reply", Duration::from_secs(8)),

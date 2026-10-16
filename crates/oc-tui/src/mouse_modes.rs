@@ -41,14 +41,22 @@ pub const V2_MOUSE_DISABLE: &[u8] = b"\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?100
 /// at all — the terminal's native selection stays untouched).
 #[must_use]
 pub fn enable_bytes(mouse: bool) -> &'static [u8] {
-    if mouse { V2_MOUSE_ENABLE } else { b"" }
+    if mouse {
+        V2_MOUSE_ENABLE
+    } else {
+        b""
+    }
 }
 
 /// The bytes to pop for the configured `mouse` value: the symmetric
 /// disable set, or nothing when capture never went on.
 #[must_use]
 pub fn disable_bytes(mouse: bool) -> &'static [u8] {
-    if mouse { V2_MOUSE_DISABLE } else { b"" }
+    if mouse {
+        V2_MOUSE_DISABLE
+    } else {
+        b""
+    }
 }
 
 /// Push the mouse modes onto a writer (boot / post-`$EDITOR` / a live
@@ -90,8 +98,8 @@ mod tests {
     /// stay empty).
     #[test]
     fn mouse_false_emits_nothing() {
-        assert!(enable_bytes(false).is_empty());
-        assert!(disable_bytes(false).is_empty());
+        assert_eq!(enable_bytes(false), b"");
+        assert_eq!(disable_bytes(false), b"");
     }
 
     /// The disable side pops exactly what the enable side pushed, in
@@ -99,8 +107,7 @@ mod tests {
     #[test]
     fn disable_pops_exactly_the_enabled_set() {
         assert_eq!(disable_bytes(true), b"\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l");
-        let enable_modes: Vec<&[u8]> =
-            vec![b"?1000", b"?1002", b"?1003", b"?1006"];
+        let enable_modes: Vec<&[u8]> = vec![b"?1000", b"?1002", b"?1003", b"?1006"];
         let mut popped: Vec<&[u8]> = vec![b"?1006", b"?1003", b"?1002", b"?1000"];
         popped.reverse();
         assert_eq!(enable_modes, popped, "the pop order mirrors the push order");
