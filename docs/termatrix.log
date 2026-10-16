@@ -249,3 +249,4 @@ xterm256-light: BOTH flip to light theme (bg=idx255 both) — theme-mode parity 
 Universal protocol gaps registered: TM-2 ?2027h/?2031h subs, TM-3 DECSCUSR+OSC12, TM-4 mouse set (?1015/?1004), TM-5 title, TM-6 sync-2026, TM-7 cursor chatter, TM-8 probe escalation, TM-9 clipboard evidence gap, TM-10 tmux adaptation.
 Pre-existing (reproduce on unmodified main at baseline): P-1 placeholder coin, palette command-set drift, reply-stats durations, models-dialog filter drift, hover-style classes.
 Findings: docs/termatrix-findings.md (severity-ranked fix queue).
+[2026-10-16T07:21:25Z] VALIDATION: cargo fmt -p parity --check clean; cargo clippy -p parity --all-targets 0 warnings; cargo test -p parity --lib 89/89 ok. No orphaned tmux servers/panes or leaked rig processes after 80 matrix runs.

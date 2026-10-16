@@ -348,9 +348,8 @@ impl PtyResponder {
                 let xtgettcap_seen = count_occurrences(&data, b"\x1bP+q");
                 let delta = xtgettcap_seen.saturating_sub(xtgettcap_answered);
                 xtgettcap_answered = xtgettcap_seen;
-                for _ in 0..delta {
-                    replies.push(b"\x1bP0+r\x1b\\");
-                }
+                // Same-item pushes are the point here: one reply per query.
+                replies.extend(std::iter::repeat_n(b"\x1bP0+r\x1b\\".as_slice(), delta));
                 for reply in replies {
                     if thread_count.load(Ordering::Relaxed) > 512 {
                         break;
@@ -417,7 +416,8 @@ pub fn wrap_argv_for_tmux(
     let mut script_text = String::from("#!/bin/sh\nexec");
     for token in std::iter::once(program.to_string_lossy().into_owned()).chain(argv.iter().cloned())
     {
-        script_text.push_str(&format!(" {}", shell_word(&token)));
+        script_text.push(' ');
+        script_text.push_str(&shell_word(&token));
     }
     script_text.push('\n');
     std::fs::write(&script, script_text)?;
@@ -659,7 +659,7 @@ fn classify_csi(
         return;
     }
     // DECRQM: `CSI ? mode $ p`.
-    if final_byte == b'p' && intermediates == [b'$'] {
+    if final_byte == b'p' && intermediates == b"$" {
         bump(format!("query:decrqm({params})"), counts);
         return;
     }
@@ -763,7 +763,7 @@ mod tests {
         ];
         let (ref_only, our_only) = signature_diff(&reference, &our);
         assert!(our_only.iter().any(|entry| entry.contains("kitty-push")));
-        assert!(ref_only.is_empty());
+        assert_eq!(ref_only, Vec::<String>::new());
     }
 
     #[test]
