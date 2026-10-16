@@ -252,6 +252,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_refresh_publishes_models_dev_refreshed_after_update() {
+        // v2 models-dev.ts:416-422 — a digest-changing refresh publishes
+        // `models-dev.refreshed` ({}); a byte-identical body stays silent.
+        use futures::StreamExt;
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let db = crate::database::Database::open_file(dir.path().join("t.db"))
+            .await
+            .expect("db");
+        let bus = crate::bus::Bus::new(db, crate::bus::BusOptions::deterministic());
+        let mut subscription = bus.subscribe();
+        let source = FakeSource::new(&tiny_catalog());
+        let kv = Arc::new(MemoryKv::default());
+        let clock = Arc::new(SteppedClock(parking_lot::Mutex::new(1_000)));
+        let service = CatalogService::new(
+            Arc::clone(&source) as Arc<dyn CatalogSource>,
+            Arc::clone(&kv) as Arc<dyn CatalogKv>,
+            Arc::clone(&clock) as Arc<dyn Clock>,
+        )
+        .with_bus(bus);
+
+        assert_eq!(service.refresh(false).await.unwrap(), RefreshOutcome::Updated);
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), subscription.next())
+            .await
+            .expect("timeout")
+            .expect("event");
+        assert_eq!(frame.type_, "models-dev.refreshed");
+        assert_eq!(frame.data, serde_json::json!({}));
+
+        // Past the TTL with an identical body: digest skip, no second
+        // event (force would bypass the digest gate by design).
+        *clock.0.lock() += 1_000;
+        assert_eq!(service.refresh(false).await.unwrap(), RefreshOutcome::SkippedDigest);
+        let none =
+            tokio::time::timeout(std::time::Duration::from_millis(50), subscription.next()).await;
+        assert!(none.is_err(), "no event on digest skip");
+    }
+
+    #[tokio::test]
     async fn provider_refresh_fetches_caches_and_invalidates() {
         let source = FakeSource::new(&tiny_catalog());
         let kv = Arc::new(MemoryKv::default());
