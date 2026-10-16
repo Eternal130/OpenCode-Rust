@@ -1,0 +1,21 @@
+# if — oc-tui serial chain, lane 4 (input foundations: auditA top interaction gaps)
+
+Worktree `.worktrees/lane-if` (branch `lane/if`, off main c0986d3).
+Evidence base: docs/auditA-interactions.md findings #1, #2, #4, #5, #6.
+All cargo via `tools/dev-gate.sh` with `OPENCODE_DEV_GATE_DIR` pinned to
+the worktree.
+
+Items (1:1 with v2 semantics):
+
+1. Mouse-wheel everywhere (auditA #1) — `Scroll*` unhandled; wire wheel
+   deltas into the scroll paths (transcript half-page per the E1 rules,
+   dialog lists, sidebar; diff hook point documented).
+2. Hit-registry lifetime + route gating (auditA #2) — stale
+   `transcript_hit_rows`/`footer_location_hit` fire phantom clicks on
+   Home; clear on route change + route-gate `mouse_event`.
+3. Permission prompt pointer-dead (auditA #4) — wire the pointer arms
+   (pills move+select/run; reject-stage confirm/cancel buttons).
+4. Disclosure arming 1-of-5 (auditA #5) — arm all five group surfaces
+   with v2's toggle semantics.
+5. Dialog ✕ family (auditA #6) — the shared header close affordance +
+   the Help `ok` button row (the port's existing dialogs' v2 buttons).
