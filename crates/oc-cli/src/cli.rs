@@ -484,3 +484,25 @@ pub enum ServiceCommands {
         name: Option<String>,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `--prompt`/`--auto` parse onto the root spec (v2
+    /// commands.ts:27-33 + :55-57 — the flags BE-1 defined but never
+    /// threaded; dogfood3 wires them into the TUI's `BootArgs`).
+    #[test]
+    fn prompt_and_auto_flags_parse_on_the_root() {
+        let cli = Cli::try_parse_from(["opencode", "--prompt", "ship the fix", "--auto", "--yolo"])
+            .expect("parse");
+        assert_eq!(cli.prompt.as_deref(), Some("ship the fix"));
+        assert!(cli.permission.auto, "--auto");
+        assert!(cli.permission.effective_auto(), "--yolo folds into effective_auto");
+        // Defaults: no prompt, no auto (v2's Flag.withDefault(false)).
+        let bare = Cli::try_parse_from(["opencode"]).expect("bare parse");
+        assert!(bare.prompt.is_none());
+        assert!(!bare.permission.auto);
+        assert!(!bare.permission.effective_auto());
+    }
+}
