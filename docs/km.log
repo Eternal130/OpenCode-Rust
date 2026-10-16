@@ -99,3 +99,47 @@ Verification: affected-crate nextest + PTY proofs + rig --quick
   (>190 spec cases) — every new binding resolves on BOTH engines.
 - Verification: cargo nextest -p oc-tui -p oc-tui-core → 838/838
   pass; clippy 0 warnings; fmt clean.
+
+## Phase 2 — tab strip advanced interactions (auditA #8b)
+- Middle-click close: Down(Middle) on the strip closes the tab on
+  the PRESS (session-tabs.tsx:1657-1664 — no select, no drag arm);
+  the home pseudo-tab's middle click follows the ✕ fallback.
+- Right-click context menu: Down(Right) on a tab opens
+  DialogKind::TabMenu { session_id, x, y } — a new Family::Menu
+  dialog rendered AT the press (left clamped into the terminal, top
+  one row under; NO backdrop dim — v2's capture layer is
+  invisible), rows-only (no title/filter/footer chrome). Contents
+  per v2 TabContextMenu (session-tabs.tsx:391-417): tab-scoped =
+  New session / Rename / Copy session ID / Close; strip-scoped
+  (the `+`, the home pseudo-tab, or empty strip cells) = the
+  recently-closed list (≤ 10) with reopen actions, or the muted
+  empty row. Submits: new→Home, rename→SessionRename dialog, copy→
+  OSC-52 + toast, close→close_tab, reopen:{id}→reopen_tab.
+  A right-press inside an open menu closes it (the scrollbox's own
+  onMouseDown, :470). Keyboard: the dialog layer's up/down/enter/
+  escape ride unchanged.
+- Drag reorder: Down(Left) on a tab arms the drag (App::strip_drag);
+  Drag(Left) maps the column to the visible slot (slotAt's overflow
+  + widths walk) and previews locally (Store::drag_preview →
+  strip_tabs_ordered applies moveSessionTab); Up(Left) persists ONE
+  move and selects the source (release, :1505-1514) — the strip
+  renders the preview order via paint_solid_bar_held.
+- Close-hold: the ✕ release arms Store::CloseHold { items, ids,
+  widths, closed, target, x, expires } (holdCloseCell, :1481-1503)
+  and the layout FREEZES through held_session_tab_layout (the
+  session-tabs.tsx:240-278 port — the target tab's width stretches
+  so its ✕ sits at the pointer's column): strip_hit_with_layout +
+  StripInputs.held consume it for hit-testing and painting. Lazy
+  5 s expiry on the store clock; a left press on a tab releases it.
+- The vertical rail variant: not ported — the rail layout (width ≤
+  SESSION_TABS_COMPACT_BREAKPOINT sidebar-tabs mode) is outside the
+  port's covered layouts (auditA §2.2); registered.
+- Registered approximation: the menu's row chrome reuses the select
+  option rows (title at the 4-wide marker column), so the box is
+  +6 over v2's scrollbox width math.
+- Tests: mouse_strip_middle_click_closes_on_down,
+  mouse_strip_right_click_menu_actions (open/at-press geometry, all
+  four actions, reopen row), mouse_strip_drag_reorders_on_release
+  (preview + persist + plain-click no-reorder),
+  mouse_strip_close_hold_freezes_the_layout_for_rapid_closes
+  (second ✕ at the same column + expiry). oc-tui lib: 680/680.

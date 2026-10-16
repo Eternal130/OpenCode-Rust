@@ -93,6 +93,12 @@ pub enum DialogKind {
     /// `DialogPlugins` approximation): one row per REGISTERED plugin
     /// id; enable/disable state is not modeled (submits close).
     Plugins,
+    /// The tab context menu (lane KM, auditA #8b — v2's
+    /// `TabContextMenu`, session-tabs.tsx:372-538): opened by a
+    /// right-press at `(x, y)`; `session_id = None` renders the
+    /// recently-closed variant. Rendered AT the pointer (never
+    /// centered, no backdrop dim).
+    TabMenu { session_id: Option<String>, x: usize, y: usize },
     /// `DialogThemeList`: the built-in theme registry.
     ThemeList,
     /// `DialogHelp` (`ui/dialog-help.tsx`): the palette hint + the
@@ -395,6 +401,40 @@ pub struct TabsState {
     /// The ` + ` affordance under the pointer (`addHovered`,
     /// `session-tabs.tsx:1301`).
     pub add_hovered: bool,
+    /// The drag-reorder preview (lane KM, auditA #8b): the dragged
+    /// session + the slot index it would land at
+    /// (`preview: { sessionID, index }`, session-tabs.tsx:1314-1321)
+    /// — the strip renders the PREVIEW order while the drag is live;
+    /// the move persists on release.
+    pub drag_preview: Option<(String, usize)>,
+    /// The ✕ close-hold (lane KM, auditA #8b — `MouseCloseHold`,
+    /// session-tabs.tsx:83-91): after a ✕ close the layout FREEZES
+    /// (visible ids + widths) so the next tab's ✕ stays under the
+    /// pointer for rapid multi-close; expires after
+    /// [`MOUSE_CLOSE_HOLD_MS`] or when the pointer leaves the strip.
+    pub close_hold: Option<CloseHold>,
+}
+
+/// `MOUSE_CLOSE_HOLD_MS` (session-tabs.tsx:80) — 5 s.
+pub const MOUSE_CLOSE_HOLD_MS: u64 = 5_000;
+
+/// The frozen close-hold snapshot (`MouseCloseHold`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloseHold {
+    /// The items list at close time (ALL tabs, in order).
+    pub items: Vec<String>,
+    /// The VISIBLE window's ids at close time (`layout().tabs`).
+    pub ids: Vec<String>,
+    /// The visible window's widths at close time.
+    pub widths: Vec<usize>,
+    /// The closed tab's id.
+    pub closed: String,
+    /// The neighbor the pointer's ✕ column now addresses.
+    pub target: String,
+    /// The pointer's strip-local column at close time.
+    pub x: usize,
+    /// Wall-clock expiry (the store's clock + 5 s).
+    pub expires_ms: u64,
 }
 
 impl TabsState {
@@ -3087,6 +3127,59 @@ impl Store {
                 model::move_session_tab(std::mem::take(&mut state.tabs), session_id, index);
         });
         self.request_redraw();
+    }
+
+    /// The drag-reorder preview (session-tabs.tsx:1314-1321 — lane KM):
+    /// the slot the dragged tab would land at; `None` clears.
+    pub fn set_tab_drag_preview(&self, preview: Option<(String, usize)>) {
+        self.tabs.update(|state| state.drag_preview = preview);
+        self.request_redraw();
+    }
+
+    /// The live preview state.
+    #[must_use]
+    pub fn tab_drag_preview(&self) -> Option<(String, usize)> {
+        self.tabs.get().drag_preview
+    }
+
+    /// Arm the ✕ close-hold (session-tabs.tsx:1481-1503 — lane KM):
+    /// snapshot the frozen layout + start the 5 s clock.
+    pub fn arm_close_hold(&self, hold: CloseHold) {
+        self.tabs.update(|state| state.close_hold = Some(hold));
+        self.request_redraw();
+    }
+
+    /// Release the close-hold (`releaseCloseHold` — the expiry, the
+    /// pointer leaving the strip, a resize, or any foreign mutation).
+    pub fn clear_close_hold(&self) {
+        if self.tabs.get().close_hold.is_some() {
+            self.tabs.update(|state| state.close_hold = None);
+            self.request_redraw();
+        }
+    }
+
+    /// The close-hold, lazily expired against the store clock (the
+    /// read IS the `setTimeout(releaseCloseHold, 5000)` arm).
+    #[must_use]
+    pub fn close_hold(&self) -> Option<CloseHold> {
+        let hold = self.tabs.get().close_hold?;
+        if self.clock() >= hold.expires_ms {
+            self.clear_close_hold();
+            return None;
+        }
+        Some(hold)
+    }
+
+    /// The strip's effective tab ORDER (lane KM): the drag preview
+    /// applied (`ordered = moveSessionTab(tabs, pending)` — the strip
+    /// renders the preview order while the drag is live).
+    #[must_use]
+    pub fn strip_tabs_ordered(&self) -> Vec<SessionTab> {
+        let tabs = self.tabs.get();
+        match tabs.drag_preview {
+            Some((ref source, index)) => model::move_session_tab(tabs.tabs.clone(), source, index),
+            None => tabs.tabs,
+        }
     }
 
     /// `queued_prompt.undo` (keybind.ts:132 — lane KM): remove the

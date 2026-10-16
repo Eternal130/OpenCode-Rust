@@ -143,13 +143,21 @@ struct StripInputs {
     add_hovered: bool,
     width: usize,
     colors: StripColors,
+    /// The close-hold's frozen layout override (lane KM, auditA
+    /// #8b — `heldSessionTabLayout`, session-tabs.tsx:240-278).
+    held: Option<AdaptiveLayout>,
 }
 
 impl StripInputs {
     /// The strip layout — the same adaptive solver the old path uses
     /// (`render_bar` → `adaptive_session_tab_layout`), so the visible
     /// window and per-tab widths are bit-identical between paths.
+    /// The close-hold's FROZEN geometry (lane KM) overrides the
+    /// solver while it is live.
     fn layout(&self) -> AdaptiveLayout {
+        if let Some(held) = &self.held {
+            return held.clone();
+        }
         let owned: Vec<crate::store::SessionTab> =
             self.tabs.iter().map(|view| view.tab.clone()).collect();
         adaptive_session_tab_layout(
@@ -778,6 +786,7 @@ impl SolidTabsStrip {
             add_hovered: false,
             width,
             colors,
+            held: None,
         });
         let mut renderer = SolidRenderer::new(CliRendererConfig {
             width: width as u32,
@@ -939,6 +948,33 @@ pub fn paint_solid_bar(
     close_hover: Option<&str>,
     add_hovered: bool,
 ) -> Frame {
+    paint_solid_bar_held(
+        tabs,
+        active,
+        show_plus,
+        width,
+        theme,
+        hover,
+        close_hover,
+        add_hovered,
+        None,
+    )
+}
+
+/// [`paint_solid_bar`] with the close-hold's frozen layout (lane KM,
+/// auditA #8b — `layout = heldLayout() ?? adaptive(…)`).
+#[allow(clippy::too_many_arguments)]
+pub fn paint_solid_bar_held(
+    tabs: &[TabView],
+    active: Option<&str>,
+    show_plus: bool,
+    width: usize,
+    theme: &ThemeStyles,
+    hover: Option<&str>,
+    close_hover: Option<&str>,
+    add_hovered: bool,
+    held: Option<AdaptiveLayout>,
+) -> Frame {
     let inputs = StripInputs {
         tabs: tabs.to_vec(),
         active: active.map(str::to_owned),
@@ -948,6 +984,7 @@ pub fn paint_solid_bar(
         add_hovered,
         width,
         colors: StripColors::of(theme),
+        held,
     };
     let glows = glow_ranges(&inputs);
     STRIP.with_borrow_mut(|slot| {
