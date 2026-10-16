@@ -509,6 +509,18 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     // <leader>q decollided (audit §1b / keybind.ts:131): the chord belongs to
     // session.queued_prompts; app.exit keeps ctrl+c/ctrl+d.
     "app_exit" => "app.exit", "ctrl+c,ctrl+d", "Exit the application", "base", palette System;
+    // Lane KM (auditA #8a — the 53-entry backlog, v2 keybind.ts:49-63):
+    // the app-level family. app.clear clears the MINI screen (v2 has no
+    // mini surface here — the dispatcher consumes the stroke, a no-op);
+    // debug/scrap/settings/pair/restart/reload default "none" (palette
+    // rows only where a handler exists).
+    "app_clear" => "app.clear", "ctrl+l", "Clear the screen in mini", "base";
+    "app_debug" => "app.debug", "none", "Toggle debug panel", "base";
+    "app_scrap" => "app.scrap", "none", "Open scrap screen", "base";
+    "opencode_settings" => "opencode.settings", "none", "Open settings", "base", palette System;
+    "server_pair" => "server.pair", "none", "Pair device", "base", palette System;
+    "service_restart" => "service.restart", "none", "Restart service", "base";
+    "location_reload" => "location.reload", "none", "Reload configuration", "base";
     "app_console" => "app.console", "none", "Toggle console", "base";
     "app_heap_snapshot" => "app.heap_snapshot", "none", "Write heap snapshot", "base";
     "app_toggle_animations" => "app.toggle.animations", "none", "Toggle animations", "base";
@@ -558,17 +570,34 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "theme_switch_mode" => "theme.switch_mode", "none", "Switch between light and dark theme mode", "base", palette Theme;
     "theme_mode_lock" => "theme.mode.lock", "none", "Lock or unlock theme mode", "base", palette Theme;
     "sidebar_toggle" => "session.sidebar.toggle", "<leader>b", "Toggle sidebar", "base", palette View;
+    // The pane/terminal family (keybind.ts:96-100 — lane KM, auditA
+    // #8a): the terminal pane is absent in the port; the chords bind
+    // and CONSUME (v2's keymap eats the event even with no pane), the
+    // dispatchers are registered no-ops.
+    "pane_focus_left" => "pane.focus.left", "<leader>left", "Focus session pane", "base";
+    "pane_focus_right" => "pane.focus.right", "<leader>right", "Focus right pane", "base";
+    "terminal_select" => "terminal.select", "<leader>down", "Select terminal", "base";
+    "terminal_toggle" => "terminal.toggle", "<leader>t", "Toggle terminal pane", "base";
+    "terminal_close" => "terminal.close", "<leader>up", "Close terminal pane", "base";
     "scrollbar_toggle" => "session.toggle.scrollbar", "none", "Toggle session scrollbar", "base";
     "status_view" => "opencode.status", "<leader>s", "View status", "base", palette View;
     "debug_view" => "opencode.debug", "none", "View debug info", "base";
     "session_export" => "session.export", "<leader>x", "Export session to editor", "base", palette Session;
     "session_copy" => "session.copy", "none", "Copy session transcript", "base", palette Session;
+    // keybind.ts:107 — lane KM: clipboard write + the info toast.
+    "session_copy_id" => "session.copy.id", "none", "Copy session ID", "base", palette Session;
     "session_move" => "session.move", "none", "Move session", "base", palette Session;
     "session_new" => "session.new", "<leader>n", "Create a new session", "base", palette Session;
     "session_list" => "session.list", "<leader>l", "List all sessions", "base", palette Session;
     "open_menu" => "open.menu", "ctrl+o", "Open recent sessions and projects", "base", palette Session;
     "session_tab_next" => "session.tab.next", "ctrl+tab,alt+down", "Switch to next open tab", "base";
     "session_tab_previous" => "session.tab.previous", "ctrl+shift+tab,alt+up", "Switch to previous open tab", "base";
+    // The tab-history pair (keybind.ts:114-115 — lane KM): back is
+    // unbound by default, forward rides ctrl+i (the historic
+    // back-tab byte; crossterm delivers plain Tab so the chord is
+    // effectively palette/override-reachable, exactly like v2).
+    "session_tab_history_back" => "session.tab.history.back", "none", "Go back in session tab history", "base";
+    "session_tab_history_forward" => "session.tab.history.forward", "ctrl+i", "Go forward in session tab history", "base";
     "session_tab_next_unread" => "session.tab.next_unread", "alt+shift+down", "Switch to next unread tab", "base";
     "session_tab_previous_unread" => "session.tab.previous_unread", "alt+shift+up", "Switch to previous unread tab", "base";
     "session_tab_close" => "session.tab.close", "<leader>w", "Close current tab", "base";
@@ -582,7 +611,21 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "session_interrupt" => "session.interrupt", "escape", "Interrupt current session", "base";
     "session_background" => "session.background", "ctrl+b", "Background blocking session tools", "base";
     "session_compact" => "session.compact", "<leader>c", "Compact the session", "base", palette Session;
-    "session_queued_prompts" => "session.queued_prompts", "<leader>q", "View queued prompts", "base", palette Prompt;
+    // The aside/cd pair (keybind.ts:129-130 — lane KM): aside is a
+    // side-question mode absent in the port (consumed no-op); cd opens
+    // the working-directory select (the footer label's dialog).
+    "session_aside" => "session.aside", "none", "Ask a side question", "base", palette Session;
+    "session_cd" => "session.cd", "none", "Change working directory", "base", palette Session;
+    // The transcript-display toggles (keybind.ts:134-135 — lane KM):
+    // exploration grouping + verbosity cycle default "none"; the
+    // grouping toggle flips the store's group flag, the verbosity
+    // model is absent (consumed no-op).
+    "session_toggle_exploration_grouping" => "session.toggle.exploration_grouping", "none", "Toggle related tool call grouping", "base";
+    "session_verbosity_cycle" => "session.verbosity.cycle", "none", "Cycle transcript verbosity", "base";
+    "session_queued_prompts" => "session.queued_prompts", "<leader>q", "Manage queued prompts", "base", palette Prompt;
+    // `queued_prompt.undo` (keybind.ts:132 — lane KM): removes the
+    // LAST queued prompt; dialog-scoped like its delete sibling.
+    "queued_prompt_undo" => "queued_prompt.undo", "ctrl+u", "Undo queued prompt", "dialog";
     "queued_prompt_delete" => "queued_prompt.delete", "ctrl+d", "Delete queued prompt", "dialog";
     "session_child_first" => "session.child.first", "down", "Toggle subagent picker", "base";
     // keybind.ts:137-138 — table-only defaults (v2 registers no
@@ -699,7 +742,17 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "dialog.select.end" => "dialog.select.end", "end", "Move to last dialog item", "dialog";
     "dialog.select.submit" => "dialog.select.submit", "return", "Submit selected dialog item", "dialog";
     "dialog.prompt.submit" => "dialog.prompt.submit", "return", "Submit dialog prompt", "dialog";
-    "dialog.project_copy.generate" => "dialog.project_copy.generate", "tab", "Generate project copy name", "dialog";
+    // v2's id is `dialog.worktree.generate` (keybind.ts:267) — the
+    // port's old `dialog.project_copy.generate` id diverged (a user
+    // override keyed by the v2 name never reached it; auditA §3).
+    // Renamed lane KM; the dialog-key handler accepts the stroke
+    // directly, so no alias shims are needed.
+    "dialog_worktree_generate" => "dialog.worktree.generate", "tab", "Generate worktree name", "dialog";
+    // The integration-account pair (keybind.ts:265-266 — lane KM):
+    // the integrations dialog is absent; dialog-scoped registrations
+    // so overrides resolve and the strokes consume inside dialogs.
+    "dialog_integration_rename" => "dialog.integration.rename", "ctrl+r", "Rename integration account", "dialog";
+    "dialog_integration_delete" => "dialog.integration.delete", "ctrl+d", "Delete integration account", "dialog";
     // The move_session trio follows the OPERATIVE v2 keybind table
     // (`config/keybind.ts`) — the v1 defaults differ (ctrl+m); the
     // dialog-select golden's footer labels ("new ctrl+a") pin the v2
@@ -716,9 +769,43 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "prompt.autocomplete.complete" => "prompt.autocomplete.complete", "tab", "Complete autocomplete item", "autocomplete";
     "permission.prompt.fullscreen" => "permission.prompt.fullscreen", "ctrl+f", "Toggle permission prompt fullscreen", "dialog";
     "plugins.toggle" => "plugins.toggle", "return", "Toggle plugin", "dialog";
-    "dialog.mcp.toggle" => "dialog.mcp.toggle", "space", "Toggle MCP server", "dialog";
+    // The plugin-manager dialog family (keybind.ts:280-283 — lane KM):
+    // error/install/update/check are scoped to v2's DialogPlugins;
+    // registered so the strokes consume there.
+    "dialog_plugins_error" => "dialog.plugins.error", "space", "View plugin error", "dialog";
+    "dialog_plugins_install" => "dialog.plugins.install", "shift+i", "Install plugin from plugin dialog", "dialog";
+    "dialog_plugins_update" => "dialog.plugins.update", "ctrl+u", "Update plugin from plugin dialog", "dialog";
+    "dialog_plugins_check" => "dialog.plugins.check", "ctrl+r", "Check for plugin updates from plugin dialog", "dialog";
     "terminal_suspend" => "terminal.suspend", "ctrl+z", "Suspend terminal", "base", palette System;
     "terminal_title_toggle" => "terminal.title.toggle", "none", "Toggle terminal title", "base";
+    // The plugin manager entries (keybind.ts:287-288 — lane KM):
+    // `plugins.list` opens the plugin manager dialog (the port's
+    // Plugins select), `plugins.install` has no surface (consumed
+    // no-op).
+    "plugins_list" => "plugins.list", "none", "Open plugin manager dialog", "base", palette System;
+    "plugins_install" => "plugins.install", "none", "Install plugin", "base";
+    // PORT ADDITION (lane KM, auditA #10): v2's toast activation is
+    // pointer-only (ui/toast.tsx:57-59); the port additionally binds a
+    // keyboard chord so the action label is reachable from the input
+    // layer while an actionable toast is live (the dispatcher no-ops
+    // otherwise). Registered in the coverage test's PORT_ADDITIONS.
+    "toast_activate" => "toast.activate", "ctrl+alt+t", "Activate the current toast action", "base", palette Prompt;
+    // The which-key family (keybind.ts:290-300 — lane KM): v2's tui
+    // src ships the table entries without a component consumer (the
+    // panel arrives via the keymap addon); the port registers the
+    // same 12 ids + defaults so overrides resolve and the strokes
+    // consume while the panel surface stays absent.
+    "which_key_toggle" => "which-key.toggle", "ctrl+alt+k", "Toggle which-key panel", "base";
+    "which_key_layout_toggle" => "which-key.layout.toggle", "ctrl+alt+shift+k", "Switch which-key layout", "base";
+    "which_key_pending_toggle" => "which-key.pending.toggle", "ctrl+alt+shift+p", "Toggle which-key pending preview", "base";
+    "which_key_group_previous" => "which-key.group.previous", "ctrl+alt+left,ctrl+alt+[", "Previous which-key group", "base";
+    "which_key_group_next" => "which-key.group.next", "ctrl+alt+right,ctrl+alt+]", "Next which-key group", "base";
+    "which_key_scroll_up" => "which-key.scroll.up", "ctrl+alt+up,ctrl+alt+p", "Scroll which-key up", "base";
+    "which_key_scroll_down" => "which-key.scroll.down", "ctrl+alt+down,ctrl+alt+n", "Scroll which-key down", "base";
+    "which_key_page_up" => "which-key.page.up", "ctrl+alt+pageup", "Page which-key up", "base";
+    "which_key_page_down" => "which-key.page.down", "ctrl+alt+pagedown", "Page which-key down", "base";
+    "which_key_home" => "which-key.home", "ctrl+alt+home", "Jump to first which-key binding", "base";
+    "which_key_end" => "which-key.end", "ctrl+alt+end", "Jump to last which-key binding", "base";
     // The composer panel's keybind family (config/keybind.ts:245-255
     // + the `bind` props on the layer commands — composer/index.tsx:72-82,
     // composer/subagents-tab.tsx:136-194). The mode is pushed while
@@ -732,6 +819,13 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "composer_shell_down" => "composer.shell.down", "down", "Next shell", "composer";
     "composer_shell_select" => "composer.shell.select", "return", "View shell output", "composer";
     "composer_shell_kill" => "composer.shell.kill", "ctrl+d", "Kill shell command", "composer";
+    // The picker's Terminals tab (keybind.ts:253-255 — lane KM): the
+    // terminals data layer is absent (rows unreachable), the layer
+    // commands still register with v2's up,k / down,j / return
+    // defaults so an override keyed `composer.terminal.up` resolves.
+    "composer_terminal_up" => "composer.terminal.up", "up,k", "Previous terminal", "composer";
+    "composer_terminal_down" => "composer.terminal.down", "down,j", "Next terminal", "composer";
+    "composer_terminal_select" => "composer.terminal.select", "return", "Select terminal", "composer";
     "composer_close" => "composer.close", "escape,ctrl+c", "Close composer", "composer";
     "composer_tab_prev" => "composer.tab.prev", "left", "Previous composer tab", "composer";
     "composer_tab_next" => "composer.tab.next", "right", "Next composer tab", "composer";

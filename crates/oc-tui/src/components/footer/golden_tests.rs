@@ -313,6 +313,8 @@ fn toast_over_session_matches_the_full_frame() {
         variant: "info",
         duration_ms: 60_000,
         action_label: None,
+        action_command: None,
+        modal: false,
     };
     let theme_state = crate::theme::ThemeState::v2_dark();
     let screen = crate::components::session_screen::SessionScreen {

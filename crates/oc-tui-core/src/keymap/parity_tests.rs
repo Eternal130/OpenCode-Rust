@@ -601,3 +601,328 @@ fn lookup_base_resolves_identically() {
         keymap.pop_mode();
     }
 }
+
+/// **Lane KM — FULL v2 table coverage** (auditA #8a): the v2 default
+/// table (`config/keybind.ts` `Definitions`, 243 entries — `leader`
+/// plus these 242) against the rust table, entry by entry:
+/// * every v2 command id resolves to a rust entry with the IDENTICAL
+///   default spec (v2 → rust, 100% or the gap is named), and
+/// * every rust entry is either a v2 id or one of the REGISTERED port
+///   additions (the inverse direction — v2 has no silent extras).
+///
+/// Registered port additions:
+/// * `app.heap_snapshot` — the port's heap-dump debug command.
+/// * `composer.close` / `composer.tab.prev` / `composer.tab.next` /
+///   `composer.subagent.toggle-activity` — v2 registers these as
+///   LAYER commands via `bind:` props (composer/index.tsx:77-86,
+///   subagents-tab.tsx:136-194); the port carries them as table
+///   entries — legit layer parity.
+/// * `app.exit` in the "diff" layer — the diff viewer's re-bind
+///   (diff-viewer.tsx:726-732, SURF-2).
+/// * `toast.activate` — lane KM's keyboard reach for the toast action
+///   (auditA #10; v2's toast is pointer-only — the addition keeps a
+///   consumed stroke, default-bound, palette-visible).
+#[test]
+#[allow(clippy::too_many_lines)] // the corpus IS the assertion
+fn table_covers_the_full_v2_default_table() {
+    /// (command id, default spec) — generated from keybind.ts.
+    const V2: &[(&str, &str)] = &[
+        ("app.exit", "ctrl+c,ctrl+d,<leader>q"),
+        ("app.clear", "ctrl+l"),
+        ("app.debug", "none"),
+        ("app.console", "none"),
+        ("app.scrap", "none"),
+        ("app.toggle.animations", "none"),
+        ("app.toggle.file_context", "none"),
+        ("app.toggle.diffwrap", "none"),
+        ("app.toggle.paste_summary", "none"),
+        ("command.palette.show", "ctrl+p"),
+        ("help.show", "none"),
+        ("docs.open", "none"),
+        ("opencode.settings", "none"),
+        ("server.pair", "none"),
+        ("service.restart", "none"),
+        ("location.reload", "none"),
+        ("diff.open", "none"),
+        ("diff.close", "escape,q"),
+        ("diff.down", "j,down"),
+        ("diff.up", "k,up"),
+        ("diff.page.down", "pagedown,ctrl+f"),
+        ("diff.page.up", "pageup,ctrl+b"),
+        ("diff.half_page.down", "ctrl+d"),
+        ("diff.half_page.up", "ctrl+u"),
+        ("diff.first", "gg,home"),
+        ("diff.last", "shift+g,end"),
+        ("diff.toggle", "none"),
+        ("diff.expand", "none"),
+        ("diff.expand_all", "none"),
+        ("diff.collapse", "none"),
+        ("diff.switch_focus", "none"),
+        ("diff.next_hunk", "]"),
+        ("diff.previous_hunk", "["),
+        ("diff.next_file", "n,alt+down"),
+        ("diff.previous_file", "p,alt+up"),
+        ("diff.toggle_file_tree", "b"),
+        ("diff.single_patch", "s"),
+        ("diff.switch_source", "d"),
+        ("diff.toggle_view", "v"),
+        ("diff.mark_reviewed", "m"),
+        ("diff.help", "?,shift+?,shift+/"),
+        ("prompt.editor", "<leader>e"),
+        ("theme.switch", "none"),
+        ("theme.switch_mode", "none"),
+        ("theme.mode.lock", "none"),
+        ("session.sidebar.toggle", "<leader>b"),
+        ("pane.focus.left", "<leader>left"),
+        ("pane.focus.right", "<leader>right"),
+        ("terminal.select", "<leader>down"),
+        ("terminal.toggle", "<leader>t"),
+        ("terminal.close", "<leader>up"),
+        ("session.toggle.scrollbar", "none"),
+        ("opencode.status", "<leader>s"),
+        ("opencode.debug", "none"),
+        ("session.export", "<leader>x"),
+        ("session.copy", "none"),
+        ("session.copy.id", "none"),
+        ("session.move", "none"),
+        ("session.new", "<leader>n"),
+        ("session.list", "<leader>l"),
+        ("open.menu", "ctrl+o"),
+        ("session.tab.next", "ctrl+tab,alt+down"),
+        ("session.tab.previous", "ctrl+shift+tab,alt+up"),
+        ("session.tab.history.back", "none"),
+        ("session.tab.history.forward", "ctrl+i"),
+        ("session.tab.next_unread", "alt+shift+down"),
+        ("session.tab.previous_unread", "alt+shift+up"),
+        ("session.tab.close", "<leader>w"),
+        ("session.tab.reopen", "ctrl+shift+t"),
+        ("session.timeline", "<leader>g"),
+        ("session.fork", "none"),
+        ("session.rename", "ctrl+r"),
+        ("session.delete", "ctrl+d"),
+        ("session.share", "none"),
+        ("session.unshare", "none"),
+        ("session.interrupt", "escape"),
+        ("session.background", "ctrl+b"),
+        ("session.compact", "<leader>c"),
+        ("session.aside", "none"),
+        ("session.cd", "none"),
+        ("session.queued_prompts", "<leader>q"),
+        ("queued_prompt.undo", "ctrl+u"),
+        ("queued_prompt.delete", "ctrl+d"),
+        ("session.toggle.exploration_grouping", "none"),
+        ("session.verbosity.cycle", "none"),
+        ("session.child.first", "down"),
+        ("session.child.next", "right"),
+        ("session.child.previous", "left"),
+        ("session.parent", "up"),
+        ("session.pin.toggle", "ctrl+f"),
+        ("session.quick_switch.1", "<leader>1"),
+        ("session.quick_switch.2", "<leader>2"),
+        ("session.quick_switch.3", "<leader>3"),
+        ("session.quick_switch.4", "<leader>4"),
+        ("session.quick_switch.5", "<leader>5"),
+        ("session.quick_switch.6", "<leader>6"),
+        ("session.quick_switch.7", "<leader>7"),
+        ("session.quick_switch.8", "<leader>8"),
+        ("session.quick_switch.9", "<leader>9"),
+        ("session.tab.select.1", "<leader>1,ctrl+1"),
+        ("session.tab.select.2", "<leader>2,ctrl+2"),
+        ("session.tab.select.3", "<leader>3,ctrl+3"),
+        ("session.tab.select.4", "<leader>4,ctrl+4"),
+        ("session.tab.select.5", "<leader>5,ctrl+5"),
+        ("session.tab.select.6", "<leader>6,ctrl+6"),
+        ("session.tab.select.7", "<leader>7,ctrl+7"),
+        ("session.tab.select.8", "<leader>8,ctrl+8"),
+        ("session.tab.select.9", "<leader>9,ctrl+9"),
+        ("session.tab.select.10", "<leader>0,ctrl+0"),
+        ("stash.delete", "ctrl+d"),
+        ("model.dialog.provider", "ctrl+a"),
+        ("model.dialog.favorite", "ctrl+f"),
+        ("model.list", "<leader>m"),
+        ("model.cycle_recent", "f2"),
+        ("model.cycle_recent_reverse", "shift+f2"),
+        ("model.cycle_favorite", "none"),
+        ("model.cycle_favorite_reverse", "none"),
+        ("mcp.list", "none"),
+        ("provider.connect", "none"),
+        ("agent.list", "<leader>a"),
+        ("agent.cycle", "shift+tab"),
+        ("agent.cycle.reverse", "none"),
+        ("variant.cycle", "ctrl+t"),
+        ("variant.list", "none"),
+        ("session.page.up", "pageup,ctrl+alt+b"),
+        ("session.page.down", "pagedown,ctrl+alt+f"),
+        ("session.line.up", "ctrl+alt+y"),
+        ("session.line.down", "ctrl+alt+e"),
+        ("session.half.page.up", "ctrl+alt+u"),
+        ("session.half.page.down", "ctrl+alt+d"),
+        ("session.first", "ctrl+g,home,alt+home"),
+        ("session.last", "ctrl+alt+g,end"),
+        ("session.message.next", "none"),
+        ("session.message.previous", "none"),
+        ("session.message.user.next", "none"),
+        ("session.message.user.previous", "none"),
+        ("session.messages_last_user", "alt+end"),
+        ("messages.copy", "<leader>y"),
+        ("session.undo", "<leader>u"),
+        ("session.redo", "<leader>r"),
+        ("session.toggle.thinking", "none"),
+        ("prompt.submit", "none"),
+        ("prompt.queue", "<leader>return"),
+        ("prompt.editor_context.clear", "none"),
+        ("prompt.images.view", "<leader>i"),
+        ("prompt.skills", "none"),
+        ("prompt.stash", "none"),
+        ("prompt.stash.pop", "none"),
+        ("prompt.stash.list", "none"),
+        ("prompt.clear", "ctrl+c"),
+        ("prompt.paste", "ctrl+v"),
+        ("input.submit", "return"),
+        ("input.newline", "shift+return,ctrl+return,alt+return,ctrl+j"),
+        ("input.move.left", "left,ctrl+b"),
+        ("input.move.right", "right,ctrl+f"),
+        ("input.move.up", "up"),
+        ("input.move.down", "down"),
+        ("input.select.left", "shift+left"),
+        ("input.select.right", "shift+right"),
+        ("input.select.up", "shift+up"),
+        ("input.select.down", "shift+down"),
+        ("input.line.home", "ctrl+a"),
+        ("input.line.end", "ctrl+e"),
+        ("input.select.line.home", "ctrl+shift+a"),
+        ("input.select.line.end", "ctrl+shift+e"),
+        ("input.visual.line.home", "alt+a"),
+        ("input.visual.line.end", "alt+e"),
+        ("input.select.visual.line.home", "alt+shift+a"),
+        ("input.select.visual.line.end", "alt+shift+e"),
+        ("input.buffer.home", "none"),
+        ("input.buffer.end", "none"),
+        ("input.select.buffer.home", "shift+home"),
+        ("input.select.buffer.end", "shift+end"),
+        ("input.delete.line", "ctrl+shift+d"),
+        ("input.delete.to.line.end", "ctrl+k"),
+        ("input.delete.to.line.start", "ctrl+u"),
+        ("input.backspace", "backspace,shift+backspace"),
+        ("input.delete", "ctrl+d,delete,shift+delete"),
+        ("input.undo", "ctrl+-,super+z"),
+        ("input.redo", "ctrl+.,super+shift+z"),
+        ("input.word.forward", "alt+f,alt+right,ctrl+right"),
+        ("input.word.backward", "alt+b,alt+left,ctrl+left"),
+        ("input.select.word.forward", "alt+shift+f,alt+shift+right"),
+        ("input.select.word.backward", "alt+shift+b,alt+shift+left"),
+        ("input.delete.word.forward", "alt+d,alt+delete,ctrl+delete"),
+        ("input.delete.word.backward", "ctrl+w,ctrl+backspace,alt+backspace"),
+        ("input.select.all", "super+a"),
+        ("prompt.history.previous", "up"),
+        ("prompt.history.next", "down"),
+        ("composer.subagent.up", "up"),
+        ("composer.subagent.down", "down"),
+        ("composer.subagent.select", "return"),
+        ("composer.subagent.interrupt", "ctrl+d"),
+        ("composer.shell.up", "up"),
+        ("composer.shell.down", "down"),
+        ("composer.shell.select", "return"),
+        ("composer.shell.kill", "ctrl+d"),
+        ("composer.terminal.up", "up,k"),
+        ("composer.terminal.down", "down,j"),
+        ("composer.terminal.select", "return"),
+        ("dialog.select.prev", "up,ctrl+p"),
+        ("dialog.select.next", "down,ctrl+n"),
+        ("dialog.select.page_up", "pageup"),
+        ("dialog.select.page_down", "pagedown"),
+        ("dialog.select.home", "home"),
+        ("dialog.select.end", "end"),
+        ("dialog.select.submit", "return"),
+        ("dialog.prompt.submit", "return"),
+        ("dialog.integration.rename", "ctrl+r"),
+        ("dialog.integration.delete", "ctrl+d"),
+        ("dialog.worktree.generate", "tab"),
+        ("dialog.move_session.new", "ctrl+a"),
+        ("dialog.move_session.move", "ctrl+m"),
+        ("dialog.move_session.delete", "ctrl+d"),
+        ("dialog.move_session.refresh", "ctrl+r"),
+        ("prompt.autocomplete.prev", "up,ctrl+p"),
+        ("prompt.autocomplete.next", "down,ctrl+n"),
+        ("prompt.autocomplete.hide", "escape"),
+        ("prompt.autocomplete.select", "return"),
+        ("prompt.autocomplete.complete", "tab"),
+        ("permission.prompt.fullscreen", "ctrl+f"),
+        ("plugins.toggle", "return"),
+        ("dialog.mcp.toggle", "space"),
+        ("dialog.plugins.error", "space"),
+        ("dialog.plugins.install", "shift+i"),
+        ("dialog.plugins.update", "ctrl+u"),
+        ("dialog.plugins.check", "ctrl+r"),
+        ("terminal.suspend", "ctrl+z"),
+        ("terminal.title.toggle", "none"),
+        ("plugins.list", "none"),
+        ("plugins.install", "none"),
+        ("which-key.toggle", "ctrl+alt+k"),
+        ("which-key.layout.toggle", "ctrl+alt+shift+k"),
+        ("which-key.pending.toggle", "ctrl+alt+shift+p"),
+        ("which-key.group.previous", "ctrl+alt+left,ctrl+alt+["),
+        ("which-key.group.next", "ctrl+alt+right,ctrl+alt+]"),
+        ("which-key.scroll.up", "ctrl+alt+up,ctrl+alt+p"),
+        ("which-key.scroll.down", "ctrl+alt+down,ctrl+alt+n"),
+        ("which-key.page.up", "ctrl+alt+pageup"),
+        ("which-key.page.down", "ctrl+alt+pagedown"),
+        ("which-key.home", "ctrl+alt+home"),
+        ("which-key.end", "ctrl+alt+end"),
+    ];
+    /// The registered port additions (command ids the v2 table lacks).
+    const PORT_ADDITIONS: &[&str] = &[
+        "app.heap_snapshot",
+        "composer.close",
+        "composer.tab.prev",
+        "composer.tab.next",
+        "composer.subagent.toggle-activity",
+        "toast.activate",
+    ];
+
+    /// Registered default divergences (id → the port's spec):
+    /// * `app.exit` — v2 binds `<leader>q` on BOTH `app.exit` and
+    ///   `session.queued_prompts` (keybind.ts:48/131); the port
+    ///   decollided the chord to the queued-prompts manager (audit
+    ///   §1b) so `app.exit` keeps ctrl+c/ctrl+d.
+    const DIVERGENCES: &[(&str, &str)] = &[("app.exit", "ctrl+c,ctrl+d")];
+    let table = default_table();
+    // No duplicate (command, layer) pairs (the old double
+    // `dialog.mcp.toggle` row was this test's first catch). One
+    // command MAY span layers — v2's own pattern (app.exit re-binds
+    // in the diff layer, diff-viewer.tsx:726-732).
+    let mut seen: Vec<(&str, &str)> = Vec::new();
+    for def in table {
+        let key = (def.command, def.layer);
+        assert!(!seen.contains(&key), "duplicate table id {} in layer {}", def.command, def.layer);
+        seen.push(key);
+    }
+    // v2 → rust: id + default spec.
+    for (id, spec) in V2 {
+        let found = table
+            .iter()
+            .find(|def| def.command == *id)
+            .unwrap_or_else(|| panic!("v2 binding {id} has no rust table entry"));
+        if let Some((_, port_spec)) = DIVERGENCES.iter().find(|(diverged, _)| diverged == id) {
+            assert_eq!(found.defaults, *port_spec, "{id}: registered divergence changed");
+            continue;
+        }
+        assert_eq!(found.defaults, *spec, "{id}: default diverges from v2");
+    }
+    assert_eq!(V2.len(), 242, "the v2 corpus itself (regenerate if keybind.ts changed)");
+    // rust → v2: every extra (id, layer) is registered — the layer
+    // rebinds (app.exit@diff) and the port additions.
+    for def in table {
+        let known_base = V2.iter().any(|(id, _)| *id == def.command)
+            && (def.layer != "base"
+                || DIVERGENCES.iter().any(|(id, _)| *id == def.command)
+                || V2.iter().any(|(id, _)| *id == def.command));
+        let known = def.command == "leader" || known_base;
+        assert!(
+            known || PORT_ADDITIONS.contains(&def.command),
+            "rust-only id {} (layer {}) is not a registered port addition",
+            def.command,
+            def.layer
+        );
+    }
+}
