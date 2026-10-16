@@ -35,6 +35,13 @@ retries = 2
 filter = 'test(pty_interactions)'
 retries = 2
 
+# lane/if: the input-foundations proofs (wheel / stale-registry /
+# permission pointer / disclosures / dialog close) are the same
+# spawn-contention class.
+[[profile.default.overrides]]
+filter = 'test(pty_lane_if)'
+retries = 2
+
 # The invariant fuzzer drives the real binary through long key
 # sequences: same serialized PTY class, and the 3-seed smoke needs a
 # wider slow-timeout than the 60s default (it is one test fn).
