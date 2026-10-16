@@ -34,6 +34,7 @@ pub mod config;
 pub mod credential;
 pub mod form;
 pub mod fs;
+pub mod integration;
 pub mod location;
 pub mod mcp;
 pub mod message;
@@ -64,6 +65,7 @@ pub fn routes() -> Router<SharedState> {
         .merge(credential::routes())
         .merge(form::routes())
         .merge(fs::routes())
+        .merge(integration::routes())
         .merge(location::routes())
         .merge(mcp::routes())
         .merge(message::routes())

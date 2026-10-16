@@ -1,6 +1,6 @@
 //! The remaining smaller namespaces: generate, migration, websearch,
-//! plugin, rpc. Integration surfaces that need the OAuth/credential host
-//! (phase-9) return their documented empty/failure shapes.
+//! plugin, rpc. The integration/auth handlers live in `integration.rs`
+//! (BE-3 host).
 
 #![allow(clippy::must_use_candidate, clippy::fn_params_excessive_bools)]
 use axum::extract::{Path, State};
@@ -15,45 +15,7 @@ pub fn routes() -> axum::Router<SharedState> {
     axum::Router::new()
         // generate
         .route("/api/experimental/generate", axum::routing::post(generate_text))
-        // integration (global + scoped)
-        .route(
-            "/api/experimental/integration/wellknown",
-            axum::routing::post(integration_wellknown_add),
-        )
-        .route("/api/integration", axum::routing::get(integration_list))
-        .route("/api/integration/:integrationID", axum::routing::get(integration_get))
-        .route(
-            "/api/integration/:integrationID/connect/command",
-            axum::routing::post(integration_command_connect),
-        )
-        .route(
-            "/api/integration/:integrationID/connect/command/:attemptID",
-            axum::routing::delete(integration_command_cancel),
-        )
-        .route(
-            "/api/integration/:integrationID/connect/command/:attemptID",
-            axum::routing::get(integration_command_status),
-        )
-        .route(
-            "/api/integration/:integrationID/connect/key",
-            axum::routing::post(integration_connect_key),
-        )
-        .route(
-            "/api/integration/:integrationID/connect/oauth",
-            axum::routing::post(integration_oauth_connect),
-        )
-        .route(
-            "/api/integration/:integrationID/connect/oauth/:attemptID",
-            axum::routing::delete(integration_oauth_cancel),
-        )
-        .route(
-            "/api/integration/:integrationID/connect/oauth/:attemptID",
-            axum::routing::get(integration_oauth_status),
-        )
-        .route(
-            "/api/integration/:integrationID/connect/oauth/:attemptID/complete",
-            axum::routing::post(integration_oauth_complete),
-        )
+        // integration handlers live in handlers/integration.rs (BE-3)
         // migration
         .route("/api/experimental/migration/v1", axum::routing::get(migration_status))
         // plugin
@@ -152,125 +114,6 @@ async fn generate_text(
         }
     }
     Ok(super::common::json_data(json!({ "text": text })))
-}
-
-// ---------------------------------------------------------------------------
-// Integrations (OAuth host lands phase-9; surface documented shapes)
-// ---------------------------------------------------------------------------
-
-async fn integration_wellknown_add(
-    State(state): State<SharedState>,
-    uri: Uri,
-    headers: HeaderMap,
-    axum::Json(body): axum::Json<Value>,
-) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
-    let _services = services(&state, &location).await?;
-    let url = body["url"].as_str().unwrap_or_default();
-    // Well-known discovery requires the integration host (§3:
-    // 400 well_known_discovery on failure).
-    Err(ApiError::invalid_request_kind(format!("Failed to fetch {url}"), "well_known_discovery"))
-}
-
-async fn integration_list(
-    State(state): State<SharedState>,
-    uri: Uri,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
-    let _services = services(&state, &location).await?;
-    // No integrations are registered in this build (TODO(phase-9)).
-    Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(Vec::new())))
-}
-
-async fn integration_get(
-    State(state): State<SharedState>,
-    Path(integration_id): Path<String>,
-    uri: Uri,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
-    let _services = services(&state, &location).await?;
-    Err(ApiError::integration_not_found(&integration_id))
-}
-
-async fn integration_command_connect(
-    Path(integration_id): Path<String>,
-    axum::Json(_body): axum::Json<Value>,
-) -> Result<Response, ApiError> {
-    Err(ApiError::integration_not_found(&integration_id))
-}
-
-async fn integration_command_cancel(
-    State(state): State<SharedState>,
-    Path((integration_id, attempt_id)): Path<(String, String)>,
-) -> Result<Response, ApiError> {
-    let _ = state;
-    // Cancelling an unknown attempt mirrors the attempt 404.
-    Err(ApiError::integration_attempt_not_found(&integration_id, &attempt_id))
-}
-
-async fn integration_command_status(
-    Path((integration_id, attempt_id)): Path<(String, String)>,
-) -> Result<Response, ApiError> {
-    Err(ApiError::integration_attempt_not_found(&integration_id, &attempt_id))
-}
-
-async fn integration_connect_key(
-    State(state): State<SharedState>,
-    Path(integration_id): Path<String>,
-    uri: Uri,
-    headers: HeaderMap,
-    axum::Json(body): axum::Json<Value>,
-) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
-    let _services = services(&state, &location).await?;
-    let _ = body["key"].as_str();
-    Err(ApiError::integration_not_found(&integration_id))
-}
-
-async fn integration_oauth_connect(
-    State(state): State<SharedState>,
-    Path(integration_id): Path<String>,
-    uri: Uri,
-    headers: HeaderMap,
-    axum::Json(body): axum::Json<Value>,
-) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
-    let _services = services(&state, &location).await?;
-    let _ = body["methodID"].as_str();
-    Err(ApiError::integration_not_found(&integration_id))
-}
-
-async fn integration_oauth_cancel(
-    State(state): State<SharedState>,
-    Path((integration_id, attempt_id)): Path<(String, String)>,
-) -> Result<Response, ApiError> {
-    let _ = state;
-    Err(ApiError::integration_attempt_not_found(&integration_id, &attempt_id))
-}
-
-async fn integration_oauth_status(
-    Path((integration_id, attempt_id)): Path<(String, String)>,
-) -> Result<Response, ApiError> {
-    Err(ApiError::integration_attempt_not_found(&integration_id, &attempt_id))
-}
-
-async fn integration_oauth_complete(
-    axum::Json(body): axum::Json<Value>,
-) -> Result<Response, ApiError> {
-    match body["code"].as_str() {
-        None | Some("") => {
-            // CodeRequired → 400 integration_code_required (§3).
-            Err(ApiError::invalid_request_kind(
-                "Authorization code required",
-                "integration_code_required",
-            ))
-        }
-        Some(_) => {
-            Err(ApiError::invalid_request_kind("Authorization failed", "integration_authorization"))
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
