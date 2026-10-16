@@ -113,3 +113,24 @@ GROUND TRUTH (ref beta.12, live probes, synthetic config):
   qwen3.8-flash-next}; OURS (fixed) lists the same 4 ✓; both default→fallback.
 - NOT in scope (left): engine/mod.rs:761 global AGENTS.md discovery still uses the
   suffixed dir; models.dev snapshot vintage drift (ref live vs ours vendored).
+
+## Phase 6 — tests pinning the real-DB shapes (all synthetic data)
+- oc-tui unit: mouse_home_strip_click_selects_the_restored_tab (app.rs) — home
+  hover + body release selects, ` + ` navigates home, second tab selects from home.
+- oc-tui unit: home_caret_sits_on_the_composer_row_under_the_strip (home.rs) —
+  input row shifts +1 under the strip; caret == input row; bottom row unclipped.
+- oc-tui PTY: pty_restored_tabs_home_click_switches_and_cursor_on_composer_row
+  (pty_tabs.rs) — REAL-SHAPE FIXTURE BUILDER (real_shape_fixture: 24 synthetic
+  sessions in OTHER directories, restored tabs referencing not-yet-loaded ids;
+  seeded tabs.json in the stable channel; scripted server serves the many-session
+  list + per-session transcripts). Asserts: home + restored strip at boot, SGR
+  click at tab-1 body switches into the session (transcript paints), and the
+  pre-click hardware cursor sits on the composer input row (SGR row 15 at 80x24).
+- oc-core: config_normalize_keeps_the_real_shape_custom_provider — the sanitized
+  provider shape (cost ARRAY, settings, mixed-case model selection, small_model →
+  agents.title.model) survives normalize.
+- oc-server: boot_binds_providers_from_the_shared_v2_config_dir (the config-dir
+  fix at boot + per-location surface) and handlers::model tests (supports_text
+  predicate incl. the empty-array wildcard; the fallback = first available text
+  model with the full Model.Info shape).
+All passing locally (nextest).

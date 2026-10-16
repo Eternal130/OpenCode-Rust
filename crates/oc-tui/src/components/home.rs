@@ -581,4 +581,54 @@ mod tests {
         let frame = render_home(&store, &theme.styles(), (80, 30));
         assert!(!frame.text_grid()[0].contains("Alpha"), "the strip follows the config gate");
     }
+
+    /// dogfood2 bug 2 — the caret and the layout under the strip: v2
+    /// seats `<SessionTabs/>` in the SAME column as the route content
+    /// (app.tsx:1349-1361), so Home lays out in `height - 1`, the
+    /// composer's hardware cursor rides the SHIFTED row, and the
+    /// bottom status row never clips. The port once computed the caret
+    /// from the pre-shift layout (one row above the input line, exactly
+    /// the strip height) and rendered full-height then truncated.
+    #[test]
+    fn home_caret_sits_on_the_composer_row_under_the_strip() {
+        let theme = crate::theme::ThemeState::v2_dark();
+
+        // Without tabs the golden home shape: caret on the input row.
+        let bare = Store::new(Runtime::new());
+        let bare_frame = render_home(&bare, &theme.styles(), (80, 24));
+        let bare_grid = bare_frame.text_grid();
+        let bare_input = bare_grid
+            .iter()
+            .position(|row| row.contains("Ask anything"))
+            .expect("the bare home renders the input line");
+        let bare_caret = bare.caret_cell().expect("the bare home sets the caret");
+        assert_eq!(usize::from(bare_caret.1), bare_input, "no strip: caret on the input row");
+
+        // With a restored tab the strip takes row 0 and the whole view
+        // (caret included) shifts down one row — still ON the input row.
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Alpha".to_owned()));
+        store.navigate(crate::store::Route::Home);
+        let frame = render_home(&store, &theme.styles(), (80, 24));
+        let grid = frame.text_grid();
+        assert!(grid[0].contains("Alpha"), "the strip leads home");
+        let input = grid
+            .iter()
+            .position(|row| row.contains("Ask anything"))
+            .expect("the shifted home renders the input line");
+        assert_eq!(input, bare_input + 1, "the home content shifts by the strip's one row");
+        let caret = store.caret_cell().expect("the strip home sets the caret");
+        assert_eq!(
+            usize::from(caret.1),
+            input,
+            "the hardware cursor sits ON the composer's input row (dogfood2 bug 2)"
+        );
+        assert!(usize::from(caret.1) > 0, "never on the strip row");
+        // height-1 layout: nothing clips — the footer's version line
+        // still paints on the frame's last row region.
+        assert!(
+            grid.iter().any(|row| row.contains(env!("CARGO_PKG_VERSION"))),
+            "the bottom status row survives the strip (no full-height truncation)"
+        );
+    }
 }
