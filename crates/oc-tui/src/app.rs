@@ -3660,6 +3660,38 @@ fn mouse_strip_hover_close_select_and_add() {
     assert!(!app.store.tabs().add_hovered);
 }
 
+/// dogfood2 bug 1 — the strip is a POINTER surface on the HOME route
+/// too: v2 mounts `<SessionTabs/>` app-wide (app.tsx:1353-1355, above
+/// the route `<Switch>`; `tabsAvailable()` = `enabled() &&
+/// tabs().length > 0 && route.data.type !== "plugin"`,
+/// app.tsx:576-579 — never session-route-gated), and `select()` is a
+/// bare route navigate (context/session-tabs.tsx:393-396). Restored
+/// tabs painted at home but took no clicks when this gate was
+/// session-only.
+#[test]
+fn mouse_home_strip_click_selects_the_restored_tab() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut app = App::new((80, 24));
+    app.store.restore_tabs(vec![
+        crate::store::SessionTab { session_id: "r1".into(), title: Some("Restored One".into()) },
+        crate::store::SessionTab { session_id: "r2".into(), title: Some("Restored Two".into()) },
+    ]);
+    assert_eq!(app.store.route(), Route::Home, "restore never moves the boot route");
+    // Hover arms on home exactly like the session route.
+    app.mouse_event(&mouse(MouseEventKind::Moved, 5, 0));
+    assert_eq!(app.store.tabs().hover.as_deref(), Some("r1"));
+    // The body release selects: home → the restored session's route.
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 0));
+    assert_eq!(app.store.route(), Route::Session { session_id: "r1".to_owned() });
+    // The ` + ` affordance still navigates home from the session...
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 65, 0));
+    assert_eq!(app.store.route(), Route::Home);
+    // ...and the second restored tab's body selects from home (tab 2
+    // spans x=32..64 on the 32+32 layout).
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 40, 0));
+    assert_eq!(app.store.route(), Route::Session { session_id: "r2".to_owned() });
+}
+
 /// beta.8 bug 4 — the `+ Thought` disclosure through the pump: a
 /// completed reasoning part renders the collapsed header, a mouse
 /// release over the header row expands it (the bordered muted body

@@ -550,4 +550,81 @@ mod tests {
             "a fresh runtime identity was claimed under the new root"
         );
     }
+
+    /// dogfood2 bug 3 — the boot provider seeding and every per-location
+    /// config load read the SHARED v2 global config dir
+    /// (`<home>/.config/opencode`) — the same source handlers/config.rs
+    /// serves and the ref reads (xdg config/opencode). A config-defined
+    /// provider in the sanitized real-world shape (settings{apiKey,
+    /// baseURL} + per-model `cost` ARRAY overlays) must bind at boot and
+    /// stay visible at every location, together with the `model`
+    /// default selection. The port once seeded from the
+    /// `opencode-rust`-suffixed dir: zero providers bound, so the boot
+    /// model silently fell back to the catalog default.
+    #[tokio::test]
+    async fn boot_binds_providers_from_the_shared_v2_config_dir() {
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let project = root.path().join("proj");
+        std::fs::create_dir_all(&project).expect("project dir");
+        let home = root.path().join("home");
+        let global_config = home.join(".config").join("opencode");
+        std::fs::create_dir_all(&global_config).expect("global config dir");
+        std::fs::write(
+            global_config.join("opencode.json"),
+            r#"{
+                "providers": {
+                    "own": {
+                        "name": "Own",
+                        "package": "@opencode/ai/providers/anthropic",
+                        "settings": { "apiKey": "sk-SYNTHETIC", "baseURL": "https://synth.invalid/v1" },
+                        "models": {
+                            "glm-5.3": {
+                                "name": "GLM-5.3",
+                                "cost": [ { "input": 0, "output": 0 } ],
+                                "limit": { "context": 600000, "output": 131072 }
+                            }
+                        }
+                    }
+                },
+                "model": "own/glm-5.3"
+            }"#,
+        )
+        .expect("global config");
+        let _env = Env::redirect_into(&home);
+
+        let options = BootOptions {
+            serve: ServeOptions { hostname: IpAddr::from([127, 0, 0, 1]), port: Some(0) },
+            password: None,
+            cors_origins: Vec::new(),
+            version: "test".to_owned(),
+            data_root: root.path().join("data"),
+            home,
+            config_location: Some(project.clone()),
+        };
+        let handle = boot_and_serve(&options).await.expect("boot and serve");
+
+        // The engine-level seeding (boot) AND the per-location load both
+        // see the shared dir's provider — the location surface is what
+        // /api/model lists.
+        let location = LocationRef::new(project.clone(), None);
+        let providers = crate::boot::location_custom_providers(&handle.state.engine, &location);
+        let own = providers
+            .iter()
+            .find(|provider| provider.id == "own")
+            .expect("the shared-dir provider binds (dogfood2 bug 3)");
+        assert_eq!(own.name.as_str(), "Own");
+        assert_eq!(own.base_url, "https://synth.invalid/v1");
+        assert_eq!(own.api_key.as_deref(), Some("sk-SYNTHETIC"));
+        assert_eq!(
+            own.models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(),
+            ["glm-5.3"],
+            "the model overlay (cost ARRAY included) survives the binding"
+        );
+        let default = crate::boot::location_default_model(&handle.state.engine, &location)
+            .expect("the model selection binds");
+        assert_eq!(default.provider_id.as_str(), "own");
+        assert_eq!(default.model.as_str(), "glm-5.3");
+
+        handle.shutdown_and_join().await.expect("shutdown");
+    }
 }
