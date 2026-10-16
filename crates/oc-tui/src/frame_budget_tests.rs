@@ -180,7 +180,7 @@ fn strip_frame_budget_body() {
     // Warmup (mount + caches).
     for frame in 0..3 {
         let hover = if frame % 2 == 0 { Some("s4") } else { None };
-        store.set_tab_hover(hover);
+        store.set_tab_hover(hover, false);
         let _ = render_session(&store, "s1", &theme.styles(), (200, 50));
     }
     let mut worst = 0u128;
@@ -191,7 +191,7 @@ fn strip_frame_budget_body() {
         // Alternate hover targets so every frame performs real patch
         // work (widths shift, ✕ reveals, glow titles re-derive).
         let hover = if frame % 2 == 0 { Some("s4") } else { Some("s7") };
-        store.set_tab_hover(hover);
+        store.set_tab_hover(hover, false);
         let start = std::time::Instant::now();
         let painted = render_session(&store, "s1", &theme.styles(), (200, 50));
         let elapsed = start.elapsed();
