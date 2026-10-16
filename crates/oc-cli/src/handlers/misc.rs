@@ -16,8 +16,6 @@ pub async fn root(
     directory: Option<&str>,
     continue_last: bool,
     session: Option<String>,
-    prompt: Option<String>,
-    auto: bool,
     server: &crate::cli::ServerParams,
 ) -> i32 {
     if let Some(directory) = directory {
@@ -25,18 +23,6 @@ pub async fn root(
             eprintln!("Error: Failed to change directory to {directory}: {error}");
             return 1;
         }
-    }
-    // Forward the boot flags the TUI consumes (v2 `handlers/default.ts:
-    // 114-117` passes `prompt` and `auto: auto || yolo ||
-    // dangerouslySkipPermissions` into the TUI args). `BootArgs` lives in
-    // oc-tui (TUI-lane ownership), so the handoff runs through the
-    // documented env contract (`main::BOOT_PROMPT_ENV` / `BOOT_AUTO_ENV`)
-    // — set in-process before the TUI launch.
-    if let Some(prompt) = prompt {
-        std::env::set_var(crate::BOOT_PROMPT_ENV, prompt);
-    }
-    if auto {
-        std::env::set_var(crate::BOOT_AUTO_ENV, "1");
     }
     let resolved = match server_connection::resolve(server_connection::Args {
         server: server.server.clone(),
