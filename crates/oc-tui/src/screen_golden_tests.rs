@@ -544,3 +544,152 @@ fn session_sidebar_live_matches_text_grid_and_ansi() {
         assert_ansi_byte_match("session-sidebar-live", usize::from(width), &frame);
     }
 }
+
+/// SURF-1 — the transcript detail states as one golden assembly: the
+/// shell tool's detail cell (rail, `$ cmd`, collapsed preview), the
+/// skill row, the queued and completed compaction dividers (with usage
+/// and summary markdown) and the staged-revert banner with its file
+/// rows. Pinned LOCALLY like the plugin-section golden (the detail
+/// states are fixture-shaped, not in the reference corpus).
+#[test]
+fn surf1_detail_states_match_the_golden_assembly() {
+    use crate::components::message::model::{Part, PartTime, ToolState, ToolStatus};
+    let theme = theme();
+    let mut messages = vscroll_messages_fixture();
+    messages.truncate(2);
+    messages.push(crate::components::message::Message::Assistant {
+        id: "surf-a".into(),
+        agent: "build".into(),
+        model: "fixture/fixture".into(),
+        parts: vec![Part::Tool {
+            id: "surf-sh".into(),
+            name: "bash".into(),
+            time: PartTime::default(),
+            state: ToolState {
+                status: ToolStatus::Completed,
+                input: [("command".to_owned(), "echo hi".to_owned())].into_iter().collect(),
+                metadata: std::collections::BTreeMap::new(),
+                metadata_json: None,
+                output: Some("hi\nsecond line".to_owned()),
+                error: None,
+            },
+        }],
+        finish: None,
+        error: None,
+        time: PartTime::default(),
+        tokens: None,
+        usage_total: None,
+    });
+    messages.push(crate::components::message::Message::Compaction {
+        id: "surf-comp".into(),
+        created: 3,
+        running: false,
+        failed: false,
+        cancelled: false,
+        error: None,
+        summary: Some("Condensed the early turns.".into()),
+        tokens_in: Some(1_200),
+        tokens_out: Some(200),
+        provider_compaction: false,
+    });
+    messages.push(crate::components::message::Message::Skill {
+        id: "surf-skill".into(),
+        name: "commitlint".into(),
+        created: 4,
+    });
+    let options = TranscriptOptions {
+        pending_compactions: vec!["surf-inbox".into()],
+        revert: Some(crate::store::RevertState {
+            message_id: "vs-user-1".into(),
+            files: vec![crate::store::RevertFile {
+                file: "src/a.py".into(),
+                status: "modified".into(),
+                additions: 3,
+                deletions: 1,
+            }],
+        }),
+        ..TranscriptOptions::default()
+    };
+    let screen = SessionScreen {
+        tabs: None,
+        sidebar: SidebarMode::Hide,
+        sidebar_view: crate::components::sidebar::SidebarView::fixture(
+            "Surf fixture",
+            FIXTURE_LOCATION,
+        ),
+        follow: FollowState::Sticky,
+        location: FIXTURE_LOCATION,
+    };
+    let composer = sibling_composer(80, &theme);
+    let frame = paint_session_screen(
+        &messages,
+        &options,
+        &screen,
+        &theme,
+        80,
+        30,
+        ComposerSlot::Sibling(&composer),
+    );
+    assert_text_grid_match("surf1-detail-states", 80, &frame);
+    assert_ansi_byte_match("surf1-detail-states", 80, &frame);
+}
+
+/// SURF-1 — the sidebar's LIVE sections in the golden assembly: the
+/// context meter (tokens + % + cost), the MCP rows with status dots
+/// (collapsed past two) and the location footer.
+#[test]
+fn surf1_sidebar_live_sections_match_the_golden_assembly() {
+    let theme = theme();
+    let sidebar_view = crate::components::sidebar::SidebarView {
+        title: "Surf fixture".into(),
+        sections: crate::components::sidebar::SidebarSections {
+            context: crate::components::sidebar::SidebarContextWidget {
+                tokens: Some(60_400),
+                percent: Some(12),
+                cost: Some("$0.42".to_owned()),
+            },
+            mcp: crate::components::sidebar::SidebarMcpWidget {
+                servers: vec![
+                    crate::store::McpServerRow {
+                        name: "github".into(),
+                        status: "connected",
+                        error: None,
+                    },
+                    crate::store::McpServerRow {
+                        name: "filesystem".into(),
+                        status: "connected",
+                        error: None,
+                    },
+                    crate::store::McpServerRow {
+                        name: "broken".into(),
+                        status: "failed",
+                        error: Some("ECONNREFUSED".into()),
+                    },
+                ],
+                open: false,
+            },
+            plugins: Vec::new(),
+        },
+        onboarding: false,
+        location: Some("/tmp/opencode/surf:main".to_owned()),
+    };
+    let screen = SessionScreen {
+        tabs: None,
+        sidebar: SidebarMode::Auto,
+        sidebar_view,
+        follow: FollowState::Sticky,
+        location: FIXTURE_LOCATION,
+    };
+    let composer = sibling_composer(118, &theme);
+    let frame = paint_session_screen(
+        &crate::components::message::list::message_groups_fixture(),
+        &TranscriptOptions::default(),
+        &screen,
+        &theme,
+        160,
+        30,
+        ComposerSlot::Sibling(&composer),
+    );
+    assert_text_grid_match("surf1-sidebar-live", 160, &frame);
+    assert_ansi_byte_match("surf1-sidebar-live", 160, &frame);
+}
