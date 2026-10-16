@@ -2,8 +2,7 @@
 //! `packages/ai/src/protocols/utils/{media-input,media-type,speech-stream,
 //! speaker-turns}.ts`).
 
-use crate::media::body::{merge_records, normalize_numbers, Body, Form, Query, QueryValue};
-use crate::media::protocol::TextOutput;
+use crate::media::body::{normalize_numbers, Form, Query, QueryValue};
 use crate::schema::media::{self, Asset};
 use crate::schema::{AiError, ProviderId, ProviderOptions};
 
@@ -11,19 +10,25 @@ use crate::schema::{AiError, ProviderId, ProviderOptions};
 // media-input.ts
 // ===========================================================================
 
+/// Non-negative wire integer from a provider-number `f64` — dimensions
+/// and sample rates are documented positive; negatives clamp to 0.
+#[must_use]
+#[allow(clippy::cast_sign_loss)] // clamped first; JS numbers cross as integers
+pub fn wire_u64(value: f64) -> u64 {
+    value.max(0.0) as u64
+}
+
 /// Owned bytes for multipart uploads; decodes `base64` sources and rejects
 /// remote sources (media-input.ts:9-16).
 pub fn inline_bytes(route: &str, asset: &Asset) -> Result<Vec<u8>, AiError> {
-    match &asset.source {
-        media::Source::Bytes { data, .. } => Ok(data.0.clone()),
-        _ => {
-            let Some(inline) = asset.inline() else {
-                return Err(crate::protocols::shared::inline_required(route, asset));
-            };
-            crate::protocols::shared::decode_base64(&inline.base64)
-                .map_err(|_| crate::media::body::invalid_base64(route))
-        }
+    if let media::Source::Bytes { data, .. } = &asset.source {
+        return Ok(data.0.clone());
     }
+    let Some(inline) = asset.inline() else {
+        return Err(crate::protocols::shared::inline_required(route, asset));
+    };
+    crate::protocols::shared::decode_base64(&inline.base64)
+        .map_err(|_| crate::media::body::invalid_base64(route))
 }
 
 /// Build a query from a JSON record (media-input.ts:28-36): scalars pass
@@ -121,12 +126,12 @@ pub fn image_output(
     info: Option<media::Info>,
     provider_metadata: Option<crate::schema::ProviderMetadata>,
 ) -> Result<Asset, AiError> {
-    if let Some(data) = item.get("b64_json").and_then(|value| value.as_str()) {
+    if let Some(data) = item.get("b64_json").and_then(serde_json::Value::as_str) {
         if !data.is_empty() {
             return decoded_asset(invalid, label, data, media_type, info, provider_metadata);
         }
     }
-    if let Some(url) = item.get("url").and_then(|value| value.as_str()) {
+    if let Some(url) = item.get("url").and_then(serde_json::Value::as_str) {
         if !url.is_empty() {
             let mut asset = media::url(url, media_type.map(str::to_string), None);
             asset.info = info;
@@ -332,9 +337,13 @@ pub mod gemini {
     impl UsageMetadata {
         fn from_value(value: &serde_json::Value) -> Self {
             Self {
-                prompt_token_count: value.get("promptTokenCount").and_then(|v| v.as_f64()),
-                candidates_token_count: value.get("candidatesTokenCount").and_then(|v| v.as_f64()),
-                total_token_count: value.get("totalTokenCount").and_then(|v| v.as_f64()),
+                prompt_token_count: value
+                    .get("promptTokenCount")
+                    .and_then(serde_json::Value::as_f64),
+                candidates_token_count: value
+                    .get("candidatesTokenCount")
+                    .and_then(serde_json::Value::as_f64),
+                total_token_count: value.get("totalTokenCount").and_then(serde_json::Value::as_f64),
             }
         }
     }
@@ -369,23 +378,26 @@ pub mod gemini {
         if let Some(usage) = chunk.get("usageMetadata").filter(|value| !value.is_null()) {
             state.usage = Some(UsageMetadata::from_value(usage));
         }
-        if let Some(reason) = chunk.pointer("/candidates/0/finishReason").and_then(|v| v.as_str()) {
+        if let Some(reason) =
+            chunk.pointer("/candidates/0/finishReason").and_then(serde_json::Value::as_str)
+        {
             state.finish_reason = Some(reason.to_string());
         }
-        if let Some(version) = chunk.get("modelVersion").and_then(|v| v.as_str()) {
+        if let Some(version) = chunk.get("modelVersion").and_then(serde_json::Value::as_str) {
             state.model_version = Some(version.to_string());
         }
-        if let Some(id) = chunk.get("responseId").and_then(|v| v.as_str()) {
+        if let Some(id) = chunk.get("responseId").and_then(serde_json::Value::as_str) {
             state.response_id = Some(id.to_string());
         }
     }
 
     /// `blocked` (gemini-generate-content.ts:86-95): a prompt-level block.
     pub fn blocked(name: &str, chunk: &serde_json::Value, frame: &str) -> Option<AiError> {
-        let reason = chunk.pointer("/promptFeedback/blockReason").and_then(|v| v.as_str())?;
+        let reason =
+            chunk.pointer("/promptFeedback/blockReason").and_then(serde_json::Value::as_str)?;
         let message_detail = chunk
             .pointer("/promptFeedback/blockReasonMessage")
-            .and_then(|v| v.as_str())
+            .and_then(serde_json::Value::as_str)
             .map(|message| format!(": {message}"))
             .unwrap_or_default();
         Some(AiError::new(AiErrorReason::ContentPolicy {
@@ -419,7 +431,8 @@ pub mod gemini {
     /// `withheld` (gemini-generate-content.ts:110-116): no output at all
     /// after a policy stop.
     pub fn withheld(name: &str, chunk: &serde_json::Value, frame: &str) -> Option<AiError> {
-        let reason = chunk.pointer("/candidates/0/finishReason").and_then(|v| v.as_str());
+        let reason =
+            chunk.pointer("/candidates/0/finishReason").and_then(serde_json::Value::as_str);
         if !content_filtered(reason) {
             return None;
         }
@@ -838,7 +851,7 @@ mod tests {
         assert_eq!(inline_bytes("r", &asset).unwrap(), vec![1, 2, 3]);
         let remote = media::url("https://x/a.png", Some("image/png".into()), None);
         let error = inline_bytes("r", &remote).unwrap_err();
-        assert!(error.reason.tag() == "InvalidRequest");
+        assert_eq!(error.reason.tag(), "InvalidRequest");
     }
 
     #[test]

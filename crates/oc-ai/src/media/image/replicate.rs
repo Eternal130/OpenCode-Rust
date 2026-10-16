@@ -5,13 +5,11 @@
 use std::collections::BTreeMap;
 
 use crate::media::body::{merge_records, Body};
-use crate::media::model::{
-    image_field_present, ImageRequest, ImageResponse, PollContext, Snapshot, Started, Status,
-};
+use crate::media::model::{ImageRequest, ImageResponse, PollContext, Snapshot, Started, Status};
 use crate::media::protocol::{
     status as table_status, Identity, MediaProtocolBase, QueuedProtocol, TextOutput,
 };
-use crate::media::utils::{media_reference, MediaRefKind};
+use crate::media::utils::media_reference;
 use crate::schema::media::{self, Asset};
 use crate::schema::{AiError, MediaUsage};
 
@@ -133,9 +131,7 @@ fn lower_input(value: &serde_json::Value) -> Result<serde_json::Value, AiError> 
 /// TS checks `value instanceof Media.Asset`; the Rust wire form of a
 /// passed-through asset is a serialized `Asset` object (`source.type`).
 fn asset_of(value: &serde_json::Value) -> Option<Asset> {
-    if value.get("source").and_then(|source| source.get("type")).is_none() {
-        return None;
-    }
+    value.get("source")?.get("type")?;
     serde_json::from_value::<Asset>(value.clone()).ok()
 }
 
@@ -147,8 +143,9 @@ fn decode_prediction(output: &TextOutput) -> Result<serde_json::Value, AiError> 
 /// an already-finished prediction.
 pub fn decode_start(output: &TextOutput) -> Result<Started<Token>, AiError> {
     let prediction = decode_prediction(output)?;
-    let id = prediction.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-    let raw = prediction.get("status").and_then(|v| v.as_str()).unwrap_or_default();
+    let id =
+        prediction.get("id").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+    let raw = prediction.get("status").and_then(serde_json::Value::as_str).unwrap_or_default();
     let status = table_status(&status_table(), raw, output)?;
     Ok(Started {
         snapshot: Snapshot { id: id.clone(), status, progress: None, position: None },
@@ -156,12 +153,12 @@ pub fn decode_start(output: &TextOutput) -> Result<Started<Token>, AiError> {
             id,
             get_url: prediction
                 .pointer("/urls/get")
-                .and_then(|v| v.as_str())
+                .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
             cancel_url: prediction
                 .pointer("/urls/cancel")
-                .and_then(|v| v.as_str())
+                .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
         },
@@ -174,7 +171,7 @@ pub fn decode_status(
     context: &PollContext<Token>,
 ) -> Result<Snapshot, AiError> {
     let prediction = decode_prediction(output)?;
-    let raw = prediction.get("status").and_then(|v| v.as_str()).unwrap_or_default();
+    let raw = prediction.get("status").and_then(serde_json::Value::as_str).unwrap_or_default();
     Ok(Snapshot {
         id: context.token.id.clone(),
         status: table_status(&status_table(), raw, output)?,
@@ -189,10 +186,10 @@ pub fn decode_result(
     context: &PollContext<Token>,
 ) -> Result<ImageResponse, AiError> {
     let prediction = decode_prediction(output)?;
-    let raw = prediction.get("status").and_then(|v| v.as_str()).unwrap_or_default();
+    let raw = prediction.get("status").and_then(serde_json::Value::as_str).unwrap_or_default();
     let status = table_status(&status_table(), raw, output)?;
     if matches!(status, Status::Failed | Status::Cancelled | Status::Expired) {
-        let error = prediction.get("error").and_then(|v| v.as_str());
+        let error = prediction.get("error").and_then(serde_json::Value::as_str);
         return Err(output.ended(
             status,
             format!(
@@ -206,7 +203,7 @@ pub fn decode_result(
     if status != Status::Completed {
         return Err(output.pending(&context.token.id));
     }
-    if prediction.get("data_removed").and_then(|v| v.as_bool()) == Some(true) {
+    if prediction.get("data_removed").and_then(serde_json::Value::as_bool) == Some(true) {
         return Err(output.ended(
             Status::Expired,
             format!("Replicate removed the output of prediction {}", context.token.id),
@@ -237,7 +234,8 @@ pub fn decode_result(
             output.invalid(format!("Replicate prediction {} returned no images", context.token.id))
         );
     }
-    let predict_time = prediction.pointer("/metrics/predict_time").and_then(|v| v.as_f64());
+    let predict_time =
+        prediction.pointer("/metrics/predict_time").and_then(serde_json::Value::as_f64);
     let mut replicate = std::collections::BTreeMap::new();
     replicate.insert(
         "predictionId".to_string(),

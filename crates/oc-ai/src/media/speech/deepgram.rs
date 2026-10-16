@@ -7,7 +7,7 @@ use crate::media::body::{merge_records, Body, Query};
 use crate::media::model::{
     speech_field_present, Addressed, ResponseContext, SpeechEvent, SpeechRequest,
 };
-use crate::media::protocol::{Framing, Identity, MediaProtocolBase, StreamProtocol, TextOutput};
+use crate::media::protocol::{Framing, Identity, MediaProtocolBase, StreamProtocol};
 use crate::media::utils::speech_stream::PcmEncoding;
 use crate::media::utils::{query_from, speech_stream};
 use crate::schema::AiError;
@@ -40,14 +40,16 @@ fn audio_format(request: &SpeechRequest) -> (Option<String>, Option<String>) {
     (
         provider
             .and_then(|options| options.get("encoding"))
-            .and_then(|value| value.as_str())
+            .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .or_else(|| format.map(|(_, encoding, _)| (*encoding).to_string())),
         provider
             .and_then(|options| options.get("container"))
-            .and_then(|value| value.as_str())
+            .and_then(serde_json::Value::as_str)
             .map(str::to_string)
-            .or_else(|| format.and_then(|(_, _, container)| container.map(|c| c.to_string()))),
+            .or_else(|| {
+                format.and_then(|(_, _, container)| container.map(std::string::ToString::to_string))
+            }),
     )
 }
 
@@ -163,49 +165,47 @@ pub fn finish(
         metadata.insert("deepgram".to_string(), deepgram);
         metadata
     });
-    match (container.as_deref(), headerless) {
-        (Some("none"), Some((_, pcm_encoding, default_rate))) => {
-            let requested_rate = request
-                .provider_options
-                .as_ref()
-                .and_then(|options| options.get("sampleRate"))
-                .and_then(|value| value.as_f64());
-            let rate = speech_stream::sample_rate(media_type.as_deref())
-                .or(requested_rate)
-                .unwrap_or(*default_rate);
-            speech_stream::finish(
-                &identity(),
-                state,
-                speech_stream::pcm(*pcm_encoding, Some(rate), media_type),
-                speech_stream::header_usage("characters", header("dg-char-count")),
-                None,
-                provider_metadata,
-                None,
-            )
-        }
-        _ => {
-            // Deepgram's default encoding is MP3; WAV is a container
-            // around any encoding.
-            let info_format = match container.as_deref() {
-                Some("wav") => "wav".to_string(),
-                _ => encoding.unwrap_or_else(|| "mp3".to_string()),
-            };
-            speech_stream::finish(
-                &identity(),
-                state,
-                speech_stream::Output {
-                    media_type: media_type.map(str::to_string),
-                    info: Some(crate::schema::media::Info {
-                        format: Some(info_format),
-                        ..Default::default()
-                    }),
-                },
-                speech_stream::header_usage("characters", header("dg-char-count")),
-                None,
-                provider_metadata,
-                None,
-            )
-        }
+    if let (Some("none"), Some((_, pcm_encoding, default_rate))) =
+        (container.as_deref(), headerless)
+    {
+        let requested_rate = request
+            .provider_options
+            .as_ref()
+            .and_then(|options| options.get("sampleRate"))
+            .and_then(serde_json::Value::as_f64);
+        let rate =
+            speech_stream::sample_rate(media_type).or(requested_rate).unwrap_or(*default_rate);
+        speech_stream::finish(
+            &identity(),
+            state,
+            speech_stream::pcm(*pcm_encoding, Some(rate), media_type),
+            speech_stream::header_usage("characters", header("dg-char-count")),
+            None,
+            provider_metadata,
+            None,
+        )
+    } else {
+        // Deepgram's default encoding is MP3; WAV is a container around
+        // any encoding.
+        let info_format = match container.as_deref() {
+            Some("wav") => "wav".to_string(),
+            _ => encoding.unwrap_or_else(|| "mp3".to_string()),
+        };
+        speech_stream::finish(
+            &identity(),
+            state,
+            speech_stream::Output {
+                media_type: media_type.map(str::to_string),
+                info: Some(crate::schema::media::Info {
+                    format: Some(info_format),
+                    ..Default::default()
+                }),
+            },
+            speech_stream::header_usage("characters", header("dg-char-count")),
+            None,
+            provider_metadata,
+            None,
+        )
     }
 }
 

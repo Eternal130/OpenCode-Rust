@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+oc-ai = { workspace = true }
 oc-core = { workspace = true }
 oc-schema = { workspace = true }
 oc-util = { workspace = true }

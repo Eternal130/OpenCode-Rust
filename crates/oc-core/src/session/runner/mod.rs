@@ -74,6 +74,12 @@ pub mod system_prompt;
 pub mod title;
 pub mod to_llm_message;
 
+pub mod generate;
+pub use generate::{GenerateError, SessionGenerate};
+
+#[cfg(test)]
+mod tests_generate;
+
 #[cfg(test)]
 mod tests_compaction;
 #[cfg(test)]

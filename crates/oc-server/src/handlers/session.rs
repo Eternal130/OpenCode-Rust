@@ -938,12 +938,73 @@ async fn context(
 async fn diff(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    _uri: Uri,
+    uri: Uri,
 ) -> Result<Response, ApiError> {
-    let _ = session_services(&state, &session_id).await?;
-    // File-diff surface rides the snapshot diff API (TODO(phase-9)); the
-    // REST shape stays an empty array until then.
-    Ok(json_data(Value::Array(Vec::new())))
+    let (services, row) = session_services(&state, &session_id).await?;
+    // Turn-range diffs (session/diff.ts): the files changed by the turn
+    // containing a user message, between the range's first recorded start
+    // snapshot and its last recorded end snapshot (or a fresh capture for
+    // a step still running in the active session).
+    let from = query_field(&uri, "from").filter(|value| !value.is_empty());
+    let to = query_field(&uri, "to").filter(|value| !value.is_empty());
+    let context = query_field(&uri, "context").and_then(|value| value.parse::<u32>().ok());
+    let active = services.execution.active().contains(&session_id);
+    let plan = oc_core::session::diff::resolve_turn(
+        &(*state.engine.db).clone(),
+        &row,
+        from.as_deref(),
+        to.as_deref(),
+        context,
+    )
+    .await
+    .map_err(|error| match error {
+        oc_core::session::diff::DiffError::MessageNotFound { session_id, message_id } => {
+            ApiError::message_not_found(&session_id, &message_id)
+        }
+        oc_core::session::diff::DiffError::TurnRange(error) => {
+            ApiError::invalid_request_kind(error.message, "turn_range")
+        }
+        oc_core::session::diff::DiffError::Db(message) => {
+            crate::errors::debug_cause("session:diff", &message);
+            ApiError::unknown_ref()
+        }
+    })?;
+    let Some(plan) = plan else {
+        return Ok(json_data(Value::Array(Vec::new())));
+    };
+    // Snapshot trees live in the repository of the location that captured
+    // them; a range spanning a switch is rejected by `resolve_turn`, but
+    // the bracketing switch can still own a different location than the
+    // session's current one.
+    let plan_location = LocationRef::new(
+        std::path::PathBuf::from(plan.location.directory.0.clone()),
+        plan.location.workspace_id.as_ref().map(|id| id.0.clone()),
+    );
+    let snapshot_services = if plan_location.directory == services.graph.location.directory
+        && plan_location.workspace_id == services.graph.location.workspace_id
+    {
+        services
+    } else {
+        state.engine.location(plan_location).await.map_err(|error| {
+            match &error {
+                oc_core::location::BootError::MissingDirectory(directory) => {
+                    return crate::errors::location_not_found_path(directory.display());
+                }
+                oc_core::location::BootError::Database(_) => {}
+            }
+            crate::errors::debug_cause("session:diff", &error);
+            ApiError::unknown_ref()
+        })?
+    };
+    let diffs = oc_core::session::diff::run_turn(&snapshot_services.snapshot, &plan, active)
+        .await
+        .map_err(|error| {
+            crate::errors::debug_cause("session:diff", &error);
+            ApiError::unknown_ref()
+        })?;
+    let data: Vec<Value> =
+        diffs.iter().map(|diff| serde_json::to_value(diff).unwrap_or(Value::Null)).collect();
+    Ok(json_data(Value::Array(data)))
 }
 
 async fn generate(
@@ -951,10 +1012,25 @@ async fn generate(
     Path(session_id): Path<String>,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let _ = (body["prompt"].as_str(), session_services(&state, &session_id).await?);
-    // The one-shot generate path needs the engine's LLM surface exposed
-    // (TODO(phase-9)); declared 503 until then.
-    Err(ApiError::service_unavailable("Text generation is not available", Some("opencode")))
+    let (services, _) = session_services(&state, &session_id).await?;
+    let prompt = body["prompt"].as_str().unwrap_or_default().to_owned();
+    // One-shot generation from the current session context without
+    // mutating session history (session/generate.ts). Model/LLM failures
+    // are the documented 503; a missing session stays the 404 from
+    // `session_services`.
+    let text =
+        services.runner.generation().generate(&session_id, &prompt).await.map_err(|error| {
+            match &error {
+                oc_core::session::runner::GenerateError::NotFound(_)
+                | oc_core::session::runner::GenerateError::AgentNotFound { .. }
+                | oc_core::session::runner::GenerateError::LocationMismatch(_) => {
+                    crate::errors::debug_cause("session:generate", &error);
+                    ApiError::unknown_ref()
+                }
+                other => ApiError::service_unavailable(other.to_string(), Some("opencode")),
+            }
+        })?;
+    Ok(json_data(serde_json::json!({ "text": text })))
 }
 
 // ---------------------------------------------------------------------------

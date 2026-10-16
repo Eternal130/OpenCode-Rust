@@ -6,13 +6,10 @@
 use std::collections::BTreeMap;
 
 use crate::media::body::{merge_records, Body};
-use crate::media::model::{
-    image_field_present, ImageRequest, ImageResponse, PollContext, Snapshot, Started, Status,
-};
+use crate::media::model::{ImageRequest, ImageResponse, PollContext, Snapshot, Started, Status};
 use crate::media::protocol::{
     status as table_status, Identity, MediaProtocolBase, QueuedProtocol, TextOutput,
 };
-use crate::media::utils::{self, dimensions};
 use crate::schema::media;
 use crate::schema::{AiError, MediaUsage};
 
@@ -156,16 +153,18 @@ pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
             request
                 .size
                 .as_deref()
-                .and_then(|size| dimensions(size).0)
-                .map(|w| serde_json::json!(w as u32)),
+                .and_then(|size| crate::media::utils::dimensions(size).0)
+                .map(crate::media::utils::wire_u64)
+                .map(|v| serde_json::json!(v)),
         ),
         (
             "height",
             request
                 .size
                 .as_deref()
-                .and_then(|size| dimensions(size).1)
-                .map(|h| serde_json::json!(h as u32)),
+                .and_then(|size| crate::media::utils::dimensions(size).1)
+                .map(crate::media::utils::wire_u64)
+                .map(|v| serde_json::json!(v)),
         ),
         ("aspect_ratio", request.aspect_ratio.clone().map(|ratio| serde_json::json!(ratio))),
         ("seed", request.seed.map(|seed| serde_json::json!(seed))),
@@ -216,7 +215,7 @@ fn is_moderated(status: &str) -> bool {
 /// `decodeStart` (bfl-images.ts:155-162).
 pub fn decode_start(output: &TextOutput) -> Result<Started<Token>, AiError> {
     let value = output.decode_json(output.body)?;
-    let id = value.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let id = value.get("id").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
     Ok(Started {
         snapshot: Snapshot {
             id: id.clone(),
@@ -228,10 +227,10 @@ pub fn decode_start(output: &TextOutput) -> Result<Started<Token>, AiError> {
             id,
             polling_url: value
                 .get("polling_url")
-                .and_then(|v| v.as_str())
+                .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
-            cost: value.get("cost").and_then(|v| v.as_f64()),
+            cost: value.get("cost").and_then(serde_json::Value::as_f64),
         },
     })
 }
@@ -242,7 +241,7 @@ pub fn decode_status(
     context: &PollContext<Token>,
 ) -> Result<Snapshot, AiError> {
     let value = output.decode_json(output.body)?;
-    let raw = value.get("status").and_then(|v| v.as_str()).unwrap_or_default();
+    let raw = value.get("status").and_then(serde_json::Value::as_str).unwrap_or_default();
     Ok(Snapshot {
         id: context.token.id.clone(),
         status: table_status(&status_table(), raw, output)?,
@@ -259,7 +258,8 @@ pub fn decode_result(
     context: &PollContext<Token>,
 ) -> Result<ImageResponse, AiError> {
     let value = output.decode_json(output.body)?;
-    let raw = value.get("status").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let raw =
+        value.get("status").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
     let status = table_status(&status_table(), &raw, output)?;
     if is_moderated(&raw) {
         return Err(output.content_policy("Black Forest Labs moderated the generation"));
@@ -278,9 +278,9 @@ pub fn decode_result(
         return Err(output
             .invalid(format!("Black Forest Labs generation {} has no result", context.token.id)));
     };
-    let sample = result.get("sample").and_then(|v| v.as_str()).unwrap_or_default();
+    let sample = result.get("sample").and_then(serde_json::Value::as_str).unwrap_or_default();
     // A settled `cost` on the result supersedes the submit-time cost.
-    let cost = value.get("cost").and_then(|v| v.as_f64()).or(context.token.cost);
+    let cost = value.get("cost").and_then(serde_json::Value::as_f64).or(context.token.cost);
     let mut bfl = std::collections::BTreeMap::new();
     bfl.insert("id".to_string(), serde_json::json!(context.token.id));
     bfl.insert(

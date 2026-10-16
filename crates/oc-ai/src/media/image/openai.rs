@@ -7,7 +7,7 @@
 
 use crate::media::body::{merge_records, Body, Form};
 use crate::media::model::{
-    image_field_present, Addressed, ImageEvent, ImageRequest, ImageResponse, Mode, ResponseContext,
+    image_field_present, Addressed, ImageEvent, ImageRequest, Mode, ResponseContext,
 };
 use crate::media::protocol::{
     Frame, Framing, Identity, MediaProtocolBase, StreamProtocol, TextOutput,
@@ -29,9 +29,7 @@ pub fn identity() -> Identity {
 /// smuggle replacements for them (openai-images.ts:110).
 const RESERVED_FORM_FIELDS: &[&str] = &["model", "prompt", "image", "image[]", "images", "mask"];
 
-fn native_options(
-    options: &crate::schema::ProviderOptions,
-) -> Option<crate::schema::ProviderOptions> {
+fn native_options(options: &crate::schema::ProviderOptions) -> crate::schema::ProviderOptions {
     let mut native = options.clone();
     let output_compression = native.remove("outputCompression");
     let partial_images = native.remove("partialImages");
@@ -39,7 +37,7 @@ fn native_options(
         native.insert("output_compression".to_string(), compression);
     }
     let _ = partial_images;
-    Some(native)
+    native
 }
 
 /// `streamOptions` (openai-images.ts:118-125): stream mode asks for SSE
@@ -103,8 +101,9 @@ pub fn body_from(request: &Addressed<ImageRequest>) -> Result<Body, AiError> {
         ])
         .as_ref(),
         stream_options(request)?.as_ref(),
-        native_options(request.request.provider_options.as_ref().unwrap_or(&Default::default()))
-            .as_ref(),
+        Some(&native_options(
+            request.request.provider_options.as_ref().unwrap_or(&Default::default()),
+        )),
         request.request.http.as_ref().and_then(|http| http.body.as_ref()),
     ]);
 
@@ -174,9 +173,9 @@ fn usage_of(value: &serde_json::Value) -> Option<MediaUsage> {
         return None;
     }
     Some(MediaUsage::Tokens {
-        input: value.get("input_tokens").and_then(|v| v.as_f64()),
-        output: value.get("output_tokens").and_then(|v| v.as_f64()),
-        total: value.get("total_tokens").and_then(|v| v.as_f64()),
+        input: value.get("input_tokens").and_then(serde_json::Value::as_f64),
+        output: value.get("output_tokens").and_then(serde_json::Value::as_f64),
+        total: value.get("total_tokens").and_then(serde_json::Value::as_f64),
         details: Some(
             serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(value.clone())
                 .unwrap_or_default(),
@@ -187,7 +186,7 @@ fn usage_of(value: &serde_json::Value) -> Option<MediaUsage> {
 /// `info` (openai-images.ts:201-204): `size` echoes the rendered
 /// `WIDTHxHEIGHT`; `auto` or any other value leaves dimensions unknown.
 fn info_of(format: &str, size: Option<&str>) -> Info {
-    let (width, height) = size.map(utils::dimensions).unwrap_or((None, None));
+    let (width, height) = size.map_or((None, None), utils::dimensions);
     Info { format: Some(format.to_string()), width, height, ..Info::default() }
 }
 
@@ -213,36 +212,42 @@ pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<ImageEvent>, AiErr
     let invalid = |message: String| identity().frame_error(message, frame.to_string());
     let event =
         TextOutput { identity: &identity(), body: frame, http: None }.decode_frame(frame)?;
-    let event_type = event.get("type").and_then(|value| value.as_str()).unwrap_or_default();
-    let format =
-        event.get("output_format").and_then(|value| value.as_str()).unwrap_or_default().to_string();
+    let event_type = event.get("type").and_then(serde_json::Value::as_str).unwrap_or_default();
+    let format = event
+        .get("output_format")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     if event_type.ends_with("partial_image") {
-        let data = event.get("b64_json").and_then(|value| value.as_str()).unwrap_or_default();
-        let index =
-            event.get("partial_image_index").and_then(|value| value.as_f64()).unwrap_or_default();
+        let data = event.get("b64_json").and_then(serde_json::Value::as_str).unwrap_or_default();
+        let index = event
+            .get("partial_image_index")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or_default();
         let image = event_image(
-            |message| invalid(message),
+            invalid,
             "OpenAI Images partial image",
             data,
             &format,
-            event.get("size").and_then(|value| value.as_str()),
+            event.get("size").and_then(serde_json::Value::as_str),
         )?;
         return Ok(vec![ImageEvent::ImagePartial { index, image }]);
     }
-    let data = event.get("b64_json").and_then(|value| value.as_str()).unwrap_or_default();
+    let data = event.get("b64_json").and_then(serde_json::Value::as_str).unwrap_or_default();
     let image = event_image(
-        |message| invalid(message),
+        invalid,
         &format!("OpenAI Images result {}", state.completed),
         data,
         &format,
-        event.get("size").and_then(|value| value.as_str()),
+        event.get("size").and_then(serde_json::Value::as_str),
     )?;
     let index = state.completed as f64;
     state.completed += 1;
     state.format = Some(format);
-    state.size = event.get("size").and_then(|value| value.as_str()).map(str::to_string);
-    state.quality = event.get("quality").and_then(|value| value.as_str()).map(str::to_string);
-    state.background = event.get("background").and_then(|value| value.as_str()).map(str::to_string);
+    state.size = event.get("size").and_then(serde_json::Value::as_str).map(str::to_string);
+    state.quality = event.get("quality").and_then(serde_json::Value::as_str).map(str::to_string);
+    state.background =
+        event.get("background").and_then(serde_json::Value::as_str).map(str::to_string);
     state.usage = usage_of(event.get("usage").unwrap_or(&serde_json::Value::Null));
     Ok(vec![ImageEvent::Image { index, image }])
 }
@@ -269,17 +274,18 @@ pub fn on_document(
         .map_err(|cause| invalid(format!("OpenAI Images returned an invalid response: {cause}")))?;
     let format = decoded
         .get("output_format")
-        .and_then(|value| value.as_str())
+        .and_then(serde_json::Value::as_str)
         .map(str::to_string)
         .or_else(|| requested.map(str::to_string))
         .unwrap_or_else(|| "png".to_string());
-    let size = decoded.get("size").and_then(|value| value.as_str());
-    let data = decoded.get("data").and_then(|value| value.as_array()).cloned().unwrap_or_default();
+    let size = decoded.get("size").and_then(serde_json::Value::as_str);
+    let data =
+        decoded.get("data").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
     let mut images = Vec::new();
     for (index, item) in data.iter().enumerate() {
-        let b64 = item.get("b64_json").and_then(|value| value.as_str()).unwrap_or_default();
+        let b64 = item.get("b64_json").and_then(serde_json::Value::as_str).unwrap_or_default();
         images.push(utils::decoded_asset(
-            |message| invalid(message),
+            invalid,
             &format!("OpenAI Images result {index}"),
             b64,
             Some(&format!("image/{format}")),
@@ -293,9 +299,9 @@ pub fn on_document(
     state.completed = images.len();
     state.format = Some(format);
     state.size = size.map(str::to_string);
-    state.quality = decoded.get("quality").and_then(|value| value.as_str()).map(str::to_string);
+    state.quality = decoded.get("quality").and_then(serde_json::Value::as_str).map(str::to_string);
     state.background =
-        decoded.get("background").and_then(|value| value.as_str()).map(str::to_string);
+        decoded.get("background").and_then(serde_json::Value::as_str).map(str::to_string);
     state.usage = usage_of(decoded.get("usage").unwrap_or(&serde_json::Value::Null));
     Ok(images
         .into_iter()
@@ -334,9 +340,12 @@ pub fn finish(state: &State) -> Result<Vec<ImageEvent>, AiError> {
     }])
 }
 
-/// `requestedFormat` (openai-images.ts:183-187).
+/// `requestedFormat` (openai-images.ts:183-187): the format the sent body
+/// asked for, which the document frame carries for responses that omit it.
+/// The route driver reads it when building [`Frame::Document`] inputs.
+#[allow(dead_code)] // consumed by the future media-route driver
 fn requested_format(body: &Body) -> Option<String> {
-    body.json_field("output_format").and_then(|value| value.as_str()).map(str::to_string)
+    body.json_field("output_format").and_then(serde_json::Value::as_str).map(str::to_string)
 }
 
 /// The protocol object implementing [`StreamProtocol`].
@@ -501,8 +510,7 @@ mod tests {
         // Requested-format fallback when the document omits it.
         let mut state = State::default();
         let events =
-            on_document(&mut state, r#"{"data": [{"b64_json": "AQID"}]}"#, Some("jpeg".into()))
-                .unwrap();
+            on_document(&mut state, r#"{"data": [{"b64_json": "AQID"}]}"#, Some("jpeg")).unwrap();
         let ImageEvent::Image { image, .. } = &events[0] else { panic!() };
         assert_eq!(image.media_type, "image/jpeg");
     }
@@ -514,7 +522,7 @@ mod tests {
         assert!(error.message().contains("returned no images"));
         match error.reason {
             crate::schema::AiErrorReason::InvalidProviderOutput { route: Some(route), .. } => {
-                assert_eq!(route, ID)
+                assert_eq!(route, ID);
             }
             other => panic!("wrong reason {other:?}"),
         }

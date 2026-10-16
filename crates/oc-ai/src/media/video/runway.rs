@@ -10,8 +10,8 @@ use crate::media::model::{
     VideoResponse,
 };
 use crate::media::protocol::{
-    expiring_url_at, failure, status as table_status, CancelSpec, Failure, Identity,
-    MediaProtocolBase, QueuedProtocol, TextOutput,
+    expiring_url_at, status as table_status, CancelSpec, Failure, Identity, MediaProtocolBase,
+    QueuedProtocol, TextOutput,
 };
 use crate::schema::media;
 use crate::schema::{AiError, MediaUsage, ProviderMetadata};
@@ -114,7 +114,7 @@ pub fn check_unsupported(request: &VideoRequest) -> Result<(), AiError> {
 /// `decodeStart` (runway-video.ts:112-115).
 pub fn decode_start(output: &TextOutput) -> Result<Started<Token>, AiError> {
     let value = output.decode_json(output.body)?;
-    let id = value.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let id = value.get("id").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
     Ok(Started {
         snapshot: Snapshot {
             id: id.clone(),
@@ -132,11 +132,11 @@ pub fn decode_status(
     context: &PollContext<Token>,
 ) -> Result<Snapshot, AiError> {
     let task = output.decode_json(output.body)?;
-    let raw = task.get("status").and_then(|v| v.as_str()).unwrap_or_default();
+    let raw = task.get("status").and_then(serde_json::Value::as_str).unwrap_or_default();
     Ok(Snapshot {
         id: context.token.task_id.clone(),
         status: table_status(&status_table(), raw, output)?,
-        progress: task.get("progress").and_then(|v| v.as_f64()),
+        progress: task.get("progress").and_then(serde_json::Value::as_f64),
         position: None,
     })
 }
@@ -149,11 +149,11 @@ pub fn decode_result(
     context: &PollContext<Token>,
 ) -> Result<VideoResponse, AiError> {
     let task = output.decode_json(output.body)?;
-    let raw = task.get("status").and_then(|v| v.as_str()).unwrap_or_default();
+    let raw = task.get("status").and_then(serde_json::Value::as_str).unwrap_or_default();
     let status = table_status(&status_table(), raw, output)?;
     if status == Status::Failed {
-        let code = task.get("failureCode").and_then(|v| v.as_str());
-        let failure_text = task.get("failure").and_then(|v| v.as_str());
+        let code = task.get("failureCode").and_then(serde_json::Value::as_str);
+        let failure_text = task.get("failure").and_then(serde_json::Value::as_str);
         let message = format!(
             "Runway task failed{}{}",
             code.map(|code| format!(" ({code})")).unwrap_or_default(),
@@ -163,7 +163,7 @@ pub fn decode_result(
             return Err(output.ended(Status::Failed, message, Failure::ProviderInternal));
         };
         let segments: Vec<&str> = code.split('.').collect();
-        if segments.iter().any(|segment| *segment == "SAFETY") {
+        if segments.contains(&"SAFETY") {
             return Err(output.content_policy(message));
         }
         let invalid_asset = matches!(segments.first(), Some(first) if *first == "ASSET")
@@ -186,7 +186,7 @@ pub fn decode_result(
     }
     let urls = task
         .get("output")
-        .and_then(|value| value.as_array())
+        .and_then(serde_json::Value::as_array)
         .map(|items| {
             items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect::<Vec<_>>()
         })
@@ -212,7 +212,7 @@ pub fn decode_result(
             .collect(),
         usage: task
             .pointer("/cost/credits")
-            .and_then(|v| v.as_f64())
+            .and_then(serde_json::Value::as_f64)
             .map(|credits| MediaUsage::Credits { credits }),
         notices: None,
         provider_metadata: Some(metadata),

@@ -131,7 +131,7 @@ fn fraction(progress: Option<f64>) -> Option<f64> {
 pub fn decode_start(output: &TextOutput) -> Result<Started<Token>, AiError> {
     let value = output.decode_json(output.body)?;
     let request_id =
-        value.get("request_id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        value.get("request_id").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
     Ok(Started {
         snapshot: Snapshot {
             id: request_id.clone(),
@@ -149,11 +149,11 @@ pub fn decode_status(
     context: &PollContext<Token>,
 ) -> Result<Snapshot, AiError> {
     let value = output.decode_json(output.body)?;
-    let raw = value.get("status").and_then(|v| v.as_str()).unwrap_or_default();
+    let raw = value.get("status").and_then(serde_json::Value::as_str).unwrap_or_default();
     Ok(Snapshot {
         id: context.token.request_id.clone(),
         status: table_status(&status_table(), raw, output)?,
-        progress: fraction(value.get("progress").and_then(|v| v.as_f64())),
+        progress: fraction(value.get("progress").and_then(serde_json::Value::as_f64)),
         position: None,
     })
 }
@@ -166,14 +166,14 @@ pub fn decode_result(
     context: &PollContext<Token>,
 ) -> Result<VideoResponse, AiError> {
     let decoded = output.decode_json(output.body)?;
-    let raw = decoded.get("status").and_then(|v| v.as_str()).unwrap_or_default();
+    let raw = decoded.get("status").and_then(serde_json::Value::as_str).unwrap_or_default();
     let status = table_status(&status_table(), raw, output)?;
     if status == Status::Running {
         return Err(output.pending(&context.token.request_id));
     }
     if status == Status::Failed {
-        let code = decoded.pointer("/error/code").and_then(|v| v.as_str());
-        let message = decoded.pointer("/error/message").and_then(|v| v.as_str());
+        let code = decoded.pointer("/error/code").and_then(serde_json::Value::as_str);
+        let message = decoded.pointer("/error/message").and_then(serde_json::Value::as_str);
         return Err(output.ended(
             Status::Failed,
             format!(
@@ -191,7 +191,8 @@ pub fn decode_result(
             Failure::ProviderInternal,
         ));
     }
-    let respect_moderation = decoded.pointer("/video/respect_moderation").and_then(|v| v.as_bool());
+    let respect_moderation =
+        decoded.pointer("/video/respect_moderation").and_then(serde_json::Value::as_bool);
     let notices = (respect_moderation == Some(false)).then(|| {
         vec![Notice {
             kind: NoticeType::Moderated,
@@ -199,14 +200,14 @@ pub fn decode_result(
             provider_metadata: None,
         }]
     });
-    let url = decoded.pointer("/video/url").and_then(|v| v.as_str());
+    let url = decoded.pointer("/video/url").and_then(serde_json::Value::as_str);
     if url.is_none() && notices.is_some() {
         return Err(output.content_policy("xAI Video withheld the video for moderation"));
     }
     let Some(url) = url else {
         return Err(output.invalid("xAI Video completed without a video URL"));
     };
-    let duration = decoded.pointer("/video/duration").and_then(|v| v.as_f64());
+    let duration = decoded.pointer("/video/duration").and_then(serde_json::Value::as_f64);
     let mut xai = std::collections::BTreeMap::new();
     xai.insert("requestId".to_string(), serde_json::json!(context.token.request_id));
     xai.insert(
@@ -261,7 +262,7 @@ impl QueuedProtocol for XAIVideo {
             .provider_options
             .as_ref()
             .and_then(|options| options.get("mode"))
-            .and_then(|value| value.as_str())
+            .and_then(serde_json::Value::as_str)
         {
             Some("extend") => EXTEND_PATH.to_string(),
             _ => EDIT_PATH.to_string(),

@@ -68,10 +68,11 @@ pub fn decode(
     _context: &DecodeContext<ImageRequest>,
 ) -> Result<ImageResponse, AiError> {
     let decoded = output.decode_json(output.body)?;
-    let data = decoded.get("data").and_then(|value| value.as_array()).cloned().unwrap_or_default();
+    let data =
+        decoded.get("data").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
     let mut images = Vec::new();
     for (index, item) in data.iter().enumerate() {
-        let revised_prompt = item.get("revised_prompt").and_then(|value| value.as_str());
+        let revised_prompt = item.get("revised_prompt").and_then(serde_json::Value::as_str);
         let mut xai = std::collections::BTreeMap::new();
         let metadata = revised_prompt.map(|prompt| {
             xai.insert("revisedPrompt".to_string(), serde_json::json!(prompt));
@@ -83,7 +84,7 @@ pub fn decode(
             |message| output.invalid(message),
             &format!("xAI Images result {index}"),
             item,
-            item.get("mime_type").and_then(|value| value.as_str()),
+            item.get("mime_type").and_then(serde_json::Value::as_str),
             None,
             metadata,
         )?);

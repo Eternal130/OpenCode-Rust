@@ -84,7 +84,7 @@ pub struct ProgressEvent {
 // image.ts
 // ---------------------------------------------------------------------------
 
-/// `Image.Request` (image.ts:65-81). `model` is the model id.
+/// `Image.Request` (image.ts:65-81); `model` is the model id.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageRequest {
@@ -133,7 +133,9 @@ impl ImageResponse {
     }
 }
 
-/// `Image.Event` tagged union (image.ts:119-154).
+/// The `Image.Event` tagged union (image.ts:119-154).
+/// Wire shape parity with v2 keeps the asset-heavy variants inline.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum ImageEvent {
@@ -161,7 +163,7 @@ pub enum ImageEvent {
 // speech.ts
 // ---------------------------------------------------------------------------
 
-/// `Speech.Voice` — a name or `{ id }` for OpenAI custom voices.
+/// The `Speech.Voice` union — a name or `{ id }` for `OpenAI` custom voices.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SpeechVoice {
@@ -180,8 +182,8 @@ impl SpeechVoice {
     }
 }
 
-/// `Speech.Timestamp` — provider-native granularity (characters on
-/// ElevenLabs, words on Cartesia).
+/// The `Speech.Timestamp` — provider-native granularity (characters on
+/// `ElevenLabs`, words on Cartesia).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeechTimestamp {
@@ -233,7 +235,9 @@ pub struct SpeechResponse {
     pub provider_metadata: Option<ProviderMetadata>,
 }
 
-/// `Speech.Event` tagged union (speech.ts:118-153).
+/// The `Speech.Event` tagged union (speech.ts:118-153).
+/// Wire parity with v2 keeps the asset-carrying finish variant inline.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum SpeechEvent {
@@ -460,6 +464,8 @@ pub struct TranscriptionResponse {
 }
 
 /// `Transcription.Event` tagged union (transcription.ts:140-169).
+/// Wire shape parity with v2 keeps the transcript-carrying finish inline.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum TranscriptionEvent {
@@ -479,8 +485,10 @@ pub enum TranscriptionEvent {
 // The erased protocol inputs/outputs
 // ---------------------------------------------------------------------------
 
-/// One media request of any modality (the protocol-layer erasure of the
-/// four request types; TS keeps them distinct per protocol family).
+/// The media request erasure — any modality (the protocol-layer erasure of
+/// the four request types; TS keeps them distinct per protocol family).
+/// Wire parity with v2 keeps the per-modality payloads inline.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum MediaRequest {
     Image(ImageRequest),

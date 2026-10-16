@@ -58,7 +58,6 @@ pub fn prepare(
 }
 
 /// The upload body (the raw audio bytes).
-#[must_use]
 pub fn upload_body(request: &TranscriptionRequest) -> Result<Body, AiError> {
     Ok(Body::binary(
         crate::media::utils::inline_bytes(ID, &request.audio)?,
@@ -77,17 +76,18 @@ pub fn body_from(request: &TranscriptionRequest) -> Result<Body, AiError> {
         ("audio_url", Some(serde_json::json!(audio_url))),
         ("speech_models", Some(serde_json::json!([request.model]))),
         ("language_code", request.language.clone().map(|value| serde_json::json!(value))),
-        ("language_detection", request.language.is_none().then(|| serde_json::json!(true))),
+        ("language_detection", Some(crate::media::body::json_flag(request.language.is_none()))),
         ("prompt", request.prompt.clone().map(|value| serde_json::json!(value))),
         (
             // Turn-level `utterances`, the only segments AssemblyAI returns,
             // and `speakers_expected` require speaker labels.
             "speaker_labels",
-            (request.diarize == Some(true)
-                || request.timestamps
-                    == Some(crate::media::model::TranscriptionTimestamps::Segment)
-                || request.speakers.is_some())
-            .then(|| serde_json::json!(true)),
+            Some(crate::media::body::json_flag(
+                request.diarize == Some(true)
+                    || request.timestamps
+                        == Some(crate::media::model::TranscriptionTimestamps::Segment)
+                    || request.speakers.is_some(),
+            )),
         ),
         ("speakers_expected", request.speakers.map(|speakers| serde_json::json!(speakers))),
     ]);
@@ -111,9 +111,9 @@ pub fn check_unsupported(request: &TranscriptionRequest) -> Result<(), AiError> 
 /// `decodeStart` (assemblyai-transcription.ts:132-138).
 pub fn decode_start(output: &TextOutput) -> Result<Started<Token>, AiError> {
     let value = output.decode_json(output.body)?;
-    let raw = value.get("status").and_then(|v| v.as_str()).unwrap_or_default();
+    let raw = value.get("status").and_then(serde_json::Value::as_str).unwrap_or_default();
     let status = table_status(&status_table(), raw, output)?;
-    let id = value.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let id = value.get("id").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
     Ok(Started {
         snapshot: Snapshot { id: id.clone(), status, progress: None, position: None },
         token: Token { transcript_id: id },
@@ -126,7 +126,7 @@ pub fn decode_status(
     context: &PollContext<Token>,
 ) -> Result<Snapshot, AiError> {
     let value = output.decode_json(output.body)?;
-    let raw = value.get("status").and_then(|v| v.as_str()).unwrap_or_default();
+    let raw = value.get("status").and_then(serde_json::Value::as_str).unwrap_or_default();
     Ok(Snapshot {
         id: context.token.transcript_id.clone(),
         status: table_status(&status_table(), raw, output)?,
@@ -146,9 +146,9 @@ pub fn decode_result(
     context: &PollContext<Token>,
 ) -> Result<TranscriptionResponse, AiError> {
     let transcript = output.decode_json(output.body)?;
-    let raw = transcript.get("status").and_then(|v| v.as_str()).unwrap_or_default();
+    let raw = transcript.get("status").and_then(serde_json::Value::as_str).unwrap_or_default();
     let status = table_status(&status_table(), raw, output)?;
-    let error = transcript.get("error").and_then(|v| v.as_str());
+    let error = transcript.get("error").and_then(serde_json::Value::as_str);
     if status == Status::Failed {
         return Err(output.ended(
             status,
@@ -162,47 +162,58 @@ pub fn decode_result(
     if status != Status::Completed {
         return Err(output.pending(&context.token.transcript_id));
     }
-    let duration = transcript.get("audio_duration").and_then(|v| v.as_f64());
-    let segments = transcript.get("utterances").and_then(|v| v.as_array()).map(|utterances| {
-        utterances
-            .iter()
-            .map(|utterance| crate::media::model::TranscriptionSegment {
-                text: utterance
-                    .get("text")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                start_seconds: utterance
-                    .get("start")
-                    .and_then(|v| v.as_f64())
-                    .map(seconds)
-                    .unwrap_or_default(),
-                end_seconds: utterance
-                    .get("end")
-                    .and_then(|v| v.as_f64())
-                    .map(seconds)
-                    .unwrap_or_default(),
-                speaker: utterance.get("speaker").and_then(|v| v.as_str()).map(str::to_string),
-            })
-            .collect::<Vec<_>>()
-    });
-    let words = transcript.get("words").and_then(|v| v.as_array()).map(|words| {
+    let duration = transcript.get("audio_duration").and_then(serde_json::Value::as_f64);
+    let segments =
+        transcript.get("utterances").and_then(serde_json::Value::as_array).map(|utterances| {
+            utterances
+                .iter()
+                .map(|utterance| crate::media::model::TranscriptionSegment {
+                    text: utterance
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    start_seconds: utterance
+                        .get("start")
+                        .and_then(serde_json::Value::as_f64)
+                        .map(seconds)
+                        .unwrap_or_default(),
+                    end_seconds: utterance
+                        .get("end")
+                        .and_then(serde_json::Value::as_f64)
+                        .map(seconds)
+                        .unwrap_or_default(),
+                    speaker: utterance
+                        .get("speaker")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                })
+                .collect::<Vec<_>>()
+        });
+    let words = transcript.get("words").and_then(serde_json::Value::as_array).map(|words| {
         words
             .iter()
             .map(|word| crate::media::model::TranscriptionWord {
-                text: word.get("text").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                text: word
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
                 start_seconds: word
                     .get("start")
-                    .and_then(|v| v.as_f64())
+                    .and_then(serde_json::Value::as_f64)
                     .map(seconds)
                     .unwrap_or_default(),
                 end_seconds: word
                     .get("end")
-                    .and_then(|v| v.as_f64())
+                    .and_then(serde_json::Value::as_f64)
                     .map(seconds)
                     .unwrap_or_default(),
-                speaker: word.get("speaker").and_then(|v| v.as_str()).map(str::to_string),
-                confidence: word.get("confidence").and_then(|v| v.as_f64()),
+                speaker: word
+                    .get("speaker")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                confidence: word.get("confidence").and_then(serde_json::Value::as_f64),
             })
             .collect::<Vec<_>>()
     });
@@ -218,13 +229,17 @@ pub fn decode_result(
     let mut metadata = crate::schema::ProviderMetadata::new();
     metadata.insert("assemblyai".to_string(), assemblyai);
     Ok(TranscriptionResponse {
-        text: transcript.get("text").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        text: transcript
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
         segments,
         words,
         language: transcript
             .get("language_code")
-            .and_then(|v| v.as_str())
-            .map(|value| value.to_ascii_lowercase()),
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_ascii_lowercase),
         duration_seconds: duration,
         usage: duration.map(|seconds| MediaUsage::Seconds { seconds }),
         notices: None,

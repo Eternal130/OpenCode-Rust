@@ -4,8 +4,6 @@
 //! `last_frame_url`, `tail_image_url`), so `frames.last` fails typed and
 //! passes through `providerOptions` instead.
 
-use std::collections::BTreeMap;
-
 use crate::media::body::{merge_records, Body};
 use crate::media::fal_queue::{self, FalToken};
 use crate::media::model::{
@@ -72,9 +70,12 @@ pub fn decode_result(
 ) -> Result<VideoResponse, AiError> {
     let value = output.decode_json(output.body)?;
     let video = value.get("video").cloned().unwrap_or(serde_json::Value::Null);
-    let url = video.get("url").and_then(|v| v.as_str()).unwrap_or_default();
-    let media_type =
-        video.get("content_type").and_then(|v| v.as_str()).unwrap_or("video/mp4").to_string();
+    let url = video.get("url").and_then(serde_json::Value::as_str).unwrap_or_default();
+    let media_type = video
+        .get("content_type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("video/mp4")
+        .to_string();
     let mut fal = std::collections::BTreeMap::new();
     fal.insert("requestId".to_string(), serde_json::json!(context.token.request_id));
     fal.insert(
@@ -173,6 +174,7 @@ mod tests {
     use super::*;
     use crate::schema::media;
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     fn request() -> VideoRequest {
         VideoRequest {
