@@ -129,20 +129,36 @@ fn handle(mut socket: std::net::TcpStream) {
             }
         }
     }
-    let body = if path.starts_with("/api/session/") {
-        // message.list for the opened tab: empty transcript.
-        r#"{"cursor":{},"data":[]}"#
+    let body: String = if path.starts_with("/api/session/") {
+        // message.list for the opened tabs: an empty transcript, or the
+        // dogfood2 real-shape per-session rows when that mode is armed.
+        if REAL_SHAPE.load(Ordering::SeqCst) {
+            let id = path
+                .trim_start_matches("/api/session/")
+                .split(['/', '?'])
+                .next()
+                .unwrap_or_default();
+            real_shape_messages(id)
+        } else {
+            r#"{"cursor":{},"data":[]}"#.to_owned()
+        }
     } else if path.starts_with("/api/session") {
-        // session.list: exactly ONE session in history.
-        concat!(
-            r#"{"cursor":{},"data":["#,
-            r#"{"id":"ses_alpha","title":"Alpha","time":{"created":0,"updated":0},"#,
-            r#""location":{"directory":"/tmp"},"projectID":"p","cost":0,"#,
-            r#""tokens":{"cache":{"read":0,"write":0},"input":0,"output":0,"read":0,"write":0,"reasoning":0}}"#,
-            r#"]}"#
-        )
+        // session.list: exactly ONE session in history — or the dogfood2
+        // real shape (many sessions, all in OTHER directories).
+        if REAL_SHAPE.load(Ordering::SeqCst) {
+            real_shape_session_list(&real_shape_fixture())
+        } else {
+            concat!(
+                r#"{"cursor":{},"data":["#,
+                r#"{"id":"ses_alpha","title":"Alpha","time":{"created":0,"updated":0},"#,
+                r#""location":{"directory":"/tmp"},"projectID":"p","cost":0,"#,
+                r#""tokens":{"cache":{"read":0,"write":0},"input":0,"output":0,"read":0,"write":0,"reasoning":0}}"#,
+                r#"]}"#
+            )
+            .to_owned()
+        }
     } else {
-        "{}"
+        "{}".to_owned()
     };
     let response = format!(
         "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}",
@@ -407,4 +423,236 @@ fn pty_solid_strip_hover_add_close_cycle() {
     let captured = snapshot(&boot);
     assert!(captured.contains("✕"), "the hovered tab revealed its close mark");
     assert!(captured.contains("Alpha"), "the tab painted before the close");
+}
+
+// ---------------------------------------------------------------------------
+// dogfood2 — the real-DB restored-tabs shape (home boot with tabs the
+// store has NOT loaded, sessions in OTHER directories, none for the cwd)
+// ---------------------------------------------------------------------------
+
+/// The dogfood2 fixture builder — SYNTHETIC data shaped like the user's
+/// real DB (the copied DB itself is never committed): MANY sessions
+/// across OTHER directories (none for the TUI's cwd), plus the port's
+/// persisted tabs document (`<state>/opencode-rust/stable/tui/tabs.json`,
+/// the `stable` channel, version-stamped) whose cwd scope restores two
+/// tabs referencing not-yet-loaded sessions — the exact boot shape of
+/// the user's ~ run (v2 restores through `useStorage` the same way).
+struct RealShapeFixture {
+    /// (session id, directory, title) — every directory != the cwd.
+    sessions: Vec<(String, String, String)>,
+    /// (sessionID, title) restored for the RUN cwd's scope.
+    restored: Vec<(String, String)>,
+}
+
+fn real_shape_fixture() -> RealShapeFixture {
+    let mut sessions: Vec<(String, String, String)> = (0..24)
+        .map(|index| {
+            (
+                format!("ses_shape_{index:02}"),
+                format!("/opt/synth-{index}"),
+                format!("Synth Session {index}"),
+            )
+        })
+        .collect();
+    // The restored tabs reference two of them (like the real tabs.json:
+    // sessions of /opt/lobechat + /opt/new-api restored into ~).
+    sessions[7].2 = "Synth Restored Seven".to_owned();
+    sessions[11].2 = "Synth Restored Eleven".to_owned();
+    RealShapeFixture {
+        restored: vec![
+            ("ses_shape_07".to_owned(), "Synth Restored Seven".to_owned()),
+            ("ses_shape_11".to_owned(), "Synth Restored Eleven".to_owned()),
+        ],
+        sessions,
+    }
+}
+
+/// The session-list body the scripted server serves (the "many sessions,
+/// none for the cwd" half of the shape).
+fn real_shape_session_list(fixture: &RealShapeFixture) -> String {
+    let rows: Vec<String> = fixture
+        .sessions
+        .iter()
+        .map(|(id, directory, title)| {
+            format!(
+                r#"{{"id":"{id}","title":"{title}","time":{{"created":0,"updated":0}},
+                     "location":{{"directory":"{directory}"}},"projectID":"p","cost":0,
+                     "tokens":{{"cache":{{"read":0,"write":0}},"input":0,"output":0,"read":0,"write":0,"reasoning":0}}}}"#
+            )
+        })
+        .collect();
+    format!(r#"{{"cursor":{{}},"data":[{}]}}"#, rows.join(","))
+}
+
+/// One distinctive user row per session, so the switched route paints an
+/// unambiguous transcript.
+fn real_shape_messages(session_id: &str) -> String {
+    format!(
+        r#"{{"cursor":{{}},"data":[{{"type":"user","id":"msg_{sid}","text":"SYNTH TRANSCRIPT {sid}","time":{{"created":1}}}}]}}"#,
+        sid = session_id
+    )
+}
+
+/// Persist the restored tabs document into the sandbox state root (the
+/// port's own channel + version stamp; the cwd scope keys the RUN cwd).
+fn seed_restored_tabs(restored: &[(String, String)], state_root: &std::path::Path) {
+    let cwd = std::env::current_dir().expect("cwd").display().to_string();
+    let tabs: Vec<String> = restored
+        .iter()
+        .map(|(id, title)| format!(r#"{{"sessionID":"{id}","title":"{title}"}}"#))
+        .collect();
+    let document = format!(
+        r#"{{"version":2,"global":{{"tabs":[],"unread":{{}}}},"cwd":{{"{cwd}":{{"tabs":[{}],"unread":{{}}}}}}}}"#,
+        tabs.join(",")
+    );
+    let dir = state_root.join("opencode-rust").join("stable").join("tui");
+    std::fs::create_dir_all(&dir).expect("state channel dir");
+    std::fs::write(dir.join("tabs.json"), document).expect("seed tabs.json");
+}
+
+/// The scripted server in real-shape mode (the shared `handle` reads
+/// this): the many-session list + per-session transcripts.
+static REAL_SHAPE: AtomicBool = AtomicBool::new(false);
+
+fn spawn_real_shape_server() -> (String, Arc<AtomicBool>) {
+    REAL_SHAPE.store(true, Ordering::SeqCst);
+    spawn_scripted_server()
+}
+
+/// The last explicit cursor-position escape (`CSI row;col H`) in the
+/// captured stream — the hardware cursor's cell (the app positions it
+/// exactly once per frame, at the caret).
+fn last_cursor_cell(bytes: &[u8]) -> Option<(usize, usize)> {
+    let text = bytes.as_ref();
+    let mut best: Option<(usize, usize)> = None;
+    let mut index = 0;
+    while let Some(escape) = text[index..].iter().position(|&b| b == 0x1b) {
+        let at = index + escape;
+        let tail = &text[at + 1..];
+        if tail.first() == Some(&b'[') {
+            if let Some(end) = tail.iter().position(|&b| b == b'H') {
+                let params = &tail[1..end];
+                if let Ok(text) = std::str::from_utf8(params) {
+                    if let Some((row, col)) = text.split_once(';') {
+                        if let (Ok(row), Ok(col)) = (row.parse::<usize>(), col.parse::<usize>()) {
+                            best = Some((row, col));
+                        }
+                    }
+                }
+            }
+        }
+        index = at + 1;
+    }
+    best
+}
+
+/// dogfood2 bugs 1 + 2 over the real app loop: a home boot with restored
+/// tabs referencing not-yet-loaded sessions (the sanitized user shape) —
+/// the strip is a POINTER surface on home (v2 app.tsx:1353-1355 + 576-579
+/// `tabsAvailable`, never session-gated; `select()` = route.navigate,
+/// context/session-tabs.tsx:393-396), and the hardware cursor sits ON the
+/// composer's input row under the strip (home lays out in height-1, the
+/// caret rides the shifted subtree).
+#[test]
+fn pty_restored_tabs_home_click_switches_and_cursor_on_composer_row() {
+    let state_root = sandbox_env("realshape");
+    let fixture = real_shape_fixture();
+    seed_restored_tabs(&fixture.restored, &state_root.join(".local/state"));
+    let (url, shutdown) = spawn_real_shape_server();
+    let guard = attach_pty();
+    let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let reader_master = guard.master.try_clone().expect("clone read");
+    {
+        let output = Arc::clone(&output);
+        std::thread::spawn(move || {
+            let mut reader = reader_master;
+            let mut chunk = [0u8; 4096];
+            loop {
+                match reader.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => {
+                        output.lock().expect("lock").extend_from_slice(&chunk[..count]);
+                    }
+                }
+            }
+        });
+    }
+    let boot = Boot { output: Arc::clone(&output) };
+    let click_cursor: Arc<Mutex<Option<(usize, usize)>>> = Arc::new(Mutex::new(None));
+
+    // The choreography: boot (home + restored strip), parse the cursor,
+    // SGR-click tab 1's body, expect the session switch, exit.
+    {
+        let mut writer = guard.master.try_clone().expect("clone keys");
+        let output = Arc::clone(&output);
+        let click_cursor = Arc::clone(&click_cursor);
+        std::thread::spawn(move || {
+            let probe = move || Boot { output: Arc::clone(&output) };
+            // (a) Home painted WITH the restored strip: the wordmark and
+            // the restored title share the boot frame.
+            assert!(
+                wait_for(&probe(), "█▀▀█".as_bytes(), Duration::from_secs(8)),
+                "the home wordmark rendered"
+            );
+            assert!(
+                wait_for(&probe(), b"Synth Restored Seven", Duration::from_secs(5)),
+                "the restored tab's title leads the home strip"
+            );
+            assert!(
+                wait_for(&probe(), b"Synth Restored Eleven", Duration::from_secs(3)),
+                "the second restored tab paints beside it"
+            );
+            std::thread::sleep(Duration::from_millis(700));
+            // (b) The hardware cursor BEFORE any click: the composer
+            // input row under the strip (row 15 in 1-based SGR terms at
+            // 80x24 — strip row 1, input row 15; the home unit test
+            // pins the row == input-line invariant).
+            let captured = snapshot(&probe());
+            *click_cursor.lock().expect("lock") = last_cursor_cell(captured.as_bytes());
+            // (c) The click: SGR press+release at col 5 (1-based; tab 1
+            // spans cols 1..32), row 1 (the strip) — selects tab 1.
+            let _ = writer.write_all(b"\x1b[<0;5;1M");
+            std::thread::sleep(Duration::from_millis(150));
+            let _ = writer.write_all(b"\x1b[<0;5;1m");
+            // (d) The route switched: the restored session's transcript
+            // paints (the boot fetch hydrated it; only the session route
+            // renders it).
+            assert!(
+                wait_for(&probe(), b"SYNTH TRANSCRIPT ses_shape_07", Duration::from_secs(5)),
+                "the click switched into the restored session"
+            );
+            std::thread::sleep(Duration::from_millis(300));
+            // Exit: ctrl+c (clear), ctrl+c again.
+            let _ = writer.write_all(b"\x03");
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = writer.write_all(b"\x03");
+        });
+    }
+
+    let client = oc_client::Client::new(&url).expect("client");
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("rt");
+    let finished = runtime.block_on(async {
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            oc_tui::app::run_with_size(client, Some((80, 24)), oc_tui::app::BootArgs::default()),
+        )
+        .await
+    });
+    match finished {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => panic!("run_with_size failed: {error}"),
+        Err(elapsed) => panic!("the TUI did not exit in time: {elapsed}"),
+    }
+    shutdown.store(true, Ordering::SeqCst);
+    drop(guard);
+
+    // The cursor row at the home boot: ON the composer input row (the
+    // strip occupies row 1; the input row is 15), never the strip row
+    // and never a row above the composer (dogfood2 bug 2).
+    let cursor = click_cursor.lock().expect("lock").expect("a cursor position painted");
+    assert_eq!(cursor.0, 15, "the hardware cursor sits on the composer input row (1-based)");
+    assert_ne!(cursor.0, 1, "never on the strip row");
+    // And the switch evidence survived to the end of the stream.
+    let captured = snapshot(&boot);
+    assert!(captured.contains("SYNTH TRANSCRIPT ses_shape_07"), "the session route painted");
 }
