@@ -128,10 +128,26 @@ pub struct Announcer {
     baselines: DashMap<String, u64>,
     /// location key -> () once a config change was published.
     changed_once: DashMap<String, ()>,
+    /// location key -> VCS HEAD watch state (the location-watcher port):
+    /// resolved HEAD file, its last change fingerprint, and the last
+    /// observed branch (v2 core/filesystem/location-watcher.ts:33-51 +
+    /// vcs.ts:118-152).
+    head_watch: DashMap<String, HeadWatch>,
     /// Whether the poller task is running (one per `AppState`).
     started: std::sync::atomic::AtomicBool,
     /// The poller's shutdown latch.
     shutdown: parking_lot::Mutex<Option<watch::Sender<bool>>>,
+}
+
+/// The per-location HEAD watch state.
+#[derive(Clone)]
+struct HeadWatch {
+    /// The resolved `<gitdir>/HEAD` file (None: no git metadata found).
+    head: Option<std::path::PathBuf>,
+    /// Last observed `(mtime_ns, len)` of the HEAD file.
+    fingerprint: (u64, u64),
+    /// Last observed branch name (None until first read).
+    branch: Option<String>,
 }
 
 impl Announcer {
@@ -143,6 +159,7 @@ impl Announcer {
             announced: DashMap::new(),
             baselines: DashMap::new(),
             changed_once: DashMap::new(),
+            head_watch: DashMap::new(),
             started: std::sync::atomic::AtomicBool::new(false),
             shutdown: parking_lot::Mutex::new(None),
         }
@@ -255,9 +272,26 @@ async fn publish_project(state: &AppState, location: &LocationRef) {
 
 /// Publishes `location.shutdown` for a location that has no assembled
 /// graph to run the shutdown sequence itself (a tracked-only location —
-/// v2's reload shuts every tracked location down).
+/// v2's reload shuts every tracked locations down).
 pub async fn publish_shutdown(state: &AppState, location: &LocationRef) {
     publish_empty(&state.engine, "location.shutdown", location).await;
+}
+
+/// Publishes one installation frame — the port of the v2 server-process
+/// updater callbacks (`process.ts:115-117`: `updateAvailable(version)` /
+/// `updated(version)` → `bus.publish(InstallationEvent.…, { version })`).
+/// `available` selects `installation.update-available` vs
+/// `installation.updated`. Unrouted (process-wide), best-effort.
+pub async fn publish_installation_event(bus: &oc_core::bus::Bus, available: bool, version: &str) {
+    let type_ = if available {
+        oc_core::bus::registry::INSTALLATION_UPDATE_AVAILABLE
+    } else {
+        oc_core::bus::registry::INSTALLATION_UPDATED
+    };
+    let Some(definition) = oc_core::bus::registry::by_type(type_) else { return };
+    let _ = bus
+        .publish(&definition, json!({ "version": version }), oc_core::bus::PublishOptions::default())
+        .await;
 }
 
 /// The reload choreography for one location (`POST /api/location/reload`):
@@ -394,6 +428,9 @@ pub async fn run(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
                 continue;
             }
             let fingerprint = config_fingerprint(&state.engine, &live);
+            // The location watcher (HEAD file) runs on every pass — it is
+            // independent of the config baseline.
+            watch_location_head(&state, &live).await;
             let baseline = state.announce.baselines.get(&key).map_or(0u64, |v| *v);
             if !state.announce.baselines.contains_key(&key) || baseline == fingerprint {
                 continue;
@@ -417,6 +454,122 @@ pub async fn run(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
             if first_change {
                 publish_empty(&state.engine, "skill.updated", &live).await;
             }
+        }
+    }
+}
+
+/// Resolves the location's VCS HEAD file — the v2 location watcher's sole
+/// target (`location-watcher.ts:33-51`: `git.repo.discover(...)?.gitDirectory`
+/// + realPath, watching `<gitdir>/HEAD`; `.git` files (linked worktrees)
+/// resolve through their `gitdir:` pointer).
+fn discover_head_file(directory: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut current = Some(directory);
+    while let Some(dir) = current {
+        let dot_git = dir.join(".git");
+        match std::fs::metadata(&dot_git) {
+            Ok(meta) if meta.is_dir() => return Some(dot_git.join("HEAD")),
+            Ok(_) => {
+                // A `.git` file: `gitdir: <path>` (linked worktree).
+                let text = std::fs::read_to_string(&dot_git).ok()?;
+                let target = text.lines().next()?.strip_prefix("gitdir:")?.trim();
+                let target = std::path::PathBuf::from(target);
+                let canonical =
+                    std::fs::canonicalize(&target).unwrap_or_else(|_| target.clone());
+                return Some(canonical.join("HEAD"));
+            }
+            Err(_) => current = dir.parent(),
+        }
+    }
+    None
+}
+
+/// The change fingerprint of a HEAD file (`(mtime_ns, len)`).
+fn head_fingerprint(path: &std::path::Path) -> (u64, u64) {
+    std::fs::metadata(path)
+        .map(|meta| {
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |duration| duration.as_nanos() as u64);
+            (mtime, meta.len())
+        })
+        .unwrap_or((0, 0))
+}
+
+/// Parses the branch a HEAD file points at (`ref: refs/heads/<name>` →
+/// `<name>`; anything else (detached) → `None`).
+fn head_branch(path: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    text.lines().next()?.strip_prefix("ref: refs/heads/").map(str::to_string)
+}
+
+/// One location-watcher pass: on a HEAD-file change publish
+/// `filesystem.changed` (`{file, event:"change"}` — the sole v2 publisher,
+/// `location-watcher.ts:28-32` maps create/update/delete onto add/change/
+/// unlink), then refresh the branch and publish `vcs.branch.updated`
+/// `{branch}` when it moved (vcs.ts:118-152).
+async fn watch_location_head(state: &Arc<AppState>, location: &LocationRef) {
+    let key = key_of(location);
+    let head = discover_head_file(&location.directory);
+    let current = head.as_ref().map(|path| head_fingerprint(path));
+    let entry = state.announce.head_watch.entry(key).or_insert_with(|| HeadWatch {
+        head: head.clone(),
+        fingerprint: current.unwrap_or((0, 0)),
+        branch: head.as_deref().and_then(head_branch),
+    });
+    let mut entry = entry;
+    // Target moved (repo discovered/removed, worktree relinked): re-arm.
+    if entry.head != head {
+        let branch = head.as_deref().and_then(head_branch);
+        entry.head = head;
+        entry.fingerprint = current.unwrap_or((0, 0));
+        entry.branch = branch;
+        return;
+    }
+    let Some(head_path) = entry.head.clone() else { return };
+    let Some(fingerprint) = current else { return };
+    if fingerprint == entry.fingerprint {
+        return;
+    }
+    entry.fingerprint = fingerprint;
+    // filesystem.changed (location-routed, exactly like v2's watcher).
+    if let Some(definition) =
+        oc_core::bus::registry::by_type(oc_core::bus::registry::FILESYSTEM_CHANGED)
+    {
+        let options = oc_core::bus::PublishOptions {
+            location: Some(envelope(location)),
+            ..oc_core::bus::PublishOptions::default()
+        };
+        let _ = state
+            .engine
+            .bus
+            .publish(
+                &definition,
+                json!({ "file": head_path.to_string_lossy(), "event": "change" }),
+                options,
+            )
+            .await;
+    }
+    // Vcs.refresh: re-announce only when the branch actually moved
+    // (vcs.ts:143-152 — "Legacy listeners can publish nested updates
+    // before streams and SSE receive this event" is a single-publisher
+    // concern; the poller cannot be overtaken mid-tick).
+    let branch = head_branch(&head_path);
+    if branch != entry.branch {
+        entry.branch = branch.clone();
+        if let Some(definition) =
+            oc_core::bus::registry::by_type(oc_core::bus::registry::VCS_BRANCH_UPDATED)
+        {
+            let mut data = json!({});
+            if let Some(branch) = branch {
+                data["branch"] = json!(branch);
+            }
+            let options = oc_core::bus::PublishOptions {
+                location: Some(envelope(location)),
+                ..oc_core::bus::PublishOptions::default()
+            };
+            let _ = state.engine.bus.publish(&definition, data, options).await;
         }
     }
 }
