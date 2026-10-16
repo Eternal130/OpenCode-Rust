@@ -21,3 +21,24 @@ Ref citations gathered:
 - Sidebar: context.tsx (contextUsage util/session.ts:58-73, cost),
   mcp.tsx (dot colors, collapse >2, click→DialogMcp), footer.tsx
   (location FilePath maxWidth 38, onboarding).
+
+## Phase B/C/D (WIP commit 2) — rows + tool detail + dialog viewer
+- rows.rs: compaction_message_row (divider+summary, spinner/✗/cancelled/
+  usage), compaction_queued_row, skill_message_row, revert_banner_row
+  (+file rows), assistant_footer_row_ext (interrupted variant),
+  locale_number.
+- list.rs: Compaction/Skill message arms; revert boundary filter +
+  banner + queued dividers at tail; expanded Exploration/Activity
+  groups emit per-tool cells; ungrouped Part::Tool renders its cell;
+  TranscriptOptions += revert/pending_compactions/redo_key/expanded_tools.
+- tool_detail.rs (new): collapse_tool_output/collapse_shell_output/
+  collapse_shell_command/collapse_tail ports; shell block, edit block
+  (parse_patch hunks), write block, read rows (+loaded), glob/grep/
+  webfetch/websearch rows, execute card (calls+error preview 4 lines),
+  generic row + error row.
+- store: TranscriptHitAction += ToggleToolDetail/OpenToolDialog/
+  DismissRevert; DialogKind::ToolOutput (DialogExecute/DialogShellOutput
+  rows via the select); app.rs wires history_loading at transcript
+  fetch; loading label painted in the live jump slot; session.rs
+  registers tool/revert hit rows.
+721 oc-tui tests green after B+C+D.
