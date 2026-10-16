@@ -358,19 +358,12 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
     // set the caret cell shifted by the strip's one row.
     let tabs = store.tabs();
     let strip_shows = store.tabs_enabled() && !tabs.tabs.is_empty() && usize::from(size.1) > 1;
-    let sub_size = (
-        size.0,
-        if strip_shows { size.1 - 1 } else { size.1 },
-    );
+    let sub_size = (size.0, if strip_shows { size.1 - 1 } else { size.1 });
     let (mut frame, caret_screen) = render_home_view(&view, &state, sub_size);
     if strip_shows {
         let (width, height) = (usize::from(size.0), usize::from(size.1));
-        let strip = crate::components::session::paint_live_tabs_bar(
-            store,
-            None,
-            width,
-            &state.styles(),
-        );
+        let strip =
+            crate::components::session::paint_live_tabs_bar(store, None, width, &state.styles());
         // Prepend the strip's row (height 1); the sub-frame already
         // fits height-1 beneath it — nothing truncates.
         let mut cells = strip.cells.clone();
