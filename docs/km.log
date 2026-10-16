@@ -185,3 +185,33 @@ Verification: affected-crate nextest + PTY proofs + rig --quick
   settled read/write never arm, generic expandable),
   markdown_link_click_opens_the_url (sink-recorded openUrl).
   Full: oc-tui + oc-tui-core 845/845.
+
+## Phase 4 — toast action + home footer chips (auditA #10)
+- ToastOptions gained action_command (v2's action.run → its dot
+  command) + with_action(); set_mcp_servers now produces v2's
+  toast-once alerts (app.tsx:522-545): failed/needs_auth
+  transitions, per-server dedup, action "Open MCP servers" →
+  mcp.list. The F11 gate narrowed to a `modal` flag (the
+  Session-failed/send-failure surfaces keep swallowing keys; every
+  other toast — v2's rule — stays transparent; the MCP error toast
+  no longer blocks typing).
+- Pointer surface (ui/toast.tsx:57-59): hover inside the panel
+  pauses the countdown (Moved), leaving resumes; a release inside
+  ACTIVATES — toast_activate() dismisses + dispatches the action
+  command through the palette dispatcher. The rect mirrors
+  toast_geometry + the panel rows (panel_rows_public).
+- Keyboard: `toast.activate` (PORT ADDITION, ctrl+alt+t, palette
+  Prompt — registered in the coverage test's additions list)
+  reaches the same activate path from the input layer.
+- Home footer chips: HomeView.plugins_failed (the boot resolution's
+  failures → store signal) renders v2's `⊙ N plugin(s) failed`
+  chip (+ `/plugins` hint at ≥80) after the MCP cell; plan_home
+  computes both cells' hit extents → FooterChipHits (store
+  registry, cleared on navigate/footer-hide). Up(Left) on home
+  dispatches mcp.list / plugins.list.
+- Tests: toast_pointer_surface_pauses_and_activates (hover pause +
+  inside release → the action opened the MCP dialog),
+  toast_activate_chord_fires_the_action, mcp_failure_transitions_
+  toast_once (title/action/non-modal + the same-status dedup),
+  home_footer_chips_are_clickable (both cells → their dialogs).
+  Full suite: 849/849.
