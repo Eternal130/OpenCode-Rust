@@ -16,11 +16,6 @@ serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
 tokio.workspace = true
-vt100 = "0.15"
-
-[[bin]]
-name = "tui-diff"
-path = "src/bin/tui-diff.rs"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
