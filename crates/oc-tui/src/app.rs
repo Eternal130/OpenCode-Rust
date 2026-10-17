@@ -5350,11 +5350,30 @@ pub async fn run_with_size(
                 },
             }
         }
-        // Toast/spinner clock.
+        // Toast/spinner clock — with the marquee's own steady ticker
+        // riding on top (beta.13 bug 3): while a hover scroll runs,
+        // the loop wakes exactly on the next 80 ms boundary and PINS
+        // the clock to it, so the offset advances by exactly one cell
+        // per tick (v2's `setInterval(…, MARQUEE_INTERVAL)` —
+        // createMarquee, session-tabs.tsx:279-369). The plain 100 ms
+        // tick only advances while it CANNOT cross a boundary
+        // (toasts/spinners keep their cadence; the marquee never
+        // samples past a step it should land on).
         let now_ms = system_now_ms();
-        if last_tick.elapsed() >= std::time::Duration::from_millis(100) {
+        let marquee_deadline = crate::components::session_tabs_solid::marquee_next_step(now_ms);
+        let mut ticked = false;
+        if let Some(deadline) = marquee_deadline.filter(|deadline| *deadline <= now_ms) {
+            app.store.advance_clock(deadline);
+            app.store.toast_advance(deadline);
+            ticked = true;
+        } else if last_tick.elapsed() >= std::time::Duration::from_millis(100)
+            && marquee_deadline.is_none_or(|deadline| deadline > now_ms)
+        {
             app.store.advance_clock(now_ms);
             app.store.toast_advance(now_ms);
+            ticked = true;
+        }
+        if ticked {
             last_tick = std::time::Instant::now();
         }
         // Config reload: keybinds + theme re-merge through the store.
@@ -5553,10 +5572,17 @@ pub async fn run_with_size(
                 last_frame_images = frame_images;
             }
         }
-        // Input / tick wait.
+        // Input / tick wait — while the marquee scrolls, the wake
+        // lands exactly on the next 80 ms step boundary (the steady
+        // ticker above pins the clock to it); otherwise the plain
+        // 100 ms poll.
+        let wait_ms = match marquee_deadline {
+            Some(deadline) => (deadline.saturating_sub(now_ms)).clamp(1, 100),
+            None => 100,
+        };
         let event = tokio::select! {
             maybe = event_rx.recv() => maybe,
-            () = tokio::time::sleep(std::time::Duration::from_millis(100)) => None,
+            () = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => None,
         };
         match event {
             Some(CrosstermEvent::Key(key)) => {

@@ -170,6 +170,36 @@ impl Marquee {
                 / f64::from(u32::try_from(LEADING_FADE_MS).unwrap_or(1)),
         )
     }
+
+    /// The next instant the scroll offset changes — the interval's
+    /// next fire (`setInterval(…, MARQUEE_INTERVAL)` in
+    /// `createMarquee`, session-tabs.tsx:279-369; the still delay's
+    /// end counts as the first boundary). `None` while idle or after
+    /// the one-pass clamp (v2 stops the timer at the cycle end). The
+    /// app loop wakes on exactly these instants and pins the clock to
+    /// them, so the offset advances by exactly one cell per tick —
+    /// sampling an absolute clock at event-driven redraws instead is
+    /// what produced the beta.13 stutter (+0/+2 cells per render).
+    #[must_use]
+    pub fn next_step_ms(&self, now_ms: u64) -> Option<u64> {
+        self.active.as_ref()?;
+        if self.cycle_width <= 1 {
+            return None;
+        }
+        let start = self.entered_ms.saturating_add(MARQUEE_DELAY);
+        if now_ms < start {
+            return Some(start);
+        }
+        // `offset` steps at start + k·interval, k = 1.. — clamped at
+        // cycle−1, so the last CHANGING boundary is k = cycle−2 (the
+        // clamp already held at k−1).
+        let k = (now_ms - start) / MARQUEE_INTERVAL + 1;
+        let max_k = u64::try_from(self.cycle_width.saturating_sub(2)).unwrap_or(0);
+        if k > max_k {
+            return None;
+        }
+        Some(start + k * MARQUEE_INTERVAL)
+    }
 }
 
 #[cfg(test)]
@@ -222,5 +252,43 @@ mod tests {
         // Leave + re-enter restarts from 0.
         marquee.leave("s1");
         assert_eq!(marquee.offset(10_000), 0, "reset on leave");
+    }
+
+    /// The steady ticker (beta.13 bug 3): while a scroll runs,
+    /// `next_step_ms` names every offset-change instant — the delay's
+    /// end, then each 80 ms boundary, `None` after the one-pass clamp.
+    /// A loop that wakes on each and pins the clock to it advances the
+    /// offset by EXACTLY one cell per tick (v2's interval semantics —
+    /// `setInterval(…, 80)` in createMarquee, session-tabs.tsx:279-369;
+    /// sampling an absolute clock only at event-driven redraws is what
+    /// stuttered +0/+2 cells in the real env).
+    #[test]
+    fn next_step_names_every_boundary_for_a_steady_ticker() {
+        let mut marquee = Marquee::default();
+        assert_eq!(marquee.next_step_ms(0), None, "idle: no ticker");
+        marquee.enter("s1", "A very long session title that overflows", 10, 0);
+        assert_eq!(marquee.next_step_ms(0), Some(MARQUEE_DELAY), "the still delay's end");
+        assert_eq!(marquee.next_step_ms(599), Some(MARQUEE_DELAY));
+        assert_eq!(marquee.next_step_ms(600), Some(680), "k=1 strictly after now");
+        // Walking the boundaries one tick at a time: the offset steps
+        // by exactly 1 per wake, through the clamp.
+        let mut now = 0u64;
+        let mut offset = marquee.offset(now);
+        let mut ticks = 0u64;
+        while let Some(deadline) = marquee.next_step_ms(now) {
+            now = deadline;
+            let next = marquee.offset(now);
+            assert_eq!(next, offset + 1, "tick {ticks}: exactly one cell");
+            offset = next;
+            ticks += 1;
+        }
+        let cycle = marquee_cycle_width("A very long session title that overflows");
+        // The first change lands AT the delay's end (offset(600) = 1),
+        // then one per interval through the clamp.
+        assert_eq!(ticks, (cycle - 1) as u64, "every offset-change boundary");
+        assert_eq!(offset, cycle - 1, "the clamped final offset");
+        // A hover-off kills the ticker.
+        marquee.leave("s1");
+        assert_eq!(marquee.next_step_ms(now), None);
     }
 }
