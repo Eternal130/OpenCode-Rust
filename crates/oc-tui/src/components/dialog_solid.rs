@@ -105,6 +105,8 @@ struct DialogColors {
     formfield_bg: Rgb,
     formfield_fg: Rgb,
     formfield_base_fg: Rgb,
+    destructive_fg: Rgb,
+    destructive_bg: Rgb,
 }
 
 impl DialogColors {
@@ -128,6 +130,8 @@ impl DialogColors {
             formfield_bg: rgb(styles.formfield_bg),
             formfield_fg: rgb(styles.formfield_fg),
             formfield_base_fg: rgb(styles.formfield_base_fg),
+            destructive_fg: rgb(styles.destructive_fg),
+            destructive_bg: rgb(styles.destructive_bg),
         }
     }
 }
@@ -222,6 +226,9 @@ struct DialogInputs {
     current: Option<String>,
     /// A `flat` select under an active filter (search footers).
     flatten: bool,
+    /// The destructive confirm variant (auditB #8 — the selected row
+    /// paints `action.destructive.focused`).
+    destructive: bool,
     /// The visible window (the For source).
     window: Vec<WindowRow>,
     /// (title, label) footer actions.
@@ -328,8 +335,13 @@ fn row_paint(inputs: &DialogInputs, index: usize) -> Option<RowPaint> {
     let option = inputs.options.get(index)?;
     let selected = inputs.flat.iter().position(|flat| *flat == index) == Some(inputs.selected);
     let current = inputs.current.as_deref() == Some(option.value.as_str());
+    let (focus_background, focus_foreground) = if inputs.destructive {
+        (inputs.colors.destructive_bg, inputs.colors.destructive_fg)
+    } else {
+        (inputs.colors.selected_bg, inputs.colors.selected_fg)
+    };
     let title_fg = if selected {
-        inputs.colors.selected_fg
+        focus_foreground
     } else if current {
         inputs.colors.current_fg
     } else {
@@ -338,11 +350,11 @@ fn row_paint(inputs: &DialogInputs, index: usize) -> Option<RowPaint> {
     Some(RowPaint {
         selected,
         current,
-        bg: if selected { inputs.colors.selected_bg } else { inputs.colors.surface },
+        bg: if selected { focus_background } else { inputs.colors.surface },
         title_fg,
         bold: selected,
-        marker_fg: if selected { inputs.colors.selected_fg } else { inputs.colors.current_fg },
-        footer_fg: if selected { inputs.colors.selected_fg } else { inputs.colors.muted },
+        marker_fg: if selected { focus_foreground } else { inputs.colors.current_fg },
+        footer_fg: if selected { focus_foreground } else { inputs.colors.muted },
     })
 }
 
@@ -1304,6 +1316,7 @@ fn build_inputs(
                 selected: entry.select.selected,
                 current: props.current.clone(),
                 flatten: props.flat && !entry.select.filter.is_empty(),
+                destructive: props.destructive,
                 window,
                 actions: props
                     .actions
@@ -1328,6 +1341,7 @@ fn build_inputs(
             selected: 0,
             current: None,
             flatten: false,
+            destructive: false,
             window: Vec::new(),
             actions: Vec::new(),
             prompt_value: entry.value.clone(),
@@ -1363,6 +1377,7 @@ fn build_inputs(
                 selected: 0,
                 current: None,
                 flatten: false,
+                destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
                 prompt_value: String::new(),
@@ -1385,6 +1400,7 @@ fn build_inputs(
                 selected: 0,
                 current: None,
                 flatten: false,
+                destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
                 prompt_value: String::new(),
