@@ -1,0 +1,24 @@
+# LANE GATE — beta.13 consolidated acceptance evidence
+# Worktree: .worktrees/lane-gate (branch lane/gate, base a6d03b0 = all fix lanes merged)
+# Runner: OPENCODE_DEV_GATE_DIR=/opt/opencode-rust/.worktrees/lane-gate tools/dev-gate.sh
+# Protocol: ONE phase/script per call; append-only; WIP-commit after each phase
+2026-10-17T03:51:45Z lane start; orphaned rig procs (target/debug/opencode-rust + oc-server :33415) killed before start
+2026-10-17T03:51:53Z [A1] cargo fmt --all --check: PASS (0 diffs)
+2026-10-17T03:55:07Z [A2] cargo clippy --workspace --all-targets --locked -- -D warnings: **FAIL** — exit 101, 6 lint errors, all in oc-core TEST targets:
+  1. crates/oc-core/src/cli_config/jsonc.rs:797:42  clippy::redundant_closure_for_method_calls  (.map(|o| o.len()) -> Map::len)
+  2. crates/oc-core/src/cli_config/mod.rs:769:9    clippy::doc_markdown                       (OPENCODE_CLI_CONFIG_CONTENT needs backticks)
+  3. crates/oc-core/src/cli_config/mod.rs:934:9    clippy::items_after_statements             (struct EnvGuard after statements)
+  4. crates/oc-core/src/cli_config/mod.rs:935:9    clippy::items_after_statements             (impl EnvGuard)
+  5. crates/oc-core/src/cli_config/mod.rs:941:9    clippy::items_after_statements             (impl Drop for EnvGuard)
+  6. crates/oc-core/src/cli_config/mod.rs:965:14   clippy::used_underscore_binding            (drop(_env))
+  Full log preserved: /tmp/opencode/gate-clippy.log (7 'error' lines = 6 lints + the compile-fail summary).
+  Toolchain: rust-toolchain pins 1.99.0 (local rustc 1.99.0 b940084d7 2026-09-28) — identical to .github/workflows/ci.yml's
+  'cargo clippy --workspace --all-targets --locked -- -D warnings'. NOT a local-version artifact; CI on the tag would fail the same way.
+  Provenance: debt is NEW SINCE beta.12 — files last touched by f3eb7f5 (config: F-1, 2026-10-17 05:54 +0800) and
+  af55e25 (tail(2), 2026-10-17 10:28 +0800); tag v2.0.24.beta.12 = fe1ebb7 (2026-10-16 04:44 +0800) contains NEITHER commit.
+  The tail lane registered but did not fix it (docs/tail.log: "the 7 oc-core TEST-target lints are pre-existing on main, untouched
+  files" — pre-existing relative to the tail lane's start, i.e. landed by an earlier post-beta.12 lane; the full-workspace gate
+  that would have caught it was deferred to THIS lane by the tier ruling).
+  PROTOCOL: Phase A failure => STOP. Phases A.3 (nextest full workspace), A.4 (pty profile), A.5 (release build),
+  A.6 (release frame budgets) NOT RUN; Phase B (26-script sweep) NOT RUN. No fixes applied by this lane.
+2026-10-17T03:55:26Z lane end: STOP at A2 per protocol; docs/final-sweep-3.md written (NO-GO verdict + fix list); no fixes applied
