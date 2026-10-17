@@ -1070,6 +1070,13 @@ pub struct Store {
     open_url_sink: std::cell::RefCell<Option<OpenUrlSink>>,
     /// SURF-2 `DialogPair`'s resource state (server.info + pair).
     pair: Signal<PairState>,
+    /// Rename-pending per session (session → armed-at clock ms) — the
+    /// `title_shimmer` envelope's input (`StoreSignals::title_pending`).
+    title_pending: Signal<HashMap<String, u64>>,
+    /// Per-tab pulse transition stamps (the strip's animated phases —
+    /// `TabPulseTrack::sync` at status flips; the render derives every
+    /// envelope level from these + the clock, stateless per frame).
+    tab_pulses: RefCell<HashMap<String, crate::components::tab_pulse::TabPulseTrack>>,
     /// SURF-2 the MCP toggle seam (mcp.connect/disconnect).
     mcp_toggle_sink: std::cell::RefCell<Rc<dyn McpToggleSink>>,
     /// SURF-2 `DialogPair`'s fetch seam (server.info + server.pair).
@@ -1861,6 +1868,12 @@ struct StoreSignals {
     diff_viewer: Signal<DiffViewerLive>,
     /// SURF-2 `DialogPair`'s resource state.
     pair: Signal<PairState>,
+    /// Rename-pending per session (session → armed-at clock ms) — v2's
+    /// `data.session.title.pending(sessionID)` (context/data.tsx:35-42:
+    /// armed when the title POST fires, held until the new title
+    /// projects locally through the `session.renamed` echo). The
+    /// sidebar `title_shimmer`'s envelope input (lane TAIL item 1d).
+    title_pending: Signal<HashMap<String, u64>>,
 }
 
 impl Store {
@@ -1969,6 +1982,7 @@ impl Store {
             sidebar_mcp_open,
             diff_viewer,
             pair,
+            title_pending,
         } = signals;
         Self {
             runtime,
@@ -2056,9 +2070,11 @@ impl Store {
             diff_sink: std::cell::RefCell::new(Rc::new(NoDiffSink)),
             open_url_sink: std::cell::RefCell::new(None),
             pair,
+            title_pending,
             mcp_toggle_sink: std::cell::RefCell::new(Rc::new(NoMcpToggleSink)),
             pair_refresh_sink: std::cell::RefCell::new(None),
             config_sink: std::cell::RefCell::new(Rc::new(NoConfigSink)),
+            tab_pulses: RefCell::new(HashMap::new()),
             theme_mode_pref: RefCell::new(None),
             system_mode: Cell::new(oc_theme::types::Mode::Dark),
             interrupt_sink: std::cell::RefCell::new(Rc::new(RecordingInterruptSink::default())),
@@ -2122,6 +2138,7 @@ impl Store {
         let sidebar_mcp_open = Signal::new(&runtime, true);
         let diff_viewer = Signal::new(&runtime, DiffViewerLive::default());
         let pair = Signal::new(&runtime, PairState::default());
+        let title_pending = Signal::new(&runtime, HashMap::<String, u64>::new());
         Self::build(
             runtime,
             StoreSignals {
@@ -2166,11 +2183,51 @@ impl Store {
                 sidebar_mcp_open,
                 diff_viewer,
                 pair,
+                title_pending,
             },
         )
     }
 
     // -- accessors --------------------------------------------------------
+
+    /// The rename-pending arm's clock stamp (`data.session.title.
+    /// pending(sessionID)` — context/data.tsx:35): `Some(since)` while
+    /// the rename POST has not yet projected through the echo.
+    #[must_use]
+    pub fn title_pending_since(&self, session_id: &str) -> Option<u64> {
+        self.title_pending.get().get(session_id).copied()
+    }
+
+    /// Arm/clear rename-pending for one session (the `title_shimmer`'s
+    /// envelope input).
+    pub fn set_title_pending(&self, session_id: &str, since: Option<u64>) {
+        self.title_pending.update(|pending| match since {
+            Some(ms) => {
+                pending.insert(session_id.to_owned(), ms);
+            }
+            None => {
+                pending.remove(session_id);
+            }
+        });
+    }
+
+    /// Sync one tab's pulse transition stamps against its live status
+    /// (`TabPulseTrack::sync` — stamps only on flips, at the store
+    /// clock) and return the track for the strip's envelope read.
+    #[must_use]
+    pub fn tab_pulse_track(
+        &self,
+        session_id: &str,
+        runs: bool,
+        glow: bool,
+        complete: bool,
+    ) -> crate::components::tab_pulse::TabPulseTrack {
+        let now = self.clock();
+        let mut pulses = self.tab_pulses.borrow_mut();
+        let track = pulses.entry(session_id.to_owned()).or_default();
+        track.sync(runs, glow, complete, now);
+        *track
+    }
 
     #[must_use]
     pub fn tabs(&self) -> TabsState {
@@ -5527,6 +5584,12 @@ impl Store {
             "session.updated" | "session.renamed" => {
                 let Some(id) = event.string("sessionID") else { return };
                 let title = event.string("title");
+                // The rename echo projects the new title locally —
+                // rename-pending releases (`generatingTitles`'s
+                // finally + the projection note, context/data.tsx:42).
+                if self.title_pending.get().contains_key(&id) {
+                    self.set_title_pending(&id, None);
+                }
                 // The session-list history refreshes in place (v2's
                 // renamed handler writes the session store's
                 // `info[sessionID].title` — client/solid/data.ts:687-699

@@ -28,7 +28,7 @@
 
 use crate::components::message::rows::locale_number;
 use crate::components::session_tabs::SESSION_SIDEBAR_WIDTH;
-use crate::layout::{Placed, PlacedLine};
+use crate::layout::{Placed, PlacedLine, StyledSpan};
 use crate::render::Fill;
 use crate::theme::ThemeStyles;
 use ratatui::style::{Modifier, Style};
@@ -245,6 +245,14 @@ pub const GETTING_STARTED_ACTION_HINT: &str = "/connect";
 pub struct SidebarView {
     /// The session title (bold, row 1).
     pub title: String,
+    /// Rename-pending's arm stamp (`data.session.title.pending`) —
+    /// `Some(since_ms)` while the shimmer's sustained segment runs
+    /// (title-shimmer.tsx: the title dims to 40% with a moving
+    /// highlight sweeping every 1200 ms).
+    pub title_pending_since: Option<u64>,
+    /// The store clock (ms) — the shimmer's only time source (a
+    /// frozen clock pins the un-faded bold row).
+    pub clock_ms: u64,
     /// The content-slot sections (blank in the golden fixture).
     pub sections: SidebarSections,
     /// Show the getting-started card (hidden when dismissed or a
@@ -261,11 +269,40 @@ impl SidebarView {
     pub fn fixture(title: &str, location: &str) -> Self {
         Self {
             title: title.to_owned(),
+            title_pending_since: None,
+            clock_ms: 0,
             sections: SidebarSections::empty(),
             onboarding: true,
             location: Some(location.to_owned()),
         }
     }
+}
+
+/// The shimmer's per-cell foreground (`title-shimmer.tsx` render):
+/// `strength = 0.6 · level · (1 − intensityAt(col, front, 4, 18))`
+/// pulls the glyph toward the backdrop (the colorMatrix's masked
+/// translation); the highlight band restores full fg.
+fn shimmer_fg(
+    base: ratatui::style::Color,
+    backdrop: ratatui::style::Color,
+    column: usize,
+    front: f64,
+    level: f64,
+) -> ratatui::style::Color {
+    let ratatui::style::Color::Rgb(fr, fg_, fb) = base else { return base };
+    let ratatui::style::Color::Rgb(br, bg_, bb) = backdrop else { return base };
+    let band = crate::components::tab_pulse::intensity_at(
+        column,
+        front,
+        crate::components::tab_pulse::RUN_HEAD,
+        crate::components::tab_pulse::RUN_TAIL,
+    );
+    let strength = 0.6 * level * (1.0 - band);
+    // The tint factors bounded 0..=255 channels by a 0..1 strength.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let mix =
+        |c: u8, b: u8| (f64::from(c) + (f64::from(b) - f64::from(c)) * strength).round() as u8;
+    ratatui::style::Color::Rgb(mix(fr, br), mix(fg_, bg_), mix(fb, bb))
 }
 
 /// Wrap one paragraph at [`CARD_TEXT_WIDTH`] through the shared wrap
@@ -361,17 +398,55 @@ pub fn render_sidebar_scrolled(
     let mut paint = SidebarPaint::default();
 
     // The title: bold `text.base` over the raised background, row 1
-    // (paddingTop 1), 2 columns in (paddingLeft 2).
-    paint.placed.push(Placed {
-        x: 2,
-        y: 1,
-        width: crate::wrap::display_width(&view.title),
-        lines: vec![PlacedLine::plain(
-            view.title.as_str(),
-            Style::new().fg(fg_base).bg(raised).add_modifier(Modifier::BOLD),
-        )],
-        tag: Some("sidebar.title".into()),
-    });
+    // (paddingTop 1), 2 columns in (paddingLeft 2). While
+    // rename-pending, the title_shimmer's sustained segment runs
+    // (title-shimmer.tsx): the glyphs dim to 40% toward the backdrop
+    // while a highlight band (`intensityAt(col, front, 4, 18)`)
+    // sweeps left-to-right every 1200 ms — per-char runs, all
+    // deterministic from (clock − since).
+    if let Some(since) = view.title_pending_since {
+        let elapsed_total = view.clock_ms.saturating_sub(since);
+        let level = crate::components::tab_pulse::smootherstep(
+            f64::from(u32::try_from(elapsed_total.min(240)).unwrap_or(0)) / 240.0,
+        );
+        let shimmer_elapsed = elapsed_total % 1_200;
+        let end = crate::wrap::display_width(&view.title).max(1);
+        let front = -4.0
+            + crate::components::tab_pulse::coast(
+                f64::from(u32::try_from(shimmer_elapsed).unwrap_or(0)) / 1200.0,
+            ) * f64::from(u32::try_from(end + 22).unwrap_or(22));
+        let runs = view
+            .title
+            .chars()
+            .enumerate()
+            .map(|(column, ch)| StyledSpan {
+                text: ch.to_string(),
+                style: Style::new()
+                    .fg(shimmer_fg(fg_base, raised, column, front, level))
+                    .bg(raised)
+                    .add_modifier(Modifier::BOLD),
+                link: None,
+            })
+            .collect();
+        paint.placed.push(Placed {
+            x: 2,
+            y: 1,
+            width: crate::wrap::display_width(&view.title),
+            lines: vec![PlacedLine { runs }],
+            tag: Some("sidebar.title".into()),
+        });
+    } else {
+        paint.placed.push(Placed {
+            x: 2,
+            y: 1,
+            width: crate::wrap::display_width(&view.title),
+            lines: vec![PlacedLine::plain(
+                view.title.as_str(),
+                Style::new().fg(fg_base).bg(raised).add_modifier(Modifier::BOLD),
+            )],
+            tag: Some("sidebar.title".into()),
+        });
+    }
 
     // The content slot's viewport: rows [2, footer_top) — the footer
     // stack (location row at height−2, the onboarding card above it)
@@ -939,6 +1014,8 @@ mod surf1_tests {
     fn live_sections_paint_context_mcp_and_location() {
         let view = SidebarView {
             title: "S".to_owned(),
+            title_pending_since: None,
+            clock_ms: 0,
             sections: SidebarSections {
                 context: SidebarContextWidget { tokens: Some(60_400), percent: None, cost: None },
                 mcp: SidebarMcpWidget {

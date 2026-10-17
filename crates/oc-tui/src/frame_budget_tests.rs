@@ -504,6 +504,8 @@ fn sidebar_pane_budget_body() {
 
     let view = || SidebarView {
         title: "Sidebar budget".to_owned(),
+        title_pending_since: None,
+        clock_ms: 0,
         sections: SidebarSections {
             context: SidebarContextWidget::default(),
             mcp: SidebarMcpWidget::default(),
