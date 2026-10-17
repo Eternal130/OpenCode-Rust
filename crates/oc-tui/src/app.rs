@@ -4375,8 +4375,15 @@ fn system_now_ms() -> u64 {
 fn crossterm_key_to_spec(key: &crossterm::event::KeyEvent) -> Option<String> {
     use crossterm::event::{KeyCode, KeyModifiers};
     if key.modifiers.contains(KeyModifiers::CONTROL) {
+        // Combined chords keep every modifier (lane KM: the
+        // ctrl+alt+ family — `toast.activate`, which-key's panel).
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
         return match key.code {
-            KeyCode::Char(ch) => Some(format!("ctrl+{}", ch.to_ascii_lowercase())),
+            KeyCode::Char(ch) => Some(if alt {
+                format!("ctrl+alt+{}", ch.to_ascii_lowercase())
+            } else {
+                format!("ctrl+{}", ch.to_ascii_lowercase())
+            }),
             _ => None,
         };
     }
