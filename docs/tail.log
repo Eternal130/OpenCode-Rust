@@ -1,0 +1,11 @@
+# lane TAIL — Wave-3 remainders (animations, protocol/robustness, error surfaces)
+# Worktree .worktrees/lane-tail, branch lane/tail. Append-only lane record.
+
+## Phase 1 — animations (item 1)
+- (a) busy tab spinner: SPINNER_FRAMES + spinner_frame_at(clock) — session_tabs.rs; indicator_chunks cycles ⠋⠙⠹… at 80 ms/frame off the store clock (paint_solid_bar_clock); paint_live_tabs_bar now sets busy = store.session_running(id) (context/session-tabs.tsx:170-174). PTY: vt_temporal_marquee un-ignored green; spinner unit covers the full 10-frame cycle at the frozen clock pin.
+- (b) TabPulse sweep: tab_pulse.rs gains the full envelope math (RUN_*/COMPLETION_*/GLOW_* constants, intensityAt, coast, attackDecay, blendTabPulseColor, fronts) as PURE functions of TabPulseTrack transition stamps + clock (stateless per frame — no thread-global mutable envelopes; golden frames byte-stable at frozen clock). The strip paints the busy band per cell at 0.14 amplitude over pulseColor=tint(bg,text,0.45) (session-tabs.tsx:1575). Store: tab_pulse_track() stamps busy/glow/completion flips at the clock.
+- (c) hover marquee: components/marquee.rs (marqueeCycleWidth/Overflows/TextParts verbatim + deterministic offset: 600 ms delay, +1/80 ms, one cycle then stop; leading fade 250 ms). title_chunks scrolls the hovered overflowing title; VT proof vt_temporal_marquee_shifts_one_cell_per_tick GREEN (was the registered ignored v2 gap).
+- (d) title_shimmer envelope: store title_pending (armed at the rename POST, released by the session.renamed/updated echo — context/data.tsx:35-42 semantics); sidebar title paints the sustained segment (dim 40% toward the backdrop, 1200 ms coasting highlight band, 240 ms blend-in) as per-char runs in render_sidebar_scrolled.
+- (e) scrim alpha: session.rs apply_scrim — rgba(0,0,0,70) composited over the route content (per-cell bg blend toward black at 70/255); the composer echo survives under the manual-open overlay (the registered 2026-10-12 "no echo" seam). Test updated accordingly.
+- Budget pair: animated_strip_stays_inside_the_frame_budget — 12 busy tabs, 60 live-clock frames, worst < 40 ms (measured ~1 ms class).
+- Verification: cargo nextest -p oc-tui 787/787 green (incl. all goldens); clippy -D warnings clean; fmt applied.

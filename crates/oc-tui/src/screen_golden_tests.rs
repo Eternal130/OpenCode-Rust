@@ -642,6 +642,8 @@ fn surf1_sidebar_live_sections_match_the_golden_assembly() {
     let theme = theme();
     let sidebar_view = crate::components::sidebar::SidebarView {
         title: "Surf fixture".into(),
+        title_pending_since: None,
+        clock_ms: 0,
         sections: crate::components::sidebar::SidebarSections {
             context: crate::components::sidebar::SidebarContextWidget {
                 tokens: Some(60_400),

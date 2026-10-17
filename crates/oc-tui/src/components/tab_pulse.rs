@@ -27,9 +27,15 @@
 //! below verify cell-for-cell.
 
 // The tint math rounds per channel by design (`fromInts(round(c))`)
-// and indexes cells by `usize` against small f64 tails; the pedantic
-// cast lints carry no real risk on terminal dimensions.
-#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_possible_wrap)]
+// and indexes cells by `usize` against small f64 tails; clock ms are
+// bounded monotonic instants. The pedantic cast lints carry no real
+// risk on terminal dimensions/instants.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss
+)]
 /// A truecolor channel triple (the painter's color vocabulary).
 pub type Rgb = (u8, u8, u8);
 /// the strip width (`tab-pulse.tsx`).
@@ -114,6 +120,289 @@ pub fn resting_glow_bg(
 #[must_use]
 pub fn idle_pulse_bg(background: Rgb) -> Rgb {
     background
+}
+
+// ---------------------------------------------------------------------------
+// The animated phases (tab-pulse.tsx:31-115 + 125-427) — lane TAIL, the
+// user's busy-session findings (ROADMAP 2026-10-16): the clockwise dot
+// spinner, the left-to-right cycling sweep, and the envelopes that
+// shape them. The envelope levels derive PURELY from a transition-stamp
+// track + the injected clock, so every render is stateless and
+// reproducible: a frozen clock pins the sustain state (golden frames
+// stay byte-stable), a fresh store starts each envelope at its origin.
+// ---------------------------------------------------------------------------
+
+/// `RUN_DURATION` — one left-to-right sweep pass (ms).
+pub const RUN_DURATION: u64 = 2_800;
+/// `RUN_ATTACK` — the sweep's fade-in (ms).
+pub const RUN_ATTACK: u64 = 450;
+/// `RUN_HEAD`/`RUN_TAIL` — the sweep band's cells ahead/behind the front.
+pub const RUN_HEAD: f64 = 4.0;
+pub const RUN_TAIL: f64 = 18.0;
+/// `RUN_FADE_OUT` — the sweep's note-off fade (ms).
+pub const RUN_FADE_OUT: u64 = 500;
+/// The sweep band's peak amplitude over the tab background (`0.14`,
+/// tab-pulse.tsx renderSelf).
+pub const RUN_SWEEP_OPACITY: f64 = 0.14;
+/// `COMPLETION_*` — the resolve flash (`attackDecay` peak 1 × 0.18).
+pub const COMPLETION_DURATION: u64 = 1_200;
+pub const COMPLETION_ATTACK: f64 = 0.12;
+pub const COMPLETION_OPACITY: f64 = 0.18;
+/// `GLOW_IGNITION_*`/`GLOW_RELEASE_*` — the glow's attack/release shapes.
+pub const GLOW_IGNITION_DURATION: u64 = 600;
+pub const GLOW_IGNITION_PEAK: f64 = 1.5;
+pub const GLOW_IGNITION_ATTACK: f64 = 0.3;
+pub const GLOW_RELEASE_DURATION: u64 = 900;
+pub const GLOW_RELEASE_ATTACK: f64 = 0.12;
+pub const GLOW_RELEASE_PEAK: f64 = 1.25;
+/// `GLOW_FADE_OUT` — the drain window inside the release (ms).
+pub const GLOW_FADE_OUT_MS: u64 = 200;
+
+/// `intensityAt(index, front, head, tail)` (tab-pulse.tsx:66-69): the
+/// sweep band's spatial profile — a `head`-wide smootherstep ramp
+/// ahead of the front, a `tail`-long falloff behind it.
+#[must_use]
+pub fn intensity_at(index: usize, front: f64, head: f64, tail: f64) -> f64 {
+    let distance = front - f64::from(index as i32);
+    if distance < 0.0 {
+        smootherstep(clamp01(1.0 + distance / head))
+    } else {
+        smootherstep(clamp01(1.0 - distance / tail))
+    }
+}
+
+/// `coast(value)` (tab-pulse.tsx:70-75): the sweep's eased traversal —
+/// a quadratic ramp-in/out around a linear middle.
+#[must_use]
+pub fn coast(value: f64) -> f64 {
+    let ramp = 0.2;
+    let v = clamp01(value);
+    if v < ramp {
+        (v * v) / (2.0 * ramp * (1.0 - ramp))
+    } else if v > 1.0 - ramp {
+        1.0 - ((1.0 - v) * (1.0 - v)) / (2.0 * ramp * (1.0 - ramp))
+    } else {
+        (v - ramp / 2.0) / (1.0 - ramp)
+    }
+}
+
+/// `fadeOut(progress)` = `1 − smootherstep(progress)`.
+#[must_use]
+pub fn fade_out(progress: f64) -> f64 {
+    1.0 - smootherstep(clamp01(progress))
+}
+
+/// `attackDecay(progress, attack, peak, rest)` (tab-pulse.tsx:78-81):
+/// rise to `peak` over the attack fraction, settle to `rest` after.
+#[must_use]
+pub fn attack_decay(progress: f64, attack: f64, peak: f64, rest: f64) -> f64 {
+    let p = clamp01(progress);
+    if p < attack {
+        peak * smootherstep(clamp01(p / attack))
+    } else {
+        peak - (peak - rest) * smootherstep(clamp01((p - attack) / (1.0 - attack)))
+    }
+}
+
+/// `glowIgnitionLevel` — the glow attack rises past 1 then settles.
+#[must_use]
+pub fn glow_ignition_level(progress: f64) -> f64 {
+    attack_decay(progress, GLOW_IGNITION_ATTACK, GLOW_IGNITION_PEAK, 1.0)
+}
+
+/// `glowReleaseSwell` — the diffusing glow swells above its resting
+/// level, then decays to nothing.
+#[must_use]
+pub fn glow_release_swell_shape(progress: f64) -> f64 {
+    attack_decay(progress, GLOW_RELEASE_ATTACK, GLOW_RELEASE_PEAK, 0.0)
+}
+
+/// `glowReleaseSpread(progress, tail, width)` — how far a resolving
+/// glow has diffused: the resting tail spreads across the full width.
+// Terminal widths are far below 2^52 — the pedantic precision lint
+// carries no real risk (the module's standing allowance).
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn glow_release_spread(progress: f64, tail: f64, width: usize) -> f64 {
+    tail + smootherstep(clamp01(progress)) * width.max(1) as f64
+}
+
+/// `blendTabPulseColor` (tab-pulse.tsx:116-130): the staged blend —
+/// glow tint, then sweep, flash and completion each pull the running
+/// color the rest of the way. (One argument per stage, the reference
+/// signature.)
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn blend_tab_pulse_color(
+    background: Rgb,
+    glow_color: Rgb,
+    running_color: Rgb,
+    flash_color: Rgb,
+    completion_color: Rgb,
+    glow: f64,
+    running: f64,
+    flash: f64,
+    completion: f64,
+) -> Rgb {
+    let mut out = if glow == 0.0 { background } else { tint(background, glow_color, glow) };
+    if running != 0.0 {
+        out = tint(out, running_color, running);
+    }
+    if flash != 0.0 {
+        out = tint(out, flash_color, flash);
+    }
+    if completion != 0.0 {
+        out = tint(out, completion_color, completion);
+    }
+    out
+}
+
+/// `elapsed(now, since)` in whole ms (monotonic, saturating).
+fn elapsed(now: u64, since: u64) -> u64 {
+    now.saturating_sub(since)
+}
+
+/// One tab's pulse history — the transition stamps the live path
+/// records when a tab's status flips ([`TabPulseTrack::sync`], the
+/// tsx prop setters' effect); every envelope level below derives
+/// purely from a track + the clock.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TabPulseTrack {
+    /// When the busy sweep began (`setActive(true)`).
+    pub active_since: Option<u64>,
+    /// When busy ended (the release fade's origin).
+    pub idle_since: Option<u64>,
+    /// When the unread glow ignited.
+    pub glow_since: Option<u64>,
+    /// When the glow released.
+    pub glow_off_since: Option<u64>,
+    /// When the completion flash fired.
+    pub completion_since: Option<u64>,
+}
+
+impl TabPulseTrack {
+    /// Stamp any status transition at `now`.
+    pub fn sync(&mut self, runs: bool, glow: bool, complete: bool, now: u64) {
+        if runs != self.active_since.is_some() {
+            if runs {
+                self.active_since = Some(now);
+                self.idle_since = None;
+                self.completion_since = None;
+            } else {
+                self.idle_since = Some(now);
+            }
+        }
+        if glow != self.glow_since.is_some() {
+            if glow {
+                self.glow_since = Some(now);
+                self.glow_off_since = None;
+            } else {
+                self.glow_off_since = Some(now);
+            }
+        }
+        if complete && self.completion_since.is_none() {
+            self.completion_since = Some(now);
+        }
+    }
+
+    /// The run envelope's level: attack over [`RUN_ATTACK`] to sustain
+    /// 1 while busy, then the [`RUN_FADE_OUT`] note-off from the
+    /// level held at note-off (`GatedEnvelope.release`).
+    #[must_use]
+    pub fn running(&self, now: u64) -> f64 {
+        let Some(active) = self.active_since else { return 0.0 };
+        let Some(idle) = self.idle_since else {
+            return smootherstep(clamp01(elapsed(now, active) as f64 / RUN_ATTACK as f64));
+        };
+        let note_off = smootherstep(clamp01(elapsed(idle, active) as f64 / RUN_ATTACK as f64));
+        note_off * fade_out(clamp01(elapsed(now, idle) as f64 / RUN_FADE_OUT as f64))
+    }
+
+    /// The sweep clock: coasts from note-on THROUGH the release fade,
+    /// stopped once the release completes (`advance`'s `!idle` gate).
+    #[must_use]
+    pub fn sweep_clock(&self, now: u64) -> u64 {
+        let Some(active) = self.active_since else { return 0 };
+        let stop = self.idle_since.map_or(u64::MAX, |idle| idle.saturating_add(RUN_FADE_OUT));
+        now.min(stop).saturating_sub(active)
+    }
+
+    /// The sweep fronts at `now` (see [`fronts_at`]).
+    #[must_use]
+    pub fn fronts(&self, width: usize, now: u64) -> (f64, f64) {
+        fronts_at(self.sweep_clock(now), width)
+    }
+
+    /// The glow envelope: ignition past 1 then sustain; on release,
+    /// the note-off residue drains over the leading 200 ms (the
+    /// release stage's drain shape).
+    #[must_use]
+    pub fn glow_level(&self, now: u64) -> f64 {
+        if let Some(off) = self.glow_off_since {
+            let note_off = self.glow_since.map_or(1.0, |on| {
+                glow_ignition_level(clamp01(
+                    elapsed(off, on) as f64 / GLOW_IGNITION_DURATION as f64,
+                ))
+            });
+            let drain_fraction = GLOW_FADE_OUT_MS as f64 / GLOW_RELEASE_DURATION as f64;
+            let progress = elapsed(now, off) as f64 / GLOW_RELEASE_DURATION as f64;
+            return note_off * fade_out(clamp01(progress / drain_fraction));
+        }
+        let Some(on) = self.glow_since else { return 0.0 };
+        glow_ignition_level(clamp01(elapsed(now, on) as f64 / GLOW_IGNITION_DURATION as f64))
+    }
+
+    /// The completion flash (0.18 amplitude, 1200 ms attackDecay).
+    #[must_use]
+    pub fn completion(&self, now: u64) -> f64 {
+        self.completion_since.map_or(0.0, |at| {
+            COMPLETION_OPACITY
+                * attack_decay(
+                    clamp01(elapsed(now, at) as f64 / COMPLETION_DURATION as f64),
+                    COMPLETION_ATTACK,
+                    1.0,
+                    0.0,
+                )
+        })
+    }
+
+    /// The diffusing swell riding a released glow (above its resting
+    /// level, decaying to nothing over the 900 ms release).
+    #[must_use]
+    pub fn glow_release_swell(&self, now: u64) -> f64 {
+        let Some(off) = self.glow_off_since else { return 0.0 };
+        let progress = clamp01(elapsed(now, off) as f64 / GLOW_RELEASE_DURATION as f64);
+        let note_off = self.glow_since.map_or(1.0, |on| {
+            glow_ignition_level(clamp01(elapsed(off, on) as f64 / GLOW_IGNITION_DURATION as f64))
+        });
+        glow_release_swell_shape(progress) * note_off.max(1.0)
+    }
+
+    /// How far the released glow has diffused (the tail spreads
+    /// across the full width as it thins away).
+    #[must_use]
+    pub fn glow_release_spread(&self, tail: f64, width: usize, now: u64) -> f64 {
+        let Some(off) = self.glow_off_since else { return 0.0 };
+        glow_release_spread(
+            clamp01(elapsed(now, off) as f64 / GLOW_RELEASE_DURATION as f64),
+            tail,
+            width,
+        )
+    }
+}
+
+/// `PulseState.fronts(width)` (tab-pulse.tsx:404-417): the two sweep
+/// fronts — the primary pass coasts left-to-right over [`RUN_DURATION`],
+/// a second pass trailing half a cycle behind.
+#[must_use]
+pub fn fronts_at(sweep_clock: u64, width: usize) -> (f64, f64) {
+    let cycles = sweep_clock as f64 / RUN_DURATION as f64;
+    let progress = cycles.fract();
+    let start = -RUN_HEAD;
+    let end = (width.saturating_sub(1)).max(1) as f64 + RUN_TAIL;
+    let span = end - start;
+    let second_progress = if cycles < 0.5 { 0.0 } else { (cycles + 0.5).fract() };
+    (start + coast(progress) * span, start + coast(second_progress) * span)
 }
 
 #[cfg(test)]
@@ -271,5 +560,121 @@ mod tests {
         assert_eq!(tint(BASE, ACCENT, 1.0), ACCENT);
         // 20 + (157 − 20) · 0.45 = 81.65 → 82 (fromInts rounding).
         assert_eq!(tint(RAISED, ACCENT, 0.45).0, 82);
+    }
+
+    // -- lane TAIL: the animated phases ----------------------------------
+
+    /// `coast` — the reference's own anchors (the quadratic feet).
+    #[test]
+    fn coast_matches_the_reference_anchors() {
+        assert_eq!(coast(0.0), 0.0);
+        // v=0.2: (0.2²)/(2·0.2·0.8) = 0.04/0.32 = 0.125
+        assert!((coast(0.2) - 0.125).abs() < 1e-12);
+        assert!((coast(0.5) - 0.5).abs() < 1e-12);
+        assert_eq!(coast(1.0), 1.0);
+        // v=0.8: 1 − (0.2²)/0.32 = 0.875
+        assert!((coast(0.8) - 0.875).abs() < 1e-12);
+    }
+
+    /// `intensityAt` — the sweep band: full at the front, a 4-cell
+    /// head ahead, an 18-cell tail behind.
+    #[test]
+    fn sweep_band_profile_matches_the_reference() {
+        assert!((intensity_at(10, 10.0, RUN_HEAD, RUN_TAIL) - 1.0).abs() < 1e-12);
+        // 4 cells AHEAD of the front (index > front): head branch → 0.
+        assert_eq!(intensity_at(14, 10.0, RUN_HEAD, RUN_TAIL), 0.0);
+        // 2 cells ahead: 1 − 2/4 = 0.5 → smootherstep(0.5) = 0.5.
+        assert!((intensity_at(12, 10.0, RUN_HEAD, RUN_TAIL) - 0.5).abs() < 1e-12);
+        assert_eq!(intensity_at(28, 10.0, RUN_HEAD, RUN_TAIL), 0.0);
+    }
+
+    /// The run envelope: attack over 450 ms to sustain 1, hold while
+    /// busy, release over 500 ms after — all from the stamps.
+    #[test]
+    fn run_envelope_attacks_sustains_and_releases() {
+        let mut track = TabPulseTrack::default();
+        assert_eq!(track.running(0), 0.0, "silent before the first busy");
+        track.sync(true, false, false, 0);
+        assert_eq!(track.running(0), 0.0, "attack origin at the stamp");
+        assert!((track.running(225) - 0.5).abs() < 1e-9, "attack midpoint");
+        assert!((track.running(450) - 1.0).abs() < 1e-9, "sustain after the attack");
+        assert!((track.running(5_000) - 1.0).abs() < 1e-9, "sustains while busy");
+        track.sync(false, false, false, 5_000);
+        assert!((track.running(5_250) - 0.5).abs() < 1e-9, "release midpoint");
+        assert_eq!(track.running(5_500), 0.0, "silent after the release");
+        // The sweep clock stops when the release completes.
+        assert_eq!(track.sweep_clock(9_000), 5_500, "sweep clamped at idle+fade");
+    }
+
+    /// The sweep front crosses cells left-to-right (`fronts_at`): the
+    /// front starts at −4, coasts across `width − 1 + 18`, and a
+    /// second pass joins half a cycle in.
+    #[test]
+    fn sweep_fronts_cross_left_to_right() {
+        let width = 32usize;
+        let (f0, f1) = fronts_at(0, width);
+        assert_eq!(f0, -4.0);
+        assert_eq!(f1, -4.0, "no second pass in the first half-cycle");
+        let (f0, f1) = fronts_at(1_400, width);
+        // coast(0.5) = 0.5 → f0 = −4 + 0.5·(31 + 18 + 4) = 22.5
+        assert!((f0 - 22.5).abs() < 1e-9, "mid-cycle front: {f0}");
+        assert!((f1 - -4.0).abs() < 1e-9, "second pass starts at mid-cycle");
+        // A mid-strip cell sees the band pass: rises to ~1 then falls.
+        let cell = 20usize;
+        let mut seen_peak = false;
+        let mut values = Vec::new();
+        for step in 0..=28 {
+            let (f0, f1) = fronts_at(step * 100, width);
+            values.push(
+                intensity_at(cell, f0, RUN_HEAD, RUN_TAIL)
+                    .max(intensity_at(cell, f1, RUN_HEAD, RUN_TAIL)),
+            );
+            if values.last().is_some_and(|v| *v > 0.99) {
+                seen_peak = true;
+            }
+        }
+        assert!(seen_peak, "the band crosses cell {cell}: {values:?}");
+    }
+
+    /// The glow envelope: ignition peaks at 1.5 then settles to 1;
+    /// release drains over the leading 200 ms with a swelling spread.
+    #[test]
+    fn glow_envelope_ignites_and_releases() {
+        let mut track = TabPulseTrack::default();
+        assert_eq!(track.glow_level(0), 0.0, "no glow before ignition");
+        track.sync(false, true, false, 0);
+        assert!((track.glow_level(180) - 1.5).abs() < 1e-9, "ignition peak at 30% of 600 ms");
+        assert!((track.glow_level(601) - 1.0).abs() < 1e-6, "settled to sustain");
+        track.sync(false, false, false, 1_000);
+        assert_eq!(track.glow_level(1_000), 1.0, "note-off held at the drain's origin");
+        assert!((track.glow_level(1_100) - 0.5).abs() < 1e-9, "halfway through the drain");
+        assert!(track.glow_release_swell(1_100) > 1.0, "the swell rides above rest");
+        assert!(track.glow_release_spread(12.0, 32, 1_450) > 12.0, "the tail spreads");
+    }
+
+    /// The completion flash: the activity unread landing after idle
+    /// fires the 0.18 wash (1200 ms attackDecay).
+    #[test]
+    fn completion_flash_fires_when_the_turn_resolves() {
+        let mut track = TabPulseTrack::default();
+        track.sync(true, false, false, 0);
+        track.sync(false, false, false, 4_000);
+        assert_eq!(track.completion(4_000), 0.0, "idle without a completion yet");
+        track.sync(false, false, true, 4_100);
+        assert!(track.completion(4_244) > 0.17, "near the 0.18 peak");
+        assert_eq!(track.completion(5_400), 0.0, "decays away");
+    }
+
+    /// `blend_tab_pulse_color` — the staged pull.
+    #[test]
+    fn staged_blend_pulls_toward_each_stage() {
+        let bg = (10, 10, 10);
+        let glow = (157, 124, 216);
+        let run = (100, 100, 100);
+        let only_glow = blend_tab_pulse_color(bg, glow, run, run, run, 0.5, 0.0, 0.0, 0.0);
+        assert_eq!(only_glow, tint(bg, glow, 0.5));
+        let both = blend_tab_pulse_color(bg, glow, run, run, run, 0.5, 0.5, 0.0, 0.0);
+        assert_eq!(both, tint(only_glow, run, 0.5));
+        assert_eq!(blend_tab_pulse_color(bg, glow, run, run, run, 0.0, 0.0, 0.0, 0.0), bg);
     }
 }

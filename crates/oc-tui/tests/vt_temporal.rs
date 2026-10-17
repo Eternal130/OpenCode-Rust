@@ -317,15 +317,12 @@ fn vt_temporal_cursor_blinks_500ms() {
 // ---------------------------------------------------------------------------
 
 /// v2 marquees a hovered TRUNCATED tab title: the visible content
-/// window shifts ~1 cell per tick while hovered. Our port's tab-pulse
-/// envelopes (marquee included) are C2 and NOT implemented
-/// (`components/tab_pulse.rs`) — the registered v2 gap. This test is
-/// `#[ignore]`d for exactly that reason: it asserts the marquee
-/// EXISTS (≥5 one-cell shifts of the hovered title region over ≥5
-/// ticks), which today it does not. REMOVE the `#[ignore]` when the
-/// marquee lands — the body is already the acceptance check.
+/// window shifts ~1 cell per tick while hovered. Lane TAIL landed the
+/// marquee (`components/marquee.rs` + `title_chunks`'s scrolling
+/// window): a hovered overflowing title scrolls one cell per 80 ms
+/// after a 600 ms still frame. The body is the acceptance check
+/// (≥5 one-cell shifts of the hovered title region over the window).
 #[test]
-#[ignore = "registered v2 gap: marquee-on-truncated-title is C2 (tab_pulse.rs) — un-ignore when it lands"]
 fn vt_temporal_marquee_shifts_one_cell_per_tick() {
     let shifts: usize = run_temporal_test(
         "marquee",

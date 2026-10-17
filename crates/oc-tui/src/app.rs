@@ -3826,11 +3826,14 @@ pub async fn run_with_size(
             post_permission_reply(client.clone(), reply);
         }
         // Rename submits (v2 index.tsx:908): the POST's
-        // `session.renamed` echo lands the title in the store.
+        // `session.renamed` echo lands the title in the store. The
+        // POST arms rename-pending (title_shimmer's envelope,
+        // context/data.tsx:35-42) — the echo releases it.
         for (session_id, title) in std::mem::take(&mut app.rename_requests) {
             if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
                 eprintln!("[tui] session rename {session_id}: {title}");
             }
+            app.store.set_title_pending(&session_id, Some(app.store.clock()));
             post_session_rename(client.clone(), session_id, title);
         }
         // Attention: the bell request set by permission asks / unread
@@ -6150,11 +6153,13 @@ mod core_interaction_tests {
         app.store.open_tab("s1", Some("Bug hunt".to_owned()));
 
         // <leader>b at 80 cols: the manual overlay — the sidebar shows
-        // and the opaque scrim covers the composer (no `┃` anywhere).
+        // over the TRANSLUCID scrim (rgba(0,0,0,70) — lane TAIL's
+        // alpha blend): the composer rail's echo survives underneath
+        // (the registered "no echo under the scrim" seam is closed).
         app.press("ctrl+x");
         app.press("b");
         assert!(app.store.sidebar_shown("s1", 80), "the manual overlay is up");
-        assert!(!app.frame_text().contains('┃'), "the scrim hides the composer");
+        assert!(app.frame_text().contains('┃'), "the composer echoes under the scrim");
 
         // Escape closes it (v2 binds "escape,ctrl+c" → onToggleSidebar)
         // and the composer rail returns.
