@@ -1,0 +1,20 @@
+# RESCAN log (append-only)
+
+## Phase 1 — landscape
+- Worktree .worktrees/lane-rescan, branch lane/rescan, base a4431d2 (beta.13).
+- Ref: /tmp/opencode/ref (v2.0.24 source, bun). Parity rig: tools/parity (server-level only, no plugin corpus).
+- Plugin: /root/.cache/opencode/npm/oh-my-opencode-slim@latest/1791474452027/node_modules/oh-my-opencode-slim/{dist,src,schema}.
+- Prior instruments: ref-parity (tools/parity) + tui-diff rig (/tmp/opencode/tui-diff*), termatrix — all vanilla-stub per mission brief.
+
+## Phase 2 — live plugin-armed captures (driver: tools/parity/src/bin/rescan-tui.rs)
+- Built rescan-tui driver (PtyChild + SharedStub + both server spawners; sandboxed homes; plugin cache seeded both layouts).
+- DISCOVERY: ref pin 2.0.24 CANNOT load omo-slim 3.0.3 (server: Cannot find module 'oh-my-opencode-slim/rpc'; TUI toast '1 plugin failed' + /plugins dialog 'failed, update available'). User's real binary opencode2 (v2.0.25, sandboxed HOME) loads it cleanly (entrypoint dist/server/index.js, mcp connected gh_grep/brave-search, command.updated x3). All live captures therefore used --ref-bin /root/.opencode/bin/opencode2.
+- DISCOVERY: our stack resolves plugins from .cache/opencode-rust/npm (APP_NAME); seeded that root for our home; our server then loads the plugin (tools 12, mcp 2, commands 4, agents 6) and the Orchestrator agent rewrite flows to our TUI.
+- Captures: /tmp/opencode/rescan-live/{session,subagent}, /tmp/opencode/rescan-time (temporal), /tmp/opencode/rescan-click (clicksub), /tmp/opencode/rescan-diag (plugindiag).
+
+## Phase 3 — addendum items
+- Masking audit: km.log:248 + tail.log:46 — tabs-live-session 19 steps + multi-session 22 steps folded into coin/digit/idx15 umbrellas; tail.log explicitly claims 'busy-tab frames are part of the registered composition', criterion = identical mismatch counts (19==19). Surviving artifacts contain zero braille glyphs (settle-then-capture never observed busy frames). Live capture proves the busy-indicator class diverges => masked + unobservable, both instrument gaps. Reported loudly in findings §4.
+- Subagent click self-consistency: our DB (opencode-stable.db) verified — child parent_id set; tool part state.metadata.sessionID present/completed. TUI click router reads sessionID/sessionId (session.rs:763-766). Live click on native card = no-op on BOTH sides (parity); enter-nav covered by corpus3. Plugin-world click dead = F1 consequence.
+- Temporal: ref busy indicator (1,0): 120ms '⠙' style 0x07600001eb0 -> 240ms '•' 0x058400001eb1; ours: zero braille glyphs across 40 frames, tab still 'Untitled session' at 120ms. Shimmer windows static both sides (rename-pending not exercised into pending state; recorded).
+- Tokens live: ┃ gutter + ✕ styles IDENTICAL both sides (prior fixes hold at rest); footer '18 (0%)' + sidebar '0% used' present on ref only.
+- Deliverable written: docs/rescan-findings.md (12 findings: S0 x4, S1 x4, S2 x4; masking audit §4; instrument-gap list §6).
