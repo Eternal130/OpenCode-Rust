@@ -1,0 +1,12 @@
+
+--- Phase A.1: fmt --all --check --- 2026-10-17T12:35:10+08:00 ---
+NOTE: first attempt ran bare `fmt` (system fmt) — misfire, no damage; re-running as `cargo fmt --all --check`.
+
+--- Phase A.2: clippy --workspace --all-targets --locked -D warnings --- 2026-10-17T12:35:22+08:00 ---
+NOTE: -D must follow `--` for clippy; re-running: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+--- Phase A.3: cargo nextest run --workspace --locked --- 2026-10-17T12:36:43+08:00 ---
+
+!! Phase A.3 FAILURE: parity::rust_scenarios m1_scenario_prompt_fake_llm — TRY 2 FAIL.
+   Error: sequence divergence golden group #3 frame 1: reference=null port=models-dev.refreshed event (extra event where golden expects none).
+   Characerizing: targeted rerun of the single test.
