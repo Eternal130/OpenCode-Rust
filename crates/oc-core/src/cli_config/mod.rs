@@ -766,7 +766,7 @@ mod tests {
         }
     }
 
-    /// OPENCODE_CLI_CONFIG_CONTENT is process-global: every test that
+    /// `OPENCODE_CLI_CONFIG_CONTENT` is process-global: every test that
     /// reads through [`CliConfig`] while another sets the variable must
     /// hold this lock.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -920,17 +920,6 @@ mod tests {
 
     #[test]
     fn env_content_overlays_the_file_everywhere() {
-        // OPENCODE_CLI_CONFIG_CONTENT is process-global: serialize the
-        // tests that touch it.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (_dir, roots) = scratch("env");
-        std::fs::write(
-            roots.config.join(FILENAME),
-            "{\n  \"theme\": { \"name\": \"file-theme\", \"mode\": \"light\" },\n  \"mouse\": true\n}\n",
-        )
-        .expect("seed");
-        let config = CliConfig::open(&roots);
-
         struct EnvGuard;
         impl EnvGuard {
             fn set(value: &str) -> Self {
@@ -944,7 +933,18 @@ mod tests {
             }
         }
 
-        let _env = EnvGuard::set(r#"{ "theme": { "mode": "dark" }, "mouse": false }"#);
+        // OPENCODE_CLI_CONFIG_CONTENT is process-global: serialize the
+        // tests that touch it.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (_dir, roots) = scratch("env");
+        std::fs::write(
+            roots.config.join(FILENAME),
+            "{\n  \"theme\": { \"name\": \"file-theme\", \"mode\": \"light\" },\n  \"mouse\": true\n}\n",
+        )
+        .expect("seed");
+        let config = CliConfig::open(&roots);
+
+        let env = EnvGuard::set(r#"{ "theme": { "mode": "dark" }, "mouse": false }"#);
         let info = config.get();
         // Overlay wins per-leaf; unmentioned leaves survive.
         assert_eq!(info.theme.as_ref().and_then(|t| t.mode.as_deref()), Some("dark"));
@@ -962,7 +962,7 @@ mod tests {
         assert_eq!(info.mouse, Some(false), "overlay still wins after a write");
         let text = std::fs::read_to_string(config.path()).expect("read");
         assert!(text.contains("\"mouse\": true"), "the file's own value is untouched");
-        drop(_env);
+        drop(env);
 
         // Invalid env content is ignored.
         let _env = EnvGuard::set("{ not json");
