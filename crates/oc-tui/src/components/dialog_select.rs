@@ -128,6 +128,9 @@ pub struct SelectProps {
     pub empty_text: Option<String>,
     /// v2's `noMatchView` copy override ("No worktrees found").
     pub no_match_text: Option<String>,
+    /// Lane FINAL: the prompt-family description rows (the connect
+    /// prompts' URL/instructions/error block).
+    pub hints: Vec<String>,
     /// The destructive confirm variant (auditB #8): the selected row
     /// paints `action.destructive.focused` instead of primary
     /// (dialog-worktrees' confirm + drop-confirm selects).
@@ -148,6 +151,7 @@ impl SelectProps {
             empty_text: None,
             no_match_text: None,
             destructive: false,
+            hints: Vec::new(),
         }
     }
 
@@ -187,6 +191,13 @@ impl SelectProps {
     pub fn with_empty_texts(mut self, empty: &str, no_match: &str) -> Self {
         self.empty_text = Some(empty.to_owned());
         self.no_match_text = Some(no_match.to_owned());
+        self
+    }
+
+    /// The prompt-family description rows (the connect prompts).
+    #[must_use]
+    pub fn with_hints(mut self, hints: Vec<String>) -> Self {
+        self.hints = hints;
         self
     }
 }

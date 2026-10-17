@@ -180,6 +180,45 @@ pub enum DialogKind {
     /// routes/session/dialog-timeline.tsx): the user-message turn
     /// list; enter opens the message actions.
     Timeline { session_id: String },
+    /// Lane FINAL: `DialogIntegration` (`provider.connect` —
+    /// component/dialog-integration.tsx): the integration list over
+    /// the BE-3 host (`integration.list`), submit routes to the
+    /// accounts view (credentials present) or the method choice.
+    Integration,
+    /// The manage-connections view (`manageConnections`,
+    /// dialog-integration.tsx:148-263): "Add account" + the
+    /// connected credential rows (select activates).
+    IntegrationAccounts { integration_id: String },
+    /// `selectMethod` (dialog-integration.tsx:265-283): one row per
+    /// non-env connect method.
+    IntegrationMethod { integration_id: String },
+    /// `KeyMethod` (dialog-integration.tsx:471-506): the API-key
+    /// prompt (`integration.connect.key` on confirm).
+    IntegrationKey { integration_id: String, method_id: String, title: String },
+    /// `OAuthCode` (dialog-integration.tsx:676-728): the
+    /// authorization-code prompt (`integration.oauth.complete`); the
+    /// attempt's URL + instructions ride the store's attempt state.
+    IntegrationCode { integration_id: String },
+    /// `OAuthAuto`/`CommandPending`'s waiting view (the 500 ms
+    /// status poll): URL + instructions rows while the worker polls.
+    IntegrationPending { integration_id: String },
+    /// Lane FINAL: `DialogConfig` (`opencode.settings` —
+    /// component/dialog-config.tsx): the settings rows that this
+    /// build both reads and persists (theme, color mode, sidebar,
+    /// tool grouping); enter cycles the values through the config
+    /// sink (cli.json write-through).
+    Settings,
+    /// Lane FINAL: `DialogFork` (`session.fork` —
+    /// routes/session/dialog-fork.tsx): "Full session" + the user
+    /// messages (newest first); enter forks at that boundary.
+    ForkPicker { session_id: String },
+    /// Lane FINAL: `session.export`'s destination choice (the
+    /// `DialogExportOptions` rows collapsed to format × destination —
+    /// dialog-export-options.tsx): markdown/json × clipboard/file.
+    SessionExport { session_id: String },
+    /// Lane FINAL: `DialogExportResult` (ui/dialog-export-result.
+    /// tsx): the written filepath after a file export.
+    ExportResult { path: String },
 }
 
 /// One stack entry: the dialog kind, chrome size and content state.
@@ -1039,6 +1078,26 @@ pub struct Store {
     /// The revert-clear API seam (`client.api.session.revert.clear`,
     /// index.tsx:2105-2111 — the banner's click). Tests record calls.
     revert_sink: std::cell::RefCell<Rc<dyn RevertSink>>,
+    /// Lane FINAL: the integration connect state (`DialogIntegration`
+    /// over `integration.list`).
+    integration_list: Signal<IntegrationListState>,
+    /// The live oauth/command attempt (code entry + the pending poll
+    /// view) — `None` when no attempt is open.
+    integration_attempt: Signal<Option<IntegrationAttempt>>,
+    /// The inline error line for the key/code prompts
+    /// (`setError(errorMessage)`).
+    integration_error: Signal<Option<String>>,
+    /// The integration API seam.
+    integration_sink: std::cell::RefCell<Rc<dyn IntegrationSink>>,
+    /// The accounts view's two-press delete (`deleting` signal,
+    /// dialog-integration.tsx:161).
+    integration_deleting: Signal<Option<String>>,
+    /// Lane FINAL: the sessions dialog's two-press delete (`toDelete`,
+    /// dialog-session-list.tsx:161).
+    session_delete_armed: Signal<Option<String>>,
+    /// Lane FINAL: the session-action API seam (compact/export/
+    /// remove/background/fork/revert-stage/reload).
+    session_action_sink: std::cell::RefCell<Rc<dyn SessionActionSink>>,
     /// Pending compaction inbox ids (`pending.list` items of type
     /// `compaction` — the `◇ Compaction queued` divider rows,
     /// rows.ts:72-79). `session.compaction.started` with a matching
@@ -1136,6 +1195,248 @@ pub struct RecordingRevertSink {
 impl RevertSink for RecordingRevertSink {
     fn clear(&self, session_id: &str) {
         self.calls.borrow_mut().push(session_id.to_owned());
+    }
+}
+
+// -- Lane FINAL: the integration connect surface (DialogIntegration,
+// component/dialog-integration.tsx) over the BE-3 host ---------------
+
+/// One non-env connect method (`connectMethods`,
+/// dialog-integration.tsx:58-62 — env methods filtered, key first).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntegrationMethod {
+    pub id: String,
+    /// `key` | `oauth` | `command`.
+    pub kind: &'static str,
+    pub label: String,
+}
+
+/// One stored credential connection (`credentialConnections`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntegrationAccount {
+    pub id: String,
+    pub label: String,
+    /// `connections[0].status` — "Sign in required →".
+    pub sign_in_required: bool,
+}
+
+/// One `integration.list` row, pre-shaped for the dialog
+/// (`integrationOptions`'s sort + category derivation,
+/// dialog-integration.tsx:30-56,102-128).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntegrationRow {
+    pub id: String,
+    pub name: String,
+    /// `Popular` | `Services` | `MCP`.
+    pub category: &'static str,
+    pub methods: Vec<IntegrationMethod>,
+    pub accounts: Vec<IntegrationAccount>,
+    /// `connectionSummary` — the connected-credentials footer.
+    pub summary: String,
+    /// `connections[0]?.status` — the warning footer.
+    pub sign_in_required: bool,
+}
+
+/// The integration list's fetch state (`createResource` over
+/// `data.location.integration.list`).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum IntegrationListState {
+    #[default]
+    Loading,
+    Loaded(Vec<IntegrationRow>),
+    Failed(String),
+}
+
+/// One live OAuth/command attempt (`IntegrationAttempt` —
+/// oauth/command connect's `data`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntegrationAttempt {
+    pub integration_id: String,
+    pub attempt_id: String,
+    /// `oauth` | `command` (the cancel route + poll family).
+    pub kind: &'static str,
+    /// `mode === "code"` only for oauth: the code-entry dialog;
+    /// auto-browser and command flows use the pending view.
+    pub code_mode: bool,
+    pub url: String,
+    pub instructions: String,
+    pub title: String,
+}
+
+/// The integration API seam (BE-3's routes — `integration.list`,
+/// `integration.connect.key`, `integration.oauth.*`,
+/// `integration.command.*`, `credential.activate/remove`): the dialog
+/// actions run through it; tests record, production round-trips the
+/// loop fetcher.
+pub trait IntegrationSink {
+    fn list(&self);
+    fn connect_key(&self, integration_id: &str, key: &str);
+    fn oauth_connect(&self, integration_id: &str, method_id: &str);
+    fn oauth_complete(&self, integration_id: &str, attempt_id: &str, code: &str);
+    fn command_connect(&self, integration_id: &str, method_id: &str);
+    /// The esc path while an attempt is live (`onCleanup`'s cancel).
+    fn cancel(&self, integration_id: &str, attempt_id: &str, kind: &'static str);
+    fn credential_activate(&self, credential_id: &str);
+    fn credential_remove(&self, credential_id: &str);
+}
+
+/// The no-op sink (no loop fetcher attached).
+#[derive(Debug, Default)]
+pub struct NoIntegrationSink;
+
+impl IntegrationSink for NoIntegrationSink {
+    fn list(&self) {}
+    fn connect_key(&self, _integration_id: &str, _key: &str) {}
+    fn oauth_connect(&self, _integration_id: &str, _method_id: &str) {}
+    fn oauth_complete(&self, _integration_id: &str, _attempt_id: &str, _code: &str) {}
+    fn command_connect(&self, _integration_id: &str, _method_id: &str) {}
+    fn cancel(&self, _integration_id: &str, _attempt_id: &str, _kind: &'static str) {}
+    fn credential_activate(&self, _credential_id: &str) {}
+    fn credential_remove(&self, _credential_id: &str) {}
+}
+
+/// One recorded [`IntegrationSink`] call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntegrationCall {
+    List,
+    ConnectKey { integration_id: String, key: String },
+    OauthConnect { integration_id: String, method_id: String },
+    OauthComplete { integration_id: String, attempt_id: String, code: String },
+    CommandConnect { integration_id: String, method_id: String },
+    Cancel { integration_id: String, attempt_id: String, kind: &'static str },
+    Activate(String),
+    Remove(String),
+}
+
+/// The recording sink (tests assert the dialog drove the API).
+#[derive(Default)]
+pub struct RecordingIntegrationSink {
+    pub calls: std::cell::RefCell<Vec<IntegrationCall>>,
+}
+
+impl IntegrationSink for RecordingIntegrationSink {
+    fn list(&self) {
+        self.calls.borrow_mut().push(IntegrationCall::List);
+    }
+    fn connect_key(&self, integration_id: &str, key: &str) {
+        self.calls.borrow_mut().push(IntegrationCall::ConnectKey {
+            integration_id: integration_id.to_owned(),
+            key: key.to_owned(),
+        });
+    }
+    fn oauth_connect(&self, integration_id: &str, method_id: &str) {
+        self.calls.borrow_mut().push(IntegrationCall::OauthConnect {
+            integration_id: integration_id.to_owned(),
+            method_id: method_id.to_owned(),
+        });
+    }
+    fn oauth_complete(&self, integration_id: &str, attempt_id: &str, code: &str) {
+        self.calls.borrow_mut().push(IntegrationCall::OauthComplete {
+            integration_id: integration_id.to_owned(),
+            attempt_id: attempt_id.to_owned(),
+            code: code.to_owned(),
+        });
+    }
+    fn command_connect(&self, integration_id: &str, method_id: &str) {
+        self.calls.borrow_mut().push(IntegrationCall::CommandConnect {
+            integration_id: integration_id.to_owned(),
+            method_id: method_id.to_owned(),
+        });
+    }
+    fn cancel(&self, integration_id: &str, attempt_id: &str, kind: &'static str) {
+        self.calls.borrow_mut().push(IntegrationCall::Cancel {
+            integration_id: integration_id.to_owned(),
+            attempt_id: attempt_id.to_owned(),
+            kind,
+        });
+    }
+    fn credential_activate(&self, credential_id: &str) {
+        self.calls.borrow_mut().push(IntegrationCall::Activate(credential_id.to_owned()));
+    }
+    fn credential_remove(&self, credential_id: &str) {
+        self.calls.borrow_mut().push(IntegrationCall::Remove(credential_id.to_owned()));
+    }
+}
+
+// -- Lane FINAL: the dead session-command seam (compact / export /
+// remove / background / fork / undo's revert.stage) + location.reload -
+
+/// The session-action API seam (v2's `client.api.*` calls behind the
+/// session command table, routes/session/index.tsx:945-1254 +
+/// app.tsx:1019-1034): dispatch arms run through it; tests record,
+/// production round-trips the loop fetcher.
+pub trait SessionActionSink {
+    /// `session.compact` (the current model rides the body).
+    fn compact(&self, session_id: &str, model: Option<&ModelSelection>);
+    /// `session.export` (sanitize only for the json copy path; the
+    /// format/destination ride along for the result delivery).
+    fn export(&self, session_id: &str, sanitize: bool, format: &str, destination: &str);
+    /// `session.remove` (the sessions dialog's two-press delete).
+    fn remove(&self, session_id: &str);
+    /// `session.background`.
+    fn background(&self, session_id: &str);
+    /// `session.fork` (`before` = the picked user message).
+    fn fork(&self, session_id: &str, before: Option<&str>);
+    /// `session.undo`'s server chain — interrupt, wait, then
+    /// `session.revert.stage` (index.tsx:985-992).
+    fn revert_stage(&self, session_id: &str, message_id: &str);
+    /// `location.reload` (app.tsx:1026-1031).
+    fn location_reload(&self);
+}
+
+/// One recorded [`SessionActionSink`] call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionActionCall {
+    Compact { session_id: String, model: Option<ModelSelection> },
+    Export { session_id: String, sanitize: bool, format: String, destination: String },
+    Remove(String),
+    Background(String),
+    Fork { session_id: String, before: Option<String> },
+    RevertStage { session_id: String, message_id: String },
+    LocationReload,
+}
+
+/// The recording sink (tests + the default).
+#[derive(Default)]
+pub struct RecordingSessionActionSink {
+    pub calls: std::cell::RefCell<Vec<SessionActionCall>>,
+}
+
+impl SessionActionSink for RecordingSessionActionSink {
+    fn compact(&self, session_id: &str, model: Option<&ModelSelection>) {
+        self.calls.borrow_mut().push(SessionActionCall::Compact {
+            session_id: session_id.to_owned(),
+            model: model.cloned(),
+        });
+    }
+    fn export(&self, session_id: &str, sanitize: bool, format: &str, destination: &str) {
+        self.calls.borrow_mut().push(SessionActionCall::Export {
+            session_id: session_id.to_owned(),
+            sanitize,
+            format: format.to_owned(),
+            destination: destination.to_owned(),
+        });
+    }
+    fn remove(&self, session_id: &str) {
+        self.calls.borrow_mut().push(SessionActionCall::Remove(session_id.to_owned()));
+    }
+    fn background(&self, session_id: &str) {
+        self.calls.borrow_mut().push(SessionActionCall::Background(session_id.to_owned()));
+    }
+    fn fork(&self, session_id: &str, before: Option<&str>) {
+        self.calls.borrow_mut().push(SessionActionCall::Fork {
+            session_id: session_id.to_owned(),
+            before: before.map(str::to_owned),
+        });
+    }
+    fn revert_stage(&self, session_id: &str, message_id: &str) {
+        self.calls.borrow_mut().push(SessionActionCall::RevertStage {
+            session_id: session_id.to_owned(),
+            message_id: message_id.to_owned(),
+        });
+    }
+    fn location_reload(&self) {
+        self.calls.borrow_mut().push(SessionActionCall::LocationReload);
     }
 }
 
@@ -1377,6 +1678,12 @@ pub trait ConfigSink {
     fn update_theme_name(&self, name: &str);
     fn update_theme_mode(&self, mode: &str);
     fn update_session_sidebar(&self, hide: bool);
+    /// Lane FINAL (should-fix #5's grouping half): the
+    /// exploration-grouping toggle's write-through
+    /// (`session.grouping` = "auto"/"none", config/index.tsx's
+    /// `session.toggle.exploration_grouping` update,
+    /// index.tsx:1050-1062).
+    fn update_session_grouping(&self, grouped: bool);
 }
 
 /// The default no-op sink.
@@ -1386,6 +1693,7 @@ impl ConfigSink for NoConfigSink {
     fn update_theme_name(&self, _name: &str) {}
     fn update_theme_mode(&self, _mode: &str) {}
     fn update_session_sidebar(&self, _hide: bool) {}
+    fn update_session_grouping(&self, _grouped: bool) {}
 }
 
 /// The recording sink (tests).
@@ -1405,6 +1713,11 @@ impl ConfigSink for RecordingConfigSink {
         self.calls
             .borrow_mut()
             .push(("session.sidebar", if hide { "hide" } else { "auto" }.to_owned()));
+    }
+    fn update_session_grouping(&self, grouped: bool) {
+        self.calls
+            .borrow_mut()
+            .push(("session.grouping", if grouped { "auto" } else { "none" }.to_owned()));
     }
 }
 
@@ -1871,6 +2184,11 @@ struct StoreSignals {
     model_ring: Signal<ModelRing>,
     picker: Signal<PickerState>,
     reverts: Signal<HashMap<String, RevertState>>,
+    integration_list: Signal<IntegrationListState>,
+    integration_attempt: Signal<Option<IntegrationAttempt>>,
+    integration_error: Signal<Option<String>>,
+    integration_deleting: Signal<Option<String>>,
+    session_delete_armed: Signal<Option<String>>,
     pending_compactions: Signal<HashMap<String, Vec<String>>>,
     history_loading: Signal<HashMap<String, bool>>,
     expanded_tools: Signal<std::collections::HashSet<String>>,
@@ -1989,6 +2307,11 @@ impl Store {
             model_ring,
             picker,
             reverts,
+            integration_list,
+            integration_attempt,
+            integration_error,
+            integration_deleting,
+            session_delete_armed,
             pending_compactions,
             history_loading,
             expanded_tools,
@@ -2076,6 +2399,11 @@ impl Store {
             model_ring,
             picker,
             reverts,
+            integration_list,
+            integration_attempt,
+            integration_error,
+            integration_deleting,
+            session_delete_armed,
             pending_compactions,
             history_loading,
             expanded_tools,
@@ -2100,6 +2428,10 @@ impl Store {
             interrupt_sink: std::cell::RefCell::new(Rc::new(RecordingInterruptSink::default())),
             model_ring_dirty: Cell::new(false),
             revert_sink: std::cell::RefCell::new(Rc::new(RecordingRevertSink::default())),
+            integration_sink: std::cell::RefCell::new(Rc::new(NoIntegrationSink)),
+            session_action_sink: std::cell::RefCell::new(Rc::new(
+                RecordingSessionActionSink::default(),
+            )),
             footer_location: std::cell::RefCell::new(String::new()),
             caret_cell: Cell::new(None),
             connection_since: Cell::new(0),
@@ -2151,6 +2483,11 @@ impl Store {
         let model_ring = Signal::new(&runtime, ModelRing::default());
         let picker = Signal::new(&runtime, PickerState::default());
         let reverts = Signal::new(&runtime, HashMap::<String, RevertState>::new());
+        let integration_list = Signal::new(&runtime, IntegrationListState::Loading);
+        let integration_attempt = Signal::new(&runtime, Option::<IntegrationAttempt>::None);
+        let integration_error = Signal::new(&runtime, Option::<String>::None);
+        let integration_deleting = Signal::new(&runtime, Option::<String>::None);
+        let session_delete_armed = Signal::new(&runtime, Option::<String>::None);
         let pending_compactions = Signal::new(&runtime, HashMap::<String, Vec<String>>::new());
         let history_loading = Signal::new(&runtime, HashMap::<String, bool>::new());
         let expanded_tools = Signal::new(&runtime, std::collections::HashSet::<String>::new());
@@ -2199,6 +2536,11 @@ impl Store {
                 model_ring,
                 picker,
                 reverts,
+                integration_list,
+                integration_attempt,
+                integration_error,
+                integration_deleting,
+                session_delete_armed,
                 pending_compactions,
                 history_loading,
                 expanded_tools,
@@ -3874,6 +4216,12 @@ impl Store {
         *self.revert_sink.borrow_mut() = sink;
     }
 
+    /// The message-actions revert's server POST (the 7.3 seam, now
+    /// wired: `session.revert.stage` through the session-action sink).
+    pub fn session_action_sink_revert_stage(&self, session_id: &str, message_id: &str) {
+        self.session_action_sink.borrow().revert_stage(session_id, message_id);
+    }
+
     /// The banner's dismiss click (index.tsx:2105-2111): fire the
     /// clear API and drop the local state (the server's
     /// `session.revert.cleared` echo is the consistency net).
@@ -3882,6 +4230,504 @@ impl Store {
         self.reverts.update(|reverts| {
             reverts.remove(session_id);
         });
+    }
+
+    // -- Lane FINAL: the integration connect machine ---------------------
+
+    /// Install the integration sink (the production loop-fetcher
+    /// round-trips).
+    pub fn set_integration_sink(&self, sink: Rc<dyn IntegrationSink>) {
+        *self.integration_sink.borrow_mut() = sink;
+    }
+
+    /// Install the session-action sink.
+    pub fn set_session_action_sink(&self, sink: Rc<dyn SessionActionSink>) {
+        *self.session_action_sink.borrow_mut() = sink;
+    }
+
+    /// The integration list's current rows (`integrationOptions`'s
+    /// sorted shape — set by the loop fetcher).
+    #[must_use]
+    pub fn integration_list(&self) -> IntegrationListState {
+        self.integration_list.get()
+    }
+
+    /// The live attempt (code entry's URL/instructions + the pending
+    /// view's poll status).
+    #[must_use]
+    pub fn integration_attempt(&self) -> Option<IntegrationAttempt> {
+        self.integration_attempt.get()
+    }
+
+    /// The key/code prompt's inline error line.
+    #[must_use]
+    pub fn integration_error(&self) -> Option<String> {
+        self.integration_error.get()
+    }
+
+    /// `provider.connect`'s run (app.tsx:950-955): refetch + mount the
+    /// list dialog (`DialogIntegration`).
+    pub fn integration_dialog_open(&self) {
+        self.integration_list.set(IntegrationListState::Loading);
+        self.integration_sink.borrow().list();
+        self.replace_dialog(DialogKind::Integration, DialogSize::Medium);
+    }
+
+    /// Refetch the integration list through the sink (the credential
+    /// events' resync).
+    pub fn integration_sink_list(&self) {
+        self.integration_sink.borrow().list();
+    }
+
+    /// The loop fetcher's `integration.list` result.
+    pub fn integration_list_loaded(&self, rows: Vec<IntegrationRow>) {
+        self.integration_list.set(IntegrationListState::Loaded(rows));
+    }
+
+    /// A failed `integration.list`.
+    pub fn integration_list_failed(&self, error: String) {
+        self.integration_list.set(IntegrationListState::Failed(error));
+    }
+
+    /// One list row (the downstream dialogs' source).
+    #[must_use]
+    pub fn integration_row(&self, id: &str) -> Option<IntegrationRow> {
+        match self.integration_list.get() {
+            IntegrationListState::Loaded(rows) => rows.into_iter().find(|row| row.id == id),
+            _ => None,
+        }
+    }
+
+    /// A list row's `onSelect` (dialog-integration.tsx:122-125):
+    /// credentials present → the manage view; else the method choice.
+    pub fn integration_select(&self, id: &str) {
+        let Some(row) = self.integration_row(id) else { return };
+        if row.accounts.is_empty() {
+            self.integration_open_methods(id);
+        } else {
+            self.integration_deleting.set(None);
+            self.replace_dialog(
+                DialogKind::IntegrationAccounts { integration_id: id.to_owned() },
+                DialogSize::Medium,
+            );
+        }
+    }
+
+    /// `selectMethod` (dialog-integration.tsx:265-283): a single
+    /// method opens it directly; multiple mount the choice.
+    pub fn integration_open_methods(&self, id: &str) {
+        let Some(row) = self.integration_row(id) else { return };
+        if row.methods.len() == 1 {
+            self.integration_method_open(id, &row.methods[0]);
+        } else {
+            self.replace_dialog(
+                DialogKind::IntegrationMethod { integration_id: id.to_owned() },
+                DialogSize::Medium,
+            );
+        }
+    }
+
+    /// `openMethod` (dialog-integration.tsx:285-303): key → the API-key
+    /// prompt; command → the pending view; oauth → `oauth.connect`.
+    pub fn integration_method_open(&self, id: &str, method: &IntegrationMethod) {
+        self.integration_error.set(None);
+        match method.kind {
+            "key" => {
+                let title = if method.label.is_empty() {
+                    let name = self.integration_row(id).map_or_else(String::new, |row| row.name);
+                    format!("Connect {name}")
+                } else {
+                    method.label.clone()
+                };
+                self.replace_dialog(
+                    DialogKind::IntegrationKey {
+                        integration_id: id.to_owned(),
+                        method_id: method.id.clone(),
+                        title,
+                    },
+                    DialogSize::Medium,
+                );
+                self.update_dialog(|top| top.value.clear());
+            }
+            "oauth" => {
+                self.integration_sink.borrow().oauth_connect(id, &method.id);
+            }
+            "command" => {
+                self.integration_sink.borrow().command_connect(id, &method.id);
+            }
+            _ => {}
+        }
+    }
+
+    /// `KeyMethod`'s confirm (dialog-integration.tsx:489-500): empty
+    /// keys never submit (the `DialogPrompt` guard); the POST rides the
+    /// sink, the result lands through the loop fetcher.
+    pub fn integration_key_submit(&self, id: &str, key: &str) {
+        if key.is_empty() {
+            return;
+        }
+        self.integration_sink.borrow().connect_key(id, key);
+    }
+
+    /// `OAuthStarting`'s result (dialog-integration.tsx:548-568): a
+    /// code attempt mounts the code prompt; auto mounts the pending
+    /// view (the worker polls).
+    pub fn integration_oauth_started(&self, attempt: IntegrationAttempt) {
+        self.integration_error.set(None);
+        let code_mode = attempt.code_mode;
+        let id = attempt.integration_id.clone();
+        self.integration_attempt.set(Some(attempt));
+        if code_mode {
+            self.replace_dialog(
+                DialogKind::IntegrationCode { integration_id: id },
+                DialogSize::Medium,
+            );
+            self.update_dialog(|top| top.value.clear());
+        } else {
+            self.replace_dialog(
+                DialogKind::IntegrationPending { integration_id: id },
+                DialogSize::Large,
+            );
+        }
+    }
+
+    /// The pending view's poll status message (`setOutput` /
+    /// `CommandPending`'s status.message).
+    pub fn integration_attempt_output(&self, message: &str) {
+        self.integration_attempt.update(|attempt| {
+            if let Some(attempt) = attempt.as_mut() {
+                message.clone_into(&mut attempt.instructions);
+            }
+        });
+    }
+
+    /// `OAuthCode`'s confirm (`oauth.complete`, :704-718).
+    pub fn integration_code_submit(&self, id: &str, attempt_id: &str, code: &str) {
+        if code.is_empty() {
+            return;
+        }
+        self.integration_sink.borrow().oauth_complete(id, attempt_id, code);
+    }
+
+    /// The accounts view's activate (`credential.activate`,
+    /// dialog-integration.tsx:206).
+    pub fn integration_account_activate(&self, credential_id: &str) {
+        self.integration_sink.borrow().credential_activate(credential_id);
+    }
+
+    /// The accounts view's two-press delete (`dialog.integration.
+    /// delete`, :237-258): the first press arms, the second fires
+    /// `credential.remove`.
+    pub fn integration_account_delete(&self, credential_id: &str) -> bool {
+        if self.integration_deleting.get().as_deref() == Some(credential_id) {
+            self.integration_deleting.set(None);
+            self.integration_sink.borrow().credential_remove(credential_id);
+            true
+        } else {
+            self.integration_deleting.set(Some(credential_id.to_owned()));
+            false
+        }
+    }
+
+    /// The connect flow's terminal event (`connected`,
+    /// dialog-integration.tsx:1007-1029): success toast, drop the
+    /// attempt, refetch the list (v2 also invalidates model/provider —
+    /// the worker's Connected arm re-emits those).
+    pub fn integration_connected(&self, name: &str) {
+        self.integration_attempt.set(None);
+        self.integration_error.set(None);
+        self.integration_sink.borrow().list();
+        self.clear_dialogs();
+        self.toast_show(crate::components::toast::ToastOptions {
+            message: format!("Connected {name}"),
+            variant: "success",
+            ..crate::components::toast::ToastOptions::info("")
+        });
+    }
+
+    /// A failed connect step: the inline error keeps the prompt open
+    /// (`setError(errorMessage)`); failures OUTSIDE a prompt (the
+    /// start/poll arms) toast and clear (`toast.show` + `dialog.
+    /// clear`).
+    pub fn integration_failed(&self, error: &str) {
+        let in_prompt = self.top_dialog().is_some_and(|entry| {
+            matches!(
+                entry.kind,
+                DialogKind::IntegrationKey { .. } | DialogKind::IntegrationCode { .. }
+            )
+        });
+        if in_prompt {
+            self.integration_error.set(Some(error.to_owned()));
+            return;
+        }
+        self.integration_attempt.set(None);
+        self.clear_dialogs();
+        self.toast_show(crate::components::toast::ToastOptions {
+            message: error.to_owned(),
+            variant: "error",
+            ..crate::components::toast::ToastOptions::info("")
+        });
+    }
+
+    /// Esc while an attempt is live: the `onCleanup` cancel
+    /// (dialog-integration.tsx:654-661, 691-698).
+    pub fn integration_cancel_active(&self) {
+        if let Some(attempt) = self.integration_attempt.get() {
+            self.integration_sink.borrow().cancel(
+                &attempt.integration_id,
+                &attempt.attempt_id,
+                attempt.kind,
+            );
+            self.integration_attempt.set(None);
+        }
+    }
+
+    // -- Lane FINAL: the six session commands + location.reload ---------
+
+    /// `session.compact`'s run (index.tsx:952-967): fire the POST with
+    /// the CURRENT model selection, clear the dialog; failures toast
+    /// through the loop fetcher's result event.
+    pub fn session_compact_pressed(&self) {
+        let Route::Session { session_id } = self.route() else { return };
+        let model = self.selection_for(&session_id).model;
+        self.session_action_sink.borrow().compact(&session_id, model.as_ref());
+        self.clear_dialogs();
+    }
+
+    /// `session.undo`'s run (index.tsx:974-999): the LAST user message
+    /// with text before the revert boundary; a miss toasts "Nothing
+    /// to undo"; a hit fires interrupt→wait→revert.stage and seeds
+    /// the composer with the message text.
+    pub fn session_undo_pressed(&self) {
+        let Route::Session { session_id } = self.route() else { return };
+        // `messagesBeforeRevert`: with a staged boundary the visible
+        // transcript ENDS before `revert.messageID`.
+        let boundary = self.revert(&session_id).map(|state| state.message_id);
+        let messages = self.messages(&session_id);
+        let visible = match &boundary {
+            Some(id) => {
+                let end = messages.iter().position(|message| message.id() == id).unwrap_or(0);
+                &messages[..end]
+            }
+            None => messages.as_slice(),
+        };
+        let target = visible.iter().rev().find_map(|message| match message {
+            crate::components::message::model::Message::User { id, text, .. }
+                if !text.trim().is_empty() =>
+            {
+                Some((id.clone(), text.clone()))
+            }
+            _ => None,
+        });
+        let Some((message_id, text)) = target else {
+            self.clear_dialogs();
+            self.toast_show(crate::components::toast::ToastOptions {
+                message: "Nothing to undo".to_owned(),
+                variant: "error",
+                duration_ms: 3000,
+                ..crate::components::toast::ToastOptions::info("")
+            });
+            return;
+        };
+        self.session_action_sink.borrow().revert_stage(&session_id, &message_id);
+        if !text.is_empty() {
+            let mut composer = self.composer(&session_id);
+            composer.set_text(&text);
+            self.set_composer(&session_id, &composer);
+        }
+        self.clear_dialogs();
+    }
+
+    /// `session.redo`'s run (index.tsx:1007-1016): `revert.clear`
+    /// through the existing revert sink; errors toast (the loop's
+    /// result event carries them — the banner path shares the POST).
+    pub fn session_redo_pressed(&self) {
+        let Route::Session { session_id } = self.route() else { return };
+        self.revert_dismiss(&session_id);
+        self.clear_dialogs();
+    }
+
+    /// `session.background`'s run (index.tsx:1250-1253).
+    pub fn session_background_pressed(&self) {
+        let Route::Session { session_id } = self.route() else { return };
+        self.session_action_sink.borrow().background(&session_id);
+        self.clear_dialogs();
+    }
+
+    /// `DialogFork`'s submit (dialog-fork.tsx:29-47): fire `session.
+    /// fork` (before = the picked user message); the loop fetcher's
+    /// result opens the tab + seeds the prompt.
+    pub fn session_fork_submit(&self, session_id: &str, before: Option<&str>) {
+        self.session_action_sink.borrow().fork(session_id, before);
+    }
+
+    /// The fork result (`route.navigate` + the projected prompt +
+    /// "Forked session" toast, dialog-fork.tsx:36-46).
+    pub fn session_forked(&self, new_session_id: &str, prompt_text: Option<&str>) {
+        self.open_tab(new_session_id, None);
+        self.navigate(Route::Session { session_id: new_session_id.to_owned() });
+        if let Some(text) = prompt_text.filter(|text| !text.is_empty()) {
+            let mut composer = self.composer(new_session_id);
+            composer.set_text(text);
+            self.set_composer(new_session_id, &composer);
+        }
+        self.clear_dialogs();
+        self.toast_show(crate::components::toast::ToastOptions {
+            message: "Forked session".to_owned(),
+            variant: "success",
+            duration_ms: 4000,
+            ..crate::components::toast::ToastOptions::info("")
+        });
+    }
+
+    /// `session.export`'s confirm (index.tsx:1217-1238): fire the
+    /// export GET; the loop fetcher formats + delivers (clipboard
+    /// write + toast, or the tmp file + result dialog).
+    pub fn session_export_submit(&self, session_id: &str, format: &str, destination: &str) {
+        let sanitize = format == "json" && destination == "clipboard";
+        self.session_action_sink.borrow().export(session_id, sanitize, format, destination);
+        self.clear_dialogs();
+    }
+
+    /// The export clipboard arm's completion toast (index.tsx:1229).
+    pub fn session_export_copied(&self) {
+        self.clear_dialogs();
+        self.toast_show(crate::components::toast::ToastOptions {
+            message: "Copied to clipboard".to_owned(),
+            variant: "success",
+            ..crate::components::toast::ToastOptions::info("")
+        });
+    }
+
+    /// The export file arm's completion (`DialogExportResult.show`).
+    pub fn session_export_written(&self, path: &str) {
+        self.replace_dialog(DialogKind::ExportResult { path: path.to_owned() }, DialogSize::Medium);
+    }
+
+    /// A failed export (index.tsx:1239-1241).
+    pub fn session_export_failed(&self) {
+        self.clear_dialogs();
+        self.toast_show(crate::components::toast::ToastOptions {
+            message: "Failed to export session".to_owned(),
+            variant: "error",
+            ..crate::components::toast::ToastOptions::info("")
+        });
+    }
+
+    /// The sessions dialog's two-press delete (`toDelete`,
+    /// dialog-session-list.tsx:161-166, 255-279): the first press
+    /// arms the row, the second fires `session.remove`.
+    pub fn session_delete_pressed(&self, session_id: &str) -> bool {
+        if self.session_delete_armed.get().as_deref() == Some(session_id) {
+            self.session_delete_armed.set(None);
+            self.session_action_sink.borrow().remove(session_id);
+            true
+        } else {
+            self.session_delete_armed.set(Some(session_id.to_owned()));
+            false
+        }
+    }
+
+    /// Any selection move clears the armed row (`onMove`,
+    /// dialog-session-list.tsx:242).
+    pub fn session_delete_disarm(&self) {
+        if self.session_delete_armed.get().is_some() {
+            self.session_delete_armed.set(None);
+        }
+    }
+
+    /// The armed row id (the title/danger render's source).
+    #[must_use]
+    pub fn session_delete_armed(&self) -> Option<String> {
+        self.session_delete_armed.get()
+    }
+
+    /// `location.reload`'s run (app.tsx:1023-1032): the info toast +
+    /// the POST; the loop fetcher's result resolves the final toast.
+    pub fn location_reload_pressed(&self) {
+        self.clear_dialogs();
+        self.toast_show(crate::components::toast::ToastOptions {
+            message: "Reloading configuration…".to_owned(),
+            variant: "info",
+            duration_ms: 30_000,
+            ..crate::components::toast::ToastOptions::info("")
+        });
+        self.session_action_sink.borrow().location_reload();
+    }
+
+    /// The reload result's success toast.
+    pub fn location_reload_finished(&self) {
+        self.toast_show(crate::components::toast::ToastOptions {
+            message: "Configuration reloaded".to_owned(),
+            variant: "success",
+            ..crate::components::toast::ToastOptions::info("")
+        });
+    }
+
+    /// A failed reload (the 30 s info toast collapses to the error).
+    pub fn location_reload_failed(&self, error: &str) {
+        self.toast_show(crate::components::toast::ToastOptions {
+            message: error.to_owned(),
+            variant: "error",
+            ..crate::components::toast::ToastOptions::info("")
+        });
+    }
+
+    /// `DialogConfig`'s `change` (dialog-config.tsx:365-386): cycle one
+    /// setting's values through the config sink; the live state moves
+    /// with it (the four settings this build both reads and persists).
+    pub fn setting_cycle(&self, id: &str, direction: i64) {
+        let cycle = |current: usize, values: &[&str]| -> String {
+            let count = values.len();
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            let next = (current as i64 + direction).rem_euclid(count as i64) as usize;
+            values[next].to_owned()
+        };
+        match id {
+            "theme.name" => {
+                let mut names = self.registry().names();
+                names.sort_by_key(|name| name.to_lowercase());
+                let current = self.theme_name();
+                let index = names.iter().position(|name| name == &current).unwrap_or(0);
+                let next = cycle(index, &names.iter().map(String::as_str).collect::<Vec<_>>());
+                self.set_theme_by_name(&next);
+            }
+            "theme.mode" => {
+                let current = self.theme_mode_pref().unwrap_or_else(|| "system".to_owned());
+                let next = cycle(
+                    ["system", "dark", "light"]
+                        .iter()
+                        .position(|mode| *mode == current)
+                        .unwrap_or(0),
+                    &["system", "dark", "light"],
+                );
+                *self.theme_mode_pref.borrow_mut() = Some(next.clone());
+                let resolved = if next == "system" {
+                    self.system_mode.get()
+                } else if next == "light" {
+                    oc_theme::types::Mode::Light
+                } else {
+                    oc_theme::types::Mode::Dark
+                };
+                self.switch_theme_mode(resolved);
+                self.config_sink.borrow().update_theme_mode(&next);
+            }
+            "session.sidebar" => {
+                let hide =
+                    matches!(self.sidebar_mode(), crate::components::sidebar::SidebarMode::Auto);
+                self.set_sidebar_mode(if hide {
+                    crate::components::sidebar::SidebarMode::Hide
+                } else {
+                    crate::components::sidebar::SidebarMode::Auto
+                });
+            }
+            "session.grouping" => {
+                let next = self.toggle_exploration_grouping();
+                self.config_sink.borrow().update_session_grouping(next);
+            }
+            _ => {}
+        }
+        self.request_redraw();
     }
 
     /// The queued-compaction inbox ids (the `◇ Compaction queued`
@@ -4999,6 +5845,18 @@ impl Store {
     #[must_use]
     pub fn theme_mode_pref(&self) -> Option<String> {
         self.theme_mode_pref.borrow().clone()
+    }
+
+    /// The selected theme's registry name (the Settings row footer).
+    #[must_use]
+    pub fn theme_name(&self) -> String {
+        self.theme.get().name
+    }
+
+    /// The accounts view's armed-delete credential id.
+    #[must_use]
+    pub fn integration_deleting(&self) -> Option<String> {
+        self.integration_deleting.get()
     }
 
     /// Boot/reload: record the configured pin + the terminal probe.
