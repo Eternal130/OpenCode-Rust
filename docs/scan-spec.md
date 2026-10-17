@@ -58,7 +58,12 @@ I10b **Enumeration-universe pin** (R3 U12): every round's report lists (a)
     web}. Standing out-of-scope-with-justification entries: **stats** (U8 — we
     ship no stats surface; absent-justified accounting entry under F2/I7 + one
     C-cell if/when shipped); **identity/enterprise** (U9 — not shipped by us;
-    `core/src/managed-policy.ts` still binds C4 precedence). {R3: U8, U9, U12}
+    `core/src/managed-policy.ts` still binds C4 precedence). Standing
+    accounting entries, no parity surface (R4 re-sweep): **console** (scaffold,
+    src empty — F2 export accounting only), **posts** (static marketing/docs
+    site — no runtime parity surface), **script** (single-file dev script — F2
+    accounting), `tui/src/devtools` (dev-only route — owned generically by
+    F1's route matrix). {R3: U8, U9, U12; R4: re-sweep}
 I11 **Process + output contract**: ≤45-min chunks, no backgrounded scans,
     worktree isolation, per-round output format (gap register + adequacy table +
     convergence estimate), no summary-only dispatch — integrations quote clause
