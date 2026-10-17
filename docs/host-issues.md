@@ -59,3 +59,14 @@ fragile in two independent ways.
 
 **Disposition:** recorded, not fixable by us (host code). Candidate for
 an upstream report if the user directs.
+
+## Standing rule (user directive, 2026-10-17): subagents MUST NOT run
+background tasks
+
+To avoid H-1 entirely, every dispatched subagent operates under an
+explicit prohibition: no backgrounded long runs of any kind (builds,
+tests, watches, rig/scan sweeps). All work runs as foreground chunks
+(≤45 min per tool call, per the standing TTL rule). Orchestrator-side
+background watchers (the parent's own shell observers) remain allowed —
+the bug is specific to CHILD sessions parking work and being re-woken.
+This clause is mandatory text in every lane dispatch prompt from now on.
