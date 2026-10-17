@@ -337,7 +337,8 @@ async fn be1_sse_session_status_is_never_server_published_over_a_real_turn() {
         .await
         .expect("prompt");
 
-    let started = expect_frame(&mut stream, "\"type\":\"session.execution.started\"", "started").await;
+    let started =
+        expect_frame(&mut stream, "\"type\":\"session.execution.started\"", "started").await;
     assert!(started.contains(&format!("\"sessionID\":\"{session_id}\"")), "{started}");
     let failed = expect_frame(&mut stream, "\"type\":\"session.execution.failed\"", "failed").await;
     assert!(failed.contains(&format!("\"sessionID\":\"{session_id}\"")), "{failed}");
@@ -345,12 +346,17 @@ async fn be1_sse_session_status_is_never_server_published_over_a_real_turn() {
     let deadline = Duration::from_secs(2);
     let mut saw_status = false;
     while let Ok(Some(Ok(frame))) = tokio::time::timeout(deadline, stream.recv()).await {
-        if frame.contains("\"type\":\"session.status\"") || frame.contains("\"type\":\"session.idle\"") {
+        if frame.contains("\"type\":\"session.status\"")
+            || frame.contains("\"type\":\"session.idle\"")
+        {
             saw_status = true;
             break;
         }
     }
-    assert!(!saw_status, "the server must not publish session.status/session.idle (v2 derives client-side)");
+    assert!(
+        !saw_status,
+        "the server must not publish session.status/session.idle (v2 derives client-side)"
+    );
     shutdown_tx.send(true).expect("stop provider");
 }
 
