@@ -215,3 +215,95 @@ Verification: affected-crate nextest + PTY proofs + rig --quick
   toast_once (title/action/non-modal + the same-status dedup),
   home_footer_chips_are_clickable (both cells → their dialogs).
   Full suite: 849/849.
+
+## Phase 5 — verification + final report
+
+### Affected-crate suites
+- `cargo nextest run -p oc-tui -p oc-tui-core -p oc-cli`:
+  **1039 passed, 2 skipped** (pre-existing skips), including the
+  pty profile's lane-KM trio. fmt --check clean; clippy
+  --all-targets 0 warnings.
+
+### PTY proofs (`pty_lane_km.rs`, 3, --profile pty)
+- pty_km_tab_strip_middle_right_and_drag: right press on tab 2 →
+  the menu renders v2's rows (New session/Rename/Copy session ID/
+  Close) + escape closes; middle press closes the tab; press→drag→
+  release reorders (strip row changes). The debug run surfaced a
+  REAL engine gap: `crossterm_key_to_spec` dropped the alt half of
+  ctrl+alt chords ("ctrl+alt+t" decoded as "ctrl+t") — fixed for
+  every combined chord.
+- pty_km_failed_tool_error_reveal: the failed probe row's release
+  reveals "ENOENT: no such file", the second release hides it.
+- pty_km_toast_action_and_home_chip: the armed MCP fetch (1
+  connected + 1 failed) toasts "MCP server failed: broken";
+  ctrl+alt+t (CSI-u) activates → the MCP servers dialog; the home
+  footer's "1 MCP failed" cell release opens the same dialog.
+
+### rig --quick (live ref, 80x24, lane @ HEAD 88e82a8)
+| script | verdict |
+|---|---|
+| boot-home | 3 mismatches — the registered (b)-coin placeholder (row 13, styles identical) |
+| multi-session | 22 mismatches — coin placeholder + digit drift (26/27,8 `Nms`) + backdrop-fg idx15 (9,13): ALL registered classes (if.log/multi-session) |
+| tabs-keyboard | 8 mismatches — coin placeholder only; main@3d7a240 shows the SAME 8-step/row-13 class → no new divergence |
+| tabs-live-session | 19 mismatches — coin + digit drift + idx15: registered classes |
+| palette | 2 mismatches — idx15 blank-fg: registered class |
+No lane-KM-specific divergence class in any script.
+
+### Keymap final coverage table (v2 keybind.ts Definitions vs ours)
+- v2 defs: 243 (242 generated + `leader`). Rust table: 250 rows,
+  249 unique command ids (app.exit spans base+diff layers).
+- **v2 → rust: 243/243 = 100%** (id + default spec equality,
+  parity_tests::table_covers_the_full_v2_default_table). The one
+  REGISTERED default divergence: `app.exit` keeps ctrl+c,ctrl+d
+  (v2 also binds <leader>q, decollided to session.queued_prompts —
+  audit §1b).
+- rust-only, ALL registered: `leader` (v2 has it; the audit's diff
+  artifact), `app.heap_snapshot` (port debug command),
+  `composer.close/tab.prev/tab.next/subagent.toggle-activity`
+  (v2 layer bind: props), `app.exit`@diff (the viewer's re-bind,
+  SURF-2), `toast.activate` (lane KM's keyboard toast reach).
+- The 5 divergent diff-layer defaults auditA flagged: all "none"
+  since SURF-2; diff.next_file/previous_file/help match v2
+  (n,alt+down / p,alt+up / ?,shift+?,shift+/).
+- dialog.project_copy.generate → dialog.worktree.generate renamed
+  (the id divergence closed); the duplicate dialog.mcp.toggle row
+  removed.
+- Dispatchers: every boot-reachable new binding resolves (tab
+  history walks, queued_prompt.undo, session.copy.id, session.cd,
+  exploration grouping, plugins.list, toast.activate, app.clear);
+  the surfaceless families (terminal/pane/which-key/scrap/debug/
+  restart/aside/verbosity/plugins.install/integration/plugin-dialog
+  actions/composer.terminal) are consumed no-ops — v2's keymap eats
+  the stroke with no handler either.
+
+### Per-item disposition (auditA)
+- **#8a Keymap completion**: CLOSED (44 bindings + rename + dup
+  removal + dispatchers + full-coverage test).
+- **#8b Tab strip advanced interactions**: CLOSED for the port's
+  covered layouts — middle-click, right-click context menu (v2's
+  contents), drag reorder, close-hold (frozen layout + 5 s expiry +
+  pointer-out release). The vertical RAIL variant: NOT PORTED — the
+  rail layout is outside the port's covered layouts (auditA §2.2
+  "vertical orientation absent"); registered.
+- **#9 Tool-row affordances**: CLOSED — the v2 arm table per family
+  (execute→details dialog, subagent→child navigation, BlockTool
+  cards never arm, read/glob/grep/webfetch/websearch arm only while
+  failed, generic arms while expandable), the failed rows' error
+  reveal renders, markdown links clickable (labeled links; bare
+  URLs need the OSC-8 profile — registered limitation). Registered
+  approximations: the shell card arms always (v2 gates on
+  shellID||overflow); execute call rows toggle through the
+  part-level disclosure.
+- **#10 Toast action + home footer chips**: CLOSED — the pointer
+  surface (hover pause + release activate) + the keyboard chord
+  (port addition, registered); the MCP/plugins chips render (the
+  plugins-failed chip is NEW surface) with hit rects; the MCP alert
+  toasts have a producer with the mcp.list action; the F11 gate
+  narrowed to the flagged modal surfaces.
+
+### Deferred / registered (not lane-KM scope)
+- The rail variant (above); bare-URL links (OSC-8 profile); enable/
+  disable state in the Plugins dialog (rows informational); the
+  terminal pane/which-key/integrations/plugin-manager-install
+  surfaces (absent features — bindings + consumed dispatchers
+  registered).
