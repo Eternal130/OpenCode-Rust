@@ -227,16 +227,41 @@ pub fn render_session(
     // x=0, unlike the prompt mount's inset.
     let picker_live = store.picker_live(session_id);
     let mount_x = if picker_live { 0 } else { inset };
+    // The picker panel's entry-row pointer targets (beta.13 bug 2 —
+    // v2 subagents-tab.tsx:221-227: hover moves the selection, a
+    // release selects + navigates into the child). The panel pastes
+    // at (0, height − mount); body row i sits at panel-local y 3+i
+    // over content columns [4, column−5] — the same walk
+    // `picker_panel_paint` solves.
+    let mut picker_hits = crate::store::PickerEntryHits::default();
     let (mount, prompt_height, mount_height, caret_screen) = if picker_live {
         let entries = store.picker_entries(session_id);
         let selected = store.picker_selection(session_id, entries.len());
+        let column_u16 = u16::try_from(column).unwrap_or(u16::MAX);
         let panel = crate::components::picker_solid::picker_panel_frame_dispatch(
             &store.picker(),
             &entries,
             selected,
             &theme,
-            u16::try_from(column).unwrap_or(u16::MAX),
+            column_u16,
         );
+        let top = height.saturating_sub(crate::components::subagent_picker::PICKER_MOUNT_ROWS);
+        let visible = entries.len().min(crate::components::subagent_picker::BODY_ROWS);
+        picker_hits = crate::store::PickerEntryHits {
+            session_id: session_id.to_owned(),
+            rows: (0..visible)
+                .map(|index| crate::store::PickerEntryHit {
+                    index,
+                    session_id: entries[index].session_id.clone(),
+                    rect: crate::store::HitRect {
+                        x: 4,
+                        y: top + 3 + index,
+                        width: column.saturating_sub(9).max(1),
+                        height: 1,
+                    },
+                })
+                .collect(),
+        };
         (
             panel,
             crate::components::subagent_picker::PICKER_MOUNT_ROWS,
@@ -251,6 +276,7 @@ pub fn render_session(
     } else {
         composer_mount_frame(store, session_id, &theme, column - inset, width, height)
     };
+    store.set_picker_entry_hits(picker_hits);
     // NEW-S1a: position the terminal cursor at the caret cell while
     // the composer owns the frame (cleared when a dialog overlays —
     // v2 blurs the prompt while any dialog is open). The picker
