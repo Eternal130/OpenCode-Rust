@@ -48,5 +48,21 @@
 ### CD-8 (CARRY-NOTE, LOW) — C4/C3: invalid `permissions` rules parse to `[]` instead of dropping/erroring
 - Probe: `permissions: [{"tool":"edit","mode":"ask"}]` (invalid Rule shape) → ours reports `permissions: []` (kept-but-empty), other invalid leaves (compaction garbage) are dropped silently with no API-visible diagnostic. Ref's normalize records diagnostics; surfacing parity (toast/event) unverified — carried to the C3/D2 ref-binary leg.
 
-*(execution continues — C10, C14, D1, D5 next per lane priority)*
+### CD-9 (MED) — C10: auth integration test suite fails under default parallelism at main HEAD (3/41)
+- **Evidence (dev-gate, reproduced 4×/4 in BOTH the lane worktree and the main checkout)**: `cargo test -p oc-core --lib integration::tests` (default threads) → FAILED: `gitlab_pkce_flow_round_trip_against_mock` (panic: "GitLab login needs local port 8080, but it is already in use"), `gitlab_bundled_client_rejected_off_gitlab_com` (expected rejection, got a live Attempt), `vertex_adc_binding_refreshes_and_binds_the_native_route` ("ADC binding resolves"). `--test-threads=1` → 41/41 PASS; each passes in isolation. Port 8080 free before the run.
+- **Root cause (pinned)**: the GitLab OAuth flow engine pins its loopback redirect port to 8080 (`tests.rs:926-929`; flow error string in-product); concurrent GitLab-flow tests in one process collide. The bundled-client test's expectation is order-dependent on the same collision.
+- **I6 attribution**: test-infra interference in freshly landed auth code (BE-3/3b class); masks real regressions in CI (any parallel run flakes) — the guard tests exist but cannot stand guard.
+
+### CD-10 (LOW/MED) — C10: pair dialog QR block deferred on ours
+- `oc-tui/src/components/command_palette.rs:986` — "the QR block deferred". Ref renders the pairing URL as a QR in `tui/src/component/dialog-pair.tsx` (CLI pair: `cli/src/commands/handlers/pair.ts`). Pairing flow itself works (CD-11); the QR affordance cell is ours-absent.
+
+### CD-11 (INFO) — C10 verified-parity rows (live, I1; mock-upstream only where declared)
+- Auth host: passwordless boot → 200; `OPENCODE_PASSWORD` boot → 401 + `WWW-Authenticate: Basic realm="Secure Area"`; basic ok/bad 200/401 (`/tmp/opencode/scancd/c10/`).
+- Pairing: `POST /api/pair` → base64url code (300s TTL, cap 1000 = ref `pairing.ts` Cache params); browser `GET /auth/connect/:code` → 200 + session token + CORS echo; **reuse → 401** (single-use ✓); pair token accepted as password-equivalent (ref auth.ts:32).
+- Credential store: create key + oauth (`{type,methodID,refresh,access,expires}` — ref `credential.ts` OAuth shape exact) → Entry `{id,integrationID,label,active,value}` ✓; activate enforces one-active-per-integration (switch observed) ✓; update label ✓; remove 204 ✓; events exactly `credential.updated` ×4 + `credential.switched` ×4 ✓; DB row persists (`credential` table) ✓.
+- Flow engines: device flow (`request_device_code`/`poll_device_token`, grant `urn:ietf:params:oauth:grant-type:device_code`), loopback+PKCE, refresh rotation (gitlab_refresh_rotates_via_mock, zen_refresh_round_trip_against_mock, zen_device_flow_round_trip_against_mock, gitlab_pkce_flow_round_trip_against_mock — mock-IdP class per [F], I9-declared) — all green serially.
+- Copilot: no-refresh by design (`providers.rs:313`, ref github-copilot.ts:126-171) ✓.
+
+*(execution continues — C14, D1, D5 next per lane priority)*
+
 
