@@ -251,6 +251,13 @@ pub async fn spawn_rust(options: RustSpawn<'_>) -> Result<RustServer> {
         .env("XDG_STATE_HOME", home.join(".local/state"))
         .env("TMPDIR", &tmp)
         .env("OPENCODE_PASSWORD", RUST_PASSWORD)
+        // Hermetic boots (S1/GATE4-A.3): kill the boot-spawned models-dev
+        // refresh loop in every parity-spawned server — an online box
+        // would otherwise publish `models-dev.refreshed` at a
+        // wall-clock-dependent moment (the goldens contain none of it).
+        // Set BEFORE extra_env so a test can still override if it ever
+        // needs the loop.
+        .env("OPENCODE_CATALOG_FETCH", "0")
         .env("RUST_LOG", "warn");
     for (key, value) in &options.extra_env {
         // `{sandbox}` expands to this server's sandbox root (harness-side
