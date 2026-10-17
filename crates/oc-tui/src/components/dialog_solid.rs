@@ -165,6 +165,10 @@ enum Family {
     RenamePrompt,
     /// `component/dialog-worktree-name.tsx` (the prompt-family twin).
     WorktreeNamePrompt,
+    /// Lane FINAL: the connect-flow prompts (`KeyMethod` /
+    /// `OAuthCode`, dialog-integration.tsx:471-506/676-728) — the
+    /// prompt tree with a dynamic title + description rows.
+    ConnectPrompt,
     /// `ui/dialog-help.tsx`.
     Help,
     /// The delegation payload's rows-only shape.
@@ -304,6 +308,8 @@ fn content_height(inputs: &DialogInputs) -> usize {
         Family::Select => 4 + inputs.window.len() + 1 + usize::from(!inputs.actions.is_empty()) + 1,
         // title, gap, input, gap, footer, the footer's paddingBottom.
         Family::RenamePrompt | Family::WorktreeNamePrompt => 6,
+        // title, gap, input, gap, hints, gap, footer, pad.
+        Family::ConnectPrompt => inputs.hint_lines.len() + 8,
         // title, gap, wrapped lines, hint paddingBottom, root gap,
         // button, button-row paddingBottom.
         Family::Help => inputs.hint_lines.len() + 6,
@@ -820,6 +826,88 @@ fn prompt_footer_element(
     ]))
 }
 
+/// The connect-flow prompt (`KeyMethod` / `OAuthCode`): the prompt
+/// tree with a DYNAMIC title + placeholder and the description rows
+/// (URL / instructions / inline error) under the input
+/// (dialog-integration.tsx:485-505, 700-727).
+fn connect_prompt_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    let title_row = box_().flex_direction("row").justify_content("space-between").children(
+        Children::Static(vec![
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk(i.title.clone(), i.colors.text, None, 1)])
+                    })),
+                )
+                .into_element(),
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("esc".to_owned(), i.colors.muted, None, 0)])
+                    })),
+                )
+                .into_element(),
+        ]),
+    );
+    let input = text().wrap_mode("none").dyn_prop(
+        "content",
+        dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+            let width = i.box_width.saturating_sub(4);
+            if i.prompt_value.is_empty() {
+                styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
+            } else {
+                let typed = take_width(&i.prompt_value, width);
+                let end = display_width(&typed);
+                let mut chunks = vec![chunk(typed, i.colors.formfield_base_fg, None, 0)];
+                if end < width {
+                    chunks.push(chunk(" ".to_owned(), i.colors.surface, Some(i.colors.text), 0));
+                }
+                styled(chunks)
+            }
+        })),
+    );
+    // The description block — a For over the hint rows (the same
+    // keyed-list shape the help tree uses), muted like
+    // `DialogPrompt`'s description slot.
+    let lines = ForItemSource {
+        source: map(inputs.clone(), |i: &DialogInputs| {
+            i.hint_lines
+                .iter()
+                .enumerate()
+                .map(|(n, line)| ForItem {
+                    key: format!("C{n}"),
+                    value: PropValue::Str(line.clone()),
+                })
+                .collect::<Vec<ForItem>>()
+        }),
+    };
+    let line_inputs = inputs.clone();
+    let hints = for_list(std::rc::Rc::new(lines), move |item: &ForItem, _index: usize| {
+        let line = match &item.value {
+            PropValue::Str(line) => line.clone(),
+            _ => String::new(),
+        };
+        let inputs = line_inputs.clone();
+        text()
+            .dyn_prop(
+                "content",
+                dyn_styled(map(inputs, move |i: &DialogInputs| {
+                    styled(vec![chunk(line.clone(), i.colors.muted, None, 0)])
+                })),
+            )
+            .into_element()
+    });
+    let hint_box = box_().children_dyn(std::rc::Rc::new(hints));
+    box_().padding_left(2.0).padding_right(2.0).children(Children::Static(vec![
+        title_row.into_element(),
+        input.margin_top(1.0).into_element(),
+        hint_box.margin_top(1.0).into_element(),
+        prompt_footer_element(inputs, false).margin_top(1.0).into_element(),
+    ]))
+}
+
 /// The prompt family tree (`ui/dialog-prompt.tsx:98-145`): the root
 /// is paddingLeft/right 2, gap 1 — title row, the 1-row input (NO
 /// formfield background: the textarea paints text only), and the
@@ -1066,6 +1154,7 @@ fn chrome_element(
         Family::Select => select_builder(&family_inputs),
         Family::RenamePrompt => prompt_builder(&family_inputs, false),
         Family::WorktreeNamePrompt => prompt_builder(&family_inputs, true),
+        Family::ConnectPrompt => connect_prompt_builder(&family_inputs),
         Family::Help => help_builder(&family_inputs),
         Family::PluginRows => plugin_rows_builder(&family_inputs),
         Family::Menu => menu_builder(&family_inputs),
@@ -1253,7 +1342,10 @@ fn dialog_chrome_button_hits(
     let title_row = box_y + 1;
     let (label, pad) = match inputs.family {
         Family::Select | Family::PluginRows => ("esc", 4usize),
-        Family::RenamePrompt | Family::WorktreeNamePrompt | Family::Menu => ("esc", 2),
+        Family::RenamePrompt
+        | Family::WorktreeNamePrompt
+        | Family::ConnectPrompt
+        | Family::Menu => ("esc", 2),
         Family::Help => ("esc/enter", 2),
     };
     let label_width = label.chars().count();
@@ -1294,6 +1386,12 @@ fn build_inputs(
     let family = match &entry.kind {
         DialogKind::SessionRename { .. } => Family::RenamePrompt,
         DialogKind::WorktreeName => Family::WorktreeNamePrompt,
+        // Lane FINAL: the connect-flow prompts (KeyMethod's API-key
+        // input / OAuthCode's code entry) — the prompt tree with a
+        // dynamic title + the attempt's URL/instructions rows.
+        DialogKind::IntegrationKey { .. } | DialogKind::IntegrationCode { .. } => {
+            Family::ConnectPrompt
+        }
         DialogKind::Help => Family::Help,
         DialogKind::TabMenu { .. } => Family::Menu,
         DialogKind::Plugin { .. } if plugin.is_some_and(|content| !content.is_select()) => {
@@ -1346,6 +1444,30 @@ fn build_inputs(
             actions: Vec::new(),
             prompt_value: entry.value.clone(),
             hint_lines: Vec::new(),
+            plugin_title: String::new(),
+            plugin_rows: Vec::new(),
+        },
+        // The connect prompts carry their title/placeholder/hints
+        // through the props (OAuthCode's description block holds the
+        // attempt's URL + instructions, dialog-integration.tsx:
+        // 719-725; the inline error rides the same rows).
+        Family::ConnectPrompt => DialogInputs {
+            family,
+            box_width,
+            colors,
+            title: props.title.clone(),
+            placeholder: props.placeholder.clone(),
+            filter: String::new(),
+            options: Vec::new(),
+            flat: Vec::new(),
+            selected: 0,
+            current: None,
+            flatten: false,
+            destructive: false,
+            window: Vec::new(),
+            actions: Vec::new(),
+            prompt_value: entry.value.clone(),
+            hint_lines: props.hints.clone(),
             plugin_title: String::new(),
             plugin_rows: Vec::new(),
         },
