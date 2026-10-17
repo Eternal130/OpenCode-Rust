@@ -51,6 +51,17 @@ it; see §2b).
 
 ### §2b E3 canary result (appended on run completion)
 
+Attempt history (honest record): **attempt 1** died mid-run to an output-
+buffering bug AND carried a rate-constant bug in the leak toy (integer
+accumulator → 0.094 MB/min instead of 10). Instructive accident: the
+sampler + least-squares measured the toy's TRUE rate at **5.6 MB/h over the
+full 30 min** — the measurement chain is linear-faithful at two orders of
+magnitude below the band, which strengthens the method validation (the
+clause's slope math is not band-tuned). **Attempt 2** was killed when the
+same rate bug was confirmed (0.1 MB/min growth). **Attempt 3** = corrected
+toy (fractional accumulator; smoke-verified 12.1 MB after 1 min ≈ spec
+rate), full 30-min leak arm + 11-min control arm. Result:
+
 PENDING — 30-min leak arm + 11-min control arm in flight (runner hardened:
 stderr logging, incremental CSV). **If E3 FAILS its canary**: the E3 clause
 sampling/slope method gets redesigned THIS round per I8 and the P2 verdict
