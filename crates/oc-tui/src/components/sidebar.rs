@@ -689,6 +689,31 @@ pub fn render_sidebar_scrolled(
         let card_top = card_bottom.saturating_sub(card_h).saturating_add(1);
         paint_card(&mut paint, theme, card_top);
     }
+    // The scrollbox's scrollbar (auditB #8 — v2's sidebar scrollbox:
+    // an absolute right-edge track `raised.base`, thumb
+    // `scrollbar.base`, mounted only while the content overflows the
+    // viewport; the thumb spans the viewport's share of the content
+    // at the scroll offset).
+    let content_height = view.sections.content_height();
+    let viewport = footer_top.saturating_sub(2);
+    if content_height > viewport && viewport > 0 {
+        let track_h = viewport;
+        let thumb_h = ((viewport * viewport) / content_height).clamp(1, track_h);
+        let max_offset = content_height - viewport;
+        let max_top = track_h - thumb_h;
+        let thumb_top = (scroll.min(max_offset) * max_top) / max_offset.max(1);
+        let x = u16::try_from(SESSION_SIDEBAR_WIDTH - 1).unwrap_or(u16::MAX);
+        let y = u16::try_from(2 + thumb_top).unwrap_or(2);
+        let w = 1u16;
+        let h = u16::try_from(thumb_h).unwrap_or(u16::MAX);
+        paint.fills.push(Fill {
+            x,
+            y,
+            width: w,
+            height: h,
+            style: Style::new().fg(theme.scrollbar).bg(raised),
+        });
+    }
     paint
 }
 
@@ -1055,4 +1080,55 @@ mod surf1_tests {
         assert!(grid.contains("/tmp/opencode:main"), "the location row: {grid}");
         assert_eq!(view.sections.content_height(), 7, "context(2+gap) + mcp(3+gap)");
     }
+}
+
+// -- lane TAIL (auditB #8): the scrollbar token binding ----------
+
+/// The scrollbox bar: overflow → one right-edge track fill in
+/// `scrollbar.base` over `raised.base`, thumb sized by the
+/// viewport share at the offset; no overflow → no fill.
+#[test]
+fn sidebar_scrollbar_paints_only_on_overflow() {
+    let theme = ThemeStyles::from_resolved(&crate::theme::ThemeState::v2_dark().resolved);
+    let sections = |rows: usize| SidebarSections {
+        context: SidebarContextWidget { tokens: Some(60_400), percent: None, cost: None },
+        mcp: SidebarMcpWidget::default(),
+        plugins: vec![crate::components::sidebar::SidebarSection {
+            plugin_id: "p".into(),
+            title: "S".into(),
+            rows: vec!["row".into(); rows],
+        }],
+    };
+    // Overflow: 30 rows of content in a 10-row slot → the fill
+    // exists, at the pane's last column, in the scrollbar color.
+    let view = SidebarView {
+        title: "T".into(),
+        title_pending_since: None,
+        clock_ms: 0,
+        sections: sections(30),
+        onboarding: false,
+        location: None,
+    };
+    let paint = render_sidebar_scrolled(&view, &theme, 20, 3);
+    assert!(
+        paint.fills.iter().any(|fill| {
+            fill.x
+                == u16::try_from(crate::components::session_tabs::SESSION_SIDEBAR_WIDTH - 1)
+                    .unwrap_or(u16::MAX)
+                && fill.style.fg == Some(theme.scrollbar)
+        }),
+        "the thumb fill painted: {:?}",
+        paint.fills
+    );
+    // No overflow → no scrollbar fill at all.
+    let view = SidebarView {
+        title: "T".into(),
+        title_pending_since: None,
+        clock_ms: 0,
+        sections: sections(1),
+        onboarding: false,
+        location: None,
+    };
+    let paint = render_sidebar_scrolled(&view, &theme, 20, 0);
+    assert!(paint.fills.is_empty(), "no bar without overflow: {:?}", paint.fills);
 }
