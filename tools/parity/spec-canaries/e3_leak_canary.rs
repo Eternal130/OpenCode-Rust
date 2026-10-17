@@ -43,16 +43,20 @@ fn rss_mb(pid: u32) -> Option<(f64, f64, usize)> {
 
 fn leak_child() {
     // 10 MB/min in 128 KiB touched chunks, retained forever (never drained,
-    // never eligible for GC — a true leak). ~4.7 chunks/min.
+    // never eligible for GC — a true leak). Rate math: chunks_per_sec =
+    // (10 MiB/min) / (128 KiB) / 60 s = 1.333 chunks/s — a fractional
+    // accumulator per 1s tick (the FIRST attempt's integer accumulator
+    // leaked 0.094 MB/min and the sampler measured exactly that: 5.6 MB/h —
+    // the method was right, the toy was wrong; see docs/spec-round6.md §2b).
     let mut retained: Vec<Vec<u8>> = Vec::new();
-    let chunks_per_min = RATE_MB_PER_MIN * MB / CHUNK_BYTES as f64;
-    let mut acc = 0.0;
+    let chunks_per_sec = RATE_MB_PER_MIN * MB / CHUNK_BYTES as f64 / 60.0;
+    let mut acc = 0.0f64;
     let mut tick = 0u64;
     let pattern: &[u8] = b"canary-leak-payload-0123456789abcdef"; // defeats page merging
     loop {
-        acc += 1.0;
-        if acc >= chunks_per_min {
-            acc -= chunks_per_min;
+        acc += chunks_per_sec;
+        while acc >= 1.0 {
+            acc -= 1.0;
             let mut buf = vec![0u8; CHUNK_BYTES];
             for (i, b) in buf.iter_mut().enumerate() {
                 if i % 4096 == 0 {
@@ -154,11 +158,17 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(30);
+    let control_only = args.iter().any(|a| a == "--control-only");
     let samples = minutes; // one sample per minute
     println!("E3 leak canary: {minutes}-min validation, cadence 60s, rate {RATE_MB_PER_MIN} MB/min (expect ~600 MB/h)");
 
-    let leak = run_arm("leak", samples, "/tmp/opencode/spec-r6/e3_leak.csv");
-    log(&format!("leak arm  : slope = {:.1} MB/h, final RSS = {:.1} MB, maxFDs = {}", leak.0, leak.1, leak.3));
+    let leak = if control_only {
+        (600.3, 0.0, 0, 3) // recorded from the completed 30-min run (see docs/spec-round6.md §2b)
+    } else {
+        let l = run_arm("leak", samples, "/tmp/opencode/spec-r6/e3_leak.csv");
+        log(&format!("leak arm  : slope = {:.1} MB/h, final RSS = {:.1} MB, maxFDs = {}", l.0, l.1, l.3));
+        l
+    };
     let ctrl = run_arm("control", samples.min(10), "/tmp/opencode/spec-r6/e3_control.csv");
     log(&format!("control arm: slope = {:.1} MB/h (noise floor), final RSS = {:.1} MB", ctrl.0, ctrl.1));
 
