@@ -753,22 +753,6 @@ struct ExecutionHooks {
     clock: Arc<dyn oc_util::determinism::Clock>,
 }
 
-/// The `session.status` union member (`schema/session-status-event.ts:9-32`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SessionStatusKind {
-    Busy,
-    Idle,
-}
-
-impl SessionStatusKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Busy => "busy",
-            Self::Idle => "idle",
-        }
-    }
-}
-
 /// One stderr line per failed turn (the engine-level failure site's log —
 /// server stderr routes to the daemon log). Public so the regression test
 /// asserts the exact shape without capturing fd 2.
@@ -816,12 +800,6 @@ impl ExecutionHooks {
         self.bus.publish(def, data, options).await.map(|_| ()).map_err(|err| {
             RunError::Defect(format!("failed to publish execution started: {err}"))
         })?;
-        // `session.status` busy (schema/session-status-event.ts:35-43): the
-        // public busy/idle push consumers subscribe to (the ref client
-        // derives the same union from the execution events,
-        // client/src/solid/data.ts:1009-1037). Ephemeral + best-effort — a
-        // status frame must never fail a turn.
-        self.publish_status(session_id, SessionStatusKind::Busy).await;
         Ok(())
     }
 
@@ -905,47 +883,7 @@ impl ExecutionHooks {
                 self.publish_event(session_id, "session.execution.failed", data, true).await
             }
         };
-        // `session.status` idle + the deprecated `session.idle` marker
-        // (session-status-event.ts:35-53) — published AFTER the terminal
-        // execution event so stream consumers observe the same order the
-        // ref client derives (execution.succeeded → idle,
-        // client/src/solid/data.ts:1033-1037).
-        self.publish_status(session_id, SessionStatusKind::Idle).await;
         result
-    }
-
-    /// The busy/idle status union of `session.status`
-    /// (`schema/session-status-event.ts:9-32`): `{type:"busy"}` /
-    /// `{type:"idle"}`. The `retry` variant belongs to the retry
-    /// scheduler in v2 and has no publisher in this port yet.
-    async fn publish_status(&self, session_id: &str, status: SessionStatusKind) {
-        if let Some(def) = crate::bus::registry::by_type(crate::bus::registry::SESSION_STATUS) {
-            let _ = self
-                .bus
-                .publish(
-                    def,
-                    serde_json::json!({
-                        "sessionID": session_id,
-                        "status": { "type": status.as_str() },
-                    }),
-                    PublishOptions::default(),
-                )
-                .await;
-        }
-        if status == SessionStatusKind::Idle {
-            // Deprecated frame the ref manifest still ships for TUI
-            // consumers (event-manifest.ts:74-77).
-            if let Some(def) = crate::bus::registry::by_type(crate::bus::registry::SESSION_IDLE) {
-                let _ = self
-                    .bus
-                    .publish(
-                        def,
-                        serde_json::json!({ "sessionID": session_id }),
-                        PublishOptions::default(),
-                    )
-                    .await;
-            }
-        }
     }
 
     /// The synthetic failed-turn error part: `session.step.started` +

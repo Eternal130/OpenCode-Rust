@@ -273,10 +273,16 @@ async fn be1_sse_filesystem_changed_and_branch_updated_on_head_move() {
     assert!(branch.contains("\"branch\":\"feature-lane-be1\""), "{branch}");
 }
 
-/// session.status busy/idle (+ deprecated session.idle) ride a real turn:
-/// prompt → mock provider rejects → execution.failed → idle.
+/// The v2.0.24 reference server NEVER publishes `session.status` /
+/// `session.idle` (the manifest ships the types, event-manifest.ts:74-77,
+/// but the reference has zero server-side publish sites — the ref CLIENT
+/// derives the busy union from the execution events,
+/// client/src/solid/data.ts:1009-1037). GATE2's golden adjudication caught
+/// our BE-1 publication as a divergence; this test pins the v2 truth: a
+/// full turn (prompt → provider rejects → execution.failed) carries the
+/// execution frames and NO status frames.
 #[tokio::test]
-async fn be1_sse_session_status_busy_then_idle_over_a_real_turn() {
+async fn be1_sse_session_status_is_never_server_published_over_a_real_turn() {
     let workspace = tempfile::tempdir().expect("workspace");
     let provider = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("provider bind");
     let port = provider.local_addr().unwrap().port();
@@ -331,12 +337,20 @@ async fn be1_sse_session_status_busy_then_idle_over_a_real_turn() {
         .await
         .expect("prompt");
 
-    let busy = expect_frame(&mut stream, "\"type\":\"session.status\"", "busy").await;
-    assert!(busy.contains("\"status\":{\"type\":\"busy\"}"), "{busy}");
-    let idle = expect_frame(&mut stream, "\"status\":{\"type\":\"idle\"}", "idle").await;
-    assert!(idle.contains(&format!("\"sessionID\":\"{session_id}\"")), "{idle}");
-    let marker = expect_frame(&mut stream, "\"type\":\"session.idle\"", "deprecated marker").await;
-    assert!(marker.contains(&format!("\"sessionID\":\"{session_id}\"")), "{marker}");
+    let started = expect_frame(&mut stream, "\"type\":\"session.execution.started\"", "started").await;
+    assert!(started.contains(&format!("\"sessionID\":\"{session_id}\"")), "{started}");
+    let failed = expect_frame(&mut stream, "\"type\":\"session.execution.failed\"", "failed").await;
+    assert!(failed.contains(&format!("\"sessionID\":\"{session_id}\"")), "{failed}");
+    // Drain briefly: no status/idle frame may EVER cross the wire.
+    let deadline = Duration::from_secs(2);
+    let mut saw_status = false;
+    while let Ok(Some(Ok(frame))) = tokio::time::timeout(deadline, stream.recv()).await {
+        if frame.contains("\"type\":\"session.status\"") || frame.contains("\"type\":\"session.idle\"") {
+            saw_status = true;
+            break;
+        }
+    }
+    assert!(!saw_status, "the server must not publish session.status/session.idle (v2 derives client-side)");
     shutdown_tx.send(true).expect("stop provider");
 }
 
