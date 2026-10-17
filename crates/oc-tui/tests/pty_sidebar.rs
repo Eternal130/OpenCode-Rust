@@ -169,6 +169,122 @@ fn pty_sidebar_plugin_section_renders_through_the_host() {
     pty_sidebar_plugin_section_body();
 }
 
+/// beta.13 bug 1 — the REAL plugin (oh-my-opencode-slim) renders its
+/// sidebar sections in the live pane: the TUI's plugin boot loads the
+/// package's server entry, the host auto-loads the `./tui` companion
+/// (`dist/tui2.js`) whose `tui(api)` registers the `sidebar_content`
+/// slot, and the bridge's materialize lands the section as native
+/// rows. Stages the REAL install (OC_OMOS_ROOT/OC_OMOS_DEPS or the
+/// live cache — skips without either or bun).
+#[test]
+fn pty_sidebar_real_omos_sections_render() {
+    let Some((sandbox, entry)) = stage_real_omos("sidebar-omos") else {
+        eprintln!("omo-slim install unavailable; skipping the real-plugin phase");
+        return;
+    };
+    if !oc_plugin_host::PluginHost::detect().enabled() {
+        eprintln!("bun unavailable; skipping the real-plugin phase");
+        return;
+    }
+    let _lock = pty_lock();
+    // The plugin's own config/log/state reads stay inside the sandbox.
+    std::env::set_var("OPENCODE_CONFIG_DIR", sandbox.join(".config"));
+    std::env::set_var("HOME", &sandbox);
+    let config_path = sandbox.join("opencode.json");
+    std::fs::write(&config_path, format!(r#"{{"plugins": ["{}"]}}"#, entry.display()))
+        .expect("stage config");
+    std::env::set_var("OPENCODE_CONFIG", &config_path);
+
+    let fake = FakeLlm::spawn(standard_sessions());
+    let harness = LiveHarness::attach(160, 30);
+    let mut driver = harness.handle();
+    let span = std::thread::spawn(move || -> Result<(), String> {
+        if !driver.wait_for(WORDMARK, Duration::from_secs(20)) {
+            return Err("the home wordmark never rendered".to_owned());
+        }
+        open_first_session(&mut driver, b"Alpha")?;
+        // The REAL plugin's section: the header row carries the
+        // "OMO-Slim" title and the roster's agent rows follow.
+        let header = wait_pane(&driver, "OMO-Slim", Duration::from_secs(25))
+            .ok_or_else(|| "the OMO-Slim section header never rendered".to_owned())?;
+        let roster = wait_pane(&driver, "explorer", Duration::from_secs(5))
+            .ok_or_else(|| "the agent roster never rendered".to_owned())?;
+        if roster <= header {
+            return Err(format!("the roster ({roster}) must sit under the header ({header})"));
+        }
+        let from = driver.raw_len();
+        assert_exit_ack(&mut driver, from).map_err(|error| format!("teardown: {error}"))?;
+        Ok(())
+    });
+    let url = fake.url.clone();
+    let teardown = std::thread::spawn(move || run_tui(&url, 160, 30, Duration::from_secs(60)));
+    let result = span.join().expect("driver thread");
+    teardown.join().expect("run thread");
+    std::env::remove_var("OPENCODE_CONFIG");
+    drop(harness);
+    result.expect("the real plugin's sidebar sections render");
+}
+
+/// Stage the real oh-my-opencode-slim install (package + the hoisted
+/// deps the bundled entries import) into a PTY sandbox.
+fn stage_real_omos(tag: &str) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let source = omos_source()?;
+    let sandbox = sandbox_env(tag);
+    let node_modules = sandbox.join("plugins").join("node_modules");
+    let package = node_modules.join("oh-my-opencode-slim");
+    copy_tree(&source.join("dist"), &package.join("dist"));
+    std::fs::copy(source.join("package.json"), package.join("package.json")).ok();
+    let deps_root = std::env::var("OC_OMOS_DEPS")
+        .map(std::path::PathBuf::from)
+        .ok()
+        .or_else(|| source.parent().map(|parent| parent.to_path_buf()));
+    if let Some(parent) = deps_root {
+        for dep in ["jsonc-parser", "zod", "solid-js", "lru-cache", "semver"] {
+            let dep_dir = parent.join(dep);
+            if dep_dir.is_dir() {
+                copy_tree(&dep_dir, &node_modules.join(dep));
+            }
+        }
+    }
+    std::fs::create_dir_all(sandbox.join("project")).ok();
+    let entry = package.join("dist").join("server").join("index.js");
+    Some((sandbox, entry))
+}
+
+/// The live omo-slim install (read-only) or the staged OC_OMOS_ROOT.
+fn omos_source() -> Option<std::path::PathBuf> {
+    if let Ok(root) = std::env::var("OC_OMOS_ROOT") {
+        let root = std::path::PathBuf::from(root);
+        return root.join("dist/server/index.js").is_file().then_some(root);
+    }
+    let base = std::path::Path::new("/root/.cache/opencode/npm/oh-my-opencode-slim@latest");
+    let mut stamps: Vec<std::path::PathBuf> = std::fs::read_dir(base)
+        .ok()?
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| entry.path())
+        .collect();
+    stamps.sort();
+    stamps
+        .into_iter()
+        .rev()
+        .map(|stamp| stamp.join("node_modules").join("oh-my-opencode-slim"))
+        .find(|root| root.join("dist/server/index.js").is_file())
+}
+
+fn copy_tree(source: &std::path::Path, destination: &std::path::Path) {
+    std::fs::create_dir_all(destination).expect("create dir");
+    for entry in std::fs::read_dir(source).expect("read dir") {
+        let entry = entry.expect("dir entry");
+        let target = destination.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).expect("copy file");
+        }
+    }
+}
+
 fn pty_sidebar_plugin_section_body() {
     if !oc_plugin_host::PluginHost::detect().enabled() {
         eprintln!("bun unavailable; skipping the plugin phase");

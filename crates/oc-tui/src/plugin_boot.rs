@@ -86,6 +86,11 @@ pub struct TuiPluginRuntime {
     /// The active-session cell the palette sink reads (the run loop
     /// refreshes it each pump).
     pub current_session: Rc<RefCell<Option<String>>>,
+    /// The last route pushed to the guest (the v2 TUI-plugin surface
+    /// — change-gated `tui.route` notifications).
+    pushed_route: Rc<RefCell<Option<Option<String>>>>,
+    /// The last theme fingerprint pushed (name + mode).
+    pushed_theme: Rc<RefCell<Option<(String, bool)>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -165,7 +170,12 @@ impl TuiPluginRuntime {
     /// Wrap a boot outcome (the loop thread's wrapper).
     #[must_use]
     pub fn new(booted: BootedPluginHost) -> Self {
-        Self { booted, current_session: Rc::new(RefCell::new(None)) }
+        Self {
+            booted,
+            current_session: Rc::new(RefCell::new(None)),
+            pushed_route: Rc::new(RefCell::new(None)),
+            pushed_theme: Rc::new(RefCell::new(None)),
+        }
     }
 
     /// Boot from the discovered config. `None` when no plugin entries
@@ -241,8 +251,35 @@ impl TuiPluginRuntime {
     }
 
     /// The per-pump UI-request drain: every queued plugin UI request
-    /// lands in the store through the neutral apply seam.
+    /// lands in the store through the neutral apply seam. The same
+    /// pump pushes the live route + theme view to the guest (the v2
+    /// TUI-plugin surface — the flagship sidebar reads both at every
+    /// materialize; change-gated, fire-and-forget notifications).
     pub fn drain_ui_requests(&self, store: &Store) {
+        if self.booted.host.enabled() {
+            let route_session = match store.route() {
+                crate::store::Route::Session { session_id } => Some(session_id),
+                crate::store::Route::Home => None,
+            };
+            let changed = { *self.pushed_route.borrow() != Some(route_session.clone()) };
+            if changed {
+                *self.pushed_route.borrow_mut() = Some(route_session.clone());
+                self.booted.host.notify_tui_route(route_session.as_deref());
+            }
+            let theme = store.theme();
+            let fingerprint = (theme.name.clone(), theme.mode == oc_theme::types::Mode::Light);
+            if *self.pushed_theme.borrow() != Some(fingerprint.clone()) {
+                *self.pushed_theme.borrow_mut() = Some(fingerprint);
+                let styles = theme.styles();
+                self.booted.host.notify_tui_theme(serde_json::json!({
+                    "accent": hex_color(styles.accent),
+                    "background": hex_color(styles.background),
+                    "borderActive": hex_color(styles.border),
+                    "text": styles.text.fg.map(hex_color).unwrap_or_else(|| "#eeeeee".into()),
+                    "textMuted": styles.text_muted.fg.map(hex_color).unwrap_or_else(|| "#888888".into()),
+                }));
+            }
+        }
         for _ in 0..64 {
             let requests = self.booted.host.drain_ui_requests();
             if requests.is_empty() {
@@ -725,5 +762,14 @@ mod tests {
         let ids: Vec<&str> =
             agents.iter().filter_map(|agent| agent.get("id").and_then(Value::as_str)).collect();
         assert_eq!(ids, ["build", "general", "compaction", "title"]);
+    }
+}
+
+/// One theme token as a `#rrggbb` string (the v2 TUI-plugin theme
+/// view the guest's sidebar render consumes).
+fn hex_color(color: ratatui::style::Color) -> String {
+    match color {
+        ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        _ => "#888888".to_owned(),
     }
 }

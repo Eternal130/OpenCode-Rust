@@ -18,3 +18,25 @@
   REF: util/marquee.ts MARQUEE_DELAY=600/MARQUEE_INTERVAL=80 + createMarquee's
   setInterval (session-tabs.tsx:279-369) — a steady interval timer, not redraws.
 - cargo check -p oc-tui PASS. Next: fmt+clippy+oc-tui tests gate, then bug #2 repro.
+
+## Phase B — bug #2 (subagent click-to-switch), fixed
+- ROOT CAUSES (two):
+  1. oc-core engine/mod.rs subagent_plugin wired deps.progress = None —
+     the real server NEVER published session.tool.progress for subagents,
+     so the RUNNING card carried no metadata.sessionID (the TUI's
+     tool_cell_hit NavigateToSession arms on it) — running cards were not
+     clickable; completed cards were (success metadata via tool_execution).
+     Also subagent.rs passed child.id as the tool id (v2 passes call.id).
+     FIX: deps.progress publishes the ephemeral session.tool.progress with
+     {sessionID(parent), assistantMessageID, id(call_id), metadata}.
+     REF: /opt/opencode-ref/packages/core/src/tool/plugin/subagent.ts:201
+     + src/session/runner/step.ts:96.
+  2. The PICKER panel entries had NO pointer surface at all (KM wired only
+     the transcript card). FIX: PickerEntryHits recorded per render
+     (session.rs picker mount geometry), hover moves selection, release
+     navigates. REF: subagents-tab.tsx:221-227.
+- Navigation routing verified: select_tab → navigate → session_root family
+  walk (root tab bookkeeping; route = the child; picker stays live on the
+  child via parentID) — app test picker_entry_rows_hover_select_and_click_navigate.
+- Gates: oc-core engine test (live bus subscription sees progress with
+  id=call_sub_1, metadata.sessionID=child) PASS; oc-tui+oc-core 1668/1668 PASS.

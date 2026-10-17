@@ -24,7 +24,7 @@
 //!    plugin costs its own dispatch, never the host.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
@@ -167,6 +167,10 @@ pub struct Shared {
     /// the IO reader (deadlock rule 1 — inline answer, enqueued
     /// reply), drained between frames by the embedder.
     pub ui_requests: Mutex<VecDeque<UiRequest>>,
+    /// Plugins with a registered `sidebar_content` slot (the v2
+    /// TUI-plugin surface, beta.13 bug 1) — gates the steady refresh
+    /// loop; cleared when the slot stops answering.
+    pub sidebar_slots: Mutex<HashSet<String>>,
     /// The runtime every supervisor task lives on — the async
     /// guest-request path (`session.*`) spawns onto it (deadlock rule
     /// 1: the reader never blocks on a port that calls back in).
@@ -196,6 +200,7 @@ impl Shared {
             dropped_events: AtomicU64::new(0),
             child_pid: AtomicI64::new(-1),
             ui_requests: Mutex::new(VecDeque::new()),
+            sidebar_slots: Mutex::new(HashSet::new()),
             runtime_handle: None,
         }
     }
@@ -318,6 +323,19 @@ impl Shared {
             //    the runtime UI-request queue; answered inline).
             "ui.toast.show" | "ui.sidebar.section" | "ui.footer.hint" | "ui.dialog.open" => {
                 Some(answer_ui_runtime(self, id, method, params))
+            }
+            // -- the v2 TUI-plugin slot surface (beta.13 bug 1): the
+            //    flagship's sidebar_content registration + its
+            //    rerender asks. Both spawn the bounded materialize
+            //    off the reader (deadlock rule 1) and answer inline.
+            "ui.slot.register" | "ui.slot.rerender" => {
+                let plugin_id =
+                    params.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
+                self.materialize_sidebar_slot(&plugin_id);
+                if method == "ui.slot.register" {
+                    self.start_sidebar_refresh_loop(&plugin_id);
+                }
+                Some(protocol::response(id, Value::Null))
             }
             "ui.dialog.register" | "ui.group.rule" | "ui.home.quickaction" => {
                 Some(answer_ui_registration(self, id, method, params))
@@ -780,6 +798,7 @@ impl Supervisor {
             dropped_events: AtomicU64::new(0),
             child_pid: AtomicI64::new(-1),
             ui_requests: Mutex::new(VecDeque::new()),
+            sidebar_slots: Mutex::new(HashSet::new()),
             runtime_handle: Some(tokio::runtime::Handle::current()),
         });
         // Prime plugin statuses before any IO so crash attribution
@@ -867,25 +886,80 @@ async fn load_entry(shared: &Arc<Shared>, entry: &std::path::Path) {
             shared.config.registration_timeout,
         )
         .await;
-    let mut registrations = shared.registrations.write().expect("registrations poisoned");
-    match outcome {
+    // The guard scope: registrations never live across an await
+    // (Send futures — the status update happens, then the block
+    // ends before the TUI-companion load below).
+    let loaded = match &outcome {
         Ok(result) => {
             let plugin_id =
                 result.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
+            let mut registrations = shared.registrations.write().expect("registrations poisoned");
             if let Some(status) = registrations.plugins.get_mut(&key) {
-                status.plugin_id = plugin_id;
+                status.plugin_id = plugin_id.clone();
                 status.state = PluginState::Active;
             }
+            plugin_id
         }
         Err(error) => {
             // A load that merely failed/timed out is contained (no
             // crash strike — that is process-death attribution).
+            let mut registrations = shared.registrations.write().expect("registrations poisoned");
             if let Some(status) = registrations.plugins.get_mut(&key) {
                 status.state = PluginState::Failed(error.to_string());
             }
             eprintln!("opencode plugin-host: load {key} failed: {error}");
+            return;
+        }
+    };
+    // The v2 TUI-plugin companion (beta.13 bug 1): a package with an
+    // `exports["./tui"]` entry (oh-my-opencode-slim's `dist/tui2.js`)
+    // drives its sidebar through `slots.register({slots:
+    // {sidebar_content: render}})` — load it next so the real
+    // plugin's sections reach the native sidebar bridge. A missing
+    // entry or a failed load is contained (the server entry stays
+    // active).
+    if let Some(tui_entry) = probe_tui_entry(entry) {
+        let tui_outcome = shared
+            .request(
+                "load.tui",
+                json!({
+                    "entry": tui_entry.display().to_string(),
+                    "options": options,
+                }),
+                shared.config.registration_timeout,
+            )
+            .await;
+        match tui_outcome {
+            Ok(result) => {
+                let tui_id =
+                    result.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
+                let sidebar = result.get("sidebar").and_then(Value::as_bool).unwrap_or(false);
+                eprintln!(
+                    "opencode plugin-host: tui entry loaded for {loaded} ({tui_id}, sidebar slot: {sidebar})"
+                );
+            }
+            Err(error) => {
+                eprintln!(
+                    "opencode plugin-host: tui entry for {loaded} failed to load (contained): {error}"
+                );
+            }
         }
     }
+}
+
+/// The package's `exports["./tui"]` entry, when the loaded entry
+/// sits inside a package that ships one (the flagship's companion
+/// TUI plugin). Walks up from the entry to the package root
+/// (the nearest `package.json`) and probes the subpath.
+fn probe_tui_entry(entry: &Path) -> Option<PathBuf> {
+    let mut package_root = entry.parent()?;
+    loop {
+        if package_root.join("package.json").is_file() {
+            break;
+        }
+        package_root = package_root.parent()?;
+    }
+    crate::context::install::resolve_subpath_entry(package_root, "./tui").ok()
 }
 
 fn mark_ready(shared: &Arc<Shared>) {
@@ -1030,6 +1104,149 @@ impl Shared {
     pub fn drain_ui_requests(&self) -> Vec<UiRequest> {
         let mut queue = self.ui_requests.lock().expect("ui request queue poisoned");
         queue.drain(..).collect()
+    }
+
+    /// Push the TUI's live route to the guest (the `tui.route`
+    /// notification — the flagship sidebar's render reads it at every
+    /// materialize; `None` is the home route).
+    pub fn notify_tui_route(&self, session: Option<&str>) {
+        let params = match session {
+            Some(session) => json!({ "sessionID": session }),
+            None => json!({ "sessionID": null }),
+        };
+        self.send_notification("tui.route", params);
+    }
+
+    /// Push the live theme view (the flat `TuiThemeCurrent` sidebar
+    /// subset the guest's render consumes).
+    pub fn notify_tui_theme(&self, view: serde_json::Value) {
+        self.send_notification("tui.theme", view);
+    }
+
+    fn send_notification(&self, method: &str, params: Value) {
+        let frame = protocol::notification(method, params);
+        let outbound = self.outbound.read().expect("outbound lock poisoned");
+        let _ = outbound.send(frame);
+    }
+
+    /// Re-materialize one plugin's sidebar slot NOW (host → guest
+    /// `slot.materialize`, hard-timeout-bounded) and land the result
+    /// as a native [`UiRequest::SidebarSection`]. Spawned off the
+    /// reader task (deadlock rule 1); a failure logs and keeps the
+    /// last section (contained like every plugin surface).
+    pub fn materialize_sidebar_slot(self: &Arc<Self>, plugin_id: &str) {
+        let Some(handle) = self.runtime_handle.clone() else { return };
+        let shared = Arc::clone(self);
+        let plugin_id = plugin_id.to_owned();
+        handle.spawn(async move {
+            let outcome = shared
+                .request(
+                    "slot.materialize",
+                    json!({ "pluginId": plugin_id }),
+                    Duration::from_secs(2),
+                )
+                .await;
+            match outcome {
+                Ok(result) => {
+                    let title = result.get("title").and_then(Value::as_str).unwrap_or_default();
+                    let rows: Vec<String> = result
+                        .get("rows")
+                        .and_then(Value::as_array)
+                        .map(|rows| {
+                            rows.iter().filter_map(Value::as_str).map(str::to_owned).collect()
+                        })
+                        .unwrap_or_default();
+                    shared.sidebar_slots.lock().expect("sidebar slots poisoned").insert(plugin_id.clone());
+                    shared
+                        .ui_requests
+                        .lock()
+                        .expect("ui request queue poisoned")
+                        .push_back(UiRequest::SidebarSection {
+                            plugin_id,
+                            title: title.to_owned(),
+                            rows,
+                        });
+                }
+                Err(error) => {
+                    eprintln!("opencode plugin-host: sidebar slot {plugin_id} materialize: {error}");
+                }
+            }
+        });
+    }
+
+    /// The steady sidebar refresh (the flagship's own 1 s renderTimer
+    /// analog): one bounded materialize per second while the slot
+    /// stays registered — keeps agent rows/status fresh between the
+    /// plugin's explicit rerender asks.
+    fn start_sidebar_refresh_loop(self: &Arc<Self>, plugin_id: &str) {
+        {
+            let mut slots = self.sidebar_slots.lock().expect("sidebar slots poisoned");
+            if slots.contains(plugin_id) {
+                return;
+            }
+            slots.insert(plugin_id.to_owned());
+        }
+        let Some(handle) = self.runtime_handle.clone() else { return };
+        let shared = Arc::clone(self);
+        let plugin_id = plugin_id.to_owned();
+        handle.spawn(async move {
+            let mut misses = 0u32;
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let still_registered = shared
+                    .sidebar_slots
+                    .lock()
+                    .expect("sidebar slots poisoned")
+                    .contains(&plugin_id);
+                if !still_registered || shared.shutting_down.load(Ordering::Relaxed) {
+                    return;
+                }
+                let outcome = shared
+                    .request(
+                        "slot.materialize",
+                        json!({ "pluginId": plugin_id }),
+                        Duration::from_secs(2),
+                    )
+                    .await;
+                match outcome {
+                    Ok(result) => {
+                        misses = 0;
+                        let title =
+                            result.get("title").and_then(Value::as_str).unwrap_or_default();
+                        let rows: Vec<String> = result
+                            .get("rows")
+                            .and_then(Value::as_array)
+                            .map(|rows| {
+                                rows.iter().filter_map(Value::as_str).map(str::to_owned).collect()
+                            })
+                            .unwrap_or_default();
+                        shared
+                            .ui_requests
+                            .lock()
+                            .expect("ui request queue poisoned")
+                            .push_back(UiRequest::SidebarSection {
+                                plugin_id: plugin_id.clone(),
+                                title: title.to_owned(),
+                                rows,
+                            });
+                    }
+                    Err(error) => {
+                        misses += 1;
+                        if misses >= 3 {
+                            eprintln!(
+                                "opencode plugin-host: sidebar refresh for {plugin_id} stopped: {error}"
+                            );
+                            shared
+                                .sidebar_slots
+                                .lock()
+                                .expect("sidebar slots poisoned")
+                                .remove(&plugin_id);
+                            return;
+                        }
+                    }
+                }
+            }
+        });
     }
 }
 
