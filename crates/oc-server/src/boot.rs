@@ -163,6 +163,19 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     // `ModelsDev` layer spawns it whenever `fetch` is on — the CLI
     // default); direct engine boots stay hermetic.
     engine_options.catalog_fetch = true;
+    // rust-test-infra (NOT a v2 divergence — v2 has no such switch, and
+    // the production default above stays on): parity/test harnesses that
+    // boot this binary set `OPENCODE_CATALOG_FETCH=0` so the boot-spawned
+    // models-dev refresh loop never runs — an online test box would
+    // otherwise publish `models-dev.refreshed` at a wall-clock-dependent
+    // moment (the offline golden captures never contain the frame: v2
+    // logs-and-ignores a failed fetch and publishes nothing).
+    if let Ok(value) = std::env::var("OPENCODE_CATALOG_FETCH") {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "0" | "false" | "off" | "no" => engine_options.catalog_fetch = false,
+            _ => {}
+        }
+    }
     if let Ok(url) = std::env::var("OPENCODE_MODELS_DEV_URL") {
         engine_options.catalog_url = Some(url);
     }

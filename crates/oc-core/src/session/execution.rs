@@ -811,6 +811,13 @@ impl ExecutionHooks {
         exit: Exit,
         reason: Option<InterruptReason>,
     ) -> Result<(), RunError> {
+        // v2 causal order (GATE4 A.3 / S2): the drain's usage events have
+        // fanned out `session.usage.updated` (projector.ts:776-787 → :94)
+        // BEFORE the coordinator settles — the golden pins
+        // `usage.updated` strictly before `execution.succeeded/failed`.
+        // Await the fan-out chain (serial per session) before ANY terminal
+        // publish so the SSE order is deterministic.
+        crate::session::projector::wait_usage_fanout(session_id).await;
         let outcome = terminal(&exit, reason);
         let result = match outcome {
             Terminal::Succeeded => {

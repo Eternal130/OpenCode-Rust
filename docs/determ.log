@@ -1,0 +1,55 @@
+
+# lane/determ — GATE4 A.3 blocker: m1 SSE event-ordering determinism
+## WIP 1 — recon verified (both signatures confirmed)
+- S1 CONFIRMED: oc-server/src/boot.rs:165 sets `catalog_fetch = true` unconditionally;
+  m1 harness spawns the real server binary (tools/parity/src/rust_server.rs spawn_rust,
+  env_clear + fresh sandbox → empty KV cache → first refresh pass ALWAYS fetches).
+  Box has network (curl models.dev → 200) → fetch succeeds → digest change vs empty
+  cache → RefreshOutcome::Updated → `models-dev.refreshed` published at a
+  scheduler-dependent time (refresh.rs:253-262; publish ONLY on Updated — verified).
+  ALL five goldens contain ZERO `models-dev` frames → any publish = mismatch = S1.
+  The golden env was offline (v2 logs-and-ignores offline fetch → no publish).
+- S2 CONFIRMED: crates/oc-core/src/session/projector.rs:365-388 — the usage fan-out
+  listener (v2 projector.ts:776-787 subscribe → publishSessionUsage → bus.publish
+  UsageUpdated at projector.ts:94) fires on session.step.ended/failed/usage.recorded
+  but `tokio::spawn`s publish_usage_updated DETACHED (projector.rs:379). The drain
+  task then races it to execution.rs:817/:883 terminal publishes (ExecutionHooks::
+  settled, execution.rs:808 — the v2 execution.ts:118-147 `settled` equivalent, run
+  sequentially after the drain at execution.rs:482). v2's observable order (golden
+  prompt_fake_llm group 2): execution.started → usage.updated → execution.succeeded —
+  usage fan-out completes before the terminal because the ref's subscriber fiber
+  finishes publishSessionUsage inside the drain's yield window. Our detached spawn
+  loses that causal edge on a multithreaded runtime → S2 transposition.
+- Fix plan: (S1) boot.rs honors OPENCODE_CATALOG_FETCH=0 (rust-test-infra switch,
+  production default unchanged — NOT a v2 divergence) + spawn_rust sets it → parity
+  boots hermetic. (S2) track per-session in-flight usage fan-outs in the projector;
+  ExecutionHooks::settled awaits them before publishing ANY terminal (restores the
+  v2 causal chain: durable usage event → project → publish usage.updated ⟶ terminal).
+## WIP 2 — fixes implemented, compile clean
+- S1: boot.rs now honors OPENCODE_CATALOG_FETCH=0/false/off/no (rust-test-infra
+  switch; production default `catalog_fetch = true` unchanged — v2 has no such
+  switch, this is harness plumbing, NOT a behavior divergence). spawn_rust
+  (tools/parity/src/rust_server.rs) sets OPENCODE_CATALOG_FETCH=0 before
+  extra_env so every parity-spawned server boot is hermetic (no models-dev
+  fetch loop → no wall-clock-dependent `models-dev.refreshed` publish).
+- S2: projector.rs usage fan-out is now (a) SERIAL per session — chained onto
+  the previous fan-out like v2's single Stream.runForEach subscription — and
+  (b) tracked in-flight via a per-session chain tail (Shared<BoxFuture>) with
+  generation-based self-cleanup; new pub wait_usage_fanout(session_id).
+  ExecutionHooks::settled (execution.rs, the execution.ts:118-147 equivalent)
+  awaits it BEFORE publishing any terminal (succeeded/failed/interrupted) —
+  restores the golden order execution.started → usage.updated → terminal.
+- cargo check -p oc-core -p oc-server -p parity: clean.
+## WIP 3 — flake-signature verification (10x each), zero flakes
+- m1_scenario_prompt_fake_llm 10x: 10/10 pass; captures byte-identical
+  (md5 303d13604e54df9799940036d8d596f5); group 2 pinned
+  execution.started → usage.updated → execution.succeeded (v2/golden order).
+  Contrast: pre-fix captures (12:47, pre-worktree) show TWO distinct hashes —
+  the flaky era. Hermeticity: server stderr EMPTY — no models-dev fetch
+  attempt at all (loop never spawns under OPENCODE_CATALOG_FETCH=0).
+- m1_scenario_config_touch 10x: 10/10 pass; byte-identical captures
+  (md5 4fc9b2bcd28619e6512db0b871ef4aa0).
+- fmt + clippy (-p oc-core -p oc-server -p parity --all-targets): clean.
+- oc-core + oc-server: 1057/1057 nextest pass.
+- Golden disposition: NOT re-pinned — the fixed deterministic order MATCHES
+  the phase-3 goldens exactly (all five scenario tests pass unchanged).
