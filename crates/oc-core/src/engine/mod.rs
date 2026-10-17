@@ -1651,6 +1651,7 @@ fn subagent_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
     InternalPlugin::new("opencode.tool.subagent", move |hooks, ports| {
         let db = inputs.tool_services.db.clone().expect("tool services db");
         let bus = inputs.tool_services.bus.clone().expect("tool services bus");
+        let progress_bus = bus.clone();
         let models = Arc::new(CatalogModelSource { catalog: Arc::clone(&inputs.catalog) });
         let agents = Arc::clone(&inputs.agents);
         let deps = crate::tool::subagent::SubagentDeps {
@@ -1668,7 +1669,31 @@ fn subagent_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
             agents: Arc::new(move || {
                 agents.list().into_iter().filter(|info| !info.hidden).collect()
             }),
-            progress: None,
+            // v2's runner-level `progress: (update) => publisher.progress(
+            // call.id, update)` (step.ts:96): the subagent tool's
+            // `context.progress({sessionID, status: "running"})` lands as
+            // an ephemeral `session.tool.progress` on the bus — the LIVE
+            // metadata the TUI's subagent card click surface reads
+            // (metadata.sessionID arms NavigateToSession while the child
+            // runs; beta.13 bug 2 left this unwired, so a RUNNING card
+            // was not clickable).
+            progress: Some(Arc::new({
+                let bus = progress_bus.clone();
+                move |context: &crate::location::ToolCallContext, metadata| {
+                    let data = serde_json::json!({
+                        "sessionID": context.session_id.as_str(),
+                        "assistantMessageID": context.message_id,
+                        "id": context.call_id,
+                        "metadata": metadata,
+                    });
+                    let bus = bus.clone();
+                    tokio::spawn(async move {
+                        let def = crate::bus::registry::by_type_latest("session.tool.progress")
+                            .unwrap_or_else(|| panic!("no session.tool.progress definition"));
+                        let _ = bus.publish(def, data, crate::bus::PublishOptions::default()).await;
+                    });
+                }
+            })),
             interrupt: None,
         };
         crate::tool::subagent::register(
