@@ -1617,8 +1617,38 @@ impl App {
                         value.chars().map(|ch| u64::from(ch as u32)).fold(0u64, u64::wrapping_add);
                     self.store.worktree_create_from_name(value, seed);
                 }
+                // Lane FINAL: `KeyMethod`'s confirm
+                // (dialog-integration.tsx:489-500) — the key POST
+                // rides the sink; the dialog stays open until the
+                // result event (failure keeps it with the inline
+                // error, success clears).
+                crate::store::DialogKind::IntegrationKey { integration_id, .. } => {
+                    self.store.integration_key_submit(integration_id, value);
+                }
+                // `OAuthCode`'s confirm (dialog-integration.tsx:
+                // 704-718) — `oauth.complete` with the entered code.
+                crate::store::DialogKind::IntegrationCode { integration_id } => {
+                    if let Some(attempt) = self.store.integration_attempt() {
+                        self.store.integration_code_submit(
+                            integration_id,
+                            &attempt.attempt_id,
+                            value,
+                        );
+                    }
+                }
                 _ => {}
             }
+        }
+        // The key/code prompts do NOT auto-close on submit (the
+        // result event resolves them — v2's setError keeps the mount).
+        if matches!(
+            self.store.dialogs().last().map(|entry| &entry.kind),
+            Some(
+                crate::store::DialogKind::IntegrationKey { .. }
+                    | crate::store::DialogKind::IntegrationCode { .. }
+            )
+        ) {
+            return;
         }
         self.store.clear_dialogs();
     }
@@ -3056,11 +3086,98 @@ pub enum LoopRequest {
     /// `DialogPair`'s fetch (SURF-2): `server.info` + `server.pair`.
     Pair,
     /// The MCP toggle (SURF-2): `experimental.mcp.connect/disconnect`.
-    McpToggle { server: String, connect: bool },
+    McpToggle {
+        server: String,
+        connect: bool,
+    },
+    // -- Lane FINAL: the integration connect machine -------------------
+    /// `integration.list` (the `DialogIntegration` open refetch).
+    IntegrationList,
+    /// `integration.connect.key` (+ the connected refetch chain).
+    IntegrationConnectKey {
+        integration_id: String,
+        key: String,
+    },
+    /// `integration.oauth.connect` (code mode returns the attempt for
+    /// entry; auto polls `oauth.status` until settled).
+    IntegrationOauthConnect {
+        integration_id: String,
+        method_id: String,
+    },
+    /// `integration.oauth.complete`.
+    IntegrationOauthComplete {
+        integration_id: String,
+        attempt_id: String,
+        code: String,
+    },
+    /// `integration.command.connect` (spawns + polls `command.status`).
+    IntegrationCommandConnect {
+        integration_id: String,
+        method_id: String,
+    },
+    /// The esc-path cancel (`oauth.cancel` / `command.cancel`).
+    IntegrationCancel {
+        integration_id: String,
+        attempt_id: String,
+        kind: &'static str,
+    },
+    /// `credential.activate` / `credential.remove` (the accounts view).
+    CredentialActivate {
+        credential_id: String,
+    },
+    CredentialRemove {
+        credential_id: String,
+    },
+    // -- Lane FINAL: the session actions --------------------------------
+    /// `session.compact`.
+    SessionCompact {
+        session_id: String,
+        model: Option<crate::store::ModelSelection>,
+    },
+    /// `session.export` (+ the format/destination the result delivers).
+    SessionExport {
+        session_id: String,
+        sanitize: bool,
+        format: String,
+        destination: String,
+    },
+    /// `session.remove`.
+    SessionRemove {
+        session_id: String,
+    },
+    /// `session.background`.
+    SessionBackground {
+        session_id: String,
+    },
+    /// `session.fork`.
+    SessionFork {
+        session_id: String,
+        before: Option<String>,
+    },
+    /// `session.undo`'s chain: interrupt → wait → `session.revert.stage`.
+    SessionRevertStage {
+        session_id: String,
+        message_id: String,
+    },
+    /// `location.reload`.
+    LocationReload,
 }
 
 /// One resolved [`LoopRequest`].
+/// The `oauth.connect` outcome (code mode → the entry prompt; auto →
+/// the pending view while the worker polls).
 #[derive(Debug)]
+pub struct IntegrationOauthOutcome {
+    pub name: String,
+    pub attempt_id: String,
+    pub code_mode: bool,
+    pub url: String,
+    pub instructions: String,
+    pub title: String,
+}
+
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // one arm per fetch result, the loop's event set
 pub enum LoopFetch {
     Transcript {
         session_id: String,
@@ -3078,6 +3195,58 @@ pub enum LoopFetch {
     },
     /// `DialogPair`'s resource result.
     Pair(Result<crate::store::PairState, String>),
+    // -- Lane FINAL -------------------------------------------------
+    /// The `integration.list` rows (pre-shaped).
+    IntegrationList(Result<Vec<crate::store::IntegrationRow>, String>),
+    /// `connect.key` resolved (the integration name rides for the
+    /// toast).
+    IntegrationKeyResult {
+        name: String,
+        result: Result<(), String>,
+    },
+    /// `oauth.connect` resolved (the attempt for code mode; auto mode
+    /// polls and settles through [`LoopFetch::IntegrationSettled`]).
+    IntegrationOauthStarted(Result<IntegrationOauthOutcome, String>),
+    /// A pending command attempt's live output row
+    /// (`CommandPending`'s `setOutput`).
+    IntegrationAttemptOutput {
+        message: String,
+    },
+    /// An oauth/command attempt settled (complete → the connected
+    /// flow; failed/expired → the error).
+    IntegrationSettled {
+        name: String,
+        result: Result<(), String>,
+    },
+    /// The accounts view's credential ops resolved (remove → refetch).
+    CredentialRemoved {
+        result: Result<(), String>,
+    },
+    /// `session.compact` resolved (errors toast).
+    SessionCompactResult {
+        session_id: String,
+        result: Result<(), String>,
+    },
+    /// `session.export` resolved (the transcript + destination).
+    SessionExportResult {
+        session_id: String,
+        format: String,
+        destination: String,
+        result: Result<oc_client::types::SessionTransferData, String>,
+    },
+    /// `session.fork` resolved (the new session id; the seed text
+    /// resolves from the store's transcript at apply time).
+    SessionForkResult {
+        session_id: String,
+        before: Option<String>,
+        result: Result<String, String>,
+    },
+    /// `revert.stage` resolved (errors toast).
+    SessionRevertStageResult {
+        result: Result<(), String>,
+    },
+    /// `location.reload` resolved.
+    LocationReloadResult(Result<(), String>),
 }
 
 /// The fetch worker: requests spawn per-fetch tasks (no head-of-line
@@ -3226,10 +3395,669 @@ pub fn spawn_loop_fetcher(
                         }
                     });
                 }
+                // -- Lane FINAL: the integration connect machine ------
+                LoopRequest::IntegrationList => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .integration()
+                            .list(&oc_client::types::IntegrationListQuery { location: None })
+                            .await
+                            .map(|response| shape_integration_rows(response.data))
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::IntegrationList(result));
+                    });
+                }
+                LoopRequest::IntegrationConnectKey { integration_id, key } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let name = integration_name(&client, &integration_id).await;
+                        let result = client
+                            .integration()
+                            .connect()
+                            .key(
+                                &integration_id,
+                                &oc_client::types::IntegrationConnectKeyQuery { location: None },
+                                &oc_client::types::IntegrationConnectKeyBody {
+                                    key,
+                                    ..Default::default()
+                                },
+                            )
+                            .await
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::IntegrationKeyResult { name, result });
+                    });
+                }
+                LoopRequest::IntegrationOauthConnect { integration_id, method_id } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let name = integration_name(&client, &integration_id).await;
+                        let started = client
+                            .integration()
+                            .oauth()
+                            .connect(
+                                &integration_id,
+                                &oc_client::types::IntegrationOauthConnectQuery { location: None },
+                                &oc_client::types::IntegrationOauthConnectBody {
+                                    method_id,
+                                    ..Default::default()
+                                },
+                            )
+                            .await;
+                        match started {
+                            Ok(response) => {
+                                let attempt = response.data;
+                                let outcome = IntegrationOauthOutcome {
+                                    name: name.clone(),
+                                    attempt_id: attempt.attempt_id.clone(),
+                                    code_mode: matches!(
+                                        attempt.mode,
+                                        oc_client::types::IntegrationAttemptEncodedMode::Code
+                                    ),
+                                    url: attempt.url.clone(),
+                                    instructions: attempt.instructions.clone(),
+                                    title: name.clone(),
+                                };
+                                let _ = tx.send(LoopFetch::IntegrationOauthStarted(Ok(outcome)));
+                                // Auto mode: the worker polls
+                                // `oauth.status` every 500 ms until
+                                // settled (dialog-integration.tsx:625-651).
+                                if matches!(
+                                    attempt.mode,
+                                    oc_client::types::IntegrationAttemptEncodedMode::Auto
+                                ) {
+                                    let result =
+                                        poll_oauth(&client, &integration_id, &attempt.attempt_id)
+                                            .await;
+                                    let _ = tx.send(LoopFetch::IntegrationSettled { name, result });
+                                }
+                            }
+                            Err(error) => {
+                                let _ = tx.send(LoopFetch::IntegrationOauthStarted(Err(
+                                    error.to_string()
+                                )));
+                            }
+                        }
+                    });
+                }
+                LoopRequest::IntegrationOauthComplete { integration_id, attempt_id, code } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let name = integration_name(&client, &integration_id).await;
+                        let result = client
+                            .integration()
+                            .oauth()
+                            .complete(
+                                &integration_id,
+                                &attempt_id,
+                                &oc_client::types::IntegrationOauthCompleteQuery { location: None },
+                                &oc_client::types::IntegrationOauthCompleteBody {
+                                    code: Some(code),
+                                },
+                            )
+                            .await
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::IntegrationKeyResult { name, result });
+                    });
+                }
+                LoopRequest::IntegrationCommandConnect { integration_id, method_id } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let name = integration_name(&client, &integration_id).await;
+                        let started = client
+                            .integration()
+                            .command()
+                            .connect(
+                                &integration_id,
+                                &oc_client::types::IntegrationCommandConnectQuery {
+                                    location: None,
+                                },
+                                &oc_client::types::IntegrationCommandConnectBody {
+                                    method_id,
+                                    ..Default::default()
+                                },
+                            )
+                            .await;
+                        match started {
+                            Ok(response) => {
+                                let attempt = response.data;
+                                let outcome = IntegrationOauthOutcome {
+                                    name: name.clone(),
+                                    attempt_id: attempt.attempt_id.clone(),
+                                    code_mode: false,
+                                    url: String::new(),
+                                    instructions: String::new(),
+                                    title: name.clone(),
+                                };
+                                let _ = tx.send(LoopFetch::IntegrationOauthStarted(Ok(outcome)));
+                                let result = poll_command(
+                                    &client,
+                                    &integration_id,
+                                    &attempt.attempt_id,
+                                    &tx,
+                                )
+                                .await;
+                                let _ = tx.send(LoopFetch::IntegrationSettled { name, result });
+                            }
+                            Err(error) => {
+                                let _ = tx.send(LoopFetch::IntegrationOauthStarted(Err(
+                                    error.to_string()
+                                )));
+                            }
+                        }
+                    });
+                }
+                LoopRequest::IntegrationCancel { integration_id, attempt_id, kind } => {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        let query = |id: &str, attempt: &str| {
+                            (
+                                id.to_owned(),
+                                attempt.to_owned(),
+                                oc_client::types::IntegrationOauthCancelQuery { location: None },
+                                oc_client::types::IntegrationCommandCancelQuery { location: None },
+                            )
+                        };
+                        let (id, attempt, oauth_q, command_q) = query(&integration_id, &attempt_id);
+                        let result = if kind == "command" {
+                            client.integration().command().cancel(&id, &attempt, &command_q).await
+                        } else {
+                            client.integration().oauth().cancel(&id, &attempt, &oauth_q).await
+                        };
+                        if let Err(error) = result {
+                            crate::keymap::log_skip(&format!("integration cancel {id}: {error}"));
+                        }
+                    });
+                }
+                LoopRequest::CredentialActivate { credential_id } => {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = client.credential().activate(&credential_id).await {
+                            crate::keymap::log_skip(&format!("credential activate: {error}"));
+                        }
+                    });
+                }
+                LoopRequest::CredentialRemove { credential_id } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .credential()
+                            .remove(&credential_id)
+                            .await
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::CredentialRemoved { result });
+                    });
+                }
+                // -- Lane FINAL: the session actions -----------------
+                LoopRequest::SessionCompact { session_id, model: _ } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    let id = session_id.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .session()
+                            .compact(&id, &oc_client::types::SessionCompactBody::default())
+                            .await
+                            .map(|_| ())
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::SessionCompactResult { session_id: id, result });
+                    });
+                }
+                LoopRequest::SessionExport { session_id, sanitize, format, destination } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .session()
+                            .export(
+                                &session_id,
+                                &oc_client::types::ExperimentalSessionExportQuery {
+                                    sanitize: if sanitize {
+                                        Some(
+                                            oc_client::types::ExperimentalSessionExportQuerySanitize::True,
+                                        )
+                                    } else {
+                                        None
+                                    },
+                                },
+                            )
+                            .await
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::SessionExportResult {
+                            session_id,
+                            format,
+                            destination,
+                            result,
+                        });
+                    });
+                }
+                LoopRequest::SessionRemove { session_id } => {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        // Failures toast like v2's
+                        // `Failed to delete session: …`
+                        if let Err(error) = client.session().remove(&session_id).await {
+                            crate::keymap::log_skip(&format!(
+                                "session remove {session_id}: {error}"
+                            ));
+                        }
+                    });
+                }
+                LoopRequest::SessionBackground { session_id } => {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = client.session().background(&session_id).await {
+                            crate::keymap::log_skip(&format!(
+                                "session background {session_id}: {error}"
+                            ));
+                        }
+                    });
+                }
+                LoopRequest::SessionFork { session_id, before } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .session()
+                            .fork(
+                                &session_id,
+                                &oc_client::types::SessionForkBody { before: before.clone() },
+                            )
+                            .await
+                            .map(|info| info.id)
+                            .map_err(|error| error.to_string());
+                        let _ =
+                            tx.send(LoopFetch::SessionForkResult { session_id, before, result });
+                    });
+                }
+                LoopRequest::SessionRevertStage { session_id, message_id } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        // `session.undo`'s chain (index.tsx:985-992):
+                        // interrupt → wait → revert.stage. Interrupt
+                        // failures on an idle session are benign (v2
+                        // lets the stage's error surface).
+                        let _ = client
+                            .session()
+                            .interrupt(
+                                &session_id,
+                                &oc_client::types::SessionInterruptQuery { resume: None },
+                            )
+                            .await;
+                        let _ = client.session().wait(&session_id).await;
+                        let result = client
+                            .session()
+                            .revert()
+                            .stage(
+                                &session_id,
+                                &oc_client::types::SessionRevertStageBody {
+                                    message_id: message_id.clone(),
+                                    ..Default::default()
+                                },
+                            )
+                            .await
+                            .map(|_| ())
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::SessionRevertStageResult { result });
+                    });
+                }
+                LoopRequest::LocationReload => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result =
+                            client.location().reload().await.map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::LocationReloadResult(result));
+                    });
+                }
             }
         }
     });
     (req_tx, rx)
+}
+
+/// `integrationOptions` + the row derivation (dialog-integration.
+/// tsx:48-74, 102-128): mcp-sourced first, then the priority map,
+/// then name; `connectMethods` filters env; the footer/gutter inputs
+/// (summary, sign-in-required) pre-computed.
+fn shape_integration_rows(
+    entries: Vec<oc_client::types::IntegrationInfo>,
+) -> Vec<crate::store::IntegrationRow> {
+    const PRIORITY: &[&str] =
+        &["opencode-go", "opencode", "openai", "github-copilot", "anthropic", "google"];
+    let priority = |id: &str| PRIORITY.iter().position(|entry| *entry == id).unwrap_or(99);
+    let mut rows: Vec<crate::store::IntegrationRow> = entries
+        .into_iter()
+        .map(|entry| {
+            let is_mcp = entry
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("source"))
+                .and_then(serde_json::Value::as_str)
+                == Some("mcp");
+            let mut methods: Vec<crate::store::IntegrationMethod> = entry
+                .methods
+                .iter()
+                .filter_map(|method| match method {
+                    oc_client::types::IntegrationMethod::KeyMethod(inner) => {
+                        Some(crate::store::IntegrationMethod {
+                            id: "key".to_owned(),
+                            kind: "key",
+                            label: inner.label.clone().unwrap_or_default(),
+                        })
+                    }
+                    oc_client::types::IntegrationMethod::OAuthMethod(inner) => {
+                        Some(crate::store::IntegrationMethod {
+                            id: inner.id.clone(),
+                            kind: "oauth",
+                            label: inner.label.clone(),
+                        })
+                    }
+                    oc_client::types::IntegrationMethod::CommandMethod(inner) => {
+                        Some(crate::store::IntegrationMethod {
+                            id: inner.id.clone(),
+                            kind: "command",
+                            label: inner.label.clone(),
+                        })
+                    }
+                    oc_client::types::IntegrationMethod::EnvMethod(_) => None,
+                })
+                .collect();
+            // key first (`toSorted(Number(a.type === "key"))`).
+            methods.sort_by_key(|method| u8::from(method.kind != "key"));
+            let mut accounts = Vec::new();
+            let mut summary_parts = Vec::new();
+            let mut sign_in_required = false;
+            for connection in &entry.connections {
+                match connection {
+                    oc_client::types::ConnectionInfo::CredentialInfo(credential) => {
+                        if credential.status.is_some() {
+                            sign_in_required = true;
+                        }
+                        summary_parts.push(credential.label.clone());
+                        accounts.push(crate::store::IntegrationAccount {
+                            id: credential.id.clone(),
+                            label: credential.label.clone(),
+                            sign_in_required: credential.status.is_some(),
+                        });
+                    }
+                    oc_client::types::ConnectionInfo::EnvInfo(env) => {
+                        summary_parts.push(format!("${}", env.name));
+                    }
+                }
+            }
+            crate::store::IntegrationRow {
+                category: if is_mcp {
+                    "MCP"
+                } else if PRIORITY.contains(&entry.id.as_str()) {
+                    "Popular"
+                } else {
+                    "Services"
+                },
+                id: entry.id,
+                name: entry.name,
+                methods,
+                accounts,
+                summary: summary_parts.join(", "),
+                sign_in_required,
+            }
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        let mcp = u8::from(b.category == "MCP").cmp(&u8::from(a.category == "MCP"));
+        mcp.then(priority(&a.id).cmp(&priority(&b.id)))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    rows
+}
+
+/// The integration's display name (the connect toasts + dialog
+/// titles); falls back to the id when the get fails.
+async fn integration_name(client: &oc_client::Client, integration_id: &str) -> String {
+    client
+        .integration()
+        .get(integration_id, &oc_client::types::IntegrationGetQuery { location: None })
+        .await
+        .map_or_else(|_| integration_id.to_owned(), |response| response.data.name)
+}
+
+/// `OAuthAuto`'s poll (dialog-integration.tsx:625-651): 500 ms
+/// `oauth.status` until complete/failed/expired; pending messages
+/// stream back as output rows.
+async fn poll_oauth(
+    client: &oc_client::Client,
+    integration_id: &str,
+    attempt_id: &str,
+) -> Result<(), String> {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        match client
+            .integration()
+            .oauth()
+            .status(
+                integration_id,
+                attempt_id,
+                &oc_client::types::IntegrationOauthStatusQuery { location: None },
+            )
+            .await
+        {
+            Ok(response) => match response.data {
+                oc_client::types::IntegrationAttemptStatus::Pending(_) => {}
+                oc_client::types::IntegrationAttemptStatus::Complete(_) => return Ok(()),
+                oc_client::types::IntegrationAttemptStatus::Failed(failed) => {
+                    return Err(failed.message);
+                }
+                oc_client::types::IntegrationAttemptStatus::Expired(_) => {
+                    return Err("Authorization expired".to_owned());
+                }
+            },
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
+
+/// `CommandPending`'s poll (dialog-integration.tsx:394-424): the same
+/// 500 ms loop over `command.status`.
+async fn poll_command(
+    client: &oc_client::Client,
+    integration_id: &str,
+    attempt_id: &str,
+    tx: &tokio::sync::mpsc::UnboundedSender<LoopFetch>,
+) -> Result<(), String> {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        match client
+            .integration()
+            .command()
+            .status(
+                integration_id,
+                attempt_id,
+                &oc_client::types::IntegrationCommandStatusQuery { location: None },
+            )
+            .await
+        {
+            Ok(response) => match response.data {
+                // The pending message streams back as the view's
+                // live output row (`setOutput(status.message)`).
+                oc_client::types::IntegrationCommandAttemptStatus::Pending(pending) => {
+                    let message = pending.message.unwrap_or_default();
+                    let _ = tx.send(LoopFetch::IntegrationAttemptOutput { message });
+                }
+                oc_client::types::IntegrationCommandAttemptStatus::Complete(_) => return Ok(()),
+                oc_client::types::IntegrationCommandAttemptStatus::Failed(failed) => {
+                    return Err(failed.message);
+                }
+                oc_client::types::IntegrationCommandAttemptStatus::Expired(_) => {
+                    return Err("Authentication expired".to_owned());
+                }
+            },
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
+
+/// The production integration sink: dialog actions become loop-fetcher
+/// requests (fire-and-forget; results arrive as events).
+struct HttpIntegrationSink {
+    tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+}
+
+impl crate::store::IntegrationSink for HttpIntegrationSink {
+    fn list(&self) {
+        let _ = self.tx.send(LoopRequest::IntegrationList);
+    }
+    fn connect_key(&self, integration_id: &str, key: &str) {
+        let _ = self.tx.send(LoopRequest::IntegrationConnectKey {
+            integration_id: integration_id.to_owned(),
+            key: key.to_owned(),
+        });
+    }
+    fn oauth_connect(&self, integration_id: &str, method_id: &str) {
+        let _ = self.tx.send(LoopRequest::IntegrationOauthConnect {
+            integration_id: integration_id.to_owned(),
+            method_id: method_id.to_owned(),
+        });
+    }
+    fn oauth_complete(&self, integration_id: &str, attempt_id: &str, code: &str) {
+        let _ = self.tx.send(LoopRequest::IntegrationOauthComplete {
+            integration_id: integration_id.to_owned(),
+            attempt_id: attempt_id.to_owned(),
+            code: code.to_owned(),
+        });
+    }
+    fn command_connect(&self, integration_id: &str, method_id: &str) {
+        let _ = self.tx.send(LoopRequest::IntegrationCommandConnect {
+            integration_id: integration_id.to_owned(),
+            method_id: method_id.to_owned(),
+        });
+    }
+    fn cancel(&self, integration_id: &str, attempt_id: &str, kind: &'static str) {
+        let _ = self.tx.send(LoopRequest::IntegrationCancel {
+            integration_id: integration_id.to_owned(),
+            attempt_id: attempt_id.to_owned(),
+            kind,
+        });
+    }
+    fn credential_activate(&self, credential_id: &str) {
+        let _ = self
+            .tx
+            .send(LoopRequest::CredentialActivate { credential_id: credential_id.to_owned() });
+    }
+    fn credential_remove(&self, credential_id: &str) {
+        let _ =
+            self.tx.send(LoopRequest::CredentialRemove { credential_id: credential_id.to_owned() });
+    }
+}
+
+/// The production session-action sink.
+struct HttpSessionActionSink {
+    tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+}
+
+impl crate::store::SessionActionSink for HttpSessionActionSink {
+    fn compact(&self, session_id: &str, model: Option<&crate::store::ModelSelection>) {
+        let _ = self.tx.send(LoopRequest::SessionCompact {
+            session_id: session_id.to_owned(),
+            model: model.cloned(),
+        });
+    }
+    fn export(&self, session_id: &str, sanitize: bool, format: &str, destination: &str) {
+        let _ = self.tx.send(LoopRequest::SessionExport {
+            session_id: session_id.to_owned(),
+            sanitize,
+            format: format.to_owned(),
+            destination: destination.to_owned(),
+        });
+    }
+    fn remove(&self, session_id: &str) {
+        let _ = self.tx.send(LoopRequest::SessionRemove { session_id: session_id.to_owned() });
+    }
+    fn background(&self, session_id: &str) {
+        let _ = self.tx.send(LoopRequest::SessionBackground { session_id: session_id.to_owned() });
+    }
+    fn fork(&self, session_id: &str, before: Option<&str>) {
+        let _ = self.tx.send(LoopRequest::SessionFork {
+            session_id: session_id.to_owned(),
+            before: before.map(str::to_owned),
+        });
+    }
+    fn revert_stage(&self, session_id: &str, message_id: &str) {
+        let _ = self.tx.send(LoopRequest::SessionRevertStage {
+            session_id: session_id.to_owned(),
+            message_id: message_id.to_owned(),
+        });
+    }
+    fn location_reload(&self) {
+        let _ = self.tx.send(LoopRequest::LocationReload);
+    }
+}
+
+/// The production session-action sink wiring point (see
+/// [`HttpSessionActionSink`]).
+/// `formatSessionTranscript` (routes/session/index.tsx:3503-3533):
+/// the markdown transcript — the header block (title/id/created/
+/// updated), then `## User` / `## Shell` / `## Assistant` sections
+/// joined by rules; thinking sections only when `thinking`, tool
+/// calls only when `tools`.
+fn format_session_transcript(
+    transfer: &oc_client::types::SessionTransferData,
+    thinking: bool,
+    tools: bool,
+) -> String {
+    let session = &transfer.info;
+    let title = session.title.clone().unwrap_or_else(|| format!("Session {}", session.id));
+    let body: Vec<String> = transfer
+        .messages
+        .iter()
+        .filter_map(|message| match message {
+            oc_client::types::SessionMessageInfo::User(user) => {
+                Some(format!("## User\n\n{}", user.text))
+            }
+            oc_client::types::SessionMessageInfo::Shell(shell) => Some(format!(
+                "## Shell\n\n```\n$ {}\n{}\n```",
+                shell.command,
+                shell.output.as_ref().map_or("", |output| output.output.as_str())
+            )),
+            oc_client::types::SessionMessageInfo::Assistant(assistant) => {
+                let content: Vec<String> = assistant
+                    .content
+                    .iter()
+                    .filter_map(|item| match item {
+                        oc_client::types::SessionMessageAssistantContentItem::Text(text) => {
+                            Some(text.text.clone())
+                        }
+                        oc_client::types::SessionMessageAssistantContentItem::Reasoning(
+                            reasoning,
+                        ) => thinking.then(|| format!("_Thinking:_\n\n{}", reasoning.text)),
+                        oc_client::types::SessionMessageAssistantContentItem::Tool(tool) => {
+                            tools.then(|| format!("**Tool: {}**", tool.name))
+                        }
+                    })
+                    .collect();
+                if content.is_empty() {
+                    None
+                } else {
+                    Some(format!("## Assistant\n\n{}", content.join("\n\n")))
+                }
+            }
+            _ => None,
+        })
+        .collect();
+    format!(
+        "# {title}\n\n**Session ID:** {}\n**Created:** {}\n**Updated:** {}\n\n---\n\n{}\n",
+        session.id,
+        session.time.created,
+        session.time.updated,
+        body.join("\n\n---\n\n")
+    )
 }
 
 /// The F13 production seam: the session-list dialog's open fires a
@@ -3397,6 +4225,21 @@ impl crate::store::ConfigSink for HttpConfigSink {
             object.insert("session".to_owned(), serde_json::Value::Object(session));
         }) {
             eprintln!("opencode tui: session.sidebar persist failed: {error}");
+        }
+    }
+
+    fn update_session_grouping(&self, grouped: bool) {
+        let value = if grouped { "auto" } else { "none" };
+        if let Err(error) = self.service.update(move |draft| {
+            let object = draft.as_object_mut().expect("config drafts are objects");
+            let mut session = object
+                .get("session")
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            session.insert("grouping".to_owned(), serde_json::json!(value));
+            object.insert("session".to_owned(), serde_json::Value::Object(session));
+        }) {
+            eprintln!("opencode tui: session.grouping persist failed: {error}");
         }
     }
 }
@@ -3793,6 +4636,14 @@ pub async fn run_with_size(
         app.store.set_pair_refresh_sink(std::rc::Rc::new(HttpPairRefresh { tx }));
         let tx = loop_fetch_tx.clone();
         app.store.set_mcp_toggle_sink(std::rc::Rc::new(HttpMcpToggle { tx }));
+    }
+    // Lane FINAL: the integration connect machine + the session
+    // actions ride the same loop fetcher.
+    {
+        let tx = loop_fetch_tx.clone();
+        app.store.set_integration_sink(std::rc::Rc::new(HttpIntegrationSink { tx }));
+        let tx = loop_fetch_tx.clone();
+        app.store.set_session_action_sink(std::rc::Rc::new(HttpSessionActionSink { tx }));
     }
     let mut fetched_transcripts: std::collections::HashSet<String> =
         app.store.open_session_ids().into_iter().collect();
@@ -4342,6 +5193,161 @@ pub async fn run_with_size(
                     };
                     app.store.set_pair_state(state);
                 }
+                // -- Lane FINAL: the connect machine's results ------
+                LoopFetch::IntegrationList(result) => match result {
+                    Ok(rows) => {
+                        // `useConnected` rides the same fetch: any
+                        // connection flips the suggested-row marker.
+                        let connected = rows
+                            .iter()
+                            .any(|row| !row.summary.is_empty() || !row.accounts.is_empty());
+                        app.store.set_integration_connected(connected);
+                        app.store.integration_list_loaded(rows);
+                    }
+                    Err(error) => app.store.integration_list_failed(error),
+                },
+                // `connect.key`, `oauth.complete`, and the settled
+                // polls all resolve through the connected flow.
+                LoopFetch::IntegrationKeyResult { name, result }
+                | LoopFetch::IntegrationSettled { name, result } => match result {
+                    Ok(()) => app.store.integration_connected(&name),
+                    Err(error) => app.store.integration_failed(&error),
+                },
+                LoopFetch::IntegrationOauthStarted(result) => match result {
+                    Ok(outcome) => {
+                        let attempt = crate::store::IntegrationAttempt {
+                            integration_id: String::new(),
+                            attempt_id: outcome.attempt_id.clone(),
+                            kind: "oauth",
+                            code_mode: outcome.code_mode,
+                            url: outcome.url,
+                            instructions: outcome.instructions,
+                            title: outcome.title,
+                        };
+                        // The integration id rides the active dialog's
+                        // entry (the flow opened it from there).
+                        let integration_id = app
+                            .store
+                            .dialogs()
+                            .last()
+                            .map(|entry| match &entry.kind {
+                                crate::store::DialogKind::IntegrationMethod { integration_id }
+                                | crate::store::DialogKind::IntegrationAccounts {
+                                    integration_id,
+                                } => integration_id.clone(),
+                                _ => String::new(),
+                            })
+                            .unwrap_or_default();
+                        let mut attempt = attempt;
+                        attempt.integration_id = integration_id;
+                        app.store.integration_oauth_started(attempt);
+                    }
+                    Err(error) => app.store.integration_failed(&error),
+                },
+                LoopFetch::IntegrationAttemptOutput { message } => {
+                    app.store.integration_attempt_output(&message);
+                }
+                LoopFetch::CredentialRemoved { result } => {
+                    if let Err(error) = result {
+                        app.store.toast_show(crate::components::toast::ToastOptions {
+                            message: error,
+                            variant: "error",
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    }
+                    // The accounts list refetches (v2's integration
+                    // sync on credential events).
+                    app.store.integration_sink_list();
+                }
+                // -- Lane FINAL: the session actions' results -------
+                LoopFetch::SessionCompactResult { session_id, result } => {
+                    if let Err(error) = result {
+                        crate::keymap::log_skip(&format!("compact {session_id}: {error}"));
+                        app.store.toast_show(crate::components::toast::ToastOptions {
+                            message: error,
+                            variant: "error",
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    }
+                }
+                LoopFetch::SessionExportResult { session_id, format, destination, result } => {
+                    match result {
+                        Ok(transfer) => {
+                            let content = if format == "json" {
+                                serde_json::to_string_pretty(&transfer)
+                                    .map(|mut text| {
+                                        text.push('\n');
+                                        text
+                                    })
+                                    .unwrap_or_default()
+                            } else {
+                                format_session_transcript(&transfer, false, true)
+                            };
+                            if destination == "clipboard" {
+                                if app.store.clipboard_write(&content).is_ok() {
+                                    app.store.session_export_copied();
+                                } else {
+                                    app.store.session_export_failed();
+                                }
+                            } else {
+                                let extension = if format == "json" { "json" } else { "md" };
+                                let stamp = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map_or(0, |since| since.as_millis());
+                                let path = std::env::temp_dir()
+                                    .join(format!("session-{session_id}-{stamp}.{extension}"));
+                                match std::fs::write(&path, content) {
+                                    Ok(()) => {
+                                        app.store
+                                            .session_export_written(&path.display().to_string());
+                                    }
+                                    Err(_) => app.store.session_export_failed(),
+                                }
+                            }
+                        }
+                        Err(_) => app.store.session_export_failed(),
+                    }
+                }
+                LoopFetch::SessionForkResult { session_id, before, result } => match result {
+                    Ok(new_session_id) => {
+                        // The projected prompt (`projectedPromptInput`
+                        // of the forked-at user message).
+                        let seed = before.as_deref().and_then(|message_id| {
+                            app.store.messages(&session_id).iter().find_map(|message| match message
+                            {
+                                crate::components::message::model::Message::User {
+                                    id,
+                                    text,
+                                    ..
+                                } if id == message_id && !text.is_empty() => Some(text.clone()),
+                                _ => None,
+                            })
+                        });
+                        app.store.session_forked(&new_session_id, seed.as_deref());
+                    }
+                    Err(error) => {
+                        app.store.toast_show(crate::components::toast::ToastOptions {
+                            message: error,
+                            variant: "error",
+                            duration_ms: 5000,
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    }
+                },
+                LoopFetch::SessionRevertStageResult { result } => {
+                    if let Err(error) = result {
+                        app.store.toast_show(crate::components::toast::ToastOptions {
+                            message: error,
+                            variant: "error",
+                            duration_ms: 5000,
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    }
+                }
+                LoopFetch::LocationReloadResult(result) => match result {
+                    Ok(()) => app.store.location_reload_finished(),
+                    Err(error) => app.store.location_reload_failed(&error),
+                },
             }
         }
         // Toast/spinner clock.
@@ -5802,9 +6808,9 @@ fn onboarding_card_pointer_routes_dismiss_and_connect() {
     assert!(
         matches!(
             app.store.dialogs().last().map(|entry| &entry.kind),
-            Some(crate::store::DialogKind::ServerList { command: "provider.connect", .. })
+            Some(crate::store::DialogKind::Integration)
         ),
-        "provider.connect opened the server-list dialog: {:?}",
+        "provider.connect opened the integration list: {:?}",
         app.store.dialogs()
     );
 }
