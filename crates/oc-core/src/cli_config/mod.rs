@@ -105,6 +105,10 @@ pub struct ScrollInfo {
 /// `attention` (`config/index.tsx:110-121`).
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AttentionInfo {
+    /// The terminal BEL on attention transitions (`attention.bell` —
+    /// the TUI's opt-in; v2 never emits BEL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bell: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notifications: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

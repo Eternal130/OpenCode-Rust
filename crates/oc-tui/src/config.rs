@@ -57,6 +57,8 @@ fn attention_from_json(value: Option<&Value>) -> AttentionConfig {
         }
     }
     AttentionConfig {
+        // `attention.bell` — default false: v2 never emits BEL (P11).
+        bell: value.get("bell").and_then(Value::as_bool).unwrap_or(false),
         notifications: value.get("notifications").and_then(Value::as_bool).unwrap_or(false),
         sound: value.get("sound").and_then(Value::as_bool).unwrap_or(false),
         volume,
@@ -150,6 +152,9 @@ pub struct TuiConfig {
     /// native text selection (v2's documented opt-out; see
     /// `crate::mouse_modes`).
     pub mouse: bool,
+    /// The `cursor` section (`cursor.style`/`cursor.blinking` — v2's
+    /// config/index.tsx:263-266; lane TAIL's DECSCUSR/OSC 12 emission).
+    pub cursor: crate::terminal_proto::CursorConfig,
     /// The file this was loaded from (`None` when no config file
     /// exists — all defaults).
     pub path: Option<PathBuf>,
@@ -173,6 +178,7 @@ impl Default for TuiConfig {
             tabs: TabsConfig::default(),
             session_sidebar: crate::components::sidebar::SidebarMode::default(),
             mouse: true,
+            cursor: crate::terminal_proto::CursorConfig::default(),
             path: None,
         }
     }
@@ -202,6 +208,7 @@ impl TuiConfig {
             info.leader.as_ref().and_then(|leader| leader.timeout).filter(|ms| *ms > 0);
         let attention = info.attention.as_ref().map_or_else(AttentionConfig::default, |source| {
             AttentionConfig {
+                bell: source.bell.unwrap_or(false),
                 notifications: source.notifications.unwrap_or(false),
                 sound: source.sound.unwrap_or(false),
                 volume: source
@@ -261,6 +268,17 @@ impl TuiConfig {
         // `mouse` (config/index.tsx:247, default `true` at :311 — v2's
         // `input.mouse ?? true`).
         let mouse = info.mouse.unwrap_or(true);
+        // `cursor` (:263-266, :314): style defaults `block`, blinking
+        // default true.
+        let cursor = info.cursor.as_ref().map_or_else(
+            crate::terminal_proto::CursorConfig::default,
+            |cursor| crate::terminal_proto::CursorConfig {
+                style: crate::terminal_proto::CursorShape::parse(
+                    cursor.style.as_deref().unwrap_or("block"),
+                ),
+                blinking: cursor.blinking.unwrap_or(true),
+            },
+        );
         Self {
             keybinds: info.keybinds.as_ref().map_or(serde_json::Value::Null, |binds| {
                 serde_json::Value::Object(
@@ -274,6 +292,7 @@ impl TuiConfig {
             tabs,
             session_sidebar,
             mouse,
+            cursor,
             path,
         }
     }
@@ -333,6 +352,17 @@ impl TuiConfig {
         // `mouse` (config/index.tsx:247 + :311): absent = true (v2's
         // `input.mouse ?? true`).
         let mouse = value.get("mouse").and_then(Value::as_bool).unwrap_or(true);
+        // `cursor` (config/index.tsx:263-266 + :314): `style` defaults
+        // `block`, `blinking` defaults true (v2 emits `CSI 1 SP q`).
+        let cursor = value.get("cursor").and_then(Value::as_object).map_or_else(
+            crate::terminal_proto::CursorConfig::default,
+            |cursor| crate::terminal_proto::CursorConfig {
+                style: crate::terminal_proto::CursorShape::parse(
+                    cursor.get("style").and_then(Value::as_str).unwrap_or("block"),
+                ),
+                blinking: cursor.get("blinking").and_then(Value::as_bool).unwrap_or(true),
+            },
+        );
         Self {
             keybinds: value.get("keybinds").cloned().unwrap_or(Value::Null),
             theme,
@@ -342,6 +372,7 @@ impl TuiConfig {
             tabs,
             session_sidebar,
             mouse,
+            cursor,
             path,
         }
     }
