@@ -860,6 +860,24 @@ impl HarnessHandle {
         self.write(format!("\x1b[<65;{};{}M", x + 1, y + 1).as_bytes());
     }
 
+    /// SGR 1006 MIDDLE-button PRESS at 0-based cell `(x, y)` (button
+    /// 1 — lane KM's tab close-on-press).
+    pub fn sgr_middle_press(&mut self, x: u16, y: u16) {
+        self.write(format!("\x1b[<1;{};{}M", x + 1, y + 1).as_bytes());
+    }
+
+    /// SGR 1006 RIGHT-button PRESS at 0-based cell `(x, y)` (button
+    /// 2 — lane KM's tab context menu).
+    pub fn sgr_right_press(&mut self, x: u16, y: u16) {
+        self.write(format!("\x1b[<2;{};{}M", x + 1, y + 1).as_bytes());
+    }
+
+    /// SGR 1006 left-button DRAG at 0-based cell `(x, y)` (button 32
+    /// — motion with the left button held, lane KM's tab reorder).
+    pub fn sgr_drag(&mut self, x: u16, y: u16) {
+        self.write(format!("\x1b[<32;{};{}M", x + 1, y + 1).as_bytes());
+    }
+
     /// Bytes fed so far (the cumulative mirror length).
     #[must_use]
     pub fn raw_len(&self) -> usize {
