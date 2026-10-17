@@ -44,7 +44,7 @@ fn e2_tti_baseline_n10() {
         let mut driver = harness.handle();
         let result: Arc<Mutex<Option<(u128, u128, u128)>>> = Arc::new(Mutex::new(None));
         let slot = Arc::clone(&result);
-        let app = {
+        let _app = {
             let url = fake.url.clone();
             std::thread::spawn(move || run_tui(&url, 80, 24, Duration::from_secs(60)))
         };
