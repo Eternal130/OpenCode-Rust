@@ -1,0 +1,7 @@
+# SCAN-CD lane log — first execution of scan-spec v9 (LOCKED), axes C(C1-C22)+D(D1-D11)
+# Worktree: lane/scancd @ 5bcf7f6 | READ-ONLY product code | cargo via dev-gate (OPENCODE_DEV_GATE_DIR=.worktrees/lane-scancd)
+# Ref: /opt/opencode-ref (35 pkgs, I10b pin) | ref binary /root/.opencode/bin/opencode (2.0.25, I2b)
+
+[setup] worktree created at 5bcf7f6 (v9 LOCKED spec HEAD); ref universe verified 35 packages; I2b binary present.
+[c1] EXECUTED-with-artifact. (a) event universe census 51/51 identical (mechanical grep diff, /tmp/opencode/scancd/c1/*-events.txt); (b) live transition-probe: real oc-server :18091 + scripted upstream (I9 mock_llm.py), created/prompt/interrupt/fork/rename/view/delete all driven with real child ids (sse.log/timeline.log); (c) ref end from ref code (execution.ts terminal(), session.ts:174 wake-vs-join, projector.ts:446). FINDINGS: CD-1 HIGH prompt-blocks-until-settlement; CD-2 HIGH fork parent_id hardcoded NULL; CD-3 MED dead message-nav keybinds; CD-4 LOW invented 'session.execution.resumed'; CD-5 INFO parity rows. Named cells: fork=done(live), anchors=server-side-verified(TUI anchor-view not found — carried into C2 check), grouping=session.grouping state exists in store.rs:1723 (renderer inline in components/session.rs), message-navigation=CD-3 dead.
+[c1] note: anchor-view.tsx TUI counterpart absent in ours (no hits); sidebar list cursor consumption unverified this clause — folded into C2 nav-graph leg.
