@@ -1,0 +1,62 @@
+[
+ {
+  "run": 0,
+  "t_session": 5.0,
+  "t_echo": 5.2,
+  "bytes": 10614
+ },
+ {
+  "run": 1,
+  "t_session": 5.0,
+  "t_echo": 5.2,
+  "bytes": 10123
+ },
+ {
+  "run": 2,
+  "t_session": 5.1,
+  "t_echo": 5.3,
+  "bytes": 10654
+ },
+ {
+  "run": 3,
+  "t_session": 5.0,
+  "t_echo": 5.2,
+  "bytes": 10614
+ },
+ {
+  "run": 4,
+  "t_session": 5.0,
+  "t_echo": 5.2,
+  "bytes": 10113
+ },
+ {
+  "run": 5,
+  "t_session": 5.0,
+  "t_echo": 5.2,
+  "bytes": 10614
+ },
+ {
+  "run": 6,
+  "t_session": 5.1,
+  "t_echo": 5.3,
+  "bytes": 10624
+ },
+ {
+  "run": 7,
+  "t_session": 5.1,
+  "t_echo": 5.3,
+  "bytes": 11110
+ },
+ {
+  "run": 8,
+  "t_session": 5.1,
+  "t_echo": 5.3,
+  "bytes": 11110
+ },
+ {
+  "run": 9,
+  "t_session": 5.1,
+  "t_echo": 5.3,
+  "bytes": 10123
+ }
+]

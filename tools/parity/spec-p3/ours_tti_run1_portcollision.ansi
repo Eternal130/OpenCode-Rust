@@ -1,0 +1,3 @@
+Failed to start server: exited with exit status: 1
+opencode-rust: web ui: 3058 files (ref e7a34f09bfd9134dfade5a8ddb843f7030bc9a69)
+Error: Address already in use (os error 98)
