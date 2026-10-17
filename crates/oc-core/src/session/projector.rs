@@ -37,6 +37,7 @@ use crate::session::inbox::{
 use crate::session::message_updater::{
     decode_row, Adapter, PreviousLocation, SessionMessageUpdater,
 };
+use futures::FutureExt as _;
 
 /// Marker for `SessionAlreadyProjected` defects.
 pub const ALREADY_PROJECTED: &str = "\u{0}session-already-projected\u{1}";
@@ -361,6 +362,17 @@ pub fn install_projectors(bus: &Bus) {
 
     // UsageUpdated fan-out (projector.ts:776-787): after step terminals and
     // usage records commit, publish the row totals.
+    //
+    // Ordering contract (GATE4 A.3 / S2): v2's subscription is one serial
+    // `Stream.runForEach` fiber, and its cooperative runtime completes
+    // `publishSessionUsage` (projector.ts:94 `bus.publish(UsageUpdated)`)
+    // inside the drain's yield window — strictly BEFORE the coordinator's
+    // `settled` publishes the terminal (`session.execution.succeeded` /
+    // `.failed` / `.interrupted`, execution.ts:118-147). The port restores
+    // that causal edge on a multithreaded runtime: each fan-out is chained
+    // onto the session's previous fan-out (serial, like runForEach) and
+    // tracked as in-flight; `ExecutionHooks::settled` awaits
+    // [`wait_usage_fanout`] before publishing any terminal.
     let fanout_bus = bus.clone();
     let usage_listener: Listener = Arc::new(move |event: &crate::bus::Event| {
         let carries_usage = match event.type_.as_str() {
@@ -376,16 +388,97 @@ pub fn install_projectors(bus: &Bus) {
         let bus = fanout_bus.clone();
         let session_id = event.data["sessionID"].as_str().unwrap_or_default().to_string();
         let event_id = event.id.clone();
-        tokio::spawn(async move {
-            if let Err(err) = publish_usage_updated(&bus, &session_id).await {
-                eprintln!(
-                    "[session] usage fan-out failed for {session_id} (event {event_id}): {err}"
-                );
+        let fanout_session = session_id.clone();
+        enqueue_usage_fanout(&session_id, move || {
+            async move {
+                if let Err(err) = publish_usage_updated(&bus, &fanout_session).await {
+                    eprintln!(
+                        "[session] usage fan-out failed for {fanout_session} (event {event_id}): {err}"
+                    );
+                }
             }
+            .boxed()
         });
         Ok(())
     });
     bus.listen(usage_listener).detach();
+}
+
+// ---------------------------------------------------------------------------
+// Usage fan-out serialization + in-flight tracking
+// ---------------------------------------------------------------------------
+
+/// A session's fan-out chain segment: `prev.await → publish → cleanup`.
+type UsageFanoutTail = futures::future::Shared<futures::future::BoxFuture<'static, ()>>;
+
+/// The session's current chain tail plus its generation (the cleanup
+/// contract: only the newest segment may remove the entry, and only when
+/// it has completed).
+struct UsageFanoutSlot {
+    generation: u64,
+    tail: UsageFanoutTail,
+}
+
+/// Per-session chain of pending usage fan-outs (global: ids are engine-wide
+/// UUIDs; deterministic test ids are unique per bus in practice, and a
+/// cross-bus await only ever waits on a driven, completing chain).
+fn usage_fanout_chains(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, UsageFanoutSlot>> {
+    static CHAINS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, UsageFanoutSlot>>,
+    > = std::sync::OnceLock::new();
+    CHAINS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Chain one fan-out job onto the session's previous fan-out (serial per
+/// session, v2's single `runForEach` stream) and drive it on its own task.
+fn enqueue_usage_fanout(
+    session_id: &str,
+    make: impl FnOnce() -> futures::future::BoxFuture<'static, ()> + Send + 'static,
+) {
+    let mut chains =
+        usage_fanout_chains().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let prev = chains.get(session_id).map(|slot| slot.tail.clone());
+    let generation = chains.get(session_id).map_or(0, |slot| slot.generation + 1);
+    let sid = session_id.to_string();
+    let tail = async move {
+        // Serial per session: the previous fan-out's publish (SSE order)
+        // completes before this one starts.
+        if let Some(prev) = prev {
+            prev.await;
+        }
+        make().await;
+        // Self-cleanup: a completed NEWEST segment removes the entry so
+        // idle sessions hold no state; if a newer segment replaced the
+        // slot meanwhile, that chain cleans up after itself instead.
+        let mut chains =
+            usage_fanout_chains().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if chains.get(&sid).is_some_and(|slot| slot.generation == generation) {
+            chains.remove(&sid);
+        }
+    }
+    .boxed()
+    .shared();
+    chains.insert(session_id.to_string(), UsageFanoutSlot { generation, tail: tail.clone() });
+    // The chain is driven by its own task (a waiter-only chain would never
+    // progress when no terminal settles — e.g. title-generation usage
+    // records publish outside any execution).
+    tokio::spawn(tail);
+}
+
+/// Await the completion of every usage fan-out enqueued so far for
+/// `session_id` (v2: the drain's subscriber has finished
+/// `publishSessionUsage` before `settled` publishes the terminal). No-op
+/// when none are in flight.
+pub async fn wait_usage_fanout(session_id: &str) {
+    let tail = usage_fanout_chains()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(session_id)
+        .map(|slot| slot.tail.clone());
+    if let Some(tail) = tail {
+        tail.await;
+    }
 }
 
 fn install(
