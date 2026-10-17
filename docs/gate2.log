@@ -1,0 +1,38 @@
+# LANE GATE2 — beta.13 consolidated acceptance evidence (re-run)
+# Supersedes: lane/gate f4ffc48 (NO-GO at Phase A.2 — clippy debt in F-1 test code),
+#   fixed on main by fd78b23 "fix(lint): clear the F-1 test-code clippy debt".
+# Worktree: .worktrees/lane-gate2 (branch lane/gate2, base fd78b23)
+# Runner: OPENCODE_DEV_GATE_DIR=/opt/opencode-rust/.worktrees/lane-gate2 /opt/opencode-rust/tools/dev-gate.sh
+# Protocol: ONE phase/script per call; append-only; WIP-commit after each phase; ≤45 min/call
+2026-10-17T12:05Z lane start; worktree created (chowned eternal130), no orphaned rig procs found (pgrep clean), load 1.37
+2026-10-17T12:07Z [A1] cargo fmt --all -- --check: PASS (0 diffs, exit 0)
+2026-10-17T12:09Z [A2] cargo clippy --workspace --all-targets --locked -- -D warnings: PASS (exit 0, 1m11s; the 6 F-1 test-code lints from lane/gate A.2 are cleared by fd78b23). Transcript: /tmp/opencode/gate2-clippy.log
+2026-10-17T12:16Z [A3] cargo nextest run --workspace --locked --no-fail-fast: **FAIL** — exit 100, 3322 tests: 3320 passed (2 slow, 1 flaky, 1 leaky), 2 failed, 12 skipped. Transcript: /tmp/opencode/gate2-nextest.log.
+  F1 (DETERMINISTIC, 2/2 tries identical): parity tui_frame::tests::golden_corpus_on_disk_verifies_against_manifest
+      "vscroll-top.w80.ansi: length 5026 != manifest 5027" + same for vscroll-middle (sha mismatch both).
+      ROOT CAUSE: 1a43069 (tail(4) theme tokens) re-pinned the 2 vscroll .ansi goldens (PARITY_UPDATE=1, jump-to-latest fg cell)
+      but did NOT regenerate goldens/tui-frames/manifest.json — the on-disk corpus is self-inconsistent at fd78b23.
+      tail(4) lane gate was `nextest -p oc-tui 805/805` which EXCLUDES the parity crate's manifest test (docs/tail.log item: "the two
+      vscroll goldens re-pinned (PARITY_UPDATE=1 — one fg cell each)"; no manifest mention).
+      FIX: regenerate manifest.json for the 2 re-pinned blobs (verify_goldens manifest writer / PARITY_UPDATE=1 export flow).
+  F2 (DETERMINISTIC, 4/4 attempts identical incl. standalone rerun): parity::rust_scenarios m1_scenario_prompt_fake_llm
+      "sequence divergence in group golden group #2 at frame 1: reference=session.usage.updated port=session.status{busy}".
+      Today's live capture (m1-artifacts/pid-1562970) vs pinned golden (goldens/scenarios/prompt_fake_llm.json, phase-3 vintage 0cf3779):
+      capture group#2 = [execution.started, session.status(busy), usage.updated, execution.succeeded, session.status(idle), session.idle]
+      + group#3 gains models-dev.refreshed; golden has none of the 4 extra frames.
+      ROOT CAUSE: 239a990 (BE-1 lane, 10-16 20:19 — POST-beta.12 tag fe1ebb7 10-16 04:44) "publish the 14 missing public event types
+      at v2 emission points" added live session.status busy/idle + session.idle (oc-core session/execution.rs:819-833) and
+      models-dev.refreshed (provider_catalog/refresh.rs). The pinned m1 golden predates them. skips_for(prompt_fake_llm) has been
+      EMPTY since gate-6 (b2478bd "prompt_fake_llm now ZERO skips"), so the comparison is exact and fails structurally.
+      NOT the dogfood2 timing flake: that framing (docs/dogfood2.log 9C) predates 239a990; today 4/4 attempts fail with one identical
+      structural signature (extra-frame insertion), zero variance across tries.
+      BE-1 lane gate was crate-scoped (oc-server 193/193, oc-core, oc-cli — docs/be1.log Phase 4); the parity m1 replay was not in it.
+      FIX (for the fix lane to adjudicate): EITHER re-capture the golden against the live reference IF the v2.0.24 reference emits these
+      frames at prompt time (scenarios.rs twin, PARITY_UPDATE=1), OR re-introduce a documented skip-list entry for the port's
+      derived-union frames (execution.rs:823 comment: the ref CLIENT derives the union — client/src/solid/data.ts:1009-1037 — so the
+      reference server may legitimately never publish them), OR gate the emission. Evidence in m1-artifacts/pid-1562970.
+  Also-observed (known classes, NOT blockers): m1_scenario_location_reload TRY1-FAIL/TRY2-PASS (nextest marked flaky, passes on retry —
+      the class dogfood2 registered); 1 leaky + 2 slow = informational nextest tags.
+  PROTOCOL: Phase A failure => STOP. A.4 (pty profile), A.5 (release build), A.6 (release frame budgets) NOT RUN; Phase B (26-script
+  sweep-3) NOT RUN. No fixes applied by this lane.
+2026-10-17T12:20Z lane end: STOP at A3 per protocol; docs/final-sweep-3.md written (NO-GO verdict + fix list + provenance); no fixes applied; no stray processes left (pgrep + port sweep clean)
