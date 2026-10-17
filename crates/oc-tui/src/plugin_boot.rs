@@ -71,6 +71,10 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// The bound on one dialog materialization (host-side hard timeout).
 const DIALOG_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The bound on one plugin sidebar row click (the guest runs the
+/// plugin's `onMouseUp` synchronously — same hard bound family).
+const CLICK_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// The Send+Sync boot outcome (crosses the `spawn_blocking` boundary;
 /// the [`TuiPluginRuntime`] wrapper adds the loop-thread-only session
 /// cell).
@@ -87,7 +91,9 @@ pub struct TuiPluginRuntime {
     /// refreshes it each pump).
     pub current_session: Rc<RefCell<Option<String>>>,
     /// The last route pushed to the guest (the v2 TUI-plugin surface
-    /// — change-gated `tui.route` notifications).
+    /// — change-gated `tui.route` notifications). The outer Option is
+    /// "nothing pushed yet"; the inner is "home vs session".
+    #[allow(clippy::option_option)]
     pushed_route: Rc<RefCell<Option<Option<String>>>>,
     /// The last theme fingerprint pushed (name + mode).
     pushed_theme: Rc<RefCell<Option<(String, bool)>>>,
@@ -246,6 +252,19 @@ impl TuiPluginRuntime {
             current: Rc::clone(&self.current_session),
         }));
         store.set_plugin_dialog_source(Rc::new(HostDialogSource { host: Arc::clone(host) }));
+        // The plugin sections' click sink (beta.13 bug 2's
+        // plugin-world path): a row release runs the plugin's own
+        // `onMouseUp` through the host's `slot.click`; the plugin's
+        // navigation flows back as a NavigateToSession UI request the
+        // next drain applies.
+        {
+            let host = Arc::clone(host);
+            store.set_plugin_section_click_sink(Some(Rc::new(
+                move |plugin_id: &str, row: usize| {
+                    let _ = host.click_sidebar_row(plugin_id, row, CLICK_TIMEOUT);
+                },
+            )));
+        }
         let snapshot = host.registrations();
         project_registrations(store, &snapshot)
     }
@@ -275,8 +294,11 @@ impl TuiPluginRuntime {
                     "accent": hex_color(styles.accent),
                     "background": hex_color(styles.background),
                     "borderActive": hex_color(styles.border),
-                    "text": styles.text.fg.map(hex_color).unwrap_or_else(|| "#eeeeee".into()),
-                    "textMuted": styles.text_muted.fg.map(hex_color).unwrap_or_else(|| "#888888".into()),
+                    "text": styles.text.fg.map_or_else(|| "#eeeeee".into(), hex_color),
+                    "textMuted": styles
+                        .text_muted
+                        .fg
+                        .map_or_else(|| "#888888".into(), hex_color),
                 }));
             }
         }
@@ -531,8 +553,13 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
             variant: variant.clone(),
             duration_ms: *duration_ms,
         },
-        UiRequest::SidebarSection { title, rows, .. } => {
-            PluginUiEvent::SidebarSection { title: title.clone(), rows: rows.clone() }
+        UiRequest::SidebarSection { title, rows, clickable, .. } => PluginUiEvent::SidebarSection {
+            title: title.clone(),
+            rows: rows.clone(),
+            clickable: clickable.clone(),
+        },
+        UiRequest::NavigateToSession { session_id } => {
+            PluginUiEvent::NavigateToSession { session_id: session_id.clone() }
         }
         UiRequest::FooterHint { text, .. } => PluginUiEvent::FooterHint { text: text.clone() },
         UiRequest::DialogOpen { spec, .. } => PluginUiEvent::DialogOpen {
@@ -670,6 +697,15 @@ impl SessionPort for HttpSessionPort {
     }
 }
 
+/// One theme token as a `#rrggbb` string (the v2 TUI-plugin theme
+/// view the guest's sidebar render consumes).
+fn hex_color(color: ratatui::style::Color) -> String {
+    match color {
+        ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        _ => "#888888".to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -762,14 +798,5 @@ mod tests {
         let ids: Vec<&str> =
             agents.iter().filter_map(|agent| agent.get("id").and_then(Value::as_str)).collect();
         assert_eq!(ids, ["build", "general", "compaction", "title"]);
-    }
-}
-
-/// One theme token as a `#rrggbb` string (the v2 TUI-plugin theme
-/// view the guest's sidebar render consumes).
-fn hex_color(color: ratatui::style::Color) -> String {
-    match color {
-        ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
-        _ => "#888888".to_owned(),
     }
 }

@@ -1381,6 +1381,13 @@ function treeLines(node) {
   return childResults.flat();
 }
 
+/** Does this node (or the box that produced a line) carry a pointer
+ *  activate handler? `decorateInteractiveRow` sets `onMouseUp` on the
+ *  ROW box itself (tui2.js:30462-30467). */
+function rowActivateHandler(node) {
+  return typeof node?.props?.onMouseUp === "function" ? node.props.onMouseUp : undefined;
+}
+
 /** `load.tui` — import the package's ./tui export and drive its
  *  `tui(api)` with the bridge's TuiApi shape. */
 async function handleLoadTui({ entry, options }) {
@@ -1524,7 +1531,11 @@ function registerSidebarSlot(pluginId, render) {
 }
 
 /** `slot.materialize` — run the plugin's render function NOW and
- *  flatten the tree into the native section shape. */
+ *  flatten the tree into the native section shape. Rows that carry
+ *  the plugin's own `onMouseUp` (v2 `decorateInteractiveRow` — the
+ *  sidebar's session/preset targets, tui2.js:30462-30467) are marked
+ *  clickable and their handlers stashed per row index for
+ *  `slot.click`. */
 async function handleSlotMaterialize({ pluginId }) {
   const slot = sidebarSlots.get(pluginId);
   if (!slot || typeof slot.render !== "function") {
@@ -1534,10 +1545,43 @@ async function handleSlotMaterialize({ pluginId }) {
   const lines = treeLines(tree)
     .map((line) => line.replace(/\s+$/, ""))
     .filter((line) => line.trim() !== "");
+  // The rows' activate handlers: walk the root's direct children (the
+  // row boxes); a child's lines inherit its handler (one line per row
+  // in this tree). flatChildren is index-aligned with `lines` — the
+  // rows start one past the title.
+  const handlers = new Map();
+  const flatChildren = [];
+  for (const child of tree?.children ?? []) {
+    const handler = rowActivateHandler(child);
+    const childLines = treeLines(child)
+      .map((line) => line.replace(/\s+$/, ""))
+      .filter((line) => line.trim() !== "");
+    for (const _line of childLines) {
+      flatChildren.push(handler);
+    }
+  }
+  const bodyRows = lines.slice(1);
+  bodyRows.forEach((_text, index) => {
+    const handler = flatChildren[index + 1];
+    if (handler) handlers.set(index, handler);
+  });
+  slot.clickHandlers = handlers;
   return {
     title: lines.length > 0 ? lines[0] : "",
-    rows: lines.slice(1),
+    rows: bodyRows.map((text, index) => ({ text, click: handlers.has(index) })),
   };
+}
+
+/** `slot.click` — run one row's stashed activate handler (the click
+ *  side of the bridge: the handler navigates / opens what the plugin
+ *  wants; navigation flows back through `tui.route.navigate`). */
+async function handleSlotClick({ pluginId, row }) {
+  const slot = sidebarSlots.get(pluginId);
+  if (!slot) throw new Error(`${pluginId}: no sidebar_content slot registered`);
+  const handler = slot.clickHandlers?.get(Number(row));
+  if (typeof handler !== "function") return { ok: false };
+  handler();
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -1557,6 +1601,7 @@ const METHODS = {
   "codemode.evaluate": handleCodemodeEvaluate,
   "dialog.materialize": handleDialogMaterialize,
   "slot.materialize": handleSlotMaterialize,
+  "slot.click": handleSlotClick,
   scan: async ({ entry }) => ({ digests: await scanDigests(entry) }),
 };
 

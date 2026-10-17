@@ -675,6 +675,19 @@ impl App {
                             return;
                         }
                     }
+                    // The plugin sections' clickable rows (beta.13
+                    // bug 2's plugin-world path — the omo-slim
+                    // sidebar's session/preset targets): the release
+                    // runs the plugin's own onMouseUp through the host
+                    // bridge; its navigate ask lands on the next
+                    // drain.
+                    for hit in &self.store.plugin_section_hits().rows {
+                        if hit.rect.contains(col, row) {
+                            self.store.plugin_section_click(&hit.plugin_id, hit.row);
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
                 }
                 // #33 — the footer location label opens the Working
                 // directory select on release

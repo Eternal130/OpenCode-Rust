@@ -11,7 +11,7 @@
 //!   `ctx.ui.sidebar.setSection` seam is OUR invention and the real
 //!   plugin never calls it);
 //! * each materialize (`slot.materialize`) runs the plugin's render
-//!   function over its own OpenTUI element records and flattens the
+//!   function over its own `OpenTUI` element records and flattens the
 //!   tree into the native `{title, rows}` section — the supervisor
 //!   lands it as a `UiRequest::SidebarSection` on the UI-request
 //!   queue (registered + rerender + the 1 s steady refresh).
@@ -75,7 +75,7 @@ fn stage(name: &str) -> Option<(PathBuf, PathBuf)> {
     let deps_root = std::env::var("OC_OMOS_DEPS")
         .map(PathBuf::from)
         .ok()
-        .or_else(|| source.parent().map(|parent| parent.to_path_buf()));
+        .or_else(|| source.parent().map(std::path::Path::to_path_buf));
     if let Some(parent) = deps_root {
         for dep in ["jsonc-parser", "zod", "solid-js", "lru-cache", "semver"] {
             let dep_dir = parent.join(dep);
@@ -152,7 +152,7 @@ fn flagship_sidebar_section_materializes_from_the_real_plugin() {
     let mut section: Option<(String, Vec<String>)> = None;
     while std::time::Instant::now() < deadline {
         for request in host.drain_ui_requests() {
-            if let UiRequest::SidebarSection { plugin_id, title, rows } = request {
+            if let UiRequest::SidebarSection { plugin_id, title, rows, .. } = request {
                 if plugin_id.ends_with(":tui") {
                     section = Some((title, rows));
                 }
@@ -165,10 +165,7 @@ fn flagship_sidebar_section_materializes_from_the_real_plugin() {
     }
     let (title, rows) = section.expect("the real plugin's sidebar section landed");
     assert!(title.contains("OMO-Slim"), "the header row renders: {title:?}");
-    assert!(
-        rows.iter().any(|row| row.contains("explorer")),
-        "the agent roster renders: {rows:?}"
-    );
+    assert!(rows.iter().any(|row| row.contains("explorer")), "the agent roster renders: {rows:?}");
     // Every row is a sane single-line label (the tree walk flattened,
     // not interleaved).
     for row in &rows {

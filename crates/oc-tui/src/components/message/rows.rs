@@ -1125,9 +1125,10 @@ mod tests {
         assert_eq!(frame.cell(0, 3).fg, expected, "expanded header uses the full warning color");
     }
 
-    /// The expanded thought body: a `┃` left border in
-    /// `decrease(raised.base)` (ThoughtEntry's borderColor,
-    /// group-view.tsx:385-386 — NOT text.muted), `text.muted` body —
+    /// The expanded thought body: a ┃ left border in
+    /// `decrease(raised.base)` (the `ThoughtEntry` borderColor,
+    /// group-view.tsx:385-386 — NOT the muted token), a `text.muted`
+    /// body —
     /// the leading blank margin comes from the LIST's per-row
     /// marginTop (rendered once, not inside the row).
     #[test]

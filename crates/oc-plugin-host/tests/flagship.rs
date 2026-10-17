@@ -94,8 +94,14 @@ fn stage(name: &str) -> Option<(PathBuf, PathBuf)> {
         std::fs::copy(source.join(file), package.join(file)).ok();
     }
     // jsonc-parser: imported at the top level of the bundled server
-    // entry (the build externalizes it).
-    if let Some(dep) = source.parent().map(|parent| parent.join("jsonc-parser")) {
+    // entry (the build externalizes it). The live install's node_modules
+    // or OC_OMOS_DEPS (the readable staging root when the gate user
+    // cannot read /root).
+    let deps_root = std::env::var("OC_OMOS_DEPS")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(|| source.parent().map(std::path::Path::to_path_buf));
+    if let Some(dep) = deps_root.map(|parent| parent.join("jsonc-parser")) {
         if dep.is_dir() {
             copy_dir(&dep, &node_modules.join("jsonc-parser"));
         }
