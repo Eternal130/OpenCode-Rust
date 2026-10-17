@@ -1,0 +1,83 @@
+=== LANE FINAL — stub-dispatch + dead-session-command lane (branch lane/final, base 9a0aca5) ===
+Plan: (1) survey v2 ref for each of the 7 stub dispatches + 6 dead session cmds; (2) wire provider.connect to a real integration-list -> method -> key/code dialog over BE-3 routes; (3) wire/delist remaining 6 per v2; (4) wire 6 session commands (compact/undo/redo/delete/export/background) per v2; (5) should-fixes if window allows.
+WIP1: worktree created; spec read; v2 ref located at /opt/opencode-ref/packages/tui. Surveyed v2 behaviors: provider.connect=DialogIntegration(app.tsx:946-958); opencode.settings=DialogConfig(app.tsx:959-968); location.reload=client.location.reload toast flow(app.tsx:1019-1034); docs.open=openUrl(docs)(app.tsx:1084-1092); open.menu=DialogOpen(app.tsx:763-774); session.share=unavailable() toast "Sharing is not implemented for V2 sessions yet"(session/index.tsx:892-897,676-679); session.fork=DialogFork(index.tsx:928-944); compact=data.session.compact+clear(945-968); undo=last user msg -> interrupt+wait+revert.stage + prompt seed(969-1000); redo=revert.clear(1001-1017); export=DialogExportOptions->session.export->clipboard/tmp file(1201-1244); background=session.background POST palette:undefined(1245-1254); delete=NOT a palette cmd in v2 — dialog-session-list.tsx:255-279 two-press ctrl+d action -> session.remove.
+WIP2: store.rs phase done — DialogKind +10 variants (Integration/Accounts/Method/Key/Code/Pending/Settings/ForkPicker/SessionExport/ExportResult); IntegrationRow/Method/Account/ListState/Attempt types; IntegrationSink + SessionActionSink traits (+No/Recording impls); ConfigSink.update_session_grouping; store fields + init; methods: connect machine (open/select/methods/key/code/accounts/delete/connected/failed/cancel), session compact/undo/redo/background/fork(+result)/export(+copied/written/failed), sessions-dialog two-press delete, location.reload(+finished/failed).
+WIP3: command_palette.rs + dialog.rs + app.rs phases drafted — props for 10 new kinds; dispatch arms (provider.connect/open.menu/settings/share/fork/reload/docs.open + compact/undo/redo/export/background); palette: session.export added, session.redo dynamic enable-gate; dialog.rs: prompt-kind helper, pending o/c keys, settings left/right, sessions+accounts two-press delete, esc-cancel attempts, submission routing; app.rs: LoopRequest/Fetch arms (integration list/key/oauth/code/command+polls/cancel/credential, session compact/export/remove/background/fork/revert-stage/reload), sinks wired, HttpConfigSink grouping, transcript formatter ported. First compile next.
+
+=== LANE FINAL — implementation record ===
+
+## Wire-vs-delist decision table (v2 citations from /opt/opencode-ref/packages/tui)
+
+| Command | v2 behavior (file:line) | Decision | Port surface |
+|---|---|---|---|
+| provider.connect | DialogIntegration over integration.list; onConnected → models dialog (app.tsx:946-958; component/dialog-integration.tsx:76-146) | WIRE | Integration list → (accounts | method choice) → key prompt / OAuth-code prompt / OAuth-auto+command pending view (o=open URL, c=copy); connect.key/oauth.complete POSTs; "Connected {name}" toast; list+connected refetch. CTA (onboarding card) routes through the same dispatch arm. |
+| open.menu | DialogOpen: recent sessions + projects (app.tsx:763-774; component/dialog-open.tsx) | WIRE (session half; project half registered) | Large "Open session or project" over the session.list routing (navigate + open tab) + the open refetch. v2's project/worktree drill-down + cross-project switching is the registered remainder (the port is location-bound: select_worktree ignores the directory — pre-existing). |
+| opencode.settings | DialogConfig settings rows, enter/←/→ cycle values via config.update (component/dialog-config.tsx:330-418) | WIRE (subset) | Settings dialog with the FOUR rows this build reads AND persists: Theme (registry cycle + write), Color mode (system/dark/light), Sidebar (hide/auto), Tool grouping (auto/none — closes should-fix #5's grouping half). v2's remaining rows (animations, scrollbar, thinking, markdown, verbosity, tps, image_preview, new_location, permissions, tabs.*, diffs.*, scroll.*, mouse, prompt.*, leader.timeout, attention.*, terminal.*, debug) are rows for state our TUI does not model — omitted rather than shown-not-working (the thinking/scrollbar/verbosity toggles themselves are pre-existing gaps outside this lane's blockers). |
+| session.share | v2 ITSELF is the unavailable toast: run: () => unavailable("Sharing") → "Sharing is not implemented for V2 sessions yet" (routes/session/index.tsx:892-897, 676-679) | MIRROR v2 exactly | Same toast, error variant, 5 s; row stays palette-listed (v2 lists it — suggested on session routes). |
+| session.fork | DialogFork: "Full session" + reversed user messages; select → session.fork(before) → navigate + projected prompt + "Forked session" toast (routes/session/dialog-fork.tsx:29-82) | WIRE | ForkPicker dialog (Large) over the FIXED fork API; result opens the tab, seeds the composer when forking at a user message, toasts. MessageActions' Fork (dialog-message) now forks directly at that message (dialog-fork.tsx:38-40 semantics) — the 7.3 seam note retired. |
+| location.reload | toast "Reloading configuration…" → POST location.reload → "Configuration reloaded" / toast.error (app.tsx:1019-1034) | WIRE | Full toast pair + POST through SessionActionSink/loop-fetcher. |
+| docs.open | openUrl("https://opencode.ai/docs") + clear (app.tsx:1084-1092) | WIRE | store.open_url (the open_url_sink path) + clear. |
+| session.compact | data.session.compact({model: current}) + clear; error toast (index.tsx:945-968) | WIRE | POST /compact with the current model selection (schema's compact body carries delivery/id; the model rides the session's selection server-side); errors toast. |
+| session.undo | last user msg w/ text before revert boundary → interrupt+wait+revert.stage + composer seed; "Nothing to undo" (index.tsx:969-1000) | WIRE | Full chain (worker: interrupt → wait → revert.stage), composer seed, miss toast. MessageActions' Revert now fires the same POST (the "7.3 seam not yet wired" note retired). |
+| session.redo | revert.clear; enabled: !!session.revert.messageID (index.tsx:1001-1017) | WIRE + DYNAMIC DELIST | RevertSink.clear (the banner's dismiss POST, shared) + palette row delisted exactly when v2's enabled gate is off (no staged revert / home route). |
+| session.delete | NOT a palette command in v2 — the sessions dialog's two-press ctrl+d action → session.remove (component/dialog-session-list.tsx:161-166, 255-279; keybind.ts:123) | WIRE as dialog action; never palette | Two-press delete in the Sessions dialog (arm → "Press ctrl+d again to confirm" title → remove POST); onMove disarms; error toast class on failure. The palette never listed it (registry unchanged). |
+| session.export | DialogExportOptions (markdown/json × copy/file × thinking/tools/sanitize) → session.export → clipboard or tmpdir file + DialogExportResult (index.tsx:1201-1244; ui/dialog-export-options.tsx; ui/dialog-export-result.tsx) | WIRE | session.export palette row added (v2 lists it, slash /export, <leader>x); destination dialog (4 rows: md/json × clipboard/file) → export GET (sanitize on the json-clipboard row, v2's only sanitize path) → formatSessionTranscript port (index.tsx:3503-3533: ## User/## Shell/## Assistant sections, header block) or pretty JSON → clipboard toast "Copied to clipboard" / tmp file + ExportResult dialog. Registered remainder: the tab-cycling thinking/tools toggles render as fixed v2 defaults (thinking off, tools on) noted in the row descriptions. |
+| session.background | POST session.background, palette: undefined (index.tsx:1245-1254) | WIRE | POST through the sink; not palette-listed (v2 parity). |
+
+## Should-fix dispositions
+- #4 session_move tool: PRECISELY REGISTERED — the LLM-facing tool is NOT REGISTERED anywhere (engine/mod.rs:1571-1590 registers only session_rename + models; session_move_tool() at opencode_tools.rs:362 is dead code with an erroring body). The reposcan's "always errors" was the parked body; in fact the model never sees the tool (v2's registry DOES expose it — divergence). The user-facing session.move API + Worktrees dialog work (unchanged). Registered: wire = admit a Move inbox item engine-side (needs the destination location's services from the tool context) or delete the dead leaf.
+- #5a prompt history/frecency/stash TUI persistence: NOT DONE (window) — stays registered (f1).
+- #5b session-toggle persistence: GROUPING half LANDED (Settings row + ConfigSink.update_session_grouping → cli.json write-through, HttpConfigSink mirrors update_session_sidebar's shape). thinking/verbosity/scrollbar stay registered (no toggle state exists in the port to persist).
+
+## Registered by this lane (new)
+- OAuth-browser AUTO mode + command flows are wired (pending view + 500 ms status polls + esc-cancel), but the pending view's live output rows are the instructions field (command pending messages overwrite it) — a display approximation, functionally complete.
+- Export options: thinking/tools toggles fixed at v2 defaults (rows describe them); DialogExportOptions' tab-cycling form is a 4-row select.
+- open.menu's project half (cross-project switch) — pre-existing location-bound limitation.
+- The default slash table (V2_SLASH/SLASH_COMMANDS) predates the session commands' wiring and omits /share /fork /compact /undo /redo /export (golden-corpus-pinned table; changing it needs a golden refresh). The command PALETTE reaches all of them; the PTY proof uses the palette path for share.
+
+## Verification (chain tier: affected-crate + PTY proofs + rig --quick)
+- oc-tui clippy --all-targets: 0 warnings; cargo fmt --all --check: CLEAN.
+- oc-tui nextest (full, post-fmt): **813 passed / 0 failed / 0 skipped** (one earlier
+  pty_engine_cycle run was the known load-flake class — green in-run and on retry).
+- New unit proofs (command_palette::tests): final_provider_connect_mounts_integration_list
+  (dispatch → list rows → single-method key prompt → connect.key POST → connected toast +
+  refetch), final_oauth_code_entry_flow (code-mode attempt mounts the entry prompt w/ URL
+  hints; complete POST), final_six_stub_dispatches_resolve (open.menu large session list,
+  settings rows, share toast, reload toast+POST, fork picker rows + fork POST w/ before,
+  docs.open URL), final_six_session_commands_act (compact w/ model, undo revert.stage +
+  composer seed, redo revert.clear after the staged SSE, background POST, export dialog →
+  markdown:file POST, delete: no palette row + two-press remove), final_session_redo_
+  delists_without_revert (v2's enabled gate mirrored; export row listed),
+  final_settings_cycles_persist (grouping write-through both directions).
+- New PTY proofs (pty_final.rs, real app loop over a pty + FakeLlm):
+  pty_connect_flow_list_key_entry_connected — `/connect` → real integration.list rows →
+  enter → API-key prompt → typed key POST connect.key (harness 204) → "Connected
+  Anthropic" toast, grid scanned for zero "Not wired in this build" text;
+  pty_settings_and_share — `/settings` rows + close, palette-routed session.share → v2's
+  exact unavailable toast. Harness: arm_integrations() (list/get + the 204 key route).
+- Rig --quick (isolated work root; ref-cache replays): palette / boot-home / multi-session —
+  every step's first-diff maps to the REGISTERED classes only ((b)-coin placeholder row 13
+  styles-identical, stats-digit drift, backdrop-fg idx15, bg idx0↔232, ✕-fg idx255/236).
+  **Zero new divergence classes.**
+- session_move (should-fix #4): registration disposition documented above (not registered
+  anywhere = the model never sees it; dead leaf noted).
+
+## Files touched
+crates/oc-tui/src/store.rs — DialogKind +10, IntegrationRow/Method/Account/ListState/Attempt,
+  IntegrationSink + SessionActionSink (+No/Recording), ConfigSink.update_session_grouping,
+  the connect machine + session-command methods + sessions-dialog two-press + setting_cycle.
+crates/oc-tui/src/components/command_palette.rs — props for the new kinds, the dispatch arms
+  (7 stub commands + 5 session commands + provider.connect), palette: session.export row +
+  session.redo dynamic enable, ServerList stub catch-all now unreachable from the palette.
+crates/oc-tui/src/components/dialog.rs — prompt-kind helper, pending o/c keys, settings
+  left/right, sessions + accounts two-press delete, esc-cancel attempts, submission routing,
+  MessageActions revert/fork now fire the real APIs.
+crates/oc-tui/src/components/dialog_select.rs — SelectProps.hints.
+crates/oc-tui/src/components/dialog_solid.rs — Family::ConnectPrompt (dynamic title,
+  placeholder, URL/instructions/error rows, content height, close-hit).
+crates/oc-tui/src/app.rs — LoopRequest/LoopFetch arms (integrations + session actions),
+  HttpIntegrationSink/HttpSessionActionSink, prompt-submit arms for key/code, event
+  application (connected/failed/export delivery/fork seed/reload toasts), HttpConfigSink
+  grouping write, format_session_transcript port, onboarding-CTA test updated.
+crates/oc-tui/tests/vt_harness.rs — arm_integrations + routes.
+crates/oc-tui/tests/pty_final.rs — the two PTY proofs.
