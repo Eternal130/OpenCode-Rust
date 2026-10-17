@@ -63,6 +63,22 @@
 - Flow engines: device flow (`request_device_code`/`poll_device_token`, grant `urn:ietf:params:oauth:grant-type:device_code`), loopback+PKCE, refresh rotation (gitlab_refresh_rotates_via_mock, zen_refresh_round_trip_against_mock, zen_device_flow_round_trip_against_mock, gitlab_pkce_flow_round_trip_against_mock — mock-IdP class per [F], I9-declared) — all green serially.
 - Copilot: no-refresh by design (`providers.rs:313`, ref github-copilot.ts:126-171) ✓.
 
-*(execution continues — C14, D1, D5 next per lane priority)*
+### CD-12 (HIGH) — C14(b): markdown + config command discovery absent; `/api/command` hardcoded empty
+- **Evidence (I1 live)**: project with `.opencode/command/md-cmd.md` AND config `commands.cfg-cmd` → `GET /api/command` = `[]`. Handler: `oc-server/src/handlers/agent.rs:55-64` — "Commands are plugin-registered (TODO(phase-9)…)"; no `command_md.rs` exists in `oc-core/src/config/` (agent_md.rs and instruction.rs do exist).
+- **Ref**: `{command,commands}/**/*.md` discovery (`core/src/config/plugin/command.ts:159`, v9 census verified this round) + config `commands` map → `command.list` returns both.
+- **Effect**: every slash-command surface (catalog/frecency UI cell of C14(b), composer autocomplete) has zero data on ours. Config-declared commands are normalized (normalize.rs:320-339) but never surfaced — half-wired.
+
+### CD-13 (HIGH) — C14(a): global AGENTS.md read from the wrong directory (`.config/opencode-rust/` not `.config/opencode/`)
+- **Evidence (I1 live, positive control)**: AGENTS.md in BOTH `home/.config/opencode/` (canonical, what every other config consumer reads — handlers/config.rs:28, boot.rs:122) and `home/.config/opencode-rust/` → materialized system prompt contains ONLY the block from the **suffixed** dir. Source: `engine/mod.rs:890-894` builds the global-file path with `oc_util::global_roots::APP_NAME` ("opencode-rust", global_roots.rs:29).
+- **Ref**: `config/plugin/instruction.ts:38` = `{global.config}/AGENTS.md` — the same dir as opencode.json (XDG opencode).
+- **Effect**: a v2-shaped install (global AGENTS.md at the documented location) silently loses ALL global instructions. Cross-install visibility class.
+
+### CD-14 (INFO) — C14 verified-parity rows
+- **(a) hierarchy (live)**: git-rooted project, AGENTS.md at root/deep/sub + global(suffixed) → materialized system prompt order = global → subdir → deep → project (nearest-to-farthest after global) — matches ref render order (instruction.ts walk + our port's cited parity); dedup via resolved-path `seen` ✓; per-session `session.synthetic` exactly-once ledger ✓; non-git project root correctly scopes the walk to the location dir.
+- **(b) agents (live)**: `.opencode/agent/md-agent.md` + `.opencode/mode/md-mode.md` both discovered, ids from relative path ✓; `mode` default "primary" both sides (ref fills `Info.default` mode:"primary" via `update()`; the legacySources primary:false only forces mode/ files — verified ref agent.ts:177-210 + core/src/agent.ts:69-82 — NOT a divergence); unknown frontmatter key triggers legacy-v1 migration into `request.body` (ref `legacy = some(!agentKeys.has(key))` → decodeLegacyAgent+migrateAgent — same chain) ✓; collision (markdown vs config `agents.md-agent`) → markdown wins, ref-equivalent by document ordering (synthetic .opencode-dir docs load after the project's direct opencode.json; findLast precedence).
+- Prompt-copy note: `prompt` has no file-discovery source in ref (v9 census re-verified: `grep -n 'Prompt' …/{command,agent}.ts` = 0) — MCP prompts are C9/C20 cells (carried).
+
+*(execution continues — D1, D5 next per lane priority)*
+
 
 
