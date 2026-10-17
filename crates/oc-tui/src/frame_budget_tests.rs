@@ -547,6 +547,7 @@ fn sidebar_pane_budget_body() {
             plugin_id: "budget".into(),
             title: "Preset".into(),
             rows: vec![format!("zhipuai · own/glm-5.3 · turn {frame}"), "openai · gpt-5.6".into()],
+            clickable: Vec::new(),
         });
         let start = std::time::Instant::now();
         let _ = render();

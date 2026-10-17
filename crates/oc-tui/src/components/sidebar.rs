@@ -69,6 +69,10 @@ pub struct SidebarSection {
     pub plugin_id: String,
     pub title: String,
     pub rows: Vec<String>,
+    /// Per-row clickability (the v2 TUI-plugin surface: rows whose
+    /// render carried `onMouseUp` — the plugin's own session/preset
+    /// targets; shorter than `rows` = the tail is plain text).
+    pub clickable: Vec<bool>,
 }
 
 impl SidebarSection {
@@ -352,6 +356,10 @@ pub struct SidebarPaint {
     /// same column-local coordinates — the header's collapse toggle
     /// and the per-server rows.
     pub mcp_hits: crate::store::SidebarMcpHits,
+    /// The plugin sections' clickable rows (beta.13 bug 2's
+    /// plugin-world path) at the same column-local coordinates — one
+    /// rect per row carrying the plugin's `onMouseUp`.
+    pub plugin_hits: crate::store::PluginSectionHits,
 }
 
 /// The content slot's viewport height (rows between the title and
@@ -654,7 +662,7 @@ pub fn render_sidebar_scrolled(
             place_slot(&mut paint, &section.title, y);
             y += 1;
         }
-        for row in &section.rows {
+        for (row_index, row) in section.rows.iter().enumerate() {
             if let Some(slot) = slot_row(y).filter(|slot| *slot < footer_top) {
                 let text = crate::wrap::take_width(row, SESSION_SIDEBAR_WIDTH - 4);
                 paint.placed.push(Placed {
@@ -664,6 +672,22 @@ pub fn render_sidebar_scrolled(
                     lines: vec![PlacedLine::plain(text, Style::new().fg(fg_muted).bg(raised))],
                     tag: None,
                 });
+                // The row's click surface (the plugin's own onMouseUp —
+                // beta.13 bug 2's plugin-world path): one rect per
+                // CLICKABLE row, addressed through the host's
+                // `slot.click`.
+                if section.clickable.get(row_index).copied().unwrap_or(false) {
+                    paint.plugin_hits.rows.push(crate::store::PluginRowHit {
+                        plugin_id: section.plugin_id.clone(),
+                        row: row_index,
+                        rect: crate::store::HitRect {
+                            x: 2,
+                            y: slot,
+                            width: SESSION_SIDEBAR_WIDTH - 4,
+                            height: 1,
+                        },
+                    });
+                }
             }
             y += 1;
         }
@@ -897,12 +921,19 @@ mod tests {
                 plugin_id: "omos".into(),
                 title: "Preset".into(),
                 rows: vec!["zhipuai · own/glm-5.3".into(), "openai · gpt-5.6".into()],
+                clickable: vec![true, false],
             },
-            SidebarSection { plugin_id: "empty".into(), title: String::new(), rows: vec![] },
+            SidebarSection {
+                plugin_id: "empty".into(),
+                title: String::new(),
+                rows: vec![],
+                clickable: vec![],
+            },
             SidebarSection {
                 plugin_id: "mcp".into(),
                 title: "MCP".into(),
                 rows: vec!["context7".into()],
+                clickable: vec![],
             },
         ];
         assert_eq!(view.sections.content_height(), 7, "(1+2)+gap + (1+1)+gap; empty skipped");
@@ -942,6 +973,7 @@ mod tests {
             plugin_id: "omos".into(),
             title: "Preset".into(),
             rows: (0..8).map(|index| format!("row {index}")).collect(),
+            clickable: Vec::new(),
         }];
         let paint = render_sidebar_scrolled(&view, &theme, 12, 2);
         let slot: Vec<(usize, String)> = paint
@@ -1097,6 +1129,7 @@ fn sidebar_scrollbar_paints_only_on_overflow() {
             plugin_id: "p".into(),
             title: "S".into(),
             rows: vec!["row".into(); rows],
+            clickable: vec![],
         }],
     };
     // Overflow: 30 rows of content in a 10-row slot → the fill

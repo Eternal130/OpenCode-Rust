@@ -103,6 +103,12 @@ struct StripColors {
     text: Rgb,
     /// `theme.text_muted.fg` — `text.muted`.
     muted: Rgb,
+    /// `theme.hue.interactive[200]` (`activeNumber`, session-tabs.tsx:568/1331)
+    /// — the busy tab indicator's spinner color (the `<spinner
+    /// frames interval={80}>` with the caller's `numberColor() =
+    /// runs() ? activeNumber() : …`, session-tabs.tsx:1634-1641) — and
+    /// the error unread glow hue.
+    interactive: Rgb,
     /// `theme.error` — the error unread glow hue.
     error: Rgb,
     /// `theme.accent` — `theme.hue.accent[200]`, the activity glow hue.
@@ -123,6 +129,7 @@ impl StripColors {
             hovered: rgb_of(theme.action_hovered),
             text: rgb_of(theme.text.fg.unwrap_or(ratatui::style::Color::Rgb(255, 255, 255))),
             muted: rgb_of(theme.text_muted.fg.unwrap_or(ratatui::style::Color::Rgb(128, 128, 128))),
+            interactive: rgb_of(theme.interactive),
             error: rgb_of(theme.error),
             accent: rgb_of(theme.accent),
         }
@@ -265,6 +272,15 @@ fn marquee_offset(
         }
         (marquee.offset(now_ms), marquee.leading(now_ms))
     })
+}
+
+/// The running marquee's next offset-change instant (`None` while no
+/// scroll is active) — the app loop's steady ticker sleeps until it
+/// and pins the store clock to the boundary (v2's
+/// `setInterval(…, 80)` cadence; `Marquee::next_step_ms`).
+#[must_use]
+pub fn marquee_next_step(now_ms: u64) -> Option<u64> {
+    MARQUEE.with(|marquee| marquee.borrow().next_step_ms(now_ms))
 }
 
 /// The sweep band's cell color for a busy tab (the `TabPulse` active
@@ -516,8 +532,17 @@ fn indicator_chunks(inputs: &StripInputs, key: &str) -> StyledText {
     } else {
         view.status.indicator_label().into()
     };
+    // v2's spinner color (`TabIndicator`'s `<spinner … color={props.color}>`,
+    // session-tabs.tsx:200): the caller's color resolves through
+    // `numberColor()` — `runs() ? activeNumber() : feedback ?? …`
+    // (session-tabs.tsx:1634-1641) — so the BUSY spinner paints
+    // `theme.hue.interactive[200]`, NOT text.base; `tabFeedbackColor`
+    // still wins for unread-error/attention (`!`/`?` rows,
+    // session-tabs.tsx:127-131).
     let fg = if view.status.unread.is_some() || view.status.attention.is_some() {
         glow_hue(view.status, &inputs.colors)
+    } else if view.status.runs() {
+        inputs.colors.interactive
     } else {
         inputs.colors.text
     };
@@ -1462,6 +1487,16 @@ mod tests {
             .find(|cell| cell.ch != ' ' && cell.ch != 'W')
             .expect("spinner glyph");
         assert_eq!(spinner_cell.ch, '⠋', "frame 0 while frozen");
+        // The spinner's COLOR token (beta.13 bug 4): `activeNumber` —
+        // `theme.hue.interactive[200]` (`<spinner color={props.color}>`
+        // with `numberColor() = runs() ? activeNumber() : …`,
+        // session-tabs.tsx:200/568/1634-1641) — NOT text.base.
+        let colors = StripColors::of(&styles);
+        assert_eq!(
+            spinner_cell.fg,
+            CellColor::Rgb(colors.interactive.0, colors.interactive.1, colors.interactive.2),
+            "the busy spinner paints hue.interactive[200]"
+        );
         // The full cycle: each 80 ms step advances one frame (the
         // braille dot rotates clockwise ⠋→⠙→⠹→⠸→…).
         let frames: Vec<char> = (0..10)

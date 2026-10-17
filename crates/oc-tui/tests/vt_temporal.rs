@@ -380,7 +380,6 @@ fn vt_temporal_marquee_shifts_one_cell_per_tick() {
 // ---------------------------------------------------------------------------
 // Debounce: idle means byte-stable (except the caret's own blink)
 // ---------------------------------------------------------------------------
-
 #[test]
 fn vt_temporal_idle_composer_is_byte_stable_2s() {
     let findings: Vec<String> = run_temporal_test(
@@ -462,5 +461,122 @@ fn vt_temporal_idle_composer_is_byte_stable_2s() {
     );
     for line in findings {
         eprintln!("[vt_temporal idle] {line}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Busy strip: the tab spinner's COLOR TOKEN (beta.13 bug 4)
+// ---------------------------------------------------------------------------
+
+/// A busy-window script: the prompt POST enqueues the user turn, the
+/// session enters `execution.started` and streams one reasoning delta
+/// — then HOLDS ~4 s before settling, so the strip's tab indicator is
+/// the busy spinner for a wide window (the fast-window class the
+/// rescan's temporal captures proved: `rescan-time`).
+fn busy_window_script() -> Vec<vt_harness::ScriptEvent> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1_000_000, |since| since.as_millis() as u64);
+    let event = |delay: u64, id: &str, type_: &str, data: &str| vt_harness::ScriptEvent {
+        delay_ms: delay,
+        body: format!(r#"{{"id":"{id}","created":{now_ms},"type":"{type_}","data":{data}}}"#),
+    };
+    vec![
+        event(
+            30,
+            "evt_inbox",
+            "session.inbox.enqueued",
+            r#"{"sessionID":"ses_alpha","inboxID":"msg_busy_1","item":{"type":"user","payload":{"text":"busy window"}}}"#,
+        ),
+        event(50, "evt_exec", "session.execution.started", r#"{"sessionID":"ses_alpha"}"#),
+        event(
+            60,
+            "evt_step",
+            "session.step.started",
+            r#"{"sessionID":"ses_alpha","assistantMessageID":"msg_busy_a1","agent":"build","model":{"providerID":"anthropic","id":"claude-sonnet"}}"#,
+        ),
+        event(
+            80,
+            "evt_r1",
+            "session.reasoning.delta",
+            r#"{"sessionID":"ses_alpha","assistantMessageID":"msg_busy_a1","ordinal":0,"delta":"Working"}"#,
+        ),
+        // The hold: the busy window spans these delays.
+        event(
+            4_000,
+            "evt_r2",
+            "session.reasoning.delta",
+            r#"{"sessionID":"ses_alpha","assistantMessageID":"msg_busy_a1","ordinal":0,"delta":" done"}"#,
+        ),
+        event(4_050, "evt_exec_end", "session.execution.succeeded", r#"{"sessionID":"ses_alpha"}"#),
+    ]
+}
+
+/// The busy tab's spinner paints `theme.hue.interactive[200]`
+/// (`activeNumber` — session-tabs.tsx:200/568/1634-1641), NOT
+/// text.base: with the turn held busy, row 0's braille cell carries
+/// the interactive token's RGB (the fast-window evidence class the
+/// rescan opened; our side now provable).
+#[test]
+fn vt_temporal_busy_strip_spinner_paints_interactive_token() {
+    let spinner_style: u64 = run_temporal_test(
+        "busy-token",
+        80,
+        24,
+        |fake| fake.arm_script(busy_window_script()),
+        |harness| {
+            boot_to_session(harness)?;
+            // Submit a turn (the script's busy window opens on the
+            // prompt POST).
+            harness.write(b"busy turn\r");
+            if !harness.wait_for(b"Thinking", Duration::from_secs(5)) {
+                return Err("the streaming turn never showed its Thinking row".to_owned());
+            }
+            // Poll row 0 for a braille spinner glyph (≤3 s window).
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            let mut found: Option<(usize, u64)> = None;
+            while std::time::Instant::now() < deadline {
+                let grid = harness.grid_now();
+                for col in 0..grid.cols {
+                    let cell = grid.cell(col, 0);
+                    if SPINNER_GLYPHS.contains(&cell.ch) {
+                        found = Some((col, cell.style));
+                        break;
+                    }
+                }
+                if found.is_some() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+            let (col, style) = found.ok_or_else(|| {
+                let row0 = harness.grid_now().row_text(0);
+                format!("no braille spinner ever rendered in the strip: row0={row0:?}")
+            })?;
+            eprintln!("[vt] busy spinner at col {col}, style digest {style:#x}");
+            Ok(style)
+        },
+    );
+    // Decode the digest's fg (the harness packs fg at bit 30:
+    // Rgb → (2<<24)|(r<<16)|(g<<8)|b).
+    let fg = spinner_style >> 30;
+    let kind = (fg >> 24) & 0xff;
+    assert_eq!(kind, 2, "the spinner's fg must be truecolor RGB (digest fg {fg:#x})");
+    let r = ((fg >> 16) & 0xff) as u8;
+    let g = ((fg >> 8) & 0xff) as u8;
+    let b = (fg & 0xff) as u8;
+    // The exact token: ThemeStyles.interactive = hue.interactive[200]
+    // of the boot theme (v2 opencode, dark).
+    assert_eq!((r, g, b), theme_interactive(), "the busy spinner paints hue.interactive[200]");
+}
+
+/// The resolved constant of the v2 opencode dark theme's
+/// `ThemeStyles::interactive` (`tokens.semantic(Interactive).s200`) —
+/// the same builtin the bare app boots with.
+fn theme_interactive() -> (u8, u8, u8) {
+    let styles = oc_tui::theme::ThemeState::v2_dark().styles();
+    match styles.interactive {
+        ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
+        other => panic!("interactive token must be RGB, got {other:?}"),
     }
 }

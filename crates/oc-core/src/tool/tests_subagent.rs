@@ -101,7 +101,7 @@ async fn harness() -> Harness {
         permission: permission(),
         depth: depth_reader,
         agents,
-        progress: Some(Arc::new(move |_session, metadata| {
+        progress: Some(Arc::new(move |_context, metadata| {
             progress_sink.lock().push(metadata);
         })),
         interrupt: None,

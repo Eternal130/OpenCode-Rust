@@ -342,6 +342,7 @@ fn sidebar_plugin_section_renders_in_the_session_screen_shape() {
         plugin_id: "tuislots".into(),
         title: "Fixture".into(),
         rows: vec!["preset: zhipuai".into(), "sessions: 7".into()],
+        clickable: Vec::new(),
     }];
     let screen = SessionScreen {
         tabs: None,

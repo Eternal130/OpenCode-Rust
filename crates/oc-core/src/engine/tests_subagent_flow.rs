@@ -223,6 +223,59 @@ async fn engine_subagent_flow_single_request_per_stage() {
     let _ = dir;
 }
 
+/// beta.13 bug 2 (real-env): the subagent tool's running-state
+/// metadata reaches the wire — an EPHEMERAL `session.tool.progress`
+/// carrying the TOOL CALL id and `metadata.sessionID` = the child (v2
+/// subagent.ts:201 `context.progress({sessionID, status: "running"})`
+/// through step.ts:96 `publisher.progress(call.id, update)`). The
+/// TUI's subagent-card click surface keys on `metadata.sessionID`; a
+/// missing progress left RUNNING cards unclickable (and the old call
+/// site passed the CHILD id where the tool id belongs — a publisher
+/// `defect` drop).
+#[tokio::test]
+async fn engine_subagent_flow_publishes_running_progress_metadata() {
+    let llm = TestLlm::new();
+    serve_flow(&llm, "general", "PARITY-SUBAGENT-TASK inspect the fixture.");
+    let (engine, dir, location) = engine_with(llm.clone()).await;
+    engine.location(location.clone()).await.expect("assemble");
+    let session_id = create_flow_session(&engine, &location, "ses_flow_progress").await;
+
+    // The live volatile channel (progress is ephemeral — never in the
+    // durable log): subscribed from t0, filtered to the type.
+    let mut live = engine.bus.subscribe_types(&["session.tool.progress"]);
+    engine
+        .prompt(&location, &session_id, "msg_user_1", "run the subagent")
+        .await
+        .expect("prompt exit");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let child = {
+        let store = crate::session::store::SessionStore::new((*engine.db).clone());
+        let sessions = store.list(Default::default()).await.expect("list");
+        sessions
+            .into_iter()
+            .find(|row| row.parent_id.as_deref() == Some(session_id.as_str()))
+            .expect("child session")
+    };
+
+    use futures::StreamExt;
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), live.next())
+        .await
+        .expect("a session.tool.progress within the timeout")
+        .expect("the subscription saw the event");
+    let progress = event.data;
+    assert_eq!(progress["id"], "call_sub_1", "the TOOL CALL id (not the child session id)");
+    assert_eq!(progress["sessionID"], session_id.as_str());
+    assert!(
+        progress["assistantMessageID"].as_str().is_some_and(|id| !id.is_empty()),
+        "the parent's assistant message id: {}",
+        progress["assistantMessageID"]
+    );
+    assert_eq!(progress["metadata"]["sessionID"], child.id.as_str(), "the child session id");
+    assert_eq!(progress["metadata"]["status"], "running");
+    let _ = dir;
+}
+
 /// #38: a config-defined agent (`agents.researcher` in the location's
 /// `opencode.json`) reaches the agent registry and the subagent flow
 /// resolves it end-to-end — the ref's `ConfigAgentPlugin` document

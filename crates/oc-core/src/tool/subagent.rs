@@ -88,8 +88,11 @@ pub struct SubagentDeps {
     pub depth: Arc<dyn Fn() -> u64 + Send + Sync>,
     /// Agents visible to the caller's location.
     pub agents: Arc<dyn Fn() -> Vec<oc_schema::agent::Info> + Send + Sync>,
-    /// Per-call progress callback channel (runner publisher).
-    pub progress: Option<Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>>,
+    /// Per-call progress channel (v2 `context.progress` — the runner
+    /// publishes `session.tool.progress` with the tool CALL id,
+    /// step.ts:96). The invocation context carries the ids; the
+    /// payload is the metadata record.
+    pub progress: Option<Arc<dyn Fn(&ToolCallContext, serde_json::Value) + Send + Sync>>,
     /// The interrupt bell raced against the foreground block (the runner's
     /// tool-fiber cancel).
     pub interrupt: Option<Arc<tokio::sync::Notify>>,
@@ -340,10 +343,15 @@ impl SubagentTool {
 
         let background = input.background;
         if let Some(progress) = &deps.progress {
-            progress(
-                child.id.as_str(),
-                json!({ "sessionID": child.id.as_str(), "status": "running" }),
-            );
+            // v2 `yield* context.progress({ sessionID: child.id, status:
+            // "running" })` (subagent.ts:201) — the runner injects the
+            // tool CALL id (step.ts:96 `publisher.progress(call.id,
+            // update)`); the child id is PAYLOAD. The beta.13 real-env
+            // bug passed the child id as the tool id (and the engine
+            // never wired the channel at all), so the RUNNING subagent
+            // card carried no `metadata.sessionID` — not clickable
+            // mid-run.
+            progress(context, json!({ "sessionID": child.id.as_str(), "status": "running" }));
         }
 
         // Standard prompt admission outside the job: Job.start joining a
