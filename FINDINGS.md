@@ -225,3 +225,58 @@ by copy-in/copy-out applied at v2's apply-points (the exhaustive §1 audit
 is the proof of coverage); what remains divergent is precisely the set a
 process boundary buys isolation from (R1-R5) — registered with the
 isolation-benefit rationale rather than papered over.
+
+---
+
+# SPEC-R6 — E12 search/filter first-pass findings (session-list surface)
+
+Corpus `tools/parity/spec-canaries/e12_search_corpus.json` (I9: fixture-derived
+synthetic); runner `crates/oc-tui/tests/spec_e12_first_pass.rs` (ours side =
+REAL `filter_indices` code path; ref side = 1:1 port of
+`tui/src/component/dialog-session-list.tsx:86-99`, cross-checked against the
+hand-computed corpus cells). 12 queries → **9 divergent, 3 parity**:
+
+1. **Child-session leakage** (E12-F1): ours lists forked children
+   (`ses_child`) as filter hits; ref excludes `parentID != null` whenever a
+   query is active (`dialog-session-list.tsx:97`). Ours shows them at all
+   times (history-based options).
+2. **Accent equivalence ours-only** (E12-F2): query `café` matches
+   `CAFE overhaul` and `cafe` matches `café menu parser` in ours (fuzzy
+   equivalence); ref `includes()` is byte-exact after case-fold — no match.
+3. **NFD normalization** (E12-F3): NFD query `cafe + U+0301` matches NFC
+   titles in ours; ref = no match (no normalization either side, but ours'
+   fuzzy collapses the difference). Normalization audit: ref = case-fold
+   only (toLowerCase), no NFC/NFD; ours = case-fold + fuzzy equivalence.
+4. **Substring vs fuzzy semantics on session list** (E12-F4):
+   `loginredirect` (concatenated) and `zln` (abbreviation) match in ours,
+   not in ref. Root cause: ours renders `session.list` through the shared
+   `dialog_select` fuzzy picker (`command_palette.rs:557-577`); ref has a
+   DEDICATED session list with plain substring filter + server-search
+   fallback.
+5. **Whitespace** (E12-F5): doubled-space titles collapse for ours
+   (`wide spaces` matches ` Wide  spaces  title `); ref byte-exact → no
+   match.
+6. **Empty/whitespace query** (E12-F6): ours returns NOTHING for
+   whitespace-only query; ref trims → empty → returns ALL sessions
+   (children included — parentID exclusion only applies with an active
+   query).
+
+Disposition: F4 is a design decision point (which semantics does the port
+want for the session-list surface?); F1/F6 are behavioral bugs candidates;
+F2/F3/F5 are semantics to ratify. All six need the LIVE ref run to confirm
+the port (blocked this round — ref runtime copy lacks deps).
+
+# SPEC-R6 — E5 inherited-finding (contrast)
+
+Default dark theme (committed `assets/v2/opencode.json` through the resolver
+chain): `border.base` on `background.base` measures < 3:1 (UI threshold).
+Inherited from the ref theme (same source document) — listed, dispositioned,
+not parity-blocking per the v5 E5 clause; ours must be ≥ ref ratio per cell
+(holds — same values).
+
+# SPEC-R6 — E2 note
+
+StartupLoading gate-behavior assert (E2-a: stretch boot under vt-clock,
+indicator appears at 500ms / escalates at 3s) is PENDING a boot-stretch
+injection harness; our measured boot reaches interactive at ~569ms median —
+just past the 500ms show threshold, so the gate is live-reachable.
