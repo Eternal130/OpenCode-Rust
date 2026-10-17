@@ -174,7 +174,7 @@ fn pty_sidebar_plugin_section_renders_through_the_host() {
 /// package's server entry, the host auto-loads the `./tui` companion
 /// (`dist/tui2.js`) whose `tui(api)` registers the `sidebar_content`
 /// slot, and the bridge's materialize lands the section as native
-/// rows. Stages the REAL install (OC_OMOS_ROOT/OC_OMOS_DEPS or the
+/// rows. Stages the REAL install (`OC_OMOS_ROOT`/`OC_OMOS_DEPS` or the
 /// live cache — skips without either or bun).
 #[test]
 fn pty_sidebar_real_omos_sections_render() {
@@ -237,7 +237,7 @@ fn stage_real_omos(tag: &str) -> Option<(std::path::PathBuf, std::path::PathBuf)
     let deps_root = std::env::var("OC_OMOS_DEPS")
         .map(std::path::PathBuf::from)
         .ok()
-        .or_else(|| source.parent().map(|parent| parent.to_path_buf()));
+        .or_else(|| source.parent().map(std::path::Path::to_path_buf));
     if let Some(parent) = deps_root {
         for dep in ["jsonc-parser", "zod", "solid-js", "lru-cache", "semver"] {
             let dep_dir = parent.join(dep);
@@ -251,7 +251,7 @@ fn stage_real_omos(tag: &str) -> Option<(std::path::PathBuf, std::path::PathBuf)
     Some((sandbox, entry))
 }
 
-/// The live omo-slim install (read-only) or the staged OC_OMOS_ROOT.
+/// The live omo-slim install (read-only) or the staged `OC_OMOS_ROOT`.
 fn omos_source() -> Option<std::path::PathBuf> {
     if let Ok(root) = std::env::var("OC_OMOS_ROOT") {
         let root = std::path::PathBuf::from(root);

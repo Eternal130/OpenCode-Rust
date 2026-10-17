@@ -683,6 +683,22 @@ pub fn render_session(
             rect.y += content_top;
         }
         store.set_sidebar_mcp_hits(mcp_hits);
+        // The plugin sections' clickable rows ride the same walk
+        // (beta.13 bug 2's plugin-world path) — translated to the
+        // pane's paste origin; the release runs the plugin's own
+        // `onMouseUp` through the host bridge.
+        let mut plugin_hits =
+            crate::components::sidebar::render_sidebar_scrolled(&view, styles, pane_height, scroll)
+                .plugin_hits;
+        for hit in &mut plugin_hits.rows {
+            hit.rect.x += origin_x;
+            hit.rect.y += content_top;
+        }
+        let crate::store::PluginSectionHits { rows, .. } = plugin_hits;
+        store.set_plugin_section_hits(crate::store::PluginSectionHits {
+            session_id: session_id.to_owned(),
+            rows,
+        });
         if sidebar_docked {
             paste(&mut frame, &pane, column, content_top);
         } else if sidebar_overlay {
@@ -699,6 +715,7 @@ pub fn render_session(
     } else {
         store.set_sidebar_onboarding_hits(None);
         store.set_sidebar_mcp_hits(crate::store::SidebarMcpHits::default());
+        store.set_plugin_section_hits(crate::store::PluginSectionHits::default());
         // The pane unmounted — v2's scrollbox goes with it (the
         // offset resets, no x extent gates the wheel).
         store.set_sidebar_scroll_geometry(0, 0, None);
@@ -1733,6 +1750,7 @@ mod tests {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
         store.set_plugin_sidebar_section(&crate::components::sidebar::SidebarSection {
+            clickable: vec![],
             plugin_id: "tuislots".into(),
             title: "Fixture".into(),
             rows: vec!["preset: zhipuai".into(), "sessions: 7".into()],
@@ -1744,6 +1762,56 @@ mod tests {
         assert!(pane[3].starts_with("  Fixture"), "the section title: {:?}", pane[3]);
         assert!(pane[4].starts_with("  preset: zhipuai"), "row 1: {:?}", pane[4]);
         assert!(pane[5].starts_with("  sessions: 7"), "row 2: {:?}", pane[5]);
+    }
+
+    /// beta.13 bug 2's plugin-world path: the section rows that carry
+    /// the plugin's own `onMouseUp` record click targets at absolute
+    /// cells (the release runs the plugin handler through the host
+    /// bridge — here, the recording sink).
+    #[test]
+    fn plugin_section_clickable_rows_record_hit_rects_and_route_the_sink() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Bug hunt".to_owned()));
+        store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+        store.set_plugin_sidebar_section(&crate::components::sidebar::SidebarSection {
+            clickable: vec![false, true],
+            plugin_id: "tuislots".into(),
+            title: "Fixture".into(),
+            rows: vec!["preset: zhipuai".into(), "Go to child".into()],
+        });
+        let clicks = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(String, usize)>::new()));
+        let recorder = clicks.clone();
+        store.set_plugin_section_click_sink(Some(std::rc::Rc::new(
+            move |plugin_id: &str, row: usize| {
+                recorder.borrow_mut().push((plugin_id.to_owned(), row));
+            },
+        )));
+        let theme = crate::theme::ThemeState::v2_dark();
+        let _ = render_session(&store, "s1", &theme.styles(), (160, 30));
+        let hits = store.plugin_section_hits();
+        assert_eq!(hits.session_id, "s1");
+        assert_eq!(hits.rows.len(), 1, "only the onMouseUp row armed");
+        let hit = hits.rows[0].clone();
+        assert_eq!(hit.plugin_id, "tuislots");
+        assert_eq!(hit.row, 1);
+        assert!(hit.rect.x >= 118 && hit.rect.x + hit.rect.width <= 160, "inside the pane");
+
+        // The release path: the sink receives the row address; the
+        // NavigateToSession UI event (the plugin's navigate ask)
+        // routes the session.
+        store.plugin_section_click("tuislots", 1);
+        assert_eq!(*clicks.borrow(), vec![("tuislots".to_owned(), 1)]);
+        crate::plugin_ui::apply_plugin_ui(
+            &store,
+            "tuislots",
+            &crate::plugin_ui::PluginUiEvent::NavigateToSession {
+                session_id: "ses_child".to_owned(),
+            },
+        );
+        assert!(matches!(
+            store.route(),
+            crate::store::Route::Session { session_id } if session_id == "ses_child"
+        ));
     }
 
     /// A subagent session never mounts the pane (session-frame.tsx:108).

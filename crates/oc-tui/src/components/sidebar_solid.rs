@@ -595,6 +595,7 @@ mod tests {
             plugin_id: "omos".into(),
             title: "Preset".into(),
             rows: vec!["zhipuai · own/glm-5.3".into()],
+            clickable: Vec::new(),
         }];
         let with_plugin = paint_solid_sidebar_pane(&view, &theme, 30, 0);
         let grid = with_plugin.text_grid().join("\n");

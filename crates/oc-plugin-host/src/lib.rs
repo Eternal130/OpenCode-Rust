@@ -631,6 +631,29 @@ impl PluginHost {
         facade.shared.notify_tui_theme(view);
     }
 
+    /// Run one plugin sidebar row's activate handler (the click side
+    /// of the v2 TUI-plugin bridge — beta.13 bug 2's plugin-world
+    /// path): the guest invokes the row's `onMouseUp`, whose
+    /// navigation flows back as a `tui.route.navigate` UI request.
+    /// Bounded by `timeout` (the HARD bound on one plugin callback).
+    pub fn click_sidebar_row(
+        &self,
+        plugin_id: &str,
+        row: usize,
+        timeout: Duration,
+    ) -> Result<bool, String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
+        let result = runtime
+            .block_on(facade.shared.request(
+                "slot.click",
+                json!({ "pluginId": plugin_id, "row": row }),
+                timeout,
+            ))
+            .map_err(|error| error.to_string())?;
+        Ok(result.get("ok").and_then(Value::as_bool).unwrap_or(false))
+    }
+
     /// Materialize one plugin dialog's content at OPEN time (the
     /// delegation seam behind `DialogKind::Plugin`): the guest builds
     /// the `{title, rows, options}` structure synchronously; this

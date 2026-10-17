@@ -435,6 +435,18 @@ impl Shared {
                     self.busy_plugins.lock().expect("busy set poisoned").remove(id);
                 }
             }
+            // The v2 TUI-plugin bridge's navigation ask: a plugin row's
+            // activate handler called `route.navigate("session",
+            // {sessionID})` (beta.13 bug 2's plugin-world path - the
+            // omo-slim sidebar's session targets).
+            "tui.route.navigate" => {
+                if let Some(session) = params.get("sessionID").and_then(Value::as_str) {
+                    self.ui_requests
+                        .lock()
+                        .expect("ui request queue poisoned")
+                        .push_back(UiRequest::NavigateToSession { session_id: session.to_owned() });
+                }
+            }
             "log" => log_guest(params),
             _ => {}
         }
@@ -681,8 +693,9 @@ fn answer_ui_runtime(shared: &Shared, id: u64, method: &str, params: &Value) -> 
                 .map(|rows| rows.iter().filter_map(Value::as_str).map(str::to_owned).collect())
                 .unwrap_or_default();
             // An empty title + empty rows is `removeSection` (the TUI
-            // drops the plugin's section).
-            UiRequest::SidebarSection { plugin_id, title, rows }
+            // drops the plugin's section) — plain rows, no handlers.
+            let clickable = vec![false; rows.len()];
+            UiRequest::SidebarSection { plugin_id, title, rows, clickable }
         }
         "ui.footer.hint" => {
             let Some(text) = params.get("text").and_then(Value::as_str) else {
@@ -895,7 +908,7 @@ async fn load_entry(shared: &Arc<Shared>, entry: &std::path::Path) {
                 result.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
             let mut registrations = shared.registrations.write().expect("registrations poisoned");
             if let Some(status) = registrations.plugins.get_mut(&key) {
-                status.plugin_id = plugin_id.clone();
+                status.plugin_id.clone_from(&plugin_id);
                 status.state = PluginState::Active;
             }
             plugin_id
@@ -1148,27 +1161,22 @@ impl Shared {
                 .await;
             match outcome {
                 Ok(result) => {
-                    let title = result.get("title").and_then(Value::as_str).unwrap_or_default();
-                    let rows: Vec<String> = result
-                        .get("rows")
-                        .and_then(Value::as_array)
-                        .map(|rows| {
-                            rows.iter().filter_map(Value::as_str).map(str::to_owned).collect()
-                        })
-                        .unwrap_or_default();
-                    shared.sidebar_slots.lock().expect("sidebar slots poisoned").insert(plugin_id.clone());
+                    let (title, rows, clickable) = parse_sidebar_section(&result);
+                    shared
+                        .sidebar_slots
+                        .lock()
+                        .expect("sidebar slots poisoned")
+                        .insert(plugin_id.clone());
                     shared
                         .ui_requests
                         .lock()
                         .expect("ui request queue poisoned")
-                        .push_back(UiRequest::SidebarSection {
-                            plugin_id,
-                            title: title.to_owned(),
-                            rows,
-                        });
+                        .push_back(UiRequest::SidebarSection { plugin_id, title, rows, clickable });
                 }
                 Err(error) => {
-                    eprintln!("opencode plugin-host: sidebar slot {plugin_id} materialize: {error}");
+                    eprintln!(
+                        "opencode plugin-host: sidebar slot {plugin_id} materialize: {error}"
+                    );
                 }
             }
         });
@@ -1211,23 +1219,16 @@ impl Shared {
                 match outcome {
                     Ok(result) => {
                         misses = 0;
-                        let title =
-                            result.get("title").and_then(Value::as_str).unwrap_or_default();
-                        let rows: Vec<String> = result
-                            .get("rows")
-                            .and_then(Value::as_array)
-                            .map(|rows| {
-                                rows.iter().filter_map(Value::as_str).map(str::to_owned).collect()
-                            })
-                            .unwrap_or_default();
+                        let (title, rows, clickable) = parse_sidebar_section(&result);
                         shared
                             .ui_requests
                             .lock()
                             .expect("ui request queue poisoned")
                             .push_back(UiRequest::SidebarSection {
                                 plugin_id: plugin_id.clone(),
-                                title: title.to_owned(),
+                                title,
                                 rows,
+                                clickable,
                             });
                     }
                     Err(error) => {
@@ -1248,6 +1249,31 @@ impl Shared {
             }
         });
     }
+}
+
+/// Parse one `slot.materialize` reply: `{title, rows:
+/// [{text, click}]}` (the v2 TUI-plugin surface — the plugin's own
+/// rows; `click` marks rows carrying an `onMouseUp` handler).
+fn parse_sidebar_section(result: &Value) -> (String, Vec<String>, Vec<bool>) {
+    let title = result.get("title").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let mut rows = Vec::new();
+    let mut clickable = Vec::new();
+    if let Some(entries) = result.get("rows").and_then(Value::as_array) {
+        for entry in entries {
+            // The object form ({text, click}); a bare string degrades
+            // to a plain row.
+            if let Some(text) = entry.as_str() {
+                rows.push(text.to_owned());
+                clickable.push(false);
+            } else {
+                let text = entry.get("text").and_then(Value::as_str).unwrap_or_default();
+                let click = entry.get("click").and_then(Value::as_bool).unwrap_or(false);
+                rows.push(text.to_owned());
+                clickable.push(click);
+            }
+        }
+    }
+    (title, rows, clickable)
 }
 
 fn decode_digests(result: &Value) -> Option<HashMap<String, String>> {
