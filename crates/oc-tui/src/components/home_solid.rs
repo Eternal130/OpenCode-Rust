@@ -459,6 +459,7 @@ fn footer_left_label(
 /// paste the composer dispatch frame at the plan's origin, and derive
 /// the terminal-cursor cell from the same walk.
 #[must_use]
+#[allow(clippy::too_many_lines)] // the banner row is the lane-TAIL addition
 pub fn paint_solid_home_view(
     view: &HomeView,
     theme: &ThemeState,
@@ -520,8 +521,50 @@ pub fn paint_solid_home_view(
         theme,
     );
     crate::components::home::paste(&mut frame, &prompt_frame, plan.paste.0, plan.paste.1);
-    // NEW-S1a: the caret's screen cell — the paste origin plus the
-    // frame-relative cell (the same walk the old painter runs).
+    // The update-notification banner (auditB #10, home.tsx:125-175):
+    // one centered row in the gap above the prompt mount — the
+    // `/update`·`/exit` prefix in `action.primary.selected`, the body
+    // in `text.muted` (the FadeIn text rides the same row; hover's
+    // bg lift lands with the pointer-hit seam). `None` in every
+    // golden state — the row paints ONLY when a live notice exists.
+    let banner_hit = view.update.as_ref().and_then(|(prefix, body, remote)| {
+        let row = plan.paste.1.saturating_sub(1);
+        let (sr, sg, sb) = theme_cell(theme.resolved.tokens.text.action.primary.selected);
+        let selected = crate::render::CellColor::Rgb(sr, sg, sb);
+        let (mr, mg, mb) = muted;
+        let muted_color = crate::render::CellColor::Rgb(mr, mg, mb);
+        let width_of = crate::wrap::display_width;
+        let prefix_width = if *remote { 0 } else { width_of(prefix) + 1 };
+        let body_width = width_of(body);
+        let total = prefix_width + body_width;
+        let x0 = (width.saturating_sub(total)) / 2;
+        let mut x = x0;
+        if !*remote {
+            for ch in prefix.chars() {
+                if let Some(cell) = frame
+                    .cells
+                    .get_mut(row)
+                    .and_then(|r| x.checked_sub(0).and_then(|_| r.get_mut(x)))
+                {
+                    cell.ch = ch;
+                    cell.fg = selected;
+                }
+                x += 1;
+            }
+            x += 1; // the gap
+        }
+        for ch in body.chars() {
+            if let Some(cell) = frame.cells.get_mut(row).and_then(|r| r.get_mut(x)) {
+                cell.ch = ch;
+                cell.fg = muted_color;
+            }
+            x += 1;
+        }
+        (total > 0 && row < height).then_some((x0, row, total))
+    });
+    let _ = banner_hit; // the pointer-hit seam lands with the chip family
+                        // NEW-S1a: the caret's screen cell — the paste origin plus the
+                        // frame-relative cell (the same walk the old painter runs).
     let caret_screen = view
         .caret
         .and_then(|offset| {
@@ -574,6 +617,7 @@ mod tests {
 
     fn owned_view(scenario: &Scenario, placeholder: String) -> HomeView<'static> {
         HomeView {
+            update: None,
             draft: Box::leak(Box::new(scenario.draft.clone())),
             placeholder,
             location: String::new(),
