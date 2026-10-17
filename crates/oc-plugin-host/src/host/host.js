@@ -849,8 +849,18 @@ async function handleUnload({ pluginId }) {
   } catch (error) {
     notify("log", { level: "warn", message: `${pluginId}: dispose threw ${errText(error)}` });
   }
+  const tuiDispose = tuiDisposers.get(pluginId);
+  if (tuiDispose) {
+    try {
+      await tuiDispose();
+    } catch (error) {
+      notify("log", { level: "warn", message: `${pluginId}: tui dispose threw ${errText(error)}` });
+    }
+    tuiDisposers.delete(pluginId);
+  }
   plugins.delete(pluginId);
   dialogProviders.delete(pluginId);
+  sidebarSlots.delete(pluginId);
   return { ok: true };
 }
 
@@ -1217,6 +1227,320 @@ async function scanDigests(entry) {
 }
 
 // ---------------------------------------------------------------------------
+// The v2 TUI-plugin surface (beta.13 bug 1 — the REAL plugin's
+// sidebar). oh-my-opencode-slim's `./tui` export (`dist/tui2.js`)
+// drives its sidebar through `api.slots.register({slots:
+// {sidebar_content: render}})` building OpenTUI trees with
+// @opentui/{core,solid} + solid-js. The desktop host provides those
+// packages from its own module graph; this host MATERIALIZES minimal
+// filesystem shims next to the install whose elements are plain
+// JSON-able records, then flattens each rendered tree into the native
+// sidebar-section shape (title + rows) at materialize time.
+// ---------------------------------------------------------------------------
+
+/** pluginId -> { render, dispose } for the sidebar_content slot. */
+const sidebarSlots = new Map();
+/** pluginId -> disposal for the loaded tui entry. */
+const tuiDisposers = new Map();
+/** The host-pushed current route ({type:"session",sessionID}|{name:"home"}). */
+let tuiRoute = { name: "home" };
+/** The host-pushed flat v2 theme view (TuiThemeCurrent's sidebar subset). */
+let tuiThemeView = {
+  accent: "#8b5cf6",
+  background: "#0a0a0a",
+  borderActive: "#3c3c3c",
+  text: "#eeeeee",
+  textMuted: "#888888",
+};
+
+/** Ensure the host-provided OpenTUI shims resolve from the tui entry
+ *  (sibling node_modules; `solid-js` stays the real package when the
+ *  install carries it, else the minimal signal shim). */
+function ensureOpentuiShims(packageRoot) {
+  // The package root's PARENT is the install's node_modules (the
+  // hoisted deps' dir — where bare imports from dist/ resolve).
+  const nm = require("node:path").dirname(packageRoot);
+  const write = (name, files) => {
+    const dir = require("node:path").join(nm, name);
+    if (require("node:fs").existsSync(require("node:path").join(dir, "package.json"))) return;
+    require("node:fs").mkdirSync(dir, { recursive: true });
+    for (const [file, body] of Object.entries(files)) {
+      require("node:fs").writeFileSync(require("node:path").join(dir, file), body);
+    }
+  };
+  write("@opentui/core", {
+    "package.json": JSON.stringify({
+      name: "@opentui/core",
+      version: "0.0.0-host-shim",
+      type: "module",
+      main: "index.js",
+    }),
+    "index.js": `\
+// Host shim (the Rust plugin host's sidebar bridge): the two color
+// utilities the flagship's sidebar uses. Values are plain records.
+export function parseColor(value) {
+  if (value && typeof value === "object") return value;
+  const text = String(value ?? "").trim();
+  let hex = null;
+  if (text.startsWith("#")) hex = text.slice(1);
+  else if (/^[0-9a-f]{6}$/i.test(text)) hex = text;
+  if (!hex || hex.length !== 6) throw new Error("unparseable color: " + text);
+  const channel = (at) => parseInt(hex.slice(at * 2, at * 2 + 2), 16) / 255;
+  return { r: channel(0), g: channel(1), b: channel(2), a: 1 };
+}
+export class RGBA {
+  constructor(r, g, b, a) { this.r = r; this.g = g; this.b = b; this.a = a; }
+  static fromValues(r, g, b, a = 1) { return new RGBA(r, g, b, a); }
+  static fromInts(r, g, b, a = 255) { return new RGBA(r / 255, g / 255, b / 255, a / 255); }
+}
+`,
+  });
+  write("@opentui/solid", {
+    "package.json": JSON.stringify({
+      name: "@opentui/solid",
+      version: "0.0.0-host-shim",
+      type: "module",
+      main: "index.js",
+    }),
+    "index.js": `\
+// Host shim: element records + an EAGER insert (each materialize
+// re-runs the plugin's render function, so eager evaluation of
+// function children reads the current signal values — the reactive
+// re-run becomes re-materialize).
+export function createElement(tag) {
+  return { tag, props: {}, children: [] };
+}
+export function setProp(node, key, value) {
+  node.props[key] = value;
+}
+export function insert(parent, child) {
+  const mount = (value) => {
+    if (value === null || value === undefined || value === false || value === true) return;
+    if (Array.isArray(value)) { for (const item of value) mount(item); return; }
+    if (typeof value === "function") { try { mount(value()); } catch { /* contained */ } return; }
+    if (typeof value === "string" || typeof value === "number") {
+      parent.children.push({ tag: "#text", props: { text: String(value) }, children: [] });
+      return;
+    }
+    if (typeof value === "object" && value.tag !== undefined) { parent.children.push(value); return; }
+  };
+  mount(child);
+}
+`,
+  });
+  write("solid-js", {
+    "package.json": JSON.stringify({
+      name: "solid-js",
+      version: "0.0.0-host-shim",
+      type: "module",
+      main: "index.js",
+    }),
+    "index.js": `\
+// Host shim: the minimal signal surface the flagship's sidebar needs
+// (only used when the install does not carry the real solid-js).
+export function createSignal(value) {
+  const subscribers = new Set();
+  const read = () => value;
+  const write = (next) => {
+    const resolved = typeof next === "function" ? next(value) : next;
+    if (Object.is(resolved, value)) return resolved;
+    value = resolved;
+    for (const subscriber of [...subscribers]) subscriber(value);
+    return value;
+  };
+  return [read, write];
+}
+`,
+  });
+}
+
+/** Walk one rendered tree into flat lines (row-boxes join their text
+ *  children horizontally with single spaces — the flex gaps are not
+ *  in the tree; column boxes stack). */
+function treeLines(node) {
+  if (!node || typeof node !== "object") return [];
+  if (node.tag === "#text") {
+    const text = String(node.props.text ?? "");
+    return text === "" ? [] : [text];
+  }
+  const childResults = (node.children ?? []).map(treeLines);
+  const direction = node.props.flexDirection;
+  if (direction === "row") {
+    const height = childResults.reduce((max, lines) => Math.max(max, lines.length), 0);
+    const row = [];
+    for (let index = 0; index < height; index++) {
+      const joined = childResults
+        .map((lines) => lines[index] ?? "")
+        .filter((part) => part !== "")
+        .join(" ")
+        .replace(/ {2,}/g, " ");
+      if (joined !== "") row.push(joined);
+    }
+    return row;
+  }
+  return childResults.flat();
+}
+
+/** `load.tui` — import the package's ./tui export and drive its
+ *  `tui(api)` with the bridge's TuiApi shape. */
+async function handleLoadTui({ entry, options }) {
+  const abs = require("node:path").resolve(entry);
+  // The package root (package.json dir) — the shims land in the
+  // sibling node_modules so bare imports from dist/ resolve.
+  let packageRoot = require("node:path").dirname(abs);
+  for (;;) {
+    if (require("node:fs").existsSync(require("node:path").join(packageRoot, "package.json"))) break;
+    const parent = require("node:path").dirname(packageRoot);
+    if (parent === packageRoot) break;
+    packageRoot = parent;
+  }
+  ensureOpentuiShims(packageRoot);
+  const mod = await import(`file://${abs}`);
+  const def = mod.default;
+  if (!def || typeof def !== "object" || typeof def.tui !== "function") {
+    throw new Error(`${entry}: default export has no tui(api) entry`);
+  }
+  const pluginId = typeof def.id === "string" && def.id ? def.id : `tui:${deriveId(abs)}`;
+  const loadOptions = options && typeof options === "object" && !Array.isArray(options) ? options : {};
+  const record = { id: pluginId, entry: abs, dispose: null, subscriptions: [], commands: new Map() };
+  plugins.set(pluginId, record);
+
+  const clientStub = new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        if (prop === "then" || prop === "catch" || prop === "finally") return undefined;
+        // Every SDK surface degrades to a rejecting promise (the
+        // sidebar's remote hydration treats failures as "no data").
+        return () => Promise.reject(new Error(`tui-bridge client stub: ${String(prop)} unavailable`));
+      },
+    },
+  );
+  const disposeLifecycle = [];
+  const api = {
+    app: { version: domainBase.appVersion },
+    version: domainBase.appVersion,
+    options: loadOptions,
+    tuiConfig: undefined,
+    state: {
+      ready: true,
+      path: { state: "", config: "", worktree: domainBase.directory, directory: domainBase.directory },
+      vcs: undefined,
+      session: {
+        count: () => 0,
+        get: () => undefined,
+        diff: () => [],
+        todo: () => [],
+        messages: () => [],
+        status: () => undefined,
+        permission: () => [],
+        question: () => [],
+      },
+      part: () => [],
+      lsp: () => [],
+      mcp: () => [],
+    },
+    route: {
+      current: () => tuiRoute,
+      navigate(name, params) {
+        const sessionID = typeof params?.sessionID === "string" ? params.sessionID : undefined;
+        notify("tui.route.navigate", { sessionID: sessionID ?? null, name: String(name ?? "") });
+      },
+      register: () => () => {},
+    },
+    theme: {
+      get current() {
+        return tuiThemeView;
+      },
+    },
+    client: clientStub,
+    renderer: { requestRender: () => { hostRequest("ui.slot.rerender", { pluginId }).catch(() => {}); } },
+    event: { on: () => () => {} },
+    keys: { map: () => ({}) },
+    keymap: { registerLayer: () => () => {}, dispatchCommand: () => {} },
+    mode: { set: () => {}, push: () => {}, pop: () => {} },
+    attention: {
+      request: () => {},
+      notify: () => Promise.resolve({ ok: false, reason: "attention_disabled" }),
+    },
+    kv: { get: async () => undefined, set: async () => {} },
+    ui: {
+      toast: () => {},
+      dialog: { open: () => {}, close: () => {}, alert: () => {}, confirm: () => {} },
+      slot: (spec) => {
+        const append = String(spec?.append ?? "");
+        const render = spec?.render;
+        if (typeof render !== "function") throw new Error("ui.slot requires a render function");
+        if (append === "sidebar.content") registerSidebarSlot(pluginId, render);
+        return () => {};
+      },
+      Slot: () => null,
+    },
+    slots: {
+      register(spec) {
+        const slots = spec?.slots ?? {};
+        const render = slots.sidebar_content ?? slots["sidebar.content"];
+        if (typeof render === "function") registerSidebarSlot(pluginId, render);
+        return `${pluginId}:slots`;
+      },
+    },
+    command: {
+      register(builder) {
+        try {
+          builder?.();
+        } catch (error) {
+          notify("log", { pluginId, level: "warn", message: `tui command register: ${errText(error)}` });
+        }
+        return () => {};
+      },
+    },
+    lifecycle: {
+      signal: new AbortController().signal,
+      onDispose(fn) {
+        disposeLifecycle.push(fn);
+        return () => {};
+      },
+    },
+    plugins: { list: () => [], activate: async () => false, deactivate: async () => false, add: async () => false },
+  };
+  await def.tui(api, loadOptions, { id: pluginId, version: domainBase.appVersion, state: "first" });
+  const dispose = async () => {
+    for (const fn of disposeLifecycle.splice(0)) {
+      try {
+        await fn();
+      } catch (error) {
+        notify("log", { pluginId, level: "warn", message: `tui dispose: ${errText(error)}` });
+      }
+    }
+    sidebarSlots.delete(pluginId);
+  };
+  tuiDisposers.set(pluginId, dispose);
+  return { ok: true, pluginId, sidebar: sidebarSlots.has(pluginId) };
+}
+
+function registerSidebarSlot(pluginId, render) {
+  sidebarSlots.set(pluginId, { render });
+  hostRequest("ui.slot.register", { pluginId, slot: "sidebar.content" }).catch(() => {});
+}
+
+/** `slot.materialize` — run the plugin's render function NOW and
+ *  flatten the tree into the native section shape. */
+async function handleSlotMaterialize({ pluginId }) {
+  const slot = sidebarSlots.get(pluginId);
+  if (!slot || typeof slot.render !== "function") {
+    throw new Error(`${pluginId}: no sidebar_content slot registered`);
+  }
+  const tree = slot.render();
+  const lines = treeLines(tree)
+    .map((line) => line.replace(/\s+$/, ""))
+    .filter((line) => line.trim() !== "");
+  return {
+    title: lines.length > 0 ? lines[0] : "",
+    rows: lines.slice(1),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Method table + read loop
 // ---------------------------------------------------------------------------
 
@@ -1224,6 +1548,7 @@ const METHODS = {
   initialize: async () => ({ ok: true, bun: Bun.version }),
   ping: async () => ({ ok: true }),
   load: handleLoad,
+  "load.tui": handleLoadTui,
   unload: handleUnload,
   dispatch: handleDispatch,
   "command.execute": handleCommandExecute,
@@ -1231,6 +1556,7 @@ const METHODS = {
   "tool.execute": handleToolExecute,
   "codemode.evaluate": handleCodemodeEvaluate,
   "dialog.materialize": handleDialogMaterialize,
+  "slot.materialize": handleSlotMaterialize,
   scan: async ({ entry }) => ({ digests: await scanDigests(entry) }),
 };
 
@@ -1265,6 +1591,27 @@ async function handleLine(line) {
       if (message.error) entry.reject(new Error(message.error.message ?? "guest error"));
       else entry.resolve(message.result ?? {});
     }
+    return;
+  }
+  if (message.method === "tui.route") {
+    // Host-pushed current route (the TUI's live session): the
+    // sidebar render reads it at every materialize.
+    const sessionID = message.params?.sessionID;
+    tuiRoute =
+      typeof sessionID === "string" && sessionID
+        ? { name: "session", params: { sessionID } }
+        : { name: "home" };
+    return;
+  }
+  if (message.method === "tui.theme") {
+    const view = message.params ?? {};
+    tuiThemeView = {
+      accent: typeof view.accent === "string" ? view.accent : tuiThemeView.accent,
+      background: typeof view.background === "string" ? view.background : tuiThemeView.background,
+      borderActive: typeof view.borderActive === "string" ? view.borderActive : tuiThemeView.borderActive,
+      text: typeof view.text === "string" ? view.text : tuiThemeView.text,
+      textMuted: typeof view.textMuted === "string" ? view.textMuted : tuiThemeView.textMuted,
+    };
     return;
   }
   if (message.method === "log") {
