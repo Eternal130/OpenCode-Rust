@@ -1,6 +1,10 @@
 # The Scan Specification (扫描细则) — LIVING DOCUMENT
 
 Version: **v9** (SPEC-R10 integration round — RATIFY-1″'s material gap MG-4
+
+**STATUS: LOCKED** (RATIFY-1\'\'\' + RATIFY-2\'\'\' both PASS, 2026-10-18). This
+is the standing instrument for every future dev->scan->fix loop. Changes
+henceforth require a new ratification cycle (protocol: docs/scan-program.md).
 cured: C14(b)'s source enum re-dispositioned to the true discovery census,
 list-census guard STRENGTHENED to cover every enumeration form (unions,
 kinds, sources, counts) with a mandatory exhaustive 83-clause sweep; A6
