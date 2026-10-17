@@ -81,3 +81,13 @@ Round SPEC-R1 (all five stances in one pass) seeds every track. Expected
 continuously. Terminal artifact: docs/scan-spec.md (the 扫描细则) — axes x
 sub-axes x granularity x fidelity requirements x method, versioned, the
 standing instrument for every future dev->scan->fix loop.
+
+## Post-final ratification rounds (user addition, 2026-10-17)
+
+After the per-perspective tracks converge and the spec reaches its FINAL
+version, run TWO MORE full multi-perspective review rounds (all five
+stances per round, fresh agents) as safety-margin ratification. Only if
+both ratification rounds yield no material gaps does the spec LOCK and
+become the standing instrument for every future dev->scan->fix loop.
+Round budget: convergence rounds (R5-R7 est.) -> FINAL -> RATIFY-1 ->
+RATIFY-2 -> LOCK.
