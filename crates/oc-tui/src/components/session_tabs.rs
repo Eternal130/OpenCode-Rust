@@ -34,8 +34,23 @@ pub const ADD_TAB_WIDTH: usize = 3;
 pub const INDICATOR_WIDTH: usize = 10;
 /// `TAB_UNREAD_MARKERS["small-dot"]`.
 pub const UNREAD_MARKER: &str = "•";
+/// `TAB_SPINNERS.dots` — the clockwise braille spinner
+/// (`SPINNER_FRAMES`, spinner-frames.ts; `interval: 80`,
+/// session-tabs.tsx:60). Frame index = `(clock / 80) % 10` — a
+/// frozen clock pins frame 0 (`SPINNER_FRAME_0`).
+pub const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+/// The spinner's interval (`TAB_SPINNERS.dots.interval`, :60).
+pub const SPINNER_INTERVAL_MS: u64 = 80;
 /// `SPINNER_FRAMES[0]` (frozen frame — animations off).
 pub const SPINNER_FRAME_0: &str = "⠋";
+
+/// The busy indicator's frame at `now_ms` — the clockwise dot while
+/// the session works (`spinner().frames[…]` under the `<spinner>`
+/// renderable's 80 ms cadence).
+#[must_use]
+pub fn spinner_frame_at(now_ms: u64) -> char {
+    SPINNER_FRAMES[((now_ms / SPINNER_INTERVAL_MS) % SPINNER_FRAMES.len() as u64) as usize]
+}
 /// `NEW_SESSION_TAB_TITLE`.
 pub const NEW_SESSION_TAB_TITLE: &str = "New session";
 /// `NEW_SESSION_TAB.sessionID` ("new", session-tabs.tsx:123) — the
