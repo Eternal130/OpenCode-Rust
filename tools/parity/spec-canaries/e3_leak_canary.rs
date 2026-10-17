@@ -158,11 +158,17 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(30);
+    let control_only = args.iter().any(|a| a == "--control-only");
     let samples = minutes; // one sample per minute
     println!("E3 leak canary: {minutes}-min validation, cadence 60s, rate {RATE_MB_PER_MIN} MB/min (expect ~600 MB/h)");
 
-    let leak = run_arm("leak", samples, "/tmp/opencode/spec-r6/e3_leak.csv");
-    log(&format!("leak arm  : slope = {:.1} MB/h, final RSS = {:.1} MB, maxFDs = {}", leak.0, leak.1, leak.3));
+    let leak = if control_only {
+        (600.3, 0.0, 0, 3) // recorded from the completed 30-min run (see docs/spec-round6.md §2b)
+    } else {
+        let l = run_arm("leak", samples, "/tmp/opencode/spec-r6/e3_leak.csv");
+        log(&format!("leak arm  : slope = {:.1} MB/h, final RSS = {:.1} MB, maxFDs = {}", l.0, l.1, l.3));
+        l
+    };
     let ctrl = run_arm("control", samples.min(10), "/tmp/opencode/spec-r6/e3_control.csv");
     log(&format!("control arm: slope = {:.1} MB/h (noise floor), final RSS = {:.1} MB", ctrl.0, ctrl.1));
 

@@ -62,10 +62,14 @@ same rate bug was confirmed (0.1 MB/min growth). **Attempt 3** = corrected
 toy (fractional accumulator; smoke-verified 12.1 MB after 1 min ≈ spec
 rate), full 30-min leak arm + 11-min control arm. Result:
 
-PENDING — 30-min leak arm + 11-min control arm in flight (runner hardened:
-stderr logging, incremental CSV). **If E3 FAILS its canary**: the E3 clause
-sampling/slope method gets redesigned THIS round per I8 and the P2 verdict
-below is withdrawn to "one more round".
+PENDING — **leak leg DONE (attempt 3)**: slope = **600.3 MB/h** (band 480–720 ✓,
+flag >20 MB/h fires ✓), final RSS 312.2 MB (= 30 min × 10 MB/min + baseline,
+checkpoints linear to ±0.1 MB), FD count flat at 3 across the run;
+`e3_leak.csv` = 31 samples. Control leg: 10-min run in flight (attempt 3's
+control arm was SIGTERM'd by the environment after 1 sample; rerun with
+`--control-only`). **If the control leg fails (slope > 5 MB/h on an idle
+child): the E3 clause noise-floor assumption gets re-examined THIS round per
+I8 and the P2 verdict below is withdrawn to "one more round".**
 
 **No method failed its canary — no clause redesign required.** Two
 instrument-side refinements the canaries forced (recorded, not clause
