@@ -1,24 +1,31 @@
 # The Scan Specification (扫描细则) — LIVING DOCUMENT
 
-Version: **v6** (SPEC-R7 convergence round — P3+P4+P5; FINAL candidate).
+Version: **v7** (SPEC-R8 ratification-cure round — RATIFY-1's two material
+gaps cured; FINAL candidate 2).
 Protocol:
 docs/scan-program.md. Lineage: v1 (R5 framework) -> SPEC-R1 (52 gaps;
 taxonomy-v2 [G][F][M]) -> v2 -> SPEC-R2 (30 gaps; [G][F][M] keystone;
 I8-I11) -> v3 -> SPEC-R3 (12 unowned families U1-U12 + 8 fold-amendments +
 clause rewrites) -> v4 -> v5 (SPEC-R5's 10 E-clause rewrites +
 3 amendments; E-axis executable; baselines ratified in
-docs/spec-round6.md) -> **THIS v6** (SPEC-R7: P3 executability riders
-B6/B7/B8/B9 + P3-D1 ref-runtime resolution + I2b ref-binary ground truth;
-P4 canary-coverage matrix + I5/I6/I8 amendments; P5 rewrites A2/B4/C6/D3/
-D11 + E2 legs; declared FINAL candidate in docs/spec-round7.md).
+docs/spec-round6.md) -> v6 (SPEC-R7: P3+P4+P5 convergence; FINAL
+candidate 1, FAILED ratification in docs/ratify-1.md) -> **THIS v7**
+(SPEC-R8: cures applied per docs/ratify-1.md — MG-1 telemetry/observability
+family owned by new clause C22 + F7 pre-disposition rewritten + B7 OTEL_*
+cells + F2/I8 amendments; MG-2 I10b enumeration pin corrected to the true
+35-package list with a mechanical census command; residual riders
+E6/E9/C7/B3; declared FINAL candidate 2 in docs/spec-round8.md).
 
 **Integration rule (binding, per I11 — this round's correction):** clause text is
 carried VERBATIM from the round documents — R1 taxonomy-v2 rows, R2 §c rewrites,
-R3 §5 proposals, R5 §3 proposals (v5), R7 §2/§3/§4 proposals (v6). Where v3 compressed or dropped a round's
+R3 §5 proposals, R5 §3 proposals (v5), R7 §2/§3/§4 proposals (v6), R8 cures
+(docs/ratify-1.md proposed cures: the F7 re-disposition and the four residual
+riders quoted character-exact; C22 and the census pin are R8-authored and
+carried verbatim in docs/spec-round8.md). Where v3 compressed or dropped a round's
 text, the fuller round text is RESTORED, not summarized. Every clause carries **[G]ranularity /
 [F]idelity / [M]ethod** — an agent satisfying the letter must also satisfy the
-spirit — plus its source gap IDs `{…}` (R2-M-4). The appendix maps ALL 129 gap
-IDs (R1 52 · R2 30 · R3 12+8 · R5 12 · R7 15) to clauses/folds/justifications.
+spirit — plus its source gap IDs `{…}` (R2-M-4). The appendix maps ALL 140 gap
+IDs (R1 52 · R2 30 · R3 12+8 · R5 12 · R7 15 · R8 11) to clauses/folds/justifications.
 
 ## Standing instrument layer (binds EVERY clause)
 I1 REAL payloads end-to-end — no hand-set ids; chains from our own
@@ -101,7 +108,11 @@ I8 **Falsifiability canary — TIERED** (v4, per R3 §3/§5): per round one
    rule (standing): an axis taking evidence MUST have its canary RUN first
    (tier rule — unchanged); axes not yet taking evidence do not pre-build
    canaries (designs land with the axis's method, as E2/E12 did in R7).
-   {R7: G9}
+   {R7: G9} **R8 design addendum (v7 — MG-1):** DESIGNED additionally =
+   **C22** (OTLP endpoint set/unset traffic-gating pair — endpoint set ⇒
+   mock collector receives /v1/logs + /v1/traces; endpoint unset ⇒ zero
+   collector traffic while the file log-layer still writes; binding before
+   C22's first evidence, per the defer-or-design rule). {R8: MG-1}
 I9 **Provenance ledger**: every fixture/capture records its source (real-run
    capture vs synthetic); synthetic data is never sole evidence.
    {R1: S4-2; R2: S4-3}
@@ -115,8 +126,21 @@ I10b **Enumeration-universe pin** (R3 U12): every round's report lists (a)
     {core, tui, cli, session-ui, schema, plugin}; family-granular {ai app client
     codemode console containers desktop effect-drizzle-sqlite enterprise
     function gui-extensions httpapi-codegen http-recorder identity latex merman
-    posts protocol script sdk server simulation stats storybook theme ui util
-    web}. Standing out-of-scope-with-justification entries: **stats** (U8 — we
+    plugin-browser posts protocol script sdk server simulation stats storybook
+    theme ui util web}. **R8 correction (v7, MG-2):** the v6 pin claimed 35
+    but enumerated 34 — **`plugin-browser` was missing** (found by
+    RATIFY-1's sorted diff; restored above between merman and posts). It is
+    behaviorally D10-owned (browser tunnel/proxy/connection/rpc/files), so
+    no family was ever unowned, but the F2/I7 completeness backstop
+    executes "every export in the I10b-pinned package universe" — an agent
+    materializing the universe from the pin LIST never accounted
+    plugin-browser's exports. **Census discipline (v7): the pin is
+    mechanical, not prose** — `ls -1 /opt/opencode-ref/packages/ | sort`
+    must yield exactly the 35 names above (6 exhaustive + 29
+    family-granular), and `ls -1 /opt/opencode-ref/packages/ | wc -l` =
+    35 (verified 2026-10-17, RATIFY-1 and this round); round reports' (a)/(b)
+    lists reconcile against that command's output, never against recall.
+    {R8: MG-2} Standing out-of-scope-with-justification entries: **stats** (U8 — we
     ship no stats surface; absent-justified accounting entry under F2/I7 + one
     C-cell if/when shipped); **identity/enterprise** (U9 — not shipped by us;
     `core/src/managed-policy.ts` still binds C4 precedence). Standing
@@ -202,6 +226,10 @@ B2 Pointer: [G] target x state x shape x **lifetime-phase** (hit-rect validity
    without wide-char reconstruction. {R1: S5-4; R2: S2-5}
 B3 Focus/layering/modality stacks. [G] per legal stack [F] routed-input trace
    [M] stack enumeration + key/pointer routing per stack.
+   **R8-N4 rider (v7 — ratify-1 R-D):** artifact = per-stack routed-input
+   trace table, assert = routing matches ref per legal stack (ours-vs-ref
+   columns; key + pointer events land on the same stack-top target as ref,
+   per stack). {R8: R-D}
 B4 Input methods: [G] per paste form (bracketed/image/large/WHATWG), IME
    composition, clipboard read/write (OSC 52) x size (incl. 100MB) [F] real
    buffers/paste payloads [M] inject + observe; byte-level paste/clip
@@ -243,7 +271,8 @@ B7 Platform/env matrix — **R2 §c rewrite, verbatim + R3 folds**: [G] OS
    profiles, CRLF in tool output, path separators, sound backend absence —
    each a distinct cell)} x env cells {unset TERM, no HOME, no PATH, no git/rg,
    read-only HOME, LANG x {C, en_US.UTF-8, non-UTF-8 (ru_RU.KOI8-R class)},
-   TZ absent, OPENCODE_* incl. CLI_CONFIG_CONTENT, SSH_TTY, CI vars, docker} x
+   TZ absent, OPENCODE_* incl. CLI_CONFIG_CONTENT, OTEL_* (R8-MG1(b) cells
+   below), SSH_TTY, CI vars, docker} x
    per-OS {$EDITOR default, sound/notify backend, updater path} + named cells:
    `ssh-askpass.ts` (fold 4), `editor-zed*` (fold 7), `attention-sounds.{bun,
    node}` backend split (fold 8). [F] clean envs; real envs where available
@@ -260,6 +289,15 @@ B7 Platform/env matrix — **R2 §c rewrite, verbatim + R3 folds**: [G] OS
    runner + the same runner script), macOS (recipe = CI macOS runner);
    sound-backend-absence and per-OS named cells ride their OS
    disposition. Artifact = matrix JSON + per-cell PASS/FAIL. {R7: G4}
+   **R8 OTEL_* cells (v7 — MG-1(b)):** the env-cell set additionally
+   includes {OTEL_EXPORTER_OTLP_ENDPOINT set, OTEL_EXPORTER_OTLP_HEADERS
+   set (valid + malformed k=v list), OTEL_RESOURCE_ATTRIBUTES set (valid +
+   malformed W3C list)} — LIVE (plain `env(1)` cells). **Boundary
+   (E6↔B7-style): B7 owns boot/survival/smoke under OTEL_* envs; C22 owns
+   the observability behavior in them** (env-read trace, emission gating,
+   log-layer). Ours today: no OTEL_* reads exist to survive — the B7 cell
+   still runs (boot must not regress when the vars are present) and the
+   C22 divergence is dispositioned on C22's leg. {R8: MG-1}
 B8 **Width implementation** (v4 rewrite per R3 §2): [G] per codepoint class
    {pure CJK, mixed, combining, ZWJ family, VS16, East-Asian Ambiguous} at OUR
    unicode-width version vs ref's width calculation; grapheme clustering;
@@ -338,6 +376,10 @@ C6 Plugin lifecycle x UI: [G] install/enable/disable/update/fail x UI x
    (I2b). {R1: S1-11; R2: (a)S1-11; R3: FOLD-5; R7: G12}
 C7 Background jobs surface. [G] per job state x surface [F] long-running real
    job [M] async replay + observe.
+   **R8-N3 rider (v7 — ratify-1 R-C):** artifact = per-job-state surface
+   table + progress/lifetime assert (ours-vs-ref columns; the job's
+   observable progress advances and its lifetime events — start/update/
+   end — appear on the owning surface, per state). {R8: R-C}
 C8 Worktree family — **R2 §c rewrite, verbatim**: [G] {create, adopt, refresh,
    move, delete, rename} x repo state {clean, dirty, detached, bare,
    conflicted, no-git} x {git-side assertion, UI cell, session_move tool}.
@@ -423,6 +465,66 @@ C21 **Determinism/idempotency** (RESTORED v4 — R2's §c-C17 / R1 S2-13 / U11;
    [F] I3 vt-clock driven [M] repetition scripts + order-stability assert;
    would catch queue double-fire on rapid Enter; duplicate session titles
    racing regeneration. {R1: S2-13; R2: S2-13, §c-C17; R3: U11}
+C22 **Telemetry/observability family** (v7, NEW — R8 MG-1(a); the family
+   RATIFY-1 found unowned: ref wires OTLP observability in PRODUCTION,
+   unconditionally, at CLI boot — `packages/cli/src/index.ts:8` imports
+   `Observability` from `@opencode/util/observability`, and
+   `cli/src/index.ts:126` provides `Observability.layer({endpoint:
+   process.env.OTEL_EXPORTER_OTLP_ENDPOINT, headers:
+   process.env.OTEL_EXPORTER_OTLP_HEADERS, client/version/channel…})`
+   into the main effect; R5's adjudication examined `packages/core` only
+   and concluded "no OTel implementation" — a POST grep cannot find
+   env-gated boot-layer wiring; ours has zero OTEL_*/otlp code (grep
+   `crates/` = 0 code hits, 2026-10-17) — a live ref-only family
+   divergence invisible to F7's ours-minus-ref letter and to any
+   core-only scan; exactly the U-family class R3's sweep existed to
+   catch, plus an I6-class masking premise). [G] cells =
+   {env-read set, boot-layer wiring, emission gating, config-key
+   behavior, always-on file-log layer} x {ours, ref}: (1) env reads —
+   the ref set is exactly {OTEL_EXPORTER_OTLP_ENDPOINT,
+   OTEL_EXPORTER_OTLP_HEADERS, OTEL_RESOURCE_ATTRIBUTES} (read at boot
+   in `cli/src/index.ts` and in `util/src/observability{.ts,/otlp.ts}`),
+   enumerated name-by-name per F7's env-read scope; malformed values
+   (bad headers k=v list, bad OTEL_RESOURCE_ATTRIBUTES W3C list) are
+   cells, not errors (ref parses defensively, drops bad attrs). (2) boot
+   layer — provided UNCONDITIONALLY: the layer, the env reads, and
+   structured logging are always on; only emission is endpoint-gated;
+   OTLP-layer failure falls back to the local-only logger
+   (`Layer.catchCause(() => local)`). (3) emission — OTLP JSON over HTTP
+   (`OtlpSerialization.layerJson` + `FetchHttpClient.layer` +
+   `OtlpExporter.layerFlusher`): logs → `{endpoint}/v1/logs`, traces →
+   `{endpoint}/v1/traces` (BatchSpanProcessor; AsyncLocalStorage-
+   ContextManager installed as the GLOBAL context manager), headers from
+   OTEL_EXPORTER_OTLP_HEADERS parsed `k=v,k=v`; resource = serviceName
+   `opencode` + serviceVersion + `deployment.environment.name` = channel
+   + `opencode.client` + `opencode.run`/`service.instance.id` = runID
+   (8-char UUID per process). (4) config key `openTelemetry`
+   (recognized in `core/src/config/normalize.ts:49`; leaf round-trip =
+   C4's; behavior disposition on/off/endpoint/headers vs ref = here).
+   (5) always-on file-log layer (endpoint-independent): structured
+   `key=value` lines (timestamp/level/run-id/spans/annotations) to a
+   shared machine-wide append-only log file, compacted in place
+   (50 MB cap → 25 MB keep, 1 h trim interval, 5 min stale-trim-lock),
+   local-vs-channel naming per `Logging.loggers(local, channel)`.
+   [F] I2b binary leg (ref 2.0.25 user binary — telemetry lives in the
+   CLI boot path, NOT in the 2.0.24-source `packages/core`, which is
+   why core-only scans kept missing it); B7's OTEL_* env cells reused;
+   I9 provenance for the mock collector (instrument, never sole
+   evidence). [M] mock OTLP collector (loopback HTTP recorder) as the
+   standing assert target: (i) endpoint SET ⇒ after one logged action +
+   one traced span, the collector holds POSTs to /v1/logs and /v1/traces
+   with parsed headers + resource attrs (channel/version/client) + JSON
+   body shape — ours vs ref-binary per cell; (ii) endpoint UNSET ⇒ zero
+   collector traffic while the file-log layer still writes (file exists,
+   structured lines carry run-id + channel); (iii) env-read trace parity
+   (F7 scope: name + count + args); (iv) ours disposition AS EVIDENCED:
+   zero OTel implementation = a standing divergence finding until
+   dispositioned (absent-justified requires a product decision, not scan
+   silence). I8 canary per the matrix's R8 design addendum (binding
+   before first evidence). Artifact = per-cell parity table {env x cell x
+   ours/ref-binary} + collector capture corpus. **Boundary: U8's OOC
+   entry stays SERVER-SIDE `stats/` only — client observability is IN
+   scope here.** {R8: MG-1}
 
 ## D — Data / Communication
 D1 SSE: [G] type x field x consumer {TUI, webui} x flow x error-injection
@@ -575,6 +677,8 @@ E6 i18n/locale: [G] locale classes {LANG=C, en_US.UTF-8, ru_RU.KOI8-R class,
    these envs; E6 owns format/rendering correctness parity in them** (no
    duplicated boot cells). [F] real locale env (same env matrix as B7,
    reused) [M] format-diff table ours vs ref per corpus item.
+   **R8-N1 rider (v7 — ratify-1 R-A):** assert = format-string equality
+   per corpus item; any diff dispositioned. {R8: R-A}
    {R1: S2-6, S3-5; R2: S2-6; R5: Q6}
 E7 Error-message quality: [G] error-path enumeration = union of {C5 injected
    failures, D2 documented error codes, C18 CLI exit codes}; per path:
@@ -595,6 +699,11 @@ E8 Security posture — **R2 §c rewrite, verbatim**: [G] route x auth table
 E9 Teardown/cleanup: [G] per exit path x {children, PTYs, temp files, locks,
    terminal restore}; **kill -9 recovery + panic injection**; stale locks.
    [F] kill -9/panic injection fidelity [M] post-exit system-state audit.
+   **R8-N2 rider (v7 — ratify-1 R-B):** artifact = per-exit-path residue
+   audit table (residue class x exit path, ours vs ref); threshold =
+   zero un-dispositioned residue = pass (orphan children, live PTYs,
+   temp files, held locks each dispositioned; terminal state restored).
+   {R8: R-B}
    {R1: S2-12; R2: (a)S2-12}
 E10 Storage/IO growth: [G] metrics = {DB main+WAL file bytes, log-dir
    bytes, state-file bytes + writes/hour (mtime count), process
@@ -646,7 +755,14 @@ F2 Bottom-up ref enumeration. [G] every export in the **I10b-pinned package
    [M] export-diff tool; account per export. Standing accounting entries
    (R5): `tui/src/devtools` DevTools.register export — dev-only
    debug-counter groups/entries; ours absent-justified (no parity
-   surface; R5-Q11). {R2: M-4; R3: U8, U12; R5: Q11}
+   surface; R5-Q11). Standing accounting entry (R8, MG-1(d)):
+   `util/src/observability{.ts,/}` exports (Observability.layer, Otlp
+   .loggers/.tracingLayer/.resource, Logging file/compaction constants) —
+   **parity-owned by C22** (env reads, boot wiring, emission gating,
+   file-log layer); NOT absent-justified: ours has zero OTel code (grep
+   `crates/` = 0 hits, 2026-10-17) → a live divergence held in C22's
+   ledger until dispositioned there. {R2: M-4; R3: U8, U12; R5: Q11;
+   R8: MG-1}
 F3 Concurrency: [G] {TUI+TUI, TUI+webui} x same-session double-drive, settings
    race (flock under two clients), SSE per-client isolation, concurrent
    session create/delete, event cross-talk [F] two live clients [M]
@@ -672,12 +788,18 @@ F7 **Negative-space parity** (v4 rewrite per R3 §2): [G] per surface x action;
    side-by-side traces vs ref [M] ours-minus-ref diff + **disposition rule
    (each extra = finding or justified)**; I8 canary = injected extra write +
    extra call must both trip (count+args, not name-only). Pre-registered
-   dispositions (R5): ref-side `openTelemetry` config key (recognized in
-   `config/normalize.ts`, no implementation in ref core — leaf round-trip
-   owned by C4); event-logger writes (in F7 files/events scope, parity
+   dispositions (R5; openTelemetry row RE-DISPOSITIONED v7): ref-side
+   `openTelemetry` config key (recognized in `config/normalize.ts`;
+   **R8 correction, MG-1(c)** — the R5 wording "no implementation in ref
+   core" carried a false product-level premise: implementation lives in
+   `packages/util/observability`, wired unconditionally in
+   `cli/src/index.ts` (boot layer; emission gated on
+   OTEL_EXPORTER_OTLP_ENDPOINT); core has none; config-key leaf round-trip
+   owned by C4, the telemetry behavior family owned by C22);
+   event-logger writes (in F7 files/events scope, parity
    expected); stats-server traffic = U8 OOC. These rows prevent false
    positives in the ours-minus-ref network/env diff. {R2: M-3; R3: §2-F7;
-   R5: Q12}
+   R5: Q12; R8: MG-1}
 
 ## Round log
 - v1: R5 framework.
@@ -721,6 +843,24 @@ F7 **Negative-space parity** (v4 rewrite per R3 §2): [G] per surface x action;
   A2/B4/C6/D3/D11; appendix +15 rows → 129. Verdict: P3/P4/P5 CLOSED →
   **FINAL candidate**; next RATIFY-1/RATIFY-2 per docs/scan-program.md.
   Report: docs/spec-round7.md.
+- v7: SPEC-R8 ratification-cure round integrated (RATIFY-1 FAIL → cures
+  applied per docs/ratify-1.md): MG-1 cured — new clause C22
+  (telemetry/observability family: OTEL_* env-read set, unconditional
+  boot layer, endpoint-gated OTLP log+trace emission, openTelemetry
+  config-key behavior, always-on file-log layer; I2b binary leg;
+  mock-collector assert; ref evidence `cli/src/index.ts:126`), F7
+  R5-Q12 pre-disposition REWRITTEN (false "no implementation in ref"
+  premise removed), B7 +OTEL_* env cells (E6↔B7-style boundary), F2
+  standing accounting entry for util/observability exports, I8 canary
+  matrix +C22 design; MG-2 cured — I10b pin corrected to the true
+  35-package list (plugin-browser restored between merman and posts) +
+  census command pinned (`ls -1 /opt/opencode-ref/packages/ | sort` /
+  `| wc -l` = 35); 4 residual riders (E6 assert, E9 artifact+threshold,
+  C7 artifact+assert, B3 artifact+assert — ratify-1 R-A..R-D proposed
+  edits applied verbatim, tagged R8-N1..N4); N-1..N-4 registered in the
+  appendix. Appendix +11 rows → 140. Verdict: **FINAL candidate 2**;
+  ratification counter RESETS — RATIFY-1′ and RATIFY-2′ follow per
+  docs/scan-program.md. Report: docs/spec-round8.md.
 
 ---
 
@@ -729,8 +869,9 @@ F7 **Negative-space parity** (v4 rewrite per R3 §2): [G] per surface x action;
 Every gap ID ever emitted by a round maps to exactly one destination below.
 Status legend: **C** = owning clause (text in this file) · **A** = amendment/
 named cell folded into an existing clause · **OOC** = out-of-scope with
-justification (I10b). Counts: R1 52/52 · R2 30/30 · R3 20/20 · R5 12/12
-· R7 15/15 = **129/129**.
+justification (I10b) · **REG** = registered residual (non-blocking; carried
+in the ledger, no clause change). Counts: R1 52/52 · R2 30/30 · R3 20/20
+· R5 12/12 · R7 15/15 · R8 11/11 = **140/140**.
 
 ### R1 gaps (52)
 
@@ -829,13 +970,13 @@ justification (I10b). Counts: R1 52/52 · R2 30/30 · R3 20/20 · R5 12/12
 | ID | Family / fold | Destination | Status |
 |---|---|---|---|
 | U1 | images | **A9** (restored) | C |
-| U2 | Code Mode + plugin-browser | **D10** (D9 number-reuse resolved) | C |
+| U2 | Code Mode + plugin-browser (package pin restored R8-MG2) | **D10** (D9 number-reuse resolved) | C |
 | U3 | terminal/persistent-PTY | **C17** | C |
 | U4 | CLI command surface | **C18** | C |
 | U5 | noninteractive/run mode | C18 (named cell-family) | A |
 | U6 | integrations | **C19** | C |
 | U7 | built-in tool family | **C20** | C |
-| U8 | stats/telemetry | F2/I7 absent-justified entry + I10b OOC list | OOC |
+| U8 | stats/telemetry (server-side `stats/` only; client observability → C22 per R8-MG1) | F2/I7 absent-justified entry + I10b OOC list | OOC |
 | U9 | account/identity/enterprise | I10b OOC list + C4 managed-policy note | OOC |
 | U10 | desktop + app frontends | D6 amendment (named or absent-justified) | A |
 | U11 | determinism/idempotency | **C21** (restored) | C |
@@ -864,7 +1005,7 @@ justification (I10b). Counts: R1 52/52 · R2 30/30 · R3 20/20 · R5 12/12
 | R5-Q9 | E11 nominal #2 closure (schedstat/pidstat @60s windows, byte-rate=0) | E11 (v5 rewrite) | C |
 | R5-Q10 | E12 committed corpus JSON + rank-order fuzzy parity | E12 (v5 rewrite) | C |
 | R5-Q11 | devtools DevTools.register observability groups | F2 standing accounting entry | A |
-| R5-Q12 | F7 ref-side-emission pre-dispositions (openTelemetry, event-logger, stats) | F7 amendment | A |
+| R5-Q12 | F7 ref-side-emission pre-dispositions (openTelemetry, event-logger, stats) — openTelemetry leg re-dispositioned by R8-MG1-F7 | F7 amendment | A |
 
 ### R7 gaps (15)
 
@@ -885,6 +1026,22 @@ justification (I10b). Counts: R1 52/52 · R2 30/30 · R3 20/20 · R5 12/12
 | R7-G13 | D3 comparison oracle + per-call disposition column (absent-API = finding) | D3 (v6 rewrite) | C |
 | R7-G14 | D11 tool/threshold/artifact (type-level export diff, zero un-dispositioned breaking) | D11 (v6 rewrite) | C |
 | R7-G15 | E2 two ref legs (source-dev + binary), ratio gates on binary leg, measured N=10 both | E2 rider | A |
+
+### R8 gaps (11 — RATIFY-1 register, cures per docs/ratify-1.md)
+
+| Gap | Destination | Status |
+|---|---|---|
+| R8-MG1 | telemetry/observability family unowned: ref wires OTLP Observability unconditionally at CLI boot (`cli/src/index.ts:126`, OTEL_* env reads); ours zero OTel — live divergence invisible | **C22** (new clause) + B7 OTEL_* cells + F2 accounting entry + I8 canary design | C |
+| R8-MG1-F7 | F7's R5-Q12 pre-disposition inherited the false "no implementation in ref" premise (core-only adjudication) | F7 pre-disposition REWRITTEN (v7, MG-1(c)) | A |
+| R8-MG2 | I10b pin claimed 35 packages, enumerated 34 — `plugin-browser` (D10-owned) missing from the F2/I7 completeness backstop | I10b pin corrected + census command pinned (v7) | A |
+| R8-N1 (=R-A) | E6 artifact without assert/threshold | E6 rider (v7): format-string equality per corpus item; any diff dispositioned | A |
+| R8-N2 (=R-B) | E9 threshold/artifact implicit | E9 rider (v7): residue audit table + zero un-dispositioned residue = pass | A |
+| R8-N3 (=R-C) | C7 thinnest clause — no artifact/threshold, "observe" verb only | C7 rider (v7): per-job-state surface table + progress/lifetime assert | A |
+| R8-N4 (=R-D) | B3 no named artifact/threshold | B3 rider (v7): per-stack routed-input trace table + routing-matches-ref assert | A |
+| R8-N5 (=N-1) | B7 linux-as-live-OS implicit; B9 TERM-negotiation/missing-binaries thresholds ride boot+echo | registered — cosmetic (S3 verdict CLEAN); rides stated cells | REG |
+| R8-N6 (=N-2) | F7 ours-minus-ref direction structurally blind to ref-only families (the MG-1 mechanism) | cured structurally by R8-MG1 (family now owned bottom-up in C22); F7 direction unchanged (symmetric diff would drown in ref-dev noise) | A |
+| R8-N7 (=N-3) | F1 coverage ledger has no aggregate closure condition | registered — round structure governed by docs/scan-program.md; per-axis % per round stands | REG |
+| R8-N8 (=N-4) | gui-extensions (806 files) owned transitively via D6/U10 + F2 — transitivity implicit | registered — D6(U10) letter forces the app disposition; F2/I10b family accounting explicit (v7 census) | REG |
 
 R3 §2 clause-stress verdicts (9 rows) are cured by the v4 rewrites of
 A8/B8/C13/C14/C15/C16/D9/F6/F7 — each rewritten clause carries its R3 §2
