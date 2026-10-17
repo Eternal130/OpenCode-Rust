@@ -1,0 +1,170 @@
+{
+ "provenance": "SPEC-R6 E12 first-evidence corpus. Session titles derived from the vt-harness standard_sessions fixtures (Alpha/Beta/Gamma shapes) plus real-shaped titles observed in ref session-data code paths; I9 label: FIXTURE-DERIVED SYNTHETIC (real-shape, not live-capture). Expected results computed by the REF session-list predicate ported 1:1 from tui/src/component/dialog-session-list.tsx:97-99 (query.trim().toLowerCase(); sessions with parentID excluded; withTimestampedFallback(title).toLowerCase().includes(query)).",
+ "surface": "session-list filter (dialog-session-list.tsx local path vs our DialogKind::ServerList session.list -> SelectProps -> filter_indices)",
+ "sessions": [
+  {
+   "id": "ses_alpha",
+   "title": "Fix login redirect loop",
+   "parent": null
+  },
+  {
+   "id": "ses_beta",
+   "title": "refactor: database migrations",
+   "parent": null
+  },
+  {
+   "id": "ses_gamma",
+   "title": "CJK 支付宝接入",
+   "parent": null
+  },
+  {
+   "id": "ses_delta",
+   "title": "café menu parser",
+   "parent": null
+  },
+  {
+   "id": "ses_epsilon",
+   "title": "CAFE overhaul",
+   "parent": null
+  },
+  {
+   "id": "ses_zeta",
+   "title": "Zalando API client",
+   "parent": null
+  },
+  {
+   "id": "ses_child",
+   "title": "Fix login redirect loop",
+   "parent": "ses_alpha"
+  },
+  {
+   "id": "ses_eta",
+   "title": " Wide  spaces  title ",
+   "parent": null
+  },
+  {
+   "id": "ses_theta",
+   "title": "naïve UTF-8 benches",
+   "parent": null
+  }
+ ],
+ "queries": [
+  {
+   "query": "login",
+   "class": "ascii",
+   "expected_match": [
+    "ses_alpha"
+   ],
+   "expected_nonmatch": [
+    "ses_beta",
+    "ses_gamma",
+    "ses_child"
+   ]
+  },
+  {
+   "query": "  FIX Login  ",
+   "class": "ascii+case+whitespace",
+   "expected_match": [
+    "ses_alpha"
+   ],
+   "expected_nonmatch": [
+    "ses_child",
+    "ses_beta"
+   ]
+  },
+  {
+   "query": "MIGRATIONS",
+   "class": "case-variant",
+   "expected_match": [
+    "ses_beta"
+   ],
+   "expected_nonmatch": [
+    "ses_alpha"
+   ]
+  },
+  {
+   "query": "café",
+   "class": "combining-precomposed-NFC",
+   "expected_match": [
+    "ses_delta"
+   ],
+   "expected_nonmatch": [
+    "ses_epsilon",
+    "ses_theta"
+   ]
+  },
+  {
+   "query": "café",
+   "class": "combining-decomposed-NFD",
+   "expected_match": [],
+   "expected_nonmatch": [
+    "ses_delta",
+    "ses_epsilon"
+   ],
+   "note": "NFD query vs NFC title: ref includes() is byte-exact after case-fold — no match; normalization audit cell"
+  },
+  {
+   "query": "cafe",
+   "class": "ascii-prefix-of-unicode",
+   "expected_match": [
+    "ses_epsilon"
+   ],
+   "expected_nonmatch": [
+    "ses_delta"
+   ],
+   "note": "ASCII 'cafe' is NOT a substring of NFC 'café' (é ≠ e) — byte-exact includes; ours may match via fuzzy equivalence: divergence probe"
+  },
+  {
+   "query": "支付宝",
+   "class": "CJK",
+   "expected_match": [
+    "ses_gamma"
+   ],
+   "expected_nonmatch": [
+    "ses_alpha"
+   ]
+  },
+  {
+   "query": "支付",
+   "class": "CJK-substring",
+   "expected_match": [
+    "ses_gamma"
+   ],
+   "expected_nonmatch": []
+  },
+  {
+   "query": "loginredirect",
+   "class": "fuzzy-concatenated",
+   "expected_match": [],
+   "expected_nonmatch": [
+    "ses_alpha"
+   ],
+   "note": "ref substring semantics: concatenated fuzzy query does NOT match 'login redirect' — ours (fuzzy) may: divergence probe"
+  },
+  {
+   "query": "zln",
+   "class": "fuzzy-abbreviation",
+   "expected_match": [],
+   "expected_nonmatch": [
+    "ses_zeta"
+   ],
+   "note": "fuzzy abbreviation of 'Zalando' — ref substring: no match; divergence probe"
+  },
+  {
+   "query": "wide spaces",
+   "class": "whitespace-collapse",
+   "expected_match": [],
+   "expected_nonmatch": [
+    "ses_eta"
+   ],
+   "note": "' Wide  spaces ' has doubled spaces; single-space query must not match under byte-exact includes"
+  },
+  {
+   "query": "  ",
+   "class": "whitespace-only",
+   "expected_match": [],
+   "expected_nonmatch": [],
+   "note": "trim() -> empty query: ref returns ALL sessions INCLUDING children (parentID exclusion applies only when a query is active — dialog-session-list.tsx:96-99)"
+  }
+ ]
+}

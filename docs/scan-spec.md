@@ -1,17 +1,20 @@
 # The Scan Specification (扫描细则) — LIVING DOCUMENT
 
-Version: **v4** (SPEC-R4 verbatim-integration round). Protocol: docs/scan-program.md.
-Lineage: v1 (R5 framework) -> SPEC-R1 (52 gaps; taxonomy-v2 [G][F][M]) -> v2 ->
-SPEC-R2 (30 gaps; [G][F][M] keystone; I8-I11) -> v3 -> SPEC-R3 (12 unowned
-families U1-U12 + 8 fold-amendments + clause rewrites) -> **THIS v4**.
+Version: **v5** (SPEC-R6 verbatim-integration + ratification round). Protocol:
+docs/scan-program.md. Lineage: v1 (R5 framework) -> SPEC-R1 (52 gaps;
+taxonomy-v2 [G][F][M]) -> v2 -> SPEC-R2 (30 gaps; [G][F][M] keystone;
+I8-I11) -> v3 -> SPEC-R3 (12 unowned families U1-U12 + 8 fold-amendments +
+clause rewrites) -> v4 -> **THIS v5** (SPEC-R5's 10 E-clause rewrites +
+3 amendments integrated verbatim; E-axis executable; baselines ratified in
+docs/spec-round6.md).
 
 **Integration rule (binding, per I11 — this round's correction):** clause text is
 carried VERBATIM from the round documents — R1 taxonomy-v2 rows, R2 §c rewrites,
-R3 §5 proposals. Where v3 compressed or dropped a round's text, the fuller round
-text is RESTORED, not summarized. Every clause carries **[G]ranularity /
+R3 §5 proposals, R5 §3 proposals (v5). Where v3 compressed or dropped a round's
+text, the fuller round text is RESTORED, not summarized. Every clause carries **[G]ranularity /
 [F]idelity / [M]ethod** — an agent satisfying the letter must also satisfy the
-spirit — plus its source gap IDs `{…}` (R2-M-4). The appendix maps ALL 102 gap
-IDs (R1 52 · R2 30 · R3 12+8) to clauses/folds/justifications.
+spirit — plus its source gap IDs `{…}` (R2-M-4). The appendix maps ALL 114 gap
+IDs (R1 52 · R2 30 · R3 12+8 · R5 12) to clauses/folds/justifications.
 
 ## Standing instrument layer (binds EVERY clause)
 I1 REAL payloads end-to-end — no hand-set ids; chains from our own
@@ -20,9 +23,10 @@ I2 REAL plugin sandbox; **≥3 ecosystems + omo-slim first (restored)**, incl.
    marketplace fetch; ref+plugin = ground truth for plugin surfaces.
    {R1: S3-4, S4-3; R2: (a)S3-4, (a)S1-11}
 I3 Virtual clock for **ALL timed behavior** (cadence = drive source), not
-   animation only: toast pause-on-activity, reconnect backoff (ref 1s/5s),
-   leader/chord timeouts, StartupLoading 500ms/3s gates, debounces,
-   update-check interval, attention bell timing. {R1: S4-4; R2: (a)S4-4}
+   animation only: toast pause-on-activity, spinner 80ms (`spinner.tsx`,
+   R5 pin), reconnect backoff (ref 1s/5s), leader/chord timeouts,
+   StartupLoading 500ms/3s gates, debounces, update-check interval,
+   attention bell timing. {R1: S4-4; R2: (a)S4-4; R5: §3-I3}
 I4 Token-exact cells per element x state.
 I5 Falsifiability: every clause names its evidence artifact. Standing in-repo
    instruments are BOUND as evidence artifacts (rounds must not rebuild ad-hoc):
@@ -358,29 +362,85 @@ D11 **SDK/client package** (RESTORED v4 — R2's §c-D10, silently vanished in
    (breaking-change diff). {R2: §c-D10; R3: §5-nonP1}
 
 ## E — Cross-cutting Quality
-E1 Perf FEEL: [G] per interaction x load; **metric = frame-interval histogram
-   at vt-clock; stall-burst = >2-frame deficit detector** [F] metric captured
-   (ms), instrumented runs [M] stutter = finding; histogram artifact.
-   {R1: S2-1; R2: S2-1}
-E2 Startup TTI: [G] boot -> first-interactive per surface x **config variant
-   (plugins on/off)** x data size; **threshold = ref StartupLoading 500ms/3s
-   gates** [F] timed [M] threshold assert vs ref timing. {R1: S2-2; R2: (a)S2-2, S2-1}
-E3 Memory growth (soak): [G] **RSS slope MB/h + span count over ≥4h soak** x
-   session shape; periodic sampling [F] RSS/handles sampled [M] slope assert +
-   sampling artifact. {R1: S2-3; R2: (a)S2-3, S2-1}
-E4 Huge-data: [G] per family x magnitude; **p95 first-paint latency at 10k
-   msgs** [F] synthetic-big + I9 [M] behavior + time. {R1: S2-4; R2: S2-1}
-E5 Accessibility: [G] contrast per theme x state x element; keyboard-only path
-   for every pointer target (~120 auditA targets); **color-independence of
-   busy/error states** [F] computed contrast [M] ratio assert + key-only walk.
-   {R1: S2-5; R2: (a)S2-5}
-E6 i18n/locale: [G] per locale class (TZ absent, non-UTF-8 ru_RU.KOI8-R,
-   LANG=C); width/truncation/ordering/formats (local-tz `toLocaleString` vs
-   fixed UTC) [F] real locale env [M] behavior diff. {R1: S2-6, S3-5; R2: (a)S2-6, S3-5}
-E7 Error-message quality: [G] per error path; exit-code semantics; toast
-   action labels; dialog copy variants [F] real messages [M] **copy-diff
-   method** + comprehensibility/actionable check; "Not wired in this build"
-   placeholders reachable in normal flows = finding. {R1: S2-10; R2: (a)S2-10}
+E1 Perf FEEL: [G] interaction × load matrix, cells = {typing, scroll, dialog
+   open, resize, paste-large, paste-during-stream, search-in-10k-transcript}
+   × {idle, streaming-active, 10k-msg transcript open}; frame model =
+   **drive-source ticks** (a TUI has no fixed fps — "frame" = one render
+   flush driven by a cadence source; pinned cadences: spinner 80ms
+   `spinner.tsx`, toast animation, reconnect backoff 1s/5s — same list as
+   I3). [F] ours: `frame_budget_tests.rs` + `replay.rs` (I5); ref:
+   timestamped PTY capture (write-stamp deltas) under I10 pin; vt-clock per
+   I3 for all cadence sources. [M] per cell: inter-flush interval histogram
+   (ms) + stall-burst detector = ≥2 consecutive missed drive ticks OR any
+   gap >150ms while a cadence source is active; **any stall-burst =
+   finding**; artifact = per-cell histogram JSON + burst list. Canary per
+   I8: injected 250ms stall must flag exactly the patched cell.
+   {R1: S2-1; R2: S2-1; R5: Q1}
+E2 Startup TTI: [G] boot → first-interactive per surface {tui, mini, webui,
+   headless run} × config variant {plugins on, plugins off} × data size
+   {fresh home, 100 sessions, 10k-msg session}; **T0 = process spawn
+   (first exec), T_interactive = first frame where the composer accepts+
+   echoes a key** (marker = observed echo in capture). [F] I3 vt-clock for
+   gate behavior + wall-clock N=10 runs recorded as baseline artifact
+   (median, p95 — same host for ours and ref, I10 pin). [M] TWO asserts:
+   (a) gate BEHAVIOR — stretch boot phases under vt-clock, StartupLoading
+   appears exactly when 500ms elapses and escalates at 3s (thresholds
+   pinned from ref `startup-loading.tsx`: 500ms show, 3000ms gate);
+   (b) baseline — ours T_interactive median ≤ ref ×1.5.
+   {R1: S2-2; R2: S2-1; R5: Q2}
+E3 Memory growth (soak): [G] per session shape {idle session open,
+   streaming session completed, 10k-msg transcript open, plugin-active}
+   × ≥2 runs × ≥4h (or 1×24h); metrics = VmRSS + RssAnon + FD count
+   sampled from /proc/PID every 60s (real clock — RSS is not
+   virtualizable). [F] sampling harness = the F5 soak; ref baseline
+   measured identically under I10 pin. [M] slope (MB/h, least-squares over
+   full run) reported per run; threshold: ours slope ≤ **max(2 × ref
+   slope, ref slope + 20 MB/h)**; artifact = CSV + slope table.
+   Leak-canary gated per I8 before first evidence counts (see R5 §5).
+   {R1: S2-3; R2: S2-1; R5: Q3}
+E4 Huge-data: [G] per family {transcript render, session-list, search,
+   diff view} × magnitude {1k, 10k, 100k msgs}; corpus = committed
+   generator script (synthetic, I9-labeled; generation is part of the
+   artifact). [F] I5 replay harness, same corpus for ours and ref (I10).
+   [M] marker = **first frame containing the target content after
+   load/navigate/scroll-to-message**; p95 over N=20 runs each side;
+   threshold: ours p95 ≤ ref p95 ×1.5 on the same host; content
+   correctness is A3's (E4 owns time only — boundary per R5 §4).
+   Artifact = per-cell p95 table. {R1: S2-4; R2: S2-1; R5: Q4}
+E5 Accessibility: [G] (a) contrast per theme × state × element — computed
+   WCAG ratio from theme-token fg/bg pairs (post-quantizer, A7 chain);
+   **threshold 4.5:1 text, 3:1 UI/large**; cells where REF itself violates
+   are inherited-findings (listed, dispositioned, not parity-blocking) —
+   ours must be ≥ ref ratio per cell. (b) keyboard-only path for every
+   pointer target — **target enumeration = B2 hit-rect inventory ∪ C16
+   dialog enumeration** (v4's "~120 auditA targets" is DELETED: `auditA`
+   does not exist in ref, verified zero hits); method = scripted key walk
+   reaching each target with visible focus. (c) color-independence of
+   busy/error/disabled states: under grayscale transform +
+   luminance-equality check (deuteranopia-class pairs share luminance),
+   state pairs must remain distinguishable by non-hue channel or
+   glyph/shape. [F] computed from token values (I4) [M] ratio assert +
+   walk artifact + independence table; canary per I8 (R5 §5).
+   {R1: S2-5; R2: S2-5; R5: Q5}
+E6 i18n/locale: [G] locale classes {LANG=C, en_US.UTF-8, ru_RU.KOI8-R class,
+   TZ absent} × format corpus {transcript timestamps, session-list relative
+   times, date pickers} — local-tz `toLocaleString` vs fixed-UTC behavior,
+   width/truncation under non-UTF-8. **Boundary: B7 owns boot/survival in
+   these envs; E6 owns format/rendering correctness parity in them** (no
+   duplicated boot cells). [F] real locale env (same env matrix as B7,
+   reused) [M] format-diff table ours vs ref per corpus item.
+   {R1: S2-6, S3-5; R2: S2-6; R5: Q6}
+E7 Error-message quality: [G] error-path enumeration = union of {C5 injected
+   failures, D2 documented error codes, C18 CLI exit codes}; per path:
+   message copy, toast action labels, dialog copy, exit code. [F] real
+   messages from the C5/D2/C18 harnesses [M] (a) **copy-diff vs ref** per
+   path (objective parity); (b) placeholder scan — regex corpus
+   {"Not wired in this build", TODO, FIXME, lorem} across all reachable
+   surfaces, any hit in a normal flow = finding; (c) exit-code table
+   completeness — every emitted code documented or dispositioned. (v4's
+   "comprehensibility/actionable check" is DELETED — not agent-executable;
+   comprehensibility is proxied by parity + placeholder freedom.)
+   {R1: S2-10; R2: S2-10; R5: Q7}
 E8 Security posture — **R2 §c rewrite, verbatim**: [G] route x auth table
    incl. static assets; pair-code entropy/expiry; credential file perms;
    traversal corpus; redaction canaries (planted secrets in logs/share/
@@ -390,23 +450,43 @@ E9 Teardown/cleanup: [G] per exit path x {children, PTYs, temp files, locks,
    terminal restore}; **kill -9 recovery + panic injection**; stale locks.
    [F] kill -9/panic injection fidelity [M] post-exit system-state audit.
    {R1: S2-12; R2: (a)S2-12}
-E10 **Storage/IO growth** (RESTORED v4 — R2's §c-E10; deep metric pass owned
-   by P2): [G] DB size, log growth, state-file churn, write amplification x
-   hours over soak [F] E3-class periodic sampling [M] growth-slope artifact;
-   would catch unbounded event-log growth — a disk-full field failure no other
-   clause can express. {R2: S2-2, §c-E10}
-E11 **Idle CPU/energy** (RESTORED v4 — R2's §c-E11; deep metric pass owned by
-   P2): [G] event-poll loops, animations while idle, wakeups per minute at
-   rest [F] idle-state sampling [M] wakeup-count artifact; would catch
-   spin-loop battery drain that passes every functional axis.
-   {R2: S2-3, §c-E11}
-E12 **Search/filter family** (NEW v4 — R2's S2-4, silently dropped by v3 and
-   missed by R3's register; caught in R4's zero-loss check): [G] per surface
-   {session-list filter, transcript/message search} x query class {ascii,
-   case variants, combining chars, CJK, fuzzy} [F] real corpus incl.
-   combining chars + I9 [M] result-parity assert vs ref + normalization
-   audit; would catch search that misses combining chars / case variants.
-   {R2: S2-4}
+E10 Storage/IO growth: [G] metrics = {DB main+WAL file bytes, log-dir
+   bytes, state-file bytes + writes/hour (mtime count), process
+   write_bytes delta /proc/PID/io} sampled every 5min during the F5/E3
+   soak, per session shape; write amplification = disk-bytes-written ÷
+   new-data-bytes per soak segment. [F] same soak harness as E3 (shared
+   sampling loop; real clock) [M] growth-slope per metric (bytes/h);
+   threshold: ours ≤ max(2 × ref baseline, ref + 50 MB/h) on identical
+   session shape (I10); **unbounded monotonic growth in any metric =
+   finding regardless of threshold**; artifact = CSV + slope table +
+   amplification ratios. {R2: S2-2; R4 restore; R5: Q8} (v5 rewrite per
+   R5 §3 — closes P1-residual nominal #1; supersedes v4's R2 §c-E10
+   restore text, same gap lineage.)
+E11 Idle CPU/energy: [G] idle states {no session, idle session open,
+   post-stream session} × 60s windows; metrics = utime+stime delta
+   /proc/PID/stat, voluntary+involuntary ctxt switches /proc/PID/schedstat
+   (fallback `pidstat -w 1 60`), and **PTY output byte-rate at rest**
+   (E1 capture harness reused) — animations-while-idle manifests as
+   nonzero byte-rate with no cadence source active. [F] real clock,
+   quiescent machine (no other load; harness asserts loadavg < 1.5), ref
+   measured identically (I10) [M] per state+window: CPU% and
+   wakeups/min; threshold: ours CPU% ≤ ref + 0.5%, wakeups/min ≤
+   ref ×1.5, byte-rate = 0 unless a user-visible animation is active
+   (each nonzero dispositioned); artifact = window table.
+   {R2: S2-3; R4 restore; R5: Q9} (v5 rewrite per R5 §3 — closes
+   P1-residual nominal #2; supersedes v4's R2 §c-E11 restore text, same
+   gap lineage.)
+E12 Search/filter family: [G] per surface {session-list filter,
+   transcript/message search} × query class {ascii, case variants,
+   combining chars (NFC/NFD pairs), CJK, fuzzy} — **corpus committed
+   in-repo as JSON** (queries × expected-matching/non-matching strings,
+   I9-labeled real-session-derived). [F] corpus + I10 pin [M]
+   result-parity assert vs ref: ordered result-list equality per query;
+   fuzzy = **rank-order parity** (ties dispositioned as set-equality);
+   normalization audit = which of NFC/NFD/case-fold each side applies.
+   Artifact = per-query diff table. {R2: S2-4; R4 new; R5: Q10} (v5
+   rewrite per R5 §3; v4-new clause — R2's S2-4, v3-dropped, R4-caught —
+   text superseded by R5 §3.)
 
 ## F — Adversarial / Meta
 F1 Materialized command x route x state matrix. [G] every cell owned;
@@ -417,7 +497,10 @@ F1 Materialized command x route x state matrix. [G] every cell owned;
 F2 Bottom-up ref enumeration. [G] every export in the **I10b-pinned package
    universe** accounted (ported/absorbed/absent-justified), incl. packages
    beyond tui/core; U8 stats = standing absent-justified entry [F] I10+I10b
-   [M] export-diff tool; account per export. {R2: M-4; R3: U8, U12}
+   [M] export-diff tool; account per export. Standing accounting entries
+   (R5): `tui/src/devtools` DevTools.register export — dev-only
+   debug-counter groups/entries; ours absent-justified (no parity
+   surface; R5-Q11). {R2: M-4; R3: U8, U12; R5: Q11}
 F3 Concurrency: [G] {TUI+TUI, TUI+webui} x same-session double-drive, settings
    race (flock under two clients), SSE per-client isolation, concurrent
    session create/delete, event cross-talk [F] two live clients [M]
@@ -442,7 +525,13 @@ F7 **Negative-space parity** (v4 rewrite per R3 §2): [G] per surface x action;
    reads, network calls}; diff granularity = name + count + args** [F]
    side-by-side traces vs ref [M] ours-minus-ref diff + **disposition rule
    (each extra = finding or justified)**; I8 canary = injected extra write +
-   extra call must both trip (count+args, not name-only). {R2: M-3; R3: §2-F7}
+   extra call must both trip (count+args, not name-only). Pre-registered
+   dispositions (R5): ref-side `openTelemetry` config key (recognized in
+   `config/normalize.ts`, no implementation in ref core — leaf round-trip
+   owned by C4); event-logger writes (in F7 files/events scope, parity
+   expected); stats-server traffic = U8 OOC. These rows prevent false
+   positives in the ours-minus-ref network/env diff. {R2: M-3; R3: §2-F7;
+   R5: Q12}
 
 ## Round log
 - v1: R5 framework.
@@ -461,6 +550,19 @@ F7 **Negative-space parity** (v4 rewrite per R3 §2): [G] per surface x action;
   landed as named cells; traceability appendix added (102 gap IDs: R1 52,
   R2 30, R3 12+8). NEXT: SPEC-R5 (P2 quality-dimensions round; directives in
   docs/spec-round4.md).
+- v5: SPEC-R5 §3 integrated **VERBATIM** (R6 integration + ratification
+  round): 10 E-clause rewrites (E1 perf-feel drive-tick model +
+  interaction×load matrix incl. paste-during-stream; E2 T0/T_interactive +
+  two-assert gate-behavior/baseline; E3 /proc VmRSS+FD @60s with
+  max(2×ref, ref+20MB/h) threshold; E4 first-paint marker N=20 ×1.5; E5
+  WCAG 4.5:1/3:1 + B2∪C16 enumeration + color-independence method —
+  auditA deleted, not in ref; E6 B7-boundary + format corpus; E7 copy-diff
+  + placeholder scan + exit-code table; E10/E11 P1-residual nominals
+  closed; E12 committed corpus + rank-order parity); 3 amendments (F2
+  devtools accounting, F7 pre-dispositions, I3 spinner-80ms pin);
+  appendix +12 rows → 114. Canaries (E1/E3/E5, 5 legs) + measured
+  baselines + zero-loss table: docs/spec-round6.md. NEXT: P3 (adversarial
+  deepening; directives in docs/spec-round6.md).
 
 ---
 
@@ -469,7 +571,8 @@ F7 **Negative-space parity** (v4 rewrite per R3 §2): [G] per surface x action;
 Every gap ID ever emitted by a round maps to exactly one destination below.
 Status legend: **C** = owning clause (text in this file) · **A** = amendment/
 named cell folded into an existing clause · **OOC** = out-of-scope with
-justification (I10b). Counts: R1 52/52 · R2 30/30 · R3 20/20 = **102/102**.
+justification (I10b). Counts: R1 52/52 · R2 30/30 · R3 20/20 · R5 12/12
+= **114/114**.
 
 ### R1 gaps (52)
 
@@ -587,6 +690,23 @@ justification (I10b). Counts: R1 52/52 · R2 30/30 · R3 20/20 = **102/102**.
 | FOLD-6 | file-retention/mutation + workspace-file-changes | C16 + C5 | A |
 | FOLD-7 | editor-zed* | B7 | A |
 | FOLD-8 | attention-sounds.{bun,node} split | B7 | A |
+
+### R5 gaps (12)
+
+| Gap | Destination | Status |
+|---|---|---|
+| R5-Q1 | E1 interaction×load matrix, drive-tick frame model, paste-during-stream cell | E1 (v5 rewrite) | C |
+| R5-Q2 | E2 T0/T_interactive markers, gate-behavior assert + baseline artifact | E2 (v5 rewrite) | C |
+| R5-Q3 | E3 threshold value + /proc sampling method (V mRSS+FD @60s) | E3 (v5 rewrite) | C |
+| R5-Q4 | E4 first-paint marker, N=20, ×1.5 threshold | E4 (v5 rewrite) | C |
+| R5-Q5 | E5 WCAG 4.5:1/3:1, B2∪C16 target enumeration, color-independence method | E5 (v5 rewrite) | C |
+| R5-Q6 | E6/B7 boundary + format corpus | E6 (v5 rewrite) | C |
+| R5-Q7 | E7 copy-diff + placeholder scan + exit-code table (subjective check dropped) | E7 (v5 rewrite) | C |
+| R5-Q8 | E10 nominal #1 closure (metrics @5min on F5 soak, slope artifact) | E10 (v5 rewrite) | C |
+| R5-Q9 | E11 nominal #2 closure (schedstat/pidstat @60s windows, byte-rate=0) | E11 (v5 rewrite) | C |
+| R5-Q10 | E12 committed corpus JSON + rank-order fuzzy parity | E12 (v5 rewrite) | C |
+| R5-Q11 | devtools DevTools.register observability groups | F2 standing accounting entry | A |
+| R5-Q12 | F7 ref-side-emission pre-dispositions (openTelemetry, event-logger, stats) | F7 amendment | A |
 
 R3 §2 clause-stress verdicts (9 rows) are cured by the v4 rewrites of
 A8/B8/C13/C14/C15/C16/D9/F6/F7 — each rewritten clause carries its R3 §2
