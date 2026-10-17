@@ -1,9 +1,10 @@
 # The Scan Specification (扫描细则) — LIVING DOCUMENT
 
-Version: **v8** (SPEC-R9 integration round — RATIFY-1′'s material gap MG-3
-cured: A8 rewritten at census-pinned family granularity, list-census guard
-added to I10b, full list-sweep of every list-bearing clause; FINAL
-candidate 3).
+Version: **v9** (SPEC-R10 integration round — RATIFY-1″'s material gap MG-4
+cured: C14(b)'s source enum re-dispositioned to the true discovery census,
+list-census guard STRENGTHENED to cover every enumeration form (unions,
+kinds, sources, counts) with a mandatory exhaustive 83-clause sweep; A6
+numeral fix; R-G1 class-cure; FINAL candidate 4).
 Protocol:
 docs/scan-program.md. Lineage: v1 (R5 framework) -> SPEC-R1 (52 gaps;
 taxonomy-v2 [G][F][M]) -> v2 -> SPEC-R2 (30 gaps; [G][F][M] keystone;
@@ -19,11 +20,19 @@ cells + F2/I8 amendments; MG-2 I10b enumeration pin corrected to the true
 E6/E9/C7/B3; declared FINAL candidate 2 in docs/spec-round8.md) ->
 **THIS v8** (SPEC-R9: RATIFY-1′ FAIL per docs/ratify-1b.md — MG-3 A8
 mermaid/latex enumeration cured by a complete merman+latex census and an
-A8 rewrite at true family granularity; I10b list-census guard extends the
-MG-2 pin discipline from packages to every ref-enumerating in-clause list;
-full v8 list-sweep pinned or exempted every list-bearing clause; R-E/R-F/
-M-1..M3 residual riders; declared FINAL candidate 3 in docs/spec-round9.md).
-
+in-place A8 rewrite at true family granularity; I10b list-census guard
+extends the MG-2 pin discipline from packages to every ref-enumerating
+in-clause list; full v8 list-sweep pinned or exempted every list-bearing
+clause; R-E/R-F/M-1..M3 residual riders; declared FINAL candidate 3 in
+docs/spec-round9.md) ->
+**THIS v9** (SPEC-R10: RATIFY-1″ FAIL per docs/ratify-1c.md — MG-4 C14(b)
+{command, agent, prompt} over-enumerates ref (`prompt` has no markdown/
+discovery source) — cured by the C14(b) v9 census re-disposition; the guard
+STRENGTHENED from "lists" to every enumeration form (unions/kinds/sources/
+named-cell inventories/count annotations, with count-vs-list coherence) and
+its sweep made EXHAUSTIVE over all 83 clauses (R9's curated 26+ set was the
+escape hatch); M-4 A6 numeral fixed; R-G1 five standing accounting entries;
+declared FINAL candidate 4 in docs/spec-round10.md).
 **Integration rule (binding, per I11 — this round's correction):** clause text is
 carried VERBATIM from the round documents — R1 taxonomy-v2 rows, R2 §c rewrites,
 R3 §5 proposals, R5 §3 proposals (v5), R7 §2/§3/§4 proposals (v6), R8 cures
@@ -31,11 +40,14 @@ R3 §5 proposals, R5 §3 proposals (v5), R7 §2/§3/§4 proposals (v6), R8 cures
 riders quoted character-exact; C22 and the census pin are R8-authored and
 carried verbatim in docs/spec-round8.md), R9 cures (the A8 rewrite, the I10b
 list-census guard, and every census pin / rider below are R9-authored and
-carried verbatim in docs/spec-round9.md). Where v3 compressed or dropped a round's
+carried verbatim in docs/spec-round9.md), R10 cures (the C14(b) census
+re-disposition, the strengthened enumeration-census guard, the A6 numeral
+fix, the C20 AGENTS.md parenthetical, and the five R-G1 standing entries
+below are R10-authored and carried verbatim in docs/spec-round10.md). Where v3 compressed or dropped a round's
 text, the fuller round text is RESTORED, not summarized. Every clause carries **[G]ranularity /
 [F]idelity / [M]ethod** — an agent satisfying the letter must also satisfy the
-spirit — plus its source gap IDs `{…}` (R2-M-4). The appendix maps ALL 157 gap
-IDs (R1 52 · R2 30 · R3 12+8 · R5 12 · R7 15 · R8 11 · R9 17) to clauses/folds/justifications.
+spirit — plus its source gap IDs `{…}` (R2-M-4). The appendix maps ALL 162 gap
+IDs (R1 52 · R2 30 · R3 12+8 · R5 12 · R7 15 · R8 11 · R9 17 · R10 5) to clauses/folds/justifications.
 
 ## Standing instrument layer (binds EVERY clause)
 I1 REAL payloads end-to-end — no hand-set ids; chains from our own
@@ -169,7 +181,26 @@ I10b **Enumeration-universe pin** (R3 U12): every round's report lists (a)
     ratification on sight. The v8 list-sweep (docs/spec-round9.md §2)
     adjudicated every list-bearing clause in this file: censused-and-
     valid, cured-and-pinned, data-driven-named, runtime-named, or
-    exempt-by-class. {R9: MG-3} Standing out-of-scope-with-justification entries: **stats** (U8 — we
+    exempt-by-class. {R9: MG-3} **Enumeration-census guard, STRENGTHENED
+    (v9 — R10; closes the MG-4 execution gap):** the guard's unit is
+    EVERY in-clause enumeration of ref facts, in ANY syntactic form —
+    brace lists, union/kind/source ENUMS (the form that escaped R9's
+    sweep: C14(b)'s {command, agent, prompt}), named-file inventories
+    ("named cells"), and the COUNT annotations and numerals that
+    summarize an enumerated set ("all 12 listed panels", "6 exhaustive +
+    29 family-granular") — each citing the mechanical census command
+    that reproduces it; a count annotation must AGREE with the
+    enumeration it summarizes (a disagreeing numeral inside a census
+    pin is the M-4 defect class and fails on sight). A sweep enforcing
+    this guard is valid ONLY if it enumerates the FULL 83-clause
+    universe row-by-row (no-enumeration clauses included, marked as
+    such) via a stated mechanical discovery procedure the next ratifier
+    can re-run — a curated-subset sweep is itself a fail-on-sight
+    defect (the MG-4 lesson: C14(b) escaped R9's 26+-clause curated
+    sweep while the guard's letter claimed completeness). The R10 sweep
+    (docs/spec-round10.md §3) is the first execution under this rule:
+    83/83 rows, discovery procedure stated. {R10: MG-4, SW1}
+    Standing out-of-scope-with-justification entries: **stats** (U8 — we
     ship no stats surface; absent-justified accounting entry under F2/I7 + one
     C-cell if/when shipped); **identity/enterprise** (U9 — not shipped by us;
     `core/src/managed-policy.ts` still binds C4 precedence). Standing
@@ -187,6 +218,31 @@ I10b **Enumeration-universe pin** (R3 U12): every round's report lists (a)
     I10); **web** (share viewer polling `ws /share_poll?id=` + docs site —
     viewer-side of the same hosted pair; rides D8's destination cells;
     accounting entry only). {R3: U8, U9, U12; R4: re-sweep; R9: R-E}
+    Standing accounting entries, no parity surface (v9, R-G1 — the
+    class-cure: ratify-1.md's table adjudications made standing, same
+    format as console/posts/script/function/web; census commands =
+    `find /opt/opencode-ref/packages/<pkg> -type f` each, executed
+    2026-10-18): **containers** (8 files: 5 Dockerfiles {base, bun-node,
+    rust, tauri-linux, publish} + `script/build.ts` + README/tsconfig —
+    build/CI recipes, no runtime surface; rides B7/B9 docker cells),
+    **storybook** (31 files: `.storybook/` config {main, manager,
+    preview, extension, theme-tool} + `mocks/{app,gui-extensions}` —
+    harness/mocks, no src/ product code), **effect-drizzle-sqlite**
+    (2 files: `sst-env.d.ts` + one example migration.sql under
+    `examples/` — no src/, no package.json; the drizzle adapter it
+    examples lives in `core/src/database/drizzle.ts` (core-owned)),
+    **httpapi-codegen** (16 files: build-time code generator — its
+    OUTPUT is shipped (`client/src/effect/generated/*`, header
+    "Generated by @opencode/httpapi-codegen") and that output's parity
+    is D11-owned via the client shape-diff; the generator itself is
+    dev tooling), **http-recorder** (30 files: record-once/replay
+    cassette library for Effect HTTP/WebSocket — test infrastructure;
+    consumers = `ai/test/*` + `core/test/*` only, zero runtime importers).
+    Identity precision note (v9, M-5b): the U9 OOC entry's
+    "account/identity" label is coarser than reality — `identity/` is 6
+    brand-mark asset files (mark.svg + PNG variants), zero code
+    (`find packages/identity -type f` = 6, all assets); disposition
+    (not shipped by us) unchanged. {R10: R-G1, M-5}
 I11 **Process + output contract**: ≤45-min chunks, no backgrounded scans,
     worktree isolation, per-round output format (gap register + adequacy table +
     convergence estimate), no summary-only dispatch — integrations quote clause
@@ -237,9 +293,15 @@ A6 MINI frontend — **R2 §c rewrite, verbatim**: [G] panel enum from ref
    [M] mini PTY capture diff vs mini spec (mini/theme.ts quantizer rules).
    **V8 census pin:** panel files verified against `ls -1
    /opt/opencode-ref/packages/tui/src/mini/ | grep -E
-   '^(footer|scrollback|stream-v2|splash)'` — all 12 listed panels exist as
-   files; `stream-v2.transport.ts` is plumbing, not a panel (2026-10-17).
-   {R1: S1-5; R2: (a)S1-5; R9: L1}
+   '^(footer|scrollback|stream-v2|splash)'` — all 13 listed panels exist as
+   files; the grep yields 17 files = the 13 panels + 4 plumbing/shared
+   (`footer.ts`, `footer.width.ts`, `scrollback.shared.ts`,
+   `stream-v2.transport.ts` — plumbing, not panels) (2026-10-17).
+   **Numeral corrected v9 (R10-M-4):** the v8 pin said "all 12 listed
+   panels" — the clause's own enum lists 13 (footer x7, scrollback x2,
+   splash x1, stream-v2 x3) and all 13 exist; count-annotation
+   coherence is guard-enforced from v9.
+   {R1: S1-5; R2: (a)S1-5; R9: L1; R10: M-4}
 A7 Theme-system chain: [G] discovery -> select -> apply -> live-preview ->
    live-retheme -> error chain (ThemeErrorToast) x step; user-theme-dir
    discovery; system detect (OSC 11); oklab quantization; syntax themes.
@@ -525,7 +587,13 @@ C13 **Skills family** (v4 rewrite per R3 §2; R2 matrix restored): [G] sources
    {directory, url, embedded} x phase {discovery, permission, invocation} x UI
    (dialog-skill); embedded-vs-directory precedence; invocation-through-agent
    and URL-fetch failure paths. [F] real skill dir [M] enumeration + UI assert
-   + failure-path probes. {R2: S1-1, (a)C13; R3: §2-C13}
+   + failure-path probes. **V9 census pin (R10-SW1):** the source-kind set
+   is EXACT — `schema/src/skill.ts:45` `type Source =
+   DirectorySource | UrlSource | EmbeddedSource` (config-side discovery
+   wires paths/urls at `config/normalize.ts:243-244`, embedded arrives via
+   plugins); census: `grep -n 'type Source'
+   /opt/opencode-ref/packages/schema/src/skill.ts` (2026-10-18).
+   {R2: S1-1, (a)C13; R3: §2-C13; R10: SW1}
 C14 **Instructions/commands/agents/prompts discovery** (v4 rewrite; R2 proposed
    these as TWO clauses — both texts carried):
    (a) Instruction discovery: [G] AGENTS.md hierarchy (global -> project ->
@@ -538,6 +606,39 @@ C14 **Instructions/commands/agents/prompts discovery** (v4 rewrite; R2 proposed
    agent-mode binding x catalog/frecency UI [F] real `.opencode/{command,
    agent}/*.md` shapes [M] precedence assert + frontmatter validation.
    {R2: S1-2, §c-C14; R3: §2-C14}
+   **V9 census cure (R10-MG4):** the (b) source-enum axis is
+   OVER-ENUMERATED as carried — re-dispositioned to ref's TRUE discovery
+   census: **commands = `{command,commands}/**/*.md`**
+   (`core/src/config/plugin/command.ts:159`); **agents =
+   `{agent,agents}/**/*.md` ∪ `{mode,modes}/*.md`** — modes are PRIMARY
+   agents (`core/src/config/plugin/agent.ts:22-23`); **`prompt` has NO
+   markdown/discovery source in ref** — census: `ls -1
+   /opt/opencode-ref/packages/core/src/config/plugin/` (command, agent,
+   skill, skill-file, instruction, … — NO prompt source plugin) and
+   `grep -n 'Prompt' …/config/plugin/{command,agent}.ts` = 0 hits; the
+   enum axis materializes over **{command, agent} ONLY** (the [F] leg's
+   own `.opencode/{command,agent}/*.md` was already the real shape).
+   Prompts ARE real in ref but **RUNTIME-SERVED, not file-discovered**:
+   MCP prompts (`Mcp.Prompt[]` via `mcp.prompts()`, reloaded on
+   `Mcp.PromptsChanged` — `core/src/plugin/command.ts:17-27`,
+   server-provided) → C9/C20-owned cells; an OURS-side prompt source,
+   if ever shipped, is an F7 ours-extra row (the C8 adopt/rename rule).
+   The plugin API registers agent + command collections ONLY
+   (`plugin/src/tui/context.ts:128-129`; its "prompt" symbols are the
+   prompt.footer composer slots + the `prompt()` ask-dialog — a
+   different family). **(a) census note (same cure):** instruction
+   discovery targets **`AGENTS.md` ONLY** (`config/plugin/instruction.ts`
+   — global-config file :38, project dirs :48, ancestor walk
+   `fs.up({targets: ["AGENTS.md"]})` :72); the CLAUDE.md /
+   .cursorrules / .cursor/rules / .github/copilot-instructions.md names
+   in `plugin/command/initialize.txt:14` are guided-setup PROMPT COPY
+   (what the init command tells the model to read), NOT discovery code
+   (`grep -rn 'CLAUDE\.md\|cursorrules' packages/core/src/config/` =
+   0). Census commands: `grep -n 'command,commands'
+   …/core/src/config/plugin/command.ts`; `sed -n '22,23p'
+   …/core/src/config/plugin/agent.ts`; `grep -n 'AGENTS\.md'
+   …/core/src/config/plugin/instruction.ts` (2026-10-18).
+   {R2: S1-2, §c-C14; R3: §2-C14; R10: MG-4}
 C15 **Composer context family** (v4 rewrite per R3 §2): [G] per trigger
    {mention grammar, directory-completion, recents} x state + **payload-
    resolution cells (mention -> payload path; insert format)** + context chips
@@ -596,9 +697,11 @@ C20 **Built-in tool family** (U7, R3 §5 verbatim): [G] per built-in tool x
    /opt/opencode-ref/packages/core/src/tool/plugin/` (edit, file-diff,
    glob, grep, mcp-resource, opencode, patch, question, read, shell,
    skill, subagent, webfetch, websearch, write — counted 2026-10-17; the
-   named list above is illustrative, the [G] covers every census entry).
+   named list above is illustrative, the [G] covers every census entry;
+   the first `ls` also yields `AGENTS.md` — a doc file, not a tool, the
+   census's only non-tool entry; noted v9, R10-M-5).
    [F] I1+I2 [M] schema+behavior+render parity vs ref per tool.
-   {R3: U7; R9: L9}
+   {R3: U7; R9: L9; R10: M-5}
 C21 **Determinism/idempotency** (RESTORED v4 — R2's §c-C17 / R1 S2-13 / U11;
    v3 had zero "determin" hits): [G] rapid/duplicate input x double-submit
    guards x idempotent re-run x event-order stability under repetition.
@@ -1037,6 +1140,32 @@ F7 **Negative-space parity** (v4 rewrite per R3 §2): [G] per surface x action;
   Verdict: **FINAL candidate 3**; ratification counter RESETS —
   RATIFY-1″ and RATIFY-2″ follow per docs/scan-program.md. Report:
   docs/spec-round9.md.
+- v9: SPEC-R10 integration round (RATIFY-1″ FAIL → MG-4 cured per
+  docs/ratify-1c.md): MG-4 cured — C14(b) source enum RE-DISPOSITIONED to
+  the true discovery census (commands `{command,commands}/**/*.md`
+  command.ts:159; agents `{agent,agents}/**/*.md` ∪ `{mode,modes}/*.md`
+  agent.ts:22-23, modes primary; `prompt` has NO markdown/discovery
+  source — MCP prompts are runtime-served, C9/C20-owned, ours-extra
+  under F7 if ever shipped; plugin API registers agent+command only,
+  context.ts:128-129; (a) note: instruction discovery = AGENTS.md only,
+  instruction.ts:38/:48/:72, initialize.txt's CLAUDE.md/.cursorrules
+  list is prompt copy, not discovery). Process cure — **I10b guard
+  STRENGTHENED**: unit = every enumeration form (brace lists,
+  union/kind/source enums, named-file inventories, COUNT annotations),
+  count-vs-list coherence enforced, and a valid sweep must enumerate
+  ALL 83 clauses row-by-row via a re-runnable discovery procedure
+  (R9's curated 26+ sweep was the escape hatch). **R10 exhaustive
+  sweep**: 83/83 clauses adjudicated (docs/spec-round10.md §3); every
+  census pin re-executed exact. M-4: A6 numeral 12→13 fixed (+count
+  annotation now equals its enum; full numeric-annotation audit —
+  docs/spec-round10.md §4). R-G1: FIVE standing accounting entries
+  (containers, storybook, effect-drizzle-sqlite, httpapi-codegen,
+  http-recorder) — the class-cure. M-5: C20 AGENTS.md doc-file note +
+  identity precision note. C13 source-set census pin added (sweep
+  finding). Appendix +5 rows → 162 (R10 section, tags R10-#). Verdict:
+  **FINAL candidate 4**; ratification counter RESETS — RATIFY-1‴ and
+  RATIFY-2‴ follow per docs/scan-program.md. Report:
+  docs/spec-round10.md.
 
 ---
 
@@ -1047,7 +1176,7 @@ Status legend: **C** = owning clause (text in this file) · **A** = amendment/
 named cell folded into an existing clause · **OOC** = out-of-scope with
 justification (I10b) · **REG** = registered residual (non-blocking; carried
 in the ledger, no clause change). Counts: R1 52/52 · R2 30/30 · R3 20/20
-· R5 12/12 · R7 15/15 · R8 11/11 · R9 17/17 = **157/157**.
+· R5 12/12 · R7 15/15 · R8 11/11 · R9 17/17 · R10 5/5 = **162/162**.
 
 ### R1 gaps (52)
 
@@ -1240,6 +1369,16 @@ in the ledger, no clause change). Counts: R1 52/52 · R2 30/30 · R3 20/20
 | R9-M-1 | R8-N6 appendix status letter "A" mislabeled a decision record as an amendment (ratify-1b cosmetic) | appendix row corrected v8 (A → REG, note in place) | REG |
 | R9-M-2 | B7 v6 LIVE list didn't repeat OTEL_* though the R8 rider extends the set (cosmetic inconsistency) | B7 v8 LIVE-list addition (OTEL_* named, tagged) | A |
 | R9-M-3 | C7 job-state source unnamed; C9 threshold implicit; A4 ref-side clocking implicit (ratify-1b cosmetics) | C7 v8 census pin (tool-part status union, session-message.ts:127-148) + C9 v8 threshold note + A4 v8 clock note | A |
+
+### R10 gaps (5 — RATIFY-1″ register per docs/ratify-1c.md; cures per docs/spec-round10.md)
+
+| Gap | Destination | Status |
+|---|---|---|
+| R10-MG4 | C14(b) source enum {command, agent, prompt} over-enumerates ref: `prompt` has NO markdown/discovery source (no prompt plugin in config/plugin/; MCP prompts runtime-served; plugin API registers agent+command only) — R2-carried verbatim, never censused, missed by the v8 sweep | **C14 v9 census cure** ((b) axis re-dispositioned to command+agent globs with census commands; prompt → C9/C20 runtime cells + F7 ours-extra rule; (a) AGENTS.md-only note) | C |
+| R10-SW1 | the v8 list-sweep adjudicated a curated 26+-clause set, not the 83-clause universe — the guard's first execution was incomplete (the META half of MG-4); C13's source enum and C20's AGENTS.md census entry also uncited/unnamed | **I10b guard STRENGTHENED v9** (unit = every enumeration form incl. unions/kinds/sources/count annotations; count-vs-list coherence; exhaustive-sweep requirement with re-runnable discovery procedure) + **R10 exhaustive sweep** 83/83 (docs/spec-round10.md §3) + C13 v9 census pin (schema/src/skill.ts:45) + C20 AGENTS.md note | C |
+| R10-M-4 | A6 census pin count annotation said "all 12 listed panels" while the clause's own enum lists 13 and all 13 exist (grep = 17 = 13 panels + 4 plumbing) — a count error inside a census pin | A6 numeral corrected v9 (12 → 13; plumbing files named; count-annotation coherence guard-enforced) | A |
+| R10-R-G1 | I10b standing-entry ledger asymmetric: containers, storybook, effect-drizzle-sqlite, httpapi-codegen, http-recorder adjudicated accounting-class only in docs/ratify-1.md's table — R-E cured the named pair (function/web), not the class | I10b v9: FIVE standing accounting entries, census-cited (`find <pkg> -type f` each, executed 2026-10-18) | A |
+| R10-M-5 | nano (ratify-1c): C20's census `ls core/src/tool/` yields AGENTS.md (doc, unnamed in the pin); U9's "account/identity" label coarser than identity's reality (6 brand-mark assets, zero code) | C20 v9 doc-file parenthetical + I10b v9 identity precision note | A |
 
 R3 §2 clause-stress verdicts (9 rows) are cured by the v4 rewrites of
 A8/B8/C13/C14/C15/C16/D9/F6/F7 — each rewritten clause carries its R3 §2
