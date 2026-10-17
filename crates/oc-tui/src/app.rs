@@ -1808,7 +1808,36 @@ impl App {
                     let _ = reason;
                 }
             }
-            KeyOutcome::Edited | KeyOutcome::Ignored | KeyOutcome::Paste(_) => {}
+            KeyOutcome::Edited | KeyOutcome::Ignored => {}
+            // `prompt.paste` (ctrl+v / the palette command): v2's read
+            // arm (prompt/index.tsx:474-491) — image bytes stage as a
+            // `clipboard` attachment chip, text inserts verbatim. The
+            // HOST tools arm runs live (pbpaste/xclip/xsel/wl-paste —
+            // auditC P8's host-first layering); the OSC 52 terminal
+            // arm is implemented in `terminal_proto` but NOT wired:
+            // crossterm's input thread owns stdin, so a query window
+            // here would race it and eat keystrokes (v2's renderer
+            // owns its input pipeline, we do not — the deferral is
+            // documented in docs/tail.log).
+            KeyOutcome::Paste(_) => {
+                if let Some(bytes) = crate::terminal_proto::clipboard_read_host() {
+                    let key = self.prompt_key();
+                    let mut composer = self.store.composer(&key);
+                    if crate::terminal_proto::sniff_image(&bytes) {
+                        let mime = crate::terminal_proto::image_mime(&bytes);
+                        let encoded = crate::clipboard::base64_encode::encode(&bytes);
+                        composer.paste_attachment(
+                            Some("clipboard"),
+                            &format!("data:{mime};base64,{encoded}"),
+                        );
+                    } else if let Ok(text) = String::from_utf8(bytes) {
+                        if !text.is_empty() {
+                            composer.paste(&text);
+                        }
+                    }
+                    self.store.set_composer(&key, &composer);
+                }
+            }
         }
     }
 
@@ -3484,6 +3513,17 @@ pub async fn run_with_size(
         let _ = crate::mouse_modes::push(&mut out, applied_mouse);
         let _ = out.flush();
     }
+    // Lane TAIL (auditC P3): the crash-restore guards — SIGHUP/SIGTERM
+    // write the restore bytes and die; a panic restores the terminal
+    // before the report. The atomic tracks the live mouse flip.
+    crate::terminal_proto::install_crash_restore(applied_mouse);
+    // Lane TAIL (auditC P6/TM-2): the live theme-flip subscriptions
+    // (`?2027h` color-scheme reports + `?2031h` mode reports) and
+    // (P2/TM-1) the kitty keyboard capability QUERY — the answer
+    // arrives as `Event::KeyboardEnhancementFlags` (crossterm parses
+    // `CSI ? flags u` itself) and the loop pushes `CSI > 5 u`.
+    crate::terminal_proto::emit(crate::terminal_proto::THEME_SUBSCRIPTIONS);
+    crate::terminal_proto::emit(crate::terminal_proto::KITTY_QUERY);
 
     // R-06 — the attention channels (v2's sounds + OS notifications):
     // the production emitter writes OSC notification sequences to
@@ -3704,6 +3744,8 @@ pub async fn run_with_size(
         .and_then(|path| std::fs::metadata(path).ok())
         .and_then(|meta| meta.modified().ok());
     let mut last_tick = std::time::Instant::now();
+    // Lane TAIL: the theme re-probe cooldown (the ?997 stand-in).
+    let mut theme_probe_at = std::time::Instant::now();
     let mut redraw_at = 0u64;
     // The previous frame's image placements (R-07) — the emission
     // delta (vanished ids delete; changed rects retransmit).
@@ -3715,27 +3757,52 @@ pub async fn run_with_size(
     // terminal background (OSC 11 — same-thread input ownership, no
     // keystroke stealing) and reports the system mode before reading.
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CrosstermEvent>(64);
-    let (probe_tx, probe_rx) = std::sync::mpsc::channel::<Mode>();
+    let (probe_tx, probe_rx) = std::sync::mpsc::channel::<(Mode, bool)>();
     std::thread::spawn(move || {
-        let background = crate::theme::query_terminal_background();
-        let mode =
-            background.map_or(Mode::Dark, |(r, g, b)| crate::theme::mode_for_background(r, g, b));
-        let _ = probe_tx.send(mode);
+        // The combined boot probe (lane TAIL): OSC 11 background + the
+        // kitty keyboard capability query, one read window.
+        let probe = crate::theme::probe_terminal();
+        let mode = probe
+            .background
+            .map_or(Mode::Dark, |(r, g, b)| crate::theme::mode_for_background(r, g, b));
+        let _ = probe_tx.send((mode, probe.kitty_keyboard));
         while let Ok(event) = crossterm::event::read() {
             if event_tx.blocking_send(event).is_err() {
                 break;
             }
         }
     });
-    if let Ok(mode) = probe_rx.recv_timeout(std::time::Duration::from_millis(600)) {
+    if let Ok((mode, kitty_keyboard)) = probe_rx.recv_timeout(std::time::Duration::from_millis(800))
+    {
         system_mode = mode;
         // Refresh the store's system-mode input (the theme lock's
         // unlock target — SURF-2).
         app.store.set_theme_mode_inputs(config.theme.mode.clone(), system_mode);
+        // Lane TAIL (auditC P2/TM-1): the terminal ANSWERED the kitty
+        // keyboard query — push the v2 flag set (disambiguate escape
+        // codes + report alternate keys; the ref pushes `CSI > 5u`).
+        if kitty_keyboard {
+            crate::terminal_proto::emit(crate::terminal_proto::KITTY_PUSH);
+        }
     }
     // The probe toggles raw mode itself; the loop owns it from here.
     let _ = crossterm::terminal::enable_raw_mode();
     app.apply_config(&config, system_mode);
+    // Lane TAIL (auditC P7/TM-3): DECSCUSR + OSC 12 — the cursor
+    // shape/blink from the `cursor` config doc and the cursor color
+    // from the resolved theme (v2's boot emission, `CSI 1 SP q` +
+    // `OSC 12 ; #…`).
+    {
+        use std::io::Write as _;
+        let mut out = std::io::stdout();
+        let _ = out.write_all(&crate::terminal_proto::decscuru_sequence(config.cursor));
+        if let ratatui::style::Color::Rgb(r, g, b) =
+            app.store.theme().styles().text.fg.unwrap_or(ratatui::style::Color::Rgb(224, 224, 224))
+        {
+            let _ = out.write_all(&crate::terminal_proto::osc12_sequence((r, g, b)));
+        }
+        let _ = out.flush();
+    }
 
     // The production plugin boot (wave-12): the host loads the config's
     // `plugins[]` entries and every wave-3 seam attaches — the event
@@ -3839,7 +3906,10 @@ pub async fn run_with_size(
         // Attention: the bell request set by permission asks / unread
         // transitions — write `\x07` once (raw mode passes it through
         // to the terminal, audible/visible over ssh).
-        if app.store.take_bell() {
+        // The BEL gate (auditC P11): v2 NEVER emits \x07 — the port's
+        // ungated emission is now `attention.bell` opt-in (default
+        // false, attention.rs).
+        if config.attention.bell && app.store.take_bell() {
             use std::io::Write as _;
             let mut out = std::io::stdout();
             let _ = out.write_all(b"\x07");
@@ -3972,6 +4042,11 @@ pub async fn run_with_size(
                 // config gate — a `mouse: false` boot never pushed
                 // them, and popping unpushed modes is wire noise).
                 let _ = crate::mouse_modes::pop(&mut out, applied_mouse);
+                // Lane TAIL (auditC P12): the paste/focus pair hands
+                // off too — `?2004`/`?1004` must NOT stay latched
+                // into `$EDITOR` (bracketed paste would corrupt the
+                // editor's input, focus reports belong to us alone).
+                let _ = out.write_all(crate::terminal_proto::PASTE_FOCUS_OFF);
                 let _ = out.flush();
             }
             let result = crate::editor::open_editor(&draft, cwd.as_deref(), || {}, || {});
@@ -3982,8 +4057,10 @@ pub async fn run_with_size(
                 let _ = crossterm::queue!(out, crossterm::terminal::EnterAlternateScreen);
                 // Re-arm the mouse modes under the SAME config gate
                 // (auditC P1 called out the old unconditional
-                // re-enable after $EDITOR).
+                // re-enable after $EDITOR) — and the paste/focus pair
+                // with them (P12's other half).
                 let _ = crate::mouse_modes::push(&mut out, applied_mouse);
+                let _ = out.write_all(crate::terminal_proto::PASTE_FOCUS_ON);
                 let _ = out.flush();
             }
             let _ = terminal.clear();
@@ -4175,6 +4252,7 @@ pub async fn run_with_size(
                 // restart needed.
                 if reloaded.mouse != applied_mouse {
                     applied_mouse = reloaded.mouse;
+                    crate::terminal_proto::set_mouse_applied(applied_mouse);
                     write_mouse_flip(applied_mouse);
                 }
             }
@@ -4300,7 +4378,28 @@ pub async fn run_with_size(
             // bell itself fired regardless — the sound channel is
             // "always" in v2's notifications plugin). FocusLost blurs
             // the attention engine (OS notifications become eligible).
-            Some(CrosstermEvent::FocusGained) => app.store.set_focused(),
+            Some(CrosstermEvent::FocusGained) => {
+                app.store.set_focused();
+                // Lane TAIL (auditC P6): the ?997 stand-in — crossterm
+                // cannot deliver `CSI ?997;1n/2n` (its CSI parser
+                // dispatches only `?u`/`?c`), so a terminal theme flip
+                // re-probes OSC 11 on focus (10 s cooldown, only while
+                // `theme.mode == "system"`) and refreshes the palette
+                // live — v2's `refreshPalette()` behavior.
+                if config.theme.mode.as_deref() == Some("system")
+                    && theme_probe_at.elapsed() >= std::time::Duration::from_secs(10)
+                {
+                    theme_probe_at = std::time::Instant::now();
+                    if let Some((r, g, b)) = crate::theme::query_terminal_background_in_raw() {
+                        let mode = crate::theme::mode_for_background(r, g, b);
+                        if mode != system_mode {
+                            system_mode = mode;
+                            app.store.set_theme_mode_inputs(config.theme.mode.clone(), system_mode);
+                            app.apply_config(&config, system_mode);
+                        }
+                    }
+                }
+            }
             Some(CrosstermEvent::FocusLost) => app.store.set_blurred(),
             // Bracketed paste (R-07): resolve attachment file paths →
             // chips, else insert the text (`pasteInputText`).
@@ -4349,6 +4448,15 @@ pub async fn run_with_size(
         // (v2's teardown pops what the renderer pushed — a
         // `mouse: false` run pushed nothing).
         let _ = crate::mouse_modes::pop(&mut out, applied_mouse);
+        // Lane TAIL (auditC P2/P7/P13): pop the kitty keyboard stack
+        // (the ref never does — we should), reset DECSCUSR/OSC 12,
+        // and ACTUALLY emit the graphics delete-all the old comment
+        // promised (`a=d,d=a`, P13).
+        let _ = out.write_all(crate::terminal_proto::KITTY_POP);
+        let _ = out.write_all(crate::terminal_proto::CURSOR_RESET);
+        if app.store.graphics_protocol() != crate::image::GraphicsProtocol::None {
+            let _ = out.write_all(crate::terminal_proto::KITTY_GRAPHICS_DELETE_ALL);
+        }
         let _ = out.flush();
     }
     // #46 — the exit epilogue (v2 app.tsx:446-450: the renderer stops,

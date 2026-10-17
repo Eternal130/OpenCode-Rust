@@ -246,6 +246,10 @@ impl AttentionNotifyResult {
 /// The resolved `attention` config (v2's `Config.Resolved["attention"]`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct AttentionConfig {
+    /// Emit the terminal BEL (`\x07`) on attention transitions
+    /// (`attention.bell`, default `false` — v2 NEVER emits BEL; the
+    /// port's ungated emission was auditC P11, now opt-in).
+    pub bell: bool,
     /// Show system notifications (`attention.notifications`, default
     /// `false`).
     pub notifications: bool,
@@ -265,6 +269,7 @@ pub struct AttentionConfig {
 impl Default for AttentionConfig {
     fn default() -> Self {
         Self {
+            bell: false,
             notifications: false,
             sound: false,
             volume: 0.4,

@@ -541,6 +541,136 @@ pub fn query_terminal_background() -> Option<(u8, u8, u8)> {
     answer
 }
 
+/// The live-loop variant of [`query_terminal_background`] (lane TAIL,
+/// auditC P6): the caller ALREADY holds raw mode (the run loop), so
+/// this probes WITHOUT toggling it — the `?997` stand-in's read arm.
+#[must_use]
+pub fn query_terminal_background_in_raw() -> Option<(u8, u8, u8)> {
+    use std::io::{IsTerminal, Write};
+    if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
+        return None;
+    }
+    {
+        let mut stdout = std::io::stdout().lock();
+        if stdout.write_all(b"\x1b]11;?\x07").is_err() || stdout.flush().is_err() {
+            return None;
+        }
+    }
+    read_osc11_reply(std::time::Duration::from_millis(150))
+}
+
+/// The boot probe's findings: the OSC 11 background (the theme-mode
+/// seed) and the kitty keyboard advertisement (the `CSI ? u` query's
+/// answer — crossterm 0.28 has no public event for it, so the answer
+/// is parsed in this same boot window; lane TAIL, auditC P2/TM-1).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalProbe {
+    /// The terminal background color (`None` on timeout).
+    pub background: Option<(u8, u8, u8)>,
+    /// The terminal answered the kitty keyboard query (`CSI ? flags u`).
+    pub kitty_keyboard: bool,
+}
+
+/// The combined boot probe: write the OSC 11 background query AND the
+/// kitty keyboard capability query together, read ONE 150 ms window,
+/// parse both answers (v2 writes both at boot; one window keeps the
+/// keystroke-drop exposure to a single interval).
+#[must_use]
+pub fn probe_terminal() -> TerminalProbe {
+    use std::io::{IsTerminal, Write};
+    use std::time::Duration;
+
+    const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
+
+    if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
+        return TerminalProbe::default(); // headless: dark fallback, no kitty
+    }
+    if crossterm::terminal::enable_raw_mode().is_err() {
+        return TerminalProbe::default();
+    }
+    let answer = (|| {
+        {
+            let mut stdout = std::io::stdout().lock();
+            let queries = b"\x1b]11;?\x07\x1b[?u";
+            if stdout.write_all(queries).is_err() || stdout.flush().is_err() {
+                return TerminalProbe::default();
+            }
+        }
+        collect_probe_answers(PROBE_TIMEOUT)
+    })();
+    let _ = crossterm::terminal::disable_raw_mode();
+    answer
+}
+
+/// Read the probe window until both answers land or the deadline:
+/// the OSC 11 color (`parse_osc_reply`) and the kitty advertisement
+/// (`CSI ? flags u` — any digit run before a `u` after `[?`).
+#[allow(unsafe_code)] // poll/read on fd 0 are only reachable through libc FFI
+fn collect_probe_answers(timeout: std::time::Duration) -> TerminalProbe {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut buffer: Vec<u8> = Vec::with_capacity(128);
+    let mut probe = TerminalProbe::default();
+    loop {
+        if probe.background.is_some() && probe.kitty_keyboard {
+            return probe;
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return probe;
+        }
+        let mut poll_fd = libc::pollfd { fd: libc::STDIN_FILENO, events: libc::POLLIN, revents: 0 };
+        #[allow(clippy::cast_possible_truncation)]
+        let remaining_ms =
+            i32::try_from((deadline - now).as_millis()).unwrap_or(0).min(i32::MAX - 1) + 1;
+        let ready = unsafe { libc::poll(std::ptr::from_mut(&mut poll_fd), 1, remaining_ms) };
+        if ready <= 0 {
+            return probe; // timeout or poll failure: no answer
+        }
+        let mut chunk = [0u8; 128];
+        let read = unsafe {
+            libc::read(libc::STDIN_FILENO, chunk.as_mut_ptr().cast::<libc::c_void>(), chunk.len())
+        };
+        if read <= 0 {
+            return probe;
+        }
+        #[allow(clippy::cast_sign_loss)]
+        buffer.extend_from_slice(&chunk[..read as usize]);
+        if probe.background.is_none() {
+            probe.background = parse_osc_reply(&buffer);
+        }
+        if !probe.kitty_keyboard {
+            probe.kitty_keyboard = parse_kitty_advertisement(&buffer);
+        }
+        // Overlong garbage never matches: give up rather than spin.
+        if buffer.len() > 512 {
+            return probe;
+        }
+    }
+}
+
+/// The kitty keyboard advertisement: a `CSI ? {flags} u` reply (any
+/// flag bits — the run loop pushes its own flag set, not the reply's).
+fn parse_kitty_advertisement(bytes: &[u8]) -> bool {
+    let mut index = 0;
+    while let Some(at) = bytes[index..].iter().position(|b| *b == b'\x1b') {
+        let start = index + at;
+        let rest = &bytes[start..];
+        if rest.len() >= 3 && rest[1] == b'[' && rest[2] == b'?' {
+            let mut cursor = 3;
+            let mut digits = false;
+            while cursor < rest.len() && rest[cursor].is_ascii_digit() {
+                digits = true;
+                cursor += 1;
+            }
+            if digits && cursor < rest.len() && rest[cursor] == b'u' {
+                return true;
+            }
+        }
+        index = start + 1;
+    }
+    false
+}
+
 /// Read the terminal's OSC 11 answer off fd 0, discarding anything
 /// else that arrives in the window (terminal responses only — user
 /// keystrokes during the 150 ms boot probe are dropped, matching v2's
