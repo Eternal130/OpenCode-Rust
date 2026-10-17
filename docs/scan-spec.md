@@ -1,7 +1,9 @@
 # The Scan Specification (扫描细则) — LIVING DOCUMENT
 
-Version: **v7** (SPEC-R8 ratification-cure round — RATIFY-1's two material
-gaps cured; FINAL candidate 2).
+Version: **v8** (SPEC-R9 integration round — RATIFY-1′'s material gap MG-3
+cured: A8 rewritten at census-pinned family granularity, list-census guard
+added to I10b, full list-sweep of every list-bearing clause; FINAL
+candidate 3).
 Protocol:
 docs/scan-program.md. Lineage: v1 (R5 framework) -> SPEC-R1 (52 gaps;
 taxonomy-v2 [G][F][M]) -> v2 -> SPEC-R2 (30 gaps; [G][F][M] keystone;
@@ -9,23 +11,31 @@ I8-I11) -> v3 -> SPEC-R3 (12 unowned families U1-U12 + 8 fold-amendments +
 clause rewrites) -> v4 -> v5 (SPEC-R5's 10 E-clause rewrites +
 3 amendments; E-axis executable; baselines ratified in
 docs/spec-round6.md) -> v6 (SPEC-R7: P3+P4+P5 convergence; FINAL
-candidate 1, FAILED ratification in docs/ratify-1.md) -> **THIS v7**
-(SPEC-R8: cures applied per docs/ratify-1.md — MG-1 telemetry/observability
+candidate 1, FAILED ratification in docs/ratify-1.md) -> v7 (SPEC-R8: cures
+applied per docs/ratify-1.md — MG-1 telemetry/observability
 family owned by new clause C22 + F7 pre-disposition rewritten + B7 OTEL_*
 cells + F2/I8 amendments; MG-2 I10b enumeration pin corrected to the true
 35-package list with a mechanical census command; residual riders
-E6/E9/C7/B3; declared FINAL candidate 2 in docs/spec-round8.md).
+E6/E9/C7/B3; declared FINAL candidate 2 in docs/spec-round8.md) ->
+**THIS v8** (SPEC-R9: RATIFY-1′ FAIL per docs/ratify-1b.md — MG-3 A8
+mermaid/latex enumeration cured by a complete merman+latex census and an
+A8 rewrite at true family granularity; I10b list-census guard extends the
+MG-2 pin discipline from packages to every ref-enumerating in-clause list;
+full v8 list-sweep pinned or exempted every list-bearing clause; R-E/R-F/
+M-1..M3 residual riders; declared FINAL candidate 3 in docs/spec-round9.md).
 
 **Integration rule (binding, per I11 — this round's correction):** clause text is
 carried VERBATIM from the round documents — R1 taxonomy-v2 rows, R2 §c rewrites,
 R3 §5 proposals, R5 §3 proposals (v5), R7 §2/§3/§4 proposals (v6), R8 cures
 (docs/ratify-1.md proposed cures: the F7 re-disposition and the four residual
 riders quoted character-exact; C22 and the census pin are R8-authored and
-carried verbatim in docs/spec-round8.md). Where v3 compressed or dropped a round's
+carried verbatim in docs/spec-round8.md), R9 cures (the A8 rewrite, the I10b
+list-census guard, and every census pin / rider below are R9-authored and
+carried verbatim in docs/spec-round9.md). Where v3 compressed or dropped a round's
 text, the fuller round text is RESTORED, not summarized. Every clause carries **[G]ranularity /
 [F]idelity / [M]ethod** — an agent satisfying the letter must also satisfy the
-spirit — plus its source gap IDs `{…}` (R2-M-4). The appendix maps ALL 140 gap
-IDs (R1 52 · R2 30 · R3 12+8 · R5 12 · R7 15 · R8 11) to clauses/folds/justifications.
+spirit — plus its source gap IDs `{…}` (R2-M-4). The appendix maps ALL 157 gap
+IDs (R1 52 · R2 30 · R3 12+8 · R5 12 · R7 15 · R8 11 · R9 17) to clauses/folds/justifications.
 
 ## Standing instrument layer (binds EVERY clause)
 I1 REAL payloads end-to-end — no hand-set ids; chains from our own
@@ -67,7 +77,11 @@ I5 Falsifiability: every clause names its evidence artifact. Standing in-repo
    driver — the ONLY standing instrument proven to load the current plugin
    generation on both stacks), and `tools/parity/spec-p3/` (ref/refbin/ours
    TTI PTY probes + results). Rounds must not rebuild ad-hoc variants of
-   these. {R7: G8}
+   these. {R7: G8} **R9 extension (v8 — R-F):** the list additionally
+   binds C22's mock OTLP collector (loopback HTTP recorder asserting
+   /v1/logs + /v1/traces POSTs and zero-traffic-when-unset) —
+   clause-declared standing since v7, formally I5-named from v8; the
+   first C22 execution commits it in-tree. {R9: R-F}
 I6 Miss-attribution ledger per finding (inventory-grade / fixture-happy /
    adjudication-masking). {R1: S4-6} **R7 standing rule (v6) —
    umbrella-adjudication masking (applies to ANY comparison instrument,
@@ -140,7 +154,22 @@ I10b **Enumeration-universe pin** (R3 U12): every round's report lists (a)
     family-granular), and `ls -1 /opt/opencode-ref/packages/ | wc -l` =
     35 (verified 2026-10-17, RATIFY-1 and this round); round reports' (a)/(b)
     lists reconcile against that command's output, never against recall.
-    {R8: MG-2} Standing out-of-scope-with-justification entries: **stats** (U8 — we
+    {R8: MG-2} **List-census guard (v8 — R9-MG3; extends this pin's
+    discipline from packages to EVERY in-clause list):** any clause that
+    CARRIES a list purporting to enumerate ref reality (diagram kinds,
+    fence languages, panel/component files, tool names, handler files,
+    updater methods, env-read sets, status/state unions, package names,
+    …) must cite the MECHANICAL census command that reproduces it
+    (`ls`/`grep`/`sed` against the pinned ref tree, or the I2b binary/
+    its APIs where no static enumeration exists) — exactly as this pin
+    does for packages; lists that enumerate OUR test design (sizes,
+    counts, locale/query classes, seed pairs, sweep widths) are exempt
+    by class. A carried list without a census citation is the MG-3
+    defect class (prose recall contradicting ref source) and FAILS
+    ratification on sight. The v8 list-sweep (docs/spec-round9.md §2)
+    adjudicated every list-bearing clause in this file: censused-and-
+    valid, cured-and-pinned, data-driven-named, runtime-named, or
+    exempt-by-class. {R9: MG-3} Standing out-of-scope-with-justification entries: **stats** (U8 — we
     ship no stats surface; absent-justified accounting entry under F2/I7 + one
     C-cell if/when shipped); **identity/enterprise** (U9 — not shipped by us;
     `core/src/managed-policy.ts` still binds C4 precedence). Standing
@@ -148,7 +177,16 @@ I10b **Enumeration-universe pin** (R3 U12): every round's report lists (a)
     src empty — F2 export accounting only), **posts** (static marketing/docs
     site — no runtime parity surface), **script** (single-file dev script — F2
     accounting), `tui/src/devtools` (dev-only route — owned generically by
-    F1's route matrix). {R3: U8, U9, U12; R4: re-sweep}
+    F1's route matrix). Standing accounting entries, no product-side client
+    (v8, R-E): **function** (Cloudflare-worker share backend: `/share_create`
+    `/share_sync` `/share_poll` `/share_delete[_admin]`, SyncServer
+    DurableObject, R2, GitHub-App auth — hosted server-side; no client in
+    the pinned 2.0.24 source NOR the 2.0.25 binary, verified 2026-10-17 in
+    docs/ratify-1b.md: the `stats`-class; accounting entry only — the share
+    product family is D8-owned, a future product client re-baselines per
+    I10); **web** (share viewer polling `ws /share_poll?id=` + docs site —
+    viewer-side of the same hosted pair; rides D8's destination cells;
+    accounting entry only). {R3: U8, U9, U12; R4: re-sweep; R9: R-E}
 I11 **Process + output contract**: ≤45-min chunks, no backgrounded scans,
     worktree isolation, per-round output format (gap register + adequacy table +
     convergence estimate), no summary-only dispatch — integrations quote clause
@@ -180,32 +218,84 @@ A3 Edge + huge data — **R2 §c rewrite, verbatim**: [G] widths {0,1,2,10,60,80
 A4 Temporal at vt-clock: [G] per-frame content @ every animated element
    (spinners, pulse, shimmer, marquee, fade, scrim alpha) x phase [F] I3 clock +
    frame stepping + drive-source audit [M] clock-stepped frame series capture.
-   {R1: S4-4}
+   **V8 clock note (R9-M-3):** the vt-clock drives OUR leg; the ref leg is
+   captured at pinned REAL cadences (ref's process is not vt-clocked) —
+   stepped-frame comparison happens at the same named cadence sources.
+   {R1: S4-4; R9: M-3}
 A5 Plugin-rendered surfaces — incl. **internal feature-plugin SLOT
    architecture** (`feature-plugins/{home,prompt,sidebar,system}` — internal
    slots are surfaces; R3 fold 5). [G] every plugin API render slot x state
    [F] I2 ref+plugin pair (≥3 ecosystems + omo-slim) [M] side-by-side capture
-   diff. {R1: S1-11, S3-4; R2: (a)S1-11; R3: FOLD-5}
+   diff. **V8 census pin:** slot list verified against `ls -1
+   /opt/opencode-ref/packages/tui/src/feature-plugins/` = exactly {home,
+   prompt, sidebar, system} (2026-10-17). {R1: S1-11, S3-4; R2: (a)S1-11;
+   R3: FOLD-5; R9: L2}
 A6 MINI frontend — **R2 §c rewrite, verbatim**: [G] panel enum from ref
    `mini/` (footer.{command,form,menu,permission,prompt,subagent,view},
    scrollback.{writer,surface}, splash, stream-v2.{fragment,image,subagent}) x
    state x width; fragment corpus = real LLM chunk boundaries. [F] I1+I3.
    [M] mini PTY capture diff vs mini spec (mini/theme.ts quantizer rules).
-   {R1: S1-5; R2: (a)S1-5}
+   **V8 census pin:** panel files verified against `ls -1
+   /opt/opencode-ref/packages/tui/src/mini/ | grep -E
+   '^(footer|scrollback|stream-v2|splash)'` — all 12 listed panels exist as
+   files; `stream-v2.transport.ts` is plumbing, not a panel (2026-10-17).
+   {R1: S1-5; R2: (a)S1-5; R9: L1}
 A7 Theme-system chain: [G] discovery -> select -> apply -> live-preview ->
    live-retheme -> error chain (ThemeErrorToast) x step; user-theme-dir
    discovery; system detect (OSC 11); oklab quantization; syntax themes.
    [F] I4 + real user theme dirs [M] apply-path trace + full-chain round-trip
    + capture. {R1: S1-13; R2: (a)S1-13}
-A8 **Rich content** (v4 rewrite per R3 §2/§5 + R2 §c restored): [G] per
-   content family — markdown, code-syntax, mermaid/merman (**sub-families:
-   flowchart/gantt/gitgraph/sequence**), math/latex (**inline vs block**),
-   diff, part-kind, `thinking-syntax.ts` (R3 fold 3) — x size x
-   **syntax-theme (theme x renderer interaction)**; **absent-justified
-   accounting per renderer WE lack** (mermaid/latex today: ref ships
-   merman+latex packages; ours has neither). [F] I1 + **I9 corpus
-   provenance** [M] renderer corpus diff — rendered frames, not parse trees;
-   render parity per family. {R2: S1-4, (a)S1-4; R3: §2-A8, FOLD-3}
+A8 **Rich content** (v4 rewrite per R3 §2/§5 + R2 §c restored; **v8 rewrite
+   per R9 — MG-3 cure: every family/sub-family list below is census-pinned
+   against the ref tree, mechanical, not prose**): [G] per content family —
+   markdown, code-syntax, mermaid/merman, math/latex (BOTH renderer stacks,
+   below), diff, part-kind, `thinking-syntax.ts` (R3 fold 3; exists at
+   `tui/src/routes/session/thinking-syntax.ts`) — x size x **syntax-theme
+   (theme x renderer interaction)**. **Mermaid sub-families (census-pinned
+   v8):** the ref kind union is EXACTLY {flowchart, sequence, state,
+   timeline, gitGraph, gantt} — six kinds, ground truth
+   `merman/src/diagnostics.ts:1` (`MermaidDiagramKind`); `detect.ts`
+   dispatches exactly these six; census commands: `sed -n '1p'
+   /opt/opencode-ref/packages/merman/src/diagnostics.ts` and `ls -1
+   /opt/opencode-ref/packages/merman/src/`. **Renderer status: ALL SIX are
+   FULL renderers, none a stub** — each kind dir carries parser + drawing +
+   render-grid + style (+ tests): flowchart 12 files (adds
+   labels/layout/routing/options), sequence 10 (adds placement), state 18
+   (adds endpoint/note/layout/routing/search/visible-model), timeline 7,
+   gitGraph 7, gantt 7; shared `core/` 15 files (canvas/drawing/geometry/
+   spatial/text). **Beyond diagrams, merman's census closes 4 more
+   sub-families:** `markdown.ts` (the ```mermaid fence renderer: streaming
+   last-good cache + partial-prefix re-render on `MermaidSyntaxError`,
+   silent pass-through on `DiagramCanvasSizeError`), `palette.ts`
+   (`resolveOpenCodeDiagramPalette(theme, themeMode)` — THE theme-x-
+   renderer interaction cell), `plugin.ts` (builtin `opencode.merman`,
+   registered in `tui/src/plugin/builtins.ts`), layout-audit (`script/` +
+   tests). **Math/latex = TWO renderer stacks (census-pinned v8; the
+   v4 "inline vs block" phrasing mis-attributed the split):** (a) TUI
+   stack = `@opencode/latex` — FENCED code blocks ONLY, fence languages
+   EXACTLY {latex, math} (census: `grep -n 'registerCodeBlockRenderer'
+   /opt/opencode-ref/packages/latex/src/plugin.ts` — two registrations,
+   one renderer); sub-parts: parser (+`expandLatexMacros`), layout,
+   symbols tables (`symbolTable`/`largeOperators`/`namedOperators`/
+   `delimiterTable`/`spacingCommands`), limits (100k source chars / 256
+   nesting), streaming retention + code-fallback on parse failure; NO
+   inline math exists on the TUI stack. (b) session-ui stack = KaTeX
+   0.16.47 via marked extension (`ui/src/context/marked-parser.tsx`):
+   inline `\(...\)` (inlineKatex, displayMode:false) + block
+   `$$\n...\n$$` (blockKatex, displayMode:true) — census: `grep -n
+   'inlineKatex\|blockKatex' .../marked-parser.tsx`; the inline-vs-block
+   axis lives HERE (plus markedShiki = the session-ui code-syntax leg).
+   **Code-block renderer universe census:** `grep -rn
+   'registerCodeBlockRenderer' /opt/opencode-ref/packages/` → exactly
+   two builtin registrations (merman "mermaid"; latex "latex"+"math") —
+   plugin-registered renderers beyond these are A5/C6-owned. **Ours:
+   absent-justified per renderer** — `grep -ri 'mermaid\|merman\|latex\|
+   katex' crates/` = 0 code hits (2026-10-17): all 6 mermaid kinds, the
+   merman fence/palette pipeline, the TUI latex fences, and the
+   session-ui KaTeX stack are ref-only; each cell = absent-justified
+   accounting until dispositioned. [F] I1 + **I9 corpus provenance**
+   [M] renderer corpus diff — rendered frames, not parse trees; render
+   parity per family. {R2: S1-4, (a)S1-4; R3: §2-A8, FOLD-3; R9: MG-3}
 A9 **Images** (RESTORED v4 — R2's A9/R3's U1; v3 had zero "image" hits):
    [G] {paste, attach, tool-output, gen, preview-zoom, retained cache,
    diff-viewer-image, mini stream-v2.image} x format {png,jpg,webp,gif} x size
@@ -277,13 +367,15 @@ B7 Platform/env matrix — **R2 §c rewrite, verbatim + R3 folds**: [G] OS
    `ssh-askpass.ts` (fold 4), `editor-zed*` (fold 7), `attention-sounds.{bun,
    node}` backend split (fold 8). [F] clean envs; real envs where available
    [M] boot+smoke matrix script, cell table artifact; behavior diff per class.
-   {R1: S3-2, S3-3; R2: S3-4, S3-5, (a)S3-2, (a)S3-3; R3: FOLD-4, FOLD-7, FOLD-8}
+   {R1: S3-2, S3-3; R2: S3-4, S3-5, (a)S3-2, (a)S3-3; R3: FOLD-4, FOLD-7, FOLD-8;
+   R9: M-2}
    **R7 executability rider (v6):** env-cell runner = boot+smoke under
    `env(1)` per cell; assert = boot reaches first frame AND one smoke
    action completes; diff-vs-baseline-class table per cell. Environment
    dispositions (measured 2026-10-17): LIVE = unset TERM, no HOME, no
    PATH, no git/rg, read-only HOME, LANG x {C, en_US.UTF-8, non-UTF-8},
-   TZ absent, OPENCODE_* incl. CLI_CONFIG_CONTENT, SSH_TTY, CI vars,
+   TZ absent, OPENCODE_* incl. CLI_CONFIG_CONTENT, OTEL_* (the R8 cells
+   below; v8 consistency addition, R9 M-2), SSH_TTY, CI vars,
    docker; DEFERRED-WITH-RECIPE = windows/ConPTY (needs a real Windows
    host — wine does not reproduce ConPTY semantics; recipe = CI windows
    runner + the same runner script), macOS (recipe = CI macOS runner);
@@ -350,9 +442,15 @@ C2 Navigation graphs: [G] tabs/picker/family/session.child full graph incl.
 C3 Permission+attention — **R2 §c rewrite, verbatim**: [G] decision {allow/
    deny/always} x tool x path-scope x persistence {session, forever, expiry} x
    queueing; attention: emission {bell OSC 777, OSC 9, in-process audio,
-   system notify} x gating config. [F] I1+I3+real grant stores [M] flow
+   system notify} x gating config. **V8 census pin (R9-L3):** ref's literal
+   sets = Permission.Effect {allow, deny, ask} (`schema/src/permission.ts:55`)
+   and Permission.Reply {once, always, reject} (`:41`) — the decision x
+   persistence matrix materializes over THESE literals (allow/deny/always
+   above are the behavioral buttons they compose into); census: `grep -n
+   'Schema.Literals' /opt/opencode-ref/packages/schema/src/permission.ts`.
+   [F] I1+I3+real grant stores [M] flow
    scripts + emission capture trace, scripted flows end-to-end.
-   {R1: S1-8, S5-6; R2: (a)S5-6}
+   {R1: S1-8, S5-6; R2: (a)S5-6; R9: L3}
 C4 Config leaf-key round-trips: [G] PER LEAF KEY read x write x restart x
    cross-install visibility; **JSONC comment preservation**; env overlays
    (OPENCODE_* incl. CLI_CONFIG_CONTENT); `managed-policy.ts` precedence
@@ -380,15 +478,30 @@ C7 Background jobs surface. [G] per job state x surface [F] long-running real
    table + progress/lifetime assert (ours-vs-ref columns; the job's
    observable progress advances and its lifetime events — start/update/
    end — appear on the owning surface, per state). {R8: R-C}
+   **V8 census pin (R9-M-3):** the job-state enumeration source is the
+   tool-part status union = {streaming, running, completed, error} —
+   `schema/src/session-message.ts:127/:133/:140/:148` (C1's from-ref-code-
+   not-prose discipline); census: `grep -n 'status: Schema.tag'
+   /opt/opencode-ref/packages/schema/src/session-message.ts`. {R9: M-3}
 C8 Worktree family — **R2 §c rewrite, verbatim**: [G] {create, adopt, refresh,
    move, delete, rename} x repo state {clean, dirty, detached, bare,
    conflicted, no-git} x {git-side assertion, UI cell, session_move tool}.
    [F] I1 real repos [M] git-state assertion script per cell; op + UI + fs
-   assert. {R1: S1-1; R2: (a)S1-1}
+   assert. **V8 census cure (R9-L4):** ref's ACTUAL worktree op set =
+   {create, remove, refresh, list} (`grep -n 'Effect.fn("Worktree\.'
+   /opt/opencode-ref/packages/core/src/worktree.ts` — exactly four; +
+   strategy registry, default git) plus the `session_move` tool
+   (`core/src/tool/plugin/opencode.ts:110` — the "move" axis) and the
+   create-time name dialog (`dialog-worktree-name.tsx`); **`adopt` and
+   `rename` have NO ref op** (the R2 list over-enumerated — carried
+   R2→v7 uncensused; adopt/rename cells convert to ours-extra negative-
+   space rows under F7, not parity cells). {R1: S1-1; R2: (a)S1-1; R9: L4}
 C9 MCP family — **R2 §c rewrite, verbatim**: [G] {add, connect, auth, fail,
    restart, remove} x {dialog cells, toasts, home row, CLI} x tool invocation
    + needs-auth + elicitation-blocked. [F] I1 real MCP servers [M] live
-   round-trip trace. {R1: S1-2; R2: (a)S1-2}
+   round-trip trace. **V8 threshold note (R9-M-3):** threshold = every cell
+   completes its round-trip with matching observable state on both stacks
+   (implicit in the verb, now stated). {R1: S1-2; R2: (a)S1-2; R9: M-3}
 C10 Provider auth family: [G] every OAuth/device/token flow x storage x
    refresh x UI (tokens sidebar, /connect, pair + QR) [F] real provider
    sandbox creds (mock IdP + I9) [M] flow capture + credential store assert.
@@ -396,9 +509,12 @@ C10 Provider auth family: [G] every OAuth/device/token flow x storage x
 C11 Update/upgrade family — **R2 §c rewrite, verbatim**: [G] check -> notify
    -> install -> restart x method {curl, npm, pnpm, bun, yarn, vp, brew} x
    {install prefix, PATH precedence, downgrade, cache migration} + uninstall;
-   update-notice cadence under I3. [F] real updater paths (staged update)
+   update-notice cadence under I3. **V8 census pin (R9-L5):** the method
+   list is EXACT — `cli/src/services/updater.ts:14` = `["curl", "npm",
+   "pnpm", "bun", "yarn", "vp", "brew"]`; census: `sed -n '14p'
+   /opt/opencode-ref/packages/cli/src/services/updater.ts`. [F] real updater paths (staged update)
    [M] upgrade round-trip script per method; UX + fs assert.
-   {R1: S1-4, S2-9; R2: (a)S1-4}
+   {R1: S1-4, S2-9; R2: (a)S1-4; R9: L5}
 C12 Onboarding/migration first-runs: [G] per first-run shape {fresh, migrated,
    mixed v2+rust install} — first-run model/provider seeding, StartupLoading
    500ms/3s gates (I3), MigrationOverlay, getting-started dismiss,
@@ -439,7 +555,12 @@ C16 **Long-tail dialogs** (v4 rewrite per R3 §2): [G] enumeration = filesystem
    command-palette, session-tabs-rail, pierre review-mode family
    (commented-lines, comment-hover, diff-selection, file-find); +
    workspace-file-changes review flow (R3 fold 6). [F] I1 [M] enumerate from
-   ref trees + assert each dialog's action. {R2: S1-8, (a)C16; R3: §2-C16, FOLD-6}
+   ref trees + assert each dialog's action. **V8 census pin (R9-L6):**
+   census commands = `ls -d /opt/opencode-ref/packages/tui/src/component/
+   dialog-*` (23 dirs) ∪ `ls -d /opt/opencode-ref/packages/tui/src/routes/
+   session/dialog-*` (4) ∪ session-ui components (counted 2026-10-17; the
+   three trees are the enumeration, the named list above is illustrative
+   cells within them). {R2: S1-8, (a)C16; R3: §2-C16, FOLD-6; R9: L6}
 C17 **Terminal / persistent-PTY family** (U3, R3 §5 verbatim): [G] {spawn,
    resize, scroll, exit-status, handoff, daemon-restart} x {terminals-tab,
    terminal-pane, shell-output dialog, pty handlers} x TTY state. [F] I1 real
@@ -450,15 +571,34 @@ C18 **CLI/service/run family** (U4+U5, R3 §5 verbatim): [G] every
    unset, registration, standalone}; `run` {interactive, noninteractive, v1} x
    stream format (headless exec: stream format, exit codes, scriptability).
    [F] I1+I10 [M] executed-command matrix artifact (every cell dispositioned).
-   {R3: U4, U5}
+   **V8 census pin (R9-L7):** census = `ls -1R
+   /opt/opencode-ref/packages/cli/src/commands/handlers/` (top-level:
+   acp, api, auth, debug, default, mini, models, pair, plugin, reload,
+   run, serve, service, session/, mcp/, stats, uninstall, upgrade —
+   counted 2026-10-17; nested dirs enumerate recursively).
+   {R3: U4, U5; R9: L7}
 C19 **Integrations family** (U6, R3 §5 verbatim): [G] per integration
    provider x {connect, disconnect, auth-state} x {dialog, picker, handlers}.
-   [F] I1 [M] flow assert + credential store check. {R3: U6}
+   **V8 census note (R9-L8): NO static enumeration exists** —
+   `IntegrationID` is a branded string (`schema/src/integration-id.ts:3`);
+   providers are runtime/plugin-registered and enumerate only via the
+   `integration.list` API (consumed by `dialog-integration.tsx:85`); census
+   = the list-API result on the I2b binary leg, recorded per round with
+   which-ref-form per I2b. [F] I1 [M] flow assert + credential store check.
+   {R3: U6; R9: L8}
 C20 **Built-in tool family** (U7, R3 §5 verbatim): [G] per built-in tool x
    arg-shape x output-kind x renderer x permission class x side-effect (named:
    read-filesystem, mcp, html-markdown, http-body, runtime, plugin tools,
    websearch, file-mutation, file-access, file-retention, vcs/patch).
-   [F] I1+I2 [M] schema+behavior+render parity vs ref per tool. {R3: U7}
+   **V8 census pin (R9-L9):** the tool universe enumerates from TWO dirs —
+   `ls -1 /opt/opencode-ref/packages/core/src/tool/` (read-filesystem, mcp,
+   html-markdown, http-body, runtime, patch.txt) ∪ `ls -1
+   /opt/opencode-ref/packages/core/src/tool/plugin/` (edit, file-diff,
+   glob, grep, mcp-resource, opencode, patch, question, read, shell,
+   skill, subagent, webfetch, websearch, write — counted 2026-10-17; the
+   named list above is illustrative, the [G] covers every census entry).
+   [F] I1+I2 [M] schema+behavior+render parity vs ref per tool.
+   {R3: U7; R9: L9}
 C21 **Determinism/idempotency** (RESTORED v4 — R2's §c-C17 / R1 S2-13 / U11;
    v3 had zero "determin" hits): [G] rapid/duplicate input x double-submit
    guards x idempotent re-run x event-order stability under repetition.
@@ -563,7 +703,13 @@ D6 WebUI serving — **R2 §c rewrite, verbatim + U10 amendment**: [G] {asset
    and app package (`packages/app`: composer/home/new-session/desktop) either
    in the served-surface enumeration or **absent-justified** (U10).
    [F] I1 [M] served-app e2e + proxy capture of the app's actual calls;
-   request matrix assert. {R1: S1-7, S3-7; R2: (a)S1-7; R3: U10}
+   request matrix assert. **V8 census pin (R9-L10):** `ls -1
+   /opt/opencode-ref/packages/desktop/src/` = exactly {main, preload,
+   renderer, shared}; `ls -1 /opt/opencode-ref/packages/app/src/` =
+   {app.tsx, composer, desktop.ts, entry.tsx, home, new-session, providers,
+   runtime, servers, session, settings, shell, workspaces, …} — the clause's
+   named subpackages all exist (counted 2026-10-17).
+   {R1: S1-7, S3-7; R2: (a)S1-7; R3: U10; R9: L10}
 D7 ACP surface: [G] session/tool/**elicitation translation** granularity x
    lifecycle (per method) [F] real ACP client [M] adapter interop, session
    assert. {R1: S1-6; R2: (a)S1-6}
@@ -578,8 +724,14 @@ D9 **Model/variant/provider matrix** (v3's number KEPT; v4 rewrite per R3
    supportsText/image) x dialog-model/dialog-variant UI cells — IN [G], not
    prose; **folding rule: providers grouped into classes, ≥2 providers per
    class exercised** (the unbounded hundreds-cell matrix folds); models-dev
-   pinned via I10. [F] catalog + config variants + I10 [M] chain assert
-   (config -> catalog -> dialog -> request). {R1: S3-6; R2: S1-7, (a)D9; R3: §2-D9}
+   pinned via I10. **V8 census note (R9-L11):** the variant-kind set
+   {effort, toggle, budget_tokens} is CATALOG-DATA — it lives in models-dev
+   data (I10-pinned external snapshot), not in code (`schema/src/model.ts`
+   defines Variant = {id + settings/headers/body overlays}, untyped kinds);
+   census = the pinned models-dev snapshot, re-run on I10 re-baseline.
+   [F] catalog + config variants + I10 [M] chain assert
+   (config -> catalog -> dialog -> request). {R1: S3-6; R2: S1-7, (a)D9; R3: §2-D9;
+   R9: L11}
 D10 **Code Mode + plugin-browser** (RESTORED v4 — R2's §c-D9 / U2; v3 reused
    the D9 number for model/variant and dropped the family): [G]
    interpreter/stdlib/openapi/tool-runtime/tool-schema surface x parity;
@@ -861,6 +1013,30 @@ F7 **Negative-space parity** (v4 rewrite per R3 §2): [G] per surface x action;
   appendix. Appendix +11 rows → 140. Verdict: **FINAL candidate 2**;
   ratification counter RESETS — RATIFY-1′ and RATIFY-2′ follow per
   docs/scan-program.md. Report: docs/spec-round8.md.
+- v8: SPEC-R9 integration round (RATIFY-1′ FAIL → MG-3 cured per
+  docs/ratify-1b.md): MG-3 cured — A8 REWRITTEN at census-pinned family
+  granularity (mermaid kind union = exactly 6 from
+  `merman/src/diagnostics.ts:1`, ALL full renderers with per-kind census
+  counts; 4 non-diagram merman sub-families: fence renderer/palette/
+  plugin/layout-audit; math/latex split into its TWO real renderer stacks
+  — TUI `@opencode/latex` fenced {latex, math} vs session-ui KaTeX
+  inline `\(...\)`/block `$$`; code-block-renderer universe census = 2
+  builtin registrations; ours absent-justified per renderer, grep crates/
+  = 0). Process cure — **I10b list-census guard**: every ref-enumerating
+  in-clause list must cite its mechanical census command (authored sweep
+  parameters exempt by class); uncited carried list = MG-3 class, fails
+  ratification on sight. List-sweep (11 findings L1-L11): census pins
+  added to A5/A6/C3/C11/C16/C18/C20/D6; C8 OVER-enumeration cured
+  (adopt/rename have no ref op → F7 ours-extra rows); C19 named
+  runtime-enumerated (integration.list, no static enum); D9 named
+  catalog-data-driven (models-dev per I10). Residual riders: R-E → I10b
+  standing accounting entries for function+web; R-F → I5 binds C22's mock
+  OTLP collector; M-1 → R8-N6 status letter corrected to REG; M-2 → B7
+  LIVE list names OTEL_*; M-3 → C7 job-state census pin + C9 threshold +
+  A4 clock note. Appendix +17 rows → 157 (R9 section, tags R9-#).
+  Verdict: **FINAL candidate 3**; ratification counter RESETS —
+  RATIFY-1″ and RATIFY-2″ follow per docs/scan-program.md. Report:
+  docs/spec-round9.md.
 
 ---
 
@@ -871,7 +1047,7 @@ Status legend: **C** = owning clause (text in this file) · **A** = amendment/
 named cell folded into an existing clause · **OOC** = out-of-scope with
 justification (I10b) · **REG** = registered residual (non-blocking; carried
 in the ledger, no clause change). Counts: R1 52/52 · R2 30/30 · R3 20/20
-· R5 12/12 · R7 15/15 · R8 11/11 = **140/140**.
+· R5 12/12 · R7 15/15 · R8 11/11 · R9 17/17 = **157/157**.
 
 ### R1 gaps (52)
 
@@ -1039,9 +1215,31 @@ in the ledger, no clause change). Counts: R1 52/52 · R2 30/30 · R3 20/20
 | R8-N3 (=R-C) | C7 thinnest clause — no artifact/threshold, "observe" verb only | C7 rider (v7): per-job-state surface table + progress/lifetime assert | A |
 | R8-N4 (=R-D) | B3 no named artifact/threshold | B3 rider (v7): per-stack routed-input trace table + routing-matches-ref assert | A |
 | R8-N5 (=N-1) | B7 linux-as-live-OS implicit; B9 TERM-negotiation/missing-binaries thresholds ride boot+echo | registered — cosmetic (S3 verdict CLEAN); rides stated cells | REG |
-| R8-N6 (=N-2) | F7 ours-minus-ref direction structurally blind to ref-only families (the MG-1 mechanism) | cured structurally by R8-MG1 (family now owned bottom-up in C22); F7 direction unchanged (symmetric diff would drown in ref-dev noise) | A |
+| R8-N6 (=N-2) | F7 ours-minus-ref direction structurally blind to ref-only families (the MG-1 mechanism) | cured structurally by R8-MG1 (family now owned bottom-up in C22); F7 direction unchanged (symmetric diff would drown in ref-dev noise). **Status letter corrected v8 (R9-M-1): was "A", honestly REG** — this row records a decision; the structural cure itself lives in R8-MG1's row/destination | REG |
 | R8-N7 (=N-3) | F1 coverage ledger has no aggregate closure condition | registered — round structure governed by docs/scan-program.md; per-axis % per round stands | REG |
 | R8-N8 (=N-4) | gui-extensions (806 files) owned transitively via D6/U10 + F2 — transitivity implicit | registered — D6(U10) letter forces the app disposition; F2/I10b family accounting explicit (v7 census) | REG |
+
+### R9 gaps (17 — RATIFY-1′ register per docs/ratify-1b.md + the v8 list-sweep; cures per docs/spec-round9.md)
+
+| Gap | Destination | Status |
+|---|---|---|
+| R9-MG3 | A8's carried enumeration lists contradicted ref source: mermaid sub-families 4 of 6 (`state`/`timeline` missing; union ground truth `merman/src/diagnostics.ts:1`, all 6 full renderers) AND math/latex "inline vs block" mis-attributed (TUI latex = fenced {latex, math} only; inline/display is session-ui KaTeX via `ui/src/context/marked-parser.tsx`) — the MG-2/R2→v7 verbatim-carry class inside a clause | **A8 v8 rewrite** (complete merman+latex census: 6 kinds x full-renderer status + 4 non-diagram merman sub-families + both math stacks + code-block-renderer universe census + ours absent-justified per renderer) + **I10b list-census guard** (the process cure) | C |
+| R9-L1 | A6 mini panel list valid but carried without census citation | A6 v8 census pin (`ls -1 …/tui/src/mini/ | grep -E …` — 12 panels verified) | A |
+| R9-L2 | A5 feature-plugin slot list valid but uncited | A5 v8 census pin (`ls -1 …/feature-plugins/` = exactly {home, prompt, sidebar, system}) | A |
+| R9-L3 | C3 permission decision/persistence sets carried without literal census | C3 v8 census pin (Effect {allow,deny,ask} `permission.ts:55`; Reply {once,always,reject} `:41`) | A |
+| R9-L4 | C8 worktree op list OVER-enumerates ref: {adopt, rename} have no ref op (census: `Effect.fn("Worktree…"` = {create, remove, refresh, list} + session_move + name dialog) | C8 v8 census cure (adopt/rename convert to F7 ours-extra rows, not parity cells) | A |
+| R9-L5 | C11 updater method list carried uncited (happens to be exact) | C11 v8 census pin (`updater.ts:14` — 7 methods exact) | A |
+| R9-L6 | C16 dialog enumeration trees named but no census command | C16 v8 census pin (component/dialog-* 23 ∪ routes/session/dialog-* 4 ∪ session-ui) | A |
+| R9-L7 | C18 handler enumeration source named but no census command | C18 v8 census pin (`ls -1R …/cli/src/commands/handlers/`) | A |
+| R9-L8 | C19 "per integration provider" — NO static enumeration exists in ref (runtime/plugin-registered) | C19 v8 census note (runtime `integration.list` API on the I2b leg; recorded per round) | A |
+| R9-L9 | C20 named tool list uncited; [G] "per built-in tool" lacked enumeration source | C20 v8 census pin (core/src/tool/ ∪ core/src/tool/plugin/ = 6 + 15 entries) | A |
+| R9-L10 | D6 desktop subpackage list uncited | D6 v8 census pin (desktop/src = {main, preload, renderer, shared} exact) | A |
+| R9-L11 | D9 variant-kind set {effort, toggle, budget_tokens} carried as if code-enumerable | D9 v8 census note (catalog-data: models-dev snapshot per I10; schema Variant is untyped overlays) | A |
+| R9-R-E | hosted share pair `function` (CF-worker backend) + `web` (viewer/docs) had no standing accounting entry (ratify-1b residual) | I10b v8 standing entries (function = hosted share backend, no client in pinned source/2.0.25 binary; web = viewer riding D8 destination cells) | A |
+| R9-R-F | C22's mock OTLP collector clause-declared standing but not I5-named (ratify-1b residual) | I5 v8 extension (named; committed in-tree at first C22 execution) | A |
+| R9-M-1 | R8-N6 appendix status letter "A" mislabeled a decision record as an amendment (ratify-1b cosmetic) | appendix row corrected v8 (A → REG, note in place) | REG |
+| R9-M-2 | B7 v6 LIVE list didn't repeat OTEL_* though the R8 rider extends the set (cosmetic inconsistency) | B7 v8 LIVE-list addition (OTEL_* named, tagged) | A |
+| R9-M-3 | C7 job-state source unnamed; C9 threshold implicit; A4 ref-side clocking implicit (ratify-1b cosmetics) | C7 v8 census pin (tool-part status union, session-message.ts:127-148) + C9 v8 threshold note + A4 v8 clock note | A |
 
 R3 §2 clause-stress verdicts (9 rows) are cured by the v4 rewrites of
 A8/B8/C13/C14/C15/C16/D9/F6/F7 — each rewritten clause carries its R3 §2
