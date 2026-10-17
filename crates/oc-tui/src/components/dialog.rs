@@ -82,6 +82,7 @@ pub fn handle_dialog_key(
         }
         DialogKind::CommandPalette
         | DialogKind::QueuedPrompts
+        | DialogKind::Update
         | DialogKind::ThemeList
         | DialogKind::Help
         | DialogKind::Plugins
@@ -375,7 +376,8 @@ pub fn render_overlay_with_options(
     // Select dialogs record their option rows (absolute screen rows,
     // flat-index order); static content records none.
     let option_rows = if match &entry.kind {
-        DialogKind::CommandPalette
+        DialogKind::Update
+        | DialogKind::CommandPalette
         | DialogKind::QueuedPrompts
         | DialogKind::ThemeList
         | DialogKind::Worktrees
@@ -532,8 +534,51 @@ pub fn execute_submission(
     // values are registry names); server-list rows route by the
     // picker's own command (model/agent/session selections).
     match store.top_dialog().map(|entry| entry.kind) {
+        // The update dialog's actions (`dialog-update.tsx`'s buttons):
+        // skip dismisses + closes; confirm runs Update (the loop's
+        // install spawn) or Restart (exit) per the live state.
+        Some(DialogKind::Update) => {
+            let action = value.to_owned();
+            store.clear_dialogs();
+            if action == "confirm" {
+                match store.update_dialog_state() {
+                    crate::components::update::UpdateDialogState::Available(version) => {
+                        store.set_update_dialog(
+                            crate::components::update::UpdateDialogState::Installing(
+                                version.clone(),
+                            ),
+                        );
+                        let _ = version;
+                        // The loop intercepts this marker through its
+                        // pending-command seam (a String payload rides
+                        // the update dialog's state instead).
+                        return crate::components::command_palette::Dispatch::ServerPending(
+                            "update.install",
+                        );
+                    }
+                    crate::components::update::UpdateDialogState::Installed(_) => {
+                        return crate::components::command_palette::Dispatch::ServerPending(
+                            "update.restart",
+                        );
+                    }
+                    _ => {}
+                }
+            } else {
+                store.update_dismiss();
+            }
+            return crate::components::command_palette::Dispatch::Handled;
+        }
         Some(DialogKind::ThemeList) => {
-            store.set_theme_by_name(command);
+            if !store.set_theme_by_name(command) {
+                // ThemeErrorToast (auditB #9): an unresolvable theme
+                // surfaces instead of silently keeping the current one.
+                store.toast_show(crate::components::toast::ToastOptions {
+                    title: Some("Failed to load theme".to_owned()),
+                    message: format!("Theme \"{command}\" could not be resolved."),
+                    variant: "error",
+                    ..crate::components::toast::ToastOptions::info("")
+                });
+            }
             // `confirmed = true` before `dialog.clear()` — the clear's
             // unmount must NOT revert the preview (dialog-theme-list.
             // tsx:31-35).

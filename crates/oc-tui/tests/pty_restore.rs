@@ -954,60 +954,37 @@ fn pty_kitty_handshake_and_teardown_bytes() {
     assert!(contains(b"\x1b[0 q"), "DECSCUSR reset at teardown");
 }
 
-/// The panic-restore finalizer (P3): a thread crashing mid-run while
-/// the TUI owns the terminal triggers the chained panic hook, which
-/// writes the full restore sequence to the pty — raw mode / alt
-/// screen / mouse / kitty can never stay latched after a crash.
+/// `ErrorComponent` (auditB #9): a render-path crash mid-run is CAUGHT
+/// — the fallback screen paints ("Something went wrong" + the detail),
+/// the crash-restore sequence fired on the pty (this thread owns the
+/// terminal), and any key exits cleanly (the teardown repeats are
+/// idempotent mode pops).
 #[test]
-fn pty_panic_mid_run_restores_the_terminal() {
-    let _sandbox = sandbox_env("tail-panic");
+fn pty_render_panic_shows_the_error_component_and_exits() {
+    let _sandbox = sandbox_env("tail-error");
     let (url, _state, shutdown) = spawn_scripted_server();
+    // Crash the FIRST rendered frame (after the boot setup).
+    std::env::set_var("OC_TUI_TEST_RENDER_PANIC", "1");
 
     run_tui(&url, oc_tui::app::BootArgs::default(), move |boot, writer| {
         assert!(
-            wait_for(&boot, "█▀▀█".as_bytes(), Duration::from_secs(8)),
-            "the home frame rendered before the crash"
+            wait_for(&boot, b"Something went wrong", Duration::from_secs(8)),
+            "the ErrorComponent fallback rendered"
         );
-        // Baseline occurrence counts (the restore bytes may
-        // land in the same reader chunk as the frame — an offset
-        // watch would race them; counting does not).
-        let count_of = |needle: &[u8]| -> usize {
-            boot.output
-                .lock()
-                .expect("output lock")
-                .windows(needle.len())
-                .filter(|w| *w == needle)
-                .count()
-        };
-        let baseline =
-            [count_of(b"?1049l"), count_of(b"?2004l"), count_of(b"\x1b[<u"), count_of(b"\x1b[0 q")];
-        // Crash a worker thread mid-run (the renderer's terminal
-        // is UP: alt screen + raw mode + mouse latched).
-        std::thread::spawn(|| panic!("mid-render crash (pty proof)"));
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        let mut restored = false;
-        while std::time::Instant::now() < deadline {
-            let now = [
-                count_of(b"?1049l"),
-                count_of(b"?2004l"),
-                count_of(b"\x1b[<u"),
-                count_of(b"\x1b[0 q"),
-            ];
-            if now.iter().zip(baseline).all(|(n, b)| *n > b) {
-                restored = true;
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
         assert!(
-            restored,
-            "the panic hook wrote the crash-restore sequence (baseline {baseline:?})"
+            wait_for(&boot, b"Press escape to exit", Duration::from_secs(2)),
+            "the fallback's exit hint rendered"
         );
-        // The app itself is unaffected (the crash was contained);
-        // leave through the standard chord.
+        // The crash-restore sequence went out (the panicking
+        // thread owns the terminal — the hook restores).
+        let output = boot.output.lock().expect("output lock").clone();
+        assert!(
+            output.windows(6).any(|w| w == b"?1049l"),
+            "the panic hook restored the alt screen"
+        );
+        // Any key exits (the fallback's only action).
         type_keys(&writer, b"\x1b");
-        type_keys(&writer, b"\x03");
-        type_keys(&writer, b"\x03");
     });
+    std::env::remove_var("OC_TUI_TEST_RENDER_PANIC");
     shutdown.store(true, Ordering::Relaxed);
 }
