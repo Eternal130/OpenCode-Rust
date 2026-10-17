@@ -69,11 +69,15 @@ use opentui_solid::{
     box_, children_expr, for_list, map, show, text, Element, Signal, SolidRenderer,
 };
 
+use crate::components::marquee::Marquee;
 use crate::components::session_tabs::{
-    adaptive_session_tab_layout, session_tab_overflow_width, AdaptiveLayout, TabStatus, TabView,
-    ADD_TAB_WIDTH,
+    adaptive_session_tab_layout, session_tab_overflow_width, spinner_frame_at, AdaptiveLayout,
+    TabStatus, TabView, ADD_TAB_WIDTH,
 };
-use crate::components::tab_pulse::{glow_text_color, resting_glow_bg, tint, Rgb, GLOW_TAIL};
+use crate::components::tab_pulse::{
+    blend_tab_pulse_color, glow_text_color, intensity_at, resting_glow_bg, tint, Rgb,
+    TabPulseTrack, GLOW_TAIL, RUN_SWEEP_OPACITY,
+};
 use crate::render::{Cell, CellColor, Frame, CONTINUATION};
 use crate::store::Unread;
 use crate::theme::ThemeStyles;
@@ -146,6 +150,15 @@ struct StripInputs {
     /// The close-hold's frozen layout override (lane KM, auditA
     /// #8b — `heldSessionTabLayout`, session-tabs.tsx:240-278).
     held: Option<AdaptiveLayout>,
+    /// The store clock (ms) — the ONLY time source the animated
+    /// phases read (spinner frame, sweep envelopes, marquee). A
+    /// frozen clock pins frame 0 / sustain, so golden frames stay
+    /// byte-stable (`ManualClock` semantics).
+    clock_ms: u64,
+    /// Per-tab pulse transition stamps (the live path syncs them from
+    /// store status flips; the golden path leaves them empty → static
+    /// resting levels).
+    tracks: std::collections::HashMap<String, TabPulseTrack>,
 }
 
 impl StripInputs {
@@ -187,6 +200,108 @@ fn glow_hue(status: TabStatus, colors: &StripColors) -> Rgb {
     } else {
         colors.accent
     }
+}
+
+// ---------------------------------------------------------------------------
+// the animated phases' carrier state (lane TAIL, item 1)
+// ---------------------------------------------------------------------------
+
+/// The pulse envelopes' read for one tab — derived purely from the
+/// transition stamps ([`crate::components::tab_pulse::TabPulseTrack`])
+/// the live path syncs from store state; a MISSING track (the golden
+/// path) means static resting levels (glow sustain 1, no sweep).
+fn pulse_read(
+    inputs: &StripInputs,
+    key: &str,
+    view: &TabView,
+    selected: bool,
+    width: usize,
+) -> PulseRead {
+    let track = inputs.tracks.get(key).copied().unwrap_or_default();
+    let now = inputs.clock_ms;
+    PulseRead {
+        running: track.running(now),
+        fronts: track.fronts(width, now),
+        glow_level: if view.status.glows(selected) && track.glow_since.is_none() {
+            1.0 // the golden resting glow: sustain without ignition
+        } else {
+            track.glow_level(now)
+        },
+        completion: track.completion(now),
+    }
+}
+
+/// One frame's envelope read for a tab (everything the painters need).
+#[derive(Clone, Copy)]
+struct PulseRead {
+    running: f64,
+    fronts: (f64, f64),
+    glow_level: f64,
+    completion: f64,
+}
+
+thread_local! {
+    /// The hover marquee (one per thread — the app mounts one strip;
+    /// the golden harnesses hover at a frozen clock ⇒ offset 0).
+    static MARQUEE: RefCell<Marquee> = RefCell::new(Marquee::default());
+}
+
+/// The hover marquee's deterministic offset for one tab's title (the
+/// map-closure seam: enter/leave is idempotent per frame; the offset
+/// derives from the absolute clock).
+fn marquee_offset(
+    key: &str,
+    title: &str,
+    title_width: usize,
+    hovered: bool,
+    now_ms: u64,
+) -> (usize, f64) {
+    MARQUEE.with(|marquee| {
+        let marquee = &mut *marquee.borrow_mut();
+        if hovered {
+            marquee.enter(key, title, title_width, now_ms);
+        } else {
+            marquee.leave(key);
+        }
+        (marquee.offset(now_ms), marquee.leading(now_ms))
+    })
+}
+
+/// The sweep band's cell color for a busy tab (the `TabPulse` active
+/// phase): `pulseColor = tint(bg, text.base, 0.45)`
+/// (session-tabs.tsx:1575), the band profile `intensityAt(cell, front,
+/// RUN_HEAD, RUN_TAIL)` at `RUN_SWEEP_OPACITY` amplitude × the run
+/// envelope's level.
+fn sweep_cell_bg(
+    background: Rgb,
+    pulse_color: Rgb,
+    cell: usize,
+    running: f64,
+    fronts: (f64, f64),
+) -> Rgb {
+    let band = intensity_at(
+        cell,
+        fronts.0,
+        crate::components::tab_pulse::RUN_HEAD,
+        crate::components::tab_pulse::RUN_TAIL,
+    )
+    .max(intensity_at(
+        cell,
+        fronts.1,
+        crate::components::tab_pulse::RUN_HEAD,
+        crate::components::tab_pulse::RUN_TAIL,
+    ));
+    blend_tab_pulse_color(
+        background,
+        background, // glow stage idle while busy (glows() is false)
+        pulse_color,
+        background,
+        background,
+        0.0,
+        band * RUN_SWEEP_OPACITY * running,
+        0.0,
+        0.0,
+    )
 }
 
 /// Everything one tab's dynamic props derive from — the per-key
@@ -257,7 +372,18 @@ fn title_chunks(inputs: &StripInputs, paint: &TabPaint, key: &str) -> StyledText
     let title_width =
         paint.width.saturating_sub(1 + number_width + usize::from(paint.hovered) * 2).max(1);
     let title = view.tab.title.clone().unwrap_or_else(|| "Untitled session".into());
-    let title_text = take_width(&title, title_width);
+    // The hover marquee (`createTabMarquee`, session-tabs.tsx:279-369):
+    // an overflowing title scrolls one cell per 80 ms after a 600 ms
+    // still frame (`marqueeTextParts(title, width, offset)`); the
+    // leading fade rides the first FADE_WIDTH cells.
+    let scrolling =
+        paint.hovered && crate::components::marquee::marquee_overflows(&title, title_width);
+    let (offset, leading) = marquee_offset(key, &title, title_width, scrolling, inputs.clock_ms);
+    let title_text = if scrolling && offset > 0 {
+        crate::components::marquee::marquee_text(&title, title_width, offset)
+    } else {
+        take_width(&title, title_width)
+    };
     let foreground =
         if paint.selected || paint.hovered { inputs.colors.text } else { inputs.colors.muted };
     let bold = u32::from(paint.selected); // attributes bit 1 = BOLD
@@ -269,15 +395,15 @@ fn title_chunks(inputs: &StripInputs, paint: &TabPaint, key: &str) -> StyledText
         None => {
             if title_fades {
                 // Per-char fade chunks (the tsx renders per-glyph spans
-                // exactly while `titleFades`), leading = 0 (not
-                // scrolling).
+                // exactly while `titleFades`), leading = the marquee's
+                // leading fade.
                 let length = title_text.chars().count();
                 StyledText::new(
                     title_text
                         .chars()
                         .enumerate()
                         .map(|(index, ch)| {
-                            let fg = fade_title_color(foreground, paint.bg, index, length, 0.0);
+                            let fg = fade_title_color(foreground, paint.bg, index, length, leading);
                             TextChunk {
                                 text: ch.to_string(),
                                 fg: Some(rgba(fg)),
@@ -307,7 +433,7 @@ fn title_chunks(inputs: &StripInputs, paint: &TabPaint, key: &str) -> StyledText
                     let mut fg = glow_text_color(foreground, glow, column, paint.width, 1.0);
                     if title_fades {
                         let length = title_text.chars().count();
-                        fg = fade_title_color(fg, paint.bg, cell, length, 0.0);
+                        fg = fade_title_color(fg, paint.bg, cell, length, leading);
                     }
                     TextChunk {
                         text: ch.to_string(),
@@ -380,17 +506,23 @@ fn indicator_chunks(inputs: &StripInputs, key: &str) -> StyledText {
             link: None,
         }]);
     }
-    let glyph = view.status.indicator_label();
-    if glyph.is_empty() {
+    // The busy spinner cycles its frames off the store clock
+    // (`<spinner frames interval={80}>`, session-tabs.tsx:60,200) — a
+    // frozen clock pins frame 0 (`indicator_label`'s static value).
+    let glyph: String = if view.status.runs() {
+        spinner_frame_at(inputs.clock_ms).to_string()
+    } else if view.status.indicator_label().is_empty() {
         return StyledText::new(Vec::new());
-    }
+    } else {
+        view.status.indicator_label().into()
+    };
     let fg = if view.status.unread.is_some() || view.status.attention.is_some() {
         glow_hue(view.status, &inputs.colors)
     } else {
         inputs.colors.text
     };
     StyledText::new(vec![TextChunk {
-        text: glyph.to_string(),
+        text: glyph.clone(),
         fg: Some(rgba(fg)),
         bg: None,
         attributes: 0,
@@ -522,19 +654,66 @@ fn tab_element(inputs: &Signal<StripInputs>, key: &str) -> Element {
         let Some(paint) = tab_paint(i, &layout, &pulse_key) else {
             return Vec::new();
         };
+        let Some(view) = i.find(&pulse_key) else {
+            return Vec::new();
+        };
+        let levels = pulse_read(i, &pulse_key, view, paint.selected, paint.width);
+        let pulse_color = tint(paint.bg, i.colors.text, 0.45);
         match paint.glow {
-            None => Vec::new(),
-            Some(glow) => (0..paint.width)
-                .map(|cell| {
-                    let color = resting_glow_bg(paint.bg, glow, cell, paint.width, GLOW_TAIL, 1.0);
-                    box_()
-                        .width(1.0)
-                        .height(1.0)
-                        .flex_shrink(0.0)
-                        .background_color(hex(color))
-                        .into_element()
-                })
-                .collect(),
+            None if !view.status.runs() => Vec::new(),
+            None => {
+                // The busy sweep (TabPulse `active`): the band crosses
+                // left-to-right each 2.8 s cycle, second pass trailing
+                // half a cycle behind (fronts, tab-pulse.tsx:404-417).
+                (0..paint.width)
+                    .map(|cell| {
+                        let color = if levels.running <= 0.0 {
+                            paint.bg
+                        } else {
+                            sweep_cell_bg(
+                                paint.bg,
+                                pulse_color,
+                                cell,
+                                levels.running,
+                                levels.fronts,
+                            )
+                        };
+                        box_()
+                            .width(1.0)
+                            .height(1.0)
+                            .flex_shrink(0.0)
+                            .background_color(hex(color))
+                            .into_element()
+                    })
+                    .collect()
+            }
+            // The resting glow (level rides the ignition/release
+            // envelope; the resolve flash washes over it).
+            Some(glow) => {
+                let glow_level = levels.glow_level.max(0.0);
+                let completion = levels.completion;
+                (0..paint.width)
+                    .map(|cell| {
+                        let mut color = resting_glow_bg(
+                            paint.bg,
+                            glow,
+                            cell,
+                            paint.width,
+                            GLOW_TAIL,
+                            glow_level,
+                        );
+                        if completion > 0.0 {
+                            color = tint(color, i.colors.accent, completion);
+                        }
+                        box_()
+                            .width(1.0)
+                            .height(1.0)
+                            .flex_shrink(0.0)
+                            .background_color(hex(color))
+                            .into_element()
+                    })
+                    .collect()
+            }
         }
     }));
 
@@ -787,6 +966,8 @@ impl SolidTabsStrip {
             width,
             colors,
             held: None,
+            clock_ms: 0,
+            tracks: std::collections::HashMap::new(),
         });
         let mut renderer = SolidRenderer::new(CliRendererConfig {
             width: width as u32,
@@ -864,7 +1045,10 @@ fn glow_ranges(inputs: &StripInputs) -> Vec<(usize, usize)> {
         let width = layout.widths[index];
         if let Some(view) = inputs.find(&tab.session_id) {
             let selected = inputs.active.as_deref() == Some(tab.session_id.as_str());
-            if view.status.glows(selected) {
+            // The busy sweep's fill cells need the same fg-Reset
+            // restore as the resting glow's (space cells under a
+            // gradient band).
+            if view.status.glows(selected) || view.status.runs() {
                 ranges.push((x, width));
             }
         }
@@ -985,7 +1169,48 @@ pub fn paint_solid_bar_held(
         width,
         colors: StripColors::of(theme),
         held,
+        clock_ms: 0,
+        tracks: std::collections::HashMap::new(),
     };
+    paint_inputs(inputs)
+}
+
+/// [`paint_solid_bar`] with the animation clock — the live-path entry
+/// (`paint_live_tabs_bar` passes the store clock; the animated phases
+/// — spinner, sweep, marquee — derive from it deterministically).
+#[allow(clippy::too_many_arguments, clippy::implicit_hasher)]
+pub fn paint_solid_bar_clock(
+    tabs: &[TabView],
+    active: Option<&str>,
+    show_plus: bool,
+    width: usize,
+    theme: &ThemeStyles,
+    hover: Option<&str>,
+    close_hover: Option<&str>,
+    add_hovered: bool,
+    held: Option<AdaptiveLayout>,
+    clock_ms: u64,
+    tracks: std::collections::HashMap<String, TabPulseTrack>,
+) -> Frame {
+    let inputs = StripInputs {
+        tabs: tabs.to_vec(),
+        active: active.map(str::to_owned),
+        show_plus,
+        hover: hover.map(str::to_owned),
+        close_hover: close_hover.map(str::to_owned),
+        add_hovered,
+        width,
+        colors: StripColors::of(theme),
+        held,
+        clock_ms,
+        tracks,
+    };
+    paint_inputs(inputs)
+}
+
+/// The shared paint: advance the envelopes by the clock delta, sync,
+/// flush, render, copy.
+fn paint_inputs(inputs: StripInputs) -> Frame {
     let glows = glow_ranges(&inputs);
     STRIP.with_borrow_mut(|slot| {
         let strip = slot.get_or_insert_with(|| SolidTabsStrip::new(inputs.width, inputs.colors));
@@ -1207,5 +1432,203 @@ mod tests {
                 }
             }
         }
+    }
+
+    // -- lane TAIL: the busy-session animations (ROADMAP 2026-10-16) ---
+
+    /// The busy tab's spinner cycles its braille frames off the clock
+    /// (`<spinner frames interval={80}>`): frame 0 at the frozen
+    /// clock, the full clockwise cycle across 800 ms.
+    #[test]
+    fn busy_spinner_cycles_frames_off_the_clock() {
+        let styles = theme();
+        let tabs = vec![view("busy", "Working", TabStatus { busy: true, ..TabStatus::EMPTY })];
+        // Frame 0 at clock 0 (the frozen-clock pin).
+        let frame = paint_solid_bar_clock(
+            &tabs,
+            Some("busy"),
+            false,
+            80,
+            &styles,
+            None,
+            None,
+            false,
+            None,
+            0,
+            std::collections::HashMap::new(),
+        );
+        let spinner_cell = frame.cells[0]
+            .iter()
+            .find(|cell| cell.ch != ' ' && cell.ch != 'W')
+            .expect("spinner glyph");
+        assert_eq!(spinner_cell.ch, '⠋', "frame 0 while frozen");
+        // The full cycle: each 80 ms step advances one frame (the
+        // braille dot rotates clockwise ⠋→⠙→⠹→⠸→…).
+        let frames: Vec<char> = (0..10)
+            .map(|step| {
+                let frame = paint_solid_bar_clock(
+                    &tabs,
+                    Some("busy"),
+                    false,
+                    80,
+                    &styles,
+                    None,
+                    None,
+                    false,
+                    None,
+                    step * 80,
+                    std::collections::HashMap::new(),
+                );
+                frame.cells[0]
+                    .iter()
+                    .find(|cell| cell.ch != ' ' && cell.ch != 'W')
+                    .unwrap_or_else(|| panic!("no spinner glyph at step {step}"))
+                    .ch
+            })
+            .collect();
+        assert_eq!(
+            frames,
+            vec!['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
+            "the clockwise dot cycle"
+        );
+    }
+
+    /// The busy sweep (the `TabPulse` active phase): the band's tint crosses
+    /// cells left-to-right across the cycle — cell N lights while the
+    /// front passes, then returns to the flat background.
+    #[test]
+    fn busy_sweep_band_crosses_cells() {
+        let styles = theme();
+        let colors = StripColors::of(&styles);
+        let tabs = vec![view("busy", "Working", TabStatus { busy: true, ..TabStatus::EMPTY })];
+        let mut track = crate::components::tab_pulse::TabPulseTrack::default();
+        track.sync(true, false, false, 0);
+        let tracks = std::collections::HashMap::from([("busy".to_owned(), track)]);
+        // One full-width tab (no plus): width 80.
+        let flat = CellColor::Rgb(colors.background.0, colors.background.1, colors.background.2);
+        let bg_at = |clock: u64, col: usize| -> CellColor {
+            let frame = paint_solid_bar_clock(
+                &tabs,
+                None,
+                false,
+                80,
+                &styles,
+                None,
+                None,
+                false,
+                None,
+                clock,
+                tracks.clone(),
+            );
+            frame.cell(0, col).bg
+        };
+        // A mid-tab cell (the solver clamps one tab to 22 cells at
+        // width 80): flat at the frozen clock (attack level 0),
+        // lifted while the band passes, flat again at cycle end.
+        let col = 18;
+        assert_eq!(bg_at(0, col), flat, "no band while frozen (attack 0)");
+        // Attack completes at 450 ms; at 1400 ms (mid-cycle) the front
+        // sits at coast(0.5)·span ≈ 22.5 — past col 20 but not 40.
+        let lifted_at_mid = bg_at(1_400, 20) != flat || bg_at(1_400, 25) != flat;
+        assert!(lifted_at_mid, "the band lifts cells as it passes");
+        // Somewhere in the cycle col 40 lifts (the front reaches
+        // 31 + 18 = 49 at coast=1).
+        let mut lifted = false;
+        for step in 0..28 {
+            if bg_at(step * 100, col) != flat {
+                lifted = true;
+                break;
+            }
+        }
+        assert!(lifted, "cell {col} sees the band pass");
+        // Full cycle + attack: the pattern repeats (cycle 2 lifts again).
+        assert_ne!(bg_at(2_800 + 1_400, 18), flat, "the sweep cycles");
+    }
+
+    /// The hover marquee: an overflowing title scrolls on hover — the
+    /// visible window shifts one cell per 80 ms after the 600 ms
+    /// still frame, then loops through the `·` separator.
+    #[test]
+    fn hover_marquee_scrolls_a_long_title() {
+        let styles = theme();
+        let title = "The extremely long session title that cannot fit";
+        let tabs = vec![view("long", title, TabStatus::EMPTY)];
+        let paint = |clock: u64, hover: Option<&str>| {
+            paint_solid_bar_clock(
+                &tabs,
+                None,
+                true,
+                40,
+                &styles,
+                hover,
+                hover,
+                false,
+                None,
+                clock,
+                std::collections::HashMap::new(),
+            )
+        };
+        let title_at = |clock: u64, hover: Option<&str>| {
+            let frame = paint(clock, hover);
+            // The title starts after the indicator (1 + numberWidth 2).
+            frame.text_grid()[0].chars().skip(3).take(30).collect::<String>()
+        };
+        let hovered_still = title_at(0, Some("long"));
+        assert_eq!(title_at(599, Some("long")), hovered_still, "no scroll inside the delay");
+        // 600→680 ms: offset 1 then 2 — the window slides right.
+        let step1 = title_at(600, Some("long"));
+        let step2 = title_at(680, Some("long"));
+        assert_ne!(step1, hovered_still, "the scroll starts at the delay boundary");
+        assert_ne!(step1, step2, "one cell per 80 ms");
+        assert!(
+            step1.chars().next() == hovered_still.chars().nth(1),
+            "offset 1 shows the title from its second cell: {step1}"
+        );
+        // Deep in the cycle the separator loops in (title is 48 cells,
+        // the slot ~30 → around offset 46+ the `·` shows).
+        let deep = title_at(600 + 80 * 47, Some("long"));
+        assert!(deep.contains('·'), "the loop separator shows late in the cycle: {deep}");
+    }
+
+    /// The frame-budget pair (the 40 ms gate): the strip's worst frame
+    /// with a busy tab mid-sweep + a hovered scrolling title.
+    #[test]
+    fn animated_strip_stays_inside_the_frame_budget() {
+        let styles = theme();
+        let tabs: Vec<TabView> = (0..12)
+            .map(|index| {
+                view(
+                    &format!("s{index}"),
+                    "A busy tab with a long title scrolling",
+                    TabStatus { busy: true, ..TabStatus::EMPTY },
+                )
+            })
+            .collect();
+        let mut tracks = std::collections::HashMap::new();
+        for index in 0..12 {
+            let mut track = crate::components::tab_pulse::TabPulseTrack::default();
+            track.sync(true, false, false, 0);
+            tracks.insert(format!("s{index}"), track);
+        }
+        let mut worst = std::time::Duration::ZERO;
+        for step in 0..60 {
+            let clock = step * 33; // ~30 fps of live-clock frames
+            let t = std::time::Instant::now();
+            let _ = paint_solid_bar_clock(
+                &tabs,
+                Some("s0"),
+                true,
+                200,
+                &styles,
+                Some("s1"),
+                Some("s1"),
+                false,
+                None,
+                clock,
+                tracks.clone(),
+            );
+            worst = worst.max(t.elapsed());
+        }
+        assert!(worst.as_millis() < 40, "worst animated frame {worst:?} < 40 ms");
     }
 }

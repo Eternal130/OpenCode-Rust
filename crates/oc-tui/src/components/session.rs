@@ -19,7 +19,7 @@ use crate::components::session_tabs::{Attention, TabStatus, TabView};
 use crate::components::sidebar::{
     SidebarContextWidget, SidebarMcpWidget, SidebarSections, SidebarView, SIDEBAR_AUTO_BREAKPOINT,
 };
-use crate::render::{paint_placed_with_fills, Fill, Frame};
+use crate::render::{paint_placed_with_fills, Frame};
 use crate::store::{SessionTab, Store};
 use ratatui::style::Style;
 
@@ -75,21 +75,44 @@ pub fn paint_live_tabs_bar(
     let tabs = store.tabs();
     let permission_live =
         matches!(store.footer().view, crate::components::footer::FooterView::Permission { .. });
+    // The animated phases' transition stamps: one track per tab,
+    // synced at the store clock (busy on/off, glow on/off, the
+    // completion arm) — the strip derives every envelope level from
+    // these + the clock, stateless per frame.
+    let mut tracks = std::collections::HashMap::new();
     let mut views: Vec<TabView> = store
         .strip_tabs_ordered()
         .iter()
-        .map(|tab| TabView {
-            // Session-title-first (session-tabs.tsx:754): the live
-            // session registry shadows the tab's persisted title, so
-            // a rename that raced the tab's opening still shows.
-            tab: SessionTab { title: store.display_title(tab), ..tab.clone() },
-            status: TabStatus {
+        .map(|tab| {
+            let busy = store.session_running(&tab.session_id);
+            let selected = Some(tab.session_id.as_str()) == active;
+            let status = TabStatus {
                 unread: tabs.unread.get(&tab.session_id).copied(),
-                busy: false,
+                // `status().busy` (context/session-tabs.tsx:170-174):
+                // the session (or family) is working — the spinner +
+                // sweep phase's gate.
+                busy,
                 attention: (permission_live && Some(tab.session_id.as_str()) == active)
                     .then_some(Attention::Permission),
-            },
-            detail: None,
+            };
+            let complete = status.unread == Some(crate::store::Unread::Activity) && !status.busy;
+            tracks.insert(
+                tab.session_id.clone(),
+                store.tab_pulse_track(
+                    &tab.session_id,
+                    status.runs(),
+                    status.glows(selected),
+                    complete,
+                ),
+            );
+            TabView {
+                // Session-title-first (session-tabs.tsx:754): the live
+                // session registry shadows the tab's persisted title, so
+                // a rename that raced the tab's opening still shows.
+                tab: SessionTab { title: store.display_title(tab), ..tab.clone() },
+                status,
+                detail: None,
+            }
         })
         .collect();
     // The promoted new-session slot: home + at least one open tab
@@ -118,7 +141,7 @@ pub fn paint_live_tabs_bar(
     let held = store
         .close_hold()
         .and_then(|hold| crate::components::session_tabs::held_session_tab_layout(&hold, &owned));
-    crate::components::session_tabs_solid::paint_solid_bar_held(
+    crate::components::session_tabs_solid::paint_solid_bar_clock(
         &views,
         active,
         show_plus,
@@ -128,6 +151,8 @@ pub fn paint_live_tabs_bar(
         close_hover.as_deref(),
         tabs.add_hovered,
         held,
+        store.clock(),
+        tracks,
     )
 }
 
@@ -635,8 +660,14 @@ pub fn render_session(
         if sidebar_docked {
             paste(&mut frame, &pane, column, content_top);
         } else if sidebar_overlay {
-            let scrim = scrim_frame(width, pane_height);
-            paste(&mut frame, &scrim, 0, content_top);
+            // The translucent scrim (session-frame.tsx:385-397): v2
+            // composites `rgba(0,0,0,70)` OVER the route content, so
+            // typing under the overlay keeps its echo (the registered
+            // "no echo under the scrim" seam, ROADMAP 2026-10-12).
+            // The text grid has no alpha channel: blend each covered
+            // cell's background toward black at 70/255 in place —
+            // glyphs (the composer's echo) survive underneath.
+            apply_scrim(&mut frame, 0, content_top, width, pane_height);
             paste(&mut frame, &pane, origin_x, content_top);
         }
     } else {
@@ -783,12 +814,25 @@ fn tool_cell_hit(
     })
 }
 
-fn scrim_frame(width: usize, height: usize) -> Frame {
-    let black = ratatui::style::Color::Rgb(0, 0, 0);
-    let style = Style::new().fg(crate::components::tool_rows::DEFAULT_FOREGROUND).bg(black);
-    let (w, h) =
-        (u16::try_from(width).unwrap_or(u16::MAX), u16::try_from(height).unwrap_or(u16::MAX));
-    paint_placed_with_fills(&[], &[Fill { x: 0, y: 0, width: w, height: h, style }], (w, h), style)
+/// The manual-open scrim's alpha blend (session-frame.tsx:385-397):
+/// every covered cell's background blends toward black at
+/// `70/255` — `rgba(0,0,0,70)` composited over the route content
+/// (glyphs keep their fg; only the veil's bg dimming applies, the
+/// opentui respectAlpha semantics for a bg-only overlay box).
+fn apply_scrim(frame: &mut Frame, x: usize, y: usize, width: usize, height: usize) {
+    const SCRIM_ALPHA: f64 = 70.0 / 255.0;
+    // The blend factors a bounded 0..=255 channel by a 0..1 alpha.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let dim = |channel: u8| (f64::from(channel) * (1.0 - SCRIM_ALPHA)).round() as u8;
+    for row in y..y.saturating_add(height).min(frame.height) {
+        for col in x..x.saturating_add(width).min(frame.width) {
+            if let Some(cell) = frame.cells.get_mut(row).and_then(|cells| cells.get_mut(col)) {
+                if let crate::render::CellColor::Rgb(r, g, b) = cell.bg {
+                    cell.bg = crate::render::CellColor::Rgb(dim(r), dim(g), dim(b));
+                }
+            }
+        }
+    }
 }
 
 /// The live sidebar's content (`routes/session/sidebar.tsx`): the
@@ -878,6 +922,8 @@ fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarV
     };
     SidebarView {
         title,
+        title_pending_since: store.title_pending_since(session_id),
+        clock_ms: store.clock(),
         sections: SidebarSections {
             context,
             mcp: SidebarMcpWidget { servers: store.mcp_servers(), open: store.sidebar_mcp_open() },

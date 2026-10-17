@@ -31,6 +31,7 @@ pub mod home;
 /// the fallback — see the module doc + the M5 section of
 /// `docs/migration-m1-tabstrip.md`).
 pub mod home_solid;
+pub mod marquee;
 pub mod message;
 pub mod overlays;
 /// Lane M6 (retired): the composer's subagent picker panel on
