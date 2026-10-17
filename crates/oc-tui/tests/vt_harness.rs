@@ -565,6 +565,9 @@ pub struct FakeLlm {
     /// Whether `/api/info` + `/api/pair` answer (opt-in — SURF-2's
     /// `DialogPair` proof).
     pub pair: Arc<AtomicBool>,
+    /// Whether `/api/integration` answers (opt-in — lane FINAL's
+    /// connect-flow proof): one key-method integration.
+    pub integrations: Arc<AtomicBool>,
     /// SSE script played once, after the first prompt POST.
     script: Arc<Mutex<Option<Vec<ScriptEvent>>>>,
 }
@@ -579,6 +582,7 @@ impl FakeLlm {
         let vcs = Arc::new(AtomicBool::new(false));
         let mcp = Arc::new(AtomicBool::new(false));
         let pair = Arc::new(AtomicBool::new(false));
+        let integrations = Arc::new(AtomicBool::new(false));
         let script: Arc<Mutex<Option<Vec<ScriptEvent>>>> = Arc::new(Mutex::new(None));
         let flag = Arc::clone(&shutdown);
         let shared_script = Arc::clone(&script);
@@ -586,6 +590,7 @@ impl FakeLlm {
         let shared_vcs = Arc::clone(&vcs);
         let shared_mcp = Arc::clone(&mcp);
         let shared_pair = Arc::clone(&pair);
+        let shared_integrations = Arc::clone(&integrations);
         std::thread::spawn(move || {
             listener.set_nonblocking(true).expect("nonblocking accept");
             while !flag.load(Ordering::SeqCst) {
@@ -597,8 +602,18 @@ impl FakeLlm {
                         let vcs = Arc::clone(&shared_vcs);
                         let mcp = Arc::clone(&shared_mcp);
                         let pair = Arc::clone(&shared_pair);
+                        let integrations = Arc::clone(&shared_integrations);
                         std::thread::spawn(move || {
-                            handle(socket, &sessions, &script, &posts, &vcs, &mcp, &pair);
+                            handle(
+                                socket,
+                                &sessions,
+                                &script,
+                                &posts,
+                                &vcs,
+                                &mcp,
+                                &pair,
+                                &integrations,
+                            );
                         });
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -608,7 +623,16 @@ impl FakeLlm {
                 }
             }
         });
-        Self { url: format!("http://{addr}"), shutdown, prompt_posts, vcs, mcp, pair, script }
+        Self {
+            url: format!("http://{addr}"),
+            shutdown,
+            prompt_posts,
+            vcs,
+            mcp,
+            pair,
+            integrations,
+            script,
+        }
     }
 
     /// Answer `/api/vcs` (the footer location label's boot lookup —
@@ -627,6 +651,12 @@ impl FakeLlm {
         self.pair.store(true, Ordering::SeqCst);
     }
 
+    /// Answer the integration routes (lane FINAL's connect-flow
+    /// proof): `integration.list`/`get` + `connect.key` (204).
+    pub fn arm_integrations(&self) {
+        self.integrations.store(true, Ordering::SeqCst);
+    }
+
     /// Arm the streaming script (played on the SSE feed after the
     /// first prompt POST). No script = a quiet held-open stream.
     pub fn arm_script(&self, script: Vec<ScriptEvent>) {
@@ -639,6 +669,7 @@ impl FakeLlm {
 }
 
 #[allow(clippy::too_many_lines)] // one arm per scripted endpoint
+#[allow(clippy::too_many_arguments)] // one flag per scripted endpoint family
 fn handle(
     mut socket: std::net::TcpStream,
     sessions: &[FakeSession],
@@ -647,6 +678,7 @@ fn handle(
     vcs: &Arc<AtomicBool>,
     mcp: &Arc<AtomicBool>,
     pair: &Arc<AtomicBool>,
+    integrations: &Arc<AtomicBool>,
 ) {
     socket.set_read_timeout(Some(Duration::from_secs(10))).ok();
     let mut buffer = [0u8; 8192];
@@ -727,6 +759,17 @@ fn handle(
     if path.ends_with("/prompt") {
         prompt_posts.fetch_add(1, Ordering::SeqCst);
     }
+    // integration.connect.key (lane FINAL): a 204 No Content — the
+    // client's execute_empty contract.
+    if integrations.load(Ordering::SeqCst)
+        && method == "POST"
+        && path.starts_with("/api/integration/")
+        && path.ends_with("/connect/key")
+    {
+        let response = b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        let _ = socket.write_all(response);
+        return;
+    }
     let body = if path.split('?').next().unwrap_or("") == "/api/vcs" && vcs.load(Ordering::SeqCst) {
         // vcs.get (lane/if: the footer location label's boot lookup —
         // the phantom-click PTY proof needs the `{cwd}:{branch}` label
@@ -754,6 +797,16 @@ fn handle(
         // mcp.list (SURF-1: the sidebar MCP section rows) — two
         // connected servers + one failed.
         r#"{"data":[{"name":"github","status":{"status":"connected"}},{"name":"filesystem","status":{"status":"connected"}},{"name":"broken","status":{"error":"connect ECONNREFUSED","status":"failed"}}],"location":{"directory":"/tmp"}}"#.to_owned()
+    } else if integrations.load(Ordering::SeqCst)
+        && path.split('?').next().unwrap_or("") == "/api/integration"
+    {
+        // integration.list (lane FINAL): one key-method provider.
+        r#"{"data":[{"id":"anthropic","name":"Anthropic","methods":[{"type":"key","label":"API key"}],"connections":[]}],"location":{"directory":"/tmp"}}"#.to_owned()
+    } else if integrations.load(Ordering::SeqCst)
+        && path.split('?').next().unwrap_or("") == "/api/integration/anthropic"
+    {
+        // integration.get (the connected toast's name lookup).
+        r#"{"data":{"id":"anthropic","name":"Anthropic","methods":[{"type":"key","label":"API key"}],"connections":[]},"location":{"directory":"/tmp"}}"#.to_owned()
     } else if path.starts_with("/api/session/") && path.ends_with("/prompt") {
         // session.prompt response: decodable Envelope<SessionInboxUser>
         // (a decode failure would toast SendFailed and pollute the
