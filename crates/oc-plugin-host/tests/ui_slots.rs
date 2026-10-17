@@ -62,7 +62,7 @@ fn tui_slots_register_and_queue_end_to_end() {
     ));
     assert!(requests.iter().any(|request| matches!(
         request,
-        UiRequest::SidebarSection { plugin_id, title, rows }
+        UiRequest::SidebarSection { plugin_id, title, rows, .. }
             if plugin_id == "tuislots" && title == "Fixture" && rows.len() == 2
     )));
     assert!(requests.iter().any(|request| matches!(

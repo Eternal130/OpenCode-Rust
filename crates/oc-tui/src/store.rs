@@ -1019,6 +1019,9 @@ pub struct Store {
     sidebar_onboarding_hits: std::cell::RefCell<Option<SidebarOnboardingHits>>,
     /// The MCP section's pointer targets (SURF-1).
     sidebar_mcp_hits: std::cell::RefCell<SidebarMcpHits>,
+    picker_entry_hits: std::cell::RefCell<PickerEntryHits>,
+    plugin_section_hits: std::cell::RefCell<PluginSectionHits>,
+    plugin_click_sink: std::cell::RefCell<Option<PluginSectionClickSink>>,
     /// The session sidebar's wheel-scroll state (auditA #1): the
     /// content-slot offset plus the geometry the last render saw
     /// (content rows, viewport rows, absolute x extent). v2's
@@ -1983,6 +1986,53 @@ pub struct SidebarMcpHits {
     pub rows: Vec<(String, HitRect)>,
 }
 
+/// One subagent-picker entry row's pointer target (beta.13 bug 2 —
+/// v2 subagents-tab.tsx:221-227: `onMouseMove` moves the selection to
+/// the row, `onMouseUp` sets it and navigates into the child session).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PickerEntryHit {
+    /// The entry's index in `picker_entries` (the selection's slot).
+    pub index: usize,
+    /// The child session the release navigates to.
+    pub session_id: String,
+    pub rect: HitRect,
+}
+
+/// One plugin sidebar section row's click target (beta.13 bug 2's
+/// plugin-world path — the row carries the plugin's own `onMouseUp`;
+/// the release runs it through the host's `slot.click`, and the
+/// plugin's navigation flows back as a `NavigateToSession` UI
+/// request).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginRowHit {
+    pub plugin_id: String,
+    /// The row's index in the section (the `slot.click` address).
+    pub row: usize,
+    pub rect: HitRect,
+}
+
+/// The host-bridge click sink: `(plugin id, row index)` → the
+/// plugin's own `onMouseUp` through `slot.click`.
+pub type PluginSectionClickSink = Rc<dyn Fn(&str, usize)>;
+
+/// The plugin sections' recorded clickable rows (paint-local until
+/// the session render shifts them to absolute cells).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginSectionHits {
+    /// The owning session route (empty while no session renders).
+    pub session_id: String,
+    pub rows: Vec<PluginRowHit>,
+}
+
+/// The picker panel's recorded entry rows: the owning session route +
+/// one rect per visible entry (absolute cells; empty while the panel
+/// is not live on that route).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PickerEntryHits {
+    pub session_id: String,
+    pub rows: Vec<PickerEntryHit>,
+}
+
 /// The sidebar's wheel-scroll model (auditA #1): the content-slot
 /// offset plus the last render's geometry — the max offset is
 /// `content_height - viewport` (v2's scrollbar clamp), and the
@@ -2388,6 +2438,9 @@ impl Store {
             home_footer_chip_hits: std::cell::RefCell::new(None),
             sidebar_onboarding_hits: std::cell::RefCell::new(None),
             sidebar_mcp_hits: std::cell::RefCell::new(SidebarMcpHits::default()),
+            picker_entry_hits: std::cell::RefCell::new(PickerEntryHits::default()),
+            plugin_section_hits: std::cell::RefCell::new(PluginSectionHits::default()),
+            plugin_click_sink: std::cell::RefCell::new(None),
             sidebar_scroll: std::cell::RefCell::new(SidebarScrollState::default()),
             permission_pointer_hits: std::cell::RefCell::new(None),
             dialog_button_hits: std::cell::RefCell::new(Vec::new()),
@@ -3896,6 +3949,12 @@ impl Store {
         // The sidebar's wheel geometry is route-scoped the same way
         // (the pane unmounts with the session route).
         *self.sidebar_scroll.borrow_mut() = SidebarScrollState::default();
+        // The picker panel's entry rows unmount with the route the
+        // same way (stale rects would zombie-navigate).
+        *self.picker_entry_hits.borrow_mut() = PickerEntryHits::default();
+        // The plugin sections' clickable rows ride the sidebar pane —
+        // same route scoping.
+        *self.plugin_section_hits.borrow_mut() = PluginSectionHits::default();
     }
 
     /// The last frame's top-dialog frame rect (absolute screen cells)
@@ -3975,6 +4034,55 @@ impl Store {
     /// origin).
     pub fn set_sidebar_onboarding_hits(&self, hits: Option<SidebarOnboardingHits>) {
         *self.sidebar_onboarding_hits.borrow_mut() = hits;
+    }
+    /// The recorded picker entry rows (absolute cells; default while
+    /// the panel is not live).
+    pub fn set_picker_entry_hits(&self, hits: PickerEntryHits) {
+        *self.picker_entry_hits.borrow_mut() = hits;
+    }
+    /// The recorded picker entry rows from the last render.
+    #[must_use]
+    pub fn picker_entry_hits(&self) -> PickerEntryHits {
+        self.picker_entry_hits.borrow().clone()
+    }
+    /// The recorded plugin-section clickable rows (absolute cells;
+    /// cleared when the pane unmounts).
+    pub fn set_plugin_section_hits(&self, hits: PluginSectionHits) {
+        *self.plugin_section_hits.borrow_mut() = hits;
+    }
+    /// The recorded plugin-section rows from the last render.
+    #[must_use]
+    pub fn plugin_section_hits(&self) -> PluginSectionHits {
+        self.plugin_section_hits.borrow().clone()
+    }
+    /// Run one plugin section row's activate handler through the
+    /// installed sink (the plugin host's `slot.click` — installed by
+    /// the run loop; a missing sink is a no-op).
+    pub fn plugin_section_click(&self, plugin_id: &str, row: usize) {
+        let sink = self.plugin_click_sink.borrow().clone();
+        if let Some(sink) = sink {
+            sink(plugin_id, row);
+        }
+    }
+    /// Install the plugin-section click sink (the host bridge).
+    pub fn set_plugin_section_click_sink(&self, sink: Option<PluginSectionClickSink>) {
+        *self.plugin_click_sink.borrow_mut() = sink;
+    }
+    /// Hover-select a picker entry (`onMouseMove` →
+    /// `setStore("selected", index())`, subagents-tab.tsx:222-224):
+    /// the route's selection moves without navigating. Only the
+    /// session route owns the panel.
+    pub fn picker_hover_select(&self, index: usize) -> bool {
+        if !matches!(self.route.get(), Route::Session { .. }) {
+            return false;
+        }
+        let mut picker = self.picker.get();
+        if picker.selected == index {
+            return false;
+        }
+        picker.selected = index;
+        self.picker.set(picker);
+        true
     }
     /// The recorded MCP-section targets (absolute cells; empty while
     /// the section is hidden).

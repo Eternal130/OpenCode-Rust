@@ -1,0 +1,107 @@
+# FIX5 lane log — oc-tui serial chain (beta.13 real-env findings)
+
+## Phase A — token/pacing fixes (#3 #4 #5), code landed
+- #4 spinner: ThemeStyles.interactive = hue.interactive[200] (oc-tui/src/theme.rs);
+  StripColors.interactive; indicator_chunks paints it for the runs() case
+  (session_tabs_solid.rs). REF: session-tabs.tsx:200 (`<spinner color={props.color}>`),
+  :568/:1331 (activeNumber = theme.hue.interactive[200]), :1634-1641 (numberColor()
+  = runs() ? activeNumber() : ...). Old code used text.base — wrong token.
+- #5 gutter: thought_entry_row's ┃ now theme.background_prompt
+  (= tokens.decrease(background.raised.base, 1.0)); body stays text_muted.
+  REF: group-view.tsx:385-386 ThoughtEntry borderColor={theme.decrease(theme.background.raised.base)};
+  ui/border.ts:26 SplitBorder vertical "┃". Old code painted the ┃ text.muted.
+- #3 marquee: Marquee::next_step_ms (marquee.rs) + session_tabs_solid::marquee_next_step;
+  app.rs run loop wakes on the next 80ms boundary, pins store clock to it, plain
+  100ms tick gated to never cross a boundary; select sleep = min(deadline-now,100).
+  ROOT CAUSE: offset derives from store clock sampled only at ≥100ms-gated ticks
+  (event-driven), so an 80ms timeline advanced +0/+2 cells per render — the stutter.
+  REF: util/marquee.ts MARQUEE_DELAY=600/MARQUEE_INTERVAL=80 + createMarquee's
+  setInterval (session-tabs.tsx:279-369) — a steady interval timer, not redraws.
+- cargo check -p oc-tui PASS. Next: fmt+clippy+oc-tui tests gate, then bug #2 repro.
+
+## Phase B — bug #2 (subagent click-to-switch), fixed
+- ROOT CAUSES (two):
+  1. oc-core engine/mod.rs subagent_plugin wired deps.progress = None —
+     the real server NEVER published session.tool.progress for subagents,
+     so the RUNNING card carried no metadata.sessionID (the TUI's
+     tool_cell_hit NavigateToSession arms on it) — running cards were not
+     clickable; completed cards were (success metadata via tool_execution).
+     Also subagent.rs passed child.id as the tool id (v2 passes call.id).
+     FIX: deps.progress publishes the ephemeral session.tool.progress with
+     {sessionID(parent), assistantMessageID, id(call_id), metadata}.
+     REF: /opt/opencode-ref/packages/core/src/tool/plugin/subagent.ts:201
+     + src/session/runner/step.ts:96.
+  2. The PICKER panel entries had NO pointer surface at all (KM wired only
+     the transcript card). FIX: PickerEntryHits recorded per render
+     (session.rs picker mount geometry), hover moves selection, release
+     navigates. REF: subagents-tab.tsx:221-227.
+- Navigation routing verified: select_tab → navigate → session_root family
+  walk (root tab bookkeeping; route = the child; picker stays live on the
+  child via parentID) — app test picker_entry_rows_hover_select_and_click_navigate.
+- Gates: oc-core engine test (live bus subscription sees progress with
+  id=call_sub_1, metadata.sessionID=child) PASS; oc-tui+oc-core 1668/1668 PASS.
+
+## Phase C — bug #1 (omo-slim sidebar), fixed
+- ROOT CAUSE: our ctx.ui.sidebar.setSection seam is an INVENTED API — the real
+  omo-slim NEVER calls it. Its sidebar lives in the package's ./tui export
+  (dist/tui2.js): tui(api) registers api.slots.register({order, slots:
+  {sidebar_content: render}}) building OpenTUI trees via @opentui/{core,solid}
+  + solid-js — packages the desktop host provides from its own module graph
+  (absent from the npm install). Our host only loaded the ./server entry.
+- FIX (host.js): load.tui + a TuiApi bridge (slots.register/ui.slot → the
+  sidebar_content registry; host-pushed route/theme; renderer.requestRender →
+  ui.slot.rerender; rejecting client stub). @opentui shims materialized into
+  the install's node_modules (element records + EAGER insert; re-materialize
+  is the reactive re-run). slot.materialize runs render() and flattens:
+  row-join + column-stack → {title, rows}.
+- FIX (supervisor): post-load ./tui companion probe; ui.slot.register/rerender
+  → bounded slot.materialize → UiRequest::SidebarSection; 1s steady refresh.
+- FIX (oc-tui): drain_ui_requests pushes tui.route + tui.theme notifications.
+- REFS: tui2.js:31129-31131 (slots.register sidebar_content), :31051 (ui.slot
+  append sidebar.content), renderSidebar :30646+ (the tree: header/config/
+  preset/agent rows), @opencode-ai/plugin/dist/tui.d.ts (TuiPluginApi).
+- PROOFS (real plugin staged from /root/.cache + OC_OMOS_ROOT/OC_OMOS_DEPS
+  readable copies for the gate user):
+  * oc-plugin-host flagship_sidebar: section lands — title "▼ OMO-Slim …",
+    rows the REAL agent roster (with the machine preset: orchestrator
+    glm-5.3, explorer glm-5.3-flash, …).
+  * oc-tui pty_sidebar_real_omos_sections_render: renders in the LIVE pane
+    (160 cols), roster rows under the header, clean exit ack.
+
+## Phase D — rescan recalibration + plugin-world click path + live proofs
+- RESCAN deltas consumed (docs/rescan-findings.md):
+  * F1/F7 (S0) = my bug #1+#2: fixed in Phases B/C; ground truth = ref
+    v2.0.25+plugin (the pinned 2.0.24 cannot load omo-slim — F10). My
+    real-plugin PTY proof matches the ref capture shape (rescan-live/
+    session/captures/ref-session-06.txt rows 18-24: header + agent roster).
+  * F8: native card click = parity no-op both sides; server metadata
+    self-consistent → the remaining #2 target is the PLUGIN-WORLD card
+    path (the omo sidebar's own session targets).
+- Plugin-world click path implemented (host.js + supervisor + oc-tui):
+  * tree walk captures per-row onMouseUp (decorateInteractiveRow,
+    tui2.js:30462-30467) → rows {text, click}; handlers stashed per row;
+  * `slot.click` runs the handler; route.navigate → the guest notifies
+    `tui.route.navigate` → UiRequest::NavigateToSession → the TUI's
+    drain routes the session (the family-walk navigate);
+  * oc-tui: SidebarSection.clickable, PluginSectionHits recorded at the
+    pane's paste origin, mouse release → the sink → host slot.click
+    (CLICK_TIMEOUT 2s); plugin_boot installs the sink at attach.
+- Off-by-one fixed (rows vs title alignment in the handler map).
+- LIVE proofs:
+  * vt_temporal_busy_strip_spinner_paints_interactive_token — the
+    fast-window busy class (rescan F3's evidence gap): our strip DOES
+    render the busy spinner in a 4s busy window (execution.started hold)
+    and its cell fg == hue.interactive[200] resolved RGB of the boot
+    theme (the beta.13 #4 token fix, proven LIVE not golden-pinned).
+  * oc-plugin-host slot_click (fixture clickprobe: section with
+    clickable [false,true], click row 0 → handler → NavigateToSession
+    ses_target; non-clickable row answers false).
+  * oc-tui plugin_section_clickable_rows_record_hit_rects_and_route_the_sink.
+- NOTE: the lane spec's "rig --quick regression" is OBSOLETE at main tip
+  (07e0e06 removed the differential TUI rig, 2026-10-17 paradigm ruling);
+  the equivalent coverage ran as the full affected-crate nextest suites.
+- Final gates: fmt --check PASS; clippy (3 crates, all targets) CLEAN;
+  nextest oc-core+oc-plugin-host+oc-tui: 1727/1727 PASS (1 load-flake on
+  vt_temporal_marquee under full-suite load; passes standalone + on retry);
+  real-plugin proofs PASS with OC_OMOS_ROOT/OC_OMOS_DEPS staged readable
+  for the gate user.

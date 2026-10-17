@@ -392,6 +392,15 @@ impl App {
                         self.store.request_redraw();
                     }
                 }
+                // The picker panel's entry rows track the pointer (v2's
+                // `onMouseMove` moves the selection —
+                // subagents-tab.tsx:222-224; beta.13 bug 2).
+                if let Some(hit) = self.picker_entry_at(col, row) {
+                    if self.store.picker_hover_select(hit.index) {
+                        self.store.request_redraw();
+                    }
+                    return;
+                }
                 // #33 — the footer location label's hover lift
                 // (`useWorkingDirectoryActions`: muted → text.base).
                 // Route-gated (auditA §4.1): a stale session rect
@@ -603,6 +612,21 @@ impl App {
                         }
                     }
                 }
+                // The picker entry rows' release (beta.13 bug 2 — v2's
+                // `onMouseUp` sets the selection then navigates into
+                // the child, subagents-tab.tsx:224-227): the panel is
+                // the routed session's composer surface, its rows are
+                // the bottom of the frame — checked before the
+                // transcript's (never-overlapping) rects.
+                if !self.permission_live() && matches!(self.store.route(), Route::Session { .. }) {
+                    if let Some(hit) = self.picker_entry_at(col, row) {
+                        self.store.picker_hover_select(hit.index);
+                        let target = hit.session_id.clone();
+                        self.store.navigate(Route::Session { session_id: target });
+                        self.store.request_redraw();
+                        return;
+                    }
+                }
                 // The sidebar onboarding card's two pointer targets
                 // (footer.tsx:45-70): the `✕` release persists
                 // `dismissed = true` (the run loop writes the
@@ -647,6 +671,19 @@ impl App {
                             if let Dispatch::ServerPending(reason) = dispatch {
                                 let _ = reason;
                             }
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
+                    // The plugin sections' clickable rows (beta.13
+                    // bug 2's plugin-world path — the omo-slim
+                    // sidebar's session/preset targets): the release
+                    // runs the plugin's own onMouseUp through the host
+                    // bridge; its navigate ask lands on the next
+                    // drain.
+                    for hit in &self.store.plugin_section_hits().rows {
+                        if hit.rect.contains(col, row) {
+                            self.store.plugin_section_click(&hit.plugin_id, hit.row);
                             self.store.request_redraw();
                             return;
                         }
@@ -1304,6 +1341,18 @@ impl App {
         if self.store.keybinds() != self.applied_keybinds {
             self.remerge_keybinds();
         }
+    }
+
+    /// The picker panel's entry rows are pointer-live while the
+    /// subagent panel is the routed session's composer surface
+    /// (beta.13 bug 2 — v2 subagents-tab.tsx:221-227).
+    fn picker_entry_at(&self, col: usize, row: usize) -> Option<crate::store::PickerEntryHit> {
+        let hits = self.store.picker_entry_hits();
+        let Route::Session { session_id } = self.store.route() else { return None };
+        if hits.session_id != session_id || !self.picker_live() {
+            return None;
+        }
+        hits.rows.into_iter().find(|hit| hit.rect.contains(col, row))
     }
 
     /// A permission ask is the live footer view.
@@ -5350,11 +5399,30 @@ pub async fn run_with_size(
                 },
             }
         }
-        // Toast/spinner clock.
+        // Toast/spinner clock — with the marquee's own steady ticker
+        // riding on top (beta.13 bug 3): while a hover scroll runs,
+        // the loop wakes exactly on the next 80 ms boundary and PINS
+        // the clock to it, so the offset advances by exactly one cell
+        // per tick (v2's `setInterval(…, MARQUEE_INTERVAL)` —
+        // createMarquee, session-tabs.tsx:279-369). The plain 100 ms
+        // tick only advances while it CANNOT cross a boundary
+        // (toasts/spinners keep their cadence; the marquee never
+        // samples past a step it should land on).
         let now_ms = system_now_ms();
-        if last_tick.elapsed() >= std::time::Duration::from_millis(100) {
+        let marquee_deadline = crate::components::session_tabs_solid::marquee_next_step(now_ms);
+        let mut ticked = false;
+        if let Some(deadline) = marquee_deadline.filter(|deadline| *deadline <= now_ms) {
+            app.store.advance_clock(deadline);
+            app.store.toast_advance(deadline);
+            ticked = true;
+        } else if last_tick.elapsed() >= std::time::Duration::from_millis(100)
+            && marquee_deadline.is_none_or(|deadline| deadline > now_ms)
+        {
             app.store.advance_clock(now_ms);
             app.store.toast_advance(now_ms);
+            ticked = true;
+        }
+        if ticked {
             last_tick = std::time::Instant::now();
         }
         // Config reload: keybinds + theme re-merge through the store.
@@ -5553,10 +5621,17 @@ pub async fn run_with_size(
                 last_frame_images = frame_images;
             }
         }
-        // Input / tick wait.
+        // Input / tick wait — while the marquee scrolls, the wake
+        // lands exactly on the next 80 ms step boundary (the steady
+        // ticker above pins the clock to it); otherwise the plain
+        // 100 ms poll.
+        let wait_ms = match marquee_deadline {
+            Some(deadline) => (deadline.saturating_sub(now_ms)).clamp(1, 100),
+            None => 100,
+        };
         let event = tokio::select! {
             maybe = event_rx.recv() => maybe,
-            () = tokio::time::sleep(std::time::Duration::from_millis(100)) => None,
+            () = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => None,
         };
         match event {
             Some(CrosstermEvent::Key(key)) => {
@@ -8436,6 +8511,67 @@ fn subagent_row_navigates_to_the_child_session() {
         Route::Session { session_id: "child-1".to_owned() },
         "the release navigated to the child session"
     );
+}
+
+/// beta.13 bug 2 — the PICKER half: the subagent panel's entry rows
+/// are pointer-live (v2 subagents-tab.tsx:221-227 — `onMouseMove`
+/// moves the selection, `onMouseUp` sets it and navigates into the
+/// child). The render records each visible row's absolute rect; the
+/// release routes the family walk (the child session's route, the
+/// ROOT's tab).
+#[test]
+fn picker_entry_rows_hover_select_and_click_navigate() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut app = App::new((80, 24));
+    app.store.open_tab("s1", Some("Parent".to_owned()));
+    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+    app.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+        "session.created",
+        serde_json::json!({
+            "sessionID": "ses_child", "parentID": "s1",
+            "agent": "general", "title": "Check the fixture"
+        }),
+    ))]);
+    app.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+        "session.execution.succeeded",
+        serde_json::json!({ "sessionID": "ses_child" }),
+    ))]);
+    // The panel open on the parent, inactive filter OFF (the completed
+    // run visible).
+    let mut picker = app.store.picker();
+    picker.open = true;
+    picker.filter_active = false;
+    app.store.set_picker(picker);
+
+    let _ = app.frame();
+    let hits = app.store.picker_entry_hits();
+    assert_eq!(hits.session_id, "s1", "the panel owns the routed session's rows");
+    let hit = hits.rows.first().expect("the completed child's row recorded").clone();
+    assert_eq!(hit.session_id, "ses_child");
+    assert!(hit.rect.width > 1, "the row spans the panel's content columns");
+
+    // Hover moves the selection onto the row.
+    app.mouse_event(&mouse(
+        MouseEventKind::Moved,
+        u16::try_from(hit.rect.x + 2).unwrap_or(0),
+        u16::try_from(hit.rect.y).unwrap_or(0),
+    ));
+    assert_eq!(app.store.picker_selection("s1", 1), hit.index, "hover selected the row");
+
+    // The release navigates into the child (the family walk: the
+    // child route, the parent's tab stays).
+    app.mouse_event(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        u16::try_from(hit.rect.x + 4).unwrap_or(0),
+        u16::try_from(hit.rect.y).unwrap_or(0),
+    ));
+    assert_eq!(
+        app.store.route(),
+        Route::Session { session_id: "ses_child".to_owned() },
+        "the release navigated to the child session"
+    );
+    assert_eq!(app.store.tabs().tabs.len(), 1, "no tab opened for the child (the root owns it)");
+    assert!(app.store.picker_live("ses_child"), "the child route keeps the panel mounted");
 }
 
 /// The failed `InlineTool` families' error reveal (read/glob/grep/

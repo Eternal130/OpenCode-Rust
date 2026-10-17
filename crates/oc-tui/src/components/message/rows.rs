@@ -241,7 +241,14 @@ pub fn reasoning_header_row(
 /// not twice: no internal margin row here).
 #[must_use]
 pub fn thought_entry_row(text: &str, theme: &ThemeStyles, width: usize) -> RowRender {
-    let muted = theme.text_muted;
+    // ThoughtEntry (group-view.tsx:376-395): the body `code` paints
+    // `fg={theme.text.muted}`, but the LEFT border is its own token —
+    // `borderColor={theme.decrease(theme.background.raised.base)}`
+    // (:385-386) — NOT text.muted. The port's ThemeStyles carries the
+    // exact expression as `background_prompt`
+    // (`tokens.decrease(background.raised.base, 1.0)`).
+    let body = theme.text_muted;
+    let gutter = Style::new().fg(theme.background_prompt).bg(theme.background);
     // The group's expanded children sit inside `paddingLeft 3`
     // (group-view.tsx:190-192); the border takes column 3 and the
     // body starts one cell right of it.
@@ -268,8 +275,8 @@ pub fn thought_entry_row(text: &str, theme: &ThemeStyles, width: usize) -> RowRe
     };
     let mut placed = Vec::new();
     for (index, line) in lines.iter().enumerate() {
-        placed.push(text_at(border_x, index, "┃", muted));
-        placed.push(text_at(body_x, index, line.clone(), muted));
+        placed.push(text_at(border_x, index, "┃", gutter));
+        placed.push(text_at(body_x, index, line.clone(), body));
     }
     RowRender { placed, fills: Vec::new(), height: lines.len().max(1), images: Vec::new() }
 }
@@ -1118,9 +1125,12 @@ mod tests {
         assert_eq!(frame.cell(0, 3).fg, expected, "expanded header uses the full warning color");
     }
 
-    /// The expanded thought body: a `┃` left border, `text.muted`,
-    /// body — the leading blank margin comes from the LIST's
-    /// per-row marginTop (rendered once, not inside the row).
+    /// The expanded thought body: a ┃ left border in
+    /// `decrease(raised.base)` (the `ThoughtEntry` borderColor,
+    /// group-view.tsx:385-386 — NOT the muted token), a `text.muted`
+    /// body —
+    /// the leading blank margin comes from the LIST's per-row
+    /// marginTop (rendered once, not inside the row).
     #[test]
     fn thought_entry_row_borders_and_mutes_the_body() {
         let theme = theme();
@@ -1133,7 +1143,20 @@ mod tests {
         );
         let grid = frame.text_grid();
         assert!(grid[0].starts_with("   ┃ Inspecting the parser edges"), "{grid:?}");
-        assert_eq!(frame.cell(0, 3).fg, crate::render::CellColor::Rgb(128, 128, 128));
+        // The gutter's exact token: `theme.decrease(raised.base)`.
+        let expected_gutter = match theme.background_prompt {
+            ratatui::style::Color::Rgb(r, g, b) => crate::render::CellColor::Rgb(r, g, b),
+            other => panic!("gutter token must be RGB, got {other:?}"),
+        };
+        assert_eq!(frame.cell(0, 3).fg, expected_gutter, "the ┃ uses decrease(raised.base)");
+        // …and it is NOT the body's text.muted (the two tokens differ
+        // in the v2 default theme — the audit's whole point).
+        let body_muted = match theme.text_muted.fg {
+            Some(ratatui::style::Color::Rgb(r, g, b)) => crate::render::CellColor::Rgb(r, g, b),
+            other => panic!("muted token must be RGB, got {other:?}"),
+        };
+        assert_ne!(expected_gutter, body_muted);
+        assert_eq!(frame.cell(0, 5).fg, body_muted, "the body stays text.muted");
     }
 
     #[test]

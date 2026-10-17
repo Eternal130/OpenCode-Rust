@@ -71,6 +71,10 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// The bound on one dialog materialization (host-side hard timeout).
 const DIALOG_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The bound on one plugin sidebar row click (the guest runs the
+/// plugin's `onMouseUp` synchronously — same hard bound family).
+const CLICK_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// The Send+Sync boot outcome (crosses the `spawn_blocking` boundary;
 /// the [`TuiPluginRuntime`] wrapper adds the loop-thread-only session
 /// cell).
@@ -86,6 +90,13 @@ pub struct TuiPluginRuntime {
     /// The active-session cell the palette sink reads (the run loop
     /// refreshes it each pump).
     pub current_session: Rc<RefCell<Option<String>>>,
+    /// The last route pushed to the guest (the v2 TUI-plugin surface
+    /// — change-gated `tui.route` notifications). The outer Option is
+    /// "nothing pushed yet"; the inner is "home vs session".
+    #[allow(clippy::option_option)]
+    pushed_route: Rc<RefCell<Option<Option<String>>>>,
+    /// The last theme fingerprint pushed (name + mode).
+    pushed_theme: Rc<RefCell<Option<(String, bool)>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -165,7 +176,12 @@ impl TuiPluginRuntime {
     /// Wrap a boot outcome (the loop thread's wrapper).
     #[must_use]
     pub fn new(booted: BootedPluginHost) -> Self {
-        Self { booted, current_session: Rc::new(RefCell::new(None)) }
+        Self {
+            booted,
+            current_session: Rc::new(RefCell::new(None)),
+            pushed_route: Rc::new(RefCell::new(None)),
+            pushed_theme: Rc::new(RefCell::new(None)),
+        }
     }
 
     /// Boot from the discovered config. `None` when no plugin entries
@@ -236,13 +252,56 @@ impl TuiPluginRuntime {
             current: Rc::clone(&self.current_session),
         }));
         store.set_plugin_dialog_source(Rc::new(HostDialogSource { host: Arc::clone(host) }));
+        // The plugin sections' click sink (beta.13 bug 2's
+        // plugin-world path): a row release runs the plugin's own
+        // `onMouseUp` through the host's `slot.click`; the plugin's
+        // navigation flows back as a NavigateToSession UI request the
+        // next drain applies.
+        {
+            let host = Arc::clone(host);
+            store.set_plugin_section_click_sink(Some(Rc::new(
+                move |plugin_id: &str, row: usize| {
+                    let _ = host.click_sidebar_row(plugin_id, row, CLICK_TIMEOUT);
+                },
+            )));
+        }
         let snapshot = host.registrations();
         project_registrations(store, &snapshot)
     }
 
     /// The per-pump UI-request drain: every queued plugin UI request
-    /// lands in the store through the neutral apply seam.
+    /// lands in the store through the neutral apply seam. The same
+    /// pump pushes the live route + theme view to the guest (the v2
+    /// TUI-plugin surface — the flagship sidebar reads both at every
+    /// materialize; change-gated, fire-and-forget notifications).
     pub fn drain_ui_requests(&self, store: &Store) {
+        if self.booted.host.enabled() {
+            let route_session = match store.route() {
+                crate::store::Route::Session { session_id } => Some(session_id),
+                crate::store::Route::Home => None,
+            };
+            let changed = { *self.pushed_route.borrow() != Some(route_session.clone()) };
+            if changed {
+                *self.pushed_route.borrow_mut() = Some(route_session.clone());
+                self.booted.host.notify_tui_route(route_session.as_deref());
+            }
+            let theme = store.theme();
+            let fingerprint = (theme.name.clone(), theme.mode == oc_theme::types::Mode::Light);
+            if *self.pushed_theme.borrow() != Some(fingerprint.clone()) {
+                *self.pushed_theme.borrow_mut() = Some(fingerprint);
+                let styles = theme.styles();
+                self.booted.host.notify_tui_theme(serde_json::json!({
+                    "accent": hex_color(styles.accent),
+                    "background": hex_color(styles.background),
+                    "borderActive": hex_color(styles.border),
+                    "text": styles.text.fg.map_or_else(|| "#eeeeee".into(), hex_color),
+                    "textMuted": styles
+                        .text_muted
+                        .fg
+                        .map_or_else(|| "#888888".into(), hex_color),
+                }));
+            }
+        }
         for _ in 0..64 {
             let requests = self.booted.host.drain_ui_requests();
             if requests.is_empty() {
@@ -494,8 +553,13 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
             variant: variant.clone(),
             duration_ms: *duration_ms,
         },
-        UiRequest::SidebarSection { title, rows, .. } => {
-            PluginUiEvent::SidebarSection { title: title.clone(), rows: rows.clone() }
+        UiRequest::SidebarSection { title, rows, clickable, .. } => PluginUiEvent::SidebarSection {
+            title: title.clone(),
+            rows: rows.clone(),
+            clickable: clickable.clone(),
+        },
+        UiRequest::NavigateToSession { session_id } => {
+            PluginUiEvent::NavigateToSession { session_id: session_id.clone() }
         }
         UiRequest::FooterHint { text, .. } => PluginUiEvent::FooterHint { text: text.clone() },
         UiRequest::DialogOpen { spec, .. } => PluginUiEvent::DialogOpen {
@@ -630,6 +694,15 @@ impl SessionPort for HttpSessionPort {
                 "session.{other}: not wired in the TUI HTTP port (seam: prompt/get/list/messages/interrupt)"
             )),
         }
+    }
+}
+
+/// One theme token as a `#rrggbb` string (the v2 TUI-plugin theme
+/// view the guest's sidebar render consumes).
+fn hex_color(color: ratatui::style::Color) -> String {
+    match color {
+        ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        _ => "#888888".to_owned(),
     }
 }
 

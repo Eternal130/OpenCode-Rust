@@ -162,8 +162,16 @@ pub struct ThemeStyles {
     pub action_focused_fg: Color,
     /// `theme.decrease(background.raised.base)` — the composer's prompt
     /// background (`promptBg`, also the selected tab pill's lift in the
-    /// horizontal bar).
+    /// horizontal bar) AND the thought-expand gutter's border color
+    /// (the `ThoughtEntry` borderColor binding,
+    /// group-view.tsx:385-386).
     pub background_prompt: Color,
+    /// `theme.hue.interactive[200]` — `activeNumber`
+    /// (session-tabs.tsx:568/1331): the busy tab indicator's spinner
+    /// color (`<spinner color={props.color}>` with the caller's
+    /// `numberColor() = runs() ? activeNumber() : …`,
+    /// session-tabs.tsx:1634-1641).
+    pub interactive: Color,
     /// Agent identity colors (`local.agent.color`: categorical hues at
     /// step 200, deduped, index-modulo).
     pub agent_colors: [Color; 5],
@@ -271,6 +279,7 @@ impl ThemeStyles {
                 let decreased = tokens.decrease(tokens.background.raised.base, 1.0);
                 rgba(decreased)
             },
+            interactive: rgba(tokens.semantic(oc_theme::types::SemanticHue::Interactive).s200),
             action_secondary: rgba(tokens.text.action.secondary.base),
             diff: DiffStyles {
                 text_added: rgba(tokens.diff.text.added),

@@ -113,8 +113,22 @@ pub enum UiRequest {
         duration_ms: u64,
     },
     /// `ctx.ui.sidebar.setSection({title, rows})` — one section per
-    /// plugin (latest wins); `removeSection` sends empty rows.
-    SidebarSection { plugin_id: String, title: String, rows: Vec<String> },
+    /// plugin (latest wins); `removeSection` sends empty rows. The
+    /// v2 TUI-plugin surface (beta.13 bug 1) lands here too, with
+    /// per-row clickability (the plugin's own `onMouseUp` handlers,
+    /// addressable through [`crate::PluginHost::click_sidebar_row`]).
+    SidebarSection {
+        plugin_id: String,
+        title: String,
+        rows: Vec<String>,
+        /// Per-row clickability (same length as `rows`; shorter means
+        /// the tail is plain text).
+        clickable: Vec<bool>,
+    },
+    /// The plugin bridge's navigation ask (`route.navigate("session",
+    /// {sessionID})` from a plugin row's activate handler — beta.13
+    /// bug 2's plugin-world path).
+    NavigateToSession { session_id: String },
     /// `ctx.ui.footer.setHint({text})` — one hint segment per plugin
     /// (latest wins; empty text removes it).
     FooterHint { plugin_id: String, text: String },
@@ -132,6 +146,7 @@ impl UiRequest {
             | UiRequest::SidebarSection { plugin_id, .. }
             | UiRequest::FooterHint { plugin_id, .. }
             | UiRequest::DialogOpen { plugin_id, .. } => plugin_id,
+            UiRequest::NavigateToSession { .. } => "",
         }
     }
 }
