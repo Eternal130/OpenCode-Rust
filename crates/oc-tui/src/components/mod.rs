@@ -61,6 +61,7 @@ pub mod tool_rows;
 /// `OC_TRANSCRIPT_OPENTUI=0` fallback for one release; see the
 /// module doc + `docs/migration-m1-tabstrip.md`).
 pub mod transcript_solid;
+pub mod update;
 
 pub use session_screen::{
     composer_bottom_chrome, paint_session_screen, paint_tabs_bar, ComposerSlot, ScreenTab,

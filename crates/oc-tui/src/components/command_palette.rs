@@ -229,6 +229,13 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         bindings: &["ctrl+x s"],
     },
     PaletteCommand { command: "server.pair", title: "Pair device", group: "System", bindings: &[] },
+    // Lane TAIL (auditB #10): `/update` — the DialogUpdate mount.
+    PaletteCommand {
+        command: "update.check",
+        title: "Check for updates",
+        group: "System",
+        bindings: &[],
+    },
     PaletteCommand {
         command: "location.reload",
         title: "Reload configuration",
@@ -678,6 +685,19 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 );
             }
             SelectProps::new(format!("MCP server: {name}"), options).flat(true)
+        }
+        // Lane TAIL `DialogUpdate` (`/update`, dialog-update.tsx):
+        // the live state row (title + detail) + the Skip/Update/
+        // Restart actions; enter confirms.
+        DialogKind::Update => {
+            let state = store.update_dialog_state();
+            let (title, detail) = crate::components::update::dialog_rows(&state);
+            let mut options = vec![SelectOption::titled(title, detail).muted_placeholder()];
+            options.push(SelectOption::titled("Skip this version", "skip"));
+            if let Some(confirm) = crate::components::update::dialog_confirm(&state) {
+                options.push(SelectOption::titled(confirm, "confirm"));
+            }
+            SelectProps::new("Update opencode", options).flat(true)
         }
         // SURF-2 `DialogStatus` (`/status`, dialog-status.tsx:29-56):
         // the count line + per-server bullet rows, or the empty
@@ -1643,6 +1663,13 @@ impl CommandDispatcher for StoreDispatcher {
             // `/status` (opencode.status — dialog-status.tsx).
             "opencode.status" => {
                 store.replace_dialog(DialogKind::Status, DialogSize::Medium);
+                Dispatch::Handled
+            }
+            // `/update` (update.check — dialog-update.tsx): the check
+            // starts on open (the dialog's `createResource`).
+            "update.check" => {
+                store.set_update_dialog(crate::components::update::UpdateDialogState::Checking);
+                store.replace_dialog(DialogKind::Update, DialogSize::Medium);
                 Dispatch::Handled
             }
             // `/variants` (variant.list — dialog-variant.tsx:919-934):

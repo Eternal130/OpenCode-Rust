@@ -172,6 +172,20 @@ pub const KEY_SIDEBAR: &str = "sidebar";
 /// `<state>/<ch>/tui/getting-started.json`).
 pub const KEY_GETTING_STARTED: &str = "getting-started";
 
+/// The update-notification dismissal history
+/// (`update-notifications.json` — v2's
+/// `storage.store("update-notifications", { initial: { versions: [] } })`,
+/// context/update-notification.tsx:34-36; the last 100
+/// `source:version` keys, lane TAIL auditB #10).
+pub const KEY_UPDATE_NOTIFICATIONS: &str = "update-notifications";
+
+/// The persisted dismissal history (`{ versions: ["client:v2.0.25", …] }`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+pub struct UpdateNotificationsDoc {
+    #[serde(default)]
+    pub versions: Vec<String>,
+}
+
 /// The persisted onboarding document (`{"dismissed": bool}` — the
 /// v2 storage draft's shape).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

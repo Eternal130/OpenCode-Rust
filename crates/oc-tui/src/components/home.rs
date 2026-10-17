@@ -143,6 +143,10 @@ pub struct HomeView<'a> {
     /// The blinking block caret offset (`None` = hidden phase / golden
     /// frames).
     pub caret: Option<usize>,
+    /// The update-notification banner (auditB #10, home.tsx:125-175):
+    /// `(prefix, body, remote)` — `None` in every golden state (the
+    /// notice is live-only).
+    pub update: Option<(String, String, bool)>,
 }
 
 /// The home route's geometry plan — ONE resolution shared by the old
@@ -407,6 +411,12 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         // NEW-S1a: the caret's char offset — the terminal cursor
         // positions at the computed cell (never a painted block).
         caret: Some(composer.caret()),
+        // Lane TAIL (auditB #10): the update banner (home.tsx:125 —
+        // between the logo and the prompt; the golden fixture carries
+        // no notice).
+        update: store
+            .update_notice()
+            .map(|notice| (notice.prefix().to_owned(), notice.body(), notice.remote)),
     };
     let _ = theme;
     // F9 — the tab strip leads the HOME route while tabs are open (v2

@@ -133,6 +133,24 @@ pub fn emit(bytes: &[u8]) {
 /// signal handler and panic hook read this — they cannot capture).
 static MOUSE_APPLIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The thread that owns the terminal (the run loop's). The PANIC hook
+/// restores only for THIS thread's panics: a render-path crash takes
+/// the terminal down with it (the crash-restore contract, auditC P3),
+/// while worker-thread panics are routinely CAUGHT (the plugin host's
+/// `catch_unwind`, harness crashers) and must NOT tear the terminal
+/// out from under the still-running loop.
+static TERMINAL_THREAD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The current thread's id as a plain `u64`.
+#[must_use]
+fn current_thread_key() -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let id = std::thread::current().id();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// The full restore sequence for a crash mid-render: leave the alt
 /// screen, pop focus/bracketed-paste, pop the mouse set if it went
 /// on, pop kitty, reset the cursor. Mouse-off boots skip the mouse
@@ -177,9 +195,14 @@ extern "C" fn signal_restore_handler(_signal: i32) {
 /// Install the SIGHUP/SIGTERM restore handlers + the chained panic
 /// hook (P3): a crash never leaves raw mode / alt screen / mouse /
 /// kitty latched. `mouse` seeds [`MOUSE_APPLIED`]; the live config
-/// flip keeps it current through [`set_mouse_applied`].
+/// flip keeps it current through [`set_mouse_applied`]. The panic
+/// hook restores ONLY when the panicking thread owns the terminal
+/// (the installer thread — the run loop): worker-thread panics are
+/// routinely caught (the plugin host) and must not tear the terminal
+/// from the running loop.
 pub fn install_crash_restore(mouse: bool) {
     set_mouse_applied(mouse);
+    TERMINAL_THREAD.store(current_thread_key(), std::sync::atomic::Ordering::Relaxed);
     // SAFETY: the handler is async-signal-safe (write+_exit only) and
     // installed once at boot before any thread reads the static.
     unsafe {
@@ -191,8 +214,11 @@ pub fn install_crash_restore(mouse: bool) {
     std::panic::set_hook(Box::new(move |info| {
         // Restore the terminal FIRST (a panicked renderer may hold a
         // broken frame; the shell must come back regardless), then
-        // chain to the previous hook (the stderr guard's report).
-        emit(crash_restore_sequence());
+        // chain to the previous hook (the stderr guard's report) —
+        // but only when THIS thread owns the terminal.
+        if current_thread_key() == TERMINAL_THREAD.load(std::sync::atomic::Ordering::Relaxed) {
+            emit(crash_restore_sequence());
+        }
         previous(info);
     }));
 }
