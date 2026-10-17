@@ -1299,3 +1299,25 @@ mod tests {
         assert!(!store.open_plugin_dialog("plugin:missing"), "unknown ids no-op");
     }
 }
+
+// -- lane TAIL (auditB #8): the destructive confirm rows ---------
+
+/// The worktree delete confirm's SELECTED row paints the
+/// `action.destructive.focused` pair (not the primary selection).
+#[test]
+fn destructive_confirm_row_uses_the_destructive_pair() {
+    let store = Store::new(crate::reactive::Runtime::new());
+    store.open_dialog(
+        crate::store::DialogKind::WorktreeDeleteConfirm { directory: "/w/dying".to_owned() },
+        crate::store::DialogSize::Medium,
+    );
+    let theme = crate::theme::ThemeState::v2_dark();
+    let frame = render_app(&store, &theme, (80, 24));
+    let styles = theme.styles();
+    // The selected ("yes") row: its cells carry the destructive bg.
+    let found = frame.cells.iter().any(|row| {
+        row.iter()
+            .any(|cell| cell.bg == crate::render::CellColor::from(styles.destructive_focused_bg))
+    });
+    assert!(found, "the destructive selected pair painted");
+}

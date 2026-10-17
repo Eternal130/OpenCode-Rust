@@ -128,6 +128,10 @@ pub struct SelectProps {
     pub empty_text: Option<String>,
     /// v2's `noMatchView` copy override ("No worktrees found").
     pub no_match_text: Option<String>,
+    /// The destructive confirm variant (auditB #8): the selected row
+    /// paints `action.destructive.focused` instead of primary
+    /// (dialog-worktrees' confirm + drop-confirm selects).
+    pub destructive: bool,
 }
 
 impl SelectProps {
@@ -143,6 +147,7 @@ impl SelectProps {
             filter_threshold: None,
             empty_text: None,
             no_match_text: None,
+            destructive: false,
         }
     }
 
@@ -161,6 +166,12 @@ impl SelectProps {
     #[must_use]
     pub fn flat(mut self, flat: bool) -> Self {
         self.flat = flat;
+        self
+    }
+    /// Mark the select destructive (the confirm rows' selected pair).
+    #[must_use]
+    pub fn destructive(mut self) -> Self {
+        self.destructive = true;
         self
     }
 
@@ -522,6 +533,10 @@ pub struct DialogStyles {
     /// `textColor`/`focusedTextColor` to the base, not the focused
     /// variant — dialog-prompt.tsx:125-126, dialog-worktree-name.tsx:64).
     pub formfield_base_fg: Color,
+    /// `text.action.destructive.focused` (auditB #8).
+    pub destructive_fg: Color,
+    /// `background.action.destructive.focused`.
+    pub destructive_bg: Color,
 }
 
 impl DialogStyles {
@@ -541,6 +556,8 @@ impl DialogStyles {
             formfield_bg: color(tokens.background.formfield.focused),
             formfield_fg: color(tokens.text.formfield.focused),
             formfield_base_fg: color(tokens.text.formfield.base),
+            destructive_fg: color(tokens.text.action.destructive.focused),
+            destructive_bg: color(tokens.background.action.destructive.focused),
         }
     }
 }
