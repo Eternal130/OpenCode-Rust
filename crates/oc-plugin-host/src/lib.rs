@@ -615,6 +615,22 @@ impl PluginHost {
         facade.shared.drain_ui_requests()
     }
 
+    /// Push the TUI's live route to the guest (the v2 TUI-plugin
+    /// surface — the flagship sidebar's render reads the visible
+    /// session at every materialize; `None` is home).
+    pub fn notify_tui_route(&self, session: Option<&str>) {
+        let Some(facade) = &self.facade else { return };
+        facade.shared.notify_tui_route(session);
+    }
+
+    /// Push the live theme view (the flat `TuiThemeCurrent` sidebar
+    /// subset: `{accent, background, borderActive, text, textMuted}`
+    /// as `#rrggbb` strings).
+    pub fn notify_tui_theme(&self, view: serde_json::Value) {
+        let Some(facade) = &self.facade else { return };
+        facade.shared.notify_tui_theme(view);
+    }
+
     /// Materialize one plugin dialog's content at OPEN time (the
     /// delegation seam behind `DialogKind::Plugin`): the guest builds
     /// the `{title, rows, options}` structure synchronously; this
