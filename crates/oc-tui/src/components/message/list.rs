@@ -770,9 +770,12 @@ impl Transcript {
                 x,
                 y: frame_height.saturating_sub(1),
                 width: crate::wrap::display_width(indicator),
+                // auditB #8: `text.feedback.info.base` (the jump row's
+                // ref fg — index.tsx's `text.feedback.info` class, NOT
+                // text.muted).
                 lines: vec![PlacedLine::plain(
                     indicator,
-                    Style::new().fg(theme.text_muted.fg.unwrap_or_default()).bg(theme.background),
+                    Style::new().fg(theme.info).bg(theme.background),
                 )],
                 tag: Some("session-jump-to-latest".into()),
             });

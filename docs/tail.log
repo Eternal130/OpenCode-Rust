@@ -30,3 +30,12 @@
 - Panic-hook refinement: the hook now restores ONLY on the terminal-owner thread (worker-thread panics are routinely caught — the plugin host — and must not tear the terminal mid-run); the worker-crash PTY test retired in favor of the owner-thread render-crash proof.
 - Verification: oc-tui 802/802 green; clippy -D clean; PTY proofs green.
 - DEFERRALS (documented): MigrationOverlay — no v1 migration API exists in the Rust stack (oc-server runs a synchronous one-way v2→rust migration at boot, nothing to poll); SessionLocationMissing — needs a location-error source in the store (the location worker never errors into state today — a separate seam); pair QR block — needs a QR encoder (no dep exists; SURF-2's deferral stands); DiffViewerImage halfblock preview — needs the image-decode plumbing into the diff viewer path; the banner's hover-lift/pointer-click (the /update command reaches the dialog today).
+
+## Phase 4 — theme tokens (item 4, auditB #8)
+- ThemeStyles gains the five remaining audit bindings: formfield_selected (text.formfield.selected), destructive_focused + destructive_focused_bg (text/background.action.destructive.focused), action_secondary_hovered (text.action.secondary.hovered), scrollbar (theme.scrollbar.base) — each resolves per-theme (nord-class divergence pinned by test).
+- jump-to-latest muted→info: message/list.rs's jump row paints text.feedback.info (the audit's explicit #50 item); the two vscroll goldens re-pinned (PARITY_UPDATE=1 — one fg cell each).
+- destructive selects: SelectProps.destructive builder; the WorktreeDeleteConfirm rows' selected pair paints destructive.focused (dialog_solid row_paint branch); test asserts the pair in the rendered dialog.
+- sidebar scrollbar: the scrollbox bar now paints on overflow — a right-edge thumb (scrollbar.base over raised.base), sized/positioned by the viewport share + offset; no bar without overflow (test).
+- Already-landed auditB #8 items confirmed present: formfield focused/selected + current_fg in the dialog family (dialog_select DialogStyles), success/info (SURF-1), action_secondary base.
+- Registered seam: action_secondary_hovered resolves but the jump row's HOVER state itself is not modeled (no hover hit on the indicator row today) — the token lands for the seam's future wiring.
+- Verification: oc-tui 805/805 green; clippy -D clean; goldens re-pinned deliberately (2 files, the jump fg cell).
