@@ -109,6 +109,9 @@ pub struct App {
     strip_drag: Option<(String, bool)>,
     /// Whether the exit command fired (the run loop's teardown gate).
     pub exit_requested: bool,
+    /// `ErrorComponent` mode (auditB #9): a caught render panic swapped
+    /// the frame for the crash fallback — every key exits.
+    pub error_mode: Option<String>,
     /// The applied keybind override set (re-merged when the store's
     /// config-reload signal changes).
     applied_keybinds: Vec<crate::keymap::KeybindOverride>,
@@ -151,6 +154,7 @@ impl App {
             size,
             last_pointer: None,
             exit_requested: false,
+            error_mode: None,
             applied_keybinds: Vec::new(),
             plugin_owned: Vec::new(),
             plugin_themes: Vec::new(),
@@ -216,8 +220,19 @@ impl App {
         };
         let name = config.theme.name.clone().unwrap_or_else(|| "opencode".to_owned());
         let registry = self.store.registry();
-        let state = registry
-            .resolve(&name, mode)
+        let resolved = registry.resolve(&name, mode);
+        // ThemeErrorToast (auditB #9 — v2's theme-load errors surface
+        // as an error toast): a configured name that fails to resolve
+        // falls back visibly, not silently.
+        if resolved.is_none() && config.theme.name.is_some() {
+            self.store.toast_show(crate::components::toast::ToastOptions {
+                title: Some("Failed to load theme".to_owned()),
+                message: format!("Theme \"{name}\" could not be resolved — using the default."),
+                variant: "error",
+                ..crate::components::toast::ToastOptions::info("")
+            });
+        }
+        let state = resolved
             .or_else(|| registry.resolve("opencode", mode))
             .unwrap_or_else(ThemeState::v2_dark);
         self.store.set_theme(state);
@@ -1166,6 +1181,12 @@ impl App {
     }
 
     pub fn press(&mut self, spec: &str) {
+        // ErrorComponent mode: any key exits (the fallback's only
+        // action — v2's ErrorBoundary dismiss).
+        if self.error_mode.is_some() {
+            self.exit_requested = true;
+            return;
+        }
         self.maybe_remerge_keybinds();
         let lowered = spec.to_ascii_lowercase();
         let expanded = match spec {
@@ -1509,9 +1530,16 @@ impl App {
         match outcome {
             crate::components::dialog::DialogKeyOutcome::Submitted(value) => {
                 let dispatch = execute_submission(&self.store, &mut self.dispatcher, &value);
-                if let Dispatch::ServerPending(_) = dispatch {
-                    // Server-backed submissions close the palette and
-                    // surface nothing further in the pump.
+                if let Dispatch::ServerPending("update.install") = dispatch {
+                    // `DialogUpdate`'s Update button: spawn the CLI's
+                    // own `upgrade` command (the in-TUI install arm —
+                    // v2's `updater.apply`), output appended to the
+                    // notice file (the completion signal the tick
+                    // watch resolves to `Installed`).
+                    self.spawn_update_install();
+                } else if let Dispatch::ServerPending("update.restart") = dispatch {
+                    // The Restart button (`exit()` in v2).
+                    self.exit_requested = true;
                 }
             }
             crate::components::dialog::DialogKeyOutcome::PromptSubmitted(value) => {
@@ -1519,6 +1547,48 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// `DialogUpdate`'s install arm: run the CLI binary's `upgrade`
+    /// detached, appending its output to the notice file (the
+    /// Installing→Installed transition rides the tick's file watch).
+    fn spawn_update_install(&mut self) {
+        use std::io::Write as _;
+        let Ok(exe) = std::env::current_exe() else {
+            self.store.set_update_dialog(crate::components::update::UpdateDialogState::Failed(
+                "could not resolve the current executable".to_owned(),
+            ));
+            return;
+        };
+        let notice = crate::components::update::notice_file_path();
+        // The child inherits NOTHING: stdio appends to the notice file
+        // (open append, duplicate onto the child's 0/1/2).
+        let Ok(log) = std::fs::OpenOptions::new().create(true).append(true).open(&notice) else {
+            self.store.set_update_dialog(crate::components::update::UpdateDialogState::Failed(
+                "could not open the update log".to_owned(),
+            ));
+            return;
+        };
+        let open_stdio = |log: &std::fs::File| {
+            // Re-open on clone failure; the worst case shares the one
+            // handle (append mode interleaves safely).
+            std::process::Stdio::from(log.try_clone().unwrap_or_else(|_| {
+                std::fs::OpenOptions::new().append(true).open(&notice).unwrap_or_else(|_| {
+                    std::fs::OpenOptions::new().write(true).open("/dev/null").expect("/dev/null")
+                })
+            }))
+        };
+        let stdin = open_stdio(&log);
+        let stdout = open_stdio(&log);
+        let stderr = std::process::Stdio::from(log);
+        let _ = std::process::Command::new(exe)
+            .arg("upgrade")
+            .stdin(stdin)
+            .stdout(stdout)
+            .stderr(stderr)
+            .spawn();
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
     }
 
     /// Rename submit: optimistically update the tab title (v2's tabs
@@ -1911,6 +1981,19 @@ impl App {
     /// The current frame (route + blockers + dialog overlay).
     #[must_use]
     pub fn frame(&self) -> Frame {
+        // The render-crash test hook (lane TAIL's ErrorComponent PTY
+        // proof): OC_TUI_TEST_RENDER_PANIC=N panics at frame N.
+        static RENDER_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        static PANIC_AT: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+        let panic_at = *PANIC_AT.get_or_init(|| {
+            std::env::var("OC_TUI_TEST_RENDER_PANIC").ok().and_then(|v| v.parse().ok())
+        });
+        if let Some(at) = panic_at {
+            assert!(
+                RENDER_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) != at,
+                "OC_TUI_TEST_RENDER_PANIC render crash"
+            );
+        }
         // opentui re-dispatches strip hover from the LAST pointer
         // position on every re-render that moves controls under it
         // (the multi-session census: the ✕ stays revealed on the tab
@@ -3613,9 +3696,28 @@ pub async fn run_with_size(
         let doc: crate::storage::GettingStartedDoc =
             storage.read_or_default(crate::storage::KEY_GETTING_STARTED);
         app.store.restore_sidebar_onboarding(doc.dismissed);
+        // The update-notification dismissal history (auditB #10 —
+        // `update-notifications.json`, the last 100 `source:version`
+        // keys; dismissals write back through the same handle).
+        let doc: crate::storage::UpdateNotificationsDoc =
+            storage.read_or_default(crate::storage::KEY_UPDATE_NOTIFICATIONS);
+        app.store.set_update_dismissed(doc.versions);
+    }
+    // The CLI checker's notice file (the TUI-mode channel —
+    // autoupdate.rs appends `update available`/`update installed`
+    // lines): the boot read + the per-tick mtime watch below feed the
+    // banner (v2's `updater.subscribe`).
+    let mut update_notice_mtime = std::fs::metadata(crate::components::update::notice_file_path())
+        .and_then(|meta| meta.modified())
+        .ok();
+    if let Ok(text) = std::fs::read_to_string(crate::components::update::notice_file_path()) {
+        if let Some(notice) = crate::components::update::UpdateNotice::from_notice_file(&text) {
+            app.store.update_notify(notice);
+        }
     }
     let mut persisted_onboarding = app.store.sidebar_onboarding_dismissed();
     let mut persisted_sidebar = app.store.sidebar_mode();
+    let mut persisted_update_dismissed = app.store.update_dismissed();
     let tabs_scope_cwd = directory.clone();
     if let Some(storage) = &tabs_storage {
         if config.tabs.enabled {
@@ -4140,6 +4242,20 @@ pub async fn run_with_size(
                 }
             }
         }
+        // The update-dismissal persistence (the last 100 keys —
+        // update-notification.tsx:56-60's `markNotification`).
+        let dismissed_now = app.store.update_dismissed();
+        if dismissed_now != persisted_update_dismissed {
+            persisted_update_dismissed = dismissed_now;
+            if let Some(storage) = &tabs_storage {
+                let _ = storage.write_typed(
+                    crate::storage::KEY_UPDATE_NOTIFICATIONS,
+                    &crate::storage::UpdateNotificationsDoc {
+                        versions: persisted_update_dismissed.clone(),
+                    },
+                );
+            }
+        }
         // Keep the resync's open-session set current + F12 — transcript
         // hydration for newly opened sessions: every id the boot resync
         // did NOT cover (any tab opened after the first connect — the
@@ -4241,6 +4357,59 @@ pub async fn run_with_size(
             .as_ref()
             .and_then(|path| std::fs::metadata(path).ok())
             .and_then(|meta| meta.modified().ok());
+        // The notice-file watch (the CLI checker's channel): a new
+        // line lands the banner; the update dialog's `Installing`
+        // state resolves to `Installed` when the file says so.
+        let notice_meta = std::fs::metadata(crate::components::update::notice_file_path())
+            .and_then(|meta| meta.modified())
+            .ok();
+        if notice_meta != update_notice_mtime {
+            update_notice_mtime = notice_meta;
+            if let Ok(text) = std::fs::read_to_string(crate::components::update::notice_file_path())
+            {
+                if let Some(notice) =
+                    crate::components::update::UpdateNotice::from_notice_file(&text)
+                {
+                    use crate::components::update::{UpdateDialogState, UpdateNoticeKind};
+                    app.store.update_notify(notice.clone());
+                    match app.store.update_dialog_state() {
+                        UpdateDialogState::Checking => {
+                            if notice.kind == UpdateNoticeKind::Available {
+                                app.store.set_update_dialog(UpdateDialogState::Available(
+                                    notice.version.clone(),
+                                ));
+                            } else {
+                                app.store.set_update_dialog(UpdateDialogState::Current);
+                            }
+                        }
+                        UpdateDialogState::Installing(_)
+                            if notice.kind == UpdateNoticeKind::Installed =>
+                        {
+                            app.store.set_update_dialog(UpdateDialogState::Installed(
+                                notice.version.clone(),
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // The dialog's CHECK: the local channel resolves immediately
+        // (the notice file is the check surface — no network here).
+        if app.store.update_dialog_state() == crate::components::update::UpdateDialogState::Checking
+        {
+            app.store.set_update_dialog(match app.store.update_notice() {
+                Some(notice) => match notice.kind {
+                    crate::components::update::UpdateNoticeKind::Available => {
+                        crate::components::update::UpdateDialogState::Available(notice.version)
+                    }
+                    crate::components::update::UpdateNoticeKind::Installed => {
+                        crate::components::update::UpdateDialogState::Installed(notice.version)
+                    }
+                },
+                None => crate::components::update::UpdateDialogState::Current,
+            });
+        }
         if mtime != config_mtime {
             config_mtime = mtime;
             if let Some(reloaded) = config.reload() {
@@ -4278,7 +4447,33 @@ pub async fn run_with_size(
                     app.resize((area.width, area.height));
                 }
             }
-            let mut frame = app.frame();
+            // ErrorComponent (auditB #9): a render-path panic is
+            // CAUGHT — the loop swaps in the crash fallback frame (v2's
+            // ErrorBoundary → ErrorComponent) and every later key
+            // exits. The fallback is STICKY (the broken store keeps
+            // rendering the fallback, never the route); the panic hook
+            // already restored the terminal (this thread owns it).
+            let mut frame = if let Some(message) = app.error_mode.clone() {
+                crate::components::update::error_component_frame(app.size, &message)
+            } else {
+                let frame_result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.frame()));
+                match frame_result {
+                    Ok(frame) => frame,
+                    Err(payload) => {
+                        let message = payload
+                            .downcast_ref::<String>()
+                            .cloned()
+                            .or_else(|| {
+                                payload.downcast_ref::<&'static str>().map(|s| (*s).to_owned())
+                            })
+                            .unwrap_or_else(|| "render panic".to_owned());
+                        crate::keymap::log_skip(&format!("render panic: {message}"));
+                        app.error_mode = Some(message.clone());
+                        crate::components::update::error_component_frame(app.size, &message)
+                    }
+                }
+            };
             // S0 parity: degrade RGB → xterm-256 indices at the
             // terminal-draw seam when the raster-level capability
             // probe says the terminal is 256-color (v2's raster does
