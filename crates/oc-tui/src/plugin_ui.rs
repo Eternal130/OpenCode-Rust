@@ -22,10 +22,18 @@ pub enum PluginUiEvent {
         duration_ms: u64,
     },
     /// One sidebar section per plugin (empty title + empty rows
-    /// removes it).
+    /// removes it). `clickable` marks rows carrying the plugin's own
+    /// `onMouseUp` (the v2 TUI-plugin surface).
     SidebarSection {
         title: String,
         rows: Vec<String>,
+        clickable: Vec<bool>,
+    },
+    /// A plugin's navigation ask (`route.navigate("session",
+    /// {sessionID})` from a plugin row's activate handler — beta.13
+    /// bug 2's plugin-world path).
+    NavigateToSession {
+        session_id: String,
     },
     /// One footer hint segment per plugin (empty text removes it).
     FooterHint {
@@ -68,13 +76,17 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                 serde_json::Value::Object(data),
             ))]);
         }
-        PluginUiEvent::SidebarSection { title, rows } => {
+        PluginUiEvent::SidebarSection { title, rows, clickable } => {
             let section = crate::components::sidebar::SidebarSection {
                 plugin_id: plugin_id.to_owned(),
                 title: title.clone(),
                 rows: rows.clone(),
+                clickable: clickable.clone(),
             };
             store.set_plugin_sidebar_section(&section);
+        }
+        PluginUiEvent::NavigateToSession { session_id } => {
+            store.navigate(crate::store::Route::Session { session_id: session_id.clone() });
         }
         PluginUiEvent::FooterHint { text } => store.set_plugin_footer_hint(plugin_id, text),
         PluginUiEvent::DialogOpen { content } => {
@@ -131,13 +143,21 @@ mod tests {
         apply_plugin_ui(
             &store,
             "omos",
-            &PluginUiEvent::SidebarSection { title: "Preset".into(), rows: vec!["zhipuai".into()] },
+            &PluginUiEvent::SidebarSection {
+                title: "Preset".into(),
+                rows: vec!["zhipuai".into()],
+                clickable: vec![],
+            },
         );
         apply_plugin_ui(&store, "omos", &PluginUiEvent::FooterHint { text: "omo ready".into() });
         apply_plugin_ui(
             &store,
             "other",
-            &PluginUiEvent::SidebarSection { title: "Other".into(), rows: vec![] },
+            &PluginUiEvent::SidebarSection {
+                title: "Other".into(),
+                rows: vec![],
+                clickable: vec![],
+            },
         );
         let sections = store.plugin_sidebar_sections();
         assert_eq!(sections.len(), 2, "one section per plugin");
@@ -146,13 +166,21 @@ mod tests {
         apply_plugin_ui(
             &store,
             "omos",
-            &PluginUiEvent::SidebarSection { title: "Preset2".into(), rows: vec![] },
+            &PluginUiEvent::SidebarSection {
+                title: "Preset2".into(),
+                rows: vec![],
+                clickable: vec![],
+            },
         );
         assert_eq!(store.plugin_sidebar_sections().len(), 2);
         apply_plugin_ui(
             &store,
             "omos",
-            &PluginUiEvent::SidebarSection { title: String::new(), rows: vec![] },
+            &PluginUiEvent::SidebarSection {
+                title: String::new(),
+                rows: vec![],
+                clickable: vec![],
+            },
         );
         apply_plugin_ui(&store, "omos", &PluginUiEvent::FooterHint { text: String::new() });
         assert_eq!(store.plugin_sidebar_sections().len(), 1, "the omos section removed");

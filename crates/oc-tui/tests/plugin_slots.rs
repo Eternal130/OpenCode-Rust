@@ -92,8 +92,13 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
             variant: variant.clone(),
             duration_ms: *duration_ms,
         },
-        UiRequest::SidebarSection { title, rows, .. } => {
-            PluginUiEvent::SidebarSection { title: title.clone(), rows: rows.clone() }
+        UiRequest::SidebarSection { title, rows, clickable, .. } => PluginUiEvent::SidebarSection {
+            title: title.clone(),
+            rows: rows.clone(),
+            clickable: clickable.clone(),
+        },
+        UiRequest::NavigateToSession { session_id } => {
+            PluginUiEvent::NavigateToSession { session_id: session_id.clone() }
         }
         UiRequest::FooterHint { text, .. } => PluginUiEvent::FooterHint { text: text.clone() },
         UiRequest::DialogOpen { spec, .. } => PluginUiEvent::DialogOpen {

@@ -615,6 +615,45 @@ impl PluginHost {
         facade.shared.drain_ui_requests()
     }
 
+    /// Push the TUI's live route to the guest (the v2 TUI-plugin
+    /// surface — the flagship sidebar's render reads the visible
+    /// session at every materialize; `None` is home).
+    pub fn notify_tui_route(&self, session: Option<&str>) {
+        let Some(facade) = &self.facade else { return };
+        facade.shared.notify_tui_route(session);
+    }
+
+    /// Push the live theme view (the flat `TuiThemeCurrent` sidebar
+    /// subset: `{accent, background, borderActive, text, textMuted}`
+    /// as `#rrggbb` strings).
+    pub fn notify_tui_theme(&self, view: serde_json::Value) {
+        let Some(facade) = &self.facade else { return };
+        facade.shared.notify_tui_theme(view);
+    }
+
+    /// Run one plugin sidebar row's activate handler (the click side
+    /// of the v2 TUI-plugin bridge — beta.13 bug 2's plugin-world
+    /// path): the guest invokes the row's `onMouseUp`, whose
+    /// navigation flows back as a `tui.route.navigate` UI request.
+    /// Bounded by `timeout` (the HARD bound on one plugin callback).
+    pub fn click_sidebar_row(
+        &self,
+        plugin_id: &str,
+        row: usize,
+        timeout: Duration,
+    ) -> Result<bool, String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
+        let result = runtime
+            .block_on(facade.shared.request(
+                "slot.click",
+                json!({ "pluginId": plugin_id, "row": row }),
+                timeout,
+            ))
+            .map_err(|error| error.to_string())?;
+        Ok(result.get("ok").and_then(Value::as_bool).unwrap_or(false))
+    }
+
     /// Materialize one plugin dialog's content at OPEN time (the
     /// delegation seam behind `DialogKind::Plugin`): the guest builds
     /// the `{title, rows, options}` structure synchronously; this
