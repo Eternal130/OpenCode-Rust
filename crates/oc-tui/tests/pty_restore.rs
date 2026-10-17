@@ -855,3 +855,159 @@ fn pty_restart_restores_the_durable_model() {
     );
     shutdown.store(true, Ordering::SeqCst);
 }
+
+// ---------------------------------------------------------------------------
+// Lane TAIL — the protocol/robustness PTY proofs (auditC P2/P3/P6/P7)
+// ---------------------------------------------------------------------------
+
+/// The kitty handshake, byte-asserted end-to-end (TM-1/P2): the boot
+/// writes the `CSI ? u` query; a terminal that ANSWERS (`CSI ? 1 u`)
+/// gets the `CSI > 5 u` push; teardown pops (`CSI < u`) and resets
+/// the cursor (`CSI 0 SP q`). The theme subscriptions (`?2027h` +
+/// `?2031h`, TM-2/P6) ride the same boot window.
+#[test]
+fn pty_kitty_handshake_and_teardown_bytes() {
+    let _sandbox = sandbox_env("tail-kitty");
+    let (url, _state, shutdown) = spawn_scripted_server();
+
+    let guard = attach_pty();
+    let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let reader_master = guard.master.try_clone().expect("clone read");
+    let writer_master = guard.master.try_clone().expect("clone write");
+    {
+        let output = Arc::clone(&output);
+        let mut reply_writer = guard.master.try_clone().expect("clone reply");
+        std::thread::spawn(move || {
+            let mut reader = reader_master;
+            let mut chunk = [0u8; 4096];
+            let mut osc11_replied = false;
+            let mut kitty_replied = false;
+            loop {
+                match reader.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => {
+                        let bytes = &chunk[..count];
+                        output.lock().expect("output lock").extend_from_slice(bytes);
+                        // The answering terminal: OSC 11 + the kitty
+                        // capability query — BOTH answered so the boot
+                        // probe completes immediately.
+                        if !osc11_replied && bytes.windows(6).any(|w| w == b"\x1b]11;?") {
+                            osc11_replied = true;
+                            let _ = reply_writer.write_all(b"\x1b]11;rgb:1717/1717/1717\x1b\\");
+                        }
+                        if !kitty_replied && bytes.windows(4).any(|w| w == b"\x1b[?u") {
+                            kitty_replied = true;
+                            // Advertise DISAMBIGUATE_ESCAPE_CODES.
+                            let _ = reply_writer.write_all(b"\x1b[?1u");
+                        }
+                    }
+                }
+            }
+        });
+    }
+    let boot_output = Arc::clone(&output);
+    let mut exit_writer = writer_master.try_clone().expect("clone exit");
+    std::thread::spawn(move || {
+        // Wait for the frame, then leave the exit chord.
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        while std::time::Instant::now() < deadline {
+            let ready =
+                boot_output.lock().expect("output lock").windows(8).any(|w| w == b"opencode");
+            if ready {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        // Exit: escape clears any pending state, ctrl+c twice (the
+        // empty-prompt exit — the harness-wide chord).
+        let _ = exit_writer.write_all(b"\x1b");
+        std::thread::sleep(Duration::from_millis(150));
+        let _ = exit_writer.write_all(b"\x03");
+        std::thread::sleep(Duration::from_millis(150));
+        let _ = exit_writer.write_all(b"\x03");
+    });
+
+    let client = oc_client::Client::new(&url).expect("client");
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("rt");
+    let finished = runtime.block_on(async {
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            oc_tui::app::run_with_size(client, Some((100, 30)), oc_tui::app::BootArgs::default()),
+        )
+        .await
+    });
+    finished.expect("tui finished within timeout").expect("run_with_size ok");
+    shutdown.store(true, Ordering::Relaxed);
+
+    let captured = output.lock().expect("output lock").clone();
+    let contains = |needle: &[u8]| captured.windows(needle.len()).any(|w| w == needle);
+    // Boot: the subscriptions + the query went out.
+    assert!(
+        contains(b"\x1b[?2027h\x1b[?2031h"),
+        "the theme-flip subscriptions (?2027h + ?2031h) emitted at boot"
+    );
+    assert!(contains(b"\x1b[?u"), "the kitty query emitted at boot");
+    // The ANSWER gated the push (the advertisement arrived → push).
+    assert!(contains(b"\x1b[>5u"), "the kitty push followed the advertisement");
+    // Teardown: the pop + the cursor reset, at the tail.
+    assert!(contains(b"\x1b[<u"), "the kitty pop at teardown");
+    assert!(contains(b"\x1b[0 q"), "DECSCUSR reset at teardown");
+}
+
+/// The panic-restore finalizer (P3): a thread crashing mid-run while
+/// the TUI owns the terminal triggers the chained panic hook, which
+/// writes the full restore sequence to the pty — raw mode / alt
+/// screen / mouse / kitty can never stay latched after a crash.
+#[test]
+fn pty_panic_mid_run_restores_the_terminal() {
+    let _sandbox = sandbox_env("tail-panic");
+    let (url, _state, shutdown) = spawn_scripted_server();
+
+    run_tui(&url, oc_tui::app::BootArgs::default(), move |boot, writer| {
+        assert!(
+            wait_for(&boot, "█▀▀█".as_bytes(), Duration::from_secs(8)),
+            "the home frame rendered before the crash"
+        );
+        // Baseline occurrence counts (the restore bytes may
+        // land in the same reader chunk as the frame — an offset
+        // watch would race them; counting does not).
+        let count_of = |needle: &[u8]| -> usize {
+            boot.output
+                .lock()
+                .expect("output lock")
+                .windows(needle.len())
+                .filter(|w| *w == needle)
+                .count()
+        };
+        let baseline =
+            [count_of(b"?1049l"), count_of(b"?2004l"), count_of(b"\x1b[<u"), count_of(b"\x1b[0 q")];
+        // Crash a worker thread mid-run (the renderer's terminal
+        // is UP: alt screen + raw mode + mouse latched).
+        std::thread::spawn(|| panic!("mid-render crash (pty proof)"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut restored = false;
+        while std::time::Instant::now() < deadline {
+            let now = [
+                count_of(b"?1049l"),
+                count_of(b"?2004l"),
+                count_of(b"\x1b[<u"),
+                count_of(b"\x1b[0 q"),
+            ];
+            if now.iter().zip(baseline).all(|(n, b)| *n > b) {
+                restored = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(
+            restored,
+            "the panic hook wrote the crash-restore sequence (baseline {baseline:?})"
+        );
+        // The app itself is unaffected (the crash was contained);
+        // leave through the standard chord.
+        type_keys(&writer, b"\x1b");
+        type_keys(&writer, b"\x03");
+        type_keys(&writer, b"\x03");
+    });
+    shutdown.store(true, Ordering::Relaxed);
+}
