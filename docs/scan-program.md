@@ -65,3 +65,19 @@ The scan is the acceptance instrument (differential testing retired).
   + instrument-miss attribution). IN FLIGHT.
 - R2: dispatched after framework finalized — see docs/scan-round2-findings.md.
 - R3-R5: directions refined from R1/R2 results before dispatch.
+
+## Spec-refinement protocol (user-revised, 2026-10-17): per-perspective convergence
+
+The spec-refinement meta-loop runs PER PERSPECTIVE to convergence, not one
+pass each. Five perspectives; each gets its own iteration track:
+  review(spec-vN) -> integrate gaps -> fresh-eyes review(spec-vN+1) -> ...
+  until a track's round finds no material gaps (convergence), then the next.
+Perspectives (each a distinct reviewer stance with fresh agents per round):
+  P1 feature-space coverage        P2 quality-dimension coverage
+  P3 environment/matrix coverage   P4 process-fidelity (field lessons -> clauses)
+  P5 adversarial rival-auditor
+Round SPEC-R1 (all five stances in one pass) seeds every track. Expected
+10-15 review rounds total; field-scan findings (RESCAN/SCAN-R2...) feed P4
+continuously. Terminal artifact: docs/scan-spec.md (the 扫描细则) — axes x
+sub-axes x granularity x fidelity requirements x method, versioned, the
+standing instrument for every future dev->scan->fix loop.
