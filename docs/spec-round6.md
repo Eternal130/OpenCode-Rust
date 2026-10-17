@@ -38,7 +38,11 @@ injected into throwaway copies at runtime — no product defect committed.
 |---|---|---|---|---|
 | E1-1 localization | +250ms one-shot shift in ONE cell's real PTY write-stamp series (dialog-under-streaming) | stall-burst detector (≥2 missed drive ticks OR gap >150ms, cadence-active) | ≥1 burst in patched cell, 0 in 3 controls | **PASS** — flagged via ">150ms" rule (observed gap 359ms = 109 natural + 250 injected); 0/0/0 in controls |
 | E1-2 false-positive | none (synthetic evenly-spaced 100ms±jitter series; plus the REAL unpatched controls above) | same detector | 0 findings | **PASS** — 0 findings both on synthetic and on all 4 real cells |
-| E3 leak+control | child process retaining 10 MB/min in never-drained touched buffers (true leak); control child idle | /proc/PID/status VmRSS+RssAnon+FD @60s, least-squares MB/h, flag >20 MB/h | leak slope ≈600 MB/h ±20% AND flags; control ≈0 | **PENDING** (30-min validation run in flight; first attempt died to an output-buffering bug in the runner — hardening = unbuffered stderr log + incremental CSV writes; result appended in §2b before lane close) |
+| E3 leak+control | child process retaining 10 MB/min in never-drained touched buffers (true leak); control child idle | /proc/PID/status VmRSS+RssAnon+FD @60s, least-squares MB/h, flag >20 MB/h | leak slope ≈600 MB/h ±20% AND flags; control ≈0 | **PASS** — leak 600.3 MB/h (band 480–720, flags; n=31, checkpoints linear, FDs flat); control 0.0 MB/h (n=5, RSS flat 2.2 MB); machine verdict `e3_verdict.json` (§2b) |
+
+Artifacts: `crates/oc-tui/tests/spec_e1_canary.rs`, `spec_e5_canary.rs`
+(committed, standing I8 corpus); `tools/parity/spec-canaries/e3_leak_canary.rs`
++ `/tmp/opencode/spec-r6/e3_{leak,control}.csv`, `e3_verdict.json`.
 | E5-a contrast | fg:=bg (ratio 1:1) on ONE pair copy | WCAG ratio assert 4.5:1/3:1 on resolved-token pairs (real A7-chain output) | NEW failure = exactly the poisoned cell | **PASS** — localized to `text.muted/background.base`; inherited-finding (below) correctly NOT counted |
 | E5-b color-independence | luminance-equal red/green pair (ΔL 0.0022) | ΔL > ε grayscale distinguishability (busy/error pair, real ΔL 0.278) | pair flagged indistinguishable | **PASS** |
 | E5-c key walk | ONE command's bindings deleted in table copy | stroke-trie walk over the REAL 250-row default keymap | exactly that target unreachable | **PASS** — `leader` unbound → exactly it unreachable (191/192 bound reach); 58 palette-only ("none") rows dispositioned |
@@ -51,10 +55,32 @@ it; see §2b).
 
 ### §2b E3 canary result (appended on run completion)
 
-PENDING — 30-min leak arm + 11-min control arm in flight (runner hardened:
-stderr logging, incremental CSV). **If E3 FAILS its canary**: the E3 clause
-sampling/slope method gets redesigned THIS round per I8 and the P2 verdict
-below is withdrawn to "one more round".
+Attempt history (honest record): **attempt 1** died mid-run to an output-
+buffering bug AND carried a rate-constant bug in the leak toy (integer
+accumulator → 0.094 MB/min instead of 10). Instructive accident: the
+sampler + least-squares measured the toy's TRUE rate at **5.6 MB/h over the
+full 30 min** — the measurement chain is linear-faithful at two orders of
+magnitude below the band, which strengthens the method validation (the
+clause's slope math is not band-tuned). **Attempt 2** was killed when the
+same rate bug was confirmed (0.1 MB/min growth). **Attempt 3** = corrected
+toy (fractional accumulator; smoke-verified 12.1 MB after 1 min ≈ spec
+rate), full 30-min leak arm + 11-min control arm. Result:
+
+**RESULT (attempt 3, both legs) — PASS.**
+- **Leak leg**: slope = **600.3 MB/h** (n=31 samples @60s; band 480–720 ✓;
+  flag threshold >20 MB/h fires ✓). Final RSS 312.2 MB = 30 min × 10 MB/min
+  + 2.2 MB baseline; every 5-min checkpoint linear to ±0.1 MB
+  (12.1 → 62.1 → 112.1 → 162.1 → 212.2 → 262.2 → 312.2); FD count flat at 3.
+- **Control leg**: slope = **0.0 MB/h** (n=5 samples; RSS flat 2.2 MB,
+  RssAnon 0.1 MB — noise floor ≈ 0 within one page).
+- Verdict machine-computed: `/tmp/opencode/spec-r6/e3_verdict.json`
+  (`canary_pass: true`); raw series `e3_leak.csv` (31 rows),
+  `e3_control.csv` (5 rows).
+- **Method validated** (I8): /proc/PID sampling @60s + least-squares MB/h +
+  flag rule correctly (a) localized the injected 10 MB/min retention, (b)
+  stayed silent on the idle control, (c) tracked the true rate
+  linearily at both 600 MB/h (attempt 3) and 5.6 MB/h (attempt 1's buggy
+  toy — the accidental low-rate probe). No clause redesign required.
 
 **No method failed its canary — no clause redesign required.** Two
 instrument-side refinements the canaries forced (recorded, not clause
@@ -140,6 +166,11 @@ P2 (quality-dimension track) is **CLOSED**. The ref-measurement debts move
 to P3 as first-class directives (not P2 failures — the clauses are
 executable and their machinery is canary-validated).
 
+**Conditional resolved:** §2b's withdrawal clause (E3 control leg) did not
+trigger — control slope 0.0 MB/h on an idle child — so the verdict stands
+unconditionally: **P2 CLOSED, all 5 canary legs green** (E1 localization,
+E1 false-positive, E3 leak, E3 control, E5 a/b/c).
+
 ## §6 P3 directives (next round)
 
 1. **Ref runtime provisioning** (prereq for D1-D3): full `bun install` of
@@ -163,9 +194,9 @@ executable and their machinery is canary-validated).
 
 ## Round log (this lane)
 - Integration: v5 verbatim, 114/114 appendix, zero-loss script PASS (§1, §4).
-- Canaries FIRST: E1 (2 legs) PASS, E5 (3 legs) PASS, E3 (leak+control) PASS
-  — 5/5 legs green, no redesign; 2 instrument refinements + 2 genuine
-  findings recorded (§2).
+- Canaries FIRST: E1 (2 legs) PASS, E5 (3 legs) PASS, E3 leak+control PASS
+  (600.3 / 0.0 MB/h) — 5/5 legs green, no redesign; 2 instrument
+  refinements + 2 genuine findings recorded (§2).
 - Baselines: spinner 80ms + StartupLoading 500/3000 verified at ref source
   (file:line); ours drive-tick ~107ms; ours TTI N=10 (569ms median);
   ref-runtime measurements BLOCKED (dep tree; provisioning recorded) (§3).
