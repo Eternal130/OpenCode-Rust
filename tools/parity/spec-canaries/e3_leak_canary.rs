@@ -103,24 +103,37 @@ fn least_squares_slope_mb_per_hour(xs: &[f64], ys: &[f64]) -> f64 {
     }
 }
 
-fn run_arm(mode: &str, samples: usize, csv: &mut String) -> (f64, f64, usize, usize) {
+fn log(msg: &str) {
+    // stderr: unbuffered — survives even a hard exit path.
+    eprintln!("[e3] {msg}");
+}
+
+fn run_arm(mode: &str, samples: usize, csv_path: &str) -> (f64, f64, usize, usize) {
     let pid = spawn_child(mode);
     let mut xs = Vec::new();
     let mut ys = Vec::new();
     let mut max_fds = 0usize;
     let (mut rss0, mut anon0, _) = rss_mb(pid).unwrap();
+    log(&format!("{mode} child {pid} alive, first sample rss={rss0:.1}MB"));
     let t0 = now();
-    let _ = writeln!(csv, "t_s,rss_mb,rssanon_mb,fds");
+    let mut csv = String::from("t_s,rss_mb,rssanon_mb,fds\n");
     for i in 0..=samples {
         std::thread::sleep(if i == 0 { SAMPLE_EVERY } else { SAMPLE_EVERY });
         if let Some((rss, anon, fds)) = rss_mb(pid) {
             let t = now() - t0;
             let _ = writeln!(csv, "{t:.0},{rss:.1},{anon:.1},{fds}");
+            let _ = fs::write(csv_path, &csv); // incremental: survives death
             xs.push(t);
             ys.push(rss);
             max_fds = max_fds.max(fds);
             rss0 = rss;
             anon0 = anon;
+            if i % 5 == 0 {
+                log(&format!("{mode} sample {i}/{samples}: rss={rss:.1}MB fds={fds}"));
+            }
+        } else {
+            log(&format!("{mode} child {pid} VANISHED at sample {i}"));
+            break;
         }
     }
     let slope = least_squares_slope_mb_per_hour(&xs, &ys);
@@ -144,25 +157,19 @@ fn main() {
     let samples = minutes; // one sample per minute
     println!("E3 leak canary: {minutes}-min validation, cadence 60s, rate {RATE_MB_PER_MIN} MB/min (expect ~600 MB/h)");
 
-    let mut leak_csv = String::new();
-    let leak = run_arm("leak", samples, &mut leak_csv);
-    println!("leak arm  : slope = {:.1} MB/h, final RSS = {:.1} MB, RssAnon = {:.1} MB, maxFDs = {}",
-             leak.0, leak.1, leak.2, leak.3);
-    let _ = fs::write("/tmp/opencode/spec-r6/e3_leak.csv", &leak_csv);
-
-    let mut ctrl_csv = String::new();
-    let ctrl = run_arm("control", samples.min(10), &mut ctrl_csv);
-    println!("control arm: slope = {:.1} MB/h (noise floor), final RSS = {:.1} MB", ctrl.0, ctrl.1);
-    let _ = fs::write("/tmp/opencode/spec-r6/e3_control.csv", &ctrl_csv);
+    let leak = run_arm("leak", samples, "/tmp/opencode/spec-r6/e3_leak.csv");
+    log(&format!("leak arm  : slope = {:.1} MB/h, final RSS = {:.1} MB, maxFDs = {}", leak.0, leak.1, leak.3));
+    let ctrl = run_arm("control", samples.min(10), "/tmp/opencode/spec-r6/e3_control.csv");
+    log(&format!("control arm: slope = {:.1} MB/h (noise floor), final RSS = {:.1} MB", ctrl.0, ctrl.1));
 
     // Clause threshold semantics: FLAG = slope exceeds max(2 x ref, ref + 20 MB/h)
     // with ref := 0 (control) → any slope > 20 MB/h flags.
     let leak_flags = leak.0 > 20.0;
     let in_band = (480.0..=720.0).contains(&leak.0);
     let ctrl_ok = ctrl.0 <= 5.0; // ~0 within noise
-    println!("VERDICT: leak slope in 600±20% band = {in_band}; leak flags = {leak_flags}; control ≈0 = {ctrl_ok}");
+    log(&format!("VERDICT: leak slope in 600±20% band = {in_band}; leak flags = {leak_flags}; control ~0 = {ctrl_ok}"));
     let pass = in_band && leak_flags && ctrl_ok;
-    println!("E3 CANARY: {}", if pass { "PASS (localizes; sampling cadence + slope math validated)" } else { "FAIL" });
+    log(if pass { "E3 CANARY: PASS (localizes; sampling cadence + slope math validated)" } else { "E3 CANARY: FAIL" });
     let report = format!(
         "{{\"minutes\": {minutes}, \"leak_slope_mb_per_h\": {:.2}, \"leak_final_rss_mb\": {:.1}, \"control_slope_mb_per_h\": {:.2}, \"leak_in_band\": {in_band}, \"leak_flags\": {leak_flags}, \"control_zero\": {ctrl_ok}, \"pass\": {pass}}}",
         leak.0, leak.1, ctrl.0
