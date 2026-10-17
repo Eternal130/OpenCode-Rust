@@ -32,4 +32,21 @@
 - Transition table (live-driven ours): created → inbox.enqueued → execution.started → step.started → text.started/delta/ended → step.ended → execution.succeeded (+`outcome=succeeded`, `time.idle` set) ✓; mid-run interrupt → active={running} → interrupt=true → step.failed → **execution.interrupted** + `outcome=interrupted` ✓; fork → session.forked + boundary{through,messageID} + title "… (fork #1)" + messages copied (8=8) ✓ (except CD-2); rename → session.renamed ✓; view → 204 (requires JSON content-type; bare POST = 415 — ref-shaped) ✓; delete → 204 + session.deleted ✓.
 - Session list anchor cursor: `cursor.next` returned with base64 JSON `{all, anchor{direction,id,time}}` (live) — matches our handler port of ref `SessionsCursor` (`server/src/handlers/session.ts:83-93`); wire-encoding parity vs ref binary deferred to D2 leg.
 
-*(execution continues — C4, C10, C14, D1, D5 next per lane priority)*
+### CD-6 (MED) — C4: `OPENCODE_CONFIG_CONTENT` overlay declared in the Loader but unwired in production
+- **Evidence**: `oc-core/src/config.rs:487` implements the "inline OPENCODE_CONFIG content (highest priority)" entry via `options.content`, but no production call site ever sets it — `oc-server/src/boot.rs:121` and `oc-server/src/handlers/config.rs:24-30` (and `boot.rs:322` `location_config`) all construct `Loader::new(...)` with default options; only `engine/tests.rs:834` exercises `content`. Live probe: `OPENCODE_CONFIG_CONTENT='{"username":"content-user"}'` + boot → `GET /api/config` shows no content document (only the global Directory entry).
+- **Ref**: `core/src/config.ts:210-214` parses `OPENCODE_CONFIG_CONTENT` as a source on every load.
+- **Effect**: the env overlay silently no-ops for the real server.
+
+### CD-7 (INFO) — C4 verified-parity rows
+- Leaf-key census: all 28 ref `Config.Info` top-level keys recognized by our normalize/loader (mechanical census, `/tmp/opencode/scancd/c4/census.sh`).
+- Valid-shape visibility (live): compaction {auto,keep{tokens},buffer}, lsp {server command}, permissions [action/resource/effect rules], worktree {directory}, experimental {portable_shell_scanner, subagent_depth} all round-trip through boot → `GET /api/config` (home2 run).
+- Shell write-path (live): `PATCH /api/experimental/config {"shell":"/bin/zsh"}` → 204; write lands in global `~/.config/opencode/opencode.jsonc` (ref's target); **JSONC comment + unrelated keys in the project file preserved** (jsonc_edit); after restart project `shell=/bin/bash` still wins (project > global precedence, ref-shaped); `username` persists.
+- `OPENCODE_CONFIG` explicit file: wired (`config.rs:385-392`, every load).
+- `OPENCODE_CLI_CONFIG_CONTENT` (the F-1 cli.json class): implemented in `oc-core/src/cli_config/mod.rs:466-472`; unit test `env_content_overlays_the_file_everywhere` PASS (dev-gate run, this round).
+- managed-policy (U9): absent on ours — matches the spec's standing U9 disposition (not shipped by us); ref `managed-policy.ts` remains the precedence authority.
+
+### CD-8 (CARRY-NOTE, LOW) — C4/C3: invalid `permissions` rules parse to `[]` instead of dropping/erroring
+- Probe: `permissions: [{"tool":"edit","mode":"ask"}]` (invalid Rule shape) → ours reports `permissions: []` (kept-but-empty), other invalid leaves (compaction garbage) are dropped silently with no API-visible diagnostic. Ref's normalize records diagnostics; surfacing parity (toast/event) unverified — carried to the C3/D2 ref-binary leg.
+
+*(execution continues — C10, C14, D1, D5 next per lane priority)*
+
