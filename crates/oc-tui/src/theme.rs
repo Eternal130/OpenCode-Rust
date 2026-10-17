@@ -140,6 +140,21 @@ pub struct ThemeStyles {
     /// `text.formfield.base` (the rail add-slot's `idleNumber` tint
     /// derives from it at 0.55).
     pub formfield_base: Color,
+    /// `text.formfield.selected` (auditB #8 — the select filter's
+    /// un-focused-current fg; the dialog family's `current_fg`).
+    pub formfield_selected: Color,
+    /// `text.action.destructive.focused` (auditB #8 — the delete/drop
+    /// confirm rows' selected fg).
+    pub destructive_focused: Color,
+    /// `background.action.destructive.focused` — the confirm rows'
+    /// selected bg.
+    pub destructive_focused_bg: Color,
+    /// `text.action.secondary.hovered` (auditB #8 — the jump row's
+    /// hover fg; `.base` already lands as `action_secondary`).
+    pub action_secondary_hovered: Color,
+    /// `theme.scrollbar.base` (auditB #8 — the scrollbox tracks'
+    /// thumb color; the track itself paints `raised.base`).
+    pub scrollbar: Color,
     /// `background.action.primary.focused` — the autocomplete
     /// selected-row background (7.2 wave 2 composer).
     pub action_focused_bg: Color,
@@ -245,6 +260,11 @@ impl ThemeStyles {
             success: rgba(tokens.text.feedback.success.base),
             info: rgba(tokens.text.feedback.info.base),
             formfield_base: rgba(tokens.text.formfield.base),
+            formfield_selected: rgba(tokens.text.formfield.selected),
+            destructive_focused: rgba(tokens.text.action.destructive.focused),
+            destructive_focused_bg: rgba(tokens.background.action.destructive.focused),
+            action_secondary_hovered: rgba(tokens.text.action.secondary.hovered),
+            scrollbar: rgba(tokens.scrollbar.base),
             action_focused_bg: rgba(tokens.background.action.primary.focused),
             action_focused_fg: rgba(tokens.text.action.primary.focused),
             background_prompt: {
@@ -933,4 +953,25 @@ mod tests {
         let last = directories.last().unwrap();
         assert_eq!(last, Path::new("/opt/opencode-rust/crates/oc-tui/.opencode"));
     }
+}
+
+// -- lane TAIL (auditB #8): the remaining token bindings --------
+
+/// The nord-class tokens resolve away from the v2-dark defaults
+/// (the audit's "correct on v2-dark, wrong on every other theme"
+/// family).
+#[test]
+fn nord_resolves_the_new_token_family() {
+    let registry = crate::theme::ThemeRegistry::builtins();
+    let nord = registry.resolve("nord", oc_theme::types::Mode::Dark).expect("nord resolves");
+    let dark = ThemeState::v2_dark();
+    let a = nord.styles();
+    let b = dark.styles();
+    assert_ne!(a.formfield_selected, b.formfield_selected);
+    assert_ne!(a.destructive_focused, b.destructive_focused);
+    assert_ne!(a.destructive_focused_bg, b.destructive_focused_bg);
+    assert_ne!(a.action_secondary_hovered, b.action_secondary_hovered);
+    assert_ne!(a.scrollbar, b.scrollbar);
+    // The jump row's info token already existed (SURF-1); it stays.
+    assert_ne!(a.info, b.info);
 }

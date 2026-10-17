@@ -526,7 +526,8 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                     .described("Do you want to delete it anyway? Yes deletes it."),
                 SelectOption::titled("Keep the worktree", "no").described("Cancels the delete."),
             ],
-        ),
+        )
+        .destructive(),
         DialogKind::ServerList { command: "agent.list", title } => agent_list_props(store, title),
         DialogKind::ServerList { command: "session.list", title } => {
             // The session list dialog renders the HISTORY (v2's
