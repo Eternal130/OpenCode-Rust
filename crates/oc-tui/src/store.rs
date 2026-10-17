@@ -87,6 +87,10 @@ impl DialogSize {
 pub enum DialogKind {
     /// The command palette (`ctrl+p`).
     CommandPalette,
+    /// `DialogUpdate` (`/update` — component/dialog-update.tsx, lane
+    /// TAIL auditB #10): the check/available/installed/current/failed
+    /// states with Skip + Update/Restart actions.
+    Update,
     /// `DialogSessionRename`: rename the active session.
     SessionRename { session_id: String },
     /// The plugin manager select (`plugins.list`, lane KM — v2's
@@ -1073,6 +1077,14 @@ pub struct Store {
     /// Rename-pending per session (session → armed-at clock ms) — the
     /// `title_shimmer` envelope's input (`StoreSignals::title_pending`).
     title_pending: Signal<HashMap<String, u64>>,
+    /// The update-notification state (auditB #10 — v2's
+    /// `update-notification.tsx`): the banner's notice + the dialog's
+    /// live state.
+    update_notice: Signal<Option<crate::components::update::UpdateNotice>>,
+    update_dialog: Signal<crate::components::update::UpdateDialogState>,
+    /// The dismissed `source:version` keys (`update-notifications` —
+    /// loaded/saved by the run loop's storage handle).
+    update_dismissed: RefCell<Vec<String>>,
     /// Per-tab pulse transition stamps (the strip's animated phases —
     /// `TabPulseTrack::sync` at status flips; the render derives every
     /// envelope level from these + the clock, stateless per frame).
@@ -1874,6 +1886,8 @@ struct StoreSignals {
     /// projects locally through the `session.renamed` echo). The
     /// sidebar `title_shimmer`'s envelope input (lane TAIL item 1d).
     title_pending: Signal<HashMap<String, u64>>,
+    update_notice: Signal<Option<crate::components::update::UpdateNotice>>,
+    update_dialog: Signal<crate::components::update::UpdateDialogState>,
 }
 
 impl Store {
@@ -1936,6 +1950,7 @@ impl Store {
     // The constructor body (one line per signal/seed field — the
     // pointer-surface seeds crossed the pedantic line budget).
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines)] // the update signals are the lane-TAIL rows
     fn build(runtime: Runtime, signals: StoreSignals) -> Self {
         let prompt_sink: std::rc::Rc<dyn PromptSink> =
             std::rc::Rc::new(RecordingPromptSink::default());
@@ -1983,6 +1998,8 @@ impl Store {
             diff_viewer,
             pair,
             title_pending,
+            update_notice,
+            update_dialog,
         } = signals;
         Self {
             runtime,
@@ -2071,6 +2088,9 @@ impl Store {
             open_url_sink: std::cell::RefCell::new(None),
             pair,
             title_pending,
+            update_notice,
+            update_dialog,
+            update_dismissed: RefCell::new(Vec::new()),
             mcp_toggle_sink: std::cell::RefCell::new(Rc::new(NoMcpToggleSink)),
             pair_refresh_sink: std::cell::RefCell::new(None),
             config_sink: std::cell::RefCell::new(Rc::new(NoConfigSink)),
@@ -2088,6 +2108,7 @@ impl Store {
     }
 
     #[must_use]
+    #[allow(clippy::too_many_lines)] // the update signal seeds are the lane-TAIL rows
     pub fn new(runtime: Runtime) -> Self {
         let tabs = Signal::new(&runtime, TabsState::default());
         let tabs_enabled = Signal::new(&runtime, true);
@@ -2139,6 +2160,9 @@ impl Store {
         let diff_viewer = Signal::new(&runtime, DiffViewerLive::default());
         let pair = Signal::new(&runtime, PairState::default());
         let title_pending = Signal::new(&runtime, HashMap::<String, u64>::new());
+        let update_notice = Signal::new(&runtime, None::<crate::components::update::UpdateNotice>);
+        let update_dialog =
+            Signal::new(&runtime, crate::components::update::UpdateDialogState::Current);
         Self::build(
             runtime,
             StoreSignals {
@@ -2184,6 +2208,8 @@ impl Store {
                 diff_viewer,
                 pair,
                 title_pending,
+                update_notice,
+                update_dialog,
             },
         )
     }
@@ -2973,6 +2999,68 @@ impl Store {
     #[must_use]
     pub fn attention(&self) -> AttentionState {
         self.attention.get()
+    }
+
+    // -- update notification (auditB #10, lane TAIL) ---------------------
+
+    /// The current banner notice (`update_notification()`).
+    #[must_use]
+    pub fn update_notice(&self) -> Option<crate::components::update::UpdateNotice> {
+        self.update_notice.get()
+    }
+
+    /// The dismissed `source:version` keys (the loop loads/saves
+    /// these through its storage handle).
+    #[must_use]
+    pub fn update_dismissed(&self) -> Vec<String> {
+        self.update_dismissed.borrow().clone()
+    }
+
+    /// Replace the dismissal history (boot load).
+    pub fn set_update_dismissed(&self, versions: Vec<String>) {
+        *self.update_dismissed.borrow_mut() = versions;
+    }
+
+    /// Notify one update notice (v2's `notify`): suppressed when the
+    /// `source:version` key is in the dismissed history; a CLIENT
+    /// notice never displaces a live SERVER one.
+    pub fn update_notify(&self, notice: crate::components::update::UpdateNotice) {
+        let source = if notice.remote { "server" } else { "client" };
+        let key = format!("{source}:{}", notice.version);
+        if self.update_dismissed.borrow().contains(&key) {
+            return;
+        }
+        let current = self.update_notice.get();
+        if let Some(current) = &current {
+            if !notice.remote && current.remote {
+                return; // client never displaces server
+            }
+        }
+        self.update_notice.set(Some(notice));
+    }
+
+    /// Dismiss the banner + record the dismissal (the loop persists
+    /// through its storage handle; the last 100 keys).
+    pub fn update_dismiss(&self) {
+        if let Some(current) = self.update_notice.get() {
+            let source = if current.remote { "server" } else { "client" };
+            let mut history = self.update_dismissed.borrow_mut();
+            history.push(format!("{source}:{}", current.version));
+            history.truncate(100);
+        }
+        self.update_notice.set(None);
+    }
+
+    /// The update dialog's live state.
+    #[must_use]
+    pub fn update_dialog_state(&self) -> crate::components::update::UpdateDialogState {
+        self.update_dialog.get()
+    }
+
+    /// Set the update dialog's live state (the check/install
+    /// transitions).
+    pub fn set_update_dialog(&self, state: crate::components::update::UpdateDialogState) {
+        self.update_dialog.set(state);
     }
 
     /// Take the bell request (the run loop writes `\x07` once).
@@ -5609,6 +5697,28 @@ impl Store {
                         );
                     }
                 });
+            }
+            // The updater's installation notices (v2's
+            // `installation.update-available`/`installation.updated`
+            // handlers, update-notification.tsx:113-121 — the
+            // server-hosting process's own updater).
+            "installation.update-available" => {
+                if let Some(version) = event.string("version") {
+                    self.update_notify(crate::components::update::UpdateNotice {
+                        kind: crate::components::update::UpdateNoticeKind::Available,
+                        version,
+                        remote: false,
+                    });
+                }
+            }
+            "installation.updated" => {
+                if let Some(version) = event.string("version") {
+                    self.update_notify(crate::components::update::UpdateNotice {
+                        kind: crate::components::update::UpdateNoticeKind::Installed,
+                        version,
+                        remote: false,
+                    });
+                }
             }
             "session.deleted" => {
                 let Some(id) = event.string("sessionID") else { return };
@@ -8559,4 +8669,114 @@ fn theme_apply_signal_reaches_every_surface_style() {
     let bg = after.background;
     let paints_bg = frame.cells.iter().flat_map(|row| row.iter()).any(|cell| cell.bg == bg.into());
     assert!(paints_bg, "the rendered frame carries the new palette");
+}
+
+// -- lane TAIL: the update-notification state machine (auditB #10) --
+
+#[cfg(test)]
+fn notice(
+    kind: crate::components::update::UpdateNoticeKind,
+    version: &str,
+    remote: bool,
+) -> crate::components::update::UpdateNotice {
+    crate::components::update::UpdateNotice { kind, version: version.to_owned(), remote }
+}
+
+/// The banner lifecycle: notify → show; dismiss → gone + the key
+/// recorded (a re-notify of the same version stays suppressed; a
+/// NEW version shows again).
+#[test]
+fn update_notice_lifecycle_and_dismissal_history() {
+    let store = Store::new(Runtime::new());
+    assert!(store.update_notice().is_none());
+    store.update_notify(notice(
+        crate::components::update::UpdateNoticeKind::Available,
+        "2.0.25",
+        false,
+    ));
+    assert_eq!(store.update_notice().map(|n| n.version), Some("2.0.25".into()));
+    store.update_dismiss();
+    assert!(store.update_notice().is_none(), "dismissed");
+    assert_eq!(store.update_dismissed(), vec!["client:2.0.25".to_owned()]);
+    // The same version stays suppressed…
+    store.update_notify(notice(
+        crate::components::update::UpdateNoticeKind::Available,
+        "2.0.25",
+        false,
+    ));
+    assert!(store.update_notice().is_none(), "the dismissed version is suppressed");
+    // …a NEW version shows.
+    store.update_notify(notice(
+        crate::components::update::UpdateNoticeKind::Available,
+        "2.0.26",
+        false,
+    ));
+    assert_eq!(store.update_notice().map(|n| n.version), Some("2.0.26".into()));
+    // A CLIENT notice never displaces a live SERVER one.
+    store.update_notify(notice(
+        crate::components::update::UpdateNoticeKind::Installed,
+        "9.9.9",
+        true,
+    ));
+    assert_eq!(store.update_notice().map(|n| n.version), Some("9.9.9".into()));
+    store.update_notify(notice(
+        crate::components::update::UpdateNoticeKind::Available,
+        "1.0.0",
+        false,
+    ));
+    assert_eq!(
+        store.update_notice().map(|n| n.version),
+        Some("9.9.9".into()),
+        "client never displaces server"
+    );
+}
+
+/// The SSE installation events land the banner.
+#[test]
+fn installation_events_notify_the_banner() {
+    let store = Store::new(Runtime::new());
+    store.ingest_all([Ingest::Event(BusEvent::new(
+        "installation.update-available",
+        serde_json::json!({ "version": "2.0.25" }),
+    ))]);
+    assert_eq!(store.update_notice().map(|n| n.version), Some("2.0.25".into()));
+}
+
+/// `/update` opens the dialog and the actions route through the
+/// submission seam (skip dismisses; confirm marks Installing).
+#[test]
+fn update_command_opens_the_dialog_with_actions() {
+    use crate::components::command_palette::CommandDispatcher as _;
+    let store = Store::new(Runtime::new());
+    let mut dispatcher = crate::components::command_palette::StoreDispatcher;
+    assert_eq!(
+        dispatcher.dispatch(&store, "update.check", None),
+        crate::components::command_palette::Dispatch::Handled
+    );
+    assert!(matches!(store.top_dialog().map(|entry| entry.kind), Some(DialogKind::Update)));
+    // An available notice + confirm → Installing (the ServerPending
+    // marker rides the submission).
+    store.update_notify(notice(
+        crate::components::update::UpdateNoticeKind::Available,
+        "2.0.25",
+        false,
+    ));
+    store.set_update_dialog(crate::components::update::UpdateDialogState::Available(
+        "2.0.25".to_owned(),
+    ));
+    let dispatch =
+        crate::components::dialog::execute_submission(&store, &mut dispatcher, "confirm");
+    assert!(matches!(
+        dispatch,
+        crate::components::command_palette::Dispatch::ServerPending("update.install")
+    ));
+    assert!(matches!(
+        store.update_dialog_state(),
+        crate::components::update::UpdateDialogState::Installing(_)
+    ));
+    // Skip dismisses the banner too.
+    store.clear_dialogs();
+    store.open_dialog(DialogKind::Update, DialogSize::Medium);
+    let _ = crate::components::dialog::execute_submission(&store, &mut dispatcher, "skip");
+    assert!(store.update_notice().is_none(), "skip dismissed the banner");
 }
