@@ -75,6 +75,22 @@ impl PaletteCommand {
             _ => false,
         }
     }
+
+    /// v2's dynamic `enabled` gate (a disabled command is filtered
+    /// from the palette, never a dead row). The one dynamic case in
+    /// the registry: `session.redo` is enabled only with a staged
+    /// revert (`enabled: !!session()?.revert?.messageID`,
+    /// index.tsx:1005).
+    #[must_use]
+    pub fn enabled(&self, store: &Store) -> bool {
+        if self.command == "session.redo" {
+            return match store.route() {
+                Route::Session { session_id } => store.revert(&session_id).is_some(),
+                Route::Home => false,
+            };
+        }
+        true
+    }
 }
 
 /// The production palette registry in registration order (app
@@ -171,6 +187,14 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         title: "Redo",
         group: "Session",
         bindings: &["ctrl+x r"],
+    },
+    // Lane FINAL: `session.export` (index.tsx:1201-1244 — palette-
+    // listed with slash `/export`, bound `<leader>x`).
+    PaletteCommand {
+        command: "session.export",
+        title: "Export session transcript",
+        group: "Session",
+        bindings: &["ctrl+x x"],
     },
     PaletteCommand {
         command: "session.move",
@@ -349,6 +373,7 @@ pub fn palette_props(store: &Store) -> SelectProps {
         .iter()
         .filter(|entry| {
             !(entry.command == "variant.list" && store.current_model_variants().is_empty())
+                && entry.enabled(store)
         })
         .collect();
     options.extend(palette_options_slice(&advertised));
@@ -552,6 +577,212 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 })
                 .collect();
             SelectProps::new(*title, options)
+        }
+        // -- Lane FINAL: the integration connect surface ---------------
+        // `DialogIntegration` (dialog-integration.tsx:102-145): one row
+        // per integration — name, Popular/Services/MCP category, the
+        // connected-✓ gutter folded into the footer (summary /
+        // "Sign in required →" warning), "Environment only" when no
+        // connect method, the muted empty view.
+        DialogKind::Integration => {
+            let options = match store.integration_list() {
+                crate::store::IntegrationListState::Loading => {
+                    vec![status_option("Loading integrations…")]
+                }
+                crate::store::IntegrationListState::Failed(error) => {
+                    vec![status_option(&format!("Integrations unavailable: {error}"))]
+                }
+                crate::store::IntegrationListState::Loaded(rows) => {
+                    if rows.is_empty() {
+                        vec![status_option("No integrations available")]
+                    } else {
+                        rows.iter()
+                            .map(|row| {
+                                let mut option =
+                                    SelectOption::titled(row.name.clone(), row.id.clone())
+                                        .categorized(row.category);
+                                if row.methods.is_empty() && row.accounts.is_empty() {
+                                    option = option.described("Environment only");
+                                }
+                                if row.sign_in_required {
+                                    option = option.with_footer("Sign in required →");
+                                } else if !row.summary.is_empty() {
+                                    option = option.with_footer(format!("✓ {}", row.summary));
+                                }
+                                option
+                            })
+                            .collect()
+                    }
+                }
+            };
+            SelectProps::new("Connect an integration", options)
+        }
+        // `manageConnections` (dialog-integration.tsx:148-263): "Add
+        // account" + the credential rows (the armed delete row flips
+        // its title to the confirm prompt).
+        DialogKind::IntegrationAccounts { integration_id } => {
+            let mut options = Vec::new();
+            if let Some(row) = store.integration_row(integration_id) {
+                if !row.methods.is_empty() {
+                    options.push(SelectOption::titled("Add account", "add"));
+                }
+                let deleting = store.integration_deleting();
+                for account in &row.accounts {
+                    let armed = deleting.as_deref() == Some(account.id.as_str());
+                    let title = if armed {
+                        "Press ctrl+d again to confirm".to_owned()
+                    } else {
+                        account.label.clone()
+                    };
+                    let mut option = SelectOption::titled(title, account.id.clone())
+                        .categorized("Connected accounts");
+                    if account.sign_in_required {
+                        option = option.with_footer("Sign in required →");
+                    }
+                    options.push(option);
+                }
+            }
+            let title = store
+                .integration_row(integration_id)
+                .map_or_else(|| "Connect an integration".to_owned(), |row| row.name);
+            SelectProps::new(title, options)
+        }
+        // `selectMethod` (dialog-integration.tsx:265-283): one row per
+        // non-env method (key first — the rows arrive pre-sorted).
+        DialogKind::IntegrationMethod { integration_id } => {
+            let options = store
+                .integration_row(integration_id)
+                .map(|row| row.methods.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|method| {
+                    let title = if method.kind == "key" && method.label.is_empty() {
+                        "API key".to_owned()
+                    } else {
+                        method.label.clone()
+                    };
+                    SelectOption::titled(title, method.id)
+                })
+                .collect();
+            let name =
+                store.integration_row(integration_id).map_or_else(String::new, |row| row.name);
+            SelectProps::new(format!("Connect {name}"), options)
+        }
+        // The prompt-style inputs render their own chrome (the props
+        // stay empty like SessionRename — the solid renderer draws the
+        // input; the code dialog's URL/instructions rows render in the
+        // description block).
+        DialogKind::IntegrationKey { title, .. } => {
+            let mut props = SelectProps::new(title.clone(), Vec::new());
+            "API key".clone_into(&mut props.placeholder);
+            if let Some(error) = store.integration_error() {
+                props.hints.push(error);
+            }
+            props
+        }
+        DialogKind::IntegrationCode { .. } => {
+            let title = store
+                .integration_attempt()
+                .map_or_else(|| "Connect".to_owned(), |attempt| attempt.title);
+            let mut props = SelectProps::new(title, Vec::new());
+            "Authorization code".clone_into(&mut props.placeholder);
+            if let Some(attempt) = store.integration_attempt() {
+                if !attempt.url.is_empty() {
+                    props.hints.push(attempt.url);
+                }
+                if !attempt.instructions.is_empty() {
+                    props.hints.push(attempt.instructions);
+                }
+            }
+            if let Some(error) = store.integration_error() {
+                props.hints.push(error);
+            }
+            props
+        }
+        // The pending view (`OAuthAuto`/`CommandPending`): the URL +
+        // instructions + waiting message as rows, the o/c action hints
+        // in the footer.
+        DialogKind::IntegrationPending { .. } => {
+            let mut options = Vec::new();
+            if let Some(attempt) = store.integration_attempt() {
+                if !attempt.url.is_empty() {
+                    options.push(SelectOption::titled(attempt.url.clone(), "url"));
+                }
+                if !attempt.instructions.is_empty() {
+                    options.push(
+                        SelectOption::titled(attempt.instructions.clone(), "instructions")
+                            .muted_placeholder(),
+                    );
+                }
+            }
+            let title = store
+                .integration_attempt()
+                .map_or_else(|| "Waiting".to_owned(), |attempt| attempt.title);
+            SelectProps::new(title, options)
+        }
+        // `DialogConfig` (dialog-config.tsx): the settings rows this
+        // build reads AND persists; the footer carries the current
+        // value, enter cycles it.
+        DialogKind::Settings => {
+            let theme_mode = store.theme_mode_pref().unwrap_or_else(|| "system".to_owned());
+            let sidebar = match store.sidebar_mode() {
+                crate::components::sidebar::SidebarMode::Hide => "hide",
+                crate::components::sidebar::SidebarMode::Auto => "auto",
+            };
+            let grouping = if store.exploration_grouping() { "auto" } else { "none" };
+            let options = vec![
+                SelectOption::titled("Theme", "theme.name")
+                    .categorized("Appearance")
+                    .with_footer(store.theme_name()),
+                SelectOption::titled("Color mode", "theme.mode")
+                    .categorized("Appearance")
+                    .with_footer(theme_mode),
+                SelectOption::titled("Sidebar", "session.sidebar")
+                    .categorized("Session")
+                    .with_footer(sidebar.to_owned()),
+                SelectOption::titled("Tool grouping", "session.grouping")
+                    .categorized("Session")
+                    .with_footer(grouping.to_owned()),
+            ];
+            SelectProps::new("Settings", options)
+        }
+        // `DialogFork` (dialog-fork.tsx:69-82): "Full session" + the
+        // user messages newest-first (text single-lined, the created
+        // time in the footer).
+        DialogKind::ForkPicker { session_id } => {
+            let mut options =
+                vec![SelectOption::titled("Full session", "")
+                    .described("fork at the latest message")];
+            for message in store.messages(session_id).iter().rev() {
+                if let crate::components::message::model::Message::User {
+                    id, text, created, ..
+                } = message
+                {
+                    options.push(
+                        SelectOption::titled(text.replace('\n', " "), id.clone())
+                            .with_footer(short_time(*created / 1000)),
+                    );
+                }
+            }
+            SelectProps::new("Fork session", options)
+        }
+        // The export destinations (DialogExportOptions' format ×
+        // action rows collapsed to four).
+        DialogKind::SessionExport { .. } => SelectProps::new(
+            "Export session",
+            vec![
+                SelectOption::titled("Markdown → clipboard", "markdown:clipboard")
+                    .described("thinking off, tool calls on"),
+                SelectOption::titled("Markdown → file", "markdown:file")
+                    .described("thinking off, tool calls on"),
+                SelectOption::titled("JSON → clipboard", "json:clipboard").described("unsanitized"),
+                SelectOption::titled("JSON → file", "json:file").described("unsanitized"),
+            ],
+        ),
+        // `DialogExportResult` (dialog-export-result.tsx:5-27): the
+        // written path row; return/esc closes.
+        DialogKind::ExportResult { path } => {
+            SelectProps::new("Session exported", vec![SelectOption::titled(path.clone(), "path")])
         }
         DialogKind::ServerList { title, .. } => SelectProps::new(
             *title,
@@ -1545,9 +1776,108 @@ impl CommandDispatcher for StoreDispatcher {
                 copy_message_to_clipboard(store);
                 Dispatch::Handled
             }
-            "model.list" | "agent.list" | "session.list" | "open.menu" | "provider.connect"
-            | "opencode.settings" | "session.share" | "session.fork" | "location.reload"
-            | "docs.open" => {
+            // -- Lane FINAL: the stub family's real surfaces -----------
+            // `provider.connect` (app.tsx:946-958): DialogIntegration
+            // over the BE-3 host — the list → method → key/code entry
+            // states; on connect the models dialog follows in v2's
+            // onConnected, the port refetches the lists + toasts.
+            "provider.connect" => {
+                store.integration_dialog_open();
+                Dispatch::Handled
+            }
+            // `open.menu` (app.tsx:763-774): DialogOpen — the session
+            // half is the Sessions list (navigate + open tab); the
+            // project half is the Worktrees dialog (select navigates
+            // home at the directory). Large size (dialog-open.tsx's
+            // `size: "large"`).
+            "open.menu" => {
+                store.request_session_list_refresh();
+                store.replace_dialog(
+                    DialogKind::ServerList {
+                        command: "session.list",
+                        title: "Open session or project",
+                    },
+                    DialogSize::Large,
+                );
+                Dispatch::Handled
+            }
+            // `opencode.settings` (app.tsx:959-968): DialogConfig — the
+            // settings rows this build reads + persists.
+            "opencode.settings" => {
+                store.replace_dialog(DialogKind::Settings, DialogSize::Medium);
+                Dispatch::Handled
+            }
+            // `session.share` (index.tsx:892-897): v2's own behavior is
+            // the unavailable toast — mirrored exactly (the row stays
+            // listed; the command reports the v2 state).
+            "session.share" => {
+                store.clear_dialogs();
+                store.toast_show(crate::components::toast::ToastOptions {
+                    message: "Sharing is not implemented for V2 sessions yet".to_owned(),
+                    variant: "error",
+                    duration_ms: 5000,
+                    ..crate::components::toast::ToastOptions::info("")
+                });
+                Dispatch::Handled
+            }
+            // `session.fork` (index.tsx:928-944): DialogFork over the
+            // FIXED fork API (the picker, not the message-context
+            // direct path).
+            "session.fork" => {
+                let Route::Session { session_id } = store.route() else {
+                    return Dispatch::Handled;
+                };
+                store.replace_dialog(
+                    DialogKind::ForkPicker { session_id: session_id.clone() },
+                    DialogSize::Large,
+                );
+                Dispatch::Handled
+            }
+            // `location.reload` (app.tsx:1019-1034): the toast pair
+            // around `location.reload` POST.
+            "location.reload" => {
+                store.location_reload_pressed();
+                Dispatch::Handled
+            }
+            // `docs.open` (app.tsx:1084-1092): openUrl + clear.
+            "docs.open" => {
+                store.clear_dialogs();
+                store.open_url("https://opencode.ai/docs");
+                Dispatch::Handled
+            }
+            // The six dead session commands (index.tsx:945-1254):
+            // compact POSTs with the current model; undo reverts the
+            // last user message + seeds the composer; redo clears the
+            // staged revert; export opens the destination choice;
+            // background POSTs. (delete lives in the Sessions dialog's
+            // two-press action — dialog-session-list.tsx:255-279.)
+            "session.compact" => {
+                store.session_compact_pressed();
+                Dispatch::Handled
+            }
+            "session.undo" => {
+                store.session_undo_pressed();
+                Dispatch::Handled
+            }
+            "session.redo" => {
+                store.session_redo_pressed();
+                Dispatch::Handled
+            }
+            "session.export" => {
+                let Route::Session { session_id } = store.route() else {
+                    return Dispatch::Handled;
+                };
+                store.replace_dialog(
+                    DialogKind::SessionExport { session_id: session_id.clone() },
+                    DialogSize::Medium,
+                );
+                Dispatch::Handled
+            }
+            "session.background" => {
+                store.session_background_pressed();
+                Dispatch::Handled
+            }
+            "model.list" | "agent.list" | "session.list" => {
                 // The mounted dialog's title is the COMPONENT mount's,
                 // not the palette row's (the models-dialog lane's #7):
                 // DialogModel "Select model" (dialog-model.tsx:122),
@@ -2887,6 +3217,373 @@ mod tests {
         assert!(
             values.iter().any(|value| value.starts_with("suggested:")),
             "v2's suggested section keeps its prefixed copies"
+        );
+    }
+
+    // -- Lane FINAL: the stub-dispatch family + the six session
+    // commands ----------------------------------------------------------
+
+    fn final_session_store() -> Store {
+        let store = Store::new(crate::reactive::Runtime::new());
+        store.open_tab("ses_1", Some("Session one".to_owned()));
+        store.navigate(Route::Session { session_id: "ses_1".to_owned() });
+        store.set_messages(
+            "ses_1",
+            vec![
+                crate::components::message::model::Message::User {
+                    id: "u1".into(),
+                    text: "first question".into(),
+                    created: 1_000,
+                    files: Vec::new(),
+                },
+                crate::components::message::model::Message::User {
+                    id: "u2".into(),
+                    text: "second question".into(),
+                    created: 2_000,
+                    files: Vec::new(),
+                },
+            ],
+        );
+        store
+    }
+
+    /// `provider.connect` mounts the real integration list over the
+    /// BE-3 host (the list fetch fires through the sink) — never the
+    /// old "Not wired in this build" stub.
+    #[test]
+    fn final_provider_connect_mounts_integration_list() {
+        use crate::store::RecordingIntegrationSink;
+        let store = Store::new(crate::reactive::Runtime::new());
+        let sink = std::rc::Rc::new(RecordingIntegrationSink::default());
+        store.set_integration_sink(sink.clone());
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "provider.connect", None), Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Integration));
+        assert_eq!(
+            sink.calls.borrow().as_slice(),
+            &[crate::store::IntegrationCall::List],
+            "the open fired integration.list"
+        );
+        // The list dialog renders the rows (v2's sort + categories +
+        // the connected footer).
+        store.integration_list_loaded(vec![crate::store::IntegrationRow {
+            id: "anthropic".into(),
+            name: "Anthropic".into(),
+            category: "Popular",
+            methods: vec![crate::store::IntegrationMethod {
+                id: "key".into(),
+                kind: "key",
+                label: "API key".into(),
+            }],
+            accounts: Vec::new(),
+            summary: String::new(),
+            sign_in_required: false,
+        }]);
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        assert_eq!(props.title, "Connect an integration");
+        assert_eq!(props.options[0].title, "Anthropic");
+        assert_eq!(props.options[0].category.as_deref(), Some("Popular"));
+
+        // The connect chain: row → (single method) → the key prompt →
+        // the sink POST.
+        let submit =
+            crate::components::dialog::execute_submission(&store, &mut dispatcher, "anthropic");
+        assert_eq!(submit, Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::IntegrationKey { .. }));
+        store.integration_key_submit("anthropic", "sk-test");
+        assert_eq!(
+            sink.calls.borrow()[1],
+            crate::store::IntegrationCall::ConnectKey {
+                integration_id: "anthropic".into(),
+                key: "sk-test".into()
+            }
+        );
+        // The connected event: toast + clear + refetch.
+        store.integration_connected("Anthropic");
+        assert!(store.dialogs().is_empty(), "the flow closed on connect");
+        assert_eq!(sink.calls.borrow().last(), Some(&crate::store::IntegrationCall::List));
+        assert!(store.toasts().current().is_some_and(|toast| toast.message.contains("Connected")));
+    }
+
+    /// The OAuth code path: `oauth.connect` (code mode) mounts the
+    /// code-entry prompt with the attempt's URL; the submit fires
+    /// `oauth.complete`.
+    #[test]
+    fn final_oauth_code_entry_flow() {
+        use crate::store::{IntegrationAttempt, RecordingIntegrationSink};
+        let store = Store::new(crate::reactive::Runtime::new());
+        let sink = std::rc::Rc::new(RecordingIntegrationSink::default());
+        store.set_integration_sink(sink.clone());
+        store.integration_list_loaded(vec![crate::store::IntegrationRow {
+            id: "github".into(),
+            name: "GitHub".into(),
+            category: "Popular",
+            methods: vec![crate::store::IntegrationMethod {
+                id: "oauth-browser".into(),
+                kind: "oauth",
+                label: "Browser".into(),
+            }],
+            accounts: Vec::new(),
+            summary: String::new(),
+            sign_in_required: false,
+        }]);
+        let mut dispatcher = StoreDispatcher;
+        dispatcher.dispatch(&store, "provider.connect", None);
+        store.integration_list_loaded(store_rows(&store));
+        crate::components::dialog::execute_submission(&store, &mut dispatcher, "github");
+        store.integration_oauth_started(IntegrationAttempt {
+            integration_id: "github".into(),
+            attempt_id: "att_1".into(),
+            kind: "oauth",
+            code_mode: true,
+            url: "https://github.com/login/device".into(),
+            instructions: "Enter code ABCD-1234".into(),
+            title: "Browser".into(),
+        });
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::IntegrationCode { .. }));
+        // The prompt shows the URL (v2's description block).
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        assert!(props.hints.iter().any(|hint| hint.contains("github.com/login/device")));
+        store.integration_code_submit("github", "att_1", "ABCD-1234");
+        assert_eq!(
+            sink.calls.borrow()[1],
+            crate::store::IntegrationCall::OauthComplete {
+                integration_id: "github".into(),
+                attempt_id: "att_1".into(),
+                code: "ABCD-1234".into()
+            }
+        );
+    }
+
+    fn store_rows(store: &Store) -> Vec<crate::store::IntegrationRow> {
+        match store.integration_list() {
+            crate::store::IntegrationListState::Loaded(rows) => rows,
+            _ => Vec::new(),
+        }
+    }
+
+    /// The other six stub dispatches resolve to their real v2
+    /// surfaces (or v2's own mirrored behavior).
+    #[test]
+    fn final_six_stub_dispatches_resolve() {
+        use crate::store::{RecordingRevertSink, RecordingSessionActionSink};
+        let store = final_session_store();
+        let actions = std::rc::Rc::new(RecordingSessionActionSink::default());
+        store.set_session_action_sink(actions.clone());
+        store.set_revert_sink(std::rc::Rc::new(RecordingRevertSink::default()));
+        store.set_open_url_sink(Some(std::rc::Rc::new(|_url: String| {})));
+        let mut dispatcher = StoreDispatcher;
+
+        // open.menu → the (large) sessions list over the shared
+        // session.list routing.
+        dispatcher.dispatch(&store, "open.menu", None);
+        assert!(matches!(
+            store.top_dialog().unwrap().kind,
+            DialogKind::ServerList { command: "session.list", title: "Open session or project" }
+        ));
+        assert_eq!(store.top_dialog().unwrap().size, crate::store::DialogSize::Large);
+        store.clear_dialogs();
+
+        // opencode.settings → the Settings rows.
+        dispatcher.dispatch(&store, "opencode.settings", None);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Settings));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        assert_eq!(
+            props.options.iter().map(|option| option.value.as_str()).collect::<Vec<_>>(),
+            vec!["theme.name", "theme.mode", "session.sidebar", "session.grouping"]
+        );
+        store.clear_dialogs();
+
+        // session.share mirrors v2's unavailable toast.
+        dispatcher.dispatch(&store, "session.share", None);
+        let toast = store.toasts().current().cloned().expect("the share toast");
+        assert_eq!(toast.message, "Sharing is not implemented for V2 sessions yet");
+        store.clear_dialogs();
+
+        // location.reload → the info toast + the POST.
+        dispatcher.dispatch(&store, "location.reload", None);
+        assert!(store
+            .toasts()
+            .current()
+            .is_some_and(|toast| toast.message == "Reloading configuration…"));
+        assert_eq!(
+            actions.calls.borrow().as_slice(),
+            &[crate::store::SessionActionCall::LocationReload]
+        );
+        store.clear_dialogs();
+
+        // session.fork → the fork picker ("Full session" + the user
+        // messages newest-first).
+        dispatcher.dispatch(&store, "session.fork", None);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::ForkPicker { .. }));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        assert_eq!(props.options[0].title, "Full session");
+        assert_eq!(props.options[1].title, "second question");
+        assert_eq!(props.options[2].title, "first question");
+        // Submitting a row fires the fork POST with `before`.
+        let submit = crate::components::dialog::execute_submission(
+            &store,
+            &mut dispatcher,
+            props.options[1].value.as_str(),
+        );
+        assert_eq!(submit, Dispatch::Handled);
+        assert_eq!(
+            actions.calls.borrow()[1],
+            crate::store::SessionActionCall::Fork {
+                session_id: "ses_1".into(),
+                before: Some("u2".into())
+            }
+        );
+
+        // docs.open → the URL open path.
+        let opened = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let opened_url = opened.clone();
+        store.set_open_url_sink(Some(std::rc::Rc::new(move |url: String| {
+            *opened_url.borrow_mut() = url;
+        })));
+        dispatcher.dispatch(&store, "docs.open", None);
+        assert_eq!(*opened.borrow(), "https://opencode.ai/docs");
+    }
+
+    /// The six dead session commands act through the sink.
+    #[test]
+    fn final_six_session_commands_act() {
+        use crate::store::{ModelSelection, RecordingRevertSink, RecordingSessionActionSink};
+        let store = final_session_store();
+        let actions = std::rc::Rc::new(RecordingSessionActionSink::default());
+        store.set_session_action_sink(actions.clone());
+        let reverts = std::rc::Rc::new(RecordingRevertSink::default());
+        store.set_revert_sink(reverts.clone());
+        let mut dispatcher = StoreDispatcher;
+
+        // compact → the POST with the current model.
+        store.select_model(
+            "ses_1",
+            &ModelSelection {
+                provider_id: "anthropic".into(),
+                model_id: "claude".into(),
+                variant: None,
+            },
+        );
+        dispatcher.dispatch(&store, "session.compact", None);
+        assert_eq!(
+            actions.calls.borrow()[0],
+            crate::store::SessionActionCall::Compact {
+                session_id: "ses_1".into(),
+                model: Some(ModelSelection {
+                    provider_id: "anthropic".into(),
+                    model_id: "claude".into(),
+                    variant: None
+                })
+            }
+        );
+
+        // undo → revert.stage on the LAST user message + the composer
+        // seed.
+        dispatcher.dispatch(&store, "session.undo", None);
+        assert_eq!(
+            actions.calls.borrow()[1],
+            crate::store::SessionActionCall::RevertStage {
+                session_id: "ses_1".into(),
+                message_id: "u2".into()
+            }
+        );
+        assert_eq!(store.composer("ses_1").draft.text, "second question");
+
+        // redo → the staged revert clears through the revert sink
+        // (the SSE staged event seeds the state first).
+        store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "session.revert.staged",
+            serde_json::json!({
+                "sessionID": "ses_1",
+                "revert": { "messageID": "u1", "files": [] }
+            }),
+        ))]);
+        dispatcher.dispatch(&store, "session.redo", None);
+        assert_eq!(reverts.calls.borrow().as_slice(), &["ses_1".to_owned()]);
+
+        // background → the POST.
+        dispatcher.dispatch(&store, "session.background", None);
+        assert_eq!(
+            actions.calls.borrow().last(),
+            Some(&crate::store::SessionActionCall::Background("ses_1".into()))
+        );
+
+        // export → the destination dialog → the POST.
+        dispatcher.dispatch(&store, "session.export", None);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::SessionExport { .. }));
+        let submit =
+            crate::components::dialog::execute_submission(&store, &mut dispatcher, "markdown:file");
+        assert_eq!(submit, Dispatch::Handled);
+        assert_eq!(
+            actions.calls.borrow().last(),
+            Some(&crate::store::SessionActionCall::Export {
+                session_id: "ses_1".into(),
+                sanitize: false,
+                format: "markdown".into(),
+                destination: "file".into()
+            })
+        );
+
+        // delete: NOT a palette row (v2 lists it only as the sessions
+        // dialog's ctrl+d action); the two-press fires session.remove.
+        assert!(palette_props(&store)
+            .options
+            .iter()
+            .all(|option| option.value != "session.delete"));
+        store.session_delete_pressed("ses_1");
+        assert!(actions
+            .calls
+            .borrow()
+            .iter()
+            .all(|call| !matches!(call, crate::store::SessionActionCall::Remove(_))));
+        store.session_delete_pressed("ses_1");
+        assert_eq!(
+            actions.calls.borrow().last(),
+            Some(&crate::store::SessionActionCall::Remove("ses_1".into()))
+        );
+    }
+
+    /// `session.redo`'s palette row delists exactly when v2's
+    /// `enabled` gate is off (no staged revert on the route).
+    #[test]
+    fn final_session_redo_delists_without_revert() {
+        let store = final_session_store();
+        let props = palette_props(&store);
+        let advertised: Vec<&str> =
+            props.options.iter().map(|option| option.value.as_str()).collect();
+        assert!(!advertised.contains(&"session.redo"), "no revert staged — delisted");
+        store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "session.revert.staged",
+            serde_json::json!({
+                "sessionID": "ses_1",
+                "revert": { "messageID": "u1", "files": [] }
+            }),
+        ))]);
+        let props = palette_props(&store);
+        let advertised: Vec<&str> =
+            props.options.iter().map(|option| option.value.as_str()).collect();
+        assert!(advertised.contains(&"session.redo"), "staged revert — listed");
+        // The export row is palette-visible (index.tsx:1201-1207).
+        assert!(advertised.contains(&"session.export"));
+    }
+
+    /// The Settings dialog's cycles write through the config sink
+    /// (should-fix #5's grouping half).
+    #[test]
+    fn final_settings_cycles_persist() {
+        use crate::store::RecordingConfigSink;
+        let store = final_session_store();
+        let config = std::rc::Rc::new(RecordingConfigSink::default());
+        store.set_config_sink(config.clone());
+        // The store default groups (v2 `session.grouping: "auto"`);
+        // one cycle flips to none, the next back to auto.
+        store.setting_cycle("session.grouping", 1);
+        assert_eq!(config.calls.borrow().as_slice(), &[("session.grouping", "none".to_owned())]);
+        store.setting_cycle("session.grouping", 1);
+        assert_eq!(
+            config.calls.borrow().as_slice(),
+            &[("session.grouping", "none".to_owned()), ("session.grouping", "auto".to_owned())]
         );
     }
 }

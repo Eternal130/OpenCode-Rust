@@ -69,10 +69,24 @@ pub fn handle_dialog_key(
 ) -> DialogKeyOutcome {
     let Some(entry) = store.top_dialog() else { return DialogKeyOutcome::Unhandled };
     let props = select_props_for_entry(&entry, store);
+    // The prompt-style inputs (not selects): rename, worktree-name,
+    // the integration key/code entry.
+    let is_prompt_kind = |kind: &DialogKind| {
+        matches!(
+            kind,
+            DialogKind::SessionRename { .. }
+                | DialogKind::WorktreeName
+                | DialogKind::IntegrationKey { .. }
+                | DialogKind::IntegrationCode { .. }
+        )
+    };
     let is_select = match &entry.kind {
-        // The rename + worktree-name dialogs are the prompt-style
-        // inputs (not selects).
-        DialogKind::SessionRename { .. } | DialogKind::WorktreeName => false,
+        // The rename + worktree-name dialogs + the connect-flow
+        // key/code prompts are the prompt-style inputs (not selects).
+        DialogKind::SessionRename { .. }
+        | DialogKind::WorktreeName
+        | DialogKind::IntegrationKey { .. }
+        | DialogKind::IntegrationCode { .. } => false,
         // A rows-only plugin dialog is static (like help: printables
         // pass through, only the close bindings act); the rest — the
         // palette, theme list, server lists, worktrees, the
@@ -101,15 +115,37 @@ pub fn handle_dialog_key(
         | DialogKind::Variant
         | DialogKind::Pair
         | DialogKind::Debug
-        | DialogKind::Timeline { .. } => true,
+        | DialogKind::Timeline { .. }
+        | DialogKind::Integration
+        | DialogKind::IntegrationAccounts { .. }
+        | DialogKind::IntegrationMethod { .. }
+        | DialogKind::IntegrationPending { .. }
+        | DialogKind::Settings
+        | DialogKind::ForkPicker { .. }
+        | DialogKind::SessionExport { .. }
+        | DialogKind::ExportResult { .. } => true,
     };
     let is_help = matches!(entry.kind, DialogKind::Help);
     let is_static = is_help
         || !is_select
-            && !matches!(entry.kind, DialogKind::SessionRename { .. } | DialogKind::WorktreeName);
+            && !matches!(
+                entry.kind,
+                DialogKind::SessionRename { .. }
+                    | DialogKind::WorktreeName
+                    | DialogKind::IntegrationKey { .. }
+                    | DialogKind::IntegrationCode { .. }
+            );
 
     // -- modal layer (dialog.tsx) -------------------------------------------
     if stroke.key == "escape" && !stroke.ctrl && !stroke.alt {
+        // Lane FINAL: closing an attempt view cancels it server-side
+        // (`onCleanup`'s cancel, dialog-integration.tsx:654-661).
+        if matches!(
+            entry.kind,
+            DialogKind::IntegrationPending { .. } | DialogKind::IntegrationCode { .. }
+        ) {
+            store.integration_cancel_active();
+        }
         store.close_dialog();
         return DialogKeyOutcome::Closed;
     }
@@ -124,7 +160,7 @@ pub fn handle_dialog_key(
             if is_select { !entry.select.filter.is_empty() } else { !entry.value.is_empty() };
         if has_text {
             store.update_dialog(|top| {
-                if matches!(top.kind, DialogKind::SessionRename { .. }) {
+                if is_prompt_kind(&top.kind) {
                     top.value.clear();
                 } else {
                     top.select.set_filter("", &props, usize::from(terminal.1));
@@ -142,7 +178,7 @@ pub fn handle_dialog_key(
         if let Some(ch) = stroke.key.chars().next() {
             let text = if stroke.shift { ch.to_ascii_uppercase() } else { ch };
             store.update_dialog(|top| {
-                if matches!(top.kind, DialogKind::SessionRename { .. } | DialogKind::WorktreeName) {
+                if is_prompt_kind(&top.kind) {
                     top.value.push(text);
                 } else {
                     let mut filter = std::mem::take(&mut top.select.filter);
@@ -156,7 +192,7 @@ pub fn handle_dialog_key(
     }
     if !is_static && stroke.key == "backspace" && !stroke.ctrl && !stroke.alt && !stroke.shift {
         store.update_dialog(|top| {
-            if matches!(top.kind, DialogKind::SessionRename { .. } | DialogKind::WorktreeName) {
+            if is_prompt_kind(&top.kind) {
                 top.value.pop();
             } else if !top.select.filter.is_empty() {
                 let mut filter = std::mem::take(&mut top.select.filter);
@@ -286,6 +322,72 @@ pub fn handle_dialog_key(
             return DialogKeyOutcome::Consumed;
         }
     }
+    // -- Lane FINAL: the pending attempt's modal keys ------------------
+    // `OAuthAuto`'s layer (dialog-integration.tsx:594-623): "o" opens
+    // the authorization URL, "c" copies it (the confirmation-code
+    // match falls back to the URL).
+    if let DialogKind::IntegrationPending { .. } = entry.kind {
+        if !stroke.ctrl && !stroke.alt && stroke.key.chars().count() == 1 {
+            let url = store.integration_attempt().map(|attempt| attempt.url).unwrap_or_default();
+            if stroke.key == "o" && !url.is_empty() {
+                store.open_url(&url);
+                return DialogKeyOutcome::Consumed;
+            }
+            if stroke.key == "c" && !url.is_empty() {
+                if store.clipboard_write(&url).is_ok() {
+                    store.toast_show(crate::components::toast::ToastOptions {
+                        message: "Copied to clipboard".to_owned(),
+                        variant: "info",
+                        ..crate::components::toast::ToastOptions::info("")
+                    });
+                }
+                return DialogKeyOutcome::Consumed;
+            }
+        }
+        return DialogKeyOutcome::Consumed;
+    }
+    // -- Lane FINAL: DialogConfig's change bindings --------------------
+    // footerHints' ←/→ (`bindings` left/right, dialog-config.tsx:
+    // 405-418): cycle the moved-to setting's values.
+    if let DialogKind::Settings = entry.kind {
+        if stroke.key == "left" && !stroke.ctrl && !stroke.alt {
+            if let Some(option) = entry.select.submit(&props) {
+                store.setting_cycle(&option.value.clone(), -1);
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+        if stroke.key == "right" && !stroke.ctrl && !stroke.alt {
+            if let Some(option) = entry.select.submit(&props) {
+                store.setting_cycle(&option.value.clone(), 1);
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+    }
+    // -- Lane FINAL: the Sessions dialog's delete action ---------------
+    // `session.delete` (dialog-session-list.tsx:255-279): two-press
+    // ctrl+d — the first arms the row (the confirm title), the second
+    // fires `session.remove`.
+    if let DialogKind::ServerList { command: "session.list", .. } = entry.kind {
+        if keymap.stroke_triggers(&stroke, "session.delete") {
+            if let Some(option) = entry.select.submit(&props) {
+                store.session_delete_pressed(&option.value.clone());
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+    }
+    // -- Lane FINAL: the accounts view's delete action -----------------
+    // `dialog.integration.delete` (dialog-integration.tsx:237-258):
+    // two-press ctrl+d over a credential row.
+    if let DialogKind::IntegrationAccounts { .. } = entry.kind {
+        if keymap.stroke_triggers(&stroke, "dialog.integration.delete") {
+            if let Some(option) = entry.select.submit(&props) {
+                if option.value != "add" {
+                    store.integration_account_delete(&option.value.clone());
+                }
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+    }
 
     // -- the dialog keymap layer (dialog.select.*) ---------------------------
     let Outcome::Command { command, .. } = keymap.lookup(stroke, clock) else {
@@ -317,6 +419,16 @@ pub fn handle_dialog_key(
     // selection move (`onMove: () => setToDelete(undefined)`).
     if matches!(entry.kind, DialogKind::Worktrees) {
         store.clear_worktree_delete();
+    }
+    // Lane FINAL: the same `onMove` contract for the sessions dialog's
+    // `toDelete` (dialog-session-list.tsx:242) and the accounts view's
+    // `deleting` (dialog-integration.tsx:173-176).
+    if matches!(
+        entry.kind,
+        DialogKind::ServerList { command: "session.list", .. }
+            | DialogKind::IntegrationAccounts { .. }
+    ) {
+        store.session_delete_disarm();
     }
     // The theme list PREVIEWS on every move (`onMove: (opt) =>
     // themes.set(opt.value)` — dialog-theme-list.tsx:28-30).
@@ -396,13 +508,26 @@ pub fn render_overlay_with_options(
         | DialogKind::Variant
         | DialogKind::Pair
         | DialogKind::Debug
-        | DialogKind::Timeline { .. } => true,
+        | DialogKind::Timeline { .. }
+        | DialogKind::Integration
+        | DialogKind::IntegrationAccounts { .. }
+        | DialogKind::IntegrationMethod { .. }
+        | DialogKind::IntegrationPending { .. }
+        | DialogKind::Settings
+        | DialogKind::ForkPicker { .. }
+        | DialogKind::SessionExport { .. }
+        | DialogKind::ExportResult { .. } => true,
+
         // A plugin dialog records rows only when its content is a
         // select (rows-only dialogs render statically).
         DialogKind::Plugin { .. } => {
             plugin.is_some_and(crate::store::PluginDialogContent::is_select)
         }
-        DialogKind::Help | DialogKind::SessionRename { .. } | DialogKind::WorktreeName => false,
+        DialogKind::Help
+        | DialogKind::SessionRename { .. }
+        | DialogKind::WorktreeName
+        | DialogKind::IntegrationKey { .. }
+        | DialogKind::IntegrationCode { .. } => false,
     } {
         crate::components::dialog_select::option_dialog_rows(
             props,
@@ -611,7 +736,8 @@ pub fn execute_submission(
             | DialogKind::Status
             | DialogKind::Pair
             | DialogKind::Debug
-            | DialogKind::Plugins,
+            | DialogKind::Plugins
+            | DialogKind::ExportResult { .. },
         ) => {
             store.clear_dialogs();
             return crate::components::command_palette::Dispatch::Handled;
@@ -761,9 +887,11 @@ pub fn execute_submission(
                 .unwrap_or_default();
             match command {
                 "session.revert" => {
-                    // `setPrompt(projectedPromptInput(value))`: the
-                    // message text lands in the composer (draft +
-                    // editing state kept in sync by the setter).
+                    // v2's dialog-message.tsx: revert.stage + the
+                    // projected prompt (`setPrompt(projectedPromptInput
+                    // (value))` — dialog-fork.tsx's codec shared here).
+                    store
+                        .session_action_sink_revert_stage(session_id.as_str(), message_id.as_str());
                     if !text.is_empty() {
                         let mut composer = store.composer(session_id.as_str());
                         composer.set_text(&text);
@@ -772,6 +900,11 @@ pub fn execute_submission(
                 }
                 "message.copy" => {
                     let _ = store.clipboard_write(&text);
+                }
+                "session.fork" => {
+                    // DialogFork with messageID forks immediately
+                    // (dialog-fork.tsx:38-40 — no picker).
+                    store.session_fork_submit(session_id.as_str(), Some(message_id.as_str()));
                 }
                 _ => {}
             }
@@ -813,6 +946,75 @@ pub fn execute_submission(
             }
             return crate::components::command_palette::Dispatch::Handled;
         }
+        // -- Lane FINAL: the connect flow's selects --------------------
+        // `DialogIntegration`'s `onSelect` (dialog-integration.tsx:
+        // 122-125): credentials → manage view; else method choice.
+        Some(DialogKind::Integration) => {
+            store.integration_select(value);
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // `manageConnections`' rows: "Add account" reopens the method
+        // choice; a credential row activates (status rows re-run the
+        // method flow).
+        Some(DialogKind::IntegrationAccounts { integration_id }) => {
+            if value == "add" {
+                store.integration_open_methods(integration_id.as_str());
+            } else {
+                let row = store.integration_row(integration_id.as_str());
+                match row.as_ref().map(|row| row.accounts.iter().find(|a| a.id == value)) {
+                    Some(Some(account)) if account.sign_in_required => {
+                        store.integration_open_methods(integration_id.as_str());
+                    }
+                    Some(Some(_)) => {
+                        store.integration_account_activate(value);
+                        store.clear_dialogs();
+                    }
+                    _ => store.clear_dialogs(),
+                }
+            }
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // `selectMethod`'s rows: open the picked method.
+        Some(DialogKind::IntegrationMethod { integration_id }) => {
+            if let Some(method) = store
+                .integration_row(integration_id.as_str())
+                .and_then(|row| row.methods.into_iter().find(|method| method.id == value))
+            {
+                store.integration_method_open(integration_id.as_str(), &method);
+            } else {
+                store.clear_dialogs();
+            }
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // `DialogConfig`'s `onSelect` (dialog-config.tsx:388):
+        // `change(1)` — cycle the row's values.
+        Some(DialogKind::Settings) => {
+            store.setting_cycle(value, 1);
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // `DialogFork`'s rows (dialog-fork.tsx:69-82): "" = the full
+        // session; a message id forks before it.
+        Some(DialogKind::ForkPicker { session_id }) => {
+            let before = if value.is_empty() { None } else { Some(value.to_owned()) };
+            store.clear_dialogs();
+            store.session_fork_submit(session_id.as_str(), before.as_deref());
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // The export destinations: "format:destination".
+        Some(DialogKind::SessionExport { session_id }) => {
+            if let Some((format, destination)) = value.split_once(':') {
+                store.session_export_submit(session_id.as_str(), format, destination);
+            } else {
+                store.clear_dialogs();
+            }
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // The informational pending view: submits are inert.
+        Some(DialogKind::IntegrationPending { .. }) => {
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // A sessions-list submit navigates (the shared session.list
+        // routing — including open.menu's large mount).
         _ => {}
     }
     store.clear_dialogs();
