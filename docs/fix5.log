@@ -1,0 +1,20 @@
+# FIX5 lane log — oc-tui serial chain (beta.13 real-env findings)
+
+## Phase A — token/pacing fixes (#3 #4 #5), code landed
+- #4 spinner: ThemeStyles.interactive = hue.interactive[200] (oc-tui/src/theme.rs);
+  StripColors.interactive; indicator_chunks paints it for the runs() case
+  (session_tabs_solid.rs). REF: session-tabs.tsx:200 (`<spinner color={props.color}>`),
+  :568/:1331 (activeNumber = theme.hue.interactive[200]), :1634-1641 (numberColor()
+  = runs() ? activeNumber() : ...). Old code used text.base — wrong token.
+- #5 gutter: thought_entry_row's ┃ now theme.background_prompt
+  (= tokens.decrease(background.raised.base, 1.0)); body stays text_muted.
+  REF: group-view.tsx:385-386 ThoughtEntry borderColor={theme.decrease(theme.background.raised.base)};
+  ui/border.ts:26 SplitBorder vertical "┃". Old code painted the ┃ text.muted.
+- #3 marquee: Marquee::next_step_ms (marquee.rs) + session_tabs_solid::marquee_next_step;
+  app.rs run loop wakes on the next 80ms boundary, pins store clock to it, plain
+  100ms tick gated to never cross a boundary; select sleep = min(deadline-now,100).
+  ROOT CAUSE: offset derives from store clock sampled only at ≥100ms-gated ticks
+  (event-driven), so an 80ms timeline advanced +0/+2 cells per render — the stutter.
+  REF: util/marquee.ts MARQUEE_DELAY=600/MARQUEE_INTERVAL=80 + createMarquee's
+  setInterval (session-tabs.tsx:279-369) — a steady interval timer, not redraws.
+- cargo check -p oc-tui PASS. Next: fmt+clippy+oc-tui tests gate, then bug #2 repro.
