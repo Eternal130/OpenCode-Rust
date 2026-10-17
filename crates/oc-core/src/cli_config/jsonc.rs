@@ -794,7 +794,7 @@ mod tests {
         let updated = modify(&updated, &["a"], None).expect("delete a");
         let updated = modify(&updated, &["c"], None).expect("delete c");
         let value = parse_jsonc(&updated).expect("parses");
-        assert_eq!(value.as_object().map(|o| o.len()), Some(0));
+        assert!(value.as_object().is_some_and(serde_json::Map::is_empty));
     }
 
     #[test]
