@@ -163,8 +163,8 @@ pub struct ThemeStyles {
     /// `theme.decrease(background.raised.base)` — the composer's prompt
     /// background (`promptBg`, also the selected tab pill's lift in the
     /// horizontal bar) AND the thought-expand gutter's border color
-    /// (`borderColor={theme.decrease(theme.background.raised.base)}`,
-    /// ThoughtEntry, group-view.tsx:385-386).
+    /// (the `ThoughtEntry` borderColor binding,
+    /// group-view.tsx:385-386).
     pub background_prompt: Color,
     /// `theme.hue.interactive[200]` — `activeNumber`
     /// (session-tabs.tsx:568/1331): the busy tab indicator's spinner
