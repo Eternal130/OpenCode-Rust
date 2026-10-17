@@ -27,6 +27,10 @@
 //!   first-divergent-cell classification, and degrade colors through the
 //!   TERM matrix (truecolor → 256 → 16).
 //!
+//! (2026-10-17 paradigm ruling: the side-by-side differential rig —
+//! `tui_diff`/`termatrix`, the tui-diff binary, corpus scripts and
+//! ref-capture cache — was REMOVED. Golden-frame regression tests stay.)
+//!
 //! HTTP is performed by a minimal localhost HTTP/1.1 client
 //! ([`minih`]): the harness only ever talks to `127.0.0.1`, and keeping it
 //! dependency-free keeps the harness buildable offline. The Phase-10 p10
@@ -40,8 +44,6 @@ pub mod reference;
 pub mod rust_server;
 pub mod scenario;
 pub mod sse;
-pub mod termatrix;
-pub mod tui_diff;
 pub mod tui_frame;
 
 pub mod minih;
