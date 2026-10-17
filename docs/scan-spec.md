@@ -1,20 +1,24 @@
 # The Scan Specification (扫描细则) — LIVING DOCUMENT
 
-Version: **v5** (SPEC-R6 verbatim-integration + ratification round). Protocol:
+Version: **v6** (SPEC-R7 convergence round — P3+P4+P5; FINAL candidate).
+Protocol:
 docs/scan-program.md. Lineage: v1 (R5 framework) -> SPEC-R1 (52 gaps;
 taxonomy-v2 [G][F][M]) -> v2 -> SPEC-R2 (30 gaps; [G][F][M] keystone;
 I8-I11) -> v3 -> SPEC-R3 (12 unowned families U1-U12 + 8 fold-amendments +
-clause rewrites) -> v4 -> **THIS v5** (SPEC-R5's 10 E-clause rewrites +
-3 amendments integrated verbatim; E-axis executable; baselines ratified in
-docs/spec-round6.md).
+clause rewrites) -> v4 -> v5 (SPEC-R5's 10 E-clause rewrites +
+3 amendments; E-axis executable; baselines ratified in
+docs/spec-round6.md) -> **THIS v6** (SPEC-R7: P3 executability riders
+B6/B7/B8/B9 + P3-D1 ref-runtime resolution + I2b ref-binary ground truth;
+P4 canary-coverage matrix + I5/I6/I8 amendments; P5 rewrites A2/B4/C6/D3/
+D11 + E2 legs; declared FINAL candidate in docs/spec-round7.md).
 
 **Integration rule (binding, per I11 — this round's correction):** clause text is
 carried VERBATIM from the round documents — R1 taxonomy-v2 rows, R2 §c rewrites,
-R3 §5 proposals, R5 §3 proposals (v5). Where v3 compressed or dropped a round's
+R3 §5 proposals, R5 §3 proposals (v5), R7 §2/§3/§4 proposals (v6). Where v3 compressed or dropped a round's
 text, the fuller round text is RESTORED, not summarized. Every clause carries **[G]ranularity /
 [F]idelity / [M]ethod** — an agent satisfying the letter must also satisfy the
-spirit — plus its source gap IDs `{…}` (R2-M-4). The appendix maps ALL 114 gap
-IDs (R1 52 · R2 30 · R3 12+8 · R5 12) to clauses/folds/justifications.
+spirit — plus its source gap IDs `{…}` (R2-M-4). The appendix maps ALL 129 gap
+IDs (R1 52 · R2 30 · R3 12+8 · R5 12 · R7 15) to clauses/folds/justifications.
 
 ## Standing instrument layer (binds EVERY clause)
 I1 REAL payloads end-to-end — no hand-set ids; chains from our own
@@ -22,6 +26,21 @@ I1 REAL payloads end-to-end — no hand-set ids; chains from our own
 I2 REAL plugin sandbox; **≥3 ecosystems + omo-slim first (restored)**, incl.
    marketplace fetch; ref+plugin = ground truth for plugin surfaces.
    {R1: S3-4, S4-3; R2: (a)S3-4, (a)S1-11}
+I2b **Plugin-era ground-truth binary**: for every plugin-surface comparison
+   (I2's ref+plugin pairing, A5, C6, D3, and any clause touching plugin-
+   rendered or plugin-registered content), the ground-truth ref = the **ref
+   2.0.25 binary** (the user's `/root/.opencode/bin/opencode`) + the current
+   plugin (omo-slim first), NOT the pinned 2.0.24 source tree: 2.0.24
+   **cannot load the current plugin generation** (`Cannot find module
+   'oh-my-opencode-slim/rpc'`; plugin shows failed in /plugins; evidence:
+   docs/rescan-findings.md §3-F10, ref-home log err_7b5efd85…d5244f41) —
+   any plugin-era parity claim differenced against 2.0.24 is **vacuously
+   true** (both sides broken ⇒ no divergence visible). Standing rule: every
+   plugin-era comparison records which ref form it used (source-2.0.24 for
+   non-plugin source parity; binary-2.0.25 for plugin-era), and an
+   instrument gate FAILS when the ref's plugin state ≠ active while ours is
+   active (and vice versa). {R7: G1, G2; evidence: RESCAN F10 + §1b/§1c of
+   docs/spec-round7.md}
 I3 Virtual clock for **ALL timed behavior** (cadence = drive source), not
    animation only: toast pause-on-activity, spinner 80ms (`spinner.tsx`,
    R5 pin), reconnect backoff (ref 1s/5s), leader/chord timeouts,
@@ -32,9 +51,31 @@ I5 Falsifiability: every clause names its evidence artifact. Standing in-repo
    instruments are BOUND as evidence artifacts (rounds must not rebuild ad-hoc):
    `golden_tests.rs`, `frame_budget_tests.rs`, `replay.rs`, `mouse_modes.rs`,
    `diff_viewer_golden_tests.rs`, ref `packages/simulation` tapes.
-   {R1: S4-7; R2: S4-6, S4-7}
+   {R1: S4-7; R2: S4-6, S4-7} **R7 extension (v6):** the list additionally
+   binds (R6/R7): `crates/oc-tui/tests/spec_e1_canary.rs`,
+   `spec_e5_canary.rs`, `spec_e2_tti.rs`, `spec_e12_first_pass.rs` (+ corpus
+   `tools/parity/spec-canaries/e12_search_corpus.json`),
+   `tools/parity/spec-canaries/e3_leak_canary.rs`,
+   `tools/parity/src/bin/rescan-tui.rs` (the plugin-armed live-capture
+   driver — the ONLY standing instrument proven to load the current plugin
+   generation on both stacks), and `tools/parity/spec-p3/` (ref/refbin/ours
+   TTI PTY probes + results). Rounds must not rebuild ad-hoc variants of
+   these. {R7: G8}
 I6 Miss-attribution ledger per finding (inventory-grade / fixture-happy /
-   adjudication-masking). {R1: S4-6}
+   adjudication-masking). {R1: S4-6} **R7 standing rule (v6) —
+   umbrella-adjudication masking (applies to ANY comparison instrument,
+   current or future):** an umbrella (b)-class (coarse mismatch classes —
+   e.g. coin-flip placeholder, digit drift, indexed color artifact) may
+   NOT absorb a step that contains animated/busy/indicator cells; steps
+   containing such cells require per-cell family classification. A closure
+   may not rest on identical mismatch counts versus a baseline ("19 ==
+   19") — it requires per-cell family evidence. Settle-then-capture
+   discipline may never be cited for animated-element parity (what the
+   capture never observed cannot be adjudicated equal). Evidence base:
+   RESCAN §4 (41 corpus steps absorbed across 2 scripts; the "no new
+   spinner class" conclusion was false at the element-family level —
+   RESCAN F3 proved a real busy-indicator divergence the umbrella had
+   swallowed). {R7: G7}
 I7 Bottom-up ref enumeration as feature completeness backstop, **quantified
    against the I10b package universe**. {R3: U12}
 I8 **Falsifiability canary — TIERED** (v4, per R3 §3/§5): per round one
@@ -44,7 +85,23 @@ I8 **Falsifiability canary — TIERED** (v4, per R3 §3/§5): per round one
    token-cell swap, B8 width-table perturbation, C4 write-path value drop,
    D1 event reorder + optional-field drop, F7 extra-fs-write + extra-network-call
    injection. An axis whose method can't catch the canary is redesign on the
-   spot. {R1: S4-7; R2: S4-2; R3: §3}
+   spot. {R1: S4-7; R2: S4-2; R3: §3} **R7 canary-coverage matrix (v6),
+   maintained per round** (a standing artifact under I5): RUN = canary
+   executed, PASS/FAIL recorded; DESIGNED = executable design bound, runs
+   before that axis's first evidence; NONE-DUE = axis has no evidence yet
+   (canary due at first evidence per the tier rule); OVERDUE = evidence
+   exists without an axis canary — must clear before further evidence
+   counts. Matrix at R7 close: RUN (5 legs, PASS) = E1, E3, E5; DESIGNED =
+   A1, B8, C4, D1, F7 (R3 §3 designs) + E2 (inject +250 ms one-shot delay
+   into a throwaway ours boot path, assert the measured T_interactive
+   shifts by ≥250 ms in that copy only — run before the E2 ratio verdict)
+   + E12 (poison one corpus cell — flip a matching string to non-matching
+   — assert `spec_e12_first_pass` flags exactly that query; binding before
+   the second pass, per R6 §6.3); all other axes NONE-DUE. Defer-or-design
+   rule (standing): an axis taking evidence MUST have its canary RUN first
+   (tier rule — unchanged); axes not yet taking evidence do not pre-build
+   canaries (designs land with the axis's method, as E2/E12 did in R7).
+   {R7: G9}
 I9 **Provenance ledger**: every fixture/capture records its source (real-run
    capture vs synthetic); synthetic data is never sole evidence.
    {R1: S4-2; R2: S4-3}
@@ -81,9 +138,14 @@ A1 Theme tokens x element x STATE matrix — state set = union {base, hover,
    cell capture; ref+plugin pair for plugin-painted cells [M] cell-diff harness
    vs ref frames incl. state injectors; ref token->element enumeration + vt
    capture diff. {R1: S5-1; R2: (a)S5-1}
-A2 Geometry (padding/gap/centering/truncation/wrap). [G] per surface x size
-   {40,60,80,120,160} + narrow/wide sweep [F] vt grid golden-frame capture
-   [M] golden-frame diff at width sweep; rule-by-rule vs ref.
+A2 Geometry (padding/gap/centering/truncation/wrap). [G] per surface
+   x size {40,60,80,120,160} + narrow/wide sweep [F] vt grid golden-frame
+   capture [M] golden-frame diff at width sweep, rule-by-rule vs ref;
+   **threshold = zero unexpected cell diffs per surface x width cell —
+   expected-diff classes are enumerated and dispositioned per cell
+   (glyph-width ambiguity is B8-owned; theme-token deltas are A1-owned;
+   anything else is a finding)**; artifact = per-surface x width diff
+   table + the golden corpus committed in-repo. {R7: G10}
 A3 Edge + huge data — **R2 §c rewrite, verbatim**: [G] widths {0,1,2,10,60,80,
    120,240} x msgs {0,1,2,10,1k,10k} x full part-kind enum (materialized from
    `oc-schema`, not prose) x wide-char set {pure CJK, mixed, combining, ZWJ
@@ -142,7 +204,16 @@ B3 Focus/layering/modality stacks. [G] per legal stack [F] routed-input trace
    [M] stack enumeration + key/pointer routing per stack.
 B4 Input methods: [G] per paste form (bracketed/image/large/WHATWG), IME
    composition, clipboard read/write (OSC 52) x size (incl. 100MB) [F] real
-   buffers/paste payloads [M] inject + observe; byte-level paste/clip traces.
+   buffers/paste payloads [M] inject + observe; byte-level paste/clip
+   traces; **threshold = byte-identical round-trip per form (bytes in =
+   bytes observed in the app's input buffer, modulo a documented
+   terminal-normalization class list: CRLF↔LF, bracket markers stripped by
+   the terminal, pasted-newline policy) — every normalization ours applies
+   that ref does not is a finding; OSC-52 write lands in the system
+   clipboard (asserted via clipboard readback tool) and read returns the
+   planted content; IME = preedit→commit sequence observed in the composer
+   trace**; artifact = per-form byte-trace pair (ours vs ref) +
+   normalization-class diff table. {R7: G11}
 B5 Terminal events (resize/focus/suspend/$EDITOR round-trip/mouse-mode
    transitions) per surface. [G] per surface x event x mid-state [F] capture
    [M] PTY event scripts; inject + state assertion.
@@ -152,7 +223,21 @@ B6 Terminal matrix — **R2 §c rewrite, verbatim**: [G] rows {xterm, kitty,
    selection, color-count fallback, undercurl, synchronized-output}; TM-1..10
    cells absorbed with signed/unsigned status. [F] real emulators (tmux live)
    + I10 pin [M] protocol-signature probe script + behavior capture per cell.
-   {R1: S3-1; R2: S5-1, (a)S3-1}
+   {R1: S3-1; R2: S5-1, (a)S3-1} **R7 executability rider (v6):** per B6
+   cell the runner emits {tool, threshold, environment, disposition}. Tool
+   = standing protocol-signature probe script (extend the TM-1..10
+   harness) + behavior capture pair (ours vs ref in the SAME emulator).
+   Threshold = (i) signature cells: exact response-byte equality for the
+   query set; (ii) behavior cells: frame parity ours-vs-ref at equal
+   window size in that emulator; a class-level diff (not byte-diff) for
+   animation cells per the I6 masking rule. Environment dispositions
+   (measured 2026-10-17): LIVE = tmux x{1,2}, no-TERM, 16-color, ssh
+   (loopback sshd); DOCKER = screen, xterm-under-Xvfb (container provides
+   Xvfb); DEFERRED-WITH-RECIPE = kitty, ghostty/wezterm-class (container
+   image per emulator + vt-dump compare; headless-render capability named
+   per emulator before the cell may close). Artifact = the cell table
+   with disposition column (executed / docker / deferred-recipe),
+   committed per round. {R7: G3}
 B7 Platform/env matrix — **R2 §c rewrite, verbatim + R3 folds**: [G] OS
    {linux, macOS, windows/ConPTY (mouse/resize/VT semantics, powershell
    profiles, CRLF in tool output, path separators, sound backend absence —
@@ -164,6 +249,17 @@ B7 Platform/env matrix — **R2 §c rewrite, verbatim + R3 folds**: [G] OS
    node}` backend split (fold 8). [F] clean envs; real envs where available
    [M] boot+smoke matrix script, cell table artifact; behavior diff per class.
    {R1: S3-2, S3-3; R2: S3-4, S3-5, (a)S3-2, (a)S3-3; R3: FOLD-4, FOLD-7, FOLD-8}
+   **R7 executability rider (v6):** env-cell runner = boot+smoke under
+   `env(1)` per cell; assert = boot reaches first frame AND one smoke
+   action completes; diff-vs-baseline-class table per cell. Environment
+   dispositions (measured 2026-10-17): LIVE = unset TERM, no HOME, no
+   PATH, no git/rg, read-only HOME, LANG x {C, en_US.UTF-8, non-UTF-8},
+   TZ absent, OPENCODE_* incl. CLI_CONFIG_CONTENT, SSH_TTY, CI vars,
+   docker; DEFERRED-WITH-RECIPE = windows/ConPTY (needs a real Windows
+   host — wine does not reproduce ConPTY semantics; recipe = CI windows
+   runner + the same runner script), macOS (recipe = CI macOS runner);
+   sound-backend-absence and per-OS named cells ride their OS
+   disposition. Artifact = matrix JSON + per-cell PASS/FAIL. {R7: G4}
 B8 **Width implementation** (v4 rewrite per R3 §2): [G] per codepoint class
    {pure CJK, mixed, combining, ZWJ family, VS16, East-Asian Ambiguous} at OUR
    unicode-width version vs ref's width calculation; grapheme clustering;
@@ -172,7 +268,16 @@ B8 **Width implementation** (v4 rewrite per R3 §2): [G] per codepoint class
    corpus checked in; surface binding NAMED (wrap engine, input echo, diff
    viewer, mini). [F] I10 version-pinned tables [M] corpus sweep +
    cursor-desync diff vs ref; I8 canary = width-table perturbation must desync
-   exactly the perturbed classes. {R2: S3-3; R3: §2-B8}
+   exactly the perturbed classes. {R2: S3-3; R3: §2-B8} **R7 executability
+   rider (v6):** tool = committed corpus runner that renders each corpus
+   string through both width implementations and compares **cursor-cell
+   position** (the clause's pass criterion); corpus = the codepoint-class
+   set of the clause, checked in (extends A3's wide-char set). Threshold =
+   zero desync on the unperturbed corpus, per class; the I8 canary
+   (width-table perturbation desyncs EXACTLY the perturbed classes) runs
+   BEFORE the first B8 evidence is accepted (designed, not yet run — no
+   B8 evidence exists yet, so the I8 tier order is intact). Artifact =
+   per-class cursor-position table ours vs ref. {R7: G5}
 B9 **Remote/hosting matrix** (RESTORED v4 — R2's §c-B8 text; v3 reused the B8
    number for width and dropped this; deep cell pass owned by P2/P3): [G]
    {ssh, mosh, tmux-over-ssh, container, CI, dumb-tty} x {echo latency under
@@ -181,6 +286,18 @@ B9 **Remote/hosting matrix** (RESTORED v4 — R2's §c-B8 text; v3 reused the B8
    env where available + I9 [M] degraded-env boot + echo matrix; cell table
    artifact. Would catch echo-lag and redraw-storm classes invisible on a
    local pty; boot failure in devcontainer. {R2: S3-1, S3-2, §c-B8; R3: §5-nonP1}
+   **R7 executability rider (v6):** per B9 cell {tool, threshold,
+   disposition}. Environment dispositions (measured 2026-10-17): LIVE =
+   ssh (loopback sshd), tmux-over-ssh, container (docker daemon OK), CI
+   env vars, dumb-tty (TERM=dumb), shaped link (tc, root: 100ms+ RTT
+   latency + loss); DOCKER/RECIPE = mosh (mosh MISSING on host; container
+   pair mosh-client/mosh-server over UDP). Threshold = per cell:
+   boot-succeeds under the degraded env + echo-latency matrix
+   (send→echo p50/p95 under each shaped RTT, ours vs ref same shaping) +
+   redraw-storm ceiling (frames-per-second under a full-redraw trigger,
+   ours ≤ ref ×2); read-only-HOME/no-/dev/pts cells assert the documented
+   failure-or-degrade behavior, not silence. Artifact = cell table +
+   latency CSV per shaped profile. {R7: G6}
 
 ## C — Behavior / State Machines
 C1 Session lifecycle: [G] materialized from x to x trigger x UI-effect
@@ -212,7 +329,13 @@ C5 Error/recovery paths: [G] per failure {server loss, plugin crash, partial
 C6 Plugin lifecycle x UI: [G] install/enable/disable/update/fail x UI x
    storage/RPC (PluginStorage, NoopRpcPort) x phase; feature-plugin SLOT
    architecture slots are surfaces (R3 fold 5). [F] I2 real plugins, real
-   payloads [M] lifecycle drive + capture. {R1: S1-11; R2: (a)S1-11; R3: FOLD-5}
+   payloads [M] lifecycle drive + capture, **with a three-layer state
+   assert per lifecycle op: (1) plugin-state API/UI cell, (2) storage
+   write (PluginStorage keys), (3) RPC/registration effects — and parity
+   differenced against the I2b ref-binary leg (2.0.25 + plugin); each
+   layer divergence per op x phase is a finding, not a capture-only
+   record**; artifact = per-op x phase state-transition table ours vs ref
+   (I2b). {R1: S1-11; R2: (a)S1-11; R3: FOLD-5; R7: G12}
 C7 Background jobs surface. [G] per job state x surface [F] long-running real
    job [M] async replay + observe.
 C8 Worktree family — **R2 §c rewrite, verbatim**: [G] {create, adopt, refresh,
@@ -312,8 +435,14 @@ D2 REST: [G] endpoint x consumer x happy path x every documented error code x
    [F] actual client calls, live traces [M] proxy capture + shape/status
    assert. {R1: S5-9}
 D3 Plugin-host boundary: [G] per API surface x real payload (omo-slim + ≥2
-   other ecosystems) [F] I2 [M] host-adapter taps, boundary trace.
-   {R1: S3-4}
+   other ecosystems) [F] I2 [M] host-adapter taps, boundary trace —
+   **compared against the I2b ref-binary leg with a per-call disposition
+   column: {parity | absent-API-on-ours (finding, F1/F7-class) |
+   plugin-never-calls (justified)}; a trace with no comparison oracle is
+   not evidence; an API the plugin calls on ref and cannot call on ours
+   is a FINDING by definition (the vacuous-truth hazard I2b exists
+   for)**. Artifact = per-surface call matrix (args + response shapes)
+   with the disposition column. {R1: S3-4; R7: G13}
 D4 Persistence: [G] per table/column/row-kind writer-reader pair (**pairing
    bookkeeping explicit — unpaired writers/readers must be listable**); per
    state-file key; CELL-level migration diffs; **longitudinal shapes** (state
@@ -358,8 +487,14 @@ D10 **Code Mode + plugin-browser** (RESTORED v4 — R2's §c-D9 / U2; v3 reused
 D11 **SDK/client package** (RESTORED v4 — R2's §c-D10, silently vanished in
    v3; R3 left the fold decision to R4 -> CLAUSE): [G] public SDK + client
    shapes the app/SDK consumers rely on x consumer {ref app, external} —
-   versioned [F] I10 versioned pins [M] shape-compat assert per release
-   (breaking-change diff). {R2: §c-D10; R3: §5-nonP1}
+   versioned [F] I10 versioned pins [M] **shape extraction = type-level
+   export diff per pinned version pair (public entrypoints: named
+   exports, function signatures, type aliases — via the ref's own type
+   tooling against `packages/sdk`/`packages/client` .d.ts); threshold =
+   zero un-dispositioned breaking changes between consecutive pinned
+   versions (breaking = removed/renamed export or widened signature;
+   additive changes recorded, non-blocking)**; artifact = per-version-pair
+   diff report committed with the round. {R2: §c-D10; R3: §5-nonP1; R7: G14}
 
 ## E — Cross-cutting Quality
 E1 Perf FEEL: [G] interaction × load matrix, cells = {typing, scroll, dialog
@@ -387,7 +522,18 @@ E2 Startup TTI: [G] boot → first-interactive per surface {tui, mini, webui,
    appears exactly when 500ms elapses and escalates at 3s (thresholds
    pinned from ref `startup-loading.tsx`: 500ms show, 3000ms gate);
    (b) baseline — ours T_interactive median ≤ ref ×1.5.
-   {R1: S2-2; R2: S2-1; R5: Q2}
+   {R1: S2-2; R2: S2-1; R5: Q2} **R7 legs amendment (v6):** the ref
+   baseline is TWO legs, both N=10, same PTY probe: (i) **source-dev
+   leg** (I10-pinned 2.0.24 tree, `bun run dev` from `packages/cli`;
+   dev-transpile overhead included — recorded as the source-parity
+   leg), (ii) **binary leg** (I2b 2.0.25 user binary — the
+   user-comparable leg). The ×1.5 ratio gates on the **binary leg**; the
+   source leg is recorded for drift detection. Ours T0 for the ratio =
+   process spawn (harness-attach numbers are recorded separately and are
+   never ratio-eligible). Measured (2026-10-17, R7): ref source-dev
+   T_interactive median **5250 ms** (p95 5300), ref binary median
+   **2300 ms** (p95 2400); ours process-spawn leg pending (field run;
+   recipe committed in `tools/parity/spec-p3/`). {R7: G15}
 E3 Memory growth (soak): [G] per session shape {idle session open,
    streaming session completed, 10k-msg transcript open, plugin-active}
    × ≥2 runs × ≥4h (or 1×24h); metrics = VmRSS + RssAnon + FD count
@@ -563,6 +709,18 @@ F7 **Negative-space parity** (v4 rewrite per R3 §2): [G] per surface x action;
   appendix +12 rows → 114. Canaries (E1/E3/E5, 5 legs) + measured
   baselines + zero-loss table: docs/spec-round6.md. NEXT: P3 (adversarial
   deepening; directives in docs/spec-round6.md).
+- v6: SPEC-R7 convergence round integrated (P3+P4+P5): 1 new clause (I2b
+  plugin-era ground-truth binary — the RESCAN F10 vacuous-truth hazard);
+  4 executability riders (B6/B7/B8/B9 — tool/threshold/disposition per
+  environment, availability measured 2026-10-17); P3-D1 resolved WITH
+  measurements (ref TTI both legs N=10: source-dev 5250 ms / binary 2300
+  ms median; launch-path + port discipline recorded; E2 legs amendment);
+  P4: I-layer audit 12/12 grounded, I8 canary-coverage matrix + E2/E12
+  canary designs, I6 umbrella-masking standing rule, I5 instrument
+  extension; P5: stratified-random (seed 7) 15-clause stress — rewrites
+  A2/B4/C6/D3/D11; appendix +15 rows → 129. Verdict: P3/P4/P5 CLOSED →
+  **FINAL candidate**; next RATIFY-1/RATIFY-2 per docs/scan-program.md.
+  Report: docs/spec-round7.md.
 
 ---
 
@@ -572,7 +730,7 @@ Every gap ID ever emitted by a round maps to exactly one destination below.
 Status legend: **C** = owning clause (text in this file) · **A** = amendment/
 named cell folded into an existing clause · **OOC** = out-of-scope with
 justification (I10b). Counts: R1 52/52 · R2 30/30 · R3 20/20 · R5 12/12
-= **114/114**.
+· R7 15/15 = **129/129**.
 
 ### R1 gaps (52)
 
@@ -707,6 +865,26 @@ justification (I10b). Counts: R1 52/52 · R2 30/30 · R3 20/20 · R5 12/12
 | R5-Q10 | E12 committed corpus JSON + rank-order fuzzy parity | E12 (v5 rewrite) | C |
 | R5-Q11 | devtools DevTools.register observability groups | F2 standing accounting entry | A |
 | R5-Q12 | F7 ref-side-emission pre-dispositions (openTelemetry, event-logger, stats) | F7 amendment | A |
+
+### R7 gaps (15)
+
+| Gap | Destination | Status |
+|---|---|---|
+| R7-G1 | plugin-era ground truth = ref 2.0.25 binary + plugin (2.0.24 cannot load plugins; vacuous-truth hazard, RESCAN F10) | **I2b** (new clause) | C |
+| R7-G2 | ref-runtime provisioning resolved: launch-path (packages/cli, tsconfig-by-CWD) + managed-service port/detached-server discipline | I2b (method) + E2 (legs) | A |
+| R7-G3 | B6 executability: per-cell tool/threshold/environment/disposition table | B6 rider | A |
+| R7-G4 | B7 executability: env(1) boot+smoke runner, per-cell dispositions incl. ConPTY/macOS recipes | B7 rider | A |
+| R7-G5 | B8 executability: corpus runner tool + zero-desync threshold + canary-before-evidence | B8 rider | A |
+| R7-G6 | B9 executability: per-cell dispositions (ssh/tmux/docker/tc LIVE; mosh recipe) + echo-latency + redraw-storm thresholds | B9 rider | A |
+| R7-G7 | umbrella-adjudication masking standing rule (RESCAN §4; any-instrument scope) | I6 rider | A |
+| R7-G8 | standing-instrument list extension (R6/R7 canary + TTI + E12 + rescan-tui + spec-p3 probes) | I5 rider | A |
+| R7-G9 | canary-coverage matrix (RUN/DESIGNED/NONE-DUE/OVERDUE) + E2 delay-injection + E12 corpus-poisoning designs + defer-or-design rule | I8 rider | A |
+| R7-G10 | A2 threshold/artifact (zero unexpected cell diffs; expected-class disposition) | A2 (v6 rewrite) | C |
+| R7-G11 | B4 threshold/artifact (byte-identical round-trip + normalization-class list + OSC-52/IME asserts) | B4 (v6 rewrite) | C |
+| R7-G12 | C6 three-layer state assert + I2b parity target | C6 (v6 rewrite) | C |
+| R7-G13 | D3 comparison oracle + per-call disposition column (absent-API = finding) | D3 (v6 rewrite) | C |
+| R7-G14 | D11 tool/threshold/artifact (type-level export diff, zero un-dispositioned breaking) | D11 (v6 rewrite) | C |
+| R7-G15 | E2 two ref legs (source-dev + binary), ratio gates on binary leg, measured N=10 both | E2 rider | A |
 
 R3 §2 clause-stress verdicts (9 rows) are cured by the v4 rewrites of
 A8/B8/C13/C14/C15/C16/D9/F6/F7 — each rewritten clause carries its R3 §2
