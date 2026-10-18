@@ -1514,6 +1514,9 @@ async fn session_projector_fork_copies_settled_history() {
         .expect("fork");
 
     let fork = stack.store.get("ses_fork_child").await.unwrap().expect("fork row");
+    // CD-2: the child carries BOTH linkages — the parent→child chain
+    // (`parent_id`) and the fork source (`fork_session_id`).
+    assert_eq!(fork.parent_id.as_deref(), Some(parent));
     assert_eq!(fork.fork_session_id.as_deref(), Some(parent));
     assert_eq!(fork.title.as_deref(), Some("ses_fork_parent (fork #1)"));
     let copied =

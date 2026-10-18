@@ -12,6 +12,24 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+/// CD-9 (scan-cd): several flow tests mutate PROCESS-GLOBAL environment
+/// variables (`GITLAB_OAUTH_CLIENT_ID` in the pkce/bundled pair,
+/// `GOOGLE_APPLICATION_CREDENTIALS` in the adc/service-account pair).
+/// Under default parallelism the mutations interleave: the bundled test
+/// sees the pkce test's client id (its rejection expectation flips and
+/// its connect grabs loopback 8080 out from under the pkce test), and
+/// the adc test reads the service-account file mid-flight. Serializing
+/// the env-mutating tests on one lock keeps the suite green under
+/// default threads WITHOUT weakening any assertion (the register's
+/// repro: 3/41 fail parallel, 41/41 pass serial).
+static ENV_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Guards a test body against concurrent process-env mutation: hold the
+/// CD-9 lock for the duration.
+async fn env_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    ENV_TEST_LOCK.lock().await
+}
+
 async fn host() -> Arc<IntegrationHost> {
     let (host, _bus) = host_with_bus().await;
     host
@@ -923,6 +941,7 @@ async fn wait_complete(
 async fn gitlab_pkce_flow_round_trip_against_mock() {
     use base64::Engine;
     use sha2::{Digest, Sha256};
+    let _env = env_guard().await;
     // GitLab pins redirect port 8080 — a busy port is an environment
     // conflict (v2 fails identically), documented-skip.
     if tokio::net::TcpListener::bind(("127.0.0.1", 8080)).await.is_err() {
@@ -1005,6 +1024,7 @@ async fn gitlab_pkce_flow_round_trip_against_mock() {
 
 #[tokio::test]
 async fn gitlab_bundled_client_rejected_off_gitlab_com() {
+    let _env = env_guard().await;
     #[allow(unsafe_code)]
     unsafe {
         std::env::remove_var("GITLAB_OAUTH_CLIENT_ID");
@@ -1980,6 +2000,7 @@ async fn vertex_adc_binding_refreshes_and_binds_the_native_route() {
     use crate::engine::resolver::CatalogModelResolver;
     use crate::provider_catalog::facade::FacadeContext;
 
+    let _env = env_guard().await;
     // 1. an authorized-user ADC file in a temp HOME + explicit
     //    GOOGLE_APPLICATION_CREDENTIALS
     let dir = tempfile::TempDir::new().expect("tempdir");
@@ -2067,6 +2088,7 @@ async fn vertex_adc_binding_refreshes_and_binds_the_native_route() {
 
 #[tokio::test]
 async fn vertex_service_account_adc_defers_to_env_adc() {
+    let _env = env_guard().await;
     let dir = tempfile::TempDir::new().expect("tempdir");
     let adc_path = dir.path().join("sa.json");
     std::fs::write(

@@ -463,6 +463,18 @@ impl LocationPluginSource for HostPluginSource {
             timeout: TOOL_TIMEOUT,
         }))
     }
+
+    fn commands(&self) -> Vec<oc_core::plugin_apply::PluginCommandDef> {
+        self.host
+            .registrations()
+            .commands
+            .iter()
+            .map(|command| oc_core::plugin_apply::PluginCommandDef {
+                name: command.name.clone(),
+                description: command.description.clone(),
+            })
+            .collect()
+    }
 }
 
 /// `tool.transform` registrations dispatch to the guest's

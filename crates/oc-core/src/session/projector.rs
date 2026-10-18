@@ -700,13 +700,19 @@ fn project_fork(tx: &mut Tx<'_>, event: &DurableEvent) -> Result<()> {
     let copied_seq = copied;
 
     let fork_boundary = encode_json(&event.data["boundary"]);
+    // CD-2 (scan-cd): the child row carries BOTH linkages — `parent_id`
+    // (the parent→child chain D5 consumers navigate) and
+    // `fork_session_id` (the fork source, `fork.sessionID`) — so the
+    // same parent id binds into both columns. The previous VALUES
+    // hardcoded NULL for `parent_id`, leaving every fork child detached
+    // from its parent chain (ref children carry parentID + fork{...}).
     let inserted = tx.execute(
         "INSERT OR IGNORE INTO session_v2 \
          (id, project_id, workspace_id, parent_id, fork_session_id, fork_boundary, slug, directory, \
           path, title, version, metadata, permission, agent, model, cost, tokens_input, \
           tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, time_created, \
           time_updated) \
-         VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, 0, 0, 0, \
+         VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, 0, 0, 0, \
           0, 0, ?15, ?15)",
         rusqlite::params![
             fork_session,
