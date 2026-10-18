@@ -149,7 +149,14 @@
 - Carried: needs-auth (OAuth MCP) + elicitation-blocked live cells (elicitation.rs port present; needs a real authenticated MCP server — no standing instrument; code-level verified only).
 
 *(next: C13)*
-*(execution continues — second tier: C13/C15/C16/C20/D2/D3/D4)*
+### CD-30 (INFO) — C13 verified-parity rows + LOW carry-notes
+- **Source enum (v9 census re-run)**: `skill.ts:45` Directory|Url|Embedded ↔ `oc-schema/src/skill.rs:26-33` exact; config wiring paths/urls (`normalize.ts:243-244` ↔ ours normalize skills list).
+- **Live directory discovery**: `.opencode/skill/probe-skill/SKILL.md` (named dir) AND `.opencode/skill/flat.md` (flat `*.md`) both discovered with {id,name,description,path,content}; builtins {opencode, report} present (`engine/skill/opencode.md` + `report.md`); non-md file ignored. `GET /api/skill` shape = ref fields {id,name,description,autoinvoke,path,content}.
+- **URL-fetch failure path (live)**: unreachable URL in `skills` → boot survives, builtins still listed, the URL source silently contributes nothing — **no diagnostic surfaced** (LOW carry-note: ref records fetch diagnostics; surfacing parity unverified).
+- Code-level: `session.skill.activated` event in schema ✓; skill tool (`tool/skill.rs`) + permission phase present; embedded-via-plugin path exists (schema) — no live plugin-skill instrument in this lane (I2 sandbox = D3's leg); dialog-skill UI cell rides C16.
+
+*(next: C15, C16, C20)*
+*(execution continues — second tier: C15/C16/C20/D2/D3/D4)*
 
 
 
