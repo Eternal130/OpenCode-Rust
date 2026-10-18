@@ -3,7 +3,7 @@
 > Orchestrator scratch state for the parity loop (docs/PARITY-LOOP.md).
 > Updated at the end of every iteration. Not a task queue — the ledger is.
 
-- **updated**: 2026-10-18 (iteration 1 — B0-1 + B0-8 merged; B0-2 baseline in progress, p10 reds under triage)
+- **updated**: 2026-10-18 (iteration 1 — B0-1/B0-8/B0-2 merged; next: B0-4 guards)
 - **batch**: 0 — NOT exited (B0-1..B0-9 pending/in progress; no product bug fixes allowed)
 - **iteration**: 1
 - **baseline**: main @ eb4023d (pre-bootstrap) → bootstrap commit adds PARITY-LOOP.md / ledger seed / ledger tool / this file
@@ -13,9 +13,10 @@
 | lane | task | worktree | branch | owner | write scope | status |
 |---|---|---|---|---|---|---|
 | lane-b0-ledger | B0-1 ledger import | removed (merged) | `lane/b0-ledger` | fixer→verifier | `docs/parity-ledger.jsonl`, `tools/parity-import.py`, `docs/parity-ledger-reconciliation.md`, `tools/parity-ledger.py` (owner-empty relaxation) | **MERGED @e2b5b73** (lane commit f04f986, verifier PASS) |
+| lane-b0-gates | B0-2 gate skeletons | removed (merged) | `lane/b0-gates` | fixer→verifier | `tools/parity/tests/**` (5 new gates + p10_common), `goldens/p10/known-red.json`, `known-red-summary.py`, README, baseline §3 | **MERGED @3eea5fa** (lane commit f7b44f4, verifier PASS) |
 | ~~lane-b0-gate0~~ | B0-8 Gate 0 env | removed (merged) | `lane/b0-gate0` | fixer→verifier | `tools/parity/src/*` skip/strict seam, `docs/parity-b0-gate0.md` | **MERGED @729725d** (lane commit 0d95bbf, verifier PASS) |
 
-WIP: 0 active lanes. Full p10 baseline re-run (no-fail-fast) in flight as orchestrator background shell.
+WIP: 0 active lanes.
 
 ## B0-1 record (complete)
 
@@ -34,18 +35,18 @@ WIP: 0 active lanes. Full p10 baseline re-run (no-fail-fast) in flight as orches
   3. `rescan-tui.rs` pre-existing clippy debt — B0-2 baseline known-red.
   4. `env-identity.log` artifact is root-owned (content correct) — capture-process slip only.
 
-## Ledger snapshot (pre-B0-1)
+## Ledger snapshot (post-B0-2)
 
-- rows=114 (open=112, needs-runtime=2)
-- severity: S0=6, S1=106, S2=2
-- clusters: CRED 10, PLUGIN 14, RUNTIME 6, WIRE 16, CONFIG 13, TUI 24, AI 15, DB 6, TOOLS-EXEC 7, SURFACES 3
-- B0-1 target: import 16 scan reports (386 raw records → ~340 unique), fingerprint dedupe, `validate --paths` = 0 errors, reconciliation doc explains 386→unique delta.
+- rows=376 (open=366, needs-runtime=10)
+- severity: S0=6, S1=112, S2=236, S3=22
+- imported 367 (B0-1) + 5 known-red (B0-2 baseline) + 4 gate-gap divergences (B0-2 skeletons)
+- known-red registry: `tools/parity/goldens/p10/known-red.json` (5 ids; expiry Batch 1B / Batch 0); summary tool exit-0 semantics verified adversarially by B0-2 verifier.
 
 ## Batch 0 checklist
 
 - [x] B0-1 台账导入 — **DONE** (merged @e2b5b73; 367 rows, validate --paths errors=0, 407→367 reconciled)
 - [x] B0-8 Gate 0 双端环境 — **DONE** (merged @729725d; OC_GATE_STRICT fail-not-skip live; lane bun discovery works; ref/rust boot evidence recorded)
-- [~] B0-2 基线 — in progress: workspace `nextest --workspace --locked --no-fail-fast` → **3391/3391 passed, 10 skipped, 0 failed** (1 leaky flag); `fmt --all --check` OK; clippy `-p parity` → 15 errors ALL in pre-existing `tools/parity/src/bin/rescan-tui.rs` (byte-identical to main, known-red); **p10 strict battery RED on main@729725d**: `p10_ts_tui_against_rust_server` (rename never reached v2 session row; ref-side poll timeout) + `p10_db_interop_stable_channel_same_file` (v2 did not read model switch) — full no-fail-fast re-run in flight for complete picture + flake-vs-deterministic classification. Remaining: docs/parity-baseline.md + 5 gate skeletons + known-red ledger entries.
+- [x] B0-2 基线 — **DONE**: `docs/parity-baseline.md` @fe2a97d; five gate skeletons + known-red registry + known-red-summary.py merged @3eea5fa (lane f7b44f4, verifier PASS incl. adversarial script tests); post-merge: default suite 103/14 skip, strict battery verdict **clean** (3 KNOWN-RED registered, 1 MISSING-PREREQ by design, 0 NEW-RED, exit 0); +4 gate-gap divergence entries (GATE-GAP-CURSOR-PAGE/TUI-FOOTER/CLI-JSON-EPOCH/RUN-JSON-EVENTS) → ledger 376 rows. Polish nits (non-blocking, recorded): stale comment p10_db_interop.rs:~637 "panics"→Err; README lacks OPENCODE_RG_PATH note; baseline §3 Gate-4 row understates certified chrome rows.
 - [ ] B0-4 静态守卫 tools/guards/*（目录尚不存在，需从零建）
 - [ ] B0-5 ADR 0001–0005
 - [ ] B0-7 测试隔离债（legacy pkill 脚本登记、root-owned auth_e2e.rs、8080 skip 语义）
