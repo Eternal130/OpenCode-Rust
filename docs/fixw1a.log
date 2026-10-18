@@ -1,0 +1,52 @@
+# FIXW1A work log (oc-tui lane; SCAN-AB register fixes)
+
+Worktree: /opt/opencode-rust/.worktrees/lane-fixw1a (branch lane/fixw1a, base f5196af = main).
+Spec: docs/scan-ab-findings.md. Standing rules honored: no background tasks,
+foreground gates ≤45 min, append-only log, English, fmt+clippy+affected-crate
+tests per gate, final report pastes `git log --oneline -1 lane/fixw1a`.
+
+## 2026-10-18 — session start
+
+Survey done (spec + code + scan artifacts under /tmp/opencode/scanab):
+
+- SA-F5: FIX5 bridge = crates/oc-plugin-host/src/host/host.js (load.tui +
+  slot.materialize flatten). Badge source: `def.tui(api, opts, {version:
+  domainBase.appVersion})` → plugin renders `v${meta.version}` (omo tui2.js
+  31120: `meta.version ?? readPackageVersion()`). Colors: our native painter
+  renders plugin rows fg=fg_muted (idx8) / header fg_base+BOLD (idx255+1);
+  ref renders BOTH idx15 (system white), bg idx233 both sides, mods=0
+  (decoded ref-session-00.styles.txt y13-y19). Padding: ref rows
+  `• name<pad>default` with default right-aligned at content col 155
+  (36-cell content, start col 120 both sides); ours joins with single space
+  (host.js treeLines `.join(" ").replace(/ {2,}/g," ")`). Plan: meta.version
+  from the plugin's own package.json; mini row-layout (width/marginLeft/
+  space-between) at a pushed content width; painter white/no-bold.
+- SA-F6: driver sends `/plugins` + \r (rescan-tui.rs:550-556). Ref: slash
+  registry entry from feature-plugins/system/plugins.tsx:337-347
+  (`plugins.list`, title "Plugins", slash name "plugins"); Enter on the
+  filtered popup selects → dialog. Ours: V2_SLASH/SLASH_COMMANDS have NO
+  `plugins` entry; DialogKind::Plugins exists (command_palette.rs:797).
+  Ref dialog shape: DialogSelect "Plugins" + Search + "No items available"
+  (shared empty placeholder, dialog-select.tsx:723) + footer hint
+  "ctrl+a show internal". Our dialog_solid already defaults empty text to
+  "No items available".
+- SA-F3: app.rs:5411-5424 — the marquee "steady ticker" pin branch can
+  NEVER fire: marquee_next_step(now) returns a STRICTLY-FUTURE boundary
+  (k = (now-start)/80 + 1 ⇒ start + k·80 > now), so `deadline <= now_ms`
+  is always false. Clock advances only on the plain 100ms branch; wakes
+  land every 80ms so the 100ms threshold fires every OTHER boundary →
+  clock jumps +160ms → offset +2 cells per render → ~166ms/step. Fix:
+  pin to the last PASSED boundary each iteration while scrolling.
+- SA-F13: input thread (app.rs:4763-4776) loops `crossterm::event::read()`
+  forever; it only exits when a key arrives after the receiver dropped.
+  A second boot's thread races the zombie for crossterm's global reader
+  lock; the zombie eats the first key(s) → dead chord on leg 2. Fix:
+  poll(50ms)+stop-flag thread with a Drop guard (also covers cancel).
+- SA-F7: VERIFIED ref pairing from ref source: `+` release → `tabs.add()`
+  → `route.navigate({type:"home"})` (context/session-tabs.tsx:406-420).
+  The ref does NOT create a tab; ours already navigates Home
+  (app.rs:575 StripHit::Add). Disposition: parity already holds; pin with
+  a test instead of changing behavior.
+
+Next: gate baseline (fmt/clippy/test oc-tui + oc-plugin-host), then
+implement in order SA-F6 → SA-F5 → SA-F3 → SA-F13 → S2 set.
