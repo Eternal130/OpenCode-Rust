@@ -14,7 +14,8 @@ use std::collections::BTreeMap;
 
 // The render port keeps the reference's shape (one long body render).
 
-/// One selectable option of a field.
+/// One selectable option row of a field (`formRows` — synthesized for
+/// booleans as the Yes/No pair, `util/form.ts:47-61`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FormOption {
     pub value: String,
@@ -23,7 +24,24 @@ pub struct FormOption {
     pub description: Option<String>,
 }
 
-/// `FormField` kinds the footer renders (wire `type` tags).
+/// A rendered row's value: option strings, or the boolean pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FormRowValue {
+    Str(String),
+    Bool(bool),
+}
+
+/// `formRows`'s row: value + label (+ description).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormRow {
+    pub value: FormRowValue,
+    pub label: String,
+    pub description: Option<String>,
+}
+
+/// `FormField` kinds the footer renders (wire `type` tags — the v2
+/// `Form.Field` family, `oc-schema/src/form.rs`: string [with
+/// options], multiselect, boolean, number, integer, external).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum FieldKind {
@@ -31,18 +49,39 @@ pub enum FieldKind {
     Text {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         placeholder: Option<String>,
+        /// Option list — a string WITH options renders as a picker
+        /// (`formRows`: `field.type === "string" ? field.options`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        options: Option<Vec<FormOption>>,
+        /// `"custom": true` — custom answers allowed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        custom: Option<bool>,
+        #[serde(rename = "minLength", default, skip_serializing_if = "Option::is_none")]
+        min_length: Option<u64>,
+        #[serde(rename = "maxLength", default, skip_serializing_if = "Option::is_none")]
+        max_length: Option<u64>,
     },
-    Select {
-        #[serde(default)]
-        options: Vec<FormOption>,
-        /// `"other": true`-style custom answers allowed.
-        #[serde(default)]
-        custom: bool,
-    },
-    #[serde(rename = "multiselect")]
     Multiselect {
         #[serde(default)]
         options: Vec<FormOption>,
+        /// `"custom": true`-style custom entries allowed
+        /// (`formCustom`: multiselect is custom only when the flag is
+        /// set — util/form.ts:41-45).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        custom: Option<bool>,
+    },
+    Boolean,
+    Number {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        minimum: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        maximum: Option<f64>,
+    },
+    Integer {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        minimum: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        maximum: Option<f64>,
     },
     External {
         url: String,
@@ -71,7 +110,13 @@ impl FormField {
             title: Some(title.into()),
             description: None,
             required: false,
-            kind: FieldKind::Text { placeholder: None },
+            kind: FieldKind::Text {
+                placeholder: None,
+                options: None,
+                custom: None,
+                min_length: None,
+                max_length: None,
+            },
         }
     }
 
@@ -81,62 +126,174 @@ impl FormField {
         self.title.as_deref().unwrap_or(self.key.as_str())
     }
 
-    /// `formTextual` — free-text input fields.
+    /// `formTextual` — free-text input fields: number/integer, and
+    /// string WITHOUT options (util/form.ts:36-39).
     #[must_use]
     pub fn textual(&self) -> bool {
-        matches!(self.kind, FieldKind::Text { .. })
-    }
-
-    /// `formCustom` — option lists that accept a custom answer.
-    #[must_use]
-    pub fn custom(&self) -> bool {
         match &self.kind {
-            FieldKind::Select { custom, .. } => *custom,
-            FieldKind::Multiselect { .. } => true,
+            FieldKind::Text { options, .. } => options.is_none(),
+            FieldKind::Number { .. } | FieldKind::Integer { .. } => true,
             _ => false,
         }
     }
 
-    /// `formRows` — the option rows.
+    /// `formCustom` — option lists that accept a custom answer
+    /// (util/form.ts:41-45: string-with-options and multiselect are
+    /// custom only when the flag is `true`).
     #[must_use]
-    pub fn rows(&self) -> &[FormOption] {
+    pub fn custom(&self) -> bool {
         match &self.kind {
-            FieldKind::Select { options, .. } | FieldKind::Multiselect { options } => options,
-            _ => &[],
+            FieldKind::Text { options: Some(_), custom, .. }
+            | FieldKind::Multiselect { custom, .. } => *custom == Some(true),
+            _ => false,
         }
     }
 
-    /// `formPlaceholder`.
+    /// `formRows` — the option rows (booleans synthesize Yes/No).
     #[must_use]
-    pub fn placeholder(&self) -> &str {
+    pub fn rows(&self) -> Vec<FormRow> {
         match &self.kind {
-            FieldKind::Text { placeholder: Some(value) } => value.as_str(),
-            _ => "Type your answer",
+            FieldKind::Boolean => vec![
+                FormRow { value: FormRowValue::Bool(true), label: "Yes".into(), description: None },
+                FormRow { value: FormRowValue::Bool(false), label: "No".into(), description: None },
+            ],
+            FieldKind::Text { options: Some(options), .. } => options
+                .iter()
+                .map(|option| FormRow {
+                    value: FormRowValue::Str(option.value.clone()),
+                    label: option.label.clone(),
+                    description: option.description.clone(),
+                })
+                .collect(),
+            FieldKind::Multiselect { options, .. } => options
+                .iter()
+                .map(|option| FormRow {
+                    value: FormRowValue::Str(option.value.clone()),
+                    label: option.label.clone(),
+                    description: option.description.clone(),
+                })
+                .collect(),
+            _ => Vec::new(),
         }
     }
 
-    /// `formValidateValue` — required fields must produce a value.
+    /// `formPlaceholder` (util/form.ts + form.tsx:199-210): the
+    /// configured placeholder, the number-range hint, or the default.
+    #[must_use]
+    pub fn placeholder(&self) -> String {
+        match &self.kind {
+            FieldKind::Text { placeholder: Some(value), .. } => value.clone(),
+            FieldKind::Number { minimum, maximum } | FieldKind::Integer { minimum, maximum } => {
+                match (minimum, maximum) {
+                    (Some(min), Some(max)) => format!("{min}-{max}"),
+                    (Some(min), None) => format!("at least {min}"),
+                    (None, Some(max)) => format!("at most {max}"),
+                    (None, None) => "Type your answer".into(),
+                }
+            }
+            _ => "Type your answer".into(),
+        }
+    }
+
+    /// `formValidateValue` (util/form.ts:72-110): requiredness, the
+    /// per-kind typing rules, and the numeric bounds.
     #[must_use]
     pub fn validate(&self, answer: Option<&serde_json::Value>) -> Option<String> {
-        let answer = answer?;
+        let Some(answer) = answer else {
+            return self.required.then(|| "Answer required".to_owned());
+        };
+        if self.required
+            && (answer == &serde_json::Value::String(String::new())
+                || answer.as_array().is_some_and(Vec::is_empty))
+        {
+            return Some(if matches!(self.kind, FieldKind::Multiselect { .. }) {
+                "Select at least one option".to_owned()
+            } else {
+                "Answer required".to_owned()
+            });
+        }
         match (&self.kind, answer) {
-            (FieldKind::Multiselect { .. }, serde_json::Value::Array(items)) => {
-                if self.required && items.is_empty() {
-                    Some(format!("{} is required", self.label()))
-                } else {
-                    None
+            (
+                FieldKind::Text { options, custom, min_length, max_length, .. },
+                serde_json::Value::String(value),
+            ) => {
+                if let Some(min) = min_length {
+                    if let Ok(min) = usize::try_from(*min) {
+                        if value.chars().count() < min {
+                            return Some(format!("Must be at least {min} characters"));
+                        }
+                    }
                 }
-            }
-            (_, serde_json::Value::String(value)) => {
-                if self.required && value.trim().is_empty() {
-                    Some(format!("{} is required", self.label()))
-                } else {
-                    None
+                if let Some(max) = max_length {
+                    if let Ok(max) = usize::try_from(*max) {
+                        if value.chars().count() > max {
+                            return Some(format!("Must be at most {max} characters"));
+                        }
+                    }
                 }
+                if let Some(options) = options {
+                    if *custom != Some(true) && !options.iter().any(|option| option.value == *value)
+                    {
+                        return Some("Select an available option".to_owned());
+                    }
+                }
+                None
             }
-            _ => None,
+            (FieldKind::Text { .. }, _) => Some("Expected text".to_owned()),
+            (FieldKind::Number { minimum, maximum }, value) => {
+                number_validate(value, false, minimum.as_ref(), maximum.as_ref())
+            }
+            (FieldKind::Integer { minimum, maximum }, value) => {
+                number_validate(value, true, minimum.as_ref(), maximum.as_ref())
+            }
+            (FieldKind::Boolean, serde_json::Value::Bool(_)) | (FieldKind::External { .. }, _) => {
+                None
+            }
+            (FieldKind::Boolean, _) => Some("Expected yes or no".to_owned()),
+            (FieldKind::Multiselect { options, custom }, serde_json::Value::Array(items)) => {
+                if *custom != Some(true)
+                    && items.iter().any(|item| {
+                        options
+                            .iter()
+                            .all(|option| option.value != item.as_str().unwrap_or_default())
+                    })
+                {
+                    return Some("Select only available options".to_owned());
+                }
+                None
+            }
+            (FieldKind::Multiselect { .. }, _) => Some("Expected selections".to_owned()),
         }
     }
+}
+
+/// The number/integer arm of `formValidateValue` (util/form.ts:97-103).
+fn number_validate(
+    value: &serde_json::Value,
+    integer: bool,
+    minimum: Option<&f64>,
+    maximum: Option<&f64>,
+) -> Option<String> {
+    let Some(number) = value.as_f64() else {
+        return Some("Expected a number".to_owned());
+    };
+    if !number.is_finite() {
+        return Some("Expected a number".to_owned());
+    }
+    if integer && number.fract() != 0.0 {
+        return Some("Expected an integer".to_owned());
+    }
+    if let Some(min) = minimum {
+        if number < *min {
+            return Some(format!("Must be at least {min}"));
+        }
+    }
+    if let Some(max) = maximum {
+        if number > *max {
+            return Some(format!("Must be at most {max}"));
+        }
+    }
+    None
 }
 
 /// `MiniFormRequest` (`FormInfo` subset).
@@ -206,14 +363,17 @@ impl FormBodyState {
         self.field >= request.fields.len()
     }
 
-    /// `formSingle` — one non-external select/boolean field submits
-    /// directly (no review step).
+    /// `formSingle` (form.tsx:128-134) — one boolean or
+    /// string-with-options field submits directly (no review step).
     #[must_use]
     pub fn single(request: &FormRequest) -> bool {
         if request.fields.len() != 1 {
             return false;
         }
-        matches!(request.fields[0].kind, FieldKind::Select { .. })
+        matches!(
+            request.fields[0].kind,
+            FieldKind::Boolean | FieldKind::Text { options: Some(_), .. }
+        )
     }
 }
 
@@ -256,9 +416,10 @@ pub fn form_move(state: &FormBodyState, request: &FormRequest, dir: i8) -> FormB
     FormBodyState { selected, ..state.clone() }
 }
 
-/// `formCommitInput` — validate + store a textual answer; advance the
-/// field (or submit when the form is single-field). Returns the next
-/// state and the reply when the form completed.
+/// `formCommitInput` — validate + store a textual answer (number /
+/// integer fields PARSE the text, `commitInput` form.tsx:386-399);
+/// advance the field (or submit when the form is single-field).
+/// Returns the next state and the reply when the form completed.
 #[must_use]
 pub fn form_commit_input(
     state: &FormBodyState,
@@ -266,7 +427,26 @@ pub fn form_commit_input(
     text: &str,
 ) -> (FormBodyState, Option<FormReply>) {
     let Some(field) = state.current(request) else { return (state.clone(), None) };
-    let value = serde_json::Value::String(text.to_owned());
+    // `Number(text)`: number/integer fields convert the draft; a
+    // non-numeric draft fails validation ("Expected a number").
+    // Whole values keep the JSON integer form (JS `Number(7)` wires
+    // `7`, not `7.0`).
+    let value = match &field.kind {
+        FieldKind::Number { .. } | FieldKind::Integer { .. } => match text.parse::<f64>() {
+            // Whole values keep the JSON integer form (JS `Number(7)`
+            // wires `7`, not `7.0`); the guard bounds the cast to
+            // MAX_SAFE_INTEGER, so the truncation is exact.
+            Ok(number) if number.fract() == 0.0 && number.abs() <= 9.007_199_254_740_992e15 =>
+            {
+                #[allow(clippy::cast_possible_truncation)]
+                serde_json::Value::Number(serde_json::Number::from(number as i64))
+            }
+            Ok(number) => serde_json::Number::from_f64(number)
+                .map_or(serde_json::Value::Null, serde_json::Value::Number),
+            Err(_) => serde_json::Value::String(text.to_owned()),
+        },
+        _ => serde_json::Value::String(text.to_owned()),
+    };
     if let Some(error) = field.validate(Some(&value)) {
         return (FormBodyState { error, ..state.clone() }, None);
     }
@@ -309,13 +489,18 @@ pub fn form_pick(
     }
     let row = &rows[index];
     if let FieldKind::Multiselect { .. } = &field.kind {
+        // Multiselect rows are option strings (the boolean pair never
+        // rides a multiselect).
+        let FormRowValue::Str(option_value) = &row.value else {
+            return (state.clone(), None);
+        };
         let mut items = state
             .answers
             .get(&field.key)
             .and_then(serde_json::Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let value = serde_json::Value::String(row.value.clone());
+        let value = serde_json::Value::String(option_value.clone());
         if let Some(position) = items.iter().position(|item| *item == value) {
             items.remove(position);
         } else {
@@ -324,7 +509,12 @@ pub fn form_pick(
         next.answers.insert(field.key.clone(), serde_json::Value::Array(items));
         (next, None)
     } else {
-        let value = serde_json::Value::String(row.value.clone());
+        // Boolean rows carry true/false (`formRows` synthesizes the
+        // Yes/No pair); every other row stores its string value.
+        let value = match row.value {
+            FormRowValue::Bool(flag) => serde_json::Value::Bool(flag),
+            FormRowValue::Str(ref text) => serde_json::Value::String(text.clone()),
+        };
         if let Some(error) = field.validate(Some(&value)) {
             return (FormBodyState { error, ..next }, None);
         }
@@ -508,12 +698,13 @@ pub fn render_form_body(
     canvas.into_frame()
 }
 
-fn answer_picked(state: &FormBodyState, field: &FormField, value: &str) -> bool {
-    match state.answers.get(&field.key) {
-        Some(serde_json::Value::Array(items)) => {
-            items.iter().any(|item| item.as_str() == Some(value))
+fn answer_picked(state: &FormBodyState, field: &FormField, value: &FormRowValue) -> bool {
+    match (state.answers.get(&field.key), value) {
+        (Some(serde_json::Value::Array(items)), FormRowValue::Str(text)) => {
+            items.iter().any(|item| item.as_str() == Some(text.as_str()))
         }
-        Some(serde_json::Value::String(answer)) => answer == value,
+        (Some(serde_json::Value::String(answer)), FormRowValue::Str(text)) => answer == text,
+        (Some(serde_json::Value::Bool(answer)), FormRowValue::Bool(flag)) => answer == flag,
         _ => false,
     }
 }
@@ -534,10 +725,21 @@ mod tests {
                     title: Some("Service".into()),
                     description: None,
                     required: true,
-                    kind: FieldKind::Text { placeholder: None },
+                    kind: text_kind(None),
                 },
                 FormField::text("notes", "Notes"),
             ],
+        }
+    }
+
+    /// A `string` field kind (bare, or with options).
+    fn text_kind(options: Option<Vec<FormOption>>) -> FieldKind {
+        FieldKind::Text {
+            placeholder: None,
+            options,
+            custom: None,
+            min_length: None,
+            max_length: None,
         }
     }
 
@@ -561,10 +763,11 @@ mod tests {
     fn textual_commit_validates_and_advances() {
         let request = deployment_form();
         let mut state = FormBodyState::new(&request);
-        // Required empty text fails.
-        let (invalid, reply) = form_commit_input(&state, &request, "  ");
+        // Required empty text fails (the callers pass the TRIMMED
+        // draft — `submitInput`, form.tsx:418).
+        let (invalid, reply) = form_commit_input(&state, &request, "");
         assert!(reply.is_none());
-        assert!(invalid.error.contains("required"));
+        assert_eq!(invalid.error, "Answer required");
         // Valid text advances to the next field.
         let (next, reply) = form_commit_input(&state, &request, "api");
         assert!(reply.is_none());
@@ -596,6 +799,7 @@ mod tests {
                         FormOption { value: "a".into(), label: "A".into(), description: None },
                         FormOption { value: "b".into(), label: "B".into(), description: None },
                     ],
+                    custom: None,
                 },
             }],
         };
@@ -615,14 +819,11 @@ mod tests {
                 title: Some("K".into()),
                 description: None,
                 required: false,
-                kind: FieldKind::Select {
-                    options: vec![FormOption {
-                        value: "x".into(),
-                        label: "X".into(),
-                        description: None,
-                    }],
-                    custom: false,
-                },
+                kind: text_kind(Some(vec![FormOption {
+                    value: "x".into(),
+                    label: "X".into(),
+                    description: None,
+                }])),
             }],
         };
         let state = FormBodyState::new(&single);
@@ -651,12 +852,15 @@ mod tests {
                 title: Some("K".into()),
                 description: None,
                 required: false,
-                kind: FieldKind::Select {
-                    options: vec![
+                kind: FieldKind::Text {
+                    placeholder: None,
+                    options: Some(vec![
                         FormOption { value: "a".into(), label: "A".into(), description: None },
                         FormOption { value: "b".into(), label: "B".into(), description: None },
-                    ],
-                    custom: true,
+                    ]),
+                    custom: Some(true),
+                    min_length: None,
+                    max_length: None,
                 },
             }],
         };
@@ -671,7 +875,6 @@ mod tests {
         let (editing, _) = form_pick(&wrap, &request, 2);
         assert!(editing.editing);
     }
-
     #[test]
     fn option_lists_render_checkboxes_and_custom_row() {
         let theme = FooterTheme::fallback_dark();
@@ -690,6 +893,7 @@ mod tests {
                         label: "Alpha".into(),
                         description: Some("first".into()),
                     }],
+                    custom: Some(true),
                 },
             }],
         };
@@ -701,5 +905,175 @@ mod tests {
         assert!(grid[7].contains("Type your own answer"), "the custom row");
         assert!(grid[14].contains("↑↓ select"));
         assert!(display_width(&grid[6]) <= 80);
+    }
+
+    // -- TUI-TD17: the typed field kinds ----------------------------------
+
+    /// The full v2 field family parses off the wire (the old `FieldKind`
+    /// dropped the WHOLE form on boolean/number/integer).
+    #[test]
+    fn typed_field_kinds_parse_off_the_wire() {
+        let wire = serde_json::json!({
+            "id": "frm_types",
+            "sessionID": "ses_form",
+            "title": "Typed fields",
+            "fields": [
+                { "type": "boolean", "key": "flag", "title": "Ship it" },
+                { "type": "number", "key": "count", "title": "Count",
+                  "minimum": 1, "maximum": 10, "required": true },
+                { "type": "integer", "key": "items", "title": "Items", "required": true },
+                { "type": "string", "key": "pick", "title": "Pick",
+                  "options": [ { "value": "a", "label": "A" } ], "custom": true },
+                { "type": "multiselect", "key": "many", "title": "Many",
+                  "options": [ { "value": "x", "label": "X" } ], "custom": true }
+            ]
+        });
+        let parsed: FormRequest = serde_json::from_value(wire).expect("the typed form parses");
+        assert!(matches!(parsed.fields[0].kind, FieldKind::Boolean));
+        assert!(matches!(parsed.fields[1].kind, FieldKind::Number { .. }));
+        assert!(matches!(parsed.fields[2].kind, FieldKind::Integer { .. }));
+        assert!(matches!(
+            parsed.fields[3].kind,
+            FieldKind::Text { options: Some(_), custom: Some(true), .. }
+        ));
+        assert!(matches!(parsed.fields[4].kind, FieldKind::Multiselect { custom: Some(true), .. }));
+    }
+
+    /// The typed helpers (`formTextual`/`formRows`/`formCustom`):
+    /// booleans render the Yes/No pair; number/integer are textual.
+    #[test]
+    fn typed_field_helpers_match_the_reference() {
+        let boolean = FormField {
+            key: "flag".into(),
+            title: Some("Ship it".into()),
+            description: None,
+            required: false,
+            kind: FieldKind::Boolean,
+        };
+        assert!(!boolean.textual());
+        assert!(!boolean.custom());
+        let rows = boolean.rows();
+        assert_eq!(rows.len(), 2, "the Yes/No pair");
+        assert_eq!(rows[0].label, "Yes");
+        assert_eq!(rows[0].value, FormRowValue::Bool(true));
+        assert_eq!(rows[1].value, FormRowValue::Bool(false));
+
+        let number = FormField {
+            key: "count".into(),
+            title: Some("Count".into()),
+            description: None,
+            required: true,
+            kind: FieldKind::Number { minimum: Some(1.0), maximum: Some(10.0) },
+        };
+        assert!(number.textual(), "numbers type into the textarea");
+        assert_eq!(number.placeholder(), "1-10", "the range placeholder");
+        assert_eq!(
+            number.validate(Some(&serde_json::json!(0.5))),
+            Some("Must be at least 1".to_owned())
+        );
+        assert_eq!(
+            number.validate(Some(&serde_json::json!(11.0))),
+            Some("Must be at most 10".to_owned())
+        );
+        assert_eq!(
+            number.validate(Some(&serde_json::json!("x"))),
+            Some("Expected a number".to_owned())
+        );
+
+        let integer = FormField {
+            key: "items".into(),
+            title: Some("Items".into()),
+            description: None,
+            required: true,
+            kind: FieldKind::Integer { minimum: None, maximum: None },
+        };
+        assert_eq!(
+            integer.validate(Some(&serde_json::json!(2.5))),
+            Some("Expected an integer".to_owned())
+        );
+
+        // Multiselect without the custom flag has NO custom row
+        // (`formCustom`: multiselect is custom only when the flag is
+        // set — the old port always allowed it).
+        let multi = FormField {
+            key: "many".into(),
+            title: Some("Many".into()),
+            description: None,
+            required: false,
+            kind: FieldKind::Multiselect {
+                options: vec![FormOption {
+                    value: "x".into(),
+                    label: "X".into(),
+                    description: None,
+                }],
+                custom: None,
+            },
+        };
+        assert!(!multi.custom(), "no custom row without the flag");
+
+        // Required checks speak the reference's messages.
+        assert_eq!(number.validate(None), Some("Answer required".to_owned()));
+    }
+
+    /// Typed answers flow through pick/commit with typed JSON values:
+    /// booleans reply `true`/`false`, numbers parse the draft.
+    #[test]
+    fn typed_answers_commit_typed_json_values() {
+        // Single boolean form: picking Yes replies immediately.
+        let single = FormRequest {
+            id: "frm_b".into(),
+            session_id: "s".into(),
+            title: "Ship".into(),
+            fields: vec![FormField {
+                key: "flag".into(),
+                title: Some("Ship it".into()),
+                description: None,
+                required: false,
+                kind: FieldKind::Boolean,
+            }],
+        };
+        assert!(FormBodyState::single(&single), "boolean single-submits");
+        let state = FormBodyState::new(&single);
+        let (next, reply) = form_pick(&state, &single, 0);
+        let reply = reply.expect("picking Yes replies");
+        assert_eq!(reply.answer["flag"], serde_json::json!(true));
+        assert_eq!(next.selected, 0);
+
+        // Number fields parse the draft on commit (2.5 → JSON 2.5).
+        let multi = FormRequest {
+            id: "frm_n".into(),
+            session_id: "s".into(),
+            title: "Typed".into(),
+            fields: vec![
+                FormField {
+                    key: "count".into(),
+                    title: Some("Count".into()),
+                    description: None,
+                    required: true,
+                    kind: FieldKind::Number { minimum: Some(1.0), maximum: Some(10.0) },
+                },
+                FormField {
+                    key: "items".into(),
+                    title: Some("Items".into()),
+                    description: None,
+                    required: true,
+                    kind: FieldKind::Integer { minimum: None, maximum: None },
+                },
+            ],
+        };
+        let state = FormBodyState::new(&multi);
+        let (bad, reply) = form_commit_input(&state, &multi, "abc");
+        assert!(reply.is_none());
+        assert_eq!(bad.error, "Expected a number", "a non-numeric draft fails");
+        let (next, _) = form_commit_input(&state, &multi, "2.5");
+        assert_eq!(next.answers.get("count"), Some(&serde_json::json!(2.5)), "float parsed");
+        let (done, _) = form_commit_input(&next, &multi, "7");
+        assert_eq!(done.field, 2, "both commits landed on the review step");
+        let reply = form_reply(&done, &multi).expect("all fields answered");
+        assert_eq!(reply.answer["count"], serde_json::json!(2.5));
+        assert_eq!(reply.answer["items"], serde_json::json!(7));
+        // Integers reject fractional drafts.
+        let (bad, _) = form_commit_input(&next, &multi, "1.5");
+        assert_eq!(bad.error, "Expected an integer");
     }
 }

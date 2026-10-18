@@ -6440,6 +6440,13 @@ impl Store {
         *self.permission_pointer_hits.borrow_mut() = None;
     }
 
+    /// `form.replied` / `form.cancelled` — the local settle arm the
+    /// pump's reply/cancel queue also drives (the server echo arrives
+    /// through the same reducer, deduplicated by the footer queue).
+    pub fn form_removed(&self, form_id: &str) {
+        self.footer.update(|footer| footer.form_removed(form_id));
+    }
+
     /// Record the permission body's pointer targets at ABSOLUTE
     /// screen cells (the render pass — `App::frame`'s permission
     /// mount; the layout math lives with the body renderer).

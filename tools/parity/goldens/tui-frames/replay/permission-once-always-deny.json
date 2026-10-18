@@ -1,7 +1,7 @@
 {
   "id": "permission-once-always-deny",
-  "description": "Permission prompt replies: the prompt lists Allow once / Always allow (when the request carries save patterns) / Reject with 'once' selected; Enter replies once, left/right move the selection, Escape opens the reject stage whose free-text reason Enter confirms",
-  "source": "test/cli/tui/input-scope.test.tsx (Enter → {decision:'once'}; Escape → reject stage keeping the reason draft) + src/routes/session/permission.tsx SessionQuestion (left/h, right/l, escapeKey=reject; app.exit shadowed while open)",
+  "description": "Permission prompt replies (session-route TWO-stage machine, routes/session/permission.tsx): the ask lists Allow once / Always allow (save patterns) / Reject with 'once' selected; right previews the always lines on the body, ONE Enter replies always (no confirm stage); Escape on a top-level session rejects immediately",
+  "source": "src/routes/session/permission.tsx SessionQuestion (left/h, right/l, escapeKey=reject; onSelect: always replies immediately, reject immediate on top-level sessions) + test/cli/tui/input-scope.test.tsx (Enter → {decision:'once'})",
   "keys": "kitty",
   "steps": [
     {
@@ -22,14 +22,13 @@
       ],
       "expect": {
         "frameIncludes": [
-          "Always allow"
+          "This will always allow the following patterns for this project."
         ],
         "focus": "dialog"
       }
     },
     {
       "keys": [
-        "left",
         "enter"
       ],
       "expect": {
@@ -51,35 +50,6 @@
     {
       "keys": [
         "escape"
-      ],
-      "expect": {
-        "frameIncludes": [
-          "Reject"
-        ],
-        "focus": "dialog"
-      }
-    },
-    {
-      "keys": [
-        "c",
-        "h",
-        "o",
-        "o",
-        "s",
-        "e",
-        " ",
-        "a",
-        "n",
-        "o",
-        "t",
-        "h",
-        "e",
-        "r",
-        " ",
-        "w",
-        "a",
-        "y",
-        "enter"
       ],
       "expect": {
         "frameExcludes": [

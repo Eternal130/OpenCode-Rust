@@ -177,7 +177,11 @@ impl FooterPane {
             FooterKey::CtrlC => "ctrl+c".to_owned(),
         };
         let mut effects = Vec::new();
-        match permission_key(&state, request, &name) {
+        // The mini surface drives the same session-route two-stage
+        // machine; the free-text reject stage stays a child-session
+        // affordance (parentID), which the mini transport does not
+        // track — top-level semantics.
+        match permission_key(&state, request, false, &name) {
             PermissionKey::State(next) => {
                 self.permission_states.insert(request.id.clone(), next);
             }

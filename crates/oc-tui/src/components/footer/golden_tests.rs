@@ -109,7 +109,13 @@ fn deployment_form() -> FormRequest {
         title: Some(title.into()),
         description: None,
         required,
-        kind: super::form::FieldKind::Text { placeholder: None },
+        kind: super::form::FieldKind::Text {
+            placeholder: None,
+            options: None,
+            custom: None,
+            min_length: None,
+            max_length: None,
+        },
     };
     FormRequest {
         id: "frm_preempted".into(),

@@ -45,6 +45,10 @@ use crate::components::command_palette::{CommandDispatcher as _, Dispatch, Store
 use crate::components::composer::render::prompt_text_width;
 use crate::components::composer::{ComposerEditCommand, ComposerKey, KeyOutcome};
 use crate::components::dialog::{execute_submission, handle_dialog_key, render_app};
+use crate::components::footer::form::{
+    form_commit_input, form_move, form_pick, form_reply, form_set_field, form_sync, FormBodyState,
+    FormCancel, FormReply,
+};
 use crate::components::footer::permission::{
     create_permission_body_state, permission_key, PermissionBodyState, PermissionKey,
     PermissionReply, PermissionRequest,
@@ -66,6 +70,11 @@ pub const HOME_PROMPT_KEY: &str = "home";
 /// The docked height of the permission body while a blocker is live.
 const PERMISSION_MOUNT_HEIGHT: usize = 16;
 
+/// The docked height of the form body while a form blocker is live
+/// (the session route's `maxHeight: 15` dock + the spacer rows,
+/// session/form.tsx's docked mount).
+const FORM_MOUNT_HEIGHT: usize = 16;
+
 /// The docked height of a footer picker panel (the mini footer family's
 /// `RUN_COMMAND_PANEL_ROWS + 1` mount).
 const FOOTER_PANEL_MOUNT_HEIGHT: usize = 17;
@@ -83,9 +92,17 @@ pub struct App {
     input_mode: bool,
     /// Per-request permission body state (selection / reject stage).
     permission_states: HashMap<String, PermissionBodyState>,
+    /// Per-form body state (tab / selection / draft / answers).
+    form_states: HashMap<String, FormBodyState>,
     /// Every permission reply the pump sent (assertions / the server
     /// call seam).
     pub permission_replies: Vec<PermissionReply>,
+    /// Every form reply the pump recorded (the `session.form.reply`
+    /// POST seam — v2 form.tsx's `reply()`).
+    pub form_replies: Vec<FormReply>,
+    /// Every form cancel the pump recorded (the `session.form.cancel`
+    /// DELETE seam — v2 form.tsx's `cancel()`).
+    pub form_cancels: Vec<FormCancel>,
     /// Rename submits pending their `session.update` POST (v2
     /// routes/session/index.tsx:908 — the dialog closes immediately;
     /// the `session.renamed` echo lands the new title through the
@@ -147,7 +164,10 @@ impl App {
             dialog_mode: false,
             input_mode: false,
             permission_states: HashMap::new(),
+            form_states: HashMap::new(),
             permission_replies: Vec::new(),
+            form_replies: Vec::new(),
+            form_cancels: Vec::new(),
             strip_drag: None,
             rename_requests: Vec::new(),
             autoaccept: false,
@@ -1248,6 +1268,10 @@ impl App {
             self.stroke_in_diff(&stroke);
         } else if self.permission_live() {
             self.stroke_in_permission(expanded);
+        } else if self.form_live() {
+            // TD16: the form's FORM_MODE layer owns the keys — the
+            // composer underneath cannot type while a form blocks.
+            self.stroke_in_form(expanded, stroke.shift);
         } else if self.error_toast_live() {
             // F11 — the error panel consumes input until closed: while
             // an ERROR-variant toast is up (the "Session failed"
@@ -1361,6 +1385,13 @@ impl App {
         matches!(self.store.footer().view, FooterView::Permission { .. })
     }
 
+    /// A form is the live footer view (TD16: forms are BLOCKING
+    /// surfaces — `forms().length > 0` mounts `FormPrompt` in v2's
+    /// session-route Switch, index.tsx:1470-1477).
+    fn form_live(&self) -> bool {
+        matches!(self.store.footer().view, FooterView::Form { .. })
+    }
+
     /// The pill under (`col`, `row`), when the pointer sits on the
     /// controls row inside one of the offered pills' extents.
     fn permission_pill_at(
@@ -1455,7 +1486,8 @@ impl App {
                         selected: option,
                         ..state
                     };
-                    match permission_key(&state, &request, "enter") {
+                    let child = self.store.session_is_subagent(&request.session_id);
+                    match permission_key(&state, &request, child, "enter") {
                         PermissionKey::State(next) => {
                             self.permission_states.insert(request.id.clone(), next);
                         }
@@ -1474,7 +1506,8 @@ impl App {
                 None => false,
             };
         };
-        match permission_key(&state, &request, key) {
+        let child = self.store.session_is_subagent(&request.session_id);
+        match permission_key(&state, &request, child, key) {
             PermissionKey::State(next) => {
                 self.permission_states.insert(request.id.clone(), next);
             }
@@ -1551,7 +1584,8 @@ impl App {
             .get(&request.id)
             .cloned()
             .unwrap_or_else(|| create_permission_body_state(&request));
-        match permission_key(&state, &request, key) {
+        let child = self.store.session_is_subagent(&request.session_id);
+        match permission_key(&state, &request, child, key) {
             PermissionKey::State(next) => {
                 self.permission_states.insert(request.id.clone(), next);
             }
@@ -1568,6 +1602,167 @@ impl App {
                 self.permission_states.insert(request.id.clone(), next);
             }
             PermissionKey::Ignored => {}
+        }
+    }
+
+    /// One stroke while a form holds the footer (TD16): the
+    /// `FORM_MODE` keymap layers (form.tsx:547-720) — the editing/
+    /// textual layer (enter commits, tab/shift+tab step fields, esc
+    /// dismisses/closes the edit, printables edit the draft), the
+    /// picker layer (arrows move, digits select, enter picks, left/
+    /// right step fields, esc dismisses), and the review step (enter
+    /// submits, esc dismisses). Every other stroke is consumed — the
+    /// composer underneath must not type.
+    #[allow(clippy::too_many_lines)] // one port of the FORM_MODE layer set (form.tsx:547-720)
+    fn stroke_in_form(&mut self, key: &str, shift: bool) {
+        use crate::components::footer::form::{FieldKind, FormField};
+
+        let FooterView::Form { request } = self.store.footer().view.clone() else { return };
+        let fresh = FormBodyState::new(&request);
+        let synced = form_sync(self.form_states.get(&request.id).unwrap_or(&fresh), &request);
+        let current = synced.current(&request);
+        let textual = current.is_some_and(FormField::textual);
+        let editing_layer = (synced.editing || textual) && !synced.confirm(&request);
+
+        // The reply/cancel side effects land after the state match —
+        // the local queue keeps `&mut self` borrows clean.
+        let mut reply: Option<FormReply> = None;
+        let mut cancel = false;
+        let next = if editing_layer {
+            match key {
+                "escape" => {
+                    if textual {
+                        cancel = true;
+                        synced.clone()
+                    } else {
+                        FormBodyState { editing: false, ..synced.clone() }
+                    }
+                }
+                "tab" | "return" | "enter" => {
+                    let (next, fired) = form_commit_input(&synced, &request, synced.draft.trim());
+                    let submitted = fired.is_some();
+                    reply = reply.or(fired);
+                    if !submitted && !FormBodyState::single(&request) {
+                        let dir: i8 = if key == "tab" && shift { -1 } else { 1 };
+                        form_step_field(&next, &request, synced.field, dir)
+                    } else {
+                        next
+                    }
+                }
+                "up" if !textual && synced.selected > 0 => FormBodyState {
+                    editing: false,
+                    selected: synced.selected - 1,
+                    ..synced.clone()
+                },
+                "backspace" => {
+                    let mut draft = synced.draft.clone();
+                    draft.pop();
+                    FormBodyState { draft, ..synced.clone() }
+                }
+                other => {
+                    let mut chars = other.chars();
+                    match (chars.next(), chars.next()) {
+                        (Some(ch), None) if !ch.is_control() => FormBodyState {
+                            draft: format!("{}{ch}", synced.draft),
+                            ..synced.clone()
+                        },
+                        _ => synced.clone(),
+                    }
+                }
+            }
+        } else {
+            match key {
+                "escape" | "ctrl+c" => {
+                    cancel = true;
+                    synced.clone()
+                }
+                "left" | "h" => form_step_field(&synced, &request, synced.field, -1),
+                "right" | "l" | "tab" => form_step_field(&synced, &request, synced.field, 1),
+                "up" | "k" => form_move(&synced, &request, -1),
+                "down" | "j" => form_move(&synced, &request, 1),
+                "enter" | "return" => {
+                    if synced.confirm(&request) {
+                        // The review step's submit (`submit`, form.tsx:
+                        // 515-541): every field re-validates; the
+                        // reply carries only answered keys.
+                        reply = reply.or(form_reply(&synced, &request));
+                        synced.clone()
+                    } else if current
+                        .is_some_and(|field| matches!(field.kind, FieldKind::External { .. }))
+                    {
+                        // External steps acknowledge on enter (the URL
+                        // row's `open link` → `I finished` → continue
+                        // chain, form.tsx:488-509 — headless-safe: the
+                        // browser open degrades to the acknowledged
+                        // state without spawning anything).
+                        let mut answers = synced.answers.clone();
+                        if let Some(field) = current {
+                            answers.insert(field.key.clone(), serde_json::Value::Bool(true));
+                        }
+                        let acknowledged = FormBodyState { answers, ..synced.clone() };
+                        if FormBodyState::single(&request) {
+                            reply = reply.or(form_reply(&acknowledged, &request));
+                            acknowledged
+                        } else {
+                            form_set_field(&acknowledged, &request, synced.field + 1)
+                        }
+                    } else {
+                        let (next, fired) = form_pick(&synced, &request, synced.selected);
+                        reply = reply.or(fired);
+                        next
+                    }
+                }
+                other => {
+                    // Digits pick the n-th row (`1..9`, form.tsx:686);
+                    // a printable on the CUSTOM row opens the editor
+                    // (the interceptor, form.tsx:275-290).
+                    if let Some(digit) = other.chars().next().and_then(|c| c.to_digit(10)) {
+                        if (1..=9).contains(&digit) {
+                            let (next, fired) = form_pick(
+                                &synced,
+                                &request,
+                                usize::try_from(digit).unwrap_or(1) - 1,
+                            );
+                            reply = reply.or(fired);
+                            next
+                        } else {
+                            synced.clone()
+                        }
+                    } else {
+                        let mut chars = other.chars();
+                        match (chars.next(), chars.next()) {
+                            (Some(ch), None)
+                                if !ch.is_control()
+                                    && current.is_some_and(|field| {
+                                        field.custom() && synced.selected == field.rows().len()
+                                    }) =>
+                            {
+                                FormBodyState {
+                                    selected: current.map_or(0, |field| field.rows().len()),
+                                    editing: true,
+                                    draft: format!("{}{ch}", synced.draft),
+                                    ..synced.clone()
+                                }
+                            }
+                            _ => synced.clone(),
+                        }
+                    }
+                }
+            }
+        };
+        self.form_states.insert(request.id.clone(), next);
+        if let Some(reply) = reply {
+            self.form_replies.push(reply.clone());
+            // The reply settles the form server-side
+            // (`form.replied`) — the footer falls back locally.
+            self.store.form_removed(&reply.form_id);
+        }
+        if cancel {
+            self.form_cancels.push(FormCancel {
+                session_id: request.session_id.clone(),
+                form_id: request.id.clone(),
+            });
+            self.store.form_removed(&request.id);
         }
     }
 
@@ -2036,7 +2231,7 @@ impl App {
         // composer under it, the `diff` layer owns the keys
         // (diff-viewer.tsx:798-800 mounts the layer while live).
         let diff = self.store.diff_viewer_open();
-        let input = !dialog && !self.permission_live() && !diff;
+        let input = !dialog && !self.permission_live() && !self.form_live() && !diff;
         let picker = input && self.picker_live();
         let mut modes: Vec<&str> = Vec::new();
         if input {
@@ -2119,6 +2314,26 @@ impl App {
             // owns the picker mount below; the ask's rects must not
             // outlive the view).
             self.store.set_permission_pointer_hits(None);
+        }
+        // TD16: the form blocker mounts the same way — `FormPrompt`
+        // replaces the composer slot in v2's session-route Switch
+        // (index.tsx:1470-1477), so the body pastes over the footer
+        // region and the keys live in `stroke_in_form`.
+        if let FooterView::Form { request } = self.store.footer().view.clone() {
+            let fresh = FormBodyState::new(&request);
+            let state = form_sync(self.form_states.get(&request.id).unwrap_or(&fresh), &request);
+            let mount_height = FORM_MOUNT_HEIGHT.min(usize::from(self.size.1));
+            let width = usize::from(self.size.0);
+            let body = crate::components::footer::form::render_form_body(
+                &request,
+                &state,
+                width,
+                mount_height,
+                &footer_theme,
+            );
+            let y = usize::from(self.size.1) - mount_height;
+            paste_frame(&mut frame, &body, y);
+        } else {
             // A footer picker panel mounts over the composer from LIVE
             // store data (the mini footer family's docked pickers).
             let footer = self.store.footer();
@@ -2172,6 +2387,24 @@ impl App {
             "prompt"
         }
     }
+}
+
+/// `selectTab` with wrap (form.tsx:421-431 + 606-615): step `from` by
+/// `dir` modulo the tab count (`fields.len() + 1` review tab on
+/// multi-field forms; single-field forms have exactly one).
+fn form_step_field(
+    state: &FormBodyState,
+    request: &crate::components::footer::form::FormRequest,
+    from: usize,
+    dir: i8,
+) -> FormBodyState {
+    let tabs = if FormBodyState::single(request) { 1 } else { request.fields.len() + 1 };
+    if tabs == 0 {
+        return state.clone();
+    }
+    let tabs_i = isize::try_from(tabs).unwrap_or(1);
+    let next = (isize::try_from(from).unwrap_or(0) + isize::from(dir)).rem_euclid(tabs_i);
+    form_set_field(state, request, usize::try_from(next).unwrap_or(0))
 }
 
 /// Paste `region`'s rows at absolute y (right-clamped to the frame).
@@ -2884,6 +3117,74 @@ pub fn post_permission_reply(client: oc_client::Client, reply: PermissionReply) 
             crate::keymap::log_skip(&format!(
                 "permission reply {}/{}: {error}",
                 reply.session_id, reply.request_id
+            ));
+        }
+    });
+}
+
+/// Map one JSON answer value onto the generated client's wire union
+/// (`Form.Value`: string / number / boolean / string-list).
+#[must_use]
+fn form_wire_value(value: &serde_json::Value) -> Option<oc_client::types::FormValue> {
+    match value {
+        serde_json::Value::String(text) => Some(oc_client::types::FormValue::String(text.clone())),
+        serde_json::Value::Number(number) => number
+            .as_f64()
+            .map(oc_client::types::FormValueVariant2::Number)
+            .map(oc_client::types::FormValue::FormValueVariant2),
+        serde_json::Value::Bool(flag) => Some(oc_client::types::FormValue::Boolean(*flag)),
+        serde_json::Value::Array(items) => {
+            let list = items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_owned))
+                .collect::<Vec<_>>();
+            Some(oc_client::types::FormValue::Array(list))
+        }
+        _ => None,
+    }
+}
+
+/// Map the pump's [`FormReply`] onto the generated client body (the
+/// `session.form.reply` POST — form.tsx's `reply()`).
+#[must_use]
+pub fn form_reply_body(reply: &FormReply) -> oc_client::types::FormReply {
+    let answer = reply
+        .answer
+        .iter()
+        .filter_map(|(key, value)| form_wire_value(value).map(|value| (key.clone(), value)))
+        .collect();
+    oc_client::types::FormReply { answer }
+}
+
+/// POST one recorded form reply through the generated client
+/// (`session.form.reply`); failures log (the local footer already
+/// fell back — the server settles the form and echoes
+/// `form.replied`).
+pub fn post_form_reply(client: oc_client::Client, reply: FormReply) {
+    tokio::spawn(async move {
+        let body = form_reply_body(&reply);
+        if let Err(error) =
+            client.session().form().reply(&reply.session_id, &reply.form_id, &body).await
+        {
+            crate::keymap::log_skip(&format!(
+                "form reply {}/{}: {error}",
+                reply.session_id, reply.form_id
+            ));
+        }
+    });
+}
+
+/// DELETE one recorded form cancel through the generated client
+/// (`session.form.cancel` — form.tsx's `cancel()`); failures log.
+pub fn post_form_cancel(client: oc_client::Client, cancel: FormCancel) {
+    tokio::spawn(async move {
+        let query = oc_client::types::SessionFormCancelQuery { message: None };
+        if let Err(error) =
+            client.session().form().cancel(&cancel.session_id, &cancel.form_id, &query).await
+        {
+            crate::keymap::log_skip(&format!(
+                "form cancel {}/{}: {error}",
+                cancel.session_id, cancel.form_id
             ));
         }
     });
@@ -4934,6 +5235,22 @@ pub async fn run_with_size(
             }
             post_permission_reply(client.clone(), reply);
         }
+        // Form replies/cancels (TD16): the form surface's submissions
+        // POST through the generated client — without this the
+        // parked tool waits forever while the footer already fell
+        // back to the composer.
+        for reply in std::mem::take(&mut app.form_replies) {
+            if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                eprintln!("[tui] form reply {} on {}", reply.form_id, reply.session_id);
+            }
+            post_form_reply(client.clone(), reply);
+        }
+        for cancel in std::mem::take(&mut app.form_cancels) {
+            if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                eprintln!("[tui] form cancel {} on {}", cancel.form_id, cancel.session_id);
+            }
+            post_form_cancel(client.clone(), cancel);
+        }
         // Rename submits (v2 index.tsx:908): the POST's
         // `session.renamed` echo lands the title in the store. The
         // POST arms rename-pending (title_shimmer's envelope,
@@ -5642,7 +5959,10 @@ pub async fn run_with_size(
                 // a painted caret cell on the ref). The route render
                 // stashed the cell; a dialog over the composer hides it
                 // (v2 blurs the prompt while any dialog is open).
-                if app.store.top_dialog().is_none() {
+                // A blocker (permission ask / form) owns the footer —
+                // the composer is not the focused surface, so its
+                // caret must not blink through the mounted body.
+                if app.store.top_dialog().is_none() && !app.permission_live() && !app.form_live() {
                     if let Some((x, y)) = app.store.caret_cell() {
                         if x < area.width && y < area.height {
                             surface.set_cursor_position(ratatui::layout::Position { x, y });
@@ -7944,6 +8264,150 @@ mod core_interaction_tests {
         ))]);
     }
 
+    // -- lane C6a: the form blocking surface (TUI-TD16) ------------------
+
+    /// Stage one `form.created` event (the SSE ingest shape).
+    fn stage_form_created(app: &mut App, id: &str, title: &str, fields: &serde_json::Value) {
+        app.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "form.created",
+            serde_json::json!({
+                "form": { "id": id, "sessionID": "s1", "title": title, "fields": fields.clone() }
+            }),
+        ))]);
+    }
+
+    /// TD16: `form.created` mounts a BLOCKING surface — the body
+    /// renders, keystrokes land in the form (the composer draft never
+    /// moves), and reply/cancel restore the composer through the
+    /// local reply queue.
+    #[test]
+    fn form_mounts_blocks_keys_and_replies() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        stage_form_created(
+            &mut app,
+            "frm_stage",
+            "Deployment",
+            &serde_json::json!([
+                { "type": "string", "key": "service", "title": "Service", "required": true },
+                { "type": "string", "key": "notes", "title": "Notes" }
+            ]),
+        );
+        assert!(app.form_live(), "the form holds the footer");
+        let frame = app.frame_text();
+        assert!(frame.contains("Deployment"), "the title rendered: {frame}");
+        assert!(frame.contains("Service (required)"), "the field rendered");
+        assert!(frame.contains("esc dismiss"), "the hint row rendered");
+        // Typed keys feed the FORM's editor — the composer draft under
+        // it must not move (v2 mounts no Prompt while forms are open).
+        app.press("a");
+        app.press("p");
+        app.press("i");
+        assert!(
+            app.store.prompt_draft("s1").text.is_empty(),
+            "the composer cannot type during forms"
+        );
+        assert!(app.frame_text().contains("api"), "the draft renders in the form body");
+        app.press("enter");
+        assert!(app.frame_text().contains("2/2"), "field 1 committed, advanced");
+        app.press("s");
+        app.press("h");
+        app.press("i");
+        app.press("p");
+        app.press("enter");
+        assert!(app.frame_text().contains("Review"), "the review step");
+        app.press("enter");
+        assert_eq!(app.form_replies.len(), 1, "one recorded reply");
+        let reply = app.form_replies[0].clone();
+        assert_eq!(reply.form_id, "frm_stage");
+        assert_eq!(reply.answer["service"], serde_json::json!("api"));
+        assert_eq!(reply.answer["notes"], serde_json::json!("ship"));
+        assert!(!app.form_live(), "the reply settled the form locally");
+        // The composer is back: keys type again.
+        app.press("x");
+        assert_eq!(app.store.prompt_draft("s1").text, "x", "the composer restored");
+    }
+
+    /// TD16: escape dismisses (cancel queue + local settle), and a
+    /// typed-kinds form (TD17) mounts instead of being dropped.
+    #[test]
+    fn form_cancel_and_typed_kinds() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        // TD17: the whole typed family parses — the old FieldKind
+        // dropped this form on ingest.
+        stage_form_created(
+            &mut app,
+            "frm_stage",
+            "Typed fields",
+            &serde_json::json!([
+                { "type": "boolean", "key": "flag", "title": "Ship it" },
+                { "type": "number", "key": "count", "title": "Count",
+                  "minimum": 1, "maximum": 10 },
+                { "type": "integer", "key": "items", "title": "Items" }
+            ]),
+        );
+        assert!(app.form_live(), "the typed form parsed and mounted");
+        assert!(app.frame_text().contains("Yes"), "the boolean Yes/No rows rendered");
+        // 1 → Yes; 2.5 → the number; 7 → the integer; review; submit.
+        app.press("1");
+        app.press("2");
+        app.press(".");
+        app.press("5");
+        app.press("enter");
+        app.press("7");
+        app.press("enter");
+        app.press("enter");
+        let reply = app.form_replies.last().cloned().expect("the typed reply");
+        assert_eq!(reply.answer["flag"], serde_json::json!(true));
+        assert_eq!(reply.answer["count"], serde_json::json!(2.5));
+        assert_eq!(reply.answer["items"], serde_json::json!(7));
+        // Cancel path: a fresh form, esc dismisses.
+        stage_form_created(
+            &mut app,
+            "frm_two",
+            "Again",
+            &serde_json::json!([{ "type": "string", "key": "k", "title": "K" }]),
+        );
+        assert!(app.form_live());
+        app.press("escape");
+        assert_eq!(app.form_cancels.len(), 1, "the cancel recorded");
+        assert_eq!(app.form_cancels[0].form_id, "frm_two");
+        assert!(!app.form_live(), "the cancel settled the form locally");
+    }
+
+    /// The reconnect seam (§4.7 exit): connection churn never clears
+    /// the blocker queues — a reconnecting stream rehydrates through
+    /// the resync, and the parked ask/form stay live (the
+    /// server-driven re-list resync is the RUNTIME lane's C3b scope).
+    #[test]
+    fn blockers_survive_connection_churn() {
+        use crate::data::ConnectionState;
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        stage_permission_ask(&mut app, "p_keep", &serde_json::json!([]));
+        stage_form_created(
+            &mut app,
+            "frm_stage",
+            "Hold",
+            &serde_json::json!([{ "type": "string", "key": "k", "title": "K" }]),
+        );
+        assert!(app.permission_live(), "the ask preempts the form");
+        app.store.ingest_all([crate::data::Ingest::Connection(ConnectionState::Reconnecting {
+            attempt: 2,
+        })]);
+        assert!(app.permission_live(), "the ask survives the reconnect window");
+        app.store.ingest_all([crate::data::Ingest::Connected]);
+        assert!(app.permission_live());
+        // Resolving the ask hands the footer to the still-queued form.
+        app.press("escape");
+        assert_eq!(app.permission_replies[0].decision, "reject");
+        assert!(app.form_live(), "the queued form took the footer");
+    }
+
     /// The pills move the selection on hover and RUN on release (v2
     /// permission.tsx:583-587: `onMouseMove` selects, `onMouseUp`
     /// selects + `onSelect`): Allow-once replies `once` through the
@@ -7994,10 +8458,12 @@ mod core_interaction_tests {
         );
     }
 
-    /// The reject flow through the pointer: the Reject pill opens the
-    /// reject stage (no reply), `enter confirm` sends the reject
-    /// reply, `esc cancel` returns to the ask — v2's two hint
-    /// BUTTONS (permission.tsx:375-400), not dead labels.
+    /// The reject flow through the pointer on a CHILD session (the
+    /// free-text stage's gate — `session()?.parentID`,
+    /// permission.tsx:249-254): the Reject pill opens the reject
+    /// stage (no reply), `enter confirm` sends the reject reply,
+    /// `esc cancel` returns to the ask — v2's two hint BUTTONS
+    /// (permission.tsx:375-400), not dead labels.
     #[test]
     fn permission_reject_confirm_and_cancel_via_pointer() {
         use crate::components::footer::permission::{PermissionOption, PermissionStage};
@@ -8005,6 +8471,13 @@ mod core_interaction_tests {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
         app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        // The child-session registry seed (`session.created` carries
+        // `parentID`): the free-text reject stage opens only for
+        // children — and the ask's session is "ses".
+        app.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "session.created",
+            serde_json::json!({ "sessionID": "ses", "parentID": "s_root" }),
+        ))]);
         stage_permission_ask(&mut app, "p2", &serde_json::json!(["src/**"]));
         let _ = app.frame();
         let hits = app.store.permission_pointer_hits().expect("armed");

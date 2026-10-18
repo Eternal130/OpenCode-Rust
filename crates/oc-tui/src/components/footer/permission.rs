@@ -48,8 +48,10 @@ pub struct PermissionReply {
 }
 
 /// `PermissionPresentation`: icon / title / lines per action
-/// (`util/permission.ts`, the footer subset — diff/patch rendering
-/// stays with the diff lane).
+/// (`util/permission.ts`). The edit arm carries the DIFF PREVIEW
+/// (TD19): `metadata.files[0].patch || .diff || metadata.diff`, else
+/// `input.patchText`, else the "No diff provided" fallback
+/// (util/permission.ts:32-43 + permission.tsx:77-82).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PermissionPresentation {
     pub icon: &'static str,
@@ -98,7 +100,29 @@ pub fn permission_presentation(request: &PermissionRequest) -> PermissionPresent
     match action {
         "edit" => {
             let file = path.clone().filter(|s| !s.is_empty()).unwrap_or(resource);
-            PermissionPresentation { icon: "→", title: format!("Edit {file}"), lines: Vec::new() }
+            // The diff preview (TD19): the first file's patch/diff, a
+            // top-level metadata diff, or the input's patchText — the
+            // user approves file edits with the hunk lines visible.
+            let metadata = request.metadata.as_object().cloned().unwrap_or_default();
+            let text_of = |value: &serde_json::Value| {
+                value.as_str().filter(|item| !item.is_empty()).map(str::to_owned)
+            };
+            let first_file = metadata
+                .get("files")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|files| files.first());
+            let diff = first_file
+                .and_then(|file| file.get("patch").or_else(|| file.get("diff")))
+                .and_then(text_of)
+                .or_else(|| metadata.get("diff").and_then(text_of));
+            let lines: Vec<String> = if let Some(diff) = diff {
+                diff.lines().map(str::to_owned).collect()
+            } else if let Some(patch) = value("patchText") {
+                patch.lines().map(str::to_owned).collect()
+            } else {
+                vec!["No diff provided".to_owned()]
+            };
+            PermissionPresentation { icon: "→", title: format!("Edit {file}"), lines }
         }
         "read" | "list" => {
             let value = path.filter(|s| !s.is_empty()).unwrap_or(resource);
@@ -245,17 +269,17 @@ pub fn permission_option_label(option: PermissionOption) -> &'static str {
         PermissionOption::Once => "Allow once",
         PermissionOption::Always => "Always allow",
         PermissionOption::Reject => "Reject",
-        PermissionOption::Confirm => "Confirm",
-        PermissionOption::Cancel => "Cancel",
     }
 }
 
-/// `PermissionStage`.
+/// `PermissionStage` — the session route's TWO-stage machine
+/// (`routes/session/permission.tsx:20`: `"permission" | "reject"`):
+/// the ask, and the child-session free-text reject prompt. There is
+/// NO always-confirmation stage — `always` replies on a single enter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PermissionStage {
     #[default]
     Permission,
-    Always,
     Reject,
 }
 
@@ -265,8 +289,6 @@ pub enum PermissionOption {
     Once,
     Always,
     Reject,
-    Confirm,
-    Cancel,
 }
 
 /// `PermissionBodyState`.
@@ -293,14 +315,14 @@ pub fn create_permission_body_state(request: &PermissionRequest) -> PermissionBo
     }
 }
 
-/// `permissionOptions(stage)`.
+/// `permissionOptions(stage)` — the ask's three affordances (the
+/// reject stage offers none: its own enter/esc hint row).
 #[must_use]
 pub fn permission_options(stage: PermissionStage) -> Vec<PermissionOption> {
     match stage {
         PermissionStage::Permission => {
             vec![PermissionOption::Once, PermissionOption::Always, PermissionOption::Reject]
         }
-        PermissionStage::Always => vec![PermissionOption::Confirm, PermissionOption::Cancel],
         PermissionStage::Reject => Vec::new(),
     }
 }
@@ -344,9 +366,17 @@ pub struct PermissionStep {
     pub reply: Option<PermissionReply>,
 }
 
-/// `permissionRun`.
+/// `permissionRun` — the session route's `onSelect`
+/// (permission.tsx:243-257): `once` and `always` reply IMMEDIATELY
+/// (always needs NO confirmation round), and `reject` replies
+/// immediately on a TOP-LEVEL session while a CHILD session
+/// (`session()?.parentID`) opens the free-text stage instead.
 #[must_use]
-pub fn permission_run(state: &PermissionBodyState, option: PermissionOption) -> PermissionStep {
+pub fn permission_run(
+    state: &PermissionBodyState,
+    option: PermissionOption,
+    child_session: bool,
+) -> PermissionStep {
     if state.submitting {
         return PermissionStep { state: state.clone(), reply: None };
     }
@@ -358,37 +388,27 @@ pub fn permission_run(state: &PermissionBodyState, option: PermissionOption) -> 
     };
     match state.stage {
         PermissionStage::Permission => match option {
-            PermissionOption::Always => PermissionStep {
-                state: PermissionBodyState {
-                    stage: PermissionStage::Always,
-                    selected: PermissionOption::Confirm,
-                    ..state.clone()
-                },
-                reply: None,
-            },
-            PermissionOption::Reject => PermissionStep {
-                state: PermissionBodyState {
-                    stage: PermissionStage::Reject,
-                    selected: PermissionOption::Reject,
-                    ..state.clone()
-                },
-                reply: None,
-            },
-            _ => PermissionStep { state: state.clone(), reply: Some(reply("once", "")) },
-        },
-        PermissionStage::Always => {
-            if option == PermissionOption::Cancel {
-                return PermissionStep {
-                    state: PermissionBodyState {
-                        stage: PermissionStage::Permission,
-                        selected: PermissionOption::Always,
-                        ..state.clone()
-                    },
-                    reply: None,
-                };
+            PermissionOption::Always => {
+                PermissionStep { state: state.clone(), reply: Some(reply("always", "")) }
             }
-            PermissionStep { state: state.clone(), reply: Some(reply("always", "")) }
-        }
+            PermissionOption::Reject => {
+                if child_session {
+                    PermissionStep {
+                        state: PermissionBodyState {
+                            stage: PermissionStage::Reject,
+                            selected: PermissionOption::Reject,
+                            ..state.clone()
+                        },
+                        reply: None,
+                    }
+                } else {
+                    PermissionStep { state: state.clone(), reply: Some(reply("reject", "")) }
+                }
+            }
+            PermissionOption::Once => {
+                PermissionStep { state: state.clone(), reply: Some(reply("once", "")) }
+            }
+        },
         PermissionStage::Reject => PermissionStep { state: state.clone(), reply: None },
     }
 }
@@ -418,24 +438,6 @@ pub fn permission_cancel(state: &PermissionBodyState) -> PermissionBodyState {
     }
 }
 
-/// `permissionEscape` — from "always" back to the ask (selection on
-/// Always); from the ask into the reject stage.
-#[must_use]
-pub fn permission_escape(state: &PermissionBodyState) -> PermissionBodyState {
-    if state.stage == PermissionStage::Always {
-        return PermissionBodyState {
-            stage: PermissionStage::Permission,
-            selected: PermissionOption::Always,
-            ..state.clone()
-        };
-    }
-    PermissionBodyState {
-        stage: PermissionStage::Reject,
-        selected: PermissionOption::Reject,
-        ..state.clone()
-    }
-}
-
 /// A key event outcome for the permission body.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PermissionKey {
@@ -449,13 +451,17 @@ pub enum PermissionKey {
     Ignored,
 }
 
-/// The `useKeyboard` handler (+ the reject field's textarea semantics):
-/// left/right/tab shift, return runs, escape rejects/opens the reject
-/// stage; inside the reject stage printable keys edit the message.
+/// The `SessionQuestion` + `RejectPrompt` keymaps
+/// (permission.tsx:284-307, 440-496): left/right/tab shift the
+/// selection, return runs it; `escapeKey="reject"` makes escape run
+/// the REJECT path — immediate on a top-level session, the free-text
+/// stage on a child; inside the reject stage printable keys edit the
+/// message, enter confirms, esc cancels.
 #[must_use]
 pub fn permission_key(
     state: &PermissionBodyState,
     request: &PermissionRequest,
+    child_session: bool,
     key: &str,
 ) -> PermissionKey {
     let offered = permission_offered_options(state.stage, request);
@@ -484,13 +490,22 @@ pub fn permission_key(
         "right" | "l" => PermissionKey::State(permission_shift(state, 1, &offered)),
         "tab" => PermissionKey::State(permission_shift(state, 1, &offered)),
         "enter" | "return" => {
-            let step = permission_run(state, state.selected);
+            let step = permission_run(state, state.selected, child_session);
             match step.reply {
                 Some(reply) => PermissionKey::Reply(reply, step.state),
                 None => PermissionKey::State(step.state),
             }
         }
-        "escape" => PermissionKey::State(permission_escape(state)),
+        // `escapeKey="reject"` (permission.tsx:241, 437-438): the ask's
+        // escape runs the reject path — no expanded-fullscreen state
+        // to collapse first in the docked body.
+        "escape" => {
+            let step = permission_run(state, PermissionOption::Reject, child_session);
+            match step.reply {
+                Some(reply) => PermissionKey::Reply(reply, step.state),
+                None => PermissionKey::State(step.state),
+            }
+        }
         _ => PermissionKey::Ignored,
     }
 }
@@ -513,9 +528,6 @@ pub fn permission_type_message(state: &PermissionBodyState, ch: char) -> Permiss
 const PERMISSION_ICON: &str = "△";
 
 fn permission_title(stage: PermissionStage, width: usize) -> &'static str {
-    if stage == PermissionStage::Always {
-        return "Always allow";
-    }
     if stage == PermissionStage::Reject {
         return if width < 24 { "Reject" } else { "Reject permission" };
     }
@@ -569,32 +581,38 @@ pub fn render_permission_body(
     let text_x = 2;
     match state.stage {
         PermissionStage::Permission => {
-            let info = permission_presentation(request);
-            canvas.spans(
-                content_start,
-                text_x + 1,
-                &[
-                    Span::new(format!("{} ", info.icon), theme.muted, theme.surface),
-                    Span::new(info.title.clone(), theme.text, theme.surface),
-                ],
-            );
-            for (index, line) in info.lines.iter().enumerate() {
+            // The ask's body is a function of the SELECTION
+            // (`body={(option) => ...}`, permission.tsx:223-231):
+            // hovering "Always allow" swaps the presentation for the
+            // always-lines preview (the two-stage replacement for the
+            // old confirm stage).
+            if state.selected == PermissionOption::Always {
+                for (index, line) in
+                    permission_always_lines(&request.action, &request.save).iter().enumerate()
+                {
+                    canvas.spans(
+                        content_start + index,
+                        text_x,
+                        &[Span::new(line.clone(), theme.text, theme.surface)],
+                    );
+                }
+            } else {
+                let info = permission_presentation(request);
                 canvas.spans(
-                    content_start + 2 + index,
-                    text_x,
-                    &[Span::new(line.clone(), theme.text, theme.surface)],
+                    content_start,
+                    text_x + 1,
+                    &[
+                        Span::new(format!("{} ", info.icon), theme.muted, theme.surface),
+                        Span::new(info.title.clone(), theme.text, theme.surface),
+                    ],
                 );
-            }
-        }
-        PermissionStage::Always => {
-            for (index, line) in
-                permission_always_lines(&request.action, &request.save).iter().enumerate()
-            {
-                canvas.spans(
-                    content_start + index,
-                    text_x,
-                    &[Span::new(line.clone(), theme.text, theme.surface)],
-                );
+                for (index, line) in info.lines.iter().enumerate() {
+                    canvas.spans(
+                        content_start + 2 + index,
+                        text_x,
+                        &[Span::new(line.clone(), theme.text, theme.surface)],
+                    );
+                }
             }
         }
         PermissionStage::Reject => {
@@ -663,11 +681,7 @@ fn render_permission_controls(
             Span::new("enter", theme.text, theme.pane),
             Span::new(" confirm  ", theme.muted, theme.pane),
             Span::new("esc", theme.text, theme.pane),
-            Span::new(
-                if state.stage == PermissionStage::Always { " cancel" } else { " reject" },
-                theme.muted,
-                theme.pane,
-            ),
+            Span::new(" reject", theme.muted, theme.pane),
         ]
     };
     canvas.spans_right(y, width - 4, &hint);
@@ -830,71 +844,116 @@ mod tests {
     }
 
     #[test]
-    fn run_walks_the_three_stages() {
+    fn run_walks_the_two_stage_machine() {
         let mut request = request("read", &[]);
         request.save = vec!["src/**".into()];
         let state = create_permission_body_state(&request);
         // once → immediate reply.
-        let once = permission_run(&state, PermissionOption::Once);
+        let once = permission_run(&state, PermissionOption::Once, false);
         assert_eq!(once.reply.as_ref().unwrap().decision, "once");
-        // always → confirmation stage.
-        let always = permission_run(&state, PermissionOption::Always);
-        assert_eq!(always.state.stage, PermissionStage::Always);
-        assert!(always.reply.is_none());
-        let confirmed = permission_run(&always.state, PermissionOption::Confirm);
-        assert_eq!(confirmed.reply.as_ref().unwrap().decision, "always");
-        let cancelled = permission_run(&always.state, PermissionOption::Cancel);
-        assert_eq!(cancelled.state.stage, PermissionStage::Permission);
-        assert_eq!(cancelled.state.selected, PermissionOption::Always);
-        // escape from the ask → reject stage; message flows into the reply.
-        let reject_stage = permission_escape(&state);
-        assert_eq!(reject_stage.stage, PermissionStage::Reject);
-        let with_message = PermissionBodyState { message: "  no way  ".into(), ..reject_stage };
+        // always → SINGLE-enter immediate reply (TD18: the old
+        // three-stage machine staged a Confirm round first).
+        let always = permission_run(&state, PermissionOption::Always, false);
+        assert_eq!(always.reply.as_ref().unwrap().decision, "always");
+        assert_eq!(always.state.stage, PermissionStage::Permission, "no confirm stage");
+        // reject on a TOP-LEVEL session → immediate reply.
+        let reject = permission_run(&state, PermissionOption::Reject, false);
+        assert_eq!(reject.reply.as_ref().unwrap().decision, "reject");
+        assert_eq!(reject.state.stage, PermissionStage::Permission);
+        // reject on a CHILD session (parentID) → the free-text stage.
+        let staged = permission_run(&state, PermissionOption::Reject, true);
+        assert!(staged.reply.is_none(), "the child reject stages first");
+        assert_eq!(staged.state.stage, PermissionStage::Reject);
+        let with_message = PermissionBodyState { message: "  no way  ".into(), ..staged.state };
         let reply = permission_reject(&with_message).unwrap();
         assert_eq!(reply.decision, "reject");
         assert_eq!(reply.message, "no way", "trimmed");
+        // The stage's esc returns to the ask, selection on Reject.
+        let cancelled = permission_cancel(&with_message);
+        assert_eq!(cancelled.stage, PermissionStage::Permission);
+        assert_eq!(cancelled.selected, PermissionOption::Reject);
     }
 
+    /// TD18: the keymap drives the two-stage flow — escape on a
+    /// top-level session replies `reject` IMMEDIATELY; on a child it
+    /// opens the free-text stage; `always` fires on one enter.
     #[test]
-    fn key_handler_drives_the_replay_flow() {
+    fn key_handler_drives_the_two_stage_flow() {
         let mut request = request("read", &[]);
         request.save = vec!["*".into()];
         let mut state = create_permission_body_state(&request);
-        // right → "Always allow" selected.
-        state = match permission_key(&state, &request, "right") {
+        // right → "Always allow" selected; enter replies IMMEDIATELY.
+        state = match permission_key(&state, &request, false, "right") {
             PermissionKey::State(next) => next,
             other => panic!("right shifts: {other:?}"),
         };
         assert_eq!(state.selected, PermissionOption::Always);
-        // left + enter → replies "once" and stays on the ask.
-        state = match permission_key(&state, &request, "left") {
-            PermissionKey::State(next) => next,
-            other => panic!("left shifts: {other:?}"),
-        };
-        let reply = match permission_key(&state, &request, "enter") {
+        let reply = match permission_key(&state, &request, false, "enter") {
             PermissionKey::Reply(reply, _) => reply,
-            other => panic!("enter replies: {other:?}"),
+            other => panic!("always replies on one enter: {other:?}"),
         };
-        assert_eq!(reply.decision, "once");
-        // escape opens the reject stage; typing builds the message; enter confirms.
-        state = match permission_key(&state, &request, "escape") {
+        assert_eq!(reply.decision, "always");
+        // escape on a TOP-LEVEL session → immediate reject (the old
+        // machine opened the free-text prompt and never replied).
+        let state = create_permission_body_state(&request);
+        let reply = match permission_key(&state, &request, false, "escape") {
+            PermissionKey::Reply(reply, _) => reply,
+            other => panic!("esc rejects immediately: {other:?}"),
+        };
+        assert_eq!(reply.decision, "reject");
+        // escape on a CHILD session → the free-text stage; typing
+        // builds the message; enter confirms.
+        let state = create_permission_body_state(&request);
+        let mut staged = match permission_key(&state, &request, true, "escape") {
             PermissionKey::State(next) => next,
-            other => panic!("escape rejects: {other:?}"),
+            other => panic!("esc stages the child reject: {other:?}"),
         };
-        assert_eq!(state.stage, PermissionStage::Reject);
+        assert_eq!(staged.stage, PermissionStage::Reject);
         for ch in ["c", "h", "o", "o", "s", "e", " "] {
-            state = match permission_key(&state, &request, ch) {
-                PermissionKey::Text(ch) => permission_type_message(&state, ch),
+            staged = match permission_key(&staged, &request, true, ch) {
+                PermissionKey::Text(ch) => permission_type_message(&staged, ch),
                 other => panic!("{ch} types: {other:?}"),
             };
         }
-        assert_eq!(state.message, "choose ");
-        let reply = match permission_key(&state, &request, "enter") {
+        assert_eq!(staged.message, "choose ");
+        let reply = match permission_key(&staged, &request, true, "enter") {
             PermissionKey::Reply(reply, _) => reply,
             other => panic!("enter confirms the reject: {other:?}"),
         };
         assert_eq!(reply.decision, "reject");
         assert_eq!(reply.message, "choose", "the reply message is trimmed");
+        // The stage's esc cancels back to the ask.
+        let back = match permission_key(&staged, &request, true, "escape") {
+            PermissionKey::State(next) => next,
+            other => panic!("esc cancels: {other:?}"),
+        };
+        assert_eq!(back.stage, PermissionStage::Permission);
+    }
+
+    /// TD19: the edit presentation carries the diff preview — the
+    /// first file's diff/patch, a metadata diff, or input.patchText.
+    #[test]
+    fn edit_presentation_renders_the_diff_preview() {
+        let mut ask = PermissionRequest {
+            input: serde_json::json!({ "path": "src/lib.rs" }),
+            metadata: serde_json::json!({
+                "files": [ { "diff": "@@ -1,2 +1,2 @@\n const old = 1\n-const gone = 2\n+const fresh = 3\n" } ]
+            }),
+            ..request("edit", &[])
+        };
+        let info = permission_presentation(&ask);
+        assert_eq!(info.title, "Edit src/lib.rs");
+        assert!(info.lines.contains(&"-const gone = 2".to_owned()), "lines: {:?}", info.lines);
+        assert!(info.lines.contains(&"+const fresh = 3".to_owned()));
+        // The patchText fallback (no files, no metadata diff).
+        ask.metadata = serde_json::json!({});
+        ask.input = serde_json::json!({ "path": "a.ts", "patchText": "+added" });
+        let info = permission_presentation(&ask);
+        assert_eq!(info.lines, vec!["+added".to_owned()]);
+        // Neither → the muted fallback.
+        ask.input = serde_json::json!({ "path": "a.ts" });
+        let info = permission_presentation(&ask);
+        assert_eq!(info.lines, vec!["No diff provided".to_owned()]);
     }
 
     #[test]
