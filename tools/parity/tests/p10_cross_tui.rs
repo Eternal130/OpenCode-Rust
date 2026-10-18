@@ -88,7 +88,6 @@ async fn wait_capture(needle: &str, tries: usize, secs: u64, artifact: &str) -> 
 
 #[tokio::test]
 #[ignore = "Phase-10 battery: opt in with OC_P10=1 (needs tmux + reference checkout)"]
-#[allow(clippy::too_many_lines)]
 async fn p10_ts_tui_against_rust_server() -> Result<()> {
     if !enabled() {
         skip("OC_P10 != 1");
@@ -120,6 +119,22 @@ async fn p10_ts_tui_against_rust_server() -> Result<()> {
     if parity::rust_server::skip_if_no_cargo() {
         return Ok(());
     }
+
+    // Known-red wrapper (B0-2, §8.5): the rename interaction is a
+    // registered red (GATE-TUI-RENAME, expiry Batch 1B) — see
+    // docs/parity-baseline.md §2.1. Categorized, never skipped.
+    if let Err(error) = run_against_rust_server(&bun).await {
+        return Err(p10_common::known_red("GATE-TUI-RENAME", "Batch 1B").categorize(error));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+async fn run_against_rust_server(bun: &std::path::Path) -> Result<()> {
+    let tui_root = std::path::PathBuf::from(
+        std::env::var("PARITY_REF_ROOT").unwrap_or_else(|_| "/tmp/opencode/ref".to_owned()),
+    )
+    .join("packages/tui");
 
     // -- scratch layout -----------------------------------------------------
     let root = PathBuf::from(format!("/tmp/opencode/p10-tui-{}", std::process::id()));

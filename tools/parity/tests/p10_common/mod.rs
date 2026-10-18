@@ -316,6 +316,156 @@ pub fn provider_config(base: &str, second_model: bool) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Known-red registry (PARITY-LOOP.md §8.5, B0-2).
+// ---------------------------------------------------------------------------
+
+/// The failure-message prefix for a mismatch already registered in
+/// `goldens/p10/known-red.json` (still a FAILURE — strict mode never skips).
+pub const KNOWN_RED_PREFIX: &str = "KNOWN-RED:";
+/// The failure-message prefix for a mismatch with no (or expired) registry
+/// entry: new reds go straight to red (§8.5).
+pub const NEW_RED_PREFIX: &str = "NEW-RED:";
+
+/// One registry entry in `goldens/p10/known-red.json`.
+#[derive(Debug, Clone)]
+pub struct KnownRedEntry {
+    pub ledger_id: String,
+    pub test: String,
+    pub pattern: String,
+    pub added: String,
+    pub expiry_batch: String,
+    pub owner: String,
+}
+
+/// Parse the checked-in registry (`goldens/p10/known-red.json`).
+///
+/// # Errors
+/// When the registry file is missing or malformed — a broken registry is a
+/// harness failure, never a silent pass.
+pub fn known_red_registry() -> Result<Vec<KnownRedEntry>> {
+    let path = golden_dir().join("known-red.json");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let value: Value =
+        serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+    let rows = value
+        .as_array()
+        .ok_or_else(|| anyhow!("{} is not an array of registry entries", path.display()))?;
+    let mut entries = Vec::new();
+    for row in rows {
+        let field = |name: &str| {
+            row.get(name)
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| anyhow!("registry entry missing field {name:?}: {row}"))
+        };
+        entries.push(KnownRedEntry {
+            ledger_id: field("ledger_id")?,
+            test: field("test")?,
+            pattern: field("pattern")?,
+            added: field("added")?,
+            expiry_batch: field("expiry_batch")?,
+            owner: field("owner")?,
+        });
+    }
+    Ok(entries)
+}
+
+/// Batch ordering for expiry checks (Batch 0 < 1A < 1B < 2 < 3 < 4; unknown
+/// labels sort last so an unparseable expiry never silently expires).
+fn batch_rank(batch: &str) -> usize {
+    const ORDER: [&str; 6] = ["Batch 0", "Batch 1A", "Batch 1B", "Batch 2", "Batch 3", "Batch 4"];
+    ORDER.iter().position(|known| *known == batch).unwrap_or(ORDER.len())
+}
+
+/// The current parity batch for expiry evaluation (override with
+/// `PARITY_CURRENT_BATCH`); defaults to Batch 0, the batch that built this
+/// skeleton.
+fn current_batch() -> String {
+    std::env::var("PARITY_CURRENT_BATCH").unwrap_or_else(|_| "Batch 0".to_owned())
+}
+
+/// How a ledger ID relates to the registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RedClass {
+    /// Registered and not yet expired — failures surface as `KNOWN-RED:`.
+    Known { expiry_batch: String },
+    /// Missing, drifted, or expired — failures surface as `NEW-RED:` with
+    /// the reason (§8.5: known-red can only shrink).
+    New { reason: String },
+}
+
+/// A resolved known-red reference for one ledger ID (see [`known_red`]).
+#[derive(Debug, Clone)]
+pub struct KnownRed {
+    /// The ledger ID the failing check is attributed to.
+    pub ledger_id: String,
+    /// The expiry batch the CALLER believes the entry carries; a mismatch
+    /// with the registry is drift and is surfaced, not hidden.
+    pub expected_expiry: String,
+    /// The resolved registry state.
+    pub class: RedClass,
+}
+
+/// Resolve `ledger_id` against `goldens/p10/known-red.json`.
+///
+/// Gate tests wrap their fallible run in this so a registered failure keeps
+/// failing — with the message prefixed `KNOWN-RED:<ledger-id>:` — while a
+/// missing/expired/drifted registration prefixes `NEW-RED:` instead (§8.5:
+/// a skip is never a pass, and known-red may only shrink).
+#[must_use]
+pub fn known_red(ledger_id: &str, expiry_batch: &str) -> KnownRed {
+    let class = match known_red_registry()
+        .ok()
+        .and_then(|entries| entries.into_iter().find(|entry| entry.ledger_id == ledger_id))
+    {
+        Some(entry) => {
+            if entry.expiry_batch != expiry_batch {
+                RedClass::New {
+                    reason: format!(
+                        "registry expiry_batch {:?} != caller-expected {:?}",
+                        entry.expiry_batch, expiry_batch
+                    ),
+                }
+            } else if batch_rank(&entry.expiry_batch) < batch_rank(&current_batch()) {
+                RedClass::New {
+                    reason: format!("registry entry expired at {:?}", entry.expiry_batch),
+                }
+            } else {
+                RedClass::Known { expiry_batch: entry.expiry_batch }
+            }
+        }
+        None => RedClass::New {
+            reason: "no entry for this ledger id in goldens/p10/known-red.json".to_owned(),
+        },
+    };
+    KnownRed { ledger_id: ledger_id.to_owned(), expected_expiry: expiry_batch.to_owned(), class }
+}
+
+impl KnownRed {
+    /// Prefix a failure per the registry state. The result is STILL an
+    /// `Err` — categorization changes the message, never the outcome.
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value)] // consumed for the {:#} chain
+    pub fn categorize(&self, error: anyhow::Error) -> anyhow::Error {
+        let detail = format!("{error:#}");
+        match &self.class {
+            RedClass::Known { expiry_batch } => anyhow!(
+                "{KNOWN_RED_PREFIX}{}: {detail}\n(known red: registered in \
+                 goldens/p10/known-red.json with expiry {expiry_batch}; this is still a \
+                 failure — strict mode never skips; see PARITY-LOOP.md §8.5)",
+                self.ledger_id
+            ),
+            RedClass::New { reason } => anyhow!(
+                "{NEW_RED_PREFIX}{}: {detail}\n({reason}; triage via the parity ledger \
+                 before registering — known-red may only shrink; see PARITY-LOOP.md §8.5)",
+                self.ledger_id
+            ),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // bun:sqlite inspection (the battery already requires bun; reuse it to read
 // the shared database without linking a sqlite driver into the harness).
 // ---------------------------------------------------------------------------
