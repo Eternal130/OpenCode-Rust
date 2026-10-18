@@ -565,6 +565,9 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             let history = store.session_history();
             let options: Vec<SelectOption> = history
                 .iter()
+                // SE-F4: parents only — the ref's session list never
+                // rows a subagent child branch.
+                .filter(|session| session.parent_id.is_none())
                 .map(|session| {
                     SelectOption::titled(
                         store
@@ -576,7 +579,9 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                     .categorized("Sessions")
                 })
                 .collect();
-            SelectProps::new(*title, options)
+            // SE-F4: the ref's filter semantics — trimmed, case-folded,
+            // byte-exact substring (whitespace-only = the full list).
+            SelectProps::new(*title, options).substring_filter()
         }
         // -- Lane FINAL: the integration connect surface ---------------
         // `DialogIntegration` (dialog-integration.tsx:102-145): one row
@@ -784,10 +789,11 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         DialogKind::ExportResult { path } => {
             SelectProps::new("Session exported", vec![SelectOption::titled(path.clone(), "path")])
         }
-        DialogKind::ServerList { title, .. } => SelectProps::new(
-            *title,
-            vec![SelectOption::titled("Not wired in this build", "stub").muted_placeholder()],
-        ),
+        // SE-F9: the stub row is DELISTED — only model/agent/session
+        // listings ever mount a ServerList now; an unknown picker
+        // falls to the shared empty state ("No items available"),
+        // never placeholder copy.
+        DialogKind::ServerList { title, .. } => SelectProps::new(*title, Vec::new()),
         // SURF-2 `DialogMcp` (`/mcps`, dialog-mcp.tsx:70-81): the
         // name-sorted server rows with the status footer text
         // (`Status`, :20-34).
@@ -2789,6 +2795,7 @@ mod tests {
                     model: None,
                     id: "s_hist".into(),
                     title: Some("History row".into()),
+                    parent_id: None,
                     time_idle: None,
                     viewed: None,
                 },
@@ -2796,6 +2803,7 @@ mod tests {
                     model: None,
                     id: "s_open".into(),
                     title: Some("Open tab".into()),
+                    parent_id: None,
                     time_idle: None,
                     viewed: None,
                 },

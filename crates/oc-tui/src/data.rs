@@ -127,6 +127,10 @@ impl BusEvent {
 pub struct SessionSnapshot {
     pub id: String,
     pub title: Option<String>,
+    /// The parent session (`parentID` on the wire) — `Some` marks a
+    /// CHILD (a subagent branch). The session-list dialog lists
+    /// PARENTS only (SE-F4: the ref's `dialog-session-list` rows).
+    pub parent_id: Option<String>,
     /// Last activity timestamp (`time.idle`); absent when unknown.
     pub time_idle: Option<f64>,
     /// Last view timestamp (`time.viewed`); absent when unknown.
@@ -289,6 +293,7 @@ impl ResyncSource for HttpResync {
             .map(|session| SessionSnapshot {
                 id: session.id,
                 title: session.title,
+                parent_id: session.parent_id,
                 time_idle: session.time.idle,
                 viewed: session.time.viewed,
                 model: session.model.map(|model| SessionModelRef {
@@ -845,6 +850,7 @@ mod tests {
             model: None,
             id: id.to_owned(),
             title: None,
+            parent_id: None,
             time_idle: idle,
             viewed,
         };

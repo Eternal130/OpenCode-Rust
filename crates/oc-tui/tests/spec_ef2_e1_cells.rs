@@ -50,7 +50,14 @@ struct Audit {
     bursts: usize,
 }
 
-fn detect(name: &str, stamps: &[u64]) -> Audit {
+/// SE-F1 adjudication (wave 2): a flush gap that tracks the cell's
+/// own DRIVE interval is the driver's pacing, not an app stall — the
+/// wheel cell writes a notch every 150 ms and the app flushes within
+/// ~1 ms of each (uniform 151.0 ms gaps, 3/3 runs; artifact
+/// /tmp/opencode/scanef2/e1-burst-details.log). `drive_ms` exempts
+/// gaps within the drive interval (+2 ms jitter); absolute stalls
+/// beyond it still count.
+fn detect(name: &str, stamps: &[u64], drive_ms: Option<u64>) -> Audit {
     let gaps: Vec<u64> = stamps.windows(2).map(|w| w[1] - w[0]).collect();
     let med = if gaps.is_empty() { 0 } else { median(&mut gaps.clone()) };
     let cadence = med <= 250 && !gaps.is_empty();
@@ -60,7 +67,8 @@ fn detect(name: &str, stamps: &[u64]) -> Audit {
     let mut detail = Vec::new();
     for w in stamps.windows(2) {
         let g = w[1] - w[0];
-        if g > 150 {
+        let drive_paced = drive_ms.is_some_and(|drive| g <= drive + 2);
+        if g > 150 && !drive_paced {
             gap150 += 1;
             detail.push(format!("gap150@{}ms={}ms", w[0], g));
         }
@@ -282,7 +290,8 @@ fn run_cell_suite(tag: &str, paste: Vec<u8>) {
     // stderr; a file is immune — I9 artifact).
     let mut report = String::new();
     for (name, stamps) in &cells {
-        let a = detect(name, stamps);
+        let drive = name.starts_with("wheel").then_some(150u64);
+        let a = detect(name, stamps, drive);
         report.push_str(&format!(
             "[E1-cell] {}: flushes={} median-gap={}ms cadence={} bursts={}\n",
             a.name,
@@ -306,14 +315,16 @@ fn run_cell_suite(tag: &str, paste: Vec<u8>) {
             "cell {name}: capture too thin ({} flushes)",
             stamps.len()
         );
-        total_bursts += detect(name, stamps).bursts;
+        let drive = name.starts_with("wheel").then_some(150u64);
+        total_bursts += detect(name, stamps, drive).bursts;
     }
     if std::env::var("EF2_ALLOW_BURSTS").is_err() {
-        // SE-F11 (registered 2026-10-18): large pastes (8k/34k) produce 2
-        // stall bursts over the E1 150ms threshold on main — a REAL
-        // finding (paste-path jank), not a flake. These two tests stay
-        // #[ignore]d until the wave-2 fix lands; run explicitly with
-        // --run-ignored to reproduce.
+        // SE-F11 (registered 2026-10-18, wave-2 VERIFIED-FIXED): the
+        // large-paste ingestion stays within the E1 budget on the
+        // fixed tree — 0 stall-bursts at 8.5 KB and 34 KB, idle and
+        // during-stream (the paste cells' audits above are the
+        // acceptance proof; the earlier bursts rode the pre-fix
+        // teardown-wedge runs).
         assert_eq!(
             total_bursts,
             0,
@@ -334,13 +345,11 @@ fn run_cell_suite(tag: &str, paste: Vec<u8>) {
 }
 
 #[test]
-#[ignore = "SE-F11: large-paste stall bursts — open finding, wave-2 fix"]
 fn e1_cells_paste_8k() {
     run_cell_suite("e1cells8k", paste_bytes(128)); // ~8.5KB
 }
 
 #[test]
-#[ignore = "SE-F11: large-paste stall bursts — open finding, wave-2 fix"]
 fn e1_cells_paste_34k() {
     run_cell_suite("e1cells34k", paste_bytes(512)); // ~34KB
 }
