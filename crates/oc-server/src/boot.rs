@@ -21,6 +21,7 @@
 //! (the per-location assembly lock), so a request can never observe a
 //! half-bound location either.
 
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -28,8 +29,13 @@ use std::sync::Arc;
 
 use oc_core::config::{GlobalDirs, Loader};
 use oc_core::engine::{Engine, EngineOptions};
+use oc_core::jobs::{
+    BackgroundRecord, Jobs, Recovery as JobRecovery, RestartDeps, RestartOptions,
+    Status as JobStatus,
+};
 use oc_core::location::LocationRef;
 use oc_core::provider_catalog::facade::CustomProvider;
+use oc_core::session::store::SessionStore;
 use oc_util::determinism::{SystemClock, UuidV4IdGen};
 
 use crate::app::AppShell;
@@ -257,6 +263,13 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     }));
     app_state.plugins = Some(plugin_boot);
     let state = Arc::new(app_state);
+    // RUNTIME-L01 — restart continuity (`installRestartContinuity`,
+    // server process.ts:237-240 → `SessionRestart.resumeSuspendedSessions`
+    // forked at boot before ready): execution claims are written at turn
+    // start, so the sweep covers graceful restarts AND unclean deaths
+    // (kill -9) with no shutdown-hook participation. Forked: readiness
+    // never waits on a drain (v2 `Effect.forkScoped`).
+    tokio::spawn(recovery_sweep(Arc::clone(&state.engine)));
     let shell = AppShell::new(Arc::clone(&state));
     let router = shell.router();
     let on_listen = trace_boot.then(|| {
@@ -270,6 +283,120 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
         }) as lifecycle::OnListen
     });
     lifecycle::serve(&options.serve, state, router, on_listen).await
+}
+
+/// RUNTIME-L01 — the boot recovery sweep over the engine
+/// (`SessionRestart.resumeSuspendedSessions`, core
+/// session/execution/restart.ts:192-231). The engine's per-location
+/// services partition v2's single-service sweep:
+///
+/// 1. the affected sessions (orphaned top-level claims + pending
+///    background targets) group by their session row's location;
+/// 2. orphaned child claims are released once, globally
+///    (`release_child_claims(children)`), except recoverable subagent
+///    children;
+/// 3. each location replays its pending records (shell notices first)
+///    and resumes its suspended claims through its own site, under the
+///    durable `resume_attempts` budget (`prepareResume`).
+///
+/// A location that fails to assemble keeps its claims — the next boot
+/// retries (recovery is at-least-once).
+async fn recovery_sweep(engine: Arc<Engine>) {
+    let store = SessionStore::new((*engine.db).clone());
+    let Ok(suspended_ids) = store.list_suspended().await else {
+        eprintln!("[restart] list_suspended failed; skipping recovery sweep");
+        return;
+    };
+    // Pending background records live in the shared KV; read once. The
+    // reader registry is process-local-empty — ids/clock only matter for
+    // allocations this read never makes.
+    let reader = Jobs::new((*engine.db).clone(), Arc::new(UuidV4IdGen), Arc::new(SystemClock));
+    let pending = reader.pending_background().await;
+    let children: Vec<String> = pending
+        .iter()
+        .filter(|record| record.status == JobStatus::Running)
+        .filter_map(|record| match &record.recovery {
+            JobRecovery::Subagent { child_session_id, .. } => Some(child_session_id.clone()),
+            JobRecovery::Shell { .. } => None,
+        })
+        .collect();
+    if let Err(error) = store.release_child_claims(&children).await {
+        eprintln!("[restart] release_child_claims failed: {error}");
+    }
+    // The v2 suspended set (listSuspended ∪ children): early replay
+    // notices for these parents must not wake them (restart.ts:199-206).
+    let suspended: HashSet<String> =
+        suspended_ids.iter().cloned().chain(children.iter().cloned()).collect();
+
+    // Partition the affected sessions by their row's location (the
+    // session-location derivation handlers/common.rs uses).
+    let target_of = |record: &BackgroundRecord| match &record.recovery {
+        JobRecovery::Shell { session_id, .. } => session_id.clone(),
+        JobRecovery::Subagent { parent_session_id, .. } => parent_session_id.clone(),
+    };
+    let mut affected: Vec<String> =
+        suspended_ids.iter().cloned().chain(pending.iter().map(&target_of)).collect();
+    affected.sort();
+    affected.dedup();
+    let mut by_location: HashMap<LocationRef, Vec<String>> = HashMap::new();
+    for session_id in &affected {
+        match store.get(session_id).await {
+            Ok(Some(row)) => {
+                by_location
+                    .entry(LocationRef::new(
+                        PathBuf::from(&row.directory),
+                        row.workspace_id.clone(),
+                    ))
+                    .or_default()
+                    .push(session_id.clone());
+            }
+            error => {
+                eprintln!(
+                    "[restart] session {session_id} unreadable ({error:?}); its claim waits for the next boot"
+                );
+            }
+        }
+    }
+
+    let options = RestartOptions::default();
+    for (location, ids) in by_location {
+        let site_pending: Vec<BackgroundRecord> =
+            pending.iter().filter(|record| ids.contains(&target_of(record))).cloned().collect();
+        let site_suspended: Vec<String> =
+            ids.iter().filter(|id| suspended_ids.contains(id)).cloned().collect();
+        if site_pending.is_empty() && site_suspended.is_empty() {
+            continue;
+        }
+        let services = match engine.location(location.clone()).await {
+            Ok(services) => services,
+            Err(error) => {
+                eprintln!(
+                    "[restart] location {} failed to assemble; {} suspended sessions wait for the next boot: {error}",
+                    location.as_path().display(),
+                    site_suspended.len()
+                );
+                continue;
+            }
+        };
+        let fork_services = Arc::clone(&services);
+        let fork = move |session_id: String| {
+            let services = Arc::clone(&fork_services);
+            tokio::spawn(async move {
+                let _ = services.execution.resume(&session_id).await;
+            });
+        };
+        let deps = RestartDeps {
+            store: &services.store,
+            inbox: &services.inbox,
+            bus: engine.bus.as_ref(),
+            jobs: &services.jobs,
+            execution: &services.execution,
+            subagents: &services.subagents,
+            fork_resume: &fork,
+        };
+        deps.recover_pending(&site_pending, &suspended, &options).await;
+        deps.resume_ids(&site_suspended, &options).await;
+    }
 }
 
 /// Parses an `IpAddr` for the CLI (`--hostname`).
@@ -577,6 +704,122 @@ mod tests {
             )),
             "a fresh runtime identity was claimed under the new root"
         );
+    }
+
+    /// RUNTIME-L01 — the production boot wires the recovery sweep
+    /// (`installRestartContinuity` → `SessionRestart`): a database that
+    /// carries an orphaned mid-turn claim from a dead previous server is
+    /// recovered by a fresh `boot_and_serve` over the same data root —
+    /// the sweep resumes the suspended turn (durable budget notice) and
+    /// the terminal releases the claim, with no request ever arriving.
+    #[tokio::test]
+    async fn boot_sweep_recovers_orphans_at_boot() {
+        /// Restores `OPENCODE_CATALOG_FETCH` on drop (hermetic boot: the
+        /// models-dev fetch loop stays off).
+        struct FetchEnv(Option<String>);
+        impl Drop for FetchEnv {
+            fn drop(&mut self) {
+                match self.0.clone() {
+                    Some(value) => std::env::set_var("OPENCODE_CATALOG_FETCH", value),
+                    None => std::env::remove_var("OPENCODE_CATALOG_FETCH"),
+                }
+            }
+        }
+
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let project = root.path().join("proj");
+        std::fs::create_dir_all(&project).expect("project dir");
+        let home = root.path().join("home");
+        std::fs::create_dir_all(&home).expect("home");
+        let data_root = root.path().join("data");
+        std::fs::create_dir_all(&data_root).expect("data root");
+        let _env = Env::redirect_into(&home);
+
+        // The "previous server's" durable signature: a session row plus
+        // an execution claim written at turn start (the production
+        // started-hook's commit SQL — the process died before any
+        // terminal released it).
+        let db_path = match oc_core::database::engine_location(&data_root) {
+            oc_core::database::DbLocation::File(path) => path,
+            oc_core::database::DbLocation::Memory => unreachable!("engine roots are files"),
+        };
+        {
+            let db = oc_core::database::Database::open_file(&db_path).await.expect("previous db");
+            let store = oc_core::session::store::SessionStore::new(db.clone());
+            let session_id = "ses_boot_sweep".to_string();
+            let claim_id = session_id.clone();
+            let project_dir = project.to_str().expect("utf8 project").to_string();
+            db.transaction(move |tx| {
+                oc_core::database::schema::ProjectRow::insert_or_ignore(
+                    tx,
+                    &oc_core::database::schema::ProjectRow::new(
+                        "prj_boot_sweep",
+                        &project_dir,
+                        None,
+                    )
+                    .expect("project row"),
+                )?;
+                let row = oc_core::database::schema::SessionRow::new(
+                    session_id.clone(),
+                    "prj_boot_sweep",
+                    &project_dir,
+                    "boot sweep orphan",
+                    "test",
+                )
+                .expect("session row");
+                oc_core::database::schema::SessionRow::insert_or_ignore(tx, &row)
+            })
+            .await
+            .expect("seed session");
+            store.claim(&claim_id).await.expect("mid-turn claim");
+        }
+
+        // The replacement server: a fresh boot over the crashed root.
+        // (Hermetic: no models-dev fetch loop in the test boot.)
+        let prior_fetch = std::env::var("OPENCODE_CATALOG_FETCH").ok();
+        std::env::set_var("OPENCODE_CATALOG_FETCH", "0");
+        let options = BootOptions {
+            serve: ServeOptions { hostname: IpAddr::from([127, 0, 0, 1]), port: Some(0) },
+            password: None,
+            cors_origins: Vec::new(),
+            version: "test".to_owned(),
+            data_root: data_root.clone(),
+            home,
+            config_location: Some(project.clone()),
+        };
+        std::env::set_var("OPENCODE_CATALOG_FETCH", "0");
+        let _fetch_env = FetchEnv(prior_fetch);
+        let handle = boot_and_serve(&options).await.expect("boot and serve");
+
+        // The forked sweep resumes the orphaned turn: the budget notice
+        // lands in the transcript and the terminal (the drain cannot
+        // resolve a model in this hermetic boot, so it fails) releases
+        // the claim. No request is ever sent.
+        let store = oc_core::session::store::SessionStore::new((*handle.state.engine.db).clone());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let row = store.get("ses_boot_sweep").await.expect("row").expect("session exists");
+            let notice = oc_core::session::store::MessagesInput {
+                session_id: "ses_boot_sweep".to_string(),
+                ..Default::default()
+            };
+            let messages = store.messages(notice).await.expect("messages");
+            let noticed = messages.iter().any(|message| {
+                message.type_ == "synthetic"
+                    && message.data.contains(oc_core::jobs::CONTINUE_AFTER_SERVER_RESTART)
+            });
+            if row.time_suspended.is_none() && noticed {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "boot sweep never recovered the orphaned claim (suspended={:?}, notice={noticed})",
+                row.time_suspended
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        handle.shutdown_and_join().await.expect("shutdown");
     }
 
     /// dogfood2 bug 3 — the boot provider seeding and every per-location
