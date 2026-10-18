@@ -77,10 +77,8 @@ pub async fn deliver(
     // ⇒ `execution.wake(parent)`. This is the RUNTIME-S01 seam: without it
     // the admitted result strands in the pending inbox of an idle parent.
     if input.resume != Some(false) {
-        let staged_revert = inbox
-            .session_staged_revert(recovery.parent_session_id.as_str())
-            .await
-            .unwrap_or(false);
+        let staged_revert =
+            inbox.session_staged_revert(recovery.parent_session_id.as_str()).await.unwrap_or(false);
         if !staged_revert {
             wake(recovery.parent_session_id.as_str());
         }
