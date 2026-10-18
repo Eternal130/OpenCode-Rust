@@ -1136,6 +1136,17 @@ impl Shared {
         self.send_notification("tui.theme", view);
     }
 
+    /// Push the sidebar's layout budget (the `tui.layout` notification
+    /// — SA-F5: the guest's sidebar flattener lays `space-between` /
+    /// flexGrow rows out against this width so the plugin's padded
+    /// columns materialize like its own renderer's output).
+    pub fn notify_tui_layout(&self, sidebar_content_width: usize) {
+        self.send_notification(
+            "tui.layout",
+            json!({ "sidebarContentWidth": sidebar_content_width }),
+        );
+    }
+
     fn send_notification(&self, method: &str, params: Value) {
         let frame = protocol::notification(method, params);
         let outbound = self.outbound.read().expect("outbound lock poisoned");
