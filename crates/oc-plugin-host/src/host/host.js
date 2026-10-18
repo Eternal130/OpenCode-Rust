@@ -1252,6 +1252,13 @@ let tuiThemeView = {
   text: "#eeeeee",
   textMuted: "#888888",
 };
+/** The host-pushed sidebar layout budget (oc-tui's painter row width:
+ *  SESSION_SIDEBAR_WIDTH − 4 = 38; the plugin root box's border pair
+ *  brings the section's own content to 36). SA-F5: the flattener lays
+ *  row boxes out against this so `justifyContent: "space-between"`
+ *  headers and flexGrow-spacer rows materialize with the padded
+ *  columns the plugin's own renderer shows. */
+let tuiSidebarContentWidth = 38;
 
 /** Ensure the host-provided OpenTUI shims resolve from the tui entry
  *  (sibling node_modules; `solid-js` stays the real package when the
@@ -1354,18 +1361,60 @@ export function createSignal(value) {
   });
 }
 
-/** Walk one rendered tree into flat lines (row-boxes join their text
- *  children horizontally with single spaces — the flex gaps are not
- *  in the tree; column boxes stack). */
-function treeLines(node) {
+/** The display width of one flattened line (ASCII-fast path). */
+function lineWidth(line) {
+  let width = 0;
+  for (const ch of line) {
+    const code = ch.codePointAt(0) ?? 0;
+    // East-asian wide/fullwidth ranges (the pragmatic wcwidth the
+    // flagship's rows need — braille/dots are narrow).
+    width +=
+      (code >= 0x1100 && code <= 0x115f) ||
+      (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
+      (code >= 0xac00 && code <= 0xd7a3) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xfe30 && code <= 0xfe6f) ||
+      (code >= 0xff00 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6) ||
+      (code >= 0x1f300 && code <= 0x1f64f) ||
+      (code >= 0x1f900 && code <= 0x1f9ff)
+        ? 2
+        : 1;
+  }
+  return width;
+}
+
+/** Pad (never truncate past content) one line to `width` display
+ *  cells — a text/box node with a numeric `width` occupies exactly
+ *  that many columns in its parent's row. */
+function padTo(line, width) {
+  const natural = lineWidth(line);
+  return natural >= width ? line : line + " ".repeat(width - natural);
+}
+
+/** Walk one rendered tree into flat lines at a resolved content
+ *  `width`. Columns stack their children's lines; ROW boxes lay their
+ *  children out horizontally honoring the tree's width cues (SA-F5
+ *  fidelity): a numeric `width` fixes a child's column span, `marginLeft`
+ *  prefixes spaces, `flexGrow` children absorb the leftover, and
+ *  `justifyContent: "space-between"` spreads the leftover across the
+ *  gaps — the shapes the flagship's sidebar rows actually use (the
+ *  header's `▼ name … version` and the agent rows' padded name column
+ *  with the right-aligned model). Rows without any flex/space-between
+ *  cue keep the legacy tight join (single space, runs collapsed). */
+function treeLines(node, width = tuiSidebarContentWidth) {
   if (!node || typeof node !== "object") return [];
   if (node.tag === "#text") {
     const text = String(node.props.text ?? "");
     return text === "" ? [] : [text];
   }
-  const childResults = (node.children ?? []).map(treeLines);
+  const children = (node.children ?? []).filter(Boolean);
   const direction = node.props.flexDirection;
-  if (direction === "row") {
+  if (direction === "row" && children.length > 0) {
+    const laid = rowLine(node, children, width);
+    if (laid !== null) return [laid];
+    // Legacy tight join (no layout cues resolvable).
+    const childResults = children.map((child) => treeLines(child, width));
     const height = childResults.reduce((max, lines) => Math.max(max, lines.length), 0);
     const row = [];
     for (let index = 0; index < height; index++) {
@@ -1378,7 +1427,76 @@ function treeLines(node) {
     }
     return row;
   }
-  return childResults.flat();
+  return children.flatMap((child) => treeLines(child, contentWidthOf(node, width)));
+}
+
+/** A box's content width: numeric `width` wins; a border consumes its
+ *  pair; `width: "100%"` resolves against the parent-provided budget.
+ *  (paddingRight is not subtracted — the flagship's space-between rows
+ *  empirically span the full inner width, ref capture cols 120..155.) */
+function contentWidthOf(node, parentWidth) {
+  const declared = node?.props?.width;
+  if (typeof declared === "number" && declared > 0) return declared;
+  let width = parentWidth;
+  if (node?.props?.border) width = Math.max(0, width - 2);
+  if (typeof node?.props?.paddingLeft === "number") width = Math.max(0, width - node.props.paddingLeft);
+  return width;
+}
+
+/** One row box's laid-out line, or null when the shape is not
+ *  resolvable (multi-line children, overflow, no width budget). */
+function rowLine(node, children, width) {
+  if (!Number.isFinite(width) || width <= 0) return null;
+  const inner = contentWidthOf(node, width);
+  const parts = [];
+  for (const child of children) {
+    const lines = treeLines(child, inner);
+    if (lines.length > 1) return null;
+    let line = lines[0] ?? "";
+    const declared = child.props?.width;
+    if (typeof declared === "number" && declared > 0) {
+      line = padTo(line, declared);
+    }
+    if (typeof child.props?.paddingLeft === "number" && child.props.paddingLeft > 0) {
+      line = " ".repeat(child.props.paddingLeft) + line;
+    }
+    let margin = 0;
+    if (typeof child.props?.marginLeft === "number" && child.props.marginLeft > 0) {
+      margin = child.props.marginLeft;
+    }
+    parts.push({ line, margin, flex: Boolean(child.props?.flexGrow) });
+  }
+  const occupied =
+    parts.reduce((sum, part) => sum + part.margin + lineWidth(part.line), 0);
+  if (occupied > inner) return null;
+  const flexCount = parts.filter((part) => part.flex).length;
+  const spaceBetween = node.props?.justifyContent === "space-between";
+  if (flexCount === 0 && !spaceBetween) return null;
+  let slack = inner - occupied;
+  const gapCount = spaceBetween && flexCount === 0 ? parts.length - 1 : 0;
+  const out = [];
+  parts.forEach((part, index) => {
+    if (part.margin) out.push(" ".repeat(part.margin));
+    out.push(part.line);
+    if (part.flex && flexCount > 0) {
+      const share = Math.floor(slack / flexCount);
+      if (share > 0) out.push(" ".repeat(share));
+      // Remainder spaces trail the LAST flexible part (integer slack).
+      if (index === parts.length - 1) {
+        const remainder = slack - share * flexCount;
+        if (remainder > 0) out.push(" ".repeat(remainder));
+      }
+    } else if (gapCount > 0 && index < gapCount) {
+      const share = Math.floor(slack / gapCount);
+      if (share > 0) out.push(" ".repeat(share));
+      if (index === gapCount - 1) {
+        const remainder = slack - share * gapCount;
+        if (remainder > 0) out.push(" ".repeat(remainder));
+      }
+    }
+  });
+  const line = out.join("");
+  return line.trim() === "" ? null : line;
 }
 
 /** Does this node (or the box that produced a line) carry a pointer
@@ -1408,6 +1526,22 @@ async function handleLoadTui({ entry, options }) {
     throw new Error(`${entry}: default export has no tui(api) entry`);
   }
   const pluginId = typeof def.id === "string" && def.id ? def.id : `tui:${deriveId(abs)}`;
+  // SA-F5: the badge must show the PLUGIN's own version — v2 passes
+  // the loaded package's version as the tui() metadata (omo-slim
+  // renders `v${meta.version}`, tui2.js: `meta.version ?? readPackageVersion()
+  // ?? "dev"`); the app version we passed before materialized as the
+  // wrong badge (`v2.0.24` where the ref showed `v3.0.4`).
+  let pluginVersion = "dev";
+  try {
+    const pkgText = require("node:fs").readFileSync(
+      require("node:path").join(packageRoot, "package.json"),
+      "utf8",
+    );
+    const pkg = JSON.parse(pkgText);
+    if (typeof pkg.version === "string" && pkg.version) pluginVersion = pkg.version;
+  } catch {
+    // Unreadable/absent package.json: "dev" (the plugin's own fallback).
+  }
   const loadOptions = options && typeof options === "object" && !Array.isArray(options) ? options : {};
   const record = { id: pluginId, entry: abs, dispose: null, subscriptions: [], commands: new Map() };
   plugins.set(pluginId, record);
@@ -1510,7 +1644,7 @@ async function handleLoadTui({ entry, options }) {
     },
     plugins: { list: () => [], activate: async () => false, deactivate: async () => false, add: async () => false },
   };
-  await def.tui(api, loadOptions, { id: pluginId, version: domainBase.appVersion, state: "first" });
+  await def.tui(api, loadOptions, { id: pluginId, version: pluginVersion, state: "first" });
   const dispose = async () => {
     for (const fn of disposeLifecycle.splice(0)) {
       try {
@@ -1657,6 +1791,16 @@ async function handleLine(line) {
       text: typeof view.text === "string" ? view.text : tuiThemeView.text,
       textMuted: typeof view.textMuted === "string" ? view.textMuted : tuiThemeView.textMuted,
     };
+    return;
+  }
+  if (message.method === "tui.layout") {
+    // SA-F5: the sidebar's row budget (the native painter's cell span)
+    // — the flattener lays the plugin's space-between/flex rows out
+    // against it so the padded columns materialize.
+    const width = message.params?.sidebarContentWidth;
+    if (typeof width === "number" && Number.isFinite(width) && width > 0) {
+      tuiSidebarContentWidth = Math.floor(width);
+    }
     return;
   }
   if (message.method === "log") {

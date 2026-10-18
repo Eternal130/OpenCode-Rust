@@ -631,6 +631,14 @@ impl PluginHost {
         facade.shared.notify_tui_theme(view);
     }
 
+    /// Push the sidebar's layout budget (`tui.layout` — SA-F5: the
+    /// guest flattener's row-layout width; the native painter's cell
+    /// span for plugin sections).
+    pub fn notify_tui_layout(&self, sidebar_content_width: usize) {
+        let Some(facade) = &self.facade else { return };
+        facade.shared.notify_tui_layout(sidebar_content_width);
+    }
+
     /// Run one plugin sidebar row's activate handler (the click side
     /// of the v2 TUI-plugin bridge — beta.13 bug 2's plugin-world
     /// path): the guest invokes the row's `onMouseUp`, whose

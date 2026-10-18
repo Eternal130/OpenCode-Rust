@@ -97,6 +97,9 @@ pub struct TuiPluginRuntime {
     pushed_route: Rc<RefCell<Option<Option<String>>>>,
     /// The last theme fingerprint pushed (name + mode).
     pushed_theme: Rc<RefCell<Option<(String, bool)>>>,
+    /// Whether the sidebar layout budget was pushed once (SA-F5: the
+    /// width is a painter constant — a single `tui.layout` push).
+    pushed_layout: Rc<RefCell<bool>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -181,6 +184,7 @@ impl TuiPluginRuntime {
             current_session: Rc::new(RefCell::new(None)),
             pushed_route: Rc::new(RefCell::new(None)),
             pushed_theme: Rc::new(RefCell::new(None)),
+            pushed_layout: Rc::new(RefCell::new(false)),
         }
     }
 
@@ -300,6 +304,16 @@ impl TuiPluginRuntime {
                         .fg
                         .map_or_else(|| "#888888".into(), hex_color),
                 }));
+            }
+            // SA-F5: the sidebar's row budget — the guest flattener
+            // lays the plugin's space-between/flex rows out against
+            // the painter's actual cell span (pushed once; the width
+            // is a layout constant).
+            if !*self.pushed_layout.borrow() {
+                *self.pushed_layout.borrow_mut() = true;
+                let budget =
+                    crate::components::session_tabs::SESSION_SIDEBAR_WIDTH.saturating_sub(4);
+                self.booted.host.notify_tui_layout(budget);
             }
         }
         for _ in 0..64 {
