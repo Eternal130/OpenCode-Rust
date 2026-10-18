@@ -112,7 +112,15 @@
 - Grouping/tree: `session.grouping` state persisted (store.rs:1723), `session.toggle.exploration_grouping` dispatched ✓, group-view row rendering ported (components/session.rs citing group-view.tsx lines).
 
 *(next: C3)*
-*(execution continues — second tier: C3/C5/C9/C13/C15/C16/C20/D2/D3/D4)*
+### CD-22 (INFO) — C3 verified-parity rows
+- **Literals (census, v8 pin re-run)**: Effect {allow,deny,ask} (permission.ts:55) and Reply {once,always,reject} (:41) — ours field-exact (`oc-schema/src/permission.rs:11-19,63-69`). HTTP reply field = `decision` on BOTH (protocol/groups/permission.ts:120 ↔ handlers/permission.rs:222).
+- **Live round-trip (I1)**: config rule `{action:"shell",resource:"*",effect:"ask"}` → tool call → `permission.asked{action,id,resources,save:["echo *"],sessionID,source{messageID,call id}}` → `POST …/reply {"decision":"always"}` → `permission.replied` + tool executed (shell exit 0) + **grant persisted** (`/api/permission/saved` row {action,resource:"echo *",projectID} + `permission` DB table) + subsequent identical calls auto-allowed without re-ask (single asked event, N successful executions).
+- **Unknown-tool guard**: a model call to a nonexistent tool fails cleanly ("No tool named … is currently available") — ref-guard present.
+- **Attention census**: notification protocols osc9/osc99/osc777 + system-notify matrix + in-process sounds (volume/sound_pack defaults 0.4/"opencode.default" = ref) + terminal-bell fallback with sound-suppress rule (attention.rs/os_notify.rs/sound.rs); gating `notifications/sound` config keys match ref defaults (false/false). Timing cells (bell cadence) ride I3 and are unit-tested in attention.rs (declared in-module).
+- Partial: reply=once/reject legs and multi-ask queueing not separately driven (grant-persistence contrast covers once-semantics; queue surface = the permission list API, exercised for the single ask). Carried as C3-residual if a fix lands in the family.
+
+*(next: C5)*
+*(execution continues — second tier: C5/C9/C13/C15/C16/C20/D2/D3/D4)*
 
 
 
