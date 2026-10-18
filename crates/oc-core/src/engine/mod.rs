@@ -128,6 +128,7 @@ use crate::session::runner::compaction::SessionCompaction;
 use crate::session::runner::context::{ContextDeps, McpServerSummary, SessionContext};
 use crate::session::runner::drain::SessionRunner;
 use crate::session::runner::model_request::{AppMetadata, SessionModelRequest};
+use crate::session::runner::prompt_prepare::PromptPrepare;
 use crate::session::runner::title::SessionTitle;
 use crate::session::runner::{LlmClient, ModelResolver, RouteLlmClient};
 use crate::session::store::{CreateInput, ListInput, MessagesInput, SessionStore};
@@ -1030,7 +1031,18 @@ impl Engine {
                 Arc::new(move || !location_dir.exists()),
             )
             .with_snapshot(Arc::clone(&snapshot))
-            .with_tool_output(Arc::clone(&self.tool_output)),
+            .with_tool_output(Arc::clone(&self.tool_output))
+            // `SessionPrompt.prepare` (RUNTIME-P01/P02): the
+            // `session.prompt` hook + `@skill` resolution fire on the
+            // consume boundary — the location's hook registry (guest
+            // hooks ride the same seam, PLUG-D21) and the engine skill
+            // table (built-ins + config discovery; plugin skills join
+            // via PLUG-D35).
+            .with_prompt_prepare(Arc::new(PromptPrepare::new(
+                (*self.db).clone(),
+                Arc::clone(&inputs.hooks),
+                Arc::clone(&inputs.skills) as Arc<dyn crate::tool::skill::SkillTable>,
+            ))),
         );
         let jobs_for_cancel = Arc::clone(&jobs);
         let execution = SessionExecution::with_clock(
