@@ -3,12 +3,27 @@
 > Orchestrator scratch state for the parity loop (docs/PARITY-LOOP.md).
 > Updated at the end of every iteration. Not a task queue — the ledger is.
 
-- **updated**: 2026-10-18 (iteration 1 — B0-1/B0-2/B0-5/B0-8 merged; B0-4 guards lane in flight)
-- **batch**: 0 — NOT exited (B0-1..B0-9 pending/in progress; no product bug fixes allowed)
-- **iteration**: 1
-- **baseline**: main @ eb4023d (pre-bootstrap) → bootstrap commit adds PARITY-LOOP.md / ledger seed / ledger tool / this file
+- **updated**: 2026-10-18 (iteration 1 COMPLETE — Batch 0 exited; Batch 1A dispatched)
+- **batch**: 1A (CRED / TUI-FORM / PLUGIN-core) — iteration 2 in flight
+- **iteration**: 2
+- **baseline**: main @ 3468f65 (Batch 0 final: 66e0bcc + 1A claims commit)
 
-## Active lanes (Batch 0)
+## Batch 0 — EXITED (2026-10-18)
+
+All items complete, no product behavior changed (zero `crates/` changes in Batch 0; workspace 3391/3391 green):
+B0-1 e2b5b73 · B0-2 3eea5fa(+fe2a97d) · B0-4 5c79821(+66e0bcc .slim skip) · B0-5 cc092d9(+ADR-0006/0007 via 8004973) · B0-7 0df11aa+chown · B0-8 729725d · B0-9 8004973(ADR-0006).
+Ledger: 380 rows, validate --paths errors=0. Gates: Gate 0 strict + 5 skeletons, strict battery verdict clean (3 KNOWN-RED registered). Guards: 8/8 green. ADRs: 0001–0007.
+
+## Active lanes (Batch 1A — 3/3 clusters active, merge serial)
+
+| lane | cluster | worktree | branch | owner | entries | status |
+|---|---|---|---|---|---|---|
+| lane-cred | C1 CRED | `.worktrees/lane-cred` | `lane/cred` | fix-11 (bg) | CRED-B1, CRED-B2, CRED-B3(needs-runtime→repro first) | dispatched |
+| lane-tui | C6a TUI-FORM | `.worktrees/lane-tui` | `lane/tui-form` | fix-12 (bg) | TUI-TD16, TD17, TD18, TD19 | dispatched |
+| lane-plugin | C2a PLUGIN-core | `.worktrees/lane-plugin` | `lane/plugin-core` | fix-13 (bg) | PLUG-D21, D18, D14 | dispatched |
+
+Hot files: app.rs/store.rs → lane-tui (C6a owns this batch); hooks.rs → lane-plugin (C2a owns 1A seam); resolver.rs → lane-cred. C2b (D33/D35) waits for C2a; C2c (TUI slot) waits for C6a seam + C2b.
+Merge order when lanes return: serial, one cluster at a time, affected tests + gate subset + fmt/clippy after each.
 
 | lane | task | worktree | branch | owner | write scope | status |
 |---|---|---|---|---|---|---|
