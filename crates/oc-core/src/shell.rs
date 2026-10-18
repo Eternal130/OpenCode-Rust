@@ -94,6 +94,10 @@ struct Inner {
     output_dir: PathBuf,
     /// Optional bus for `shell.created`/`shell.exited`/`shell.deleted`.
     bus: Option<crate::bus::Bus>,
+    /// Optional per-location hook registry for `shell.create.before`.
+    hooks: Option<Arc<crate::hooks::HookRegistry>>,
+    /// Config `shell` key (`ShellSelect` priority "config" input).
+    config_shell: Option<String>,
 }
 
 impl Shell {
@@ -115,6 +119,8 @@ impl Shell {
                 exit_order: Mutex::new(Vec::new()),
                 output_dir,
                 bus: None,
+                hooks: None,
+                config_shell: None,
             }),
         }
     }
@@ -124,6 +130,25 @@ impl Shell {
     pub fn with_bus(mut self, bus: crate::bus::Bus) -> Self {
         let inner = Arc::get_mut(&mut self.inner).expect("bus must attach before cloning");
         inner.bus = Some(bus);
+        self
+    }
+
+    /// Attaches the location's hook registry — the `shell.create.before`
+    /// dispatch site (v2 `PluginHooks.node`, shell.ts:274).
+    #[must_use]
+    pub fn with_hooks(mut self, hooks: Arc<crate::hooks::HookRegistry>) -> Self {
+        let inner = Arc::get_mut(&mut self.inner).expect("hooks must attach before cloning");
+        inner.hooks = Some(hooks);
+        self
+    }
+
+    /// Attaches the config `shell` key — the `ShellSelect` editor's
+    /// configured value (config/plugin/shell.ts; `resolve` priority
+    /// "config").
+    #[must_use]
+    pub fn with_config_shell(mut self, shell: Option<String>) -> Self {
+        let inner = Arc::get_mut(&mut self.inner).expect("config shell must attach before cloning");
+        inner.config_shell = shell;
         self
     }
 
