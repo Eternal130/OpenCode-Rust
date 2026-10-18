@@ -225,10 +225,6 @@ async fn worktree_list(
     Ok(axum::Json(Value::Array(directories)).into_response())
 }
 
-fn body_project_id(body: &Value) -> String {
-    body["projectID"].as_str().unwrap_or_default().to_owned()
-}
-
 /// v2 `Slug.create()` (util/slug.ts) — a random adjective-noun pair.
 mod slug {
     use rand::seq::SliceRandom;
@@ -260,11 +256,7 @@ mod slug {
 /// `Worktree.DirectoryUnavailableError` when the directory does not exist.
 fn canonical_directory(directory: &std::path::Path) -> Result<std::path::PathBuf, ApiError> {
     std::fs::canonicalize(directory).map_err(|_| {
-        ApiError::worktree(
-            "directory_unavailable",
-            format!("Worktree directory unavailable: {}", directory.display()),
-            None,
-        )
+        ApiError::worktree(format!("Worktree directory unavailable: {}", directory.display()), None)
     })
 }
 
@@ -310,7 +302,7 @@ async fn worktree_create(
     }
     let name = body["name"].as_str().map(str::trim);
     if name == Some("") {
-        return Err(ApiError::worktree("invalid_name", "Worktree name is required", None));
+        return Err(ApiError::worktree("Worktree name is required", None));
     }
     let branch = body["branch"].as_str().map(str::trim).filter(|branch| !branch.is_empty());
     let from = body["from"].as_str().map(std::path::PathBuf::from);
@@ -362,7 +354,6 @@ async fn worktree_create(
             .unwrap_or(false);
         if !known {
             return Err(ApiError::worktree(
-                "source_not_found",
                 format!("Worktree source not found: {}", source.display()),
                 None,
             ));
@@ -380,11 +371,7 @@ async fn worktree_create(
         });
     std::fs::create_dir_all(&parent).map_err(|error| {
         crate::errors::debug_cause("worktree:mkdir", &error);
-        ApiError::worktree(
-            "directory_unavailable",
-            format!("Worktree directory unavailable: {}", parent.display()),
-            None,
-        )
+        ApiError::worktree(format!("Worktree directory unavailable: {}", parent.display()), None)
     })?;
 
     // Name + collision suffixes (v2: `name-2` … `name-10`, then
@@ -401,7 +388,6 @@ async fn worktree_create(
     }
     let Some(worktree_directory) = worktree_directory else {
         return Err(ApiError::worktree(
-            "destination_exists",
             format!(
                 "Worktree destination already exists: {}",
                 parent.join(format!("{name}-10")).display()
@@ -421,7 +407,6 @@ async fn worktree_create(
         .is_ok_and(|output| output.status.success());
     if !inside_repo {
         return Err(ApiError::worktree(
-            "directory_unavailable",
             format!("Worktree directory unavailable: {}", source.display()),
             None,
         ));
@@ -436,7 +421,7 @@ async fn worktree_create(
         .output()
         .map_err(|error| {
             crate::errors::debug_cause("worktree:spawn", &error);
-            ApiError::worktree("operation", format!("Git failed: {error}"), None)
+            ApiError::worktree(format!("Git failed: {error}"), None)
         })?;
     if !added.status.success() {
         let message = {
@@ -447,7 +432,7 @@ async fn worktree_create(
                 .or((!stdout.is_empty()).then_some(stdout))
                 .unwrap_or_else(|| "Git failed".to_string())
         };
-        return Err(ApiError::worktree("operation", message, None));
+        return Err(ApiError::worktree(message, None));
     }
     let directory = canonical_directory(&worktree_directory)?;
     let directory_str = directory.to_string_lossy().into_owned();
@@ -501,15 +486,11 @@ async fn worktree_create(
                     .then_some(stderr)
                     .or((!stdout.is_empty()).then_some(stdout))
                     .unwrap_or_else(|| "Start command failed".to_string());
-                return Err(ApiError::worktree("operation", message, None));
+                return Err(ApiError::worktree(message, None));
             }
             Err(error) => {
                 crate::errors::debug_cause("worktree:start", &error);
-                return Err(ApiError::worktree(
-                    "operation",
-                    format!("Start command failed: {error}"),
-                    None,
-                ));
+                return Err(ApiError::worktree(format!("Start command failed: {error}"), None));
             }
         }
     }
@@ -560,39 +541,139 @@ async fn worktree_refresh(axum::Json(_body): axum::Json<Value>) -> Result<Respon
     Ok(no_content())
 }
 
+#[allow(clippy::too_many_lines)] // one v2 Effect chain (worktree.ts:257-271)
 async fn worktree_remove(
     State(state): State<SharedState>,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
+    // v2 worktree.ts:257-271 — project row → canonicalize → stored
+    // strategy check → strategy remove (`git worktree remove [--force]`,
+    // git.ts:669-681) → row delete + `worktree.updated`.
     let (project_id, directory, force) = (
         body["projectID"].as_str().unwrap_or_default().to_owned(),
         body["directory"].as_str().unwrap_or_default().to_owned(),
         body["force"].as_bool().unwrap_or(false),
     );
+    if project_id.is_empty() {
+        return Err(ApiError::invalid_request("projectID is required"));
+    }
     let db = state.engine.db.clone();
-    let outer_directory = directory.clone();
+    let lookup_project = project_id.clone();
+    let project = db
+        .transaction(move |tx| {
+            Ok(tx
+                .conn()
+                .query_row("SELECT worktree FROM project WHERE id = ?1", (lookup_project,), |row| {
+                    row.get::<_, String>(0)
+                })
+                .ok())
+        })
+        .await
+        .map_err(|error| {
+            crate::errors::debug_cause("worktree:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
+    let Some(project_worktree) = project else {
+        return Err(ApiError::project_not_found(&project_id));
+    };
+    let project_worktree = std::path::PathBuf::from(project_worktree);
+
+    // Canonical on-disk path (DirectoryUnavailableError when missing).
+    let worktree_directory = canonical_directory(std::path::Path::new(&directory))?;
+    let directory_str = worktree_directory.to_string_lossy().into_owned();
+
+    // A saved row with a strategy owns the directory (InvalidDirectoryError
+    // otherwise); the git strategy is the only registered backend (create
+    // stores `'git'`).
+    let lookup_directory = directory_str.clone();
+    let strategy_project = project_id.clone();
+    let stored: Option<String> = db
+        .transaction(move |tx| {
+            let value = tx
+                .conn()
+                .query_row(
+                    "SELECT strategy FROM worktree WHERE project_id = ?1 AND directory = ?2",
+                    (strategy_project.as_str(), lookup_directory.as_str()),
+                    |row| row.get::<_, String>(0),
+                )
+                .ok();
+            Ok(value)
+        })
+        .await
+        .map_err(|error| {
+            crate::errors::debug_cause("worktree:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
+    if stored.as_deref().is_none_or(str::is_empty) {
+        return Err(ApiError::worktree(
+            format!("Invalid worktree directory: {directory_str}"),
+            None,
+        ));
+    }
+
+    // `git worktree remove [--force] <directory>` from the repository's
+    // common dir (git.ts:621-633 + 669-681: discover from the worktree,
+    // run from commonDirectory).
+    let common = git_output(
+        &worktree_directory,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .map(|output| std::path::PathBuf::from(output.trim()))
+    .filter(|path| path.is_dir())
+    .unwrap_or(project_worktree);
+    let mut args = vec!["worktree".to_owned(), "remove".to_owned()];
+    if force {
+        args.push("--force".to_owned());
+    }
+    args.push(directory_str.clone());
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let refs = refs.as_slice();
+    let removal = std::process::Command::new("git")
+        .args(refs)
+        .current_dir(&common)
+        .stdin(std::process::Stdio::null())
+        .output();
+    match removal {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let message = (!stderr.is_empty())
+                .then_some(stderr)
+                .or((!stdout.is_empty()).then_some(stdout))
+                .unwrap_or_else(|| "Git failed".to_owned());
+            // git.ts:630-633 — the dirty-tree failure demands --force. The
+            // v2 regex covers the English messages; the literal `--force`
+            // hint rides every locale's dirty-tree error.
+            let dirty = message.contains("contains modified or untracked files")
+                || message.contains("is dirty")
+                || message.contains("--force");
+            return Err(ApiError::worktree(message, Some(dirty)));
+        }
+        Err(error) => {
+            crate::errors::debug_cause("worktree:spawn", &error);
+            return Err(ApiError::worktree(format!("Git failed: {error}"), None));
+        }
+    }
+
+    // Row delete + `worktree.updated` (worktree.ts:270-271) — by the
+    // canonical directory the row stores.
+    let delete_project = project_id.clone();
+    let delete_directory = directory_str;
     let removed = db
         .transaction(move |tx| {
             tx.execute(
                 "DELETE FROM worktree WHERE project_id = ?1 AND directory = ?2",
-                (project_id, directory),
+                (delete_project, delete_directory),
             )
         })
         .await
         .map_err(|error| {
-            crate::errors::debug_cause("project:unknown_ref", &error);
+            crate::errors::debug_cause("worktree:unknown_ref", &error);
             ApiError::unknown_ref()
         })?;
-    if removed == 0 && !force {
-        return Err(ApiError::worktree(
-            "not_found",
-            format!("Worktree not found: {outer_directory}"),
-            None,
-        ));
-    }
-    // worktree.ts:270 — removal of an owned row publishes `worktree.updated`.
     if removed > 0 {
-        publish_worktree_updated(&state, &body_project_id(&body)).await;
+        publish_worktree_updated(&state, &project_id).await;
     }
     Ok(no_content())
 }
@@ -630,14 +711,210 @@ async fn vcs_base(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    // v2 vcs.base (handlers/vcs.ts + plugin/vcs/git.ts:286-317): reflog
+    // "branch: Created from <origin>" first, default-branch fallback
+    // second, DiffError → 503 ServiceUnavailableError{service:"vcs"}.
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
-    let base = git_output(services.project.canonical.as_path(), &["merge-base", "HEAD", "@{u}"])
-        .map_or(Value::Null, |output| {
-            let name = output.trim().to_owned();
-            json!({ "name": name, "ref": name })
-        });
-    Ok(super::common::json_location_data(&location.as_path().to_string_lossy(), base))
+    let scope = services.project.canonical.as_path();
+    let unavailable =
+        |message: &str| ApiError::service_unavailable(message.to_owned(), Some("vcs"));
+
+    if !git_has_head(scope) {
+        return Ok(super::common::json_location_data(
+            &location.as_path().to_string_lossy(),
+            Value::Null,
+        ));
+    }
+    let Some(current) = git_current_branch(scope) else {
+        return Err(unavailable("Choose a review base"));
+    };
+
+    // Creation hints from the branch reflog (renamed branches lose the
+    // simple creation story).
+    let history = git_reflog_creation(scope, &current);
+    let renamed = history.iter().any(|(_, message)| {
+        message.strip_prefix("Branch: renamed ").is_some_and(|rest| !rest.is_empty())
+    });
+    let creation = if renamed {
+        None
+    } else {
+        // reflog lists newest first; `find` takes the newest creation hint.
+        history.iter().find_map(|(commit, message)| {
+            message
+                .strip_prefix("branch: Created from ")
+                .filter(|origin| !origin.is_empty())
+                .map(|origin| (commit.clone(), origin.to_owned()))
+        })
+    };
+    if let Some((commit, origin)) = creation {
+        if let Some((name, ref_)) = git_named_ref(scope, &origin) {
+            if name != current
+                && git_is_ancestor(scope, &commit, "HEAD")
+                && git_is_ancestor(scope, &commit, &ref_)
+            {
+                return Ok(super::common::json_location_data(
+                    &location.as_path().to_string_lossy(),
+                    json!({ "name": name, "ref": ref_, "source": "reflog" }),
+                ));
+            }
+        }
+    }
+
+    let Some((name, default_ref)) = git_default_branch(scope) else {
+        return Err(unavailable("Choose a review base"));
+    };
+    if name != current {
+        return Err(unavailable("Choose a review base"));
+    }
+    match git_named_ref(scope, &default_ref) {
+        Some((_, ref_)) => Ok(super::common::json_location_data(
+            &location.as_path().to_string_lossy(),
+            json!({ "name": name, "ref": ref_, "source": "default" }),
+        )),
+        None => Err(unavailable("The default review base is unavailable")),
+    }
+}
+
+/// `git rev-parse --verify HEAD` succeeds (git.ts:318-321).
+fn git_has_head(scope: &std::path::Path) -> bool {
+    git_status(scope, &["rev-parse", "--verify", "HEAD"])
+}
+
+/// The checked-out branch short name (git.ts:220-224).
+fn git_current_branch(scope: &std::path::Path) -> Option<String> {
+    git_output(scope, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .map(|output| output.trim().to_owned())
+        .filter(|branch| !branch.is_empty())
+}
+
+/// `git reflog show --max-count=256 --format=%H%x00%gs refs/heads/<branch>`
+/// parsed into (commit, message) pairs (git.ts:291-300).
+fn git_reflog_creation(scope: &std::path::Path, branch: &str) -> Vec<(String, String)> {
+    let output = git_output(
+        scope,
+        &[
+            "reflog",
+            "show",
+            "--max-count=256",
+            "--format=%H%x00%gs",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .unwrap_or_default();
+    output
+        .lines()
+        .filter_map(|line| {
+            let (commit, message) = line.split_once('\u{0}')?;
+            Some((commit.to_owned(), message.to_owned()))
+        })
+        .collect()
+}
+
+/// `namedRef` (git.ts:271-283): a creation hint must identify a branch
+/// (not HEAD, an object id, or a revision expression).
+fn git_named_ref(scope: &std::path::Path, input: &str) -> Option<(String, String)> {
+    if input == "HEAD"
+        || input.ends_with("/HEAD")
+        || input.chars().any(|c| matches!(c, '~' | '^' | ':' | '@' | '{' | '}' | ' '))
+    {
+        return None;
+    }
+    let full = git_output(
+        scope,
+        &["rev-parse", "--symbolic-full-name", "--verify", "--end-of-options", input],
+    )?
+    .trim()
+    .to_owned();
+    let is_head_ref = full.starts_with("refs/heads/") && !full.ends_with("/HEAD");
+    let is_remote_ref = full.starts_with("refs/remotes/")
+        && !full.ends_with("/HEAD")
+        && full.matches('/').count() > 2;
+    if !is_head_ref && !is_remote_ref {
+        return None;
+    }
+    if !git_status(
+        scope,
+        &["rev-parse", "--verify", "--end-of-options", &format!("{full}^{{commit}}")],
+    ) {
+        return None;
+    }
+    let name = full
+        .strip_prefix("refs/heads/")
+        .map(str::to_owned)
+        .or_else(|| {
+            full.strip_prefix("refs/remotes/").map(|rest| {
+                rest.split_once('/').map_or_else(|| rest.to_owned(), |(_, tail)| tail.to_owned())
+            })
+        })
+        .unwrap_or_else(|| full.clone());
+    Some((name, full))
+}
+
+/// `defaultBranch` (git.ts:244-260): primary remote's HEAD → configured
+/// `init.defaultBranch` present locally → main → master.
+fn git_default_branch(scope: &std::path::Path) -> Option<(String, String)> {
+    let remotes = git_lines(scope, &["remote"]);
+    let primary = if remotes.iter().any(|remote| remote == "origin") {
+        Some("origin".to_owned())
+    } else if remotes.len() == 1 {
+        remotes.first().cloned()
+    } else if remotes.iter().any(|remote| remote == "upstream") {
+        Some("upstream".to_owned())
+    } else {
+        remotes.first().cloned()
+    };
+    if let Some(remote) = primary {
+        if let Some(head) =
+            git_output(scope, &["symbolic-ref", &format!("refs/remotes/{remote}/HEAD")])
+        {
+            let reference = head.trim().strip_prefix("refs/remotes/").unwrap_or_default();
+            if let Some(name) =
+                reference.strip_prefix(&format!("{remote}/")).filter(|name| !name.is_empty())
+            {
+                return Some((name.to_owned(), reference.to_owned()));
+            }
+        }
+    }
+    let locals = git_lines(scope, &["for-each-ref", "--format=%(refname:short)", "refs/heads"]);
+    if let Some(configured) = git_output(scope, &["config", "init.defaultBranch"]) {
+        let name = configured.trim();
+        if !name.is_empty() && locals.iter().any(|local| local == name) {
+            return Some((name.to_owned(), name.to_owned()));
+        }
+    }
+    if locals.iter().any(|local| local == "main") {
+        return Some(("main".to_owned(), "main".to_owned()));
+    }
+    if locals.iter().any(|local| local == "master") {
+        return Some(("master".to_owned(), "master".to_owned()));
+    }
+    None
+}
+
+/// `merge-base --is-ancestor commit ref` (git.ts:268-272).
+fn git_is_ancestor(scope: &std::path::Path, commit: &str, reference: &str) -> bool {
+    let hex = commit.len() >= 40 && commit.chars().all(|c| c.is_ascii_hexdigit());
+    hex && git_status(scope, &["merge-base", "--is-ancestor", commit, reference])
+}
+
+fn git_lines(scope: &std::path::Path, args: &[&str]) -> Vec<String> {
+    git_output(scope, args)
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+fn git_status(scope: &std::path::Path, args: &[&str]) -> bool {
+    std::process::Command::new("git")
+        .args(args)
+        .current_dir(scope)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 async fn vcs_branch_list(
@@ -645,27 +922,107 @@ async fn vcs_branch_list(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    // v2 vcs.branch.list → `Vcs.BranchList` = bare string[]
+    // (git.ts:228-241): case-insensitive for-each-ref over local+remote
+    // namespaces, committerdate-then-refname ordering, /HEAD filtered.
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let search = query_field(&uri, "search");
     let limit = query_field(&uri, "limit")
         .and_then(|value| value.parse::<usize>().ok())
         .map_or(50usize, |value| value.min(100));
-    let output =
-        git_output(services.project.canonical.as_path(), &["branch", "--format=%(refname:short)"])
-            .unwrap_or_default();
-    let mut branches: Vec<String> = output.lines().map(str::trim).map(String::from).collect();
-    if let Some(search) = &search {
-        let lowered = search.to_lowercase();
-        branches.retain(|branch| branch.to_lowercase().contains(&lowered));
+    let scope = services.project.canonical.as_path();
+
+    let escaped = search.as_ref().map(|value| {
+        let trimmed = value.trim();
+        let mut out = String::with_capacity(trimmed.len());
+        for character in trimmed.chars() {
+            if matches!(character, '*' | '?' | '[' | '\\' | ']') {
+                out.push('\\');
+            }
+            out.push(character);
+        }
+        out
+    });
+    let mut args = vec![
+        "for-each-ref".to_owned(),
+        "--ignore-case".to_owned(),
+        "--sort=refname".to_owned(),
+        "--sort=-committerdate".to_owned(),
+        "--format=%(refname:short)".to_owned(),
+        format!("--count={limit}"),
+    ];
+    match escaped.as_deref() {
+        Some(pattern) if !pattern.is_empty() => {
+            args.push(format!("refs/heads/*{pattern}*"));
+            args.push(format!("refs/remotes/*{pattern}*"));
+        }
+        _ => {
+            args.push("refs/heads".to_owned());
+            args.push("refs/remotes".to_owned());
+        }
     }
-    branches.truncate(limit);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = git_output(scope, refs.as_slice()).unwrap_or_default();
+    let branches: Vec<Value> = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.ends_with("/HEAD"))
+        .map(|line| json!(line))
+        .collect();
     Ok(super::common::json_location_data(
         &location.as_path().to_string_lossy(),
-        json!({ "branches": branches }),
+        Value::Array(branches),
     ))
 }
 
+// ---------------------------------------------------------------------------
+// VCS-3 — diff (plugin/vcs/git.ts:101-117 + 344-608)
+// ---------------------------------------------------------------------------
+
+/// `MAX_PATCH_BYTES` / `MAX_TOTAL_PATCH_BYTES` (vcs/patch.ts:10-11).
+const MAX_PATCH_BYTES: usize = 10_000_000;
+const MAX_TOTAL_PATCH_BYTES: usize = 10_000_000;
+/// `PATCH_CONTEXT_LINES` (vcs/patch.ts:7) — effectively full context.
+const PATCH_CONTEXT_LINES: i64 = 2_147_483_647;
+
+/// One changed file (git.ts:129-133).
+#[derive(Debug, Clone)]
+struct DiffItem {
+    file: String,
+    code: String,
+    status: &'static str,
+}
+
+/// The jsdiff `emptyPatch` rendering (vcs/patch.ts:33-34), pinned against
+/// the reference's own `diff` package output.
+fn empty_patch(file: &str) -> String {
+    format!("Index: {file}\n===================================================================\n--- {file}\t\n+++ {file}\t\n")
+}
+
+/// `kind` (git.ts:154-160): porcelain/status letter → wire status.
+fn diff_kind(code: &str) -> &'static str {
+    if code == "??" {
+        return "added";
+    }
+    if code.contains('U') {
+        return "modified";
+    }
+    if code.contains('A') && !code.contains('D') {
+        return "added";
+    }
+    if code.contains('D') && !code.contains('A') {
+        return "deleted";
+    }
+    "modified"
+}
+
+/// NUL-split output filter (git.ts:152).
+fn nuls(text: &str) -> Vec<String> {
+    text.split('\u{0}').filter(|item| !item.is_empty()).map(String::from).collect()
+}
+
+#[allow(clippy::too_many_lines)] // mirrors the v2 batch pipeline (git.ts:101-608)
 async fn vcs_diff(
     State(state): State<SharedState>,
     uri: Uri,
@@ -673,29 +1030,375 @@ async fn vcs_diff(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
-    let base = query_field(&uri, "base");
-    let context = query_field(&uri, "context").unwrap_or_else(|| "3".to_owned());
-    let mode = query_field(&uri, "mode");
-    let mut args = vec!["diff".to_owned(), format!("--unified={context}")];
-    if mode.as_deref() == Some("staged") {
-        args.push("--cached".to_owned());
+    let base_param = query_field(&uri, "base");
+    let context = query_field(&uri, "context").and_then(|value| value.parse::<i64>().ok());
+    let mode = query_field(&uri, "mode").unwrap_or_else(|| "working".to_owned());
+    if !matches!(mode.as_str(), "working" | "branch" | "committed") {
+        return Err(ApiError::invalid_request(
+            "Expected \"working\" | \"branch\" | \"committed\"\n  at [\"mode\"]".to_owned(),
+        ));
     }
-    if let Some(base) = base {
-        args.push(base);
-    }
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let output = git_output(services.project.canonical.as_path(), &refs).unwrap_or_default();
-    // A raw unified-diff string array (one hunk per entry) is the v2 shape;
-    // the file-level diff parse rides the file_diff lane (TODO(phase-9)).
-    let hunks: Vec<Value> = if output.trim().is_empty() {
-        Vec::new()
+    let scope = services.project.canonical.as_path();
+    let unavailable =
+        |message: &str| ApiError::service_unavailable(message.to_owned(), Some("vcs"));
+
+    let context = context.unwrap_or(PATCH_CONTEXT_LINES);
+
+    // Mode routing (git.ts:101-117).
+    let (reference, target): (Option<String>, Option<&str>) = if mode == "working" {
+        (git_has_head(scope).then(|| "HEAD".to_owned()), None)
+    } else if !git_has_head(scope) {
+        if mode == "committed" {
+            return Ok(super::common::json_location_data(
+                &location.as_path().to_string_lossy(),
+                json!([]),
+            ));
+        }
+        // branch-mode without HEAD diffs the untracked status scan.
+        (None, None)
     } else {
-        vec![json!({ "path": "diff", "status": { "type": "modified" }, "chunks": [output] })]
+        let Some(base) = base_param
+            .clone()
+            .or_else(|| git_default_branch(scope).map(|(_, reference)| reference))
+        else {
+            return Err(unavailable("No review base available"));
+        };
+        let Some(reference) = git_merge_base(scope, &base) else {
+            return Err(unavailable(&format!("No merge base available for {base}")));
+        };
+        if mode == "committed" {
+            (Some(reference), Some("HEAD"))
+        } else {
+            (Some(reference), None)
+        }
     };
+
+    // File list + stats + untracked (git.ts:344-371 + statusNames).
+    let mut items = match &reference {
+        Some(reference) => {
+            let mut names = git_diff_names(scope, reference, target);
+            // diffNames covers tracked changes; working-scope diffs add
+            // the untracked files from status (git.ts:601-609).
+            if target.is_none() {
+                names.extend(git_status_items(scope).into_iter().filter(|item| item.code == "??"));
+            }
+            names
+        }
+        None => git_status_items(scope),
+    };
+    items.sort_by(|a, b| a.file.cmp(&b.file));
+    items.dedup_by(|a, b| a.file == b.file);
+
+    // Per-file stats (numstat; untracked via --no-index).
+    let mut stats: std::collections::HashMap<String, (i64, i64)> = match &reference {
+        Some(reference) => git_numstat(scope, reference, target),
+        None => std::collections::HashMap::new(),
+    };
+    for item in &items {
+        if item.code == "??" && !stats.contains_key(&item.file) {
+            if let Some(stat) = git_stat_untracked(scope, &item.file) {
+                stats.insert(item.file.clone(), stat);
+            }
+        }
+    }
+
+    // Batched patches (one git diff invocation, capped, split per file)
+    // with the per-file native fallback (git.ts:490-560).
+    let mut batch: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut batch_capped = false;
+    if let Some(reference) = &reference {
+        if !items.is_empty() {
+            let mut args = vec![
+                "diff".to_owned(),
+                "--patch".to_owned(),
+                "--no-ext-diff".to_owned(),
+                "--no-renames".to_owned(),
+                format!("--unified={context}"),
+                reference.clone(),
+            ];
+            if let Some(target) = target {
+                args.push(target.to_owned());
+            }
+            args.push("--".to_owned());
+            args.push(".".to_owned());
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let output = std::process::Command::new("git")
+                .args(refs.as_slice())
+                .current_dir(scope)
+                .stdin(std::process::Stdio::null())
+                .output();
+            if let Ok(output) = output {
+                let text = String::from_utf8_lossy(&output.stdout).into_owned();
+                batch_capped = text.len() > MAX_TOTAL_PATCH_BYTES;
+                for (file, chunk) in split_git_patch(&text) {
+                    *batch.entry(file).or_default() += &chunk;
+                }
+            }
+        }
+    }
+
+    // Assemble FileDiff.Info[] under the byte budgets (git.ts:568-608).
+    let mut files: Vec<Value> = Vec::new();
+    let mut total = 0usize;
+    let mut capped = false;
+    for item in &items {
+        let stat = stats.get(&item.file).copied().unwrap_or((0, 0));
+        let patch = if capped {
+            empty_patch(&item.file)
+        } else {
+            match batch.get(&item.file) {
+                Some(patch) => patch.clone(),
+                None => {
+                    if item.code != "??" && batch_capped {
+                        empty_patch(&item.file)
+                    } else {
+                        native_patch(scope, reference.as_deref(), item, target, context)
+                    }
+                }
+            }
+        };
+        let (patch, this_capped) = if capped {
+            (patch, true)
+        } else if total + patch.len() <= MAX_TOTAL_PATCH_BYTES {
+            (patch, false)
+        } else {
+            (empty_patch(&item.file), true)
+        };
+        capped = capped || this_capped;
+        if !capped {
+            total += patch.len();
+            capped = total >= MAX_TOTAL_PATCH_BYTES;
+        }
+        files.push(json!({
+            "file": item.file,
+            "patch": patch,
+            "additions": stat.0,
+            "deletions": stat.1,
+            "status": item.status,
+        }));
+    }
     Ok(super::common::json_location_data(
         &location.as_path().to_string_lossy(),
-        Value::Array(hunks),
+        Value::Array(files),
     ))
+}
+
+/// `diff --name-status -z` (git.ts:344-359).
+fn git_diff_names(scope: &std::path::Path, reference: &str, target: Option<&str>) -> Vec<DiffItem> {
+    let mut args = vec![
+        "diff".to_owned(),
+        "--no-ext-diff".to_owned(),
+        "--no-renames".to_owned(),
+        "--name-status".to_owned(),
+        "-z".to_owned(),
+        reference.to_owned(),
+    ];
+    if let Some(target) = target {
+        args.push(target.to_owned());
+    }
+    args.push("--".to_owned());
+    args.push(".".to_owned());
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let Some(output) = git_output(scope, refs.as_slice()) else {
+        return Vec::new();
+    };
+    let list = nuls(&output);
+    let mut items = Vec::new();
+    let mut index = 0;
+    while index + 1 < list.len() {
+        items.push(DiffItem {
+            code: list[index].clone(),
+            file: list[index + 1].clone(),
+            status: diff_kind(&list[index]),
+        });
+        index += 2;
+    }
+    items
+}
+
+/// `status --porcelain -z` untracked scan (git.ts:353-367).
+fn git_status_items(scope: &std::path::Path) -> Vec<DiffItem> {
+    let Some(output) = git_output(
+        scope,
+        &["status", "--porcelain=v1", "--untracked-files=all", "--no-renames", "-z", "--", "."],
+    ) else {
+        return Vec::new();
+    };
+    nuls(&output)
+        .into_iter()
+        .filter_map(|entry| {
+            let file = entry.get(3..)?.to_owned();
+            let code = entry.get(..2)?.to_owned();
+            (!file.is_empty()).then(|| DiffItem {
+                code: code.clone(),
+                file,
+                status: diff_kind(&code),
+            })
+        })
+        .collect()
+}
+
+/// `diff --numstat -z` (git.ts:361-384).
+fn git_numstat(
+    scope: &std::path::Path,
+    reference: &str,
+    target: Option<&str>,
+) -> std::collections::HashMap<String, (i64, i64)> {
+    let mut args = vec![
+        "diff".to_owned(),
+        "--no-ext-diff".to_owned(),
+        "--no-renames".to_owned(),
+        "--numstat".to_owned(),
+        "-z".to_owned(),
+        reference.to_owned(),
+    ];
+    if let Some(target) = target {
+        args.push(target.to_owned());
+    }
+    args.push("--".to_owned());
+    args.push(".".to_owned());
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let Some(output) = git_output(scope, refs.as_slice()) else {
+        return std::collections::HashMap::new();
+    };
+    let mut map = std::collections::HashMap::new();
+    for entry in nuls(&output) {
+        let Some((additions, rest)) = entry.split_once('\t') else { continue };
+        let Some((deletions, file)) = rest.split_once('\t') else { continue };
+        if file.is_empty() {
+            continue;
+        }
+        let parse = |value: &str| match value {
+            "-" => 0,
+            other => other.parse::<i64>().unwrap_or(0),
+        };
+        map.insert(file.to_owned(), (parse(additions), parse(deletions)));
+    }
+    map
+}
+
+/// `diff --no-index --numstat /dev/null <file>` for untracked additions
+/// (git.ts:442-458).
+fn git_stat_untracked(scope: &std::path::Path, file: &str) -> Option<(i64, i64)> {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--no-index", "--numstat", "--", "/dev/null", file])
+        .current_dir(scope)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    let mut parts = text.split('\t');
+    let addition = parts.next()?;
+    let deletion = parts.next()?;
+    let parse = |value: &str| match value {
+        "-" => 0,
+        other => other.parse::<i64>().unwrap_or(0),
+    };
+    Some((parse(addition), parse(deletion)))
+}
+
+/// Per-file native patch (git.ts:386-404 / 406-421 / 423-440).
+fn native_patch(
+    scope: &std::path::Path,
+    reference: Option<&str>,
+    item: &DiffItem,
+    target: Option<&str>,
+    context: i64,
+) -> String {
+    let mut args = vec![
+        "diff".to_owned(),
+        "--patch".to_owned(),
+        "--no-ext-diff".to_owned(),
+        "--no-renames".to_owned(),
+        format!("--unified={context}"),
+    ];
+    let output = if item.code == "??" || reference.is_none() {
+        args.extend([
+            "--no-index".to_owned(),
+            "--".to_owned(),
+            "/dev/null".to_owned(),
+            item.file.clone(),
+        ]);
+        std::process::Command::new("git")
+            .args(args.iter().map(String::as_str).collect::<Vec<_>>().as_slice())
+            .current_dir(scope)
+            .stdin(std::process::Stdio::null())
+            .output()
+    } else {
+        args.push(reference.unwrap_or("HEAD").to_owned());
+        if let Some(target) = target {
+            args.push(target.to_owned());
+        }
+        args.push("--".to_owned());
+        args.push(item.file.clone());
+        std::process::Command::new("git")
+            .args(args.iter().map(String::as_str).collect::<Vec<_>>().as_slice())
+            .current_dir(scope)
+            .stdin(std::process::Stdio::null())
+            .output()
+    };
+    match output {
+        Ok(output) if output.stdout.len() <= MAX_PATCH_BYTES && !output.stdout.is_empty() => {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        }
+        _ => empty_patch(&item.file),
+    }
+}
+
+/// `splitGitPatch` + `chunksByFile` (vcs/patch.ts:93-110): split a
+/// multi-file `git diff` at `diff --git` headers and map each chunk to
+/// its file (from the `+++ ` line, falling back to the header's b-side).
+fn split_git_patch(text: &str) -> Vec<(String, String)> {
+    let mut starts = Vec::new();
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        if line.starts_with("diff --git ") {
+            starts.push(offset);
+        }
+        offset += line.len();
+    }
+    if starts.is_empty() {
+        return Vec::new();
+    }
+    let mut chunks = Vec::new();
+    for (index, start) in starts.iter().enumerate() {
+        let end = starts.get(index + 1).copied().unwrap_or(text.len());
+        chunks.push(&text[*start..end]);
+    }
+    chunks
+        .into_iter()
+        .filter_map(|chunk| {
+            let file = chunk.lines().find_map(|line| {
+                let path = line.strip_prefix("+++ ")?;
+                let path = path.split('\t').next().unwrap_or(path);
+                let path = path.strip_prefix("b/").unwrap_or(path);
+                (!path.is_empty() && path != "/dev/null").then(|| path.to_owned())
+            });
+            let file = file.or_else(|| {
+                chunk.lines().find_map(|line| {
+                    let header = line.strip_prefix("diff --git ")?;
+                    let (_, b) = header.split_once(" b/")?;
+                    (!b.trim().is_empty()).then(|| b.trim().to_owned())
+                })
+            })?;
+            Some((file, chunk.to_owned()))
+        })
+        .collect()
+}
+
+/// `mergeBase` (git.ts:325-333): resolve, then `merge-base <ref> HEAD`.
+fn git_merge_base(scope: &std::path::Path, base: &str) -> Option<String> {
+    let resolved = git_output(
+        scope,
+        &["rev-parse", "--verify", "--end-of-options", &format!("{base}^{{commit}}")],
+    )?
+    .trim()
+    .to_owned();
+    if resolved.is_empty() {
+        return None;
+    }
+    let merged = git_output(scope, &["merge-base", &resolved, "HEAD"])?.trim().to_owned();
+    (!merged.is_empty()).then_some(merged)
 }
 
 async fn vcs_status(
