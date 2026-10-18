@@ -127,6 +127,22 @@ pub struct PluginHook {
     pub name: String,
 }
 
+/// One plugin-registered RPC definition (`ctx.rpc.register(definition,
+/// handlers)` — PLUG-D14): the definition JSON crosses the bridge
+/// (id + method names; schemas best-effort), the HANDLERS stay in the
+/// guest. Dispatch routes back through the host's `rpc.call`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginRpc {
+    pub plugin_id: String,
+    /// The definition id (the `/api/rpc/{rpcID}` path segment).
+    pub id: String,
+    /// Declared method names (the method-not-found gate).
+    pub methods: Vec<String>,
+    /// The definition document verbatim (diagnostics / future schema
+    /// validation).
+    pub definition: Value,
+}
+
 /// One plugin-registered theme document (feeds the oc-tui
 /// `ThemeRegistry` discovery path, registration-time only).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,6 +227,8 @@ pub struct RegistrationSnapshot {
     pub tools: Vec<PluginTool>,
     pub mcps: Vec<PluginMcp>,
     pub hooks: Vec<PluginHook>,
+    /// Registered RPC definitions (id → the winning registration).
+    pub rpcs: Vec<PluginRpc>,
     pub themes: Vec<PluginTheme>,
     /// Plugin-provided message-grouping rules (wave 3's open rules
     /// table).
@@ -246,6 +264,9 @@ pub struct Registrations {
     /// set would reorder plugins alphabetically and flip mutation
     /// outcomes when two plugins touch the same field).
     pub hooks: Vec<PluginHook>,
+    /// RPC definitions by id — the LAST registration for an id wins
+    /// (v2 `registrations.get(rpcID)?.at(-1)`, rpc.ts:78).
+    pub rpcs: BTreeMap<String, PluginRpc>,
     pub themes: BTreeMap<String, PluginTheme>,
     /// Plugin group rules (registration order stable across snapshots).
     pub group_rules: Vec<PluginGroupRule>,
@@ -272,6 +293,7 @@ impl Registrations {
         self.hooks.retain(|hook| hook.plugin_id != plugin_id);
         self.agents.retain(|_, agent| agent.plugin_id != plugin_id);
         self.mcps.retain(|_, mcp| mcp.plugin_id != plugin_id);
+        self.rpcs.retain(|_, rpc| rpc.plugin_id != plugin_id);
         self.group_rules.retain(|rule| rule.plugin_id != plugin_id);
         self.home_actions.retain(|action| action.plugin_id != plugin_id);
         self.dialogs.retain(|_, dialog| dialog.plugin_id != plugin_id);
@@ -280,6 +302,12 @@ impl Registrations {
                 self.agent_default = None;
             }
         }
+    }
+
+    /// Record one RPC registration; the LAST registration for an id
+    /// wins (v2 `registrations.get(rpcID)?.at(-1)`).
+    pub fn register_rpc(&mut self, rpc: PluginRpc) {
+        self.rpcs.insert(rpc.id.clone(), rpc);
     }
 
     /// Merge one `ctx.agent.transform` materialization: the guest sends
@@ -411,6 +439,7 @@ impl Registrations {
             tools: self.tools.values().cloned().collect(),
             mcps: self.mcps.values().cloned().collect(),
             hooks: self.hooks.clone(),
+            rpcs: self.rpcs.values().cloned().collect(),
             themes: self.themes.values().cloned().collect(),
             group_rules: self.group_rules.clone(),
             home_actions: self.home_actions.clone(),
