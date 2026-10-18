@@ -358,14 +358,20 @@ async fn list(
     // serializer renders undefined as null, not omitted). Non-empty pages
     // carry the encoded cursor strings.
     let mut cursor = serde_json::Map::new();
-    cursor.insert("previous".to_owned(), match previous.flatten() {
-        Some(p) => json!(p),
-        None => Value::Null,
-    });
-    cursor.insert("next".to_owned(), match next.flatten() {
-        Some(n) => json!(n),
-        None => Value::Null,
-    });
+    cursor.insert(
+        "previous".to_owned(),
+        match previous.flatten() {
+            Some(p) => json!(p),
+            None => Value::Null,
+        },
+    );
+    cursor.insert(
+        "next".to_owned(),
+        match next.flatten() {
+            Some(n) => json!(n),
+            None => Value::Null,
+        },
+    );
     Ok(axum::Json(json!({
         "data": data,
         "cursor": cursor,
