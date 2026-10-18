@@ -120,7 +120,20 @@
 - Partial: reply=once/reject legs and multi-ask queueing not separately driven (grant-persistence contrast covers once-semantics; queue surface = the permission list API, exercised for the single ask). Carried as C3-residual if a fix lands in the family.
 
 *(next: C5)*
-*(execution continues — second tier: C5/C9/C13/C15/C16/C20/D2/D3/D4)*
+### CD-23 (MED-LOW) — C5/C16: `DialogWorkspaceFileChanges` exists only in its delete-confirm role
+- Ours models the dialog solely as `WorktreeDeleteConfirm` (store.rs:124) after a `forceRequired` rejection. Ref's `dialog-workspace-file-changes.tsx` is the full changed-files REVIEW flow (list + review before adopt/move). Ours = partial (confirm-only); the review-list role is absent.
+
+### CD-24 (LOW, UNCERTAIN — instrument anomaly, recorded for follow-up) — C5/E-class: data-root fallback to `/.local/share/opencode-rust` under HOME-unresolvable conditions
+- Two MANUAL server invocations (identical env exports to the scripted drives: `OPENCODE_TEST_HOME` + full XDG_* set) wrote their data to `/.local/share/opencode-rust/opencode.db` (the XDG error-path root) and loaded the user-global plugin config, while ALL scripted drives isolated correctly per-home (per-probe DBs verified distinct). Exact trigger unisolated (shell env scoping vs root-resolution precedence — boot.rs:359's redirect seam is the suspect surface). No user data touched (the /.local DB contains only this lane's sessions). Flagged as a precedence-audit TODO, not adjudicated a product bug from this evidence alone.
+
+### CD-25 (INFO) — C5 verified-parity rows
+- **Server loss (live, kill -9 mid-SLOWSTREAM + restart)**: session row intact (no false terminal: `outcome=None` until a real settle — ref semantics: outcome only at terminal transitions); messages readable including the partial assistant; `active` set EMPTY after restart (no stuck execution ownership); new prompts admitted post-recovery.
+- **Bad data (live)**: bogus session id → 404 `SessionNotFoundError` shape; invalid prompt body handled without crash; corrupt config JSON (`{'shell': /bin/broken}`) → server BOOTS and serves (invalid document dropped with loader diagnostics, boot survives — ref-consistent).
+- **file-mutation/file-retention**: ports present with keyed lock tables (`file_mutation.rs:149`), tests inline.
+- Carried: partial-write mid-state (needs fs-level fault injection — no standing instrument); plugin-crash recovery folded into C6 (same supervision surface).
+
+*(next: C9, C13)*
+*(execution continues — second tier: C9/C13/C15/C16/C20/D2/D3/D4)*
 
 
 
