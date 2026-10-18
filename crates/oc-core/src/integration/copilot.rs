@@ -7,6 +7,7 @@
 use super::types::{ConnectionInfo, CredentialValue};
 use super::IntegrationHost;
 use dashmap::DashMap;
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -102,9 +103,21 @@ impl IntegrationHost {
         &self.provider_bindings_shared
     }
 
-    /// Recomputes the credential-driven provider bindings (copilot today)
-    /// into the shared snapshot. Best-effort per provider: a failing
-    /// resolve keeps the previous entry.
+    /// Recomputes the credential-driven provider bindings into the
+    /// shared snapshot. Best-effort per provider: a failing resolve
+    /// keeps the previous entry.
+    ///
+    /// CRED-B1: the fold covers EVERY registered integration with a
+    /// stored credential, not just the named transports — v2 resolves
+    /// the active connection per attempt
+    /// (`integrations.connection.active(provider.integrationID ?? id)`
+    /// → `resolve`, model-resolver.ts:364-371) and maps it onto the
+    /// provider settings (`nativeCredentialSettings`: key → apiKey,
+    /// oauth access → apiKey, model-resolver.ts:308-319). The snapshot
+    /// keeps the resolver's `bind()` synchronous; env connections stay
+    /// with the facade's lazy env chain. The special transports computed
+    /// first (copilot client headers, vertex ADC) win over the generic
+    /// fold.
     pub async fn refresh_provider_bindings(self: &Arc<Self>) {
         let mut next = BTreeMap::new();
         if let Some(binding) = copilot_binding(self).await {
@@ -114,6 +127,19 @@ impl IntegrationHost {
         // rides the same snapshot; failures keep the previous entry.
         if let Some(binding) = self.vertex_binding().await {
             next.insert("google-vertex".to_owned(), binding);
+        }
+        let registered: Vec<String> = self.entries.read().keys().cloned().collect();
+        if let Ok(rows) = self.store().all().await {
+            let with_credentials: std::collections::HashSet<String> =
+                rows.into_iter().map(|row| row.integration_id).collect();
+            for id in registered {
+                if !with_credentials.contains(&id) {
+                    continue;
+                }
+                if let Some(binding) = integration_binding(self, &id).await {
+                    next.entry(id).or_insert(binding);
+                }
+            }
         }
         self.provider_bindings_shared.swap(next);
     }
@@ -144,4 +170,47 @@ async fn copilot_binding(host: &IntegrationHost) -> Option<ProviderBinding> {
         api_key: oauth.refresh.clone(),
         headers: copilot_headers(),
     })
+}
+
+/// The generic credential → route fold for one integration (CRED-B1):
+/// the ACTIVE stored credential becomes the provider's api key — key
+/// credentials contribute `key.key`, OAuth credentials their `access`
+/// token (`nativeCredentialSettings`, model-resolver.ts:308-319) — and
+/// a `baseURL` in the credential's metadata (or a key credential's
+/// configuration form answer) overrides the endpoint (the `configured`
+/// settings fold, model-resolver.ts:202-203). Env connections are left
+/// to the facade's lazy env chain.
+async fn integration_binding(
+    host: &IntegrationHost,
+    integration_id: &str,
+) -> Option<ProviderBinding> {
+    let connection = host.connection_active(integration_id).await.ok()??;
+    let ConnectionInfo::Credential { id, .. } = connection else {
+        return None;
+    };
+    let stored = host.store().get(&id).await.ok()??;
+    let (token, metadata, configuration) = match &stored.value {
+        CredentialValue::Key(key) => {
+            (key.key.clone(), key.metadata.as_ref(), key.configuration.as_ref())
+        }
+        CredentialValue::OAuth(oauth) => (oauth.access.clone(), oauth.metadata.as_ref(), None),
+    };
+    if token.is_empty() {
+        return None;
+    }
+    let from_map = |map: Option<&std::collections::BTreeMap<String, Value>>| {
+        map.and_then(|map| map.get("baseURL"))
+            .and_then(Value::as_str)
+            .filter(|url| !url.is_empty())
+            .map(str::to_owned)
+    };
+    let from_value = |value: Option<&Value>| {
+        value
+            .and_then(|value| value.get("baseURL"))
+            .and_then(Value::as_str)
+            .filter(|url| !url.is_empty())
+            .map(str::to_owned)
+    };
+    let base_url = from_map(metadata).or_else(|| from_value(configuration));
+    Some(ProviderBinding { base_url, api_key: token, headers: BTreeMap::new() })
 }

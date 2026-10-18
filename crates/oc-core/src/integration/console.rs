@@ -220,6 +220,13 @@ pub fn to_custom_providers(config: &ConsoleConfig) -> Vec<CustomProvider> {
 #[derive(Default)]
 pub struct ConsoleProviders {
     entries: DashMap<String, CustomProvider>,
+    /// The resolved Console token (CRED-B2): the ACTIVE `opencode`
+    /// credential's OAuth access token. Console-issued providers
+    /// authenticate with it — their integrationID is "opencode"
+    /// (opencode.ts:251) and the resolver's credential fold maps the
+    /// oauth access token onto the api key
+    /// (model-resolver.ts:308-319,364-371).
+    token: parking_lot::RwLock<Option<String>>,
 }
 
 impl ConsoleProviders {
@@ -231,6 +238,17 @@ impl ConsoleProviders {
     #[must_use]
     pub fn get(&self, id: &str) -> Option<CustomProvider> {
         self.entries.get(id).map(|entry| entry.value().clone())
+    }
+
+    /// The resolved Console token console-issued providers carry as
+    /// their bearer key (CRED-B2).
+    #[must_use]
+    pub fn token(&self) -> Option<String> {
+        self.token.read().clone()
+    }
+
+    fn set_token(&self, token: Option<String>) {
+        *self.token.write() = token;
     }
 
     /// Case-insensitive id iteration for the resolver's prefix match.
@@ -260,20 +278,28 @@ impl IntegrationHost {
 
     /// One console refresh: fetch the config with the ACTIVE credential,
     /// project providers, and report connection statuses on the console
-    /// error shapes (opencode.ts:181-207 `connectionStatus`).
+    /// error shapes (opencode.ts:181-207 `connectionStatus`). The active
+    /// credential's token rides the shared snapshot (CRED-B2) so
+    /// resolvers bind console-issued providers with it; a missing
+    /// connection clears both.
     pub async fn refresh_console(self: &Arc<Self>) {
         let Some(connection) = self.connection_active("opencode").await.ok().flatten() else {
+            self.console_providers_shared.set_token(None);
             return;
         };
         let ConnectionInfo::Credential { id, .. } = &connection else {
+            self.console_providers_shared.set_token(None);
             return;
         };
         let Some(stored) = self.store().get(id).await.ok().flatten() else {
+            self.console_providers_shared.set_token(None);
             return;
         };
         let CredentialValue::OAuth(oauth) = &stored.value else {
+            self.console_providers_shared.set_token(None);
             return;
         };
+        self.console_providers_shared.set_token(Some(oauth.access.clone()));
         match fetch_config(oauth).await {
             Ok(Some(config)) => {
                 self.console_providers_shared.swap(to_custom_providers(&config));

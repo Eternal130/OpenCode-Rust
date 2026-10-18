@@ -62,10 +62,7 @@ fn session_row() -> SessionRow {
 
 /// Renders the resolved model's wire request and reads one header — the
 /// seam every provider request passes through before the transport.
-fn wire_header(
-    resolved: &ResolvedModel,
-    name: &str,
-) -> Result<Option<String>, String> {
+fn wire_header(resolved: &ResolvedModel, name: &str) -> Result<Option<String>, String> {
     let route = Arc::clone(&resolved.model.route);
     let mut request = oc_ai::schema::LLMRequest::new(resolved.model.clone());
     request.messages = vec![oc_ai::schema::Message::user("hi")];
@@ -109,10 +106,10 @@ async fn active_credential_reaches_resolver() {
     .with_credentials(Arc::clone(host.credential_bindings()));
 
     let session = session_row();
-    let resolved = resolver
+    let bound = resolver
         .resolve_selected(&session, &model_ref("anthropic", "claude-opus-4-5"))
         .expect("anthropic resolves");
-    let header = wire_header(&resolved, "x-api-key")
+    let header = wire_header(&bound, "x-api-key")
         .unwrap_or_else(|error| panic!("no stored credential reached the request: {error}"));
     assert_eq!(header.as_deref(), Some("sk-ant-from-store"));
 }
@@ -144,9 +141,9 @@ async fn credential_switch_invalidates_resolver() {
         .await
         .expect("connect first");
     host.refresh_provider_bindings().await;
-    let resolved = resolver.resolve_selected(&session, &reference).expect("resolve first");
+    let bound = resolver.resolve_selected(&session, &reference).expect("resolve first");
     assert_eq!(
-        wire_header(&resolved, "x-api-key").expect("wire first").as_deref(),
+        wire_header(&bound, "x-api-key").expect("wire first").as_deref(),
         Some("sk-ant-first")
     );
 
@@ -157,9 +154,9 @@ async fn credential_switch_invalidates_resolver() {
         .await
         .expect("connect second");
     host.refresh_provider_bindings().await;
-    let resolved = resolver.resolve_selected(&session, &reference).expect("resolve second");
+    let bound = resolver.resolve_selected(&session, &reference).expect("resolve second");
     assert_eq!(
-        wire_header(&resolved, "x-api-key").expect("wire second").as_deref(),
+        wire_header(&bound, "x-api-key").expect("wire second").as_deref(),
         Some("sk-ant-second"),
         "credential switch must invalidate the resolver's cached credential"
     );
@@ -223,10 +220,7 @@ async fn console_provider_gets_token() {
         refresh: "r".into(),
         access: "console-access-token".into(),
         expires: oc_core::database::migrations::now_ms() + 3_600_000,
-        metadata: Some(BTreeMap::from([(
-            "server".to_owned(),
-            Value::String(mock.base.clone()),
-        )])),
+        metadata: Some(BTreeMap::from([("server".to_owned(), Value::String(mock.base.clone()))])),
     });
     host.store()
         .create(CreateInput {
@@ -254,10 +248,10 @@ async fn console_provider_gets_token() {
     .with_console(Arc::clone(host.console_providers()));
 
     let session = session_row();
-    let resolved = resolver
+    let bound = resolver
         .resolve_selected(&session, &model_ref("acme-ai", "acme-large"))
         .expect("console provider resolves");
-    let header = wire_header(&resolved, "authorization")
+    let header = wire_header(&bound, "authorization")
         .unwrap_or_else(|error| panic!("console provider request: {error}"));
     assert_eq!(
         header.as_deref(),
@@ -284,11 +278,8 @@ async fn keyless_zen_uses_public_key() {
     }
     // Sandboxed fresh HOME + data root: no credentials, no logins.
     let dir = tempfile::tempdir_in("/tmp/opencode").expect("fresh home");
-    let engine = Engine::boot(EngineOptions::new(
-        dir.path().join("data"),
-        dir.path().join("home"),
-    ))
-    .await;
+    let engine =
+        Engine::boot(EngineOptions::new(dir.path().join("data"), dir.path().join("home"))).await;
 
     // A FREE zen model survives the keyless fold (models with a non-zero
     // cost tier are disabled keyless, opencode.ts:327-342).
@@ -304,11 +295,11 @@ async fn keyless_zen_uses_public_key() {
         .location(oc_core::location::LocationRef::new(dir.path().to_owned(), None))
         .await
         .expect("location services");
-    let resolved = services
+    let bound = services
         .resolver
         .resolve_selected(&session, &model_ref("opencode", &free.id.0.clone()))
         .expect("zen model resolves keyless");
-    let header = wire_header(&resolved, "authorization")
+    let header = wire_header(&bound, "authorization")
         .unwrap_or_else(|error| panic!("keyless zen request failed to build: {error}"));
     assert_eq!(
         header.as_deref(),
