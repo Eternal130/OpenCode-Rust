@@ -4813,15 +4813,32 @@ pub async fn run_with_size(
     {
         let input_stop = Arc::clone(&input_stop);
         std::thread::spawn(move || {
+            if std::env::var("FIXW2_TRACE").is_ok() {
+                eprintln!("[fixw2] reader thread start t={}ms", system_now_ms() % 1_000_000);
+            }
             // The combined boot probe (lane TAIL): OSC 11 background +
             // the kitty keyboard capability query, one read window.
             let probe = crate::theme::probe_terminal();
+            if std::env::var("FIXW2_TRACE").is_ok() {
+                eprintln!("[fixw2] probe done t={}ms bg={:?} kitty={}", system_now_ms() % 1_000_000, probe.background, probe.kitty_keyboard);
+            }
             let mode = probe
                 .background
                 .map_or(Mode::Dark, |(r, g, b)| crate::theme::mode_for_background(r, g, b));
             let _ = probe_tx.send((mode, probe.kitty_keyboard));
+            let mut fixw2_iters: u32 = 0;
             loop {
+                if std::env::var("FIXW2_TRACE").is_ok() {
+                    fixw2_iters += 1;
+                    if fixw2_iters <= 3 || fixw2_iters % 40 == 0 {
+                        let raw = crossterm::terminal::is_raw_mode_enabled();
+                        eprintln!("[fixw2] reader iter={fixw2_iters} raw={raw:?} t={}ms", system_now_ms() % 1_000_000);
+                    }
+                }
                 if input_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    if std::env::var("FIXW2_TRACE").is_ok() {
+                        eprintln!("[fixw2] reader loop EXIT stop-flag t={}ms", system_now_ms() % 1_000_000);
+                    }
                     break;
                 }
                 match crossterm::event::poll(std::time::Duration::from_millis(50)) {

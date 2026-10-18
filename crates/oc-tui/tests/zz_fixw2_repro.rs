@@ -104,6 +104,54 @@ fn boot_and_exit2(cols: u16, rows: u16, tag: &str) {
     assert!(ok, "{tag}: the TUI did not exit on the chord (SE-F2 wedge)");
 }
 
+fn boot_and_exit3(cols: u16, rows: u16, tag: &str) {
+    let _sandbox = sandbox_env(tag);
+    let fake = FakeLlm::spawn(standard_sessions());
+    let harness = LiveHarness::attach(cols, rows);
+    let mut driver = harness.handle();
+    let done = std::sync::Arc::new(std::sync::Mutex::new(None::<Result<(), String>>));
+    let slot = std::sync::Arc::clone(&done);
+    std::thread::spawn(move || {
+        let out = (|| -> Result<(), String> {
+            if !driver.wait_for(vt_harness::WORDMARK, Duration::from_secs(8)) {
+                return Err("wordmark never rendered".into());
+            }
+            // open the session dialog: <leader>l
+            let from = driver.raw_len();
+            driver.write(b"\x18l");
+            std::thread::sleep(Duration::from_millis(700));
+            let grid = driver.grid_now();
+            let mut dump = String::new();
+            for y in 0..grid.rows {
+                dump.push_str(&format!("row{y:02}: {:?}\n", grid.row_text(y)));
+            }
+            std::fs::create_dir_all("/tmp/opencode/fixw2").ok();
+            let _ = std::fs::write(format!("/tmp/opencode/fixw2/dlg-{cols}x{rows}.grid.txt"), &dump);
+            let listed = driver.wait_for_after(b"Alpha", from, Duration::from_millis(200));
+            eprintln!("[fixw2] dlg {cols}x{rows} listed_alpha={listed}");
+            driver.write(b"\x1b");
+            std::thread::sleep(Duration::from_millis(300));
+            Ok(())
+        })();
+        vt_harness::exit_chord(&mut driver);
+        *slot.lock().unwrap() = Some(out);
+    });
+    let handle = {
+        let url = fake.url.clone();
+        std::thread::spawn(move || {
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_tui(&url, cols, rows, Duration::from_secs(25));
+            }));
+            r.is_ok()
+        })
+    };
+    let ok = handle.join().expect("boot thread");
+    fake.stop();
+    let out = done.lock().unwrap().take();
+    eprintln!("[fixw2] {tag} {cols}x{rows} exited={ok} driver_out={out:?}");
+    assert!(ok, "{tag}: the TUI did not exit on the chord (SE-F2 wedge)");
+}
+
 #[test]
 fn fixw2_repro() {
     let _lock = pty_lock();
@@ -122,6 +170,11 @@ fn fixw2_repro() {
         "resize" => boot_and_exit(80, 24, Some((100, 30)), "resize"),
         "resize-back" => {
             boot_and_exit2(80, 24, "resize-back");
+        }
+        "dlg" => {
+            let w: u16 = std::env::var("FIXW2_W").ok().and_then(|s| s.parse().ok()).unwrap_or(40);
+            let h: u16 = std::env::var("FIXW2_H").ok().and_then(|s| s.parse().ok()).unwrap_or(12);
+            boot_and_exit3(w, h, "dlg");
         }
         other => panic!("unknown FIXW2_MODE {other}"),
     }
