@@ -353,13 +353,19 @@ async fn list(
     });
 
     let data: Vec<Value> = rows.iter().map(session_row_to_info).collect();
+    // Empty page: v2's runtime emits explicit nulls (probed 2026-10-19:
+    // `{"data":[],"cursor":{"previous":null,"next":null}}` — the cursor
+    // serializer renders undefined as null, not omitted). Non-empty pages
+    // carry the encoded cursor strings.
     let mut cursor = serde_json::Map::new();
-    if let Some(previous) = previous.flatten() {
-        cursor.insert("previous".to_owned(), json!(previous));
-    }
-    if let Some(next) = next.flatten() {
-        cursor.insert("next".to_owned(), json!(next));
-    }
+    cursor.insert("previous".to_owned(), match previous.flatten() {
+        Some(p) => json!(p),
+        None => Value::Null,
+    });
+    cursor.insert("next".to_owned(), match next.flatten() {
+        Some(n) => json!(n),
+        None => Value::Null,
+    });
     Ok(axum::Json(json!({
         "data": data,
         "cursor": cursor,

@@ -115,13 +115,17 @@ async fn list(
     });
 
     let data: Vec<Value> = rows.iter().map(message_row_to_info).collect();
+    // Empty page: v2 emits explicit nulls (same runtime-probed contract as
+    // the session list cursor — see session.rs list handler, 2026-10-19).
     let mut cursor_json = serde_json::Map::new();
-    if let Some(previous) = previous.flatten() {
-        cursor_json.insert("previous".to_owned(), json!(previous));
-    }
-    if let Some(next) = next.flatten() {
-        cursor_json.insert("next".to_owned(), json!(next));
-    }
+    cursor_json.insert("previous".to_owned(), match previous.flatten() {
+        Some(p) => json!(p),
+        None => Value::Null,
+    });
+    cursor_json.insert("next".to_owned(), match next.flatten() {
+        Some(n) => json!(n),
+        None => Value::Null,
+    });
     Ok(axum::Json(json!({
         "data": data,
         "cursor": cursor_json,
