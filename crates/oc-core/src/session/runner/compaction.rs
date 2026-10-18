@@ -215,6 +215,14 @@ impl SessionCompaction {
         *self.settings.write() = update;
     }
 
+    /// The current settings (CONFIG-C1's consumer proof surface: the
+    /// engine's `ConfigCompactionPlugin` wiring is observable through
+    /// the configured values).
+    #[must_use]
+    pub fn settings(&self) -> Settings {
+        *self.settings.read()
+    }
+
     /// `compact` (compaction.ts:205-240, 660-673). Manual compactions
     /// settle through their `/compact` inbox item, which the runner owns.
     pub async fn compact(&self, trigger: Trigger) -> CompactStatus {
