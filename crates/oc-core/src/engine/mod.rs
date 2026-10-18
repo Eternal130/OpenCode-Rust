@@ -851,17 +851,22 @@ impl Engine {
 
         // The wave-12 plugin seam: the embedder's plugin host's
         // registration snapshot applies into THIS location's registries
-        // (agents via plugin_apply, tool rows + executors natively) —
-        // BEFORE the Code Mode surface so the snapshot shaping sees the
-        // plugin tools (code-mode-eligible ones hide behind `execute`
-        // exactly like MCP tools).
+        // (agents via plugin_apply, tool rows + executors natively, and
+        // the guest hook subscriptions into the location's HookRegistry
+        // — PLUG-D21: every dispatch site below reaches guest handlers
+        // through the bridge forwarder) — BEFORE the Code Mode surface
+        // so the snapshot shaping sees the plugin tools
+        // (code-mode-eligible ones hide behind `execute` exactly like
+        // MCP tools).
         if let Some(source) = &self.plugin_source {
             let applied = crate::plugin_apply::apply_location_plugins(
                 source.as_ref(),
+                &hooks,
                 &agents,
                 &tools,
                 Some(&commands),
-            );
+            )
+            .await;
             let _ = applied; // diagnostics only (boot-trace reads the registry)
         }
 

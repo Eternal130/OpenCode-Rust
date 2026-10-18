@@ -44,13 +44,16 @@ use serde_json::{json, Value};
 
 use oc_core::config::Loaded;
 use oc_core::engine::Engine;
+use oc_core::hooks::PluginStorage;
 use oc_core::location::{LocationRef, ToolExecute, ToolRunFailure, ToolRunResult};
-use oc_core::plugin_apply::{LocationPluginSource, PluginToolDef};
+use oc_core::plugin_apply::{
+    GuestHookDispatcher, LocationPluginSource, PluginHookDef, PluginToolDef,
+};
 use oc_core::tool::codemode::{CallRecord, CodeModeRuntime, RunOutcome, ToolCallFn};
 use oc_plugin_host::registrations::PluginState;
 use oc_plugin_host::{
     Bridge, CodeModeToolSpec, HostState, PluginHost, PluginHostConfig, Resolution, ResolvedPlugin,
-    SessionPort, ToolPort,
+    SessionPort, StoragePort, StorageScanQuery, ToolPort,
 };
 use oc_schema::mcp::ServerConfig;
 use oc_schema::misc::{PluginFeatures, PluginInfo, PluginSource, PluginState as WireState};
@@ -67,6 +70,9 @@ const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 /// `code_mode_timeout` default).
 const EXECUTE_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// The hard bound on one guest RPC dispatch (`/api/rpc`).
+const RPC_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// The booted plugin subsystem (attached to [`crate::state::AppState`]).
 pub struct PluginBoot {
     pub host: Arc<PluginHost>,
@@ -82,6 +88,32 @@ pub struct PluginBoot {
     pub session_slot: Arc<EngineSessionSlot>,
 }
 
+/// One `/api/rpc` call's failure (PLUG-D14): the v2 error channel —
+/// `Failure` maps to `RpcError` 400, `Internal` to `RpcInternalError`
+/// 500 (`rpc.internal` / `rpc.invalid_output`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum RpcCallError {
+    /// A declared or registry failure with its v2 `type` (the 400 leg,
+    /// unless the type is one of the internal two).
+    Failure { type_: String, message: String, data: Option<Value> },
+    /// The 500 leg (`rpc.internal` / `rpc.invalid_output`).
+    Internal(String),
+}
+
+impl RpcCallError {
+    /// v2's unavailable / method-not-found failures arrive as plain
+    /// strings from the host facade; classify by their `type` prefix.
+    fn unregistered(message: String) -> Self {
+        if message.starts_with("RPC is unavailable:") {
+            Self::Failure { type_: "rpc.unavailable".into(), message, data: None }
+        } else if message.starts_with("Unknown RPC method:") {
+            Self::Failure { type_: "rpc.method_not_found".into(), message, data: None }
+        } else {
+            Self::Internal(message)
+        }
+    }
+}
+
 impl PluginBoot {
     /// A disabled, empty boot (the panic fallback / embedders that boot
     /// without plugins).
@@ -93,6 +125,30 @@ impl PluginBoot {
             ready: false,
             router: Arc::new(TokenRouter::default()),
             session_slot: Arc::new(EngineSessionSlot::default()),
+        }
+    }
+
+    /// `/api/rpc/{rpcID}/{method}` dispatch (PLUG-D14): route the call
+    /// into the guest through the host's `rpc.call`. The error strings
+    /// mirror v2's failure channel exactly (`rpc.unavailable` /
+    /// `rpc.method_not_found` carry their v2 messages; the caller maps
+    /// them onto `RpcError` 400).
+    pub async fn rpc_call(
+        &self,
+        rpc_id: &str,
+        method: &str,
+        input: Value,
+    ) -> Result<Option<Value>, RpcCallError> {
+        match self.host.rpc_call_async(rpc_id, method, input, RPC_TIMEOUT).await {
+            Ok(oc_plugin_host::RpcOutcome::Output(output)) => Ok(output),
+            Ok(oc_plugin_host::RpcOutcome::Failure { type_, message, data }) => {
+                Err(RpcCallError::Failure { type_, message, data })
+            }
+            Ok(oc_plugin_host::RpcOutcome::Internal(message)) => {
+                Err(RpcCallError::Internal(message))
+            }
+            // Unregistered id / method: v2's failure(type, message).
+            Err(message) => Err(RpcCallError::unregistered(message)),
         }
     }
 
@@ -204,6 +260,13 @@ fn plugins_disabled() -> bool {
 /// is core, not plugin-gated (v2 synthesizes `execute` over MCP tools
 /// with no plugins loaded).
 ///
+/// `data_root` is the engine's database root: the plugin KV shares the
+/// SAME `opencode.db` `kv` table (PLUG-D18 — v2 `PluginHost.storage(kv,
+/// pluginID)`), so plugin state survives process restarts exactly like
+/// every other durable row. A second connection over the same file is
+/// safe (WAL + busy timeout; migrations idempotent under the bootstrap
+/// lock).
+///
 /// Blocking: the registration pass parks the caller up to
 /// [`READY_TIMEOUT`] — `boot_and_serve` runs this inside
 /// `spawn_blocking`.
@@ -213,6 +276,7 @@ pub fn boot(
     loaded: &Loaded,
     home: &std::path::Path,
     directory: &std::path::Path,
+    data_root: &std::path::Path,
     app_version: &str,
 ) -> Arc<PluginBoot> {
     if plugins_disabled() {
@@ -268,11 +332,43 @@ pub fn boot(
             .collect(),
     };
 
+    // PLUG-D18: the plugin KV lives in the ENGINE's database (the same
+    // `opencode.db` under `data_root` — the v2 shape, one shared `kv`
+    // table with `plugin:<hex(id)>:` namespaced keys). The host boots
+    // BEFORE the engine creates the root, so create it here. A failed
+    // open degrades the port (calls decline with a clear error) — never
+    // a boot failure.
+    let storage_port: Option<Arc<dyn StoragePort>> =
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let _ = std::fs::create_dir_all(data_root);
+            match handle.block_on(oc_core::database::Database::open_location(
+                oc_core::database::engine_location(data_root),
+                oc_core::database::MigrationOptions::default(),
+            )) {
+                Ok(db) => Some(Arc::new(DbStoragePort { db: Arc::new(db) })),
+                Err(error) => {
+                    eprintln!(
+                    "opencode plugin: storage database unavailable ({error}); ctx.storage disabled"
+                );
+                    None
+                }
+            }
+        } else {
+            eprintln!(
+                "opencode plugin: no async runtime for the storage database; ctx.storage disabled"
+            );
+            None
+        };
+
     let config = PluginHostConfig {
         host_state,
         session_port: Some(Arc::clone(&session_slot) as Arc<dyn SessionPort>),
         tool_port: Some(Arc::new(RouterToolPort { router: Arc::clone(&router) })),
+        storage_port,
         entry_options: resolution.entry_options(),
+        // The registration pass spans bun cold start + every entry's
+        // setup; 2 s (the crate default) flakes under load.
+        registration_timeout: Duration::from_secs(10),
         ..PluginHostConfig::default()
     };
     let host = Arc::new(detected.start_detached_with(config, &resolution.entries()));
@@ -475,6 +571,47 @@ impl LocationPluginSource for HostPluginSource {
             })
             .collect()
     }
+
+    /// PLUG-D21: the guest's hook subscriptions (registration order).
+    fn hooks(&self) -> Vec<PluginHookDef> {
+        self.host
+            .registrations()
+            .hooks
+            .iter()
+            .map(|hook| PluginHookDef {
+                plugin_id: hook.plugin_id.clone(),
+                domain: hook.domain.clone(),
+                name: hook.name.clone(),
+            })
+            .collect()
+    }
+
+    /// PLUG-D21: the bridge forwarder — every engine dispatch site
+    /// reaches the guest through `PluginHost::dispatch_hook_async`
+    /// (`Bridge::dispatch_hook`).
+    fn hook_dispatcher(&self) -> Option<Arc<dyn GuestHookDispatcher>> {
+        Some(Arc::new(HostHookDispatcher { host: Arc::clone(&self.host) }))
+    }
+}
+
+/// The [`GuestHookDispatcher`] over the host's bridge (PLUG-D21): one
+/// call forwards one serialized event to one plugin's guest handlers
+/// and returns the possibly-mutated copy.
+struct HostHookDispatcher {
+    host: Arc<PluginHost>,
+}
+
+#[async_trait]
+impl GuestHookDispatcher for HostHookDispatcher {
+    async fn dispatch(
+        &self,
+        plugin_id: &str,
+        domain: &str,
+        name: &str,
+        event: Value,
+    ) -> Result<Value, String> {
+        self.host.dispatch_hook_async(plugin_id, domain, name, event).await
+    }
 }
 
 /// `tool.transform` registrations dispatch to the guest's
@@ -502,6 +639,65 @@ impl ToolExecute for PluginToolExecutor {
             }),
             Err(message) => Err(ToolRunFailure::Error { message, metadata: None }),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The plugin KV port (PLUG-D18: the engine database's `kv` table)
+// ---------------------------------------------------------------------------
+
+/// The [`StoragePort`] over oc-core's [`oc_core::hooks::DatabasePluginStorage`]:
+/// one namespaced slice of the shared `kv` table per plugin id (the v2
+/// `PluginHost.storage(kv, pluginID)` binding). Writes are transactions —
+/// a failed write rolls back and the previous value stays.
+struct DbStoragePort {
+    db: Arc<oc_core::database::Database>,
+}
+
+#[async_trait]
+impl StoragePort for DbStoragePort {
+    async fn get(&self, plugin_id: &str, key: &str) -> Result<Option<Value>, String> {
+        oc_core::hooks::DatabasePluginStorage::new(&self.db, plugin_id)
+            .get(key)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn set(&self, plugin_id: &str, key: &str, value: Value) -> Result<(), String> {
+        oc_core::hooks::DatabasePluginStorage::new(&self.db, plugin_id)
+            .set(key, value)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn remove(&self, plugin_id: &str, key: &str) -> Result<(), String> {
+        oc_core::hooks::DatabasePluginStorage::new(&self.db, plugin_id)
+            .remove(key)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn scan(&self, plugin_id: &str, query: StorageScanQuery) -> Result<Value, String> {
+        let storage = oc_core::hooks::DatabasePluginStorage::new(&self.db, plugin_id);
+        let result = storage
+            .scan(oc_core::hooks::ScanOptions {
+                prefix: Some(query.prefix),
+                cursor: query.after,
+                limit: query.limit.map(|limit| u32::try_from(limit).unwrap_or(u32::MAX)),
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        // The v2 guest wire shape: `{entries: [{key, value}], next?}`
+        // (namespaced stripped by the storage impl).
+        let mut page = json!({
+            "entries": result.items.into_iter()
+                .map(|(key, value)| json!({ "key": key, "value": value }))
+                .collect::<Vec<_>>(),
+        });
+        if let Some(next) = result.cursor {
+            page["next"] = Value::String(next);
+        }
+        Ok(page)
     }
 }
 
