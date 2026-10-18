@@ -37,12 +37,21 @@ fn a2_geometry_width_sweep_10_40_160() {
             Some(vec![(w, h)])
         })
         .unwrap_or_else(|| vec![(10, 6), (40, 12), (160, 40)]);
+    // ONE PTY for the whole sweep (the SA-F13 constraint vt_double_boot
+    // documents): crossterm's process-global event source pins the FIRST
+    // tty's epoll registration — a per-width re-attach leaves the next
+    // boot's reader polling a dead slave (input dead; the registered
+    // SE-F2 sweep wedge). The sweep resizes the live PTY to each width
+    // before booting it; every width still gets a fresh boot at its own
+    // geometry (the exit rides real resizes between legs).
+    let _lock = pty_lock();
+    let first = widths[0];
+    let harness = LiveHarness::attach(first.0, first.1);
     for (cols, rows) in widths {
-        let _lock = pty_lock();
         let tag = format!("a2w{cols}");
         let _sandbox = sandbox_env(&tag);
         let fake = FakeLlm::spawn(standard_sessions());
-        let harness = LiveHarness::attach(cols, rows);
+        harness.handle().resize_pty(cols, rows);
         let mut driver = harness.handle();
         let done = std::sync::Arc::new(std::sync::Mutex::new(None::<Result<(), String>>));
         let slot = std::sync::Arc::clone(&done);
