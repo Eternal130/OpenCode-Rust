@@ -8,7 +8,7 @@
 //! results enter a 25-entry consumed history. Recoverable wait results stay
 //! available for background registration and acknowledgment.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -625,6 +625,415 @@ impl Jobs {
 impl crate::session::execution::CancelJobs for Jobs {
     async fn cancel(&self, session_id: &str) {
         self.cancel_session(session_id).await;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SessionRestart (session/execution/restart.ts) — the boot recovery sweep
+// ---------------------------------------------------------------------------
+
+/// `CONTINUE_AFTER_SERVER_RESTART` (restart.ts:11-12): the notice
+/// `prepareResume` appends before resuming an orphaned turn.
+pub const CONTINUE_AFTER_SERVER_RESTART: &str = "The server restarted while you were working. Continue from where you left off without repeating completed work.";
+
+/// `RESUME_EXHAUSTED.message` (restart.ts:14-17).
+pub const RESUME_EXHAUSTED_MESSAGE: &str =
+    "Execution was interrupted repeatedly and will not be resumed automatically.";
+
+/// `DEFAULT_MAX_ATTEMPTS` (restart.ts:24): times a single turn may be
+/// resumed before it is terminalized instead. The counter is durable and
+/// only a terminal event resets it, so a turn that keeps dying cannot
+/// crash-loop across restarts. Turns that complete never accumulate: the
+/// budget is per-turn, not per-session.
+pub const DEFAULT_MAX_RESUME_ATTEMPTS: i64 = 10;
+
+/// `SessionRestart.Options`.
+#[derive(Debug, Clone, Copy)]
+pub struct RestartOptions {
+    pub max_attempts: i64,
+}
+
+impl Default for RestartOptions {
+    fn default() -> Self {
+        Self { max_attempts: DEFAULT_MAX_RESUME_ATTEMPTS }
+    }
+}
+
+/// One service site's borrowed dependencies for the sweep: the store
+/// (claims), the inbox (notice admission), the bus (terminal/synthetic
+/// publication), the jobs registry (durable background records), the
+/// process-local execution, and the subagent-job machinery the recovery
+/// re-arms. `fork_resume` is the fork point for resumed drains (v2
+/// `Effect.forkIn(scope)`): the caller owns the 'static execution handle
+/// (the engine's per-location `Arc<LocationServices>`; tests an
+/// `Arc<SessionExecution>`).
+pub struct RestartDeps<'a> {
+    pub store: &'a crate::session::store::SessionStore,
+    pub inbox: &'a crate::session::inbox::SessionInbox,
+    pub bus: &'a crate::bus::Bus,
+    pub jobs: &'a Arc<Jobs>,
+    pub execution: &'a crate::session::execution::SessionExecution,
+    pub subagents: &'a Arc<crate::session::subagent_job::SubagentJob>,
+    pub fork_resume: &'a (dyn Fn(String) + Send + Sync),
+}
+
+fn restart_sid(raw: &str) -> oc_schema::id::SessionId {
+    oc_schema::id::SessionId::parse(raw.to_string())
+        .unwrap_or_else(|err| oc_schema::id::SessionId(err.value))
+}
+
+fn restart_mid(raw: &str) -> oc_schema::id::MessageId {
+    oc_schema::id::MessageId::parse(raw.to_string())
+        .unwrap_or_else(|err| oc_schema::id::MessageId(err.value))
+}
+
+fn job_status(status: Status) -> crate::subagent::JobStatus {
+    match status {
+        Status::Running => crate::subagent::JobStatus::Running,
+        Status::Completed => crate::subagent::JobStatus::Completed,
+        Status::Error => crate::subagent::JobStatus::Error,
+        Status::Cancelled => crate::subagent::JobStatus::Cancelled,
+    }
+}
+
+fn status_wire(status: Status) -> &'static str {
+    match status {
+        Status::Running => "running",
+        Status::Completed => "completed",
+        Status::Error => "error",
+        Status::Cancelled => "cancelled",
+    }
+}
+
+impl RestartDeps<'_> {
+    /// `prepareResume` (restart.ts:67-84): durably count one more resume
+    /// BEFORE the resume runs (a crash inside the resumed turn is counted
+    /// by the next sweep — the budget cannot be dodged); over-budget turns
+    /// terminalize (`session.execution.failed` + the release hook clears
+    /// the claim and resets the counter atomically with the terminal
+    /// event); otherwise append the continuing-after-restart notice (the
+    /// direct `session.synthetic` publish the projector turns into a
+    /// message — v2 `SessionEvent.Synthetic`).
+    pub async fn prepare_resume(&self, session_id: &str, options: &RestartOptions) -> bool {
+        let attempts = self.store.count_resume(session_id).await.ok().flatten();
+        let Some(attempts) = attempts else {
+            // The session is gone (attempts undefined): nothing to resume.
+            return false;
+        };
+        if attempts > options.max_attempts {
+            let error = oc_schema::common::SessionError {
+                error_type: "aborted".into(),
+                message: RESUME_EXHAUSTED_MESSAGE.to_string(),
+                status: None,
+                response: None,
+            };
+            self.publish_with_release(
+                "session.execution.failed",
+                session_id,
+                serde_json::json!({
+                    "sessionID": session_id,
+                    "error": serde_json::to_value(&error).unwrap_or_default(),
+                }),
+            )
+            .await;
+            return false;
+        }
+        let data = serde_json::json!({
+            "sessionID": session_id,
+            "text": CONTINUE_AFTER_SERVER_RESTART,
+            "description": "Continuing after restart",
+            "metadata": { "notice": "restart" },
+        });
+        if let Some(def) = crate::bus::registry::by_type_latest("session.synthetic") {
+            if let Err(error) =
+                self.bus.publish(def, data, crate::bus::PublishOptions::default()).await
+            {
+                eprintln!("[restart] failed to publish restart notice for {session_id}: {error}");
+            }
+        }
+        true
+    }
+
+    /// v2's `bus.publish(..., { commit: () => store.release(sessionID) })`:
+    /// the terminal event and the claim release land in one transaction.
+    async fn publish_with_release(&self, type_: &str, session_id: &str, data: serde_json::Value) {
+        let Some(def) = crate::bus::registry::by_type_latest(type_) else {
+            eprintln!("[restart] no durable definition for {type_}");
+            return;
+        };
+        let released = session_id.to_string();
+        let options = crate::bus::PublishOptions {
+            commit: Some(Box::new(move |tx: &mut crate::database::Tx<'_>, _: i64| {
+                tx.execute(
+                    "UPDATE session_v2 SET time_suspended = NULL, resume_attempts = 0, \
+                         time_updated = time_updated WHERE id = ?1",
+                    rusqlite::params![released],
+                )?;
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        if let Err(error) = self.bus.publish(def, data, options).await {
+            eprintln!("[restart] failed to publish {type_} for {session_id}: {error}");
+        }
+    }
+
+    /// `recoverShell` (restart.ts:86-117): the restarted process no longer
+    /// owns the shell — records still marked running recover as cancelled;
+    /// settled records re-deliver their outcome. The notice must NOT wake
+    /// idle owners of long-lived shells (`resume: false`): interrupted
+    /// executions resume separately after their notices are admitted.
+    pub async fn recover_shell(&self, record: &BackgroundRecord) {
+        let crate::jobs::Recovery::Shell { session_id, shell_id, command } = &record.recovery
+        else {
+            return;
+        };
+        let state =
+            if record.status == Status::Running { "cancelled" } else { status_wire(record.status) };
+        let text = match record.status {
+            Status::Running => "Command cancelled because the server restarted".to_string(),
+            Status::Completed => {
+                record.output.clone().unwrap_or_else(|| "Command completed".to_string())
+            }
+            Status::Error => record.error.clone().unwrap_or_else(|| "Command failed".to_string()),
+            Status::Cancelled => "Command cancelled".to_string(),
+        };
+        let notification =
+            crate::shell::result::notification(crate::shell::result::NotificationInput {
+                shell_id,
+                job_id: Some(&record.id),
+                command,
+                state,
+                text: &text,
+                output: None,
+            });
+        let metadata = match notification.metadata {
+            serde_json::Value::Object(map) => Some(map.into_iter().collect()),
+            _ => None,
+        };
+        let item = oc_schema::session_inbox::Item::Synthetic {
+            payload: oc_schema::session_inbox::SyntheticPayload {
+                text: notification.text,
+                description: Some(command.clone()),
+                metadata,
+            },
+            delivery: oc_schema::session_inbox::Delivery::Steer,
+        };
+        // v2 catches Session.NotFoundError → void (a deleted session drops
+        // its notice); infrastructure failures log and continue.
+        match self.inbox.admit(&record.notification_id, session_id, item).await {
+            Ok(_) => {}
+            Err(error) => eprintln!("[restart] shell notice for {session_id} skipped: {error}"),
+        }
+        self.jobs.complete_background(&record.notification_id).await;
+    }
+
+    /// `recoverSubagent` (restart.ts:119-151): validate the family, then
+    /// — settled records re-notify (waking an idle parent unless it was
+    /// suspended at sweep time, exactly v2's `resume: false` rule);
+    /// running records re-arm the child under the resume budget, with the
+    /// `SubagentJob` machinery (start + background arm the completion
+    /// observer).
+    pub async fn recover_subagent(
+        &self,
+        record: &BackgroundRecord,
+        suspended: &HashSet<String>,
+        options: &RestartOptions,
+    ) {
+        let crate::jobs::Recovery::Subagent {
+            parent_session_id,
+            child_session_id,
+            agent,
+            description,
+        } = &record.recovery
+        else {
+            return;
+        };
+        let family_valid = async {
+            let child = self.store.get(child_session_id).await.ok().flatten();
+            let parent = self.store.get(parent_session_id).await.ok().flatten();
+            child
+                .is_some_and(|child| child.parent_id.as_deref() == Some(parent_session_id.as_str()))
+                && parent.is_some()
+        };
+        if !family_valid.await {
+            self.jobs.complete_background(&record.notification_id).await;
+            return;
+        }
+        // Early notices wait for recovery's accounting, including sessions
+        // that exhaust their budget (restart.ts:155-157): a suspended
+        // parent is NOT woken by the replayed notice — the final resume
+        // loop owns its turn.
+        let resume = if suspended.contains(parent_session_id) { Some(false) } else { None };
+        if record.status != Status::Running {
+            self.deliver_subagent(
+                record,
+                record.status,
+                record.output.clone(),
+                record.error.clone(),
+                resume,
+            )
+            .await;
+            return;
+        }
+        if self.execution.is_active(child_session_id) {
+            return;
+        }
+        if !self.prepare_resume(child_session_id, options).await {
+            self.deliver_subagent(
+                record,
+                Status::Error,
+                None,
+                Some(RESUME_EXHAUSTED_MESSAGE.to_string()),
+                resume,
+            )
+            .await;
+            return;
+        }
+        // v2 jobs.start({ run: execution.resume(child) ... }) + background
+        // + the forked wait → notify — exactly `SubagentJob::start` +
+        // `background` (the observer is armed inside).
+        let recovery = crate::subagent::SubagentRecovery {
+            parent_session_id: restart_sid(parent_session_id),
+            child_session_id: restart_sid(child_session_id),
+            agent: agent.clone(),
+            description: description.clone(),
+        };
+        self.subagents.start(&recovery).await;
+        self.subagents.background(&recovery).await;
+    }
+
+    /// The `notify` closure of `recoverSubagent`: deliver the terminal
+    /// fields into the parent (subagent-completion.ts `deliver`).
+    async fn deliver_subagent(
+        &self,
+        record: &BackgroundRecord,
+        status: Status,
+        output: Option<String>,
+        error: Option<String>,
+        resume: Option<bool>,
+    ) {
+        let crate::jobs::Recovery::Subagent {
+            parent_session_id,
+            child_session_id,
+            agent,
+            description,
+        } = &record.recovery
+        else {
+            return;
+        };
+        let recovery = crate::subagent::SubagentRecovery {
+            parent_session_id: restart_sid(parent_session_id),
+            child_session_id: restart_sid(child_session_id),
+            agent: agent.clone(),
+            description: description.clone(),
+        };
+        let jobs_control: Arc<dyn crate::subagent::JobControl> =
+            Arc::new(crate::subagent_jobs_adapter::JobsAdapter(Arc::clone(self.jobs)));
+        let execution = self.execution;
+        let wake = move |parent: &str| {
+            execution.wake(parent, crate::session::inbox::Promotable::Input);
+        };
+        if let Err(error) = crate::session::subagent_completion::deliver(
+            self.inbox,
+            &jobs_control,
+            &wake,
+            crate::session::subagent_completion::DeliverInput {
+                status: job_status(status),
+                output,
+                error,
+                notification_id: Some(restart_mid(&record.notification_id)),
+                recovery,
+                resume,
+            },
+        )
+        .await
+        {
+            eprintln!("[restart] subagent notice for {parent_session_id} skipped: {error}");
+        }
+    }
+
+    /// The sweep's pending-record loop (restart.ts:203-213): shell
+    /// outcomes admit first (a recovered child must see them before its
+    /// first model request); locally-running jobs keep their in-process
+    /// owner and are skipped.
+    pub async fn recover_pending(
+        &self,
+        pending: &[BackgroundRecord],
+        suspended: &HashSet<String>,
+        options: &RestartOptions,
+    ) {
+        let mut ordered: Vec<&BackgroundRecord> = pending.iter().collect();
+        ordered.sort_by_key(|record| matches!(record.recovery, Recovery::Subagent { .. }));
+        for record in ordered {
+            if self.jobs.get(&record.id).is_some_and(|info| info.status == Status::Running) {
+                continue;
+            }
+            match &record.recovery {
+                Recovery::Shell { .. } => self.recover_shell(record).await,
+                Recovery::Subagent { .. } => {
+                    self.recover_subagent(record, suspended, options).await;
+                }
+            }
+        }
+    }
+
+    /// The final resume loop (restart.ts:215-228): every still-suspended
+    /// claim not already resumed (background completion can wake a parent,
+    /// so local ownership is inspected only after recovery) resumes under
+    /// the budget, forked — the sweep never blocks on a drain.
+    pub async fn resume_ids(&self, ids: &[String], options: &RestartOptions) {
+        let resumed: HashSet<String> = self.execution.active().into_iter().collect();
+        for session_id in ids {
+            if resumed.contains(session_id) {
+                continue;
+            }
+            if self.prepare_resume(session_id, options).await {
+                (self.fork_resume)(session_id.clone());
+            }
+        }
+    }
+
+    /// `resumeSuspendedSessions` (restart.ts:192-231) over ONE service
+    /// site: the full single-site sweep — orphaned child claims released
+    /// (except recoverable children), pending background replayed, and the
+    /// site's suspended top-level claims resumed. Recovery is at-least-
+    /// once: local coordination prevents concurrent drains, not repeated
+    /// external side effects after a crash.
+    pub async fn resume_suspended_sessions(&self, options: &RestartOptions) {
+        // The sweep assumes every orphaned claim's owner is dead (the
+        // managed-server protocol guarantees it; the service is inert
+        // until called at boot).
+        let active: HashSet<String> = self.execution.active().into_iter().collect();
+        let pending = self.jobs.pending_background().await;
+        let children: Vec<String> = pending
+            .iter()
+            .filter(|record| record.status == Status::Running)
+            .filter_map(|record| match &record.recovery {
+                Recovery::Subagent { child_session_id, .. } => Some(child_session_id.clone()),
+                Recovery::Shell { .. } => None,
+            })
+            .collect();
+        // Early notices wait for recovery's accounting, including sessions
+        // that exhaust their budget.
+        let mut suspended: HashSet<String> = self
+            .store
+            .list_suspended()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .chain(children.iter().cloned())
+            .filter(|session_id| !active.contains(session_id))
+            .collect();
+        if let Err(error) = self.store.release_child_claims(&children).await {
+            eprintln!("[restart] release_child_claims failed: {error}");
+        }
+        self.recover_pending(&pending, &suspended, options).await;
+        let ids = self.store.list_suspended().await.unwrap_or_default();
+        self.resume_ids(&ids, options).await;
+        // Async observers consult this set at delivery; later completions
+        // wake parents normally.
+        suspended.clear();
     }
 }
 
