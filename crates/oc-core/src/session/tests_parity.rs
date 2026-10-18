@@ -141,13 +141,13 @@ impl ReferenceServer {
     }
 }
 
-fn prepare_sandbox(sandbox: &Path) -> std::io::Result<(PathBuf, PathBuf)> {
+fn prepare_sandbox(sandbox: &Path, endpoint: &str) -> std::io::Result<(PathBuf, PathBuf)> {
     let home = sandbox.join("home");
     let tmp = sandbox.join("tmp");
     for dir in [
         home.join(".local/share"),
         home.join(".local/state"),
-        home.join(".config"),
+        home.join(".config/opencode"),
         home.join(".cache"),
         tmp.clone(),
         sandbox.join("logs"),
@@ -155,6 +155,30 @@ fn prepare_sandbox(sandbox: &Path) -> std::io::Result<(PathBuf, PathBuf)> {
     ] {
         std::fs::create_dir_all(dir)?;
     }
+    // Deterministic failed-turn setup (2026-10-18 incident): an EMPTY
+    // home lets the reference fall back to its default zen model — a
+    // LIVE external dependency whose error SHAPE decides the test's
+    // fate (zen returning retryable 500s = a minutes-long retry
+    // ladder). A dead endpoint is no better: connection-refused rides
+    // the same ~9-attempt transport ladder. The seeded provider points
+    // at an in-test 4xx responder instead: 4xx provider errors are
+    // NON-retryable in the reference — the failed turn lands in
+    // milliseconds, deterministically, with zero external deps.
+    let config = format!(
+        r#"{{
+  "model": "probe/reject",
+  "providers": {{
+    "probe": {{
+      "name": "Probe",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {{ "baseURL": "{endpoint}", "apiKey": "sk-reject" }},
+      "models": {{ "reject": {{ "name": "Reject" }} }}
+    }}
+  }}
+}}
+"#
+    );
+    std::fs::write(home.join(".config/opencode/opencode.json"), config)?;
     Ok((home, tmp))
 }
 
@@ -192,11 +216,37 @@ Effect.runPromise(program as Effect.Effect<never, unknown, never>).catch((error)
 "#;
 
 async fn spawn_reference() -> Result<(ReferenceServer, std::path::PathBuf), String> {
+    // The in-test 4xx responder: every request gets an immediate 400
+    // (invalid_request_error) — the reference treats 4xx provider
+    // errors as non-retryable, so the scenario's failed turn settles
+    // in milliseconds (see prepare_sandbox).
+    let reject = tokio::net::TcpListener::bind("127.0.0.1:0").await.map_err(|e| e.to_string())?;
+    let reject_port = reject.local_addr().map(|a| a.port()).map_err(|e| e.to_string())?;
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        loop {
+            let Ok((mut stream, _)) = reject.accept().await else { return };
+            tokio::spawn(async move {
+                let mut buf = [0u8; 8192];
+                let _ =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
+                        .await;
+                let body = r#"{"error":{"message":"rejected","type":"invalid_request_error"}}"#;
+                let response = format!(
+                    "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
     let bun = bun_path().ok_or("bun not found")?;
     let root = PathBuf::from(REF_ROOT);
     let port = free_port().ok_or("no free port")?;
     let sandbox = PathBuf::from(SANDBOX_ROOT).join(format!("ref-{}-{port}", std::process::id()));
-    let (home, tmp) = prepare_sandbox(&sandbox).map_err(|e| e.to_string())?;
+    let (home, tmp) = prepare_sandbox(&sandbox, &format!("http://127.0.0.1:{reject_port}/v1"))
+        .map_err(|e| e.to_string())?;
     let db_path = home.join(".local/share/opencode").join("w4a-parity.db");
     // The launcher lives inside the ref runtime tree (bare workspace
     // imports resolve from there). The ref runtime must be owned by (or
@@ -508,7 +558,7 @@ async fn session_projector_replay_parities_reference() {
     // session-scoped routes then resolve the session's location.
     let encoded = percent_encode(&project_dir);
     let mut warm: (u16, serde_json::Value) = (0, serde_json::Value::Null);
-    for _ in 0..100 {
+    for _ in 0..300 {
         warm = request(port, "GET", &format!("/api/location?location[directory]={encoded}"), None)
             .await
             .unwrap_or((0, serde_json::Value::Null));
@@ -574,7 +624,7 @@ async fn session_projector_replay_parities_reference() {
 
     // Quiescence: the failed turn's messages are readable.
     let mut settled = false;
-    for _ in 0..100 {
+    for _ in 0..300 {
         let (status, body) =
             request(port, "GET", &format!("/api/session/{session_id}/message"), None)
                 .await
