@@ -112,15 +112,24 @@ impl SubagentJob {
         let info = self.inner.jobs.wait(recovery.child_session_id.as_str()).await;
         if let Some(info) = info {
             if info.status != crate::subagent::JobStatus::Running {
+                // The wake seam (session.ts:310): children share the
+                // parent's location, so the child-execution adapter's
+                // `wake(parent)` registers the completion with the
+                // parent's execution — an idle parent starts draining
+                // without another user message (RUNTIME-S01).
+                let execution = Arc::clone(&self.inner.execution);
+                let wake = move |parent: &str| execution.wake(parent);
                 super::subagent_completion::deliver(
                     &self.inner.inbox,
                     &self.inner.jobs,
+                    &wake,
                     super::subagent_completion::DeliverInput {
                         status: info.status,
                         output: info.output,
                         error: info.error,
                         notification_id: info.notification_id,
                         recovery: recovery.clone(),
+                        resume: None,
                     },
                 )
                 .await
