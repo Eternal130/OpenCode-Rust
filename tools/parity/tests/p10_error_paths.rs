@@ -174,11 +174,9 @@ async fn p10_error_path_goldens_side_by_side() -> Result<()> {
         return Ok(());
     }
     if !p10_common::reference_runnable() {
-        skip("bun or the reference checkout is unavailable");
         return Ok(());
     }
     if parity::rust_server::skip_if_no_cargo() {
-        skip("cargo not found on PATH");
         return Ok(());
     }
 

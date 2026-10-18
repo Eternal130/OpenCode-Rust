@@ -48,8 +48,12 @@ async fn m1_official_tui_smoke_against_rust_server() -> anyhow::Result<()> {
         eprintln!("skipping: tmux not installed");
         return Ok(());
     }
-    if !tui_root().is_dir() {
-        eprintln!("skipping: reference TUI checkout missing at {}", tui_root().display());
+    if !tui_root().is_dir()
+        && parity::gate::skip_or_fail(&format!(
+            "reference TUI checkout missing at {}",
+            tui_root().display()
+        ))
+    {
         return Ok(());
     }
 

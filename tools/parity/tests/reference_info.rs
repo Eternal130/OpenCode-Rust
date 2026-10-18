@@ -2,7 +2,10 @@
 //! server, hit `GET /api/info`, normalize, golden-compare, exercise
 //! `httpdiff` and `sse`, and shut down cleanly.
 //!
-//! Skips (pass, with a note) when bun or the reference checkout is missing.
+//! Skips (pass, with a note) when bun or the reference checkout is
+//! missing — unless `OC_GATE_STRICT=1`, where a missing prerequisite
+//! FAILS the test instead (Gate 0 fake-green elimination; see
+//! `parity::gate`).
 
 use std::time::Duration;
 
@@ -14,7 +17,6 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 #[tokio::test]
 async fn reference_api_info_and_first_event_shape() -> anyhow::Result<()> {
     if reference::skip_if_no_bun() {
-        eprintln!("skipping: bun or reference checkout not available (see tools/parity/README.md)");
         return Ok(());
     }
     let server = reference::spawn().await?;
