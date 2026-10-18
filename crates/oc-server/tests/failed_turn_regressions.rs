@@ -191,7 +191,10 @@ async fn failed_turn_then_message_list_answers_normally() {
         .expect("create session");
     let session_id = created.id.clone();
 
-    // The failed turn: prompt resolves (session outcome), provider 400s.
+    // The failed turn: prompt admits and returns immediately (CD-1: v2's
+    // fire-and-forget wake — the HTTP response never waits on run
+    // settlement); the provider request arrives when the woken run
+    // reaches the model.
     tokio::time::timeout(
         Duration::from_secs(300),
         server.client.session().prompt(
@@ -200,35 +203,63 @@ async fn failed_turn_then_message_list_answers_normally() {
         ),
     )
     .await
-    .expect("prompt settles")
+    .expect("prompt admits")
     .expect("prompt is a session outcome, not an HTTP error");
-    let _ = shutdown_tx.send(true);
 
-    // The captured provider request: integer params on the wire (BUG-C).
-    // The session runner's OUTPUT_TOKEN_FALLBACK (32000.0 f64) must cross
-    // the wire as `32000`, never `32000.0` (the exact newapi rejection).
-    let first_request = captured.lock().unwrap().clone();
-    let first_request = first_request.expect("the engine sent at least one provider request");
+    // The captured provider request: poll — the run settles
+    // asynchronously from the wake.
+    let first_request = {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(request) = captured.lock().unwrap().clone() {
+                break request;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the engine sent at least one provider request"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    };
     assert!(
         !first_request.contains("32000.0"),
         "integer LLM params must not serialize as floats: {first_request}"
     );
 
     // THE REGRESSION: GET /message over raw TCP must produce a full HTTP
-    // response (live bug: connection reset, curl exit 52).
-    let response = tokio::time::timeout(
-        Duration::from_secs(15),
-        support::request(
-            server.addr,
-            "GET",
-            &format!("/api/session/{session_id}/message"),
-            &[],
-            b"",
-        ),
-    )
-    .await
-    .expect("GET /message must not hang")
-    .expect("GET /message must not reset the connection");
+    // response (live bug: connection reset, curl exit 52). Poll until
+    // the failed turn's assistant error part is projected (the run
+    // settles asynchronously from the wake).
+    let response = {
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            let response = tokio::time::timeout(
+                Duration::from_secs(15),
+                support::request(
+                    server.addr,
+                    "GET",
+                    &format!("/api/session/{session_id}/message"),
+                    &[],
+                    b"",
+                ),
+            )
+            .await
+            .expect("GET /message must not hang")
+            .expect("GET /message must not reset the connection");
+            assert_eq!(response.status, 200, "message list answers 200: {}", response.text());
+            let data = response.json()["data"].as_array().cloned().unwrap_or_default();
+            let settled = data.iter().rev().any(|message| {
+                (message["type"].as_str() == Some("assistant")
+                    || message["role"].as_str() == Some("assistant"))
+                    && message.get("error").is_some_and(|error| !error.is_null())
+            });
+            if settled || std::time::Instant::now() > deadline {
+                break response;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    };
+    let _ = shutdown_tx.send(true);
 
     assert_eq!(response.status, 200, "message list answers 200: {}", response.text());
     let body = response.json();

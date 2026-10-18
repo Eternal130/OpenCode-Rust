@@ -98,7 +98,10 @@ pub fn decode(file: &CommandFile, content: &str) -> Option<(String, Command)> {
     let name = command_name(file)?;
     let mut data = serde_json::to_value(&markdown.data).ok()?;
     let object = data.as_object_mut()?;
-    object.insert("template".to_string(), serde_json::Value::String(markdown.content.trim().to_string()));
+    object.insert(
+        "template".to_string(),
+        serde_json::Value::String(markdown.content.trim().to_string()),
+    );
     let command: Command = serde_json::from_value(data).ok()?;
     Some((name, command))
 }
@@ -186,7 +189,10 @@ fn parse_arguments(input: &str) -> Vec<String> {
             _ => None,
         });
         let token = match quote {
-            Some(q) => rest[1..].split(q).next().map(|token| (token.to_string(), q.len_utf8() + token.len())),
+            Some(q) => rest[1..]
+                .split(q)
+                .next()
+                .map(|token| (token.to_string(), 2 * q.len_utf8() + token.len())),
             None => rest.split_whitespace().next().map(|token| (token.to_string(), token.len())),
         };
         match token {
@@ -318,8 +324,9 @@ mod tests {
             "---\ndescription: File an issue\nsubagent: true\n---\nFile $1 against $2 please.",
         );
         let files = discover(&dir);
-        let (name, command) = decode(&files[0], &std::fs::read_to_string(&files[0].filepath).unwrap())
-            .expect("decode");
+        let (name, command) =
+            decode(&files[0], &std::fs::read_to_string(&files[0].filepath).unwrap())
+                .expect("decode");
         assert_eq!(name, "issue");
         assert_eq!(command.description.as_deref(), Some("File an issue"));
         assert_eq!(command.subagent, Some(true));
@@ -330,11 +337,18 @@ mod tests {
     fn config_command_md_skips_empty_and_undecodable() {
         let dir = tempdir("command-md-skip");
         write(&dir.join("command").join("empty.md"), "");
-        write(&dir.join("command").join("bad.md"), "---\ntemplate: 5\n---\nBody");
-        assert!(load_commands(&[Entry::Directory(oc_schema::config::Directory {
+        // Frontmatter `template` is intentionally OVERRIDDEN by the body
+        // (ref `decode`: `{ ...markdown.data, template: body }`), so a
+        // wrong-typed template key alone is NOT undecodable — a wrong
+        // typed OTHER field is.
+        write(&dir.join("command").join("bad.md"), "---\nsubagent: not-a-bool\n---\nBody");
+        write(&dir.join("command").join("typed-template.md"), "---\ntemplate: 5\n---\nBody wins.");
+        let commands = load_commands(&[Entry::Directory(oc_schema::config::Directory {
             path: dir.display().to_string(),
-        })])
-        .is_empty());
+        })]);
+        assert_eq!(commands.len(), 1, "only the typed-template file decodes: {commands:?}");
+        assert_eq!(commands[0].0, "typed-template");
+        assert_eq!(commands[0].1.template, "Body wins.");
     }
 
     #[test]

@@ -15,8 +15,8 @@
 
 use parking_lot::RwLock;
 
-use crate::config::Loaded;
 use crate::config::command_md;
+use crate::config::Loaded;
 
 /// Where a registered command came from (drives execution dispatch).
 #[derive(Debug, Clone, PartialEq)]

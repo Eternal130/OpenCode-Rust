@@ -11,7 +11,7 @@
 //!   still settling against a held-open provider stream (v2's
 //!   fire-and-forget `execution.wake` semantics).
 //!
-//! CD-2 (fork parent_id) and CD-13 (global AGENTS.md v2 dir) carry their
+//! CD-2 (fork `parent_id`) and CD-13 (global AGENTS.md v2 dir) carry their
 //! E2E assertions in `be1_lane.rs` and `oc-core/src/engine/tests.rs`.
 
 use std::path::{Path, PathBuf};
@@ -137,12 +137,11 @@ struct TestServer {
 async fn boot(workspace: PathBuf) -> TestServer {
     let data = tempfile::tempdir().expect("data tempdir");
     std::env::set_current_dir(&workspace).expect("chdir to workspace");
-    let engine =
-        oc_core::engine::Engine::boot(oc_core::engine::EngineOptions::new(
-            data.path().join("data"),
-            data.path().join("home"),
-        ))
-        .await;
+    let engine = oc_core::engine::Engine::boot(oc_core::engine::EngineOptions::new(
+        data.path().join("data"),
+        data.path().join("home"),
+    ))
+    .await;
     let state = Arc::new(AppState::new(
         engine,
         AuthConfig { password: None },
@@ -222,8 +221,7 @@ fn write_command_fixture(workspace: &Path) {
     )
     .expect("team/plan");
     // Noise: outside the source dirs, wrong suffix.
-    std::fs::write(workspace.join(".opencode").join("notes.md"), "not a command")
-        .expect("noise");
+    std::fs::write(workspace.join(".opencode").join("notes.md"), "not a command").expect("noise");
 }
 
 #[tokio::test]
@@ -232,7 +230,12 @@ async fn cd12_command_list_surfaces_config_and_markdown_sources() {
     write_command_fixture(workspace.path());
     let server = boot(workspace.path().to_path_buf()).await;
 
-    let listed = server.client.command().list(&Default::default()).await.expect("command.list");
+    let listed = server
+        .client
+        .command()
+        .list(&oc_client::types::CommandListQuery::default())
+        .await
+        .expect("command.list");
     let names: Vec<(String, Option<String>)> = listed
         .data
         .iter()
@@ -369,10 +372,13 @@ async fn cd1_prompt_returns_while_the_provider_stream_is_held_open() {
     // old resume-join held it for the whole provider stream (≥90 s in
     // the scan's SLOWSTREAM probe).
     let started = Instant::now();
-    let admitted = tokio::time::timeout(Duration::from_secs(3), server.client.session().prompt(
-        &session_id,
-        &oc_client::types::SessionPromptBody { text: "hello".to_owned(), ..Default::default() },
-    ))
+    let admitted = tokio::time::timeout(
+        Duration::from_secs(3),
+        server.client.session().prompt(
+            &session_id,
+            &oc_client::types::SessionPromptBody { text: "hello".to_owned(), ..Default::default() },
+        ),
+    )
     .await
     .expect("prompt returns without waiting for the run (CD-1)")
     .expect("prompt admits");
@@ -435,7 +441,10 @@ export default {
 "#;
 
 fn bun_available() -> bool {
-    std::process::Command::new("bun").arg("--version").output().is_ok_and(|out| out.status.success())
+    std::process::Command::new("bun")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success())
 }
 
 #[tokio::test]
@@ -451,9 +460,11 @@ async fn cd34_plugin_commands_surface_and_execute_through_the_real_boot() {
     std::fs::create_dir_all(&home).expect("home");
     std::fs::create_dir_all(&project).expect("project");
     std::fs::write(project.join("cmdplugin.ts"), CMD_PLUGIN).expect("plugin");
+    // Local specs resolve against the PROCESS cwd — the test binary's,
+    // not the config location — so the entry carries the absolute path.
     std::fs::write(
         project.join("opencode.json"),
-        json!({ "plugins": ["./cmdplugin.ts"] }).to_string(),
+        json!({ "plugins": [project.join("cmdplugin.ts").display().to_string()] }).to_string(),
     )
     .expect("config");
     std::env::set_var("OC_PLUGIN_TEST_SANDBOX", root.display().to_string());
@@ -478,7 +489,7 @@ async fn cd34_plugin_commands_surface_and_execute_through_the_real_boot() {
     loop {
         let listed_names: Vec<String> = client
             .command()
-            .list(&Default::default())
+            .list(&oc_client::types::CommandListQuery::default())
             .await
             .ok()
             .map(|listed| listed.data.into_iter().map(|command| command.name).collect())

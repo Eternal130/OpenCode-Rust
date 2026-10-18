@@ -475,6 +475,41 @@ impl PluginHost {
             .map_err(|error| error.to_string())
     }
 
+    /// [`PluginHost::execute_command_in_session`] without parking a
+    /// runtime worker — the async-server handler path (called from
+    /// inside the tokio runtime, where `block_on` is illegal).
+    pub async fn execute_command_in_session_async(
+        &self,
+        name: &str,
+        args: Option<&str>,
+        session_id: &str,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let Some(plugin_id) = facade.shared.plugin_for_command(name) else {
+            return Err(format!("{name}: no such plugin command"));
+        };
+        let args = match args {
+            Some(text) => json!(text),
+            None => Value::Null,
+        };
+        facade
+            .shared
+            .request(
+                "command.execute",
+                json!({
+                    "pluginId": plugin_id,
+                    "name": name,
+                    "args": args,
+                    "sessionID": session_id,
+                }),
+                timeout,
+            )
+            .await
+            .map(|result| result.get("result").cloned().unwrap_or(Value::Null))
+            .map_err(|error| error.to_string())
+    }
+
     /// Digest-scan + reload changed plugins. Returns the reloaded
     /// count. Errors degrade to `Err` — the host keeps running.
     pub fn reload_now(&self) -> Result<usize, String> {

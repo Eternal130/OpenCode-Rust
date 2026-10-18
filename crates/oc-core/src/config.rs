@@ -864,7 +864,7 @@ mod tests {
     #[test]
     fn config_env_content_source_loads_through_loader_new() {
         static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _env = ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        let _env = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempdir("env-content");
         write(&dir.join("opencode.json"), r#"{"username": "file-user"}"#);
         let globals = GlobalDirs { config: dir.join("global"), home: dir.join("home") };

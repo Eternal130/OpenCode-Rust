@@ -856,14 +856,11 @@ async fn fork(
     }
     data["instructionEntries"] = Value::Array(instruction_entries);
 
-    let definition =
-        registry::by_type_latest("session.forked").ok_or_else(ApiError::unknown_ref)?;
-    services.graph.bus.publish(definition, data.clone(), PublishOptions::default()).await.map_err(
-        |error| {
-            crate::errors::debug_cause("session:fork_projection", &error);
-            ApiError::unknown_ref()
-        },
-    )?;
+    // CD-15 (scan-cd): publish through the location envelope like every
+    // other session event (the raw global-bus publish dropped `location`
+    // — the only envelope divergence in the D1 both-legs field diff;
+    // location-keyed SSE consumers misroute envelope-less forks).
+    publish_session_event(&services, "session.forked", data.clone()).await?;
     // The projected fork row (the projector created it inside the publish).
     let fork_id = data["sessionID"].as_str().unwrap_or_default().to_owned();
     let fork_row = services
@@ -884,6 +881,7 @@ async fn fork(
 
 // POST /:id/command — v2 `session.command`: dispatch a registered
 // command (config/markdown template semantics, or a plugin guest call).
+#[allow(clippy::too_many_lines)] // the ref execute chain is one sequential flow
 async fn command(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
@@ -900,7 +898,8 @@ async fn command(
         Some("queue") => Delivery::Queue,
         _ => Delivery::Steer,
     };
-    let input_files: Option<Vec<oc_schema::prompt::InputFileAttachment>> = typed_value(&body, "files");
+    let input_files: Option<Vec<oc_schema::prompt::InputFileAttachment>> =
+        typed_value(&body, "files");
     let files = super::attachment::materialize_files(input_files.as_deref())
         .map_err(|error| ApiError::invalid_request(error.to_string()))?;
 
@@ -913,12 +912,13 @@ async fn command(
                 return Err(ApiError::command_execution(name, "plugin subsystem disabled"));
             };
             boot.host
-                .execute_command_in_session(
+                .execute_command_in_session_async(
                     name,
                     Some(text.as_str()),
                     &session_id,
                     std::time::Duration::from_secs(30),
                 )
+                .await
                 .map_err(|error| ApiError::command_execution(name, error))?;
             Ok(no_content())
         }
@@ -970,12 +970,11 @@ async fn command(
                     }),
                     version: state.version.clone(),
                 };
-                let child = state.engine.create_session(&location, input).await.map_err(
-                    |error| {
+                let child =
+                    state.engine.create_session(&location, input).await.map_err(|error| {
                         crate::errors::debug_cause("session:unknown_ref", &error);
                         ApiError::unknown_ref()
-                    },
-                )?;
+                    })?;
                 let message_id = state.ids.new_id("msg");
                 let payload = oc_schema::session_inbox::UserPayload {
                     text: format!("{}\n{}", oc_core::subagent::FIRST_PROMPT_PREFIX, expanded),
