@@ -122,3 +122,44 @@ fn session_deleted_clears_cache() {
         "the tab closes (the pre-existing surface)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// CONFIG-T1 — cli.json session.permissions read side
+// ---------------------------------------------------------------------------
+
+/// `session.permissions: "autoaccept"` arms the boot permission mode
+/// exactly like `--auto` (context/permission.tsx:14); `prompt`/absent
+/// stays manual, and the flag wins over everything.
+#[test]
+fn cli_json_autoaccept() {
+    use oc_tui::config::TuiConfig;
+
+    // The decoded-document mapping.
+    let mut info = oc_core::cli_config::Info::default();
+    info.session = Some(oc_core::cli_config::SessionInfo {
+        permissions: Some("autoaccept".to_owned()),
+        ..Default::default()
+    });
+    let config = TuiConfig::from_info(&info, None);
+    assert!(
+        config.permission_autoaccept(false),
+        "autoaccept through cli.json without the flag"
+    );
+    assert!(config.permission_autoaccept(true), "the flag stays a superset");
+
+    // The truth table (v2's `args.auto ? "autoaccept" : config...`).
+    let mut prompt = oc_core::cli_config::Info::default();
+    prompt.session = Some(oc_core::cli_config::SessionInfo {
+        permissions: Some("prompt".to_owned()),
+        ..Default::default()
+    });
+    let config = TuiConfig::from_info(&prompt, None);
+    assert!(!config.permission_autoaccept(false), "prompt stays manual");
+    assert!(config.permission_autoaccept(true), "the flag overrides prompt");
+    let config = TuiConfig::from_info(&oc_core::cli_config::Info::default(), None);
+    assert!(!config.permission_autoaccept(false), "absent key defaults to prompt");
+
+    // The raw-document parse path (cli.json on disk).
+    let config = TuiConfig::parse(r#"{ "session": { "permissions": "autoaccept" } }"#, None);
+    assert!(config.permission_autoaccept(false), "the parse path reads the key");
+}

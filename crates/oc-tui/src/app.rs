@@ -5042,9 +5042,11 @@ pub async fn run_with_size(
     // `--auto` (v2 permission.tsx:14 `args.auto ? "autoaccept"`):
     // arm the permission auto-answer (every ask replies `once`,
     // session/index.tsx:255-262) + the composer metadata's `auto`
-    // marker.
-    app.autoaccept = boot.auto;
-    app.store.set_permission_autoaccept(boot.auto);
+    // marker. CONFIG-T1: the cli.json `session.permissions` key rides
+    // the same arm (`config.data.session.permissions` — the flag wins,
+    // the key covers the flag-less boot).
+    app.autoaccept = config.permission_autoaccept(boot.auto);
+    app.store.set_permission_autoaccept(app.autoaccept);
 
     // Config reload: mtime check per tick (the reference watches the dir).
     let mut config_mtime = config
