@@ -124,6 +124,12 @@ pub struct SelectProps {
     pub flat: bool,
     /// Normalized fuzzy threshold (the palette's `0.7`).
     pub filter_threshold: Option<f64>,
+    /// SE-F4 (E12): the session list's filter semantics — the ref's
+    /// `dialog-session-list` matches a TRIMMED, case-folded, byte-exact
+    /// SUBSTRING (never fuzzy, never accent-folded; a whitespace-only
+    /// query trims to empty = the full list). The palette and the rest
+    /// keep the fuzzysort contract.
+    pub substring_filter: bool,
     /// v2's `emptyView` copy override ("No worktrees available").
     pub empty_text: Option<String>,
     /// v2's `noMatchView` copy override ("No worktrees found").
@@ -148,6 +154,7 @@ impl SelectProps {
             actions: Vec::new(),
             flat: false,
             filter_threshold: None,
+            substring_filter: false,
             empty_text: None,
             no_match_text: None,
             destructive: false,
@@ -189,6 +196,14 @@ impl SelectProps {
     #[must_use]
     pub fn threshold(mut self, threshold: f64) -> Self {
         self.filter_threshold = Some(threshold);
+        self
+    }
+
+    /// SE-F4: the ref's session-list semantics — trimmed, case-folded,
+    /// byte-exact substring (see the field docs).
+    #[must_use]
+    pub fn substring_filter(mut self) -> Self {
+        self.substring_filter = true;
         self
     }
 
@@ -252,8 +267,23 @@ type OptionKey = fn(&IndexedOption<'_>) -> Option<String>;
 /// The filtered option indices in fuzzy order (`filtered()`): no
 /// filter keeps registry order; a filter ranks through [`fuzzy`] with
 /// the dialog's `title×2 + category + searchText` weighting.
+/// `substring_filter` selects the session list's contract instead
+/// (SE-F4): trim + case-fold + byte-exact substring, registry order.
 #[must_use]
 pub fn filter_indices(props: &SelectProps, filter: &str) -> Vec<usize> {
+    if props.substring_filter {
+        let needle = filter.trim().to_lowercase();
+        if needle.is_empty() {
+            return props.options.iter().enumerate().map(|(index, _)| index).collect();
+        }
+        return props
+            .options
+            .iter()
+            .enumerate()
+            .filter(|(_, option)| option.title.to_lowercase().contains(&needle))
+            .map(|(index, _)| index)
+            .collect();
+    }
     if filter.is_empty() {
         return props.options.iter().enumerate().map(|(index, _)| index).collect();
     }
@@ -324,11 +354,14 @@ pub fn content_rows(groups: &[SelectGroup]) -> usize {
     rows
 }
 
-/// The scroll window height: `min(rows, floor(terminal_height / 2) - 6)`
-/// (`height()`), never above `rows`.
+/// The scroll window height: `min(rows, max(5, floor(terminal_height /
+/// 2) - 6))` (`height()`). SE-F6: the ref clamps the window to a
+/// MINIMUM of 5 rows — a bare `floor(h/2) - 6` collapses to 0 at
+/// short viewports (12-row terminals: 0 list rows, the session dialog
+/// renders chrome only and the sessions stay invisible).
 #[must_use]
 pub fn viewport_height(rows: usize, terminal_height: usize) -> usize {
-    rows.min((terminal_height / 2).saturating_sub(6))
+    rows.min((terminal_height / 2).saturating_sub(6).max(5))
 }
 
 /// The DIALOG-CONTENT row of each flat option (the mouse surface,
@@ -1028,8 +1061,11 @@ mod tests {
         let props = SelectProps::new("Items", options);
         let groups = grouped(&props, "");
         assert_eq!(content_rows(&groups), 30);
-        // Viewport at terminal height 20: min(30, 10 - 6) = 4 rows.
-        assert_eq!(viewport_height(30, 20), 4);
+        // Viewport at terminal height 20: min(30, max(5, 10 - 6)) = 5 rows
+        // (SE-F6: the ref's min-5 window — never collapses to 0).
+        assert_eq!(viewport_height(30, 20), 5);
+        assert_eq!(viewport_height(30, 12), 5, "12-row terminals keep a 5-row window");
+        assert_eq!(viewport_height(3, 12), 3, "never above the row count");
 
         let mut state = SelectState::default();
         for _ in 0..9 {
@@ -1037,27 +1073,69 @@ mod tests {
         }
         state.reveal(&props, 20);
         assert_eq!(state.selected, 9);
-        assert_eq!(state.scroll, 6, "edge-follow: selected row visible at the bottom");
+        assert_eq!(state.scroll, 5, "edge-follow: selected row visible at the bottom");
         state.move_selection(&props, -1);
         state.reveal(&props, 20);
-        assert_eq!(state.scroll, 6, "scroll does not jump upward while following");
+        assert_eq!(state.scroll, 5, "scroll does not jump upward while following");
         state.move_to_edge(&props, false);
         state.reveal(&props, 20);
         assert_eq!((state.selected, state.scroll), (0, 0), "home reveals from the top");
         state.move_to_edge(&props, true);
         state.reveal(&props, 20);
         assert_eq!(state.selected, 29);
-        assert_eq!(state.scroll, 26, "end pins the last row into the viewport");
+        assert_eq!(state.scroll, 25, "end pins the last row into the viewport");
 
         // The rendered window matches the scroll offset.
         let styles = styles();
         let view = render_select(&props, &state, &styles, Color::Rgb(10, 10, 10), 40, 20, Some(20));
         let text: String = view.rows[4].iter().map(|cell| cell.ch).collect();
-        assert!(text.contains("Item 26"), "first visible row at scroll 26: {text}");
-        let text: String = view.rows[7].iter().map(|cell| cell.ch).collect();
-        assert!(text.contains("Item 29"), "last visible row: {text}");
+        assert!(text.contains("Item 25"), "first visible row at scroll 25: {text}");
         let text: String = view.rows[8].iter().map(|cell| cell.ch).collect();
+        assert!(text.contains("Item 29"), "last visible row: {text}");
+        let text: String = view.rows[9].iter().map(|cell| cell.ch).collect();
         assert_eq!(text.trim(), "", "row below the viewport is blank");
+    }
+
+    /// SE-F4: the session list's filter contract — trimmed,
+    /// case-folded, byte-exact SUBSTRING (the ref's
+    /// `dialog-session-list`); whitespace-only = the full list; no
+    /// fuzzy cross-letter matches; no accent folding.
+    #[test]
+    fn substring_filter_matches_the_session_list_contract() {
+        let options = vec![
+            SelectOption::titled("Login Redirect Flow", "a"),
+            SelectOption::titled("Zephyr Long Night", "b"),
+            SelectOption::titled("Café notes", "c"),
+        ];
+        let props = SelectProps::new("Sessions", options).substring_filter();
+        let ids = |filter: &str| {
+            filter_indices(&props, filter)
+                .into_iter()
+                .map(|index| props.options[index].value.clone())
+                .collect::<Vec<_>>()
+        };
+        // Substring, case-folded.
+        assert_eq!(ids("login red"), vec!["a".to_owned()]);
+        assert_eq!(ids("LONG NIGHT"), vec!["b".to_owned()]);
+        // Fuzzy cross-letter sequences (the E12 divergence: zln)
+        // must NOT match.
+        assert!(ids("zln").is_empty());
+        // Trim: surrounding whitespace is insignificant…
+        assert_eq!(ids("  café  "), vec!["c".to_owned()]);
+        // …and a whitespace-only query is EMPTY = the full list.
+        assert_eq!(ids("   ").len(), 3);
+        // Byte-exact: no accent folding (cafe ≠ Café).
+        assert!(ids("cafe").is_empty());
+        // The default (fuzzy) contract is untouched: zln still ranks
+        // through fuzzysort for the palette.
+        let fuzzy_props = SelectProps::new(
+            "Commands",
+            vec![
+                SelectOption::titled("Login Redirect Flow", "a"),
+                SelectOption::titled("Zephyr Long Night", "b"),
+            ],
+        );
+        assert!(!filter_indices(&fuzzy_props, "zln").is_empty());
     }
 
     #[test]

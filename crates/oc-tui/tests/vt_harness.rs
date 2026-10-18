@@ -878,8 +878,7 @@ impl HarnessHandle {
     /// SIGWINCH exactly as a terminal resize delivers it.
     pub fn resize_pty(&self, cols: u16, rows: u16) {
         unsafe {
-            let winsize =
-                libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+            let winsize = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
             libc::ioctl(self.writer.as_raw_fd(), libc::TIOCSWINSZ, &winsize);
         }
     }
@@ -1208,8 +1207,14 @@ pub fn open_second_session(h: &mut HarnessHandle, needle: &[u8]) -> Result<(), S
     Ok(())
 }
 
-/// The standard exit chord: ctrl+c (clear) then `<leader>q`.
+/// The standard exit chord: ctrl+c twice (v2's `app.exit` is
+/// ctrl+c/ctrl+d on an EMPTY prompt — the first press clears a dirty
+/// draft or closes a dialog, the second exits — `keybind.ts:131`
+/// keeps `<leader>q` for `session.queued_prompts`), then `<leader>q`
+/// as a harmless trailing chord.
 pub fn exit_chord(h: &mut HarnessHandle) {
+    h.write(b"\x03");
+    std::thread::sleep(Duration::from_millis(200));
     h.write(b"\x03");
     std::thread::sleep(Duration::from_millis(200));
     h.write(b"\x18q");

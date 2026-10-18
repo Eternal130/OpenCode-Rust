@@ -212,17 +212,12 @@ impl GitSnapshotStore {
             .join("snapshot")
             .join(project_id)
             .join(hash_fast(worktree.to_string_lossy().as_bytes()));
-        // Re-open an existing store; initialize on first use. (A bare init
-        // over an existing repository errors with "attempt to
-        // reinitialize".)
-        if git2::Repository::open_bare(&git_directory).is_err() {
-            let store = git2::Repository::init_opts(
-                &git_directory,
-                git2::RepositoryInitOptions::new().bare(true).external_template(false).mkdir(true),
-            )
-            .map_err(|error| operation_error("capture", error.message()))?;
-            drop(store);
-        }
+        // SE-F3 (deferred init): the bare store is created on FIRST
+        // USE (`open_repo` below), not here — the reference's
+        // Snapshot module is lazy (session-scoped captures only; zero
+        // snapshot writes in the boot window). The eager init cost
+        // two bare-repo creations per boot even in an EMPTY project
+        // (boot fs-churn + E2/TTI coupling).
         Ok(Self {
             worktree: worktree.to_path_buf(),
             scope: scope.to_string(),
@@ -243,6 +238,17 @@ impl GitSnapshotStore {
     }
 
     fn open_repo(&self) -> Result<git2::Repository, git2::Error> {
+        if let Ok(repo) = git2::Repository::open_bare(&self.git_directory) {
+            return Ok(repo);
+        }
+        // First use: initialize the bare store (SE-F3's deferred init).
+        // A race with another first-use initializer lands in the
+        // "attempt to reinitialize" error — fall through to a re-open
+        // either way, so exactly one init wins.
+        let _ = git2::Repository::init_opts(
+            &self.git_directory,
+            git2::RepositoryInitOptions::new().bare(true).external_template(false).mkdir(true),
+        );
         git2::Repository::open_bare(&self.git_directory)
     }
 

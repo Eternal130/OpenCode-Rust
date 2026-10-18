@@ -4386,7 +4386,12 @@ pub async fn run(client: oc_client::Client, boot: BootArgs) -> Result<(), String
             "the TUI requires an interactive terminal (stdin/stdout are not TTYs)".to_owned()
         );
     }
-    let size = crossterm::terminal::size().ok();
+    let size = crossterm::terminal::size()
+        .ok()
+        // SE-F5: an un-winsized PTY reports 0x0 — rendering at a zero
+        // area emits boot escapes and ZERO frames (the ref paints a
+        // full default-size TUI instead). Fall to the default frame.
+        .filter(|&(width, height)| width > 0 && height > 0);
     run_with_size(client, size, boot).await
 }
 
@@ -5561,7 +5566,10 @@ pub async fn run_with_size(
             // at the live terminal dimensions; mirror that by adopting
             // the backend's size before building the frame.
             if let Ok(area) = terminal.size() {
-                if (area.width, area.height) != app.size {
+                // SE-F5: never re-adopt a degenerate 0x0 winsize (an
+                // un-winsized PTY keeps reporting it; the frame stays
+                // at the default size like the ref).
+                if area.width > 0 && area.height > 0 && (area.width, area.height) != app.size {
                     app.resize((area.width, area.height));
                 }
             }

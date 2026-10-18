@@ -7988,6 +7988,7 @@ mod tests {
                 model: None,
                 id: "ghost".to_owned(),
                 title: Some("Old wire title".to_owned()),
+                parent_id: None,
                 time_idle: None,
                 viewed: None,
             }],
@@ -8021,6 +8022,7 @@ mod tests {
                         model: None,
                         id: "a".to_owned(),
                         title: Some("Fresh title".to_owned()),
+                        parent_id: None,
                         time_idle: None,
                         viewed: None,
                     },
@@ -8028,6 +8030,7 @@ mod tests {
                         model: None,
                         id: "not-open".to_owned(),
                         title: Some("History only".to_owned()),
+                        parent_id: None,
                         time_idle: None,
                         viewed: None,
                     },
@@ -9129,6 +9132,7 @@ mod tests {
             sessions: vec![crate::data::SessionSnapshot {
                 id: "s1".into(),
                 title: None,
+                parent_id: None,
                 time_idle: None,
                 viewed: None,
                 model: Some(crate::data::SessionModelRef {

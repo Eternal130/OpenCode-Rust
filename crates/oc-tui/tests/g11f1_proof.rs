@@ -239,6 +239,7 @@ impl Harness {
                 model: None,
                 id: SESSION.to_owned(),
                 title: Some(SESSION.to_owned()),
+                parent_id: None,
                 time_idle: None,
                 viewed: None,
             }],

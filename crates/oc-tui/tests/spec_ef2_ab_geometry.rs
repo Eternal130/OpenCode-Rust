@@ -26,7 +26,6 @@ fn exit_ok(h: &mut vt_harness::HarnessHandle) {
 }
 
 #[test]
-#[ignore = "SE-F2: resize kills the exit chord — open finding, wave-2 fix; the sweep exits through resizes"]
 fn a2_geometry_width_sweep_10_40_160() {
     let widths: Vec<(u16, u16)> = std::env::var("EF2_A2_WIDTH")
         .ok()
@@ -37,12 +36,21 @@ fn a2_geometry_width_sweep_10_40_160() {
             Some(vec![(w, h)])
         })
         .unwrap_or_else(|| vec![(10, 6), (40, 12), (160, 40)]);
+    // ONE PTY for the whole sweep (the SA-F13 constraint vt_double_boot
+    // documents): crossterm's process-global event source pins the FIRST
+    // tty's epoll registration — a per-width re-attach leaves the next
+    // boot's reader polling a dead slave (input dead; the registered
+    // SE-F2 sweep wedge). The sweep resizes the live PTY to each width
+    // before booting it; every width still gets a fresh boot at its own
+    // geometry (the exit rides real resizes between legs).
+    let _lock = pty_lock();
+    let first = widths[0];
+    let harness = LiveHarness::attach(first.0, first.1);
     for (cols, rows) in widths {
-        let _lock = pty_lock();
         let tag = format!("a2w{cols}");
         let _sandbox = sandbox_env(&tag);
         let fake = FakeLlm::spawn(standard_sessions());
-        let harness = LiveHarness::attach(cols, rows);
+        harness.handle().resize_pty(cols, rows);
         let mut driver = harness.handle();
         let done = std::sync::Arc::new(std::sync::Mutex::new(None::<Result<(), String>>));
         let slot = std::sync::Arc::clone(&done);
@@ -73,7 +81,11 @@ fn a2_geometry_width_sweep_10_40_160() {
                     driver.write(b"\x1b");
                     std::thread::sleep(Duration::from_millis(400));
                     vt_harness::exit_chord(&mut driver);
-                    let exited = driver.wait_for_after(vt_harness::ALT_SCREEN_LEAVE, from, Duration::from_secs(4));
+                    let exited = driver.wait_for_after(
+                        vt_harness::ALT_SCREEN_LEAVE,
+                        from,
+                        Duration::from_secs(4),
+                    );
                     log(&format!("esc-then-chord exited: {exited}"));
                     return Err(e);
                 }
@@ -121,6 +133,48 @@ fn a2_geometry_width_sweep_10_40_160() {
         eprintln!("[A2] {cols}x{rows} OK (boot + session + strip rules)");
         std::thread::sleep(Duration::from_millis(400));
     }
+}
+
+/// SE-F7 (B3 cell): the exit chord must tear the app down THROUGH an
+/// open dialog — the first ctrl+c closes the dialog (empty filter),
+/// the second exits on the empty prompt. The pre-fix shape routed
+/// the chord into the dialog's search and wedged (the A2 legs' 60 s
+/// timeouts).
+#[test]
+fn b3_chord_through_open_dialog_exits() {
+    let _lock = pty_lock();
+    let _sandbox = sandbox_env("b3chord");
+    let fake = FakeLlm::spawn(standard_sessions());
+    let harness = LiveHarness::attach(80, 24);
+    let mut driver = harness.handle();
+    let done = std::sync::Arc::new(std::sync::Mutex::new(None::<Result<(), String>>));
+    let slot = std::sync::Arc::clone(&done);
+    std::thread::spawn(move || {
+        let out = (|| {
+            if !driver.wait_for(vt_harness::WORDMARK, Duration::from_secs(8)) {
+                return Err("wordmark never rendered".into());
+            }
+            // Open the session dialog and LEAVE it open.
+            driver.write(b"\x18l");
+            if !driver.wait_for(b"Sessions", Duration::from_secs(5)) {
+                return Err("the session dialog never opened".into());
+            }
+            // The RAW chord — no esc first.
+            let from = driver.raw_len();
+            vt_harness::exit_chord(&mut driver);
+            if !driver.wait_for_after(vt_harness::ALT_SCREEN_LEAVE, from, Duration::from_secs(5)) {
+                return Err("the chord did not exit through the open dialog".into());
+            }
+            Ok(())
+        })();
+        *slot.lock().unwrap() = Some(out);
+    });
+    run_tui(&fake.url, 80, 24, Duration::from_secs(60));
+    fake.stop();
+    if let Some(Err(e)) = done.lock().unwrap().take() {
+        panic!("b3 chord-through-dialog: {e}");
+    }
+    eprintln!("[B3] exit chord tears down through an open dialog");
 }
 
 #[test]
