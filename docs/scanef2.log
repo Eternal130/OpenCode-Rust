@@ -260,3 +260,39 @@ deliberate improvement — then it must be dispositioned as ours-extra
 by design). Also rides E1's search-in-10k disposition: ours has NO
 in-transcript search surface at all (E12 [G] names it; ref-side
 existence unverified this lane — carried).
+
+## Legs 6-10 — AB carries + E2/E7/E9/E11 + F6-lite (2026-10-18)
+
+Compliance: legs below added 6 binary boots (ours debug x3 incl. one
+30s diagnostic, ours release x3, ref x4 incl. TTI N=3) — ALL under the
+PTY wrappers (f7_boot_trace.py / spec-p3 probes, both now set 80x24
+winsize — the 0x0 default exposed SE-F5), one per invocation with
+sleeps, rig services killed after each leg. No raw boots, no /dev/tty.
+The E2 spawn leg ran PTY-WRAPPED (the amended recipe); the un-wrapped
+recipe was never run.
+
+- B6: SA-F1 residual CLOSED — matched env (xterm-256color, no SSH):
+  ref indexed-256 (452 SGR), ours indexed-256 (69) = quantize parity
+  live. Unset-TERM: ours falls back truecolor (ours-side row).
+- B7 sampled: unset TERM (boots, truecolor), no HOME (boots, falls
+  back to passwd home /root), OTEL_* incl. malformed (boots; ZERO
+  endpoint traffic — C22 divergence re-verified, no crash).
+- B3: vt_double_boot PASS (SA-F13 fix holds); focus handlers wired
+  (FocusGained/Lost + ?1004h emission observed).
+- A6: mini goldens 6/6 PASS. A9 census: image = {Png kitty f=100,
+  Sixel passthrough}; jpg/webp/gif absent-dispositioned.
+- A2/A3: `spec_ef2_ab_geometry.rs` committed (width sweep + wide-char
+  corpus — CJK/NFD/ZWJ/VS16 render, no panic). SE-F6 (12-row dialogs:
+  zero list rows), SE-F7 (chord swallowed by open dialog; esc-first
+  exits — verified), SE-F10 (160x40 dialog persists post-Enter).
+- E2: gate test PASS; spawn legs PTY-wrapped: ref 2.2s x3 (R7's
+  2300ms holds); ours 4.4s (debug + release) = 2.0x > 1.5x gate →
+  SE-F8 (frame 0.9s, 3.5s frame→echo gap; SE-F3-class boot work is
+  the suspect). Probe extensions (EF2_BIN/EF2_ARGS/winsize) documented.
+- E7: placeholder scan → SE-F9 (palette ServerList stub row,
+  command_palette.rs:789); methods.gen TODOs = dev comments.
+- E11 ours-side: idle 640B/2s caret-blink class only.
+- F6-lite: interaction-of-the-round = resize x streaming (SE-F2) +
+  paste x streaming (clean) — probes committed.
+- Deliverable written: docs/scan-ef-findings.md (register + ledger +
+  top-10 + compliance).
