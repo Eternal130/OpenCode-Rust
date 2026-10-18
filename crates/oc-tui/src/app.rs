@@ -1242,6 +1242,30 @@ impl App {
         };
         let Some(stroke) = KeyStroke::parse(expanded) else { return };
         self.sync_modes();
+        if std::env::var("FIXW2_TRACE").is_ok() {
+            let branch = if self.error_mode.is_some() {
+                "error_mode"
+            } else if self.store.focus() == Focus::Dialog {
+                "dialog"
+            } else if self.diff_live() {
+                "diff"
+            } else if self.permission_live() {
+                "permission"
+            } else if self.error_toast_live() {
+                "error_toast"
+            } else if self.picker_live() {
+                "picker"
+            } else {
+                "route"
+            };
+            let key = self.prompt_key();
+            let draft_len = self.store.prompt_draft(&key).text.len();
+            let route = std::format!("{:?}", self.store.route());
+            eprintln!(
+                "[fixw2] press spec={spec} branch={branch} draft_len={draft_len} route={route} pending={:?}",
+                self.keymap.pending_display()
+            );
+        }
         if self.store.focus() == Focus::Dialog {
             self.stroke_in_dialog(stroke);
         } else if self.diff_live() {
@@ -1758,7 +1782,11 @@ impl App {
         //    base for those.
         if draft_empty {
             let had_pending = self.keymap.pending_display().is_some();
-            match self.keymap.lookup_base(stroke.clone(), &self.clock) {
+            let outcome = self.keymap.lookup_base(stroke.clone(), &self.clock);
+            if std::env::var("FIXW2_TRACE").is_ok() {
+                eprintln!("[fixw2] rung1 stroke={stroke:?} had_pending={had_pending} outcome={outcome:?}");
+            }
+            match outcome {
                 Outcome::Command { command, .. } if command == "app.exit" => {
                     self.request_exit();
                     return;
@@ -4799,12 +4827,20 @@ pub async fn run_with_size(
                 match crossterm::event::poll(std::time::Duration::from_millis(50)) {
                     Ok(true) => {
                         let Ok(event) = crossterm::event::read() else { break };
+                        if std::env::var("FIXW2_TRACE").is_ok() {
+                            eprintln!("[fixw2] reader t={}ms ev={event:?}", system_now_ms() % 1_000_000);
+                        }
                         if event_tx.blocking_send(event).is_err() {
                             break;
                         }
                     }
                     Ok(false) => {}
-                    Err(_) => break,
+                    Err(e) => {
+                        if std::env::var("FIXW2_TRACE").is_ok() {
+                            eprintln!("[fixw2] reader poll ERR {e}");
+                        }
+                        break;
+                    }
                 }
             }
         });
@@ -5677,6 +5713,11 @@ pub async fn run_with_size(
             maybe = event_rx.recv() => maybe,
             () = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => None,
         };
+        if std::env::var("FIXW2_TRACE").is_ok() {
+            if let Some(ev) = event.as_ref() {
+                eprintln!("[fixw2] loop t={}ms ev={ev:?}", system_now_ms() % 1_000_000);
+            }
+        }
         match event {
             Some(CrosstermEvent::Key(key)) => {
                 if key.kind == KeyEventKind::Press {

@@ -1,0 +1,6 @@
+FIXW2 lane log — started 2026-10-18T05:39:03Z
+2026-10-18 FIXW2 entry 1 — SE-F2 root-caused (revised), teardown wedge FIXED
+- Repro ladder (zz_fixw2_repro.rs, temporary): single boot 40x12/80x12 wedge; 80x24/40x24/160x40/10x6 clean; resize round-trip 80x24->100x30->80x24 clean => resize path EXONERATED (contrary to the scan bisect).
+- Instrumented trace (FIXW2_TRACE, to be removed): e1_cells wedge shows all chord keys REACH the loop; press trace shows branch=route, draft_len=7493 (paste residue; ctrl+u is line-scoped DeleteToLineStart), ctrl+c clears the draft, and <leader>q resolves to session.queued_prompts — which is v2-correct (keybind.ts:131 decollision; app.exit keeps ctrl+c/ctrl+d, table.rs:511).
+- ROOT CAUSE: the harness exit chord (single \x03 + leader q) can never exit through a dirty draft or open dialog. SE-F7's dialog case: \x03 closes the dialog (empty filter), then leader+q opens queued-prompts.
+- FIX: vt_harness::exit_chord => ctrl+c, ctrl+c, leader+q (clear/close then exit; the trailing chord is harmless). e1_cells_paste_8k with EF2_ALLOW_BURSTS=1 now PASSES teardown (19.3s). Remaining: SE-F11 burst assert.
