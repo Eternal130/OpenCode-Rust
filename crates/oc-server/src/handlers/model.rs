@@ -83,14 +83,33 @@ fn custom_model_json(
 /// same stable sort (released = 0, after every dated catalog model).
 /// `Model.default`'s fallback (`available.find(supportsText)`,
 /// model.ts:260-266) scans the SAME ordering.
-fn location_model_entries(
+async fn location_model_entries(
     engine: &oc_core::engine::Engine,
     location: &oc_core::location::LocationRef,
 ) -> Vec<Value> {
     // The live catalog (v2 `ModelsDev.get()` — invalidated by refresh).
     let catalog = engine.catalog_service.get();
+    // CRED-B1: availability reads the credential store, not env alone —
+    // v2's provider fold counts ANY integration connection
+    // (provider.ts:393-406): a stored credential for the provider's
+    // integration satisfies the provider exactly like its env
+    // variables do (and a Console credential un-keylesses zen, since
+    // the opencode integration's connection exists).
+    let credential_integrations: std::collections::HashSet<String> = engine
+        .integration
+        .store()
+        .all()
+        .await
+        .map(|rows| rows.into_iter().map(|row| row.integration_id).collect())
+        .unwrap_or_default();
+    let mut credential_env: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for snapshot in catalog.providers() {
+        if credential_integrations.contains(snapshot.info.id.as_str()) {
+            credential_env.extend(snapshot.environment.iter().cloned());
+        }
+    }
     let mut data: Vec<(f64, Value)> = catalog
-        .available_models(|name| std::env::var_os(name).is_some())
+        .available_models(|name| std::env::var_os(name).is_some() || credential_env.contains(name))
         .into_iter()
         .map(|(snapshot, model)| (model.time.released.0, model_json(snapshot, model)))
         .collect();
@@ -130,7 +149,7 @@ async fn model_list(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
-    let data = location_model_entries(&state.engine, &location);
+    let data = location_model_entries(&state.engine, &location).await;
     Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
 }
 
@@ -183,9 +202,13 @@ async fn model_default(
                         .map(|model| model_json(snapshot, model))
                 })
         };
-        let default = resolved.or_else(|| {
-            location_model_entries(&state.engine, &location).into_iter().find(supports_text)
-        });
+        let default = match resolved {
+            Some(value) => Some(value),
+            None => location_model_entries(&state.engine, &location)
+                .await
+                .into_iter()
+                .find(supports_text),
+        };
         if let Some(default) = default {
             return Ok(json_location_data(&location.as_path().to_string_lossy(), default));
         }
@@ -193,6 +216,7 @@ async fn model_default(
     // No configured selection (or an empty catalog): the same
     // available-first fallback v2's `Model.default()` takes.
     let default = location_model_entries(&state.engine, &location)
+        .await
         .into_iter()
         .find(supports_text)
         .unwrap_or(Value::Null);
@@ -259,7 +283,7 @@ mod tests {
         ))
         .await;
         let location = oc_core::location::LocationRef::new(tmp.path().to_owned(), None);
-        let entries = location_model_entries(&engine, &location);
+        let entries = location_model_entries(&engine, &location).await;
         assert!(!entries.is_empty(), "the keyless opencode tier is available offline");
         let fallback = entries
             .iter()
