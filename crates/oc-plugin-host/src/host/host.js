@@ -80,6 +80,41 @@ process.on("unhandledRejection", (reason) => {
   notify("log", { level: "error", message: `unhandledRejection: ${errText(reason)}` });
 });
 
+// SA-F16 (SCAN-AB): shield every SCHEDULED guest callback — a
+// plugin's periodic filesystem probing that walks permission-denied
+// directories (the observed `EACCES /lost+found`, `/tmp/tmux-0`)
+// must degrade to a recorded fault, never an uncaught throw at
+// process level. The wrapper preserves the timer handles and the
+// callbacks' return values; only the error path changes (a
+// `plugin.fault` notification the supervisor records as a health
+// result, plus the log line).
+function scheduledFault(error) {
+  notify("plugin.fault", { message: errText(error) });
+  notify("log", { level: "warn", message: `plugin scheduled callback fault: ${errText(error)}` });
+}
+function shieldCallback(fn) {
+  return (...args) => {
+    try {
+      const result = fn(...args);
+      if (result && typeof result.then === "function") {
+        result.then(undefined, scheduledFault);
+      }
+      return result;
+    } catch (error) {
+      scheduledFault(error);
+      return undefined;
+    }
+  };
+}
+{
+  const nativeSetInterval = globalThis.setInterval.bind(globalThis);
+  const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+  globalThis.setInterval = (fn, ms, ...args) =>
+    typeof fn === "function" ? nativeSetInterval(shieldCallback(fn), ms, ...args) : nativeSetInterval(fn, ms, ...args);
+  globalThis.setTimeout = (fn, ms, ...args) =>
+    typeof fn === "function" ? nativeSetTimeout(shieldCallback(fn), ms, ...args) : nativeSetTimeout(fn, ms, ...args);
+}
+
 // ---------------------------------------------------------------------------
 // Plugin registry
 // ---------------------------------------------------------------------------

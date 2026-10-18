@@ -522,6 +522,53 @@ fn vt_temporal_idle_composer_is_byte_stable_2s() {
 }
 
 // ---------------------------------------------------------------------------
+// SA-F4's instrument: the before-settle sampler catches in-flight churn
+// ---------------------------------------------------------------------------
+
+/// SA-F4's instrument repair, demonstrated on a genuine time-driven
+/// transient: the busy tab's sweep ramps per-column backgrounds while
+/// the turn streams (tab_pulse's run envelope — the A4 drive-source
+/// audit). The BEFORE-SETTLE sampler observes the style churn with NO
+/// settle wait (the settle-first collectors structurally miss exactly
+/// this class — the scan's shimmer leg recorded 0 style deltas across
+/// 60 ref frames after typing settled).
+#[test]
+fn vt_temporal_style_sampler_catches_inflight_churn() {
+    let (samples, distinct): (usize, usize) = run_temporal_test(
+        "sampler",
+        80,
+        24,
+        |fake| fake.arm_script(busy_window_script()),
+        |harness| {
+            boot_to_session(harness)?;
+            harness.write(b"busy turn\r");
+            if !harness.wait_for(b"Thinking", Duration::from_secs(5)) {
+                return Err("the streaming turn never showed its Thinking row".to_owned());
+            }
+            // Sample row 0 (the busy tab's sweep region) DURING the
+            // held-open busy window — no settle, polls straight away.
+            let series = harness.style_series_during(1200, 25, (0, 0, 40, 1), || {});
+            let samples = series.len();
+            let mut distinct_sets: Vec<&Vec<u64>> = Vec::new();
+            for (_t, styles) in &series {
+                if !distinct_sets.contains(&styles) {
+                    distinct_sets.push(styles);
+                }
+            }
+            Ok((samples, distinct_sets.len()))
+        },
+    );
+    eprintln!(
+        "[vt_temporal sampler] {samples} in-flight samples, {distinct} distinct style frames"
+    );
+    assert!(samples >= 20, "the sampler polled the live grid ({samples} samples)");
+    assert!(
+        distinct >= 8,
+        "the busy sweep's style churn was caught in flight ({distinct} distinct frames — a settle-first collector would see far fewer)"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Busy strip: the tab spinner's COLOR TOKEN (beta.13 bug 4)
 // ---------------------------------------------------------------------------
 

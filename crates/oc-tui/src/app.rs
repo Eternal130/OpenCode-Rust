@@ -6615,7 +6615,11 @@ fn mouse_home_strip_click_selects_the_restored_tab() {
     // The body release selects: home → the restored session's route.
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 0));
     assert_eq!(app.store.route(), Route::Session { session_id: "r1".to_owned() });
-    // The ` + ` affordance still navigates home from the session...
+    // The ` + ` affordance navigates home from the session — SA-F7's
+    // verified ref pairing: v2's `+` release runs `tabs.add()` which
+    // is `route.navigate({type:"home", …})` (context/session-tabs.tsx
+    // :406-420 — the ref does NOT create a session/tab on the click;
+    // the home composer's next submit does). Ours matches.
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 65, 0));
     assert_eq!(app.store.route(), Route::Home);
     // ...and the second restored tab's body selects from home (tab 2
