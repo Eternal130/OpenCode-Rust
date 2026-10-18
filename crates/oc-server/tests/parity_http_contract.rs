@@ -167,14 +167,12 @@ async fn cursor_absent_not_null() {
     let body3 = page3.json();
     assert_eq!(body3["data"].as_array().expect("data array").len(), 0);
     assert!(
-        body3["cursor"].get("previous").is_some()
-            && body3["cursor"]["previous"].is_null(),
+        body3["cursor"].get("previous").is_some() && body3["cursor"]["previous"].is_null(),
         "empty page must emit previous:null (v2 runtime probe): {}",
         body3["cursor"]
     );
     assert!(
-        body3["cursor"].get("next").is_some()
-            && body3["cursor"]["next"].is_null(),
+        body3["cursor"].get("next").is_some() && body3["cursor"]["next"].is_null(),
         "empty page must emit next:null (v2 runtime probe): {}",
         body3["cursor"]
     );
