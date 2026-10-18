@@ -261,7 +261,10 @@ async fn connect(
         return empty_status(StatusCode::NOT_FOUND);
     }
     if let Some(ticket) = parse_query_field(query, "ticket") {
-        if !consume_ticket(&state, &ticket, &pty_id, &location) {
+        // v2 pty.ts:153-159 — the Origin gate runs FIRST: a disallowed
+        // origin is 403 and the ticket is NOT consumed.
+        let origin_ok = origin_allowed(&state, &headers);
+        if !origin_ok || !consume_ticket(&state, &ticket, &pty_id, &location) {
             return empty_status(StatusCode::FORBIDDEN);
         }
     }
@@ -276,8 +279,9 @@ async fn connect(
 }
 
 /// One attached PTY socket: replay → metaFrame(cursor) → live output;
-/// attach failure closes with 4404 after a 1s drain window (§3). The
-/// shutdown watch ends the loop when the server stops (gate-6 F2).
+/// normal exit closes 1000, attach failures close 4404 after the drain
+/// window (§3, v2 pty.ts:169-199). The shutdown watch ends the loop when
+/// the server stops (gate-6 F2).
 async fn pty_session(
     shared: std::sync::Arc<pty_state::PtyShared>,
     mut socket: WebSocket,
@@ -297,36 +301,48 @@ async fn pty_session(
     };
     let on_end: Box<dyn FnOnce(Option<i32>) + Send + Sync> = {
         let outbox = outbox_tx.clone();
-        Box::new(move |exit_code| {
+        Box::new(move |_exit_code| {
+            // v2 pty.ts:176 — a normal PTY exit is CloseEvent(1000).
             let _ = outbox.send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                code: 4404,
-                reason: format!("pty exited{exit_code:?}").into(),
+                code: 1000,
+                reason: "".into(),
             })));
         })
     };
 
-    let attach = shared.pty.attach(&id, cursor, on_data, on_end);
-    let attachment = if let Ok(attachment) = attach {
-        attachment.activate();
-        std::sync::Arc::new(attachment)
-    } else {
-        // Attach failure: close frame 4404 (§3).
-        let _ = socket
-            .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                code: 4404,
-                reason: "attach failed".into(),
-            })))
-            .await;
-        return;
+    let attachment = match shared.pty.attach(&id, cursor, on_data, on_end) {
+        Ok(attachment) => attachment,
+        // v2 pty.ts:169-176 — attach failures close 4404 with the mapped
+        // reason (NotFound → "session not found", Exited → "session exited").
+        Err(error) => {
+            let reason = match error {
+                oc_core::pty::AttachError::NotFound(_) => "session not found",
+                oc_core::pty::AttachError::Exited(_) => "session exited",
+            };
+            let _ = socket
+                .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                    code: 4404,
+                    reason: reason.into(),
+                })))
+                .await;
+            return;
+        }
     };
+    let attachment = std::sync::Arc::new(attachment);
     let (replay, replay_cursor) = (attachment.replay.clone(), attachment.cursor);
 
-    // Replay chunks → metaFrame(cursor) first, then the replayed bytes.
-    let meta = json!({ "type": "meta", "cursor": replay_cursor });
-    let _ = outbox_tx.send(Message::Text(meta.to_string()));
-    for chunk in replay.as_bytes().chunks(16 * 1024) {
+    // v2 pty.ts:198-199 + pty/protocol.ts — replay chunks first (64 KiB
+    // text frames), then ONE binary control frame `0x00 || {"cursor":N}`,
+    // then activation.
+    for chunk in replay.as_bytes().chunks(64 * 1024) {
         let _ = outbox_tx.send(Message::Text(String::from_utf8_lossy(chunk).into_owned()));
     }
+    let meta_json = json!({ "cursor": replay_cursor }).to_string();
+    let mut meta = Vec::with_capacity(meta_json.len() + 1);
+    meta.push(0x00);
+    meta.extend_from_slice(meta_json.as_bytes());
+    let _ = outbox_tx.send(Message::Binary(meta));
+    attachment.activate();
 
     let (mut sender, mut receiver) = socket_split(socket);
     loop {

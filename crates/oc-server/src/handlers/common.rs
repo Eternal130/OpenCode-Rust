@@ -180,14 +180,19 @@ impl ApiError {
             }),
         )
     }
-    pub fn worktree(name: &str, message: impl Into<String>, force_required: Option<bool>) -> Self {
+    /// v2 `WorktreeError` (protocol/groups/worktree.ts:13-24): 400 with
+    /// the literal `name: "WorktreeError"`; `forceRequired` surfaces only
+    /// when a dirty tree demands `force` (undefined is dropped on the wire).
+    pub fn worktree(message: impl Into<String>, force_required: Option<bool>) -> Self {
         let mut data = json!({ "message": message.into() });
-        if let (Some(force), Value::Object(map)) = (force_required, &mut data) {
-            map.insert("forceRequired".to_owned(), json!(force));
+        if force_required == Some(true) {
+            if let Value::Object(map) = &mut data {
+                map.insert("forceRequired".to_owned(), json!(true));
+            }
         }
         ApiError::new(
             StatusCode::BAD_REQUEST,
-            json!({ "_tag": "WorktreeError", "name": name, "data": data }),
+            json!({ "_tag": "WorktreeError", "name": "WorktreeError", "data": data }),
         )
     }
 }
@@ -312,18 +317,29 @@ pub fn b64url_decode(input: &str) -> Option<Vec<u8>> {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(input).ok()
 }
 
-/// Session-list cursor: base64url JSON
-/// `{directory|project|all, anchor:{id,time,direction}}`.
-#[derive(Debug, Clone, PartialEq)]
+/// Session-list cursor: base64url JSON of the v2 `SessionsCursorInput`
+/// union (`protocol/src/groups/session.ts:83-107`) — the scope key
+/// (`directory` | `project` + optional `subpath` | neither for the all
+/// scope), the preserved query fields (`search`, `order`, `parentID`)
+/// and the `anchor`. Absent fields stay absent in the token.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SessionCursor {
     pub scope: SessionCursorScope,
+    pub subpath: Option<String>,
+    pub search: Option<String>,
+    pub order: Option<ListOrderWire>,
+    /// `Some("null")` filters parentless sessions (v2 `ParentIDFilter`
+    /// encodes `null` as the literal string "null").
+    pub parent_id: Option<String>,
     pub anchor: Option<SessionAnchor>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum SessionCursorScope {
     Directory(String),
     Project(String),
+    /// The all-scope token carries NO scope key (v2 `SessionsAllQuery`).
+    #[default]
     All,
 }
 
@@ -359,9 +375,20 @@ pub fn encode_session_cursor(cursor: &SessionCursor) -> Option<String> {
         SessionCursorScope::Project(project) => {
             map.insert("project".into(), json!(project));
         }
-        SessionCursorScope::All => {
-            map.insert("all".into(), json!(true));
-        }
+        // v2 `withCursor(SessionsAllQuery)`: no scope discriminator key.
+        SessionCursorScope::All => {}
+    }
+    if let Some(subpath) = &cursor.subpath {
+        map.insert("subpath".into(), json!(subpath));
+    }
+    if let Some(search) = &cursor.search {
+        map.insert("search".into(), json!(search));
+    }
+    if let Some(order) = cursor.order {
+        map.insert("order".into(), json!(order.as_str()));
+    }
+    if let Some(parent) = &cursor.parent_id {
+        map.insert("parentID".into(), json!(parent));
     }
     if let Some(anchor) = &cursor.anchor {
         map.insert(
@@ -385,23 +412,38 @@ pub fn decode_session_cursor(input: &str) -> Option<SessionCursor> {
         SessionCursorScope::Directory(directory.to_owned())
     } else if let Some(project) = object.get("project").and_then(Value::as_str) {
         SessionCursorScope::Project(project.to_owned())
-    } else if object.contains_key("all") {
-        SessionCursorScope::All
     } else {
-        return None;
+        SessionCursorScope::All
     };
-    let anchor = object.get("anchor").and_then(|anchor| {
-        Some(SessionAnchor {
-            id: anchor.get("id")?.as_str()?.to_owned(),
-            time: anchor.get("time")?.as_i64()?,
-            direction: match anchor.get("direction")?.as_str()? {
-                "next" => CursorDirection::Next,
-                "previous" => CursorDirection::Previous,
-                _ => return None,
-            },
-        })
-    });
-    Some(SessionCursor { scope, anchor })
+    let field = |name: &str| object.get(name).and_then(Value::as_str).map(str::to_owned);
+    // v2's `withCursor` union requires `anchor` in every member — a JSON
+    // object without one is an invalid cursor (400 InvalidCursorError).
+    let anchor = {
+        let anchor = object.get("anchor").and_then(|anchor| {
+            Some(SessionAnchor {
+                id: anchor.get("id")?.as_str()?.to_owned(),
+                time: anchor.get("time")?.as_i64()?,
+                direction: match anchor.get("direction")?.as_str()? {
+                    "next" => CursorDirection::Next,
+                    "previous" => CursorDirection::Previous,
+                    _ => return None,
+                },
+            })
+        })?;
+        anchor
+    };
+    Some(SessionCursor {
+        scope,
+        subpath: field("subpath"),
+        search: field("search"),
+        order: object.get("order").and_then(|order| match order.as_str() {
+            Some("asc") => Some(ListOrderWire::Asc),
+            Some("desc") => Some(ListOrderWire::Desc),
+            _ => None,
+        }),
+        parent_id: field("parentID"),
+        anchor: Some(anchor),
+    })
 }
 
 /// Message cursor: base64url JSON `{id, order, direction}`.
@@ -578,6 +620,10 @@ mod tests {
     fn session_cursor_round_trip() {
         let cursor = SessionCursor {
             scope: SessionCursorScope::Directory("/tmp/w".into()),
+            subpath: Some("src".into()),
+            search: Some("parity".into()),
+            order: Some(ListOrderWire::Asc),
+            parent_id: Some("ses_parent".into()),
             anchor: Some(SessionAnchor {
                 id: "ses_1".into(),
                 time: 1234,
@@ -590,9 +636,49 @@ mod tests {
     }
 
     #[test]
-    fn session_cursor_all_scope() {
-        let cursor = SessionCursor { scope: SessionCursorScope::All, anchor: None };
+    fn session_cursor_all_scope_has_no_scope_key() {
+        // v2 SessionsAllQuery carries no `directory`/`project` — and the
+        // port must not add its own discriminator (HTTP-H6).
+        let mut cursor = SessionCursor { anchor: None, ..Default::default() };
         let encoded = encode_session_cursor(&cursor).unwrap();
+        let bytes = b64url_decode(&encoded).unwrap();
+        let payload: Value = serde_json::from_slice(&bytes).unwrap();
+        let object = payload.as_object().unwrap();
+        assert!(!object.contains_key("all"), "no synthetic all key: {payload}");
+        assert!(!object.contains_key("directory"));
+        assert!(!object.contains_key("project"));
+        // Round-trips once anchored (v2 always emits tokens with an anchor).
+        cursor.anchor =
+            Some(SessionAnchor { id: "ses_1".into(), time: 42, direction: CursorDirection::Next });
+        let encoded = encode_session_cursor(&cursor).unwrap();
+        assert_eq!(decode_session_cursor(&encoded).unwrap(), cursor);
+    }
+
+    #[test]
+    fn session_cursor_preserves_query_fields() {
+        // The v2 token = query ∪ anchor; following pages read the query
+        // back out of the cursor (HTTP-H6).
+        let cursor = SessionCursor {
+            scope: SessionCursorScope::Project("prj_1".into()),
+            subpath: Some("crates".into()),
+            search: Some("wire".into()),
+            order: Some(ListOrderWire::Desc),
+            parent_id: Some("null".into()),
+            anchor: Some(SessionAnchor {
+                id: "ses_9".into(),
+                time: 99,
+                direction: CursorDirection::Next,
+            }),
+        };
+        let encoded = encode_session_cursor(&cursor).unwrap();
+        let bytes = b64url_decode(&encoded).unwrap();
+        let payload: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["project"], "prj_1");
+        assert_eq!(payload["subpath"], "crates");
+        assert_eq!(payload["search"], "wire");
+        assert_eq!(payload["order"], "desc");
+        assert_eq!(payload["parentID"], "null");
+        assert_eq!(payload["anchor"]["id"], "ses_9");
         assert_eq!(decode_session_cursor(&encoded).unwrap(), cursor);
     }
 

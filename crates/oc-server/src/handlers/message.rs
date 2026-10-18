@@ -1,6 +1,7 @@
 //! Message handlers (`session.message.list` / `session.message.get`):
-//! limit 50, order desc default, cursor `{id, order, direction}` with the
-//! cursor-XOR-order → `InvalidCursorError` 400 rule (deep-map §3).
+//! limit 50, order desc default, cursor `{id, order, direction}` —
+//! cursor+order → `InvalidCursorError`, cursor-only pages take the
+//! order from the token (v2 `handlers/message.ts:35-62`).
 
 #![allow(
     clippy::must_use_candidate,
@@ -40,41 +41,48 @@ async fn list(
     if limit <= 0 {
         return Err(ApiError::invalid_request("limit must be a positive integer"));
     }
-    let requested = query_field(&uri, "order").unwrap_or_else(|| "desc".to_owned());
-    let order = match requested.as_str() {
-        "asc" => ListOrder::Asc,
-        "desc" => ListOrder::Desc,
-        other => {
+    let order_param = query_field(&uri, "order");
+    let order = match order_param.as_deref() {
+        Some("asc") => ListOrder::Asc,
+        Some(other) if other != "desc" => {
             return Err(ApiError::invalid_request(format!("invalid order: {other}")));
         }
+        _ => ListOrder::Desc,
     };
     let type_ = query_field(&uri, "type");
 
     let cursor_param = query_field(&uri, "cursor");
+    // v2 message.ts:35-36 — cursor and order cannot be combined.
+    if let (Some(_), Some(_)) = (&cursor_param, &order_param) {
+        return Err(ApiError::invalid_cursor("Cursor cannot be combined with order"));
+    }
     let cursor = match &cursor_param {
         Some(encoded) => {
             let decoded = decode_message_cursor(encoded)
                 .ok_or_else(|| ApiError::invalid_cursor("Invalid cursor"))?;
-            // cursor XOR order → InvalidCursorError (§3).
-            let wire_order = match decoded.order {
-                ListOrderWire::Asc => "asc",
-                ListOrderWire::Desc => "desc",
-            };
-            if wire_order != requested {
-                return Err(ApiError::invalid_cursor(format!(
-                    "Cursor order {wire_order} does not match requested order {requested}"
-                )));
-            }
-            Some((decoded.id, direction_of(decoded.direction)))
+            // v2 message.ts:40 — with a cursor the order comes from the
+            // token (`decoded?.order ?? ctx.query.order ?? "desc"`).
+            Some((
+                decoded.id,
+                direction_of(decoded.direction),
+                match decoded.order {
+                    ListOrderWire::Asc => ListOrder::Asc,
+                    ListOrderWire::Desc => ListOrder::Desc,
+                },
+            ))
         }
         None => None,
+    };
+    let (cursor, order) = match cursor {
+        Some((id, direction, order)) => (Some((id, direction)), order),
+        None => (None, order),
     };
 
     let rows = services
         .store
         .messages(MessagesInput {
             session_id: session_id.clone(),
-            limit: Some(limit + 1),
+            limit: Some(limit),
             order: Some(order),
             type_,
             cursor,
@@ -85,38 +93,38 @@ async fn list(
             ApiError::unknown_ref()
         })?;
 
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
-
     let wire_order = match order {
         ListOrder::Asc => ListOrderWire::Asc,
         ListOrder::Desc => ListOrderWire::Desc,
     };
-    let mut next = None;
-    let mut previous = None;
-    if has_more {
-        if let Some(last) = rows.last() {
-            next = encode_message_cursor(&super::common::MessageCursor {
-                id: last.id.clone(),
-                order: wire_order,
-                direction: CursorDirection::Next,
-            });
-        }
-    }
-    if cursor_param.is_some() {
-        if let Some(first) = rows.first() {
-            previous = encode_message_cursor(&super::common::MessageCursor {
-                id: first.id.clone(),
-                order: wire_order,
-                direction: CursorDirection::Previous,
-            });
-        }
-    }
+    // v2 message.ts:58-62 — previous/next come from the first/last row of
+    // every non-empty page; the keys are OMITTED when absent.
+    let previous = rows.first().map(|first| {
+        encode_message_cursor(&super::common::MessageCursor {
+            id: first.id.clone(),
+            order: wire_order,
+            direction: CursorDirection::Previous,
+        })
+    });
+    let next = rows.last().map(|last| {
+        encode_message_cursor(&super::common::MessageCursor {
+            id: last.id.clone(),
+            order: wire_order,
+            direction: CursorDirection::Next,
+        })
+    });
 
     let data: Vec<Value> = rows.iter().map(message_row_to_info).collect();
+    let mut cursor_json = serde_json::Map::new();
+    if let Some(previous) = previous.flatten() {
+        cursor_json.insert("previous".to_owned(), json!(previous));
+    }
+    if let Some(next) = next.flatten() {
+        cursor_json.insert("next".to_owned(), json!(next));
+    }
     Ok(axum::Json(json!({
         "data": data,
-        "cursor": { "previous": previous, "next": next },
+        "cursor": cursor_json,
     }))
     .into_response())
 }

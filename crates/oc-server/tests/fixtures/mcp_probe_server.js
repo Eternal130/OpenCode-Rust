@@ -30,7 +30,7 @@ function handle(message) {
       id: message.id,
       result: {
         protocolVersion: message.params?.protocolVersion ?? "2025-06-18",
-        capabilities: { tools: { listChanged: false } },
+        capabilities: { tools: { listChanged: false }, resources: { subscribe: false, listChanged: false } },
         serverInfo: { name: "fixture-probe", version: "1.0.0" },
         instructions: "A fixture MCP server.",
       },
@@ -52,6 +52,30 @@ function handle(message) {
               properties: { note: { type: "string", description: "A note" } },
             },
           },
+        ],
+      },
+    });
+    return;
+  }
+  if (message.method === "resources/list") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        resources: [
+          { uri: "fixture://doc/guide", name: "guide", description: "The guide resource", mimeType: "text/plain" },
+        ],
+      },
+    });
+    return;
+  }
+  if (message.method === "resources/templates/list") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        resourceTemplates: [
+          { uriTemplate: "fixture://doc/{name}", name: "doc", description: "Any doc", mimeType: "text/plain" },
         ],
       },
     });
