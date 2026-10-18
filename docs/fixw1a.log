@@ -110,3 +110,33 @@ implement in order SA-F6 → SA-F5 → SA-F3 → SA-F13 → S2 set.
   flagship_loads_and_registers_on_the_minimal_context) fail under the
   /tmp fixture env PRE-EXISTING (verified via git stash — the fixture
   lacks the preset config the /root cache had); unchanged by this fix.
+
+## Item SA-F3 (S1) — FIXED
+
+Root cause (code-cited): the run loop's marquee "steady ticker" pin
+branch compared `marquee_next_step(now) <= now` — but next_step is
+STRICTLY FUTURE by construction (k = q+1 ⇒ start+k·80 > now), so the
+pin NEVER fired. The clock advanced only on the plain 100ms branch;
+wakes landed on every 80ms boundary, so the 100ms threshold tripped
+every OTHER boundary → the clock jumped +160ms → offset +2 cells per
+render → the measured ~166ms/step.
+
+- marquee.rs: `passed_step_ms` — the most recent boundary ≤ now while
+  the scroll is live (liveness mirrors next_step_ms; None past the
+  one-pass clamp). Unit test pins the invariant pair (next is strictly
+  future; pin+interval = next) and the clamp symmetry.
+- session_tabs_solid.rs: `marquee_passed_step` accessor.
+- app.rs tick section: while a scroll is live, wake → pin
+  `advance_clock(passed_boundary)` when newer than the clock (compared
+  against the CLOCK, never `now`); the plain 100ms tick stays suspended
+  while scrolling (the 80ms pin cadence subsumes it — the clock never
+  samples past a boundary the marquee should land on).
+- vt_temporal.rs marquee test upgraded to the SA-F3 vt-clock proof:
+  polls the LIVE grid every 12ms (the snapshot instrument's 80ms
+  quiet window CANNOT resolve an 80ms cadence — consecutive frames
+  merge into one burst; direct grid polling measures change times),
+  takes the longest ≤300ms-separated steady run, asserts median ∈
+  [70,105], max ≤ 140 (no ~166 quantization leak), min ≥ 55 (no
+  double-steps), ≥10 shifts. MEASURED: 27 shifts, median 77ms, min
+  76, max 90 (3/3 stable + full vt_temporal suite 5/5 PASS — the
+  100ms-cadence surfaces unchanged).
