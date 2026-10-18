@@ -59,7 +59,9 @@ impl PermissionHarness {
     }
 
     /// Feed one kitty key token ("right", "enter", "escape", "c", …)
-    /// to the live permission body.
+    /// to the live permission body. The harness's `ses_replay` is a
+    /// TOP-LEVEL session (no parentID): the two-stage machine's
+    /// reject path replies immediately.
     pub fn press(&mut self, key: &str) {
         let FooterView::Permission { request } = &self.machine.view else {
             return;
@@ -70,7 +72,7 @@ impl PermissionHarness {
             .get(&request.id)
             .cloned()
             .unwrap_or_else(|| create_permission_body_state(&request));
-        match permission_key(&state, &request, key) {
+        match permission_key(&state, &request, false, key) {
             PermissionKey::State(next) => {
                 self.states.insert(request.id.clone(), next);
             }
@@ -140,10 +142,11 @@ mod tests {
         }
     }
 
-    /// Drive `replay/permission-once-always-deny.json` end-to-end: the
-    /// once/always/reject affordances, selection movement, the reject
-    /// stage's free-text reason and its confirming reply — through the
-    /// footer state machine (ask → reply → re-ask → reject).
+    /// Drive `replay/permission-once-always-deny.json` end-to-end:
+    /// the once/always/reject affordances, the always-lines preview on
+    /// selection, the SINGLE-enter always reply, and the top-level
+    /// escape's immediate reject — through the footer state machine
+    /// (ask → always → re-ask → esc reject).
     #[test]
     fn replay_permission_once_always_deny() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -186,12 +189,12 @@ mod tests {
                 assert_eq!(harness.focus(), expected, "step {index}: focus {focus}");
             }
         }
-        // The script's final state: one "once" reply then one "reject"
-        // reply carrying the typed reason.
+        // The script's final state: the SINGLE-enter "always" reply,
+        // then the top-level escape's immediate "reject".
         assert_eq!(harness.replies.len(), 2);
-        assert_eq!(harness.replies[0].decision, "once");
+        assert_eq!(harness.replies[0].decision, "always");
         assert_eq!(harness.replies[1].decision, "reject");
-        assert_eq!(harness.replies[1].message, "choose another way");
+        assert_eq!(harness.replies[1].message, "");
     }
 
     #[test]

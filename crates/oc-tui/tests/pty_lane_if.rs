@@ -333,7 +333,7 @@ fn pty_home_release_fires_no_stale_location_dialog() {
 /// (the second becomes the view after the pointer resolves the
 /// first — the SSE feed plays its script once per connection).
 fn permission_script(session: &str) -> Vec<ScriptEvent> {
-    let ask = |id: &str, ordinal: usize| {
+    let ask_on = |id: &str, ordinal: usize, session: &str| {
         bus_event(
             &format!("evt_ask_{ordinal}"),
             "permission.asked",
@@ -347,6 +347,7 @@ fn permission_script(session: &str) -> Vec<ScriptEvent> {
             }),
         )
     };
+    let ask = |id: &str, ordinal: usize| ask_on(id, ordinal, session);
     vec![
         bus_event(
             "evt_inbox",
@@ -368,7 +369,21 @@ fn permission_script(session: &str) -> Vec<ScriptEvent> {
             }),
         ),
         ask("p1", 1),
-        ScriptEvent { delay_ms: 600, ..ask("p2", 2) },
+        // The second ask rides a CHILD session (`session.created`
+        // seeds its parentID): under the session-route two-stage
+        // machine the free-text reject stage opens only for children
+        // (`session()?.parentID`, permission.tsx:249-254) — a
+        // top-level reject replies immediately.
+        ScriptEvent {
+            delay_ms: 500,
+            body: bus_event(
+                "evt_child",
+                "session.created",
+                serde_json::json!({ "sessionID": "ses_child", "parentID": "ses_alpha" }),
+            )
+            .body,
+        },
+        ScriptEvent { delay_ms: 600, ..ask_on("p2", 2, "ses_child") },
     ]
 }
 
