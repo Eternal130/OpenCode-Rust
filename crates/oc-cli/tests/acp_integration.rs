@@ -799,9 +799,25 @@ async fn session_list_and_cursor_errors() {
             );
         }
 
-        // The last page has no nextCursor.
+        // v2 passes the HTTP cursor through whenever the page is non-empty:
+        // acp/service.ts:187 `...(page.cursor.next ? { nextCursor: page.cursor.next } : {})`,
+        // and the session list emits cursors from the first/last row of every
+        // non-empty page with no has_more check (HTTP-H2/H6 semantics).
+        // Pagination terminates on the EMPTY page, not on a absent cursor.
         if page.sessions.len() < 100 {
-            assert_eq!(page.next_cursor, None);
+            let cursor = page
+                .next_cursor
+                .as_deref()
+                .expect("non-empty page carries nextCursor (v2 pass-through)");
+            let next = cx
+                .send_request(ListSessionsRequest::new().cwd(cwd.clone()).cursor(cursor))
+                .block_task()
+                .await
+                .expect("session/list page 2");
+            assert!(
+                next.sessions.is_empty(),
+                "pagination terminates on the empty page (v2)"
+            );
         }
 
         // An invalid cursor maps to InvalidRequest on the cursor field
