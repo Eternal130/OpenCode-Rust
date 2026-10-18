@@ -98,11 +98,11 @@ pub use context::{
 };
 pub use registrations::{
     PluginAgent, PluginCommand, PluginDialog, PluginGroupRule, PluginHomeAction, PluginHook,
-    PluginMcp, PluginSkill, PluginState, PluginStatus, PluginTheme, PluginTool,
+    PluginMcp, PluginRpc, PluginSkill, PluginState, PluginStatus, PluginTheme, PluginTool,
     RegistrationSnapshot,
 };
 pub use resolve::{parse_ops, resolve, PluginOp, PluginSourceKind, Resolution, ResolvedPlugin};
-pub use supervisor::{HostError, SupervisorConfig};
+pub use supervisor::{HostError, StoragePort, StorageScanQuery, SupervisorConfig};
 pub use tap::{BroadcastTap, TapEvent};
 pub use ui::{PluginDialogOption, PluginDialogSpec, UiRequest};
 
@@ -133,6 +133,9 @@ pub struct PluginHostConfig {
     /// `tools.<name>(input)` routing from Code Mode programs (the
     /// oc-core registry seam; wave 4).
     pub tool_port: Option<Arc<dyn ToolPort>>,
+    /// `ctx.storage.*` routing target (PLUG-D18): the durable KV
+    /// backend. `None` declines every call.
+    pub storage_port: Option<Arc<dyn supervisor::StoragePort>>,
     /// Config-sourced plugin options keyed by entry path (`ctx.options`,
     /// v2 plugin `{package, options}` entries).
     pub entry_options: BTreeMap<String, Value>,
@@ -151,6 +154,7 @@ impl Default for PluginHostConfig {
             host_state: HostState::default(),
             session_port: None,
             tool_port: None,
+            storage_port: None,
             entry_options: BTreeMap::new(),
         }
     }
@@ -639,6 +643,106 @@ impl PluginHost {
             .unwrap_or_default();
         Ok(CodeModeRun { value, error, tool_calls })
     }
+}
+
+/// The outcome of one guest RPC call (PLUG-D14).
+#[derive(Debug, Clone, PartialEq)]
+pub enum RpcOutcome {
+    /// The handler's output (`None` = `undefined`).
+    Output(Option<Value>),
+    /// A declared failure (the handler's `ctx.error(type, message,
+    /// data)`): `type`, `message`, optional `data`.
+    Failure { type_: String, message: String, data: Option<Value> },
+    /// A transport/host failure (timeout, dead guest, handler
+    /// defect): the v2 `rpc.internal` shape.
+    Internal(String),
+}
+
+impl PluginHost {
+    /// Dispatch one runtime hook event into the guest for `plugin_id`
+    /// through the production bridge ([`Bridge::dispatch_hook`] — the
+    /// PLUG-D21 seam the engine's `HookRegistry` forwarders call).
+    /// Returns the possibly-mutated event.
+    pub async fn dispatch_hook_async(
+        &self,
+        plugin_id: &str,
+        domain: &str,
+        name: &str,
+        event: Value,
+    ) -> Result<Value, String> {
+        let Some(facade) = &self.facade else {
+            return Err("plugin subsystem disabled".into());
+        };
+        let bridge = Bridge { shared: Arc::clone(&facade.shared) };
+        bridge
+            .dispatch_hook(plugin_id, domain, name, event)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// Dispatch one `/api/rpc/{rpcID}/{method}` call into the guest
+    /// (PLUG-D14): resolves the registration, gates unknown ids/methods
+    /// (the caller maps those to v2's `rpc.unavailable` /
+    /// `rpc.method_not_found`), and routes the call through the guest's
+    /// `rpc.call` handler.
+    pub async fn rpc_call_async(
+        &self,
+        rpc_id: &str,
+        method: &str,
+        input: Value,
+        timeout: Duration,
+    ) -> Result<RpcOutcome, String> {
+        let Some(facade) = &self.facade else {
+            return Err(format!("RPC is unavailable: {rpc_id}"));
+        };
+        let Some(registration) = facade.shared.rpc_registration(rpc_id) else {
+            return Err(format!("RPC is unavailable: {rpc_id}"));
+        };
+        if !registration.methods.iter().any(|name| name == method) {
+            return Err(format!("Unknown RPC method: {rpc_id}.{method}"));
+        }
+        let result = match facade
+            .shared
+            .request(
+                "rpc.call",
+                json!({
+                    "pluginId": registration.plugin_id,
+                    "rpcId": rpc_id,
+                    "method": method,
+                    "input": input,
+                }),
+                timeout,
+            )
+            .await
+        {
+            Ok(result) => result,
+            // Transport/host failures are the v2 `rpc.internal` leg
+            // (handler defects normalize guest-side; timeouts and a
+            // dead guest never echo internals).
+            Err(HostError::Guest(why)) => return Ok(RpcOutcome::Internal(why)),
+            Err(HostError::Timeout(_) | HostError::Exited(_)) => {
+                return Ok(RpcOutcome::Internal("RPC call failed".to_owned()))
+            }
+        };
+        // The guest answers `{ok: true, output?}` or `{ok: false,
+        // failure: {type, message, data?}}`.
+        if result.get("ok").and_then(Value::as_bool) == Some(false) {
+            let failure = result.get("failure").cloned().unwrap_or(Value::Null);
+            let type_ =
+                failure.get("type").and_then(Value::as_str).unwrap_or("rpc.internal").to_owned();
+            let message = failure
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("RPC call failed")
+                .to_owned();
+            let data = failure.get("data").cloned().filter(|data| !data.is_null());
+            if type_ == "rpc.internal" || type_ == "rpc.invalid_output" {
+                return Ok(RpcOutcome::Internal(message));
+            }
+            return Ok(RpcOutcome::Failure { type_, message, data });
+        }
+        Ok(RpcOutcome::Output(result.get("output").cloned()))
+    }
 
     /// Drain the pending plugin → TUI UI requests (the wave-3 slot
     /// bridge: toasts, sidebar sections, footer hints, dialog opens).
@@ -797,6 +901,7 @@ fn supervisor_config(
         host_state: std::mem::take(&mut config.host_state),
         session_port: config.session_port.take().or_else(|| Some(Arc::new(NoSessionEngine))),
         tool_port: config.tool_port.take().or_else(|| Some(Arc::new(NoToolEngine))),
+        storage_port: config.storage_port.take(),
         entry_options: std::mem::take(&mut config.entry_options),
     }
 }

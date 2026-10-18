@@ -970,7 +970,9 @@ async fn handlers_misc_documented_shapes() {
         .expect_err("404");
     assert_api(&error, 404, "CommandNotFoundError");
 
-    // rpc without a host → 500 RpcInternalError.
+    // rpc without a host → v2's empty registry: `rpc.unavailable`
+    // (RpcError 400 — handlers/rpc.ts maps the failure channel; the old
+    // 500 stub was PLUG-D14's defect).
     let error = client
         .rpc()
         .call(
@@ -980,8 +982,8 @@ async fn handlers_misc_documented_shapes() {
             &RpcInput { input: Some(serde_json::json!({})) },
         )
         .await
-        .expect_err("500");
-    assert_api(&error, 500, "RpcInternalError");
+        .expect_err("400");
+    assert_api(&error, 400, "RpcError");
 
     let _ = client.migration().status().await.expect("migration status");
 }

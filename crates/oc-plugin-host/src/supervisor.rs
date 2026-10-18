@@ -29,6 +29,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
@@ -41,6 +42,34 @@ use crate::protocol::{self, Incoming};
 use crate::registrations::{PluginState, PluginStatus, Registrations};
 use crate::tap::TapEvent;
 use crate::ui::UiRequest;
+
+/// One `storage.scan` query (v2 `StorageScanOptions`).
+#[derive(Debug, Clone, Default)]
+pub struct StorageScanQuery {
+    pub prefix: String,
+    pub after: Option<String>,
+    pub limit: Option<u64>,
+}
+
+/// The plugin-KV routing target (PLUG-D18): guest `ctx.storage.*` calls
+/// land here, answered asynchronously off the IO reader (deadlock rule 1
+/// — the durable backend's IO must never block the pipe). The embedder
+/// implements this over the database KV table with the v2
+/// `plugin:<hex(id)>:` namespace (oc-core's `DatabasePluginStorage`);
+/// the host crate stays dependency-light, so the trait travels as data.
+#[async_trait]
+pub trait StoragePort: Send + Sync {
+    /// `storage.get` → the value (`None` = absent; the guest surfaces
+    /// `undefined`).
+    async fn get(&self, plugin_id: &str, key: &str) -> Result<Option<Value>, String>;
+    /// `storage.set` (an upsert; failures reject the guest call).
+    async fn set(&self, plugin_id: &str, key: &str, value: Value) -> Result<(), String>;
+    /// `storage.remove` (idempotent).
+    async fn remove(&self, plugin_id: &str, key: &str) -> Result<(), String>;
+    /// `storage.scan` → the v2 `{entries: [{key, value}], next?}` page
+    /// with the namespace stripped from the keys.
+    async fn scan(&self, plugin_id: &str, query: StorageScanQuery) -> Result<Value, String>;
+}
 
 /// Everything the supervisor needs at spawn time.
 #[derive(Clone)]
@@ -81,6 +110,10 @@ pub struct SupervisorConfig {
     /// keyed by entry path — surfaced as `ctx.options` (v2's
     /// `{ ...host, options: operation.options }`).
     pub entry_options: BTreeMap<String, Value>,
+    /// The plugin-KV backend (PLUG-D18): `None` declines every
+    /// `ctx.storage.*` call with a clear error; the embedder binds the
+    /// database-backed port.
+    pub storage_port: Option<Arc<dyn StoragePort>>,
 }
 
 impl Default for SupervisorConfig {
@@ -101,6 +134,7 @@ impl Default for SupervisorConfig {
             session_port: None,
             tool_port: None,
             entry_options: BTreeMap::new(),
+            storage_port: None,
         }
     }
 }
@@ -299,10 +333,16 @@ impl Shared {
                 self.registrations.write().expect("registrations poisoned").add_hook(hook);
                 Some(protocol::response(id, Value::Null))
             }
-            // -- plugin-ID-scoped durable KV (file per plugin under the
-            //    sandbox; small synchronous IO on the reader task).
+            // -- PLUG-D14: `ctx.rpc.register(definition, handlers)` —
+            //    the definition lands in the native registry (method
+            //    names gate dispatch); the handlers stay in the guest.
+            "rpc.register" => Some(answer_rpc_register(self, id, params)),
+            // -- plugin-ID-scoped durable KV (PLUG-D18): the DB-backed
+            //    port answers asynchronously off the reader (deadlock
+            //    rule 1 — the backend's IO never blocks the pipe).
             "storage.get" | "storage.set" | "storage.remove" | "storage.scan" => {
-                Some(answer_storage(self, id, method, params))
+                self.answer_storage_async(id, method, params);
+                None
             }
             "permission.reply" => {
                 // Registration-time acknowledgment only; the permission
@@ -362,6 +402,89 @@ impl Shared {
                 Some(protocol::error_response(id, &format!("unknown host method {other:?}")))
             }
         }
+    }
+
+    /// The async `ctx.storage.*` path (PLUG-D18): spawn the port call
+    /// onto the supervisor runtime; the reply is enqueued when it
+    /// settles. The reader task returns immediately (deadlock rule 1 —
+    /// the durable backend's IO never blocks the pipe).
+    fn answer_storage_async(self: &Arc<Self>, id: u64, method: &str, params: &Value) {
+        let Some(handle) = self.runtime_handle.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(id, "plugin host runtime unavailable"));
+            return;
+        };
+        let Some(port) = self.config.storage_port.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(
+                id,
+                "storage: no durable storage attached to the plugin host",
+            ));
+            return;
+        };
+        let plugin_id =
+            params.get("pluginId").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let key = params.get("key").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+        let method = method.to_owned();
+        let params = params.clone();
+        handle.spawn(async move {
+            let reply = match method.as_str() {
+                "storage.get" => {
+                    if key.is_empty() {
+                        protocol::error_response(id, "storage.get requires a key")
+                    } else {
+                        match port.get(&plugin_id, &key).await {
+                            Ok(value) => protocol::response(id, json!({ "value": value })),
+                            Err(error) => protocol::error_response(id, &error),
+                        }
+                    }
+                }
+                "storage.set" => {
+                    if key.is_empty() {
+                        protocol::error_response(id, "storage.set requires a key")
+                    } else if let Some(value) = params.get("value") {
+                        match port.set(&plugin_id, &key, value.clone()).await {
+                            Ok(()) => protocol::response(id, Value::Null),
+                            Err(error) => protocol::error_response(id, &error),
+                        }
+                    } else {
+                        protocol::error_response(id, "storage.set requires a value")
+                    }
+                }
+                "storage.remove" => {
+                    if key.is_empty() {
+                        protocol::error_response(id, "storage.remove requires a key")
+                    } else {
+                        match port.remove(&plugin_id, &key).await {
+                            Ok(()) => protocol::response(id, Value::Null),
+                            Err(error) => protocol::error_response(id, &error),
+                        }
+                    }
+                }
+                "storage.scan" => {
+                    let query = StorageScanQuery {
+                        prefix: params
+                            .get("prefix")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        after: params
+                            .get("after")
+                            .and_then(Value::as_str)
+                            .filter(|after| !after.is_empty())
+                            .map(str::to_owned),
+                        limit: params.get("limit").and_then(Value::as_u64),
+                    };
+                    match port.scan(&plugin_id, query).await {
+                        Ok(page) => protocol::response(id, page),
+                        Err(error) => protocol::error_response(id, &error),
+                    }
+                }
+                other => protocol::error_response(id, &format!("unknown storage method {other:?}")),
+            };
+            let _ = outbound.send(reply);
+        });
     }
 
     /// The async `session.*` path: spawn the port call onto the
@@ -637,48 +760,34 @@ fn log_guest(params: &Value) {
     }
 }
 
-/// The `storage.*` guest-request arms (one helper — `answer_guest`'s
-/// match stays under the complexity ceiling). Synchronous file IO on
-/// the reader task; the KV is small by construction (value/key caps).
-fn answer_storage(shared: &Shared, id: u64, method: &str, params: &Value) -> String {
-    let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or_default().to_owned();
-    let store = StorageFile::for_plugin(&shared.config.cwd, &plugin_id);
-    match method {
-        "storage.get" => {
-            let Some((_, key)) = storage_key(params) else {
-                return protocol::error_response(id, "storage.get requires a key");
-            };
-            let value = store.get(&key);
-            protocol::response(id, json!({ "value": value }))
-        }
-        "storage.set" => {
-            let Some((_, key)) = storage_key(params) else {
-                return protocol::error_response(id, "storage.set requires a key");
-            };
-            let Some(value) = params.get("value") else {
-                return protocol::error_response(id, "storage.set requires a value");
-            };
-            match store.set(&key, value) {
-                Ok(()) => protocol::response(id, Value::Null),
-                Err(error) => protocol::error_response(id, &error),
-            }
-        }
-        "storage.remove" => {
-            let Some((_, key)) = storage_key(params) else {
-                return protocol::error_response(id, "storage.remove requires a key");
-            };
-            store.remove(&key);
-            protocol::response(id, Value::Null)
-        }
-        "storage.scan" => {
-            let prefix = params.get("prefix").and_then(Value::as_str).unwrap_or_default();
-            let after = params.get("after").and_then(Value::as_str);
-            let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(100).clamp(1, 500);
-            let result = store.scan(prefix, after, limit as usize);
-            protocol::response(id, result)
-        }
-        other => protocol::error_response(id, &format!("unknown storage method {other:?}")),
+/// The `rpc.register` guest-request arm (PLUG-D14): validate + record
+/// the definition; the handlers stay guest-side (`rpc.call` routes back
+/// through the supervisor's request path).
+fn answer_rpc_register(shared: &Shared, id: u64, params: &Value) -> String {
+    let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
+    let Some(definition) = params.get("definition") else {
+        return protocol::error_response(id, "rpc.register requires a definition");
+    };
+    let Some(rpc_id) = definition.get("id").and_then(Value::as_str).map(str::to_owned) else {
+        return protocol::error_response(id, "rpc.register requires a definition id");
+    };
+    if rpc_id.is_empty() {
+        return protocol::error_response(id, "rpc.register requires a non-empty definition id");
     }
+    let methods: Vec<String> = definition
+        .get("methods")
+        .and_then(Value::as_object)
+        .map(|methods| methods.keys().cloned().collect())
+        .unwrap_or_default();
+    shared.registrations.write().expect("registrations poisoned").register_rpc(
+        crate::registrations::PluginRpc {
+            plugin_id,
+            id: rpc_id,
+            methods,
+            definition: definition.clone(),
+        },
+    );
+    protocol::response(id, Value::Null)
 }
 
 /// The runtime `ui.*` arms (wave 3's slot bridge): parse, push onto
@@ -1112,6 +1221,11 @@ impl Shared {
             .map(|command| command.plugin_id.clone())
     }
 
+    /// Look up the winning RPC registration for an id (PLUG-D14).
+    pub fn rpc_registration(&self, rpc_id: &str) -> Option<crate::registrations::PluginRpc> {
+        self.registrations.read().expect("registrations poisoned").rpcs.get(rpc_id).cloned()
+    }
+
     /// Look up the owning plugin of a dialog provider id (raw or
     /// `plugin:id`-qualified).
     pub fn plugin_for_dialog(&self, dialog_id: &str) -> Option<String> {
@@ -1537,117 +1651,6 @@ async fn dispatch_pump(shared: Arc<Shared>, mut tap_rx: mpsc::Receiver<TapEvent>
     }
 }
 
-// =============================================================================
-// Plugin storage KV (file per plugin id under the sandbox)
-// =============================================================================
-
-/// Cap: a value larger than this is rejected (the KV is for flags,
-/// caches and small documents — not blobs).
-const STORAGE_VALUE_LIMIT: usize = 256 * 1024;
-/// Cap: the store file is an in-memory JSON map; refuse unbounded key
-/// growth instead of wedging the reader task.
-const STORAGE_MAX_KEYS: usize = 10_000;
-/// One file per plugin: keys sorted (`BTreeMap`), scanned in
-/// key order for deterministic paging.
-type StorageMap = BTreeMap<String, Value>;
-
-fn storage_key(params: &Value) -> Option<(String, String)> {
-    let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or_default().to_owned();
-    let key = params.get("key").and_then(Value::as_str).unwrap_or_default().to_owned();
-    Some((plugin_id, key)).filter(|(_, key)| !key.is_empty() && key.len() <= 256)
-}
-
-/// One plugin's durable KV: `<sandbox>/plugin-storage/<sanitized>.json`.
-struct StorageFile {
-    path: PathBuf,
-}
-
-impl StorageFile {
-    fn for_plugin(cwd: &std::path::Path, plugin_id: &str) -> Self {
-        let safe: String = plugin_id
-            .chars()
-            .map(
-                |c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' },
-            )
-            .collect();
-        let safe = safe.chars().take(80).collect::<String>();
-        let dir = cwd.join("plugin-storage");
-        let _ = std::fs::create_dir_all(&dir);
-        Self { path: dir.join(format!("{safe}.json")) }
-    }
-
-    fn load(&self) -> StorageMap {
-        std::fs::read_to_string(&self.path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
-    }
-
-    fn save(&self, map: &StorageMap) -> Result<(), String> {
-        if let Some(parent) = self.path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let text = serde_json::to_string(map).map_err(|error| error.to_string())?;
-        std::fs::write(&self.path, text).map_err(|error| format!("write storage: {error}"))
-    }
-
-    fn get(&self, key: &str) -> Option<Value> {
-        self.load().get(key).cloned()
-    }
-
-    fn set(&self, key: &str, value: &Value) -> Result<(), String> {
-        let encoded = serde_json::to_string(value).map_err(|error| error.to_string())?;
-        if encoded.len() > STORAGE_VALUE_LIMIT {
-            return Err(format!(
-                "storage value for {key:?} exceeds {STORAGE_VALUE_LIMIT} bytes ({} encoded)",
-                encoded.len()
-            ));
-        }
-        let mut map = self.load();
-        if map.len() >= STORAGE_MAX_KEYS {
-            return Err(format!("storage for this plugin holds {} keys; refusing more", map.len()));
-        }
-        map.insert(key.to_owned(), value.clone());
-        self.save(&map)
-    }
-
-    fn remove(&self, key: &str) {
-        let mut map = self.load();
-        map.remove(key);
-        let _ = self.save(&map);
-    }
-
-    /// v2 `storage.scan`: `{prefix, after?, limit?}` → `{entries,
-    /// next?}` in key order.
-    fn scan(&self, prefix: &str, after: Option<&str>, limit: usize) -> Value {
-        let map = self.load();
-        let mut entries = Vec::new();
-        let mut next = Value::Null;
-        let mut count = 0usize;
-        for (key, value) in map.range(prefix.to_owned()..) {
-            if !key.starts_with(prefix) {
-                break;
-            }
-            if let Some(after) = after {
-                if key.as_str() <= after {
-                    continue;
-                }
-            }
-            if count >= limit {
-                next = Value::String(key.clone());
-                break;
-            }
-            entries.push(json!({ "key": key, "value": value }));
-            count += 1;
-        }
-        let mut result = json!({ "entries": entries });
-        if !next.is_null() {
-            result["next"] = next;
-        }
-        result
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1663,34 +1666,11 @@ mod tests {
     }
 
     #[test]
-    fn storage_kv_round_trips_and_scans_in_key_order() {
-        let dir = std::env::temp_dir().join(format!("ocph-storage-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let store = StorageFile::for_plugin(&dir, "p@1/odd id");
-        assert!(store.path.ends_with("p_1_odd_id.json"), "{}", store.path.display());
-        store.set("b/2", &json!(2)).expect("set b/2");
-        store.set("a/1", &json!({ "x": 1 })).expect("set a/1");
-        store.set("b/1", &json!("v")).expect("set b/1");
-        assert_eq!(store.get("a/1"), Some(json!({ "x": 1 })));
-        let page = store.scan("b/", None, 10);
-        assert_eq!(
-            page["entries"],
-            json!([{ "key": "b/1", "value": "v" }, { "key": "b/2", "value": 2 }])
-        );
-        let paged = store.scan("b/", Some("b/1"), 10);
-        assert_eq!(paged["entries"], json!([{ "key": "b/2", "value": 2 }]));
-        store.remove("b/1");
-        assert_eq!(store.get("b/1"), None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn storage_rejects_oversized_values() {
-        let dir = std::env::temp_dir().join(format!("ocph-storage-big-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let store = StorageFile::for_plugin(&dir, "p");
-        let big = "x".repeat(STORAGE_VALUE_LIMIT + 1);
-        assert!(store.set("big", &json!(big)).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
+    fn storage_port_defaults_to_none() {
+        // The declining default: no backend bound → guest ctx.storage
+        // calls reject with a clear error (the DB-backed port is the
+        // embedder's binding, PLUG-D18).
+        let config = SupervisorConfig::default();
+        assert!(config.storage_port.is_none(), "storage port must be opt-in");
     }
 }

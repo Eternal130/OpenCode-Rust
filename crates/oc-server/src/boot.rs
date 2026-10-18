@@ -193,8 +193,16 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     let boot_directory = config_location.clone();
     let boot_version = options.version.clone();
     let plugin_ops = crate::plugins::config_plugin_ops(&snapshot);
+    let boot_data_root = options.data_root.clone();
     let plugin_boot: Arc<crate::plugins::PluginBoot> = tokio::task::spawn_blocking(move || {
-        crate::plugins::boot(&plugin_ops, &boot_loaded, &boot_home, &boot_directory, &boot_version)
+        crate::plugins::boot(
+            &plugin_ops,
+            &boot_loaded,
+            &boot_home,
+            &boot_directory,
+            &boot_data_root,
+            &boot_version,
+        )
     })
     .await
     .unwrap_or_else(|join_error| {

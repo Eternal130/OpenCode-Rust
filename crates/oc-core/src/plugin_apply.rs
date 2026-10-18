@@ -16,6 +16,7 @@
 //! `execute` surface then hides the code-mode-eligible ones exactly
 //! like MCP tools).
 
+use crate::hooks::{HookError, HookHandler, HookOptions, HookRegistry};
 use crate::location::{AgentRegistry, ToolExecute, ToolRegistryState};
 use oc_schema::id::AgentId;
 use serde_json::Value;
@@ -104,6 +105,20 @@ pub trait LocationPluginSource: Send + Sync {
         let _ = name;
         None
     }
+
+    /// Guest hook subscriptions (the PLUG-D21 seam): each lands in the
+    /// location's [`HookRegistry`] behind a forwarder that crosses the
+    /// process boundary through [`GuestHookDispatcher`]. Registration
+    /// order is the snapshot's order (v2 fires in registration order).
+    fn hooks(&self) -> Vec<PluginHookDef> {
+        Vec::new()
+    }
+
+    /// The dispatch target guest hook forwarders call (the plugin
+    /// host's bridge). `None` = no guest hooks wire up.
+    fn hook_dispatcher(&self) -> Option<Arc<dyn GuestHookDispatcher>> {
+        None
+    }
 }
 
 /// One plugin-registered command as the engine sees it (the host
@@ -114,13 +129,193 @@ pub struct PluginCommandDef {
     pub description: String,
 }
 
+/// One guest hook subscription as the engine sees it: the host
+/// snapshot's `PluginHook` mirrored (plugin id + `domain.name` wire
+/// key). The registration order is preserved (v2 fires callbacks in
+/// registration order, `hooks.ts:89`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginHookDef {
+    pub plugin_id: String,
+    /// `session` | `tool` | `shell` (the guest-bridge domains).
+    pub domain: String,
+    /// e.g. `prompt`, `execute.before`, `create.before`.
+    pub name: String,
+}
+
+impl PluginHookDef {
+    /// The `domain.name` wire key.
+    #[must_use]
+    pub fn key(&self) -> String {
+        format!("{}.{}", self.domain, self.name)
+    }
+}
+
+/// The engine-facing dispatch target for guest hooks: one call forwards
+/// one serialized event to ONE plugin's handlers in the guest process
+/// and returns the possibly-mutated event (the copy-in/copy-out
+/// documented divergence, ADR-0005). The embedder implements this over
+/// the plugin host's `Bridge::dispatch_hook`.
+#[async_trait::async_trait]
+pub trait GuestHookDispatcher: Send + Sync {
+    async fn dispatch(
+        &self,
+        plugin_id: &str,
+        domain: &str,
+        name: &str,
+        event: Value,
+    ) -> Result<Value, String>;
+}
+
+/// Typed ↔ v2-JSON codec pair for one hook event (the
+/// process-isolation boundary's serialization seam): `encode` mirrors
+/// the v2 event shape (camelCase wire fields), `decode` parses the
+/// guest's possibly-mutated copy back.
+pub type HookCodec<E> = (fn(&E) -> Value, fn(Value) -> Option<E>);
+
+/// The [`HookHandler`] forwarder: serialize, dispatch to the guest,
+/// merge the mutated copy back. A guest failure fails the dispatch
+/// (v2 trigger semantics — later handlers are skipped).
+struct GuestHookHandler<E> {
+    dispatcher: Arc<dyn GuestHookDispatcher>,
+    plugin_id: String,
+    domain: &'static str,
+    name: &'static str,
+    codec: HookCodec<E>,
+}
+
+#[async_trait::async_trait]
+impl<E: Send + 'static> HookHandler<E> for GuestHookHandler<E> {
+    async fn call(&self, event: &mut E) -> Result<(), HookError> {
+        let (encode, decode) = self.codec;
+        let json = encode(event);
+        match self.dispatcher.dispatch(&self.plugin_id, self.domain, self.name, json).await {
+            Ok(updated) => {
+                if let Some(parsed) = decode(updated) {
+                    *event = parsed;
+                }
+                Ok(())
+            }
+            Err(message) => Err(HookError::Handler(message)),
+        }
+    }
+}
+
+/// Register one guest hook subscription into `hooks` (registration
+/// order preserved; the caller appends in snapshot order).
+async fn register_guest_hook(
+    hooks: &Arc<HookRegistry>,
+    definition: &PluginHookDef,
+    dispatcher: &Arc<dyn GuestHookDispatcher>,
+) -> bool {
+    macro_rules! point {
+        ($register:ident, $domain:literal, $name:literal, $encode:ident, $decode:ident) => {{
+            // Registration disposal is Drop-based; the guest hook lives
+            // for the location's lifetime (the same `mem::forget`
+            // precedent the engine's own internal hook registrations
+            // use — unload/reload rebuilds the whole graph).
+            let registration = hooks
+                .$register(
+                    Arc::new(GuestHookHandler {
+                        dispatcher: Arc::clone(dispatcher),
+                        plugin_id: definition.plugin_id.clone(),
+                        domain: $domain,
+                        name: $name,
+                        codec: (wire::$encode, wire::$decode),
+                    }),
+                    HookOptions::default(),
+                )
+                .await;
+            std::mem::forget(registration);
+        }};
+    }
+    match definition.key().as_str() {
+        "session.prompt" => {
+            point!(register_session_prompt, "session", "prompt", prompt_to_json, prompt_from_json);
+        }
+        "session.context" => {
+            point!(
+                register_session_context,
+                "session",
+                "context",
+                context_to_json,
+                context_from_json
+            );
+        }
+        "session.compaction" => point!(
+            register_session_compaction,
+            "session",
+            "compaction",
+            compaction_to_json,
+            compaction_from_json
+        ),
+        "session.generate" => {
+            point!(
+                register_session_generate,
+                "session",
+                "generate",
+                context_to_json,
+                context_from_json
+            );
+        }
+        "session.title" => {
+            point!(register_session_title, "session", "title", title_to_json, title_from_json);
+        }
+        "session.model.request" => point!(
+            register_session_model_request,
+            "session",
+            "model.request",
+            model_request_to_json,
+            model_request_from_json
+        ),
+        "session.retry" => {
+            point!(register_session_retry, "session", "retry", retry_to_json, retry_from_json);
+        }
+        "tool.execute.before" => point!(
+            register_tool_execute_before,
+            "tool",
+            "execute.before",
+            tool_before_to_json,
+            tool_before_from_json
+        ),
+        "tool.execute.after" => point!(
+            register_tool_execute_after,
+            "tool",
+            "execute.after",
+            tool_after_to_json,
+            tool_after_from_json
+        ),
+        "shell.create.before" => point!(
+            register_shell_create_before,
+            "shell",
+            "create.before",
+            shell_before_to_json,
+            shell_before_from_json
+        ),
+        // http.request/http.response + the experimental ws.* points have
+        // no engine dispatch site yet (M-02/C7a lanes own the transport
+        // sites); permission/aisdk are not guest-bridge domains.
+        other => {
+            eprintln!(
+                "opencode plugin-apply: skipping guest hook {other} (no production dispatch site yet)"
+            );
+            return false;
+        }
+    }
+    true
+}
+
 /// Apply one plugin source into a freshly built location graph's
 /// registries (the `assemble` step): agents + default, then the tool
 /// rows + executors, then the plugin command registrations into the
-/// location's command table. Returns the applied agent count.
-#[must_use]
-pub fn apply_location_plugins(
+/// location's command table, then the guest hook subscriptions into the
+/// location's [`HookRegistry`] (the PLUG-D21 seam: every engine
+/// dispatch site — `tool.execute.before` in the tool pipeline,
+/// `session.*` in the model-request preparation — reaches guest
+/// handlers through the bridge forwarder). Returns the applied agent
+/// count.
+pub async fn apply_location_plugins(
     source: &dyn LocationPluginSource,
+    hooks: &Arc<HookRegistry>,
     agents: &Arc<AgentRegistry>,
     tools: &Arc<ToolRegistryState>,
     commands: Option<&Arc<crate::engine::commands::CommandTable>>,
@@ -147,7 +342,490 @@ pub fn apply_location_plugins(
             commands.register_plugin(&definition.name, &definition.description);
         }
     }
+    if let Some(dispatcher) = source.hook_dispatcher() {
+        for definition in source.hooks() {
+            register_guest_hook(hooks, &definition, &dispatcher).await;
+        }
+    }
     applied
+}
+
+// ---------------------------------------------------------------------------
+// Guest-hook wire codecs (typed events ↔ v2 JSON, ADR-0005 copy semantics)
+// ---------------------------------------------------------------------------
+
+mod wire {
+    //! Mirror structs for the v2 hook event shapes (camelCase wire
+    //! fields; `session.prompt` per `session/prompt.ts:40-49`, the tool
+    //! events per `tool.ts:101-152`, `shell.create.before` per
+    //! `shell.ts:263-272`, the request-shaped session events per
+    //! `session/model-request.ts`).
+
+    use crate::hooks::{
+        CompactionResult, RetryDecision, SessionCompactionEvent, SessionContextEvent,
+        SessionModelRequestEvent, SessionPromptEvent, SessionRequestEvent, SessionRetryEvent,
+        SessionTitleEvent, ShellCreateBeforeEvent, ToolDescriptor, ToolExecuteAfterEvent,
+        ToolExecuteBeforeEvent, ToolOutcome,
+    };
+    use oc_ai::schema::messages::{Message, SystemPart};
+    use oc_schema::id::{AgentId, MessageId, SessionId};
+    use oc_schema::model::Ref as ModelRef;
+    use oc_schema::prompt::Prompt;
+    use oc_schema::session_inbox::Delivery;
+    use oc_schema::tool::ToolError;
+    use serde::{Deserialize, Serialize};
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+
+    #[derive(Serialize, Deserialize)]
+    pub struct PromptEvent {
+        #[serde(rename = "sessionID")]
+        pub session_id: SessionId,
+        #[serde(rename = "messageID")]
+        pub message_id: MessageId,
+        pub prompt: Prompt,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub metadata: Option<serde_json::Map<String, Value>>,
+        pub delivery: Delivery,
+    }
+
+    /// The request-shaped draft (`{sessionID, model, system, messages,
+    /// options}` + `agent`/`tools` on context-shaped events).
+    #[derive(Serialize, Deserialize)]
+    pub struct ContextEvent {
+        #[serde(rename = "sessionID")]
+        pub session_id: SessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub agent: Option<AgentId>,
+        pub model: ModelRef,
+        pub system: Vec<SystemPart>,
+        pub messages: Vec<Message>,
+        pub options: serde_json::Map<String, Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub tools: Option<BTreeMap<String, DescriptorWire>>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct DescriptorWire {
+        pub description: String,
+        pub input: Value,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct CompactionResultWire {
+        pub summary: String,
+        #[serde(rename = "providerState", default, skip_serializing_if = "Option::is_none")]
+        pub provider_state: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub metadata: Option<serde_json::Map<String, Value>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub tokens: Option<Value>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct TitleEvent {
+        #[serde(rename = "sessionID")]
+        pub session_id: SessionId,
+        pub model: ModelRef,
+        pub system: Vec<SystemPart>,
+        pub messages: Vec<Message>,
+        pub options: serde_json::Map<String, Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub result: Option<String>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct ModelRequestEvent {
+        #[serde(rename = "sessionID")]
+        pub session_id: SessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub agent: Option<AgentId>,
+        pub model: ModelRef,
+        pub kind: String,
+        #[serde(rename = "baseURL", default, skip_serializing_if = "Option::is_none")]
+        pub base_url: Option<String>,
+        #[serde(default)]
+        pub headers: BTreeMap<String, String>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct RetryDecisionWire {
+        pub retry: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub delay: Option<u64>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct RetryEvent {
+        #[serde(rename = "sessionID")]
+        pub session_id: SessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub agent: Option<AgentId>,
+        pub model: ModelRef,
+        pub kind: String,
+        pub error: Value,
+        pub attempt: u32,
+        pub decision: RetryDecisionWire,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct ToolBeforeEvent {
+        pub tool: String,
+        #[serde(rename = "sessionID")]
+        pub session_id: SessionId,
+        pub agent: AgentId,
+        #[serde(rename = "messageID")]
+        pub message_id: MessageId,
+        pub id: String,
+        pub input: Value,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct ToolAfterEvent {
+        pub tool: String,
+        #[serde(rename = "sessionID")]
+        pub session_id: SessionId,
+        pub agent: AgentId,
+        #[serde(rename = "messageID")]
+        pub message_id: MessageId,
+        pub id: String,
+        pub input: Value,
+        /// `completed` | `error`.
+        pub status: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub result: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub error: Option<ToolError>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct ShellBeforeEvent {
+        pub command: String,
+        pub cwd: String,
+        #[serde(default)]
+        pub timeout: u64,
+        pub shell: String,
+        #[serde(default)]
+        pub env: BTreeMap<String, Option<String>>,
+    }
+
+    // -- typed ↔ wire conversions ------------------------------------------
+
+    fn encode<T: Serialize>(value: &T) -> Value {
+        serde_json::to_value(value).unwrap_or(Value::Null)
+    }
+
+    fn request_parts(
+        event: &SessionRequestEvent,
+    ) -> (SessionId, ModelRef, Vec<SystemPart>, Vec<Message>, serde_json::Map<String, Value>) {
+        (
+            event.session_id.clone(),
+            event.model.clone(),
+            event.system.clone(),
+            event.messages.clone(),
+            event.options.clone(),
+        )
+    }
+
+    impl From<SessionPromptEvent> for PromptEvent {
+        fn from(event: SessionPromptEvent) -> Self {
+            Self {
+                session_id: event.session_id,
+                message_id: event.message_id,
+                prompt: event.prompt,
+                metadata: event.metadata,
+                delivery: event.delivery,
+            }
+        }
+    }
+
+    impl From<PromptEvent> for SessionPromptEvent {
+        fn from(wire: PromptEvent) -> Self {
+            Self {
+                session_id: wire.session_id,
+                message_id: wire.message_id,
+                prompt: wire.prompt,
+                metadata: wire.metadata,
+                delivery: wire.delivery,
+            }
+        }
+    }
+
+    pub fn prompt_to_json(event: &SessionPromptEvent) -> Value {
+        encode(&PromptEvent::from(event.clone()))
+    }
+
+    pub fn prompt_from_json(json: Value) -> Option<SessionPromptEvent> {
+        serde_json::from_value::<PromptEvent>(json).ok().map(SessionPromptEvent::from)
+    }
+
+    fn context_wire(event: &SessionContextEvent) -> ContextEvent {
+        ContextEvent {
+            session_id: event.session_id.clone(),
+            agent: Some(event.agent.clone()),
+            model: event.model.clone(),
+            system: event.system.clone(),
+            messages: event.messages.clone(),
+            options: event.options.clone(),
+            tools: Some(
+                event
+                    .tools
+                    .iter()
+                    .map(|(name, descriptor)| {
+                        (
+                            name.clone(),
+                            DescriptorWire {
+                                description: descriptor.description.clone(),
+                                input: descriptor.input.clone(),
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    fn context_from_wire(wire: ContextEvent) -> SessionContextEvent {
+        SessionContextEvent {
+            session_id: wire.session_id,
+            agent: wire.agent.unwrap_or_else(|| AgentId::parse("build")),
+            model: wire.model,
+            system: wire.system,
+            messages: wire.messages,
+            options: wire.options,
+            tools: wire
+                .tools
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(name, descriptor)| {
+                    (
+                        name,
+                        ToolDescriptor {
+                            description: descriptor.description,
+                            input: descriptor.input,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    pub fn context_to_json(event: &SessionContextEvent) -> Value {
+        encode(&context_wire(event))
+    }
+
+    pub fn context_from_json(json: Value) -> Option<SessionContextEvent> {
+        serde_json::from_value::<ContextEvent>(json).ok().map(context_from_wire)
+    }
+
+    pub fn compaction_to_json(event: &SessionCompactionEvent) -> Value {
+        let mut map = encode(&context_wire(&event.context));
+        if let Some(result) = &event.result {
+            let wire = CompactionResultWire {
+                summary: result.summary.clone(),
+                provider_state: result.provider_state.clone(),
+                metadata: result.metadata.clone(),
+                tokens: result.tokens.clone(),
+            };
+            if let Some(target) = map.as_object_mut() {
+                target.insert("result".into(), encode(&wire));
+            }
+        }
+        map
+    }
+
+    pub fn compaction_from_json(json: Value) -> Option<SessionCompactionEvent> {
+        let result =
+            json.as_object().and_then(|object| object.get("result").cloned()).and_then(|result| {
+                serde_json::from_value::<CompactionResultWire>(result).ok().map(
+                    |wire: CompactionResultWire| CompactionResult {
+                        summary: wire.summary,
+                        provider_state: wire.provider_state,
+                        metadata: wire.metadata,
+                        tokens: wire.tokens,
+                    },
+                )
+            });
+        let context = serde_json::from_value::<ContextEvent>(json).ok().map(context_from_wire)?;
+        Some(SessionCompactionEvent { context, result })
+    }
+
+    pub fn title_to_json(event: &SessionTitleEvent) -> Value {
+        let (session_id, model, system, messages, options) = request_parts(&event.request);
+        encode(&TitleEvent {
+            session_id,
+            model,
+            system,
+            messages,
+            options,
+            result: event.result.clone(),
+        })
+    }
+
+    pub fn title_from_json(json: Value) -> Option<SessionTitleEvent> {
+        let wire = serde_json::from_value::<TitleEvent>(json).ok()?;
+        Some(SessionTitleEvent {
+            request: SessionRequestEvent {
+                session_id: wire.session_id,
+                model: wire.model,
+                system: wire.system,
+                messages: wire.messages,
+                options: wire.options,
+            },
+            result: wire.result,
+        })
+    }
+
+    pub fn model_request_to_json(event: &SessionModelRequestEvent) -> Value {
+        encode(&ModelRequestEvent {
+            session_id: event.session_id.clone(),
+            agent: Some(event.agent.clone()),
+            model: event.model.clone(),
+            kind: event.kind.as_str().to_owned(),
+            base_url: event.base_url.clone(),
+            headers: event.headers.clone(),
+        })
+    }
+
+    pub fn model_request_from_json(json: Value) -> Option<SessionModelRequestEvent> {
+        let wire = serde_json::from_value::<ModelRequestEvent>(json).ok()?;
+        let kind = match wire.kind.as_str() {
+            "compaction" => crate::hooks::SessionRequestKind::Compaction,
+            "title" => crate::hooks::SessionRequestKind::Title,
+            "generate" => crate::hooks::SessionRequestKind::Generate,
+            _ => crate::hooks::SessionRequestKind::Primary,
+        };
+        Some(SessionModelRequestEvent {
+            session_id: wire.session_id,
+            agent: wire.agent.unwrap_or_else(|| AgentId::parse("build")),
+            model: wire.model,
+            kind,
+            base_url: wire.base_url,
+            headers: wire.headers,
+        })
+    }
+
+    pub fn retry_to_json(event: &SessionRetryEvent) -> Value {
+        encode(&RetryEvent {
+            session_id: event.session_id.clone(),
+            agent: Some(event.agent.clone()),
+            model: event.model.clone(),
+            kind: "primary".to_owned(),
+            error: event.error.clone(),
+            attempt: event.attempt,
+            decision: match event.decision {
+                RetryDecision::NoRetry => RetryDecisionWire { retry: false, delay: None },
+                RetryDecision::Retry { delay_ms } => {
+                    RetryDecisionWire { retry: true, delay: Some(delay_ms) }
+                }
+            },
+        })
+    }
+
+    pub fn retry_from_json(json: Value) -> Option<SessionRetryEvent> {
+        let wire = serde_json::from_value::<RetryEvent>(json).ok()?;
+        let decision = if wire.decision.retry {
+            RetryDecision::Retry { delay_ms: wire.decision.delay.unwrap_or(0) }
+        } else {
+            RetryDecision::NoRetry
+        };
+        Some(SessionRetryEvent {
+            session_id: wire.session_id,
+            agent: wire.agent.unwrap_or_else(|| AgentId::parse("build")),
+            model: wire.model,
+            error: wire.error,
+            attempt: wire.attempt,
+            decision,
+        })
+    }
+
+    pub fn tool_before_to_json(event: &ToolExecuteBeforeEvent) -> Value {
+        encode(&ToolBeforeEvent {
+            tool: event.tool.clone(),
+            session_id: event.session_id.clone(),
+            agent: event.agent.clone(),
+            message_id: event.message_id.clone(),
+            id: event.call_id.clone(),
+            input: event.input.clone(),
+        })
+    }
+
+    pub fn tool_before_from_json(json: Value) -> Option<ToolExecuteBeforeEvent> {
+        let wire = serde_json::from_value::<ToolBeforeEvent>(json).ok()?;
+        Some(ToolExecuteBeforeEvent {
+            tool: wire.tool,
+            session_id: wire.session_id,
+            agent: wire.agent,
+            message_id: wire.message_id,
+            call_id: wire.id,
+            input: wire.input,
+        })
+    }
+
+    pub fn tool_after_to_json(event: &ToolExecuteAfterEvent) -> Value {
+        // v2's completed result is `{output?, content, metadata?}` — the
+        // Rust dispatch site already carries that JSON shape verbatim.
+        let (status, result, error) = match &event.outcome {
+            ToolOutcome::Completed { result } => ("completed", Some(result.clone()), None),
+            ToolOutcome::Error { error } => ("error", None, Some(error.clone())),
+        };
+        encode(&ToolAfterEvent {
+            tool: event.tool.clone(),
+            session_id: event.session_id.clone(),
+            agent: event.agent.clone(),
+            message_id: event.message_id.clone(),
+            id: event.call_id.clone(),
+            input: event.input.clone(),
+            status: status.to_owned(),
+            result,
+            error,
+        })
+    }
+
+    pub fn tool_after_from_json(json: Value) -> Option<ToolExecuteAfterEvent> {
+        let wire = serde_json::from_value::<ToolAfterEvent>(json).ok()?;
+        let outcome = if wire.status == "error" {
+            ToolOutcome::Error {
+                error: wire.error.unwrap_or(ToolError {
+                    message: "tool failed".into(),
+                    error: None,
+                    metadata: None,
+                }),
+            }
+        } else {
+            ToolOutcome::Completed { result: wire.result.unwrap_or(Value::Null) }
+        };
+        Some(ToolExecuteAfterEvent {
+            tool: wire.tool,
+            session_id: wire.session_id,
+            agent: wire.agent,
+            message_id: wire.message_id,
+            call_id: wire.id,
+            input: wire.input,
+            outcome,
+        })
+    }
+
+    pub fn shell_before_to_json(event: &ShellCreateBeforeEvent) -> Value {
+        encode(&ShellBeforeEvent {
+            command: event.command.clone(),
+            cwd: event.cwd.clone(),
+            timeout: event.timeout_ms,
+            shell: event.shell.clone(),
+            env: event.env.clone(),
+        })
+    }
+
+    pub fn shell_before_from_json(json: Value) -> Option<ShellCreateBeforeEvent> {
+        let wire = serde_json::from_value::<ShellBeforeEvent>(json).ok()?;
+        Some(ShellCreateBeforeEvent {
+            command: wire.command,
+            cwd: wire.cwd,
+            timeout_ms: wire.timeout,
+            shell: wire.shell,
+            env: wire.env,
+        })
+    }
 }
 
 #[cfg(test)]

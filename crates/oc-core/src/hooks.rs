@@ -1252,17 +1252,133 @@ pub struct ScanResult {
 #[error("plugin storage: {0}")]
 pub struct StorageError(pub String);
 
-/// Plugin-ID-scoped durable KV (v2 `ctx.storage`). The plugin lane provides
-/// the concrete backend (durable table or file store).
-///
-/// `TODO(plugin-lane)`: implement over the database KV table with plugin-ID
-/// key scoping.
+/// Plugin-ID-scoped durable KV (v2 `ctx.storage`). The concrete backend
+/// is [`DatabasePluginStorage`] (the shared `kv` table under the
+/// `plugin:<hex(id)>:` namespace, PLUG-D18); the trait stays open for
+/// embedders and tests.
 #[async_trait]
 pub trait PluginStorage: Send + Sync {
     async fn get(&self, key: &str) -> Result<Option<Value>, StorageError>;
     async fn set(&self, key: &str, value: Value) -> Result<(), StorageError>;
     async fn remove(&self, key: &str) -> Result<(), StorageError>;
     async fn scan(&self, options: ScanOptions) -> Result<ScanResult, StorageError>;
+}
+
+/// The v2 plugin-storage key namespace (`core/src/plugin/host.ts:602-607`):
+/// every character of the plugin id as a 4-digit lowercase hex UTF-16 code
+/// unit, wrapped `plugin:<hex>:` — e.g. `"wiring"` →
+/// `plugin:0077006900720069006e0067:`.
+#[must_use]
+pub fn plugin_storage_namespace(plugin_id: &str) -> String {
+    use std::fmt::Write as _;
+    let mut hex = String::with_capacity(4 + plugin_id.len() * 4 + 1);
+    for unit in plugin_id.encode_utf16() {
+        let _ = write!(hex, "{unit:04x}");
+    }
+    format!("plugin:{hex}:")
+}
+
+/// `prefixEnd` (`core/src/kv.ts`): the exclusive upper bound for a prefix
+/// scan — the last code point below U+10FFFF bumped by one; `None` when the
+/// prefix is entirely maximal (unbounded).
+fn prefix_end(prefix: &str) -> Option<String> {
+    let points: Vec<char> = prefix.chars().collect();
+    let index = points.iter().rposition(|value| (*value as u32) < 0x10_FFFF)?;
+    let mut end: String = points[..index].iter().collect();
+    end.push(char::from_u32(points[index] as u32 + 1)?);
+    Some(end)
+}
+
+/// The database-backed [`PluginStorage`] (PLUG-D18): one plugin's
+/// namespaced slice of the shared `kv` table — the exact v2 surface
+/// (`PluginHost.storage(kv, pluginID)`), surviving process restarts.
+///
+/// All operations run through the serialized connection (each internally
+/// `spawn_blocking`); writes go through transactions so a failed write
+/// rolls back (the previous value stays).
+pub struct DatabasePluginStorage {
+    db: std::sync::Arc<crate::database::Database>,
+    namespace: String,
+}
+
+impl DatabasePluginStorage {
+    /// One plugin's storage over `db`.
+    #[must_use]
+    pub fn new(db: &std::sync::Arc<crate::database::Database>, plugin_id: &str) -> Self {
+        Self { db: Arc::clone(db), namespace: plugin_storage_namespace(plugin_id) }
+    }
+
+    fn namespaced(&self, key: &str) -> String {
+        format!("{}{key}", self.namespace)
+    }
+}
+
+#[async_trait]
+impl PluginStorage for DatabasePluginStorage {
+    async fn get(&self, key: &str) -> Result<Option<Value>, StorageError> {
+        let full = self.namespaced(key);
+        self.db
+            .transaction(move |tx| tx.kv_get(&full))
+            .await
+            .map_err(|error| StorageError(error.to_string()))
+    }
+
+    async fn set(&self, key: &str, value: Value) -> Result<(), StorageError> {
+        let full = self.namespaced(key);
+        self.db
+            .transaction(move |tx| tx.kv_set(&full, &value))
+            .await
+            .map_err(|error| StorageError(error.to_string()))
+    }
+
+    async fn remove(&self, key: &str) -> Result<(), StorageError> {
+        let full = self.namespaced(key);
+        self.db
+            .transaction(move |tx| tx.kv_delete(&full))
+            .await
+            .map_err(|error| StorageError(error.to_string()))
+    }
+
+    async fn scan(&self, options: ScanOptions) -> Result<ScanResult, StorageError> {
+        // v2 KV.scan: limit = clamp(floor(limit ?? 100), 1, 1000); the
+        // page reads `limit + 1` rows so a leftover row reports `next`.
+        let limit = options.limit.unwrap_or(100).clamp(1, 1000) as usize;
+        let prefix = format!("{}{}", self.namespace, options.prefix.unwrap_or_default());
+        let after = options.cursor;
+        let end = prefix_end(&prefix);
+        let namespace_len = self.namespace.len();
+        self.db
+            .with_conn(move |conn| {
+                let mut statement = conn.prepare(
+                    "SELECT key, value FROM kv WHERE key >= ?1 AND (?2 IS NULL OR key < ?2) \
+                     AND (?3 IS NULL OR key > ?3) ORDER BY key LIMIT ?4",
+                )?;
+                let rows = statement
+                    .query_map(
+                        rusqlite::params![
+                            prefix,
+                            end,
+                            after,
+                            i64::try_from(limit + 1).unwrap_or(i64::MAX)
+                        ],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                    )?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let mut items = Vec::with_capacity(rows.len());
+                let mut next = None;
+                for (index, (key, value)) in rows.into_iter().enumerate() {
+                    if index >= limit {
+                        next = items.last().map(|(key, _): &(String, Value)| key.clone());
+                        break;
+                    }
+                    let decoded: Value = serde_json::from_str(&value).unwrap_or(Value::Null);
+                    items.push((key[namespace_len..].to_owned(), decoded));
+                }
+                Ok(ScanResult { items, cursor: next })
+            })
+            .await
+            .map_err(|error| StorageError(error.to_string()))
+    }
 }
 
 // =============================================================================
