@@ -163,11 +163,19 @@ fn build_binary(package: &str, bin: &str, binary: &std::path::Path) -> Result<Pa
 }
 
 /// Test helper: skip when the harness cannot build the Rust server (no
-/// cargo on PATH).
+/// cargo on PATH). Under `OC_GATE_STRICT=1` (Gate 0, B0-8) this fails
+/// the test instead of skipping — see [`crate::gate`].
 #[must_use]
 pub fn skip_if_no_cargo() -> bool {
-    !std::env::var("PATH")
-        .is_ok_and(|paths| paths.split(':').any(|dir| Path::new(dir).join("cargo").is_file()))
+    let cargo_on_path = std::env::var("PATH")
+        .is_ok_and(|paths| paths.split(':').any(|dir| Path::new(dir).join("cargo").is_file()));
+    if cargo_on_path {
+        return false;
+    }
+    crate::gate::skip_or_fail(
+        "cargo not found on PATH (the Rust gate side cannot be built; run tests \
+         through tools/dev-gate.sh)",
+    )
 }
 
 /// Pick a free loopback port (never the managed-service default 49374).

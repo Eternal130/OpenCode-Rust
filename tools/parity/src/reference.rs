@@ -143,14 +143,26 @@ fn sandbox_root() -> PathBuf {
     std::env::var("PARITY_SANDBOX_ROOT").map_or_else(|_| PathBuf::from(SANDBOX_ROOT), PathBuf::from)
 }
 
+/// Well-known bun install paths probed when `PARITY_BUN` is unset. The
+/// lane home is probed right after root's: gate runs execute as
+/// `eternal130` (`tools/dev-gate.sh`), whose `$HOME` bun install is the
+/// reachable one on this host — `/root` is mode 700, so
+/// `/root/.bun/bin/bun` only ever resolves for root, and root must not
+/// run gates (PARITY-LOOP.md §2.1 incident B).
+const WELL_KNOWN_BUN: &[&str] = &[
+    "/root/.bun/bin/bun",
+    "/home/eternal130/.bun/bin/bun",
+    "/usr/local/bin/bun",
+    "/usr/bin/bun",
+    "/opt/homebrew/bin/bun",
+];
+
 /// Locate bun: `$PARITY_BUN`, then well-known install paths, then `PATH`.
 fn bun_path() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("PARITY_BUN") {
         return Some(PathBuf::from(path));
     }
-    for candidate in
-        ["/root/.bun/bin/bun", "/usr/local/bin/bun", "/usr/bin/bun", "/opt/homebrew/bin/bun"]
-    {
+    for candidate in WELL_KNOWN_BUN {
         if Path::new(candidate).is_file() {
             return Some(PathBuf::from(candidate));
         }
@@ -166,18 +178,60 @@ fn bun_path() -> Option<PathBuf> {
     None
 }
 
+/// The bun executable the harness would launch, for Gate 0 evidence
+/// records (see `tests/gate0_environment.rs`).
+#[must_use]
+pub fn resolved_bun() -> Option<PathBuf> {
+    bun_path()
+}
+
 /// Test helper: returns `true` when the reference cannot be run and tests
-/// should skip: bun missing, or the checkout missing with no rebuild source.
+/// should skip: bun missing, or the checkout missing with no rebuild
+/// source. Under `OC_GATE_STRICT=1` (Gate 0, B0-8) a missing prerequisite
+/// fails the test instead of skipping — see [`crate::gate`].
 #[must_use]
 pub fn skip_if_no_bun() -> bool {
-    if bun_path().is_none() {
-        return true;
+    if let Some(reason) = reference_unavailable_reason() {
+        return crate::gate::skip_or_fail(&reason);
+    }
+    false
+}
+
+/// Exactly why the reference side cannot run (`None` = runnable): bun
+/// unresolved, a (strict-mode-only) `PARITY_BUN` pointing at a
+/// nonexistent file, or a missing checkout with no rebuild source.
+fn reference_unavailable_reason() -> Option<String> {
+    match bun_path() {
+        None => {
+            return Some(format!(
+                "bun not found (set PARITY_BUN; probed $PARITY_BUN, well-known paths [{}], then $PATH)",
+                WELL_KNOWN_BUN.join(", ")
+            ));
+        }
+        // Strict only: Gate 0 must fail fast with the path named when the
+        // explicitly configured bun does not exist. Non-strict keeps
+        // today's behavior (the spawn itself errors out loudly).
+        Some(path) if crate::gate::strict() && !path.is_file() => {
+            return Some(format!(
+                "bun not found at {} (PARITY_BUN points at a nonexistent file)",
+                path.display()
+            ));
+        }
+        Some(_) => {}
     }
     if reference_checkout_present() {
-        return false;
+        return None;
     }
     let source = std::env::var("PARITY_REF_SOURCE").unwrap_or_else(|_| REF_SOURCE.to_owned());
-    !PathBuf::from(source).join("packages/cli").is_dir()
+    if Path::new(&source).join("packages/cli").is_dir() {
+        return None; // missing, but rebuildable on demand
+    }
+    Some(format!(
+        "reference checkout {} missing and not rebuildable (source {} has no packages/cli; \
+         set PARITY_REF_ROOT or PARITY_REF_SOURCE)",
+        ref_root().display(),
+        source
+    ))
 }
 
 /// Whether the reference checkout (the part the spawner needs) exists.

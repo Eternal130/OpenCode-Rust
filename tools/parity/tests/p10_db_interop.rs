@@ -118,11 +118,9 @@ async fn p10_db_interop_v2_written_null_rows() -> Result<()> {
         return Ok(());
     }
     if !p10_common::reference_runnable() {
-        skip("bun or the reference checkout is unavailable");
         return Ok(());
     }
     if parity::rust_server::skip_if_no_cargo() {
-        skip("cargo not found on PATH");
         return Ok(());
     }
     let bun = bun_path()?;
@@ -512,11 +510,9 @@ async fn p10_db_interop_stable_channel_same_file() -> Result<()> {
         return Ok(());
     }
     if !p10_common::reference_runnable() {
-        skip("bun or the reference checkout is unavailable");
         return Ok(());
     }
     if parity::rust_server::skip_if_no_cargo() {
-        skip("cargo not found on PATH");
         return Ok(());
     }
     let bun = bun_path()?;

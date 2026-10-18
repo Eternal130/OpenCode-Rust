@@ -3,6 +3,11 @@
 //!
 //! Module map:
 //!
+//! - [`gate`] — Gate 0 strict-mode environment precheck (B0-8): the one
+//!   shared fail-not-skip decision for every availability self-skip.
+//!   With `OC_GATE_STRICT=1`, a missing prerequisite (bun, an
+//!   unrebuildable reference checkout, cargo) fails the test instead of
+//!   skipping, eliminating fake greens from silently self-skipped gates.
 //! - [`normalize`] — the canonical rewrite algorithm specified by
 //!   `NORMALIZATION.md` (repo-relative: `tools/parity/NORMALIZATION.md`).
 //!   Every value compared by this crate goes through this one function on
@@ -36,6 +41,7 @@
 //! dependency-free keeps the harness buildable offline. The Phase-10 p10
 //! battery reuses it directly for raw error-path probing.
 
+pub mod gate;
 pub mod golden;
 pub mod httpdiff;
 pub mod normalize;

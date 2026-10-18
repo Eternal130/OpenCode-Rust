@@ -37,12 +37,16 @@ async fn p10_openapi_semantic_equivalence() -> Result<()> {
         return Ok(());
     }
     if parity::rust_server::skip_if_no_cargo() {
-        skip("cargo not found on PATH");
         return Ok(());
     }
     let pinned_path = ref_source().join("packages/protocol/openapi.json");
-    if !pinned_path.is_file() {
-        skip(&format!("pinned openapi.json missing at {}", pinned_path.display()));
+    if !pinned_path.is_file()
+        && parity::gate::skip_or_fail(&format!(
+            "pinned openapi.json missing at {} (reference source checkout incomplete; \
+             set PARITY_REF_SOURCE)",
+            pinned_path.display()
+        ))
+    {
         return Ok(());
     }
 
