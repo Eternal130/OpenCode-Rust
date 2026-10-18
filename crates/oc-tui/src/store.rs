@@ -483,6 +483,10 @@ pub struct CloseHold {
     pub expires_ms: u64,
 }
 
+/// CONFIG-C8: the retention recency window (session-tabs.tsx:144's
+/// `limit: 3` — the navigated roots kept beside the open tabs).
+const RETENTION_LIMIT: usize = 3;
+
 impl TabsState {
     #[must_use]
     pub fn active(&self, route: &Route) -> Option<String> {
@@ -956,6 +960,10 @@ pub struct Store {
     /// the exploration-grouping toggle behind
     /// `session.toggle.exploration_grouping`.
     exploration_grouping: Signal<bool>,
+    /// CONFIG-C8 (context/session-retention.ts): the recently navigated
+    /// session ROOTS (newest first) — the recency window beside the
+    /// open tabs that keeps `by_session` bounded.
+    retention_recent: Signal<Vec<String>>,
     /// Plugin footer hint segments (one per plugin, latest wins).
     plugin_hints: Signal<Vec<(String, String)>>,
     /// Plugin home quick actions (registration-time).
@@ -2226,6 +2234,7 @@ struct StoreSignals {
     /// CLI flag; the composer metadata's `auto` marker reads it).
     permission_autoaccept: Signal<bool>,
     exploration_grouping: Signal<bool>,
+    retention_recent: Signal<Vec<String>>,
     plugin_hints: Signal<Vec<(String, String)>>,
     plugin_home_actions: Signal<Vec<crate::components::home::PluginQuickAction>>,
     plugin_group_rules: Signal<crate::components::message::model::GroupRules>,
@@ -2349,6 +2358,7 @@ impl Store {
             sidebar_onboarding,
             permission_autoaccept,
             exploration_grouping,
+            retention_recent,
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
@@ -2404,6 +2414,7 @@ impl Store {
             sidebar_onboarding,
             permission_autoaccept,
             exploration_grouping,
+            retention_recent,
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
@@ -2526,6 +2537,7 @@ impl Store {
         let sidebar_onboarding = Signal::new(&runtime, false);
         let permission_autoaccept = Signal::new(&runtime, false);
         let exploration_grouping = Signal::new(&runtime, true);
+        let retention_recent = Signal::new(&runtime, Vec::new());
         let plugin_hints = Signal::new(&runtime, Vec::<(String, String)>::new());
         let plugin_home_actions =
             Signal::new(&runtime, Vec::<crate::components::home::PluginQuickAction>::new());
@@ -2581,6 +2593,7 @@ impl Store {
                 sidebar_onboarding,
                 permission_autoaccept,
                 exploration_grouping,
+                retention_recent,
                 plugin_hints,
                 plugin_home_actions,
                 plugin_group_rules,
@@ -5512,7 +5525,21 @@ impl Store {
                 });
             }
         }
+        // CONFIG-C8 — the retention effect (context/session-retention.
+        // ts): navigation advances the recency window (`viewed !==
+        // previous`) and the pass evicts every listed root outside
+        // tabs ∪ window ∪ current.
+        let previous = match &self.route.get() {
+            Route::Session { session_id } => Some(session_id.clone()),
+            Route::Home => None,
+        };
         self.route.set(route);
+        let viewed = match &self.route.get() {
+            Route::Session { session_id } => Some(session_id.clone()),
+            Route::Home => None,
+        };
+        let navigated = viewed != previous;
+        self.enforce_session_retention(viewed.as_deref(), navigated);
     }
 
     pub fn push_dialog(&self, kind: DialogKind) {
@@ -6277,6 +6304,92 @@ impl Store {
         next
     }
 
+    // -- CONFIG-C8: session retention (context/session-retention.ts) --
+
+    /// `session.evict(root)` (client/solid/data.ts:1363-1369): clear
+    /// the heavy cached data for the root and all known descendants —
+    /// the message trees, loading flags, and pending-compaction
+    /// dividers. Family membership resolves through the session index
+    /// (every listed session whose root is `session_id`'s root).
+    pub fn session_evict(&self, session_id: &str) {
+        let family = {
+            let index = self.session_index.borrow();
+            let root = index.root_of(session_id);
+            let mut members: Vec<String> = vec![root.clone()];
+            for id in index.ids() {
+                if index.root_of(id) == root {
+                    members.push(id.to_owned());
+                }
+            }
+            members
+        };
+        self.messages.update(|state| {
+            for id in &family {
+                state.by_session.remove(id);
+            }
+        });
+        self.history_loading.update(|state| {
+            for id in &family {
+                state.remove(id);
+            }
+        });
+        self.pending_compactions.update(|state| {
+            for id in &family {
+                state.remove(id);
+            }
+        });
+    }
+
+    /// `createSessionRetention`'s effect (context/session-retention.ts:
+    /// 14-39, `limit: 3` at session-tabs.tsx:144): retain the open
+    /// tabs' roots, the routed root, and the newest
+    /// [`RETENTION_LIMIT`] navigated roots outside the keep set; every
+    /// other listed session's root evicts. Only NAVIGATION advances
+    /// the recency window (`viewed !== previous`).
+    pub fn enforce_session_retention(&self, current: Option<&str>, navigated: bool) {
+        let root_of = |id: &str| self.session_index.borrow().root_of(id);
+        let current_root = current.map(&root_of);
+        // `recent` — newest first, roots re-resolved (metadata may
+        // have arrived since the last pass).
+        let mut recent: Vec<String> = Vec::new();
+        if navigated {
+            if let Some(root) = &current_root {
+                recent.push(root.clone());
+            }
+        }
+        for id in self.retention_recent.get() {
+            let root = root_of(&id);
+            if !recent.contains(&root) {
+                recent.push(root.clone());
+            }
+        }
+        let keep: std::collections::HashSet<String> =
+            self.tabs.get().tabs.iter().map(|tab| root_of(&tab.session_id)).collect();
+        // `retained = [...keep, ...recent.filter(!keep).slice(0, limit)]`
+        // + the routed root.
+        let mut retained: std::collections::HashSet<String> = keep.clone();
+        for root in recent.iter().filter(|root| !keep.contains(*root)).take(RETENTION_LIMIT) {
+            retained.insert(root.clone());
+        }
+        if let Some(root) = &current_root {
+            retained.insert(root.clone());
+        }
+        // `recent = recent.filter(retained.has)` — evicted roots drop
+        // out of the window.
+        recent.retain(|root| retained.contains(root));
+        self.retention_recent.set(recent);
+        // Evict every listed session whose root fell outside the
+        // retained set (`session.list()` drives the exclusion map).
+        let listed: Vec<String> =
+            self.session_history.get().iter().map(|session| session.id.clone()).collect();
+        for id in listed {
+            let root = root_of(&id);
+            if !retained.contains(&root) {
+                self.session_evict(&id);
+            }
+        }
+    }
+
     /// The boot restore (the document's `dismissed` seeds the signal —
     /// the run loop reads `<state>/<ch>/tui/getting-started.json`
     /// before the first frame, mirroring v2's `storage.store(...)`
@@ -6625,6 +6738,16 @@ impl Store {
                 for (session_id, list) in messages {
                     self.set_messages(&session_id, list);
                 }
+                // CONFIG-C8 — the retention effect re-runs when the
+                // session list changes (`input.session.list()` is a
+                // dependency of createSessionRetention's effect): no
+                // navigation advanced, but new/removed listings can
+                // move roots in or out of the retained set.
+                let current = match &self.route.get() {
+                    Route::Session { session_id } => Some(session_id.clone()),
+                    Route::Home => None,
+                };
+                self.enforce_session_retention(current.as_deref(), false);
             }
             // F12: the session-open transcript fetch (v2
             // `data.session.message.sync`, client/solid/data.ts:1630-1651)
@@ -6787,6 +6910,12 @@ impl Store {
             }
             "session.deleted" => {
                 let Some(id) = event.string("sessionID") else { return };
+                // CONFIG-C8 — `session.deleted` clears the family's
+                // cached data (removeSession → the evict surface,
+                // client/solid/data.ts:642-644): the message trees,
+                // loading flags, and pending dividers drop alongside
+                // the tab close.
+                self.session_evict(&id);
                 if self.tabs.get().tabs.iter().any(|tab| tab.session_id == id) {
                     self.close_tab(Some(&id));
                 }
