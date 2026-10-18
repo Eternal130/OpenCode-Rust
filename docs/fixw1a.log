@@ -71,3 +71,42 @@ implement in order SA-F6 → SA-F5 → SA-F3 → SA-F13 → S2 set.
   "No items available"/ctrl+a hint on screen; composer does NOT retain
   the text). PASS 1.43s. 727 lib tests green (no golden churn:
   /worktrees stays the pad anchor, /plugins sorts inside).
+
+## Item SA-F5 (S1) — FIXED
+
+- host.js (oc-plugin-host):
+  * meta.version = the PLUGIN's package.json version (was
+    domainBase.appVersion → badge showed v2.0.24; ref shows the
+    plugin's v3.0.4 — omo tui2.js:31120 `meta.version ??
+    readPackageVersion() ?? "dev"`).
+  * treeLines → layout-aware flattener: numeric width pads a child's
+    column, marginLeft prefixes, flexGrow children absorb the
+    leftover, justifyContent space-between spreads the gap — the
+    compact agent rows and header materialize with the ref's padded
+    columns (measured ref shape: 36-cell content, model column
+    right-aligned, 15-space gap on "orchestrator"). Legacy tight join
+    kept for rows without layout cues. Wide-char-aware lineWidth.
+  * tui.layout notification handler stores the sidebar content width
+    (default 38 = SESSION_SIDEBAR_WIDTH−4).
+- supervisor.rs + lib.rs: notify_tui_layout(sidebar_content_width)
+  (`tui.layout` notification, mirrors tui.route/tui.theme).
+- plugin_boot.rs: the pump pushes the layout budget once (painter
+  constant; the plugin root box's border pair brings the section
+  content to 36 = the ref's measured span).
+- sidebar.rs (oc-tui painter): plugin section header AND rows paint
+  plain white #ffffff, NO bold, bg raised — the ref's decoded
+  digests (idx15/idx233/mods=0 both header and rows; our
+  quantize(#ffffff)=15 by the tie-break, color_mode tests pin it).
+- Tests: flagship_sidebar_renders_plugin_version_and_padded_columns
+  (real plugin, real bun: badge = staged package version, all rows
+  one width, model column aligned, multi-space padding; PASS with
+  OC_OMOS_ROOT=/tmp/opencode/scanab/omos-npm/stamp-full),
+  plugin_section_paints_the_plugin_white (painter colors),
+  vt_plugin_sidebar.rs (END-TO-END live loop: file:// plugin boots,
+  session sidebar renders — badge = plugin version, every section
+  cell fg idx15/bg idx233, rows padded to the header edge; PASS
+  1.84s; needs >120 cols for the auto sidebar).
+- Notes: the flagship preset tests (flagship_config_preset_processing,
+  flagship_loads_and_registers_on_the_minimal_context) fail under the
+  /tmp fixture env PRE-EXISTING (verified via git stash — the fixture
+  lacks the preset config the /root cache had); unchanged by this fix.
