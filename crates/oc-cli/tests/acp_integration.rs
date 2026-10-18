@@ -814,10 +814,7 @@ async fn session_list_and_cursor_errors() {
                 .block_task()
                 .await
                 .expect("session/list page 2");
-            assert!(
-                next.sessions.is_empty(),
-                "pagination terminates on the empty page (v2)"
-            );
+            assert!(next.sessions.is_empty(), "pagination terminates on the empty page (v2)");
         }
 
         // An invalid cursor maps to InvalidRequest on the cursor field
