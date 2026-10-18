@@ -26,8 +26,8 @@ use crate::route::transport::{
     read_body_limited, SharedTransport, TransportError, TransportRequest, TransportResponse,
 };
 use crate::schema::{
-    AiError, AiErrorReason, GenerationOptions, HttpOptions, LLMEvent, LLMRequest, LLMRequestPatch,
-    LLMResponse, LanguageModel, ProviderId, ReasonFields, ResponseState,
+    AiError, AiErrorReason, GenerationOptions, HttpContext, HttpOptions, LLMEvent, LLMRequest,
+    LLMRequestPatch, LLMResponse, LanguageModel, ProviderId, ReasonFields, ResponseState,
 };
 use crate::tool_history::normalize_tool_history;
 
@@ -323,11 +323,34 @@ impl Route {
         let prepared = self.prepare_request(&request);
         let body = self.build_body(&prepared)?;
         let (transport_request, _body_text) = self.prepare_transport(&prepared, &body)?;
-        let response = self
-            .transport
-            .execute(transport_request.clone())
-            .await
-            .map_err(map_transport_failure)?;
+        // The v2 HTTP timeout budget (AI-TIMEOUT): header wait, chunk idle,
+        // and whole-request budget wrap the real transport call + body
+        // stream (ref `route/transport/http.ts` execute).
+        let budget = crate::route::transport::timeouts::TimeoutBudget::from_http_options(
+            prepared.http.as_ref(),
+        );
+        let started = tokio::time::Instant::now();
+        let response = crate::route::transport::timeouts::execute_with_timeouts(
+            Arc::clone(&self.transport),
+            transport_request.clone(),
+            budget,
+        )
+        .await
+        .map_err(map_transport_failure)?;
+
+        // Wrap the body before status classification so error-body reads
+        // run under the same budgets (v2 wraps the stream inside execute).
+        let TransportResponse { status, headers, body } = response;
+        let http_context =
+            HttpContext { url: transport_request.url.clone(), status, headers: headers.clone() };
+        let body = crate::route::transport::timeouts::body_with_timeouts(
+            body,
+            budget,
+            started,
+            &transport_request.url,
+            http_context,
+        );
+        let response = TransportResponse { status, headers, body };
 
         if response.status >= 400 {
             return Err(status_failure(self, &transport_request, response).await);

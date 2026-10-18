@@ -76,8 +76,10 @@ impl TransportError {
     /// Map into the AI error taxonomy.
     #[must_use]
     pub fn into_ai_error(self) -> AiError {
+        let fields =
+            ReasonFields { message: self.message, http: self.http, ..ReasonFields::default() };
         AiError::new(AiErrorReason::Transport {
-            fields: ReasonFields::new(self.message),
+            fields,
             transport: self.transport,
             operation: self.operation,
             code: self.code,
@@ -196,6 +198,289 @@ impl Transport for FailingTransport {
         _request: TransportRequest,
     ) -> Result<TransportResponse, TransportError> {
         Err(TransportError::connection(self.message, TransportOperation::Request))
+    }
+}
+
+/// The v2 HTTP timeout budget (port of `packages/ai/src/route/transport/
+/// http.ts` timeout wiring + `packages/core/src/provider.ts` `timeouts()`).
+///
+/// Every provider request runs under three budgets: `headerTimeout` (wait
+/// for response headers, default [`DEFAULT_HTTP_TIMEOUT_MS`] = 300s),
+/// `chunkTimeout` (idle wait between streamed body chunks, same default),
+/// and `timeout` (whole-request budget, **no default** — unbounded when
+/// unset). A budget of `false` disables that budget. Expired budgets
+/// surface as typed transport errors (`code: "Timeout"`, operation
+/// `request` for headers / `read` for the body) instead of hanging.
+/// [`Route::stream`](crate::route::client::Route::stream) applies this
+/// around the real transport call — the production path, not test-only.
+pub mod timeouts {
+    use std::time::Duration;
+
+    use super::{
+        ByteStream, SharedTransport, TransportError, TransportOperation, TransportRequest,
+        TransportResponse,
+    };
+    use crate::schema::{HttpContext, HttpOptions, HttpTimeout, DEFAULT_HTTP_TIMEOUT_MS};
+
+    /// A resolved three-part timeout budget for one request.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct TimeoutBudget {
+        /// Whole-request budget (send → response complete). `None` is
+        /// unbounded — v2 gives `timeout` no default.
+        pub total: Option<Duration>,
+        /// Wait for response headers. `None` disables the budget.
+        pub header: Option<Duration>,
+        /// Idle wait between body chunks. `None` disables the budget.
+        pub chunk: Option<Duration>,
+    }
+
+    impl TimeoutBudget {
+        /// Resolve the merged per-request `http` options with v2 defaults:
+        /// unset `headerTimeout`/`chunkTimeout` fall back to
+        /// [`DEFAULT_HTTP_TIMEOUT_MS`] (300s), `false` disables them, and
+        /// `timeout` stays unbounded when unset (invalid values are
+        /// dropped, mirroring v2's decode-or-drop `timeout()` helper).
+        #[must_use]
+        pub fn from_http_options(http: Option<&HttpOptions>) -> Self {
+            let resolve = |value: Option<HttpTimeout>, default: Option<Duration>| match value {
+                Some(HttpTimeout::Ms(ms)) if ms.is_finite() && ms > 0.0 => {
+                    Some(duration_from_ms(ms))
+                }
+                Some(_) => None,
+                None => default,
+            };
+            let default = Some(duration_from_ms(DEFAULT_HTTP_TIMEOUT_MS));
+            let (timeout, header, chunk) = match http {
+                Some(options) => (options.timeout, options.header_timeout, options.chunk_timeout),
+                None => (None, None, None),
+            };
+            Self {
+                total: resolve(timeout, None),
+                header: resolve(header, default),
+                chunk: resolve(chunk, default),
+            }
+        }
+
+        /// The header wait budget: `min(headerTimeout, total)` (v2
+        /// `Duration.min(timeoutDuration(request.http?.headerTimeout), total)`).
+        /// `None` when both are unbounded.
+        #[must_use]
+        pub fn header_wait(&self) -> Option<Duration> {
+            match (self.header, self.total) {
+                (Some(header), Some(total)) => Some(header.min(total)),
+                (Some(header), None) => Some(header),
+                (None, total) => total,
+            }
+        }
+    }
+
+    fn duration_from_ms(ms: f64) -> Duration {
+        // Inputs are validated finite/positive at the call sites; the clamp
+        // keeps the conversion panic-free for NaN (`max` resolves to 0.0).
+        Duration::from_secs_f64((ms / 1_000.0).max(0.0))
+    }
+
+    /// Header budget expired — the response headers never arrived in time.
+    pub fn header_timeout_error(url: &str) -> TransportError {
+        TransportError::connection(
+            "Timed out waiting for response headers",
+            TransportOperation::Request,
+        )
+        .with_url(url)
+        .with_code("Timeout")
+    }
+
+    /// Chunk idle budget expired — no body data arrived within the budget.
+    pub fn chunk_timeout_error(url: &str, http: HttpContext) -> TransportError {
+        read_timeout("Timed out waiting for response data", url, http)
+    }
+
+    /// Whole-request budget expired while the response was still streaming.
+    pub fn total_timeout_error(url: &str, http: HttpContext) -> TransportError {
+        read_timeout("Timed out waiting for the response to complete", url, http)
+    }
+
+    fn read_timeout(message: &'static str, url: &str, http: HttpContext) -> TransportError {
+        TransportError::connection(message, TransportOperation::Read)
+            .with_url(url)
+            .with_code("Timeout")
+            .with_http(http)
+    }
+
+    /// Execute one request under the header budget (`min(header, total)`):
+    /// a response whose headers do not arrive in time fails with the typed
+    /// header timeout error instead of hanging the caller forever.
+    pub async fn execute_with_timeouts(
+        transport: SharedTransport,
+        request: TransportRequest,
+        budget: TimeoutBudget,
+    ) -> Result<TransportResponse, TransportError> {
+        match budget.header_wait() {
+            None => transport.execute(request).await,
+            Some(wait) => {
+                let url = request.url.clone();
+                match tokio::time::timeout(wait, transport.execute(request)).await {
+                    Ok(result) => result,
+                    Err(_elapsed) => Err(header_timeout_error(&url)),
+                }
+            }
+        }
+    }
+
+    /// Which budget expired while waiting for the next body chunk.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Expiry {
+        Chunk,
+        Total,
+    }
+
+    /// Wrap a response body with the chunk idle budget and the remaining
+    /// whole-request budget (v2 `Stream.timeoutOrElse(chunkTimeout)` +
+    /// `interruptWhen(remaining)`): a stalled or overrunning stream fails
+    /// with a typed read timeout instead of hanging. Underlying transport
+    /// read failures pass through unchanged.
+    pub fn body_with_timeouts(
+        body: ByteStream,
+        budget: TimeoutBudget,
+        started: tokio::time::Instant,
+        url: &str,
+        http: HttpContext,
+    ) -> ByteStream {
+        let total_deadline = budget.total.map(|total| started + total);
+        let chunk_wait = budget.chunk;
+        let url = url.to_string();
+        Box::pin(async_stream::stream! {
+            use futures::StreamExt;
+            let mut body = body;
+            loop {
+                let outcome = if chunk_wait.is_none() && total_deadline.is_none() {
+                    Ok(body.next().await)
+                } else {
+                    let inner = async {
+                        match chunk_wait {
+                            Some(wait) => tokio::time::timeout(wait, body.next())
+                                .await
+                                .map_err(|_| Expiry::Chunk),
+                            None => Ok(body.next().await),
+                        }
+                    };
+                    match total_deadline {
+                        Some(deadline) => match tokio::time::timeout_at(deadline, inner).await {
+                            Ok(outcome) => outcome,
+                            Err(_elapsed) => Err(Expiry::Total),
+                        },
+                        None => inner.await,
+                    }
+                };
+                match outcome {
+                    Ok(Some(Ok(chunk))) => yield Ok(chunk),
+                    Ok(Some(Err(error))) => {
+                        yield Err(error);
+                        return;
+                    }
+                    Ok(None) => return,
+                    Err(Expiry::Chunk) => {
+                        yield Err(chunk_timeout_error(&url, http.clone()));
+                        return;
+                    }
+                    Err(Expiry::Total) => {
+                        yield Err(total_timeout_error(&url, http.clone()));
+                        return;
+                    }
+                }
+            }
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn budget_defaults_match_v2() {
+            assert_eq!(DEFAULT_HTTP_TIMEOUT_MS, 300_000.0, "v2 DEFAULT_TIMEOUT_MS");
+            let budget = TimeoutBudget::from_http_options(None);
+            assert_eq!(budget.header, Some(Duration::from_secs(300)));
+            assert_eq!(budget.chunk, Some(Duration::from_secs(300)));
+            assert_eq!(budget.total, None, "timeout has no default");
+
+            let empty = HttpOptions::default();
+            let budget = TimeoutBudget::from_http_options(Some(&empty));
+            assert_eq!(budget.header, Some(Duration::from_secs(300)));
+            assert_eq!(budget.chunk, Some(Duration::from_secs(300)));
+            assert_eq!(budget.total, None);
+        }
+
+        #[test]
+        fn budget_respects_explicit_and_disabled_values() {
+            let options = HttpOptions {
+                timeout: Some(HttpTimeout::Ms(1_000.0)),
+                header_timeout: Some(HttpTimeout::Disabled),
+                chunk_timeout: Some(HttpTimeout::Ms(250.0)),
+                ..Default::default()
+            };
+            let budget = TimeoutBudget::from_http_options(Some(&options));
+            assert_eq!(budget.total, Some(Duration::from_secs(1)));
+            assert_eq!(budget.header, None, "false disables the header budget");
+            assert_eq!(budget.chunk, Some(Duration::from_millis(250)));
+        }
+
+        #[test]
+        fn header_wait_is_min_of_header_and_total() {
+            let long = HttpOptions {
+                timeout: Some(HttpTimeout::Ms(1_000.0)),
+                header_timeout: Some(HttpTimeout::Ms(60_000.0)),
+                ..Default::default()
+            };
+            let budget = TimeoutBudget::from_http_options(Some(&long));
+            assert_eq!(budget.header_wait(), Some(Duration::from_secs(1)));
+
+            let disabled = HttpOptions {
+                timeout: Some(HttpTimeout::Ms(1_000.0)),
+                header_timeout: Some(HttpTimeout::Disabled),
+                ..Default::default()
+            };
+            let budget = TimeoutBudget::from_http_options(Some(&disabled));
+            assert_eq!(
+                budget.header_wait(),
+                Some(Duration::from_secs(1)),
+                "total still bounds a disabled header timeout"
+            );
+
+            let unbounded = TimeoutBudget::from_http_options(None);
+            assert_eq!(unbounded.header_wait(), Some(Duration::from_secs(300)));
+            assert_eq!(TimeoutBudget::default().header_wait(), None);
+        }
+
+        #[test]
+        fn timeout_errors_carry_the_v2_shape() {
+            let error = header_timeout_error("http://provider.test/v1");
+            assert_eq!(error.operation, TransportOperation::Request);
+            assert_eq!(error.code.as_deref(), Some("Timeout"));
+            assert_eq!(error.message, "Timed out waiting for response headers");
+            assert_eq!(error.url.as_deref(), Some("http://provider.test/v1"));
+
+            let http = HttpContext {
+                url: "http://provider.test/v1".into(),
+                status: 200,
+                headers: Default::default(),
+            };
+            let error = chunk_timeout_error("http://provider.test/v1", http.clone());
+            assert_eq!(error.operation, TransportOperation::Read);
+            assert_eq!(error.message, "Timed out waiting for response data");
+            assert_eq!(error.http, Some(http));
+
+            let error = total_timeout_error(
+                "http://provider.test/v1",
+                HttpContext {
+                    url: "http://provider.test/v1".into(),
+                    status: 200,
+                    headers: Default::default(),
+                },
+            );
+            assert_eq!(error.operation, TransportOperation::Read);
+            assert_eq!(error.message, "Timed out waiting for the response to complete");
+        }
     }
 }
 
