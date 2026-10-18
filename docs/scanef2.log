@@ -184,3 +184,47 @@ first capture (lazy, ref-shaped).
 - Stale lane artifacts found+killed during setup: a 100%-CPU
   oc-plugin-host bun process from 10:55 (previous session) and the
   spec-r6 E3 leak-canary control child from 10-17.
+
+## Leg 3 — F1 matrix sampling (priority #3) — EXECUTED (2026-10-18)
+
+No live processes (static corpus grep + committed runner).
+
+- New instrument `tools/parity/spec-ef2/f1_matrix.py` (committed):
+  materialized route×dialog + command×handler cell ledger; evidence =
+  identifier referenced in TEST-CONTEXT corpus only (tests/ dirs,
+  *tests*.rs, goldens — source definitions excluded after the first
+  iteration showed 100% self-match, corrected).
+- Result (sampling round, artifact /tmp/opencode/scanef2/f1-matrix.md):
+  30 cells defined, 28 exercised = **93.3%** (route-dialog 10/12,
+  command 18/18 — command cells' fn-name heuristic can over-count
+  generic names; noted as method caveat).
+- **I8 canary PASS**: phantom exercised-mark (dialog_phantom_ef2, no
+  backing test) flagged by the verifier.
+- **Coverage hole found (bookkeeping finding, F1's purpose):**
+  `dialog_worktrees` (home~ and session~ cells) has ZERO test-context
+  references — the worktrees dialog is the untested surface. Carried
+  as F1 ledger row (C8-adjacent; the fix wave owns adding its test).
+
+## Leg 4 — E5 accessibility (priority #4) — EXECUTED (2026-10-18)
+
+No live processes (token computation + standing canary test via dev-gate).
+
+- **I8 canary: RUN + PASS** (3 legs): A injected fg==bg localized
+  exactly; B luminance-equal red/green flagged, real busy/error pair
+  ΔL=0.278 passes; C keymap-walk phantom-unreachable localized.
+- (a) contrast: ours v2 theme asset byte-identical to ref's (diff =
+  clean) → per-cell parity BY CONSTRUCTION; 20-cell WCAG table
+  computed (tools/parity/spec-ef2/e5_contrast_table.py, artifact
+  /tmp/opencode/scanef2/e5-contrast-table.md): 18 PASS,
+  **1 INHERITED-VIOLATION: border.base/bg.base = 2.16 < 3.0 UI
+  threshold** (ref theme violates too — inherited, dispositioned,
+  non-parity-blocking per the clause), 1 token-missing
+  (action.primary.$hovered rides expand-time state defaults),
+  1 NON-COLOR (selected overlay bg = transparent by design).
+  Near-threshold: text.muted/bg.raised = 4.66 (text 4.5) — within
+  3.5% of the line; drift watch row.
+- (b) keyboard-only walk: canary leg C + SCAN-AB's B1 end-behavior
+  table (live cells) sampled; full B2∪C16 target enumeration rides
+  the C16 leg (carried).
+- (c) color-independence: canary leg B + computed pairs (busy
+  ΔL=0.278 vs ε) — sampled set passes.
