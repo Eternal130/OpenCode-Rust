@@ -50,7 +50,15 @@ WIP: 0 active lanes.
 - [ ] B0-4 静态守卫 tools/guards/*（目录尚不存在，需从零建）
 - [x] B0-5 ADR 0001–0005 — **DONE** (merged @cc092d9; verifier PASS, 44/44 citations verified; 3 OPEN questions recorded: 0002 miniaudio-vs-system-player ruling, 0004 README scope staleness at release, 0001 KV persistence → C2)
 - [~] B0-7 测试隔离债 — mostly done: all 4 items ledger-ized (HYGIENE-PKILL-LEGACY-PROBES / RELEASE-SMOKE-KILL / AUTH-E2E-ROOT-OWNED / OAUTH-8080-SKIP); 8080 skip semantics **empirically verified** (port held → test PASSes via documented-skip branch, 5ms); guards lane (B0-4, in flight) baselines the legacy pkill set. Remaining: owner assignment (Batch 1+) + user nod on auth_e2e.rs ownership fix (bundled into B0-9 decision batch).
-- [ ] B0-9 live fixture 窗口 — **需要用户决策**（endpoint/credential sandbox + 时段）；其余 Batch 0 完成后集中询问
+- [x] B0-9 live fixture 窗口 — **DONE** (2026-10-18 用户裁决：cassette-only for now；ADR-0006；release 前必复审)
+
+## User-decision batch (2026-10-18, all recorded)
+
+1. **B0-9 live window** → cassette-only；ADR-0006 `docs/adr/0006-cassette-only-live-fixtures.md`；release 前重问。
+2. **ADR-0002 miniaudio ruling** → 接受 Linux inproc vendored miniaudio 为既成决定；ADR-0002 已修订（OPEN 关闭）；README "sounds" 滞后随 §12.4 清理。
+3. **tmux strict policy** → 保持 documented skip（即使 OC_GATE_STRICT=1）；tmux 属环境项非双端前提；B0-8 证据文档 §7 follow-up 就此了结，无需代码改动。
+4. **root-owned files chown** → 用户批准并已执行：auth_e2e.rs、spec-p3/*、spec-ef2/* 全部 eternal130 化（剩余 root-owned=0）。
+5. **HYGIENE-OAUTH-8080-SKIP** → 关闭（accepted，ADR-0007）。
 
 ## Environment facts (verified this iteration)
 
@@ -70,8 +78,7 @@ WIP: 0 active lanes.
 
 ## Blockers
 
-- B0-9 requires user decision (live fixture window). Deferred until rest of Batch 0 lands; will ask once.
-- p10 strict battery red on main (2+ failures) — must be classified (flake vs deterministic vs pre-existing before eb4023d) and ledger-ized as known-red with owner/expiry in B0-2; blocks nothing else in Batch 0.
+- None. ADR-0002/0006/0007 + tmux ruling recorded; ownership fixed. (ADR-0004 README scope alignment stays scheduled at release per its 复审日期.)
 
 ## Known-red register (to ledger-ize in B0-2)
 
