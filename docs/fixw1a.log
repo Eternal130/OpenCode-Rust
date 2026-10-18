@@ -140,3 +140,33 @@ render → the measured ~166ms/step.
   double-steps), ≥10 shifts. MEASURED: 27 shifts, median 77ms, min
   76, max 90 (3/3 stable + full vt_temporal suite 5/5 PASS — the
   100ms-cadence surfaces unchanged).
+
+## Item SA-F13 (S1) — FIXED
+
+Root cause (code-cited): the input reader thread
+(app.rs input-thread spawn) looped `crossterm::event::read()` forever;
+it exits only when a key arrives AFTER its receiver dropped. A second
+`run_with_size` in the process spawns its own reader, but the zombie
+from boot 1 sits INSIDE crossterm's global reader lock
+(INTERNAL_EVENT_READER, crossterm-0.28.1 event.rs:147) and consumes
+the first key(s) — leg-2's ctrl+c is eaten, the loop never breaks,
+the future never returns (the scan's dead-chord + teardown-hang).
+
+- app.rs: the reader now `event::poll(50ms)`s against an
+  `Arc<AtomicBool>` stop flag; `StopInputReader` (Drop guard held by
+  the run future) fires it on the normal teardown AND on outer
+  cancellation (a test timeout dropping the future); the boot's slot
+  swap (`INPUT_READER_STOP`) stops any stale reader from an abandoned
+  boot before spawning the new one.
+- vt_double_boot.rs: the SA-F13 acceptance — TWO full boots in one
+  process on ONE shared PTY (the scan repro's shape; NOTE: crossterm's
+  global event source registers fd 0's open-file-description once per
+  process, so a per-leg re-attach would test a harness artifact, not
+  the app — the test reuses one LiveHarness): each leg proves the
+  input path live (typed echo), then the FIRST exit chord must tear
+  down and the run-loop future must return.
+  * WITH the fix: PASS (2.7s, both legs return, chord tears down).
+  * WITHOUT (git stash of app.rs): leg-1 returns, leg-2 NEVER exits
+    ("the TUI did not exit in time") — the failure reproduced in both
+    directions.
+- Full oc-tui + oc-plugin-host: 899/899 PASS; clippy lib 0 warnings.
