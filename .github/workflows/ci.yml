@@ -13,6 +13,20 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  guards:
+    name: static anti-regression guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # §9.1/§9.3 static guards: stdlib-only python3, no bun/ref/cargo.
+      # New violations or expired allowlist entries fail; baselines may
+      # only shrink. env_inventory runs from its committed snapshot
+      # (no reference checkout on runners).
+      - name: Run guards
+        run: tools/guards/run.sh
+
   lint:
     name: fmt + clippy
     runs-on: ubuntu-latest
