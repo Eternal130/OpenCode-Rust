@@ -3,30 +3,34 @@
 > Orchestrator scratch state for the parity loop (docs/PARITY-LOOP.md).
 > Updated at the end of every iteration. Not a task queue — the ledger is.
 
-- **updated**: 2026-10-18 (iteration 1 COMPLETE — Batch 0 exited; Batch 1A dispatched)
-- **batch**: 1A (CRED / TUI-FORM / PLUGIN-core) — iteration 2 in flight
-- **iteration**: 2
-- **baseline**: main @ 3468f65 (Batch 0 final: 66e0bcc + 1A claims commit)
+- **updated**: 2026-10-18 (iteration 2 COMPLETE — Batch 1A exited; Batch 1B dispatched)
+- **batch**: 1B (WIRE-PROTOCOL / TOOLS-EXEC / AI-TIMEOUT) — iteration 3 in flight; RUNTIME queued (hooks.rs after C10, session.rs seam after C4a)
+- **iteration**: 3
+- **baseline**: main @ 5fcd634 (1A final + 1B claims)
 
-## Batch 0 — EXITED (2026-10-18)
+## Batch 1A — EXITED (2026-10-18)
 
-All items complete, no product behavior changed (zero `crates/` changes in Batch 0; workspace 3391/3391 green):
-B0-1 e2b5b73 · B0-2 3eea5fa(+fe2a97d) · B0-4 5c79821(+66e0bcc .slim skip) · B0-5 cc092d9(+ADR-0006/0007 via 8004973) · B0-7 0df11aa+chown · B0-8 729725d · B0-9 8004973(ADR-0006).
-Ledger: 380 rows, validate --paths errors=0. Gates: Gate 0 strict + 5 skeletons, strict battery verdict clean (3 KNOWN-RED registered). Guards: 8/8 green. ADRs: 0001–0007.
+All 3 clusters verified+merged serially, each with an independent verifier (red reconstruction + golden/manifest audits):
+- CRED @bc7fdd3 (B1/B2/B3 verified; +2 follow-ups CRED-CONSOLE-KEYAUTH, CRED-AUTHNONE)
+- PLUGIN-core @24b107a (D21/D18/D14 verified; +2 follow-ups PLUG-KVSCAN-CURSOR, PLUG-RPC-DATA-FIELD)
+- TUI-FORM @bc44de1 (TD16-19 verified, golden re-auth v2-grounded; tui-frames manifest re-pin @e180f01; +1 follow-up TUI-EMIT-GAP)
+- Batch exit: workspace **3413/3413**, p10 strict verdict **clean** (3 KNOWN-RED, 0 NEW-RED), guards 8/8, fmt clean. Ledger: 385 rows.
 
-## Active lanes (Batch 1A — 3/3 clusters active, merge serial)
+## Active lanes (Batch 1B — 3 clusters; serial-heavy discipline)
 
 | lane | cluster | worktree | branch | owner | entries | status |
 |---|---|---|---|---|---|---|
-| lane-cred | C1 CRED | removed (merged) | `lane/cred` | fix-11→lane-verify | CRED-B1, CRED-B2, CRED-B3 | **MERGED @bc7fdd3, all 3 verified** (+2 follow-up entries: CRED-CONSOLE-KEYAUTH S1, CRED-AUTHNONE S2) |
-| lane-tui | C6a TUI-FORM | `.worktrees/lane-tui` | `lane/tui-form` | fix-12 (bg) | TUI-TD16, TD17, TD18, TD19 | running |
-| lane-plugin | C2a PLUGIN-core | `.worktrees/lane-plugin` | `lane/plugin-core` | fix-13 (bg) | PLUG-D21, D18, D14 | running |
+| lane-wire | C4a WIRE-PROTOCOL | `.worktrees/lane-wire` | `lane/wire` | fix-17 (bg) | HTTP-H1..H6, PTY-F1..F4, VCS-1..4, EV-1 (15) | dispatched |
+| lane-tools | C10 TOOLS-EXEC | `.worktrees/lane-tools` | `lane/tools` | fix-18 (bg) | TOOL-C1..C5, A1, A2 (7) | dispatched |
+| lane-ai-timeout | C7a AI-TIMEOUT | `.worktrees/lane-ai-timeout` | `lane/ai-timeout` | fix-19 (bg) | AI-TIMEOUT | dispatched |
 
-Post-merge gates for CRED @bc7fdd3: oc-core+oc-server **1080/1080**, fmt clean, clippy clean, ledger validate errors=0.
-Infra note: repo-wide root-owned sweep executed under the user's chown approval after a root-owned source dir (`crates/oc-core/src/integration/`) blocked the merge; remaining root-owned outside `.worktrees` = 0. Merge-leftover cleanup (untracked mid-checkout files) handled.
+Queued: C3 RUNTIME (C3a wake-recovery first — after C10's hooks.rs round + C4a's session.rs seam). C4b (HTTP-H0 validator generator) slides to Batch 2 per §5.
 
-Hot files: app.rs/store.rs → lane-tui (C6a owns this batch); hooks.rs → lane-plugin (C2a owns 1A seam); resolver.rs → lane-cred. C2b (D33/D35) waits for C2a; C2c (TUI slot) waits for C6a seam + C2b.
-Merge order when lanes return: serial, one cluster at a time, affected tests + gate subset + fmt/clippy after each.
+Discipline update (user lag report): all heavy runs serialized — orchestrator never runs gates while a child is active; fixers instructed to serialize their own gate commands.
+
+## Host-issue H-1 mitigation (active)
+
+Children with background-task history: parent re-checks with `task_result` on completion instead of trusting push notifications (TUI verifier's final report was stored-but-not-pushed; recovered manually).
 
 | lane | task | worktree | branch | owner | write scope | status |
 |---|---|---|---|---|---|---|
