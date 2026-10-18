@@ -1483,13 +1483,13 @@
     },
     {
       "id": "permission-once-always-deny",
-      "description": "Permission prompt replies: the prompt lists Allow once / Always allow (when the request carries save patterns) / Reject with 'once' selected; Enter replies once, left/right move the selection, Escape opens the reject stage whose free-text reason Enter confirms",
-      "source": "test/cli/tui/input-scope.test.tsx (Enter \u2192 {decision:'once'}; Escape \u2192 reject stage keeping the reason draft) + src/routes/session/permission.tsx SessionQuestion (left/h, right/l, escapeKey=reject; app.exit shadowed while open)",
+      "description": "Permission prompt replies (session-route TWO-stage machine, routes/session/permission.tsx): the ask lists Allow once / Always allow (when the request carries save patterns) / Reject with 'once' selected; right previews the always lines on the body, ONE Enter replies always (no confirm stage); Escape on a top-level session replies reject immediately (free-text stage only on child sessions)",
+      "source": "src/routes/session/permission.tsx (PermissionStage permission|reject; onSelect always -> reply('always') no confirm; escapeKey=reject) + util/permission.ts:159 always-preview lines; re-authored in batch 1A to v2 semantics (old golden encoded the obsolete three-stage machine)",
       "keys": "kitty",
-      "steps": 6,
+      "steps": 5,
       "file": "replay/permission-once-always-deny.json",
-      "bytes": 1917,
-      "sha256": "f4a6c274d3924454e90b81b15d25a2a4b85c1e3e6d11cf121c71186a878505fd"
+      "bytes": 1611,
+      "sha256": "1b8406e3e5b94b4ffadcb79b4f645492b6e89590e6d52f2851f6db3ec97a7b62"
     },
     {
       "id": "session-list-leader-l",
