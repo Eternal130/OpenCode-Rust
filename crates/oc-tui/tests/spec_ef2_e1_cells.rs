@@ -95,8 +95,7 @@ fn detect(name: &str, stamps: &[u64], drive_ms: Option<u64>) -> Audit {
 }
 
 fn stamps_since(h: &HarnessHandle, from_ms: u64) -> Vec<u64> {
-    h.vt
-        .lock()
+    h.vt.lock()
         .expect("vt")
         .snapshots()
         .iter()
@@ -224,8 +223,10 @@ fn run_cell_suite(tag: &str, paste: Vec<u8>) {
                 if mode != "grow-only" {
                     driver.resize_pty(80, 24);
                 }
-                let settle_ms: u64 =
-                    std::env::var("EF2_RESIZE_SETTLE_MS").ok().and_then(|s| s.parse().ok()).unwrap_or(300);
+                let settle_ms: u64 = std::env::var("EF2_RESIZE_SETTLE_MS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(300);
                 std::thread::sleep(Duration::from_millis(settle_ms));
                 slot.lock().unwrap().push(("resize-100x30".into(), w));
                 // Liveness probe (diagnostic): does ANY key still act
@@ -235,8 +236,9 @@ fn run_cell_suite(tag: &str, paste: Vec<u8>) {
                     driver.write(&[0x10]);
                     std::thread::sleep(Duration::from_millis(600));
                     let delta = driver.raw_len() - from;
-                    let opened = driver.wait_for_after(b"palette", from, Duration::from_millis(100))
-                        || driver.wait_for_after(b"command", from, Duration::from_millis(100));
+                    let opened =
+                        driver.wait_for_after(b"palette", from, Duration::from_millis(100))
+                            || driver.wait_for_after(b"command", from, Duration::from_millis(100));
                     std::fs::create_dir_all("/tmp/opencode/scanef2").ok();
                     if let Ok(mut f) = std::fs::OpenOptions::new()
                         .create(true)
@@ -310,11 +312,7 @@ fn run_cell_suite(tag: &str, paste: Vec<u8>) {
     assert!(cells.len() >= 5, "expected >=5 cells, got {}", cells.len());
     let mut total_bursts = 0usize;
     for (name, stamps) in &cells {
-        assert!(
-            stamps.len() >= 4,
-            "cell {name}: capture too thin ({} flushes)",
-            stamps.len()
-        );
+        assert!(stamps.len() >= 4, "cell {name}: capture too thin ({} flushes)", stamps.len());
         let drive = name.starts_with("wheel").then_some(150u64);
         total_bursts += detect(name, stamps, drive).bursts;
     }
@@ -326,8 +324,7 @@ fn run_cell_suite(tag: &str, paste: Vec<u8>) {
         // acceptance proof; the earlier bursts rode the pre-fix
         // teardown-wedge runs).
         assert_eq!(
-            total_bursts,
-            0,
+            total_bursts, 0,
             "E1 stall-bursts on main: {total_bursts} — findings per E1 threshold"
         );
     }

@@ -1139,7 +1139,8 @@ mod tests {
     }
 
     #[test]
-    fn selection_wraps_and_reconciles() {        assert_eq!(move_selection(0, 3, -1), 2, "wraps backward");
+    fn selection_wraps_and_reconciles() {
+        assert_eq!(move_selection(0, 3, -1), 2, "wraps backward");
         assert_eq!(move_selection(2, 3, 1), 0, "wraps forward");
         assert_eq!(move_selection(1, 3, 10), 0, "big deltas wrap through");
         assert_eq!(reconcile_selection(5, 3), 2);
