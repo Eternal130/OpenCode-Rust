@@ -1242,30 +1242,6 @@ impl App {
         };
         let Some(stroke) = KeyStroke::parse(expanded) else { return };
         self.sync_modes();
-        if std::env::var("FIXW2_TRACE").is_ok() {
-            let branch = if self.error_mode.is_some() {
-                "error_mode"
-            } else if self.store.focus() == Focus::Dialog {
-                "dialog"
-            } else if self.diff_live() {
-                "diff"
-            } else if self.permission_live() {
-                "permission"
-            } else if self.error_toast_live() {
-                "error_toast"
-            } else if self.picker_live() {
-                "picker"
-            } else {
-                "route"
-            };
-            let key = self.prompt_key();
-            let draft_len = self.store.prompt_draft(&key).text.len();
-            let route = std::format!("{:?}", self.store.route());
-            eprintln!(
-                "[fixw2] press spec={spec} branch={branch} draft_len={draft_len} route={route} pending={:?}",
-                self.keymap.pending_display()
-            );
-        }
         if self.store.focus() == Focus::Dialog {
             self.stroke_in_dialog(stroke);
         } else if self.diff_live() {
@@ -1782,11 +1758,7 @@ impl App {
         //    base for those.
         if draft_empty {
             let had_pending = self.keymap.pending_display().is_some();
-            let outcome = self.keymap.lookup_base(stroke.clone(), &self.clock);
-            if std::env::var("FIXW2_TRACE").is_ok() {
-                eprintln!("[fixw2] rung1 stroke={stroke:?} had_pending={had_pending} outcome={outcome:?}");
-            }
-            match outcome {
+            match self.keymap.lookup_base(stroke.clone(), &self.clock) {
                 Outcome::Command { command, .. } if command == "app.exit" => {
                     self.request_exit();
                     return;
@@ -4414,7 +4386,12 @@ pub async fn run(client: oc_client::Client, boot: BootArgs) -> Result<(), String
             "the TUI requires an interactive terminal (stdin/stdout are not TTYs)".to_owned()
         );
     }
-    let size = crossterm::terminal::size().ok();
+    let size = crossterm::terminal::size()
+        .ok()
+        // SE-F5: an un-winsized PTY reports 0x0 — rendering at a zero
+        // area emits boot escapes and ZERO frames (the ref paints a
+        // full default-size TUI instead). Fall to the default frame.
+        .filter(|&(width, height)| width > 0 && height > 0);
     run_with_size(client, size, boot).await
 }
 
@@ -4444,13 +4421,6 @@ pub async fn run_with_size(
     size: Option<(u16, u16)>,
     boot: BootArgs,
 ) -> Result<(), String> {
-    let fixw2_t0 = std::time::Instant::now();
-    let fixw2_ms = |label: &str| {
-        if std::env::var("FIXW2_TRACE").is_ok() {
-            eprintln!("[fixw2ms] {label} +{}ms", fixw2_t0.elapsed().as_millis());
-        }
-    };
-    fixw2_ms("boot-entry");
     use crossterm::event::Event as CrosstermEvent;
     use crossterm::event::KeyEventKind;
     use crossterm::terminal::{
@@ -4500,7 +4470,6 @@ pub async fn run_with_size(
     // `crate::image` for why not a DA1 round-trip).
     app.store.set_graphics_protocol(crate::image::detect_protocol());
     let config = crate::config::TuiConfig::load(&oc_util::global_roots::resolve());
-    fixw2_ms("config-loaded");
     // SURF-2 (F-1): the config persistence sink — cli.json
     // write-through for the theme name/mode pins and
     // `session.sidebar` (oc-core's comment-preserving updater). The
@@ -4821,51 +4790,26 @@ pub async fn run_with_size(
     {
         let input_stop = Arc::clone(&input_stop);
         std::thread::spawn(move || {
-            if std::env::var("FIXW2_TRACE").is_ok() {
-                eprintln!("[fixw2] reader thread start t={}ms", system_now_ms() % 1_000_000);
-            }
             // The combined boot probe (lane TAIL): OSC 11 background +
             // the kitty keyboard capability query, one read window.
             let probe = crate::theme::probe_terminal();
-            if std::env::var("FIXW2_TRACE").is_ok() {
-                eprintln!("[fixw2] probe done t={}ms bg={:?} kitty={}", system_now_ms() % 1_000_000, probe.background, probe.kitty_keyboard);
-            }
             let mode = probe
                 .background
                 .map_or(Mode::Dark, |(r, g, b)| crate::theme::mode_for_background(r, g, b));
             let _ = probe_tx.send((mode, probe.kitty_keyboard));
-            let mut fixw2_iters: u32 = 0;
             loop {
-                if std::env::var("FIXW2_TRACE").is_ok() {
-                    fixw2_iters += 1;
-                    if fixw2_iters <= 3 || fixw2_iters % 40 == 0 {
-                        let raw = crossterm::terminal::is_raw_mode_enabled();
-                        eprintln!("[fixw2] reader iter={fixw2_iters} raw={raw:?} t={}ms", system_now_ms() % 1_000_000);
-                    }
-                }
                 if input_stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    if std::env::var("FIXW2_TRACE").is_ok() {
-                        eprintln!("[fixw2] reader loop EXIT stop-flag t={}ms", system_now_ms() % 1_000_000);
-                    }
                     break;
                 }
                 match crossterm::event::poll(std::time::Duration::from_millis(50)) {
                     Ok(true) => {
                         let Ok(event) = crossterm::event::read() else { break };
-                        if std::env::var("FIXW2_TRACE").is_ok() {
-                            eprintln!("[fixw2] reader t={}ms ev={event:?}", system_now_ms() % 1_000_000);
-                        }
                         if event_tx.blocking_send(event).is_err() {
                             break;
                         }
                     }
                     Ok(false) => {}
-                    Err(e) => {
-                        if std::env::var("FIXW2_TRACE").is_ok() {
-                            eprintln!("[fixw2] reader poll ERR {e}");
-                        }
-                        break;
-                    }
+                    Err(_) => break,
                 }
             }
         });
@@ -4952,7 +4896,6 @@ pub async fn run_with_size(
     // any live StartupLoading pill to "Finishing startup…" and starts
     // its 3 s hold (startup-loading.tsx:13-31).
     app.store.set_plugins_ready();
-    fixw2_ms("pre-loop");
 
     let result: Result<(), String> = loop {
         // The plugin pump (wave-12): refresh the palette sink's active
@@ -5623,7 +5566,10 @@ pub async fn run_with_size(
             // at the live terminal dimensions; mirror that by adopting
             // the backend's size before building the frame.
             if let Ok(area) = terminal.size() {
-                if (area.width, area.height) != app.size {
+                // SE-F5: never re-adopt a degenerate 0x0 winsize (an
+                // un-winsized PTY keeps reporting it; the frame stays
+                // at the default size like the ref).
+                if area.width > 0 && area.height > 0 && (area.width, area.height) != app.size {
                     app.resize((area.width, area.height));
                 }
             }
@@ -5707,7 +5653,6 @@ pub async fn run_with_size(
             if draw.is_err() {
                 break Err("terminal draw failed".to_owned());
             }
-            fixw2_ms("first-draw-done");
             // R-07: the frame's image overlays — emit AFTER the cell
             // grid flushed (the placements sit over their placeholder
             // rects); ids that left the frame delete first.
@@ -5740,14 +5685,8 @@ pub async fn run_with_size(
             maybe = event_rx.recv() => maybe,
             () = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => None,
         };
-        if std::env::var("FIXW2_TRACE").is_ok() {
-            if let Some(ev) = event.as_ref() {
-                eprintln!("[fixw2] loop t={}ms ev={ev:?}", system_now_ms() % 1_000_000);
-            }
-        }
         match event {
             Some(CrosstermEvent::Key(key)) => {
-                fixw2_ms(&format!("key-{key:?}"));
                 if key.kind == KeyEventKind::Press {
                     if let Some(spec) = crossterm_key_to_spec(&key) {
                         if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
