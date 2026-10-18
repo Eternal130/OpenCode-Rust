@@ -171,6 +171,9 @@ pub struct Shared {
     /// TUI-plugin surface, beta.13 bug 1) — gates the steady refresh
     /// loop; cleared when the slot stops answering.
     pub sidebar_slots: Mutex<HashSet<String>>,
+    /// SA-F16: shielded scheduled guest callbacks' most recent faults
+    /// (the EACCES-class filesystem probing), newest first, bounded.
+    pub plugin_faults: Mutex<Vec<String>>,
     /// The runtime every supervisor task lives on — the async
     /// guest-request path (`session.*`) spawns onto it (deadlock rule
     /// 1: the reader never blocks on a port that calls back in).
@@ -201,6 +204,7 @@ impl Shared {
             child_pid: AtomicI64::new(-1),
             ui_requests: Mutex::new(VecDeque::new()),
             sidebar_slots: Mutex::new(HashSet::new()),
+            plugin_faults: Mutex::new(Vec::new()),
             runtime_handle: None,
         }
     }
@@ -448,6 +452,20 @@ impl Shared {
                 }
             }
             "log" => log_guest(params),
+            // SA-F16: a shielded scheduled guest callback failed (the
+            // EACCES-class filesystem probing) — record it as a health
+            // fault (bounded, most-recent-first) instead of letting it
+            // surface as a process-level uncaught exception.
+            "plugin.fault" => {
+                let message = params
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown fault")
+                    .to_owned();
+                let mut faults = self.plugin_faults.lock().expect("plugin faults poisoned");
+                faults.insert(0, message);
+                faults.truncate(16);
+            }
             _ => {}
         }
     }
@@ -812,6 +830,7 @@ impl Supervisor {
             child_pid: AtomicI64::new(-1),
             ui_requests: Mutex::new(VecDeque::new()),
             sidebar_slots: Mutex::new(HashSet::new()),
+            plugin_faults: Mutex::new(Vec::new()),
             runtime_handle: Some(tokio::runtime::Handle::current()),
         });
         // Prime plugin statuses before any IO so crash attribution
@@ -1134,6 +1153,17 @@ impl Shared {
     /// subset the guest's render consumes).
     pub fn notify_tui_theme(&self, view: serde_json::Value) {
         self.send_notification("tui.theme", view);
+    }
+
+    /// Push the sidebar's layout budget (the `tui.layout` notification
+    /// — SA-F5: the guest's sidebar flattener lays `space-between` /
+    /// flexGrow rows out against this width so the plugin's padded
+    /// columns materialize like its own renderer's output).
+    pub fn notify_tui_layout(&self, sidebar_content_width: usize) {
+        self.send_notification(
+            "tui.layout",
+            json!({ "sidebarContentWidth": sidebar_content_width }),
+        );
     }
 
     fn send_notification(&self, method: &str, params: Value) {

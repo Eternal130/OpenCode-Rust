@@ -167,6 +167,13 @@ impl SelectProps {
         self
     }
 
+    /// Append one footer action (the Plugins dialog's hint pair).
+    #[must_use]
+    pub fn with_action(mut self, action: SelectAction) -> Self {
+        self.actions.push(action);
+        self
+    }
+
     #[must_use]
     pub fn flat(mut self, flat: bool) -> Self {
         self.flat = flat;

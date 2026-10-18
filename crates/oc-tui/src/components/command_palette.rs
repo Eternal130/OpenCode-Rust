@@ -793,7 +793,15 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         // (`Status`, :20-34).
         // `plugins.list` (lane KM): the plugin manager select — one
         // row per registered plugin id (commands + home actions),
-        // empty → the muted status row.
+        // empty → the shared select empty state. SA-F6 fidelity with
+        // the ref's PluginsDialog (feature-plugins/system/
+        // plugins.tsx:354-368): a DialogSelect titled "Plugins" whose
+        // empty options render the shared "No items available"
+        // placeholder (ui/dialog-select.tsx:723), plus the
+        // `ctrl+a show internal` footerHints pair riding the footer
+        // bar (a FooterHint renders `title label` — display-only; the
+        // ref's ctrl+a TOGGLE of internal plugins has no ported
+        // surface, so the pair carries a surfaceless command id).
         DialogKind::Plugins => {
             let mut ids: Vec<String> = store
                 .plugin_commands()
@@ -804,11 +812,15 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             ids.sort();
             ids.dedup();
             let options = if ids.is_empty() {
-                vec![status_option("No plugins registered")]
+                Vec::new()
             } else {
                 ids.iter().map(|id| SelectOption::titled(id.clone(), id.clone())).collect()
             };
-            SelectProps::new("Plugins", options)
+            SelectProps::new("Plugins", options).with_action(SelectAction::new(
+                "dialog.plugins.check",
+                "ctrl+a",
+                "show internal",
+            ))
         }
         // The tab context menu (lane KM — `TabContextMenu`'s actions,
         // session-tabs.tsx:391-417): a tab-scoped menu carries New
@@ -3585,5 +3597,55 @@ mod tests {
             config.calls.borrow().as_slice(),
             &[("session.grouping", "none".to_owned()), ("session.grouping", "auto".to_owned())]
         );
+    }
+
+    /// SA-F6: the Plugins dialog renders the ref's live shape — the
+    /// shared "No items available" empty state (ui/dialog-select.tsx
+    /// :723) and the `ctrl+a show internal` footerHints pair riding
+    /// the footer bar (plugins.tsx:199 + dialog-select.tsx:170-173).
+    #[test]
+    fn plugins_dialog_renders_the_reference_shape() {
+        let theme = crate::theme::ThemeState::v2_dark();
+        let store = final_session_store();
+        store.replace_dialog(crate::store::DialogKind::Plugins, crate::store::DialogSize::Medium);
+        let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
+        assert_eq!(props.title, "Plugins");
+        assert!(
+            props.options.is_empty(),
+            "no registered plugin ids → the shared empty state renders"
+        );
+        assert_eq!(props.empty_text, None, "no override — the shared placeholder shows");
+        assert!(
+            props
+                .actions
+                .iter()
+                .any(|action| action.title == "ctrl+a" && action.label == "show internal"),
+            "the footer hint pair: {:?}",
+            props.actions
+        );
+        // The rendered overlay carries the rows (Search placeholder,
+        // the empty state, the footer hint).
+        let cell = crate::render::Cell {
+            ch: ' ',
+            attrs: 0,
+            fg: crate::render::CellColor::Rgb(255, 255, 255),
+            bg: crate::render::CellColor::Rgb(10, 10, 10),
+        };
+        let mut frame =
+            crate::render::Frame { cells: vec![vec![cell; 80]; 24], width: 80, height: 24 };
+        crate::components::dialog::render_overlay_with(
+            &mut frame,
+            &store.top_dialog().expect("open"),
+            &props,
+            None,
+            &theme,
+            (80, 24),
+        );
+        let rows = frame.text_grid();
+        let text = rows.concat();
+        assert!(text.contains("Plugins"), "the title");
+        assert!(text.contains("Search"), "the filter placeholder");
+        assert!(text.contains("No items available"), "the shared empty state");
+        assert!(text.contains("ctrl+a show internal"), "the footer hint");
     }
 }

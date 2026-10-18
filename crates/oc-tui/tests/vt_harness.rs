@@ -1021,6 +1021,43 @@ impl HarnessHandle {
         false
     }
 
+    /// SA-F4's instrument repair — the BEFORE-SETTLE sampler: poll one
+    /// region's STYLE digests while a transient is still in flight
+    /// (no settle wait, no burst-closing). The settle-first collectors
+    /// (`collect_snapshots`, `capture_baseline`) structurally miss
+    /// time-driven effects — the scan's shimmer leg sampled after
+    /// typing settled and saw 0 style deltas across 60 ref frames;
+    /// this sampler observes the churn DURING the effect. `tick` runs
+    /// between polls (whatever keeps the transient live — typing, a
+    /// held turn, an armed pending state).
+    pub fn style_series_during(
+        &self,
+        window_ms: u64,
+        poll_ms: u64,
+        region: (usize, usize, usize, usize),
+        tick: impl FnMut(),
+    ) -> Vec<(u64, Vec<u64>)> {
+        let (x0, y0, width, height) = region;
+        let mut tick = tick;
+        let start = self.now_ms();
+        let mut series = Vec::new();
+        while self.now_ms() - start < window_ms {
+            tick();
+            let grid = self.grid_now();
+            let mut styles = Vec::with_capacity(width * height);
+            for y in y0..y0.saturating_add(height) {
+                for x in x0..x0.saturating_add(width) {
+                    if x < grid.cols && y < grid.rows {
+                        styles.push(grid.cell(x, y).style);
+                    }
+                }
+            }
+            series.push((self.now_ms(), styles));
+            std::thread::sleep(Duration::from_millis(poll_ms));
+        }
+        series
+    }
+
     /// A settled baseline plus the KNOWN-VOLATILE cells: sampled as
     /// the union of pairwise diffs over three grids spanning ≥650 ms
     /// — the 500 ms-phase caret blink ALWAYS flips phase across a

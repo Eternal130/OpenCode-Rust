@@ -173,3 +173,86 @@ fn flagship_sidebar_section_materializes_from_the_real_plugin() {
     }
     host.shutdown();
 }
+
+/// SA-F5 (SCAN-AB): the materialized section carries the PLUGIN's own
+/// render contract — the version badge shows the plugin's package
+/// version (the ref's `v3.0.4`, never our app version), and the
+/// compact agent rows keep their padded columns (the name column and
+/// the right-aligned model column, ref capture ref-session-00: `•
+/// orchestrator               default` — all rows one width, the
+/// header's `v…` badge right-aligned on the same edge).
+#[test]
+fn flagship_sidebar_renders_plugin_version_and_padded_columns() {
+    let Some(source) = flagship_source() else {
+        eprintln!("flagship source unavailable; skipping");
+        return;
+    };
+    let package = std::fs::read_to_string(source.join("package.json")).expect("package.json");
+    let version = package
+        .split("\"version\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').nth(1))
+        .unwrap_or_default()
+        .to_owned();
+    assert!(!version.is_empty(), "the staged package carries a version");
+    let Some(host) = boot("flagship-fidelity") else { return };
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(90);
+    let mut section: Option<(String, Vec<String>)> = None;
+    while std::time::Instant::now() < deadline {
+        for request in host.drain_ui_requests() {
+            if let UiRequest::SidebarSection { plugin_id, title, rows, .. } = request {
+                if plugin_id.ends_with(":tui") {
+                    section = Some((title, rows));
+                }
+            }
+        }
+        if section.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let (title, rows) = section.expect("the real plugin's sidebar section landed");
+    // The badge is the PLUGIN's version (meta.version — the plugin's
+    // package.json), never the app version the host runs under.
+    assert!(
+        title.contains(&format!("v{version}")),
+        "the badge shows the plugin's own version {version}: {title:?}"
+    );
+    assert!(!title.contains("2.0.24-rust"), "the app version must not leak: {title:?}");
+    // The compact agent rows: every row pads to the SAME width with
+    // the model column right-aligned (the ref's materialized shape).
+    let agent_rows: Vec<&String> =
+        rows.iter().filter(|row| row.starts_with('•') || row.contains("• ")).collect();
+    assert!(!agent_rows.is_empty(), "the compact roster renders: {rows:?}");
+    let widths: Vec<usize> = agent_rows.iter().map(|row| row.chars().count()).collect();
+    for (index, width) in widths.iter().enumerate() {
+        assert_eq!(
+            *width, widths[0],
+            "row {index} pads to the section width (the right-aligned column): {:?}",
+            agent_rows[index]
+        );
+    }
+    // The header badge right-aligns on the SAME edge (the
+    // space-between header): the title's width equals the rows'.
+    assert_eq!(
+        title.chars().count(),
+        widths[0],
+        "the header's badge right-aligns on the rows' edge: {title:?} vs {:?}",
+        agent_rows[0]
+    );
+    // The name/model gap is PADDED (multi-space), not the legacy
+    // single-space join.
+    assert!(
+        agent_rows.iter().all(|row| row.contains("  ")),
+        "the padded column shape: {agent_rows:?}"
+    );
+    // The model column starts at the same cell on every row.
+    let model_cols: Vec<usize> =
+        agent_rows.iter().map(|row| row.rfind(' ').map(|at| at + 1).unwrap_or(0)).collect();
+    assert!(
+        model_cols.windows(2).all(|pair| pair[0] == pair[1]),
+        "the model column aligns: {agent_rows:?}"
+    );
+    host.shutdown();
+}
