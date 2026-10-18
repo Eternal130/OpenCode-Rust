@@ -23,6 +23,7 @@ use crate::session::runner::compaction::{
 };
 use crate::session::runner::context::{self, Loaded, SessionContext};
 use crate::session::runner::model_request::{prepare_primary, SessionModelRequest};
+use crate::session::runner::prompt_prepare::PromptPrepare;
 use crate::session::runner::step::{AttemptFailure, AttemptInput, Outcome, StepDeps};
 use crate::session::runner::title::SessionTitle;
 use crate::session::runner::LlmClient;
@@ -72,6 +73,10 @@ pub struct SessionRunner {
     /// `FiberMap`-equivalent for title generation: one live task per
     /// session, `onlyIfMissing`.
     title_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+    /// The `SessionPrompt.prepare` seam (P01/P02): `session.prompt`
+    /// dispatch + `@skill` resolution on the consume boundary. `None`
+    /// = not attached (the pre-seam behavior).
+    prompt_prepare: Option<Arc<PromptPrepare>>,
 }
 
 impl SessionRunner {
@@ -115,7 +120,18 @@ impl SessionRunner {
             snapshot: None,
             tool_output: None,
             title_tasks: Mutex::new(HashMap::new()),
+            prompt_prepare: None,
         }
+    }
+
+    /// Attaches the `SessionPrompt.prepare` seam (the engine's
+    /// production wiring — `session.prompt` hook dispatch + `@skill`
+    /// resolution over the location's skill table; guest hooks ride
+    /// the same registry seam, PLUG-D21).
+    #[must_use]
+    pub fn with_prompt_prepare(mut self, prepare: Arc<PromptPrepare>) -> Self {
+        self.prompt_prepare = Some(prepare);
+        self
     }
 
     /// One-shot generation over the session context (`session.generate`
@@ -400,7 +416,11 @@ impl SessionRunner {
             {
                 return Ok(Boundary::Complete);
             }
-            // 7. Ready path: prepare context, promote, fork titles, load.
+            // 7. Ready path: prepare prompts (the `session.prompt` +
+            //    `@skill` seam fires here — before delivery and the
+            //    model turn), prepare context, promote, fork titles,
+            //    load.
+            self.prepare_session_prompts(session_id).await?;
             let selected = self.context.prepare_context(session_id).await?;
             let promoted = self
                 .inbox
@@ -426,6 +446,36 @@ impl SessionRunner {
             let loaded = self.context.load(&selected).await?;
             return Ok(Boundary::Ready(Box::new(loaded), step));
         }
+    }
+
+    /// `SessionPrompt.prepare` on the consume boundary (RUNTIME-P01 /
+    /// P02, core/session/prompt.ts:38-84): fires `session.prompt`
+    /// (copy-in/copy-out per ADR-0005) and resolves `@skill`
+    /// attachments for every not-yet-prepared pending user row,
+    /// BEFORE the promote path delivers them — the projected user
+    /// message and the model turn both see the prepared prompt. A
+    /// failed prepare cancels the poisoned row (v2 never admits a
+    /// prompt whose prepare failed) and fails the drain with the
+    /// error surfaced to the session.
+    async fn prepare_session_prompts(&self, session_id: &str) -> Result<(), RunFailure> {
+        let Some(prepare) = self.prompt_prepare.as_ref() else { return Ok(()) };
+        if !prepare.is_armed() {
+            return Ok(());
+        }
+        let parsed =
+            SessionId::parse(session_id.to_string()).unwrap_or_else(|error| SessionId(error.value));
+        if let Err((id, error)) = prepare.prepare_pending(&parsed).await {
+            // Cancel the poisoned pending row (best-effort: a bus
+            // failure still surfaces the prepare error below).
+            let _ = self.inbox.cancel(session_id, &id).await;
+            return Err(RunFailure::surfaced(oc_schema::common::SessionError {
+                error_type: "prompt.failed".into(),
+                message: format!("prompt {id} rejected: {error}"),
+                status: None,
+                response: None,
+            }));
+        }
+        Ok(())
     }
 
     /// The manual-compaction run (llm.ts:113-157): preview context, then

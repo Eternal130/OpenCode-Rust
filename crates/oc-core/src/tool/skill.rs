@@ -46,6 +46,63 @@ pub fn prepare(skill: &Skill) -> std::io::Result<(String, String)> {
     Ok((skill.name.to_string(), output))
 }
 
+/// `Skill.prepare` for the PROMPT path (core/session/prompt.ts:71 →
+/// `Skill.prepare(...).output` = `Skill.toModelOutput`): the model-facing
+/// text injected for an `@skill` attachment — the `<skill_content>`
+/// envelope wrapping the trimmed body, the base-directory note, and a
+/// SAMPLED file list (up to 10 files, `SKILL.md` excluded, scanned
+/// recursively with dot-files, sorted — ref skill.ts:33-73). Distinct
+/// from [`prepare`]: the tool leaf joins raw file CONTENTS; the prompt
+/// attachment carries the enveloped list.
+pub fn prompt_text(skill: &Skill) -> std::io::Result<String> {
+    let path = std::path::Path::new(skill.path.as_str());
+    let directory =
+        path.parent().map(std::path::Path::to_string_lossy).unwrap_or_default().to_string();
+    // Only `SKILL.md` skills sample files (skill.ts:58-62); a bare
+    // skill file contributes the envelope with an empty list.
+    let mut files: Vec<String> = Vec::new();
+    if path.file_name().is_some_and(|name| name == "SKILL.md") {
+        collect_skill_files(std::path::Path::new(&directory), &mut files, 0);
+        files.sort();
+        files.truncate(10);
+    }
+    let mut output = String::new();
+    output.push_str(&format!("<skill_content name=\"{}\">\n", skill.name.as_str()));
+    output.push_str(&format!("# Skill: {}\n\n", skill.name.as_str()));
+    output.push_str(skill.content.trim());
+    output.push_str("\n\n");
+    output.push_str(&format!("Base directory for this skill: {directory}\n"));
+    output.push_str(
+        "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\n",
+    );
+    output.push_str("Note: file list is sampled.\n\n");
+    output.push_str("<skill_files>\n");
+    for file in &files {
+        output.push_str(&format!("<file>{file}</file>\n"));
+    }
+    output.push_str("</skill_files>\n");
+    output.push_str("</skill_content>");
+    Ok(output)
+}
+
+/// Recursive file sampler (`fs.scan("**/*", { include: "file", dot: true })`,
+/// `SKILL.md` basename excluded, bounded by the 10-file sample + depth cap).
+fn collect_skill_files(directory: &std::path::Path, out: &mut Vec<String>, depth: usize) {
+    const MAX_DEPTH: usize = 6;
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_skill_files(&path, out, depth + 1);
+        } else if path.is_file() && path.file_name().is_some_and(|name| name != "SKILL.md") {
+            out.push(path.to_string_lossy().into_owned());
+        }
+    }
+}
+
 /// The skill resolution seam (`Skill.Service.get`) — the config-lane table.
 pub trait SkillTable: Send + Sync {
     fn get(&self, id: &str) -> Option<Skill>;
