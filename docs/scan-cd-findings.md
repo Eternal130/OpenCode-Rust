@@ -94,7 +94,15 @@
 ### CD-18 (I8) — D1 canary executed: v1 FAIL → oracle redesigned → PASS (recorded per the on-the-spot rule)
 - Canary A (adjacent same-type event reorder) was INVISIBLE to a type-sequence ordering check — the method's blindspot; redesigned to instance fingerprints (type + payload digest): 2 mismatched positions detected. Canary B (optional `location` drop) flagged by the field-diff. Final: **I8-D1 PASS** with the fingerprint oracle; the v1 oracle is recorded as insufficient (an agent re-running D1 must use instance fingerprints, not type sequences).
 
-*(execution continues — D5 next per lane priority, then second-tier C2/C3/C5/C9/C13/C15/C16/C20/D2/D3/D4)*
+### CD-19 (INFO) — D5 verified-parity rows + CD-2 scope refinement
+- **Invariant checker** (`/tmp/opencode/scancd/d5/invariants.py`) over a live 242-session stress corpus (1 parent + 241 subagent children, 964 messages, full SSE): ZERO violations on message→session, session→project, per-directory project consistency, SSE durable-aggregate→session, inbox→session, instruction_state→session, per-session messageID uniqueness, fork_session_id orphans.
+- **CD-2 refined**: subagent children carry `parent_id` 241/241 ✓ (the subagent creation path is correct); ONLY the fork projector hardcodes NULL — the bug is fork-scoped, not chain-wide.
+- **Subagent id chain (live, FIX5 area)**: parent tool part embeds `<subagent sessionID="ses_…" state="completed">` with the child's real id ✓; `session.tool.progress` emitted live (240×) ✓; child job completion delivered into the parent (subagent_job notify keyed `{child}:{startedAt}`, exactly-once set) ✓ code-verified.
+- **Step-cap semantics = ref**: cap applies only when `agent.steps` is set (ours drain.rs:541 ↔ ref llm.ts:223 identical); a tool-looping model with steps unset loops unbounded on BOTH (my instrument's 241-loop reproduces ref semantics — I6/I9: instrument artifact, not a divergence; recorded because quota-burn is a real shared property, dispositioned ref-equal).
+- LOW-note: subagent child sessions get empty titles (`title: ''` in DB); ref derives child titles from the prompt (title.ts) — carried to a UI lane if visible.
+
+*(execution continues — second tier: C2/C3/C5/C9/C13/C15/C16/C20/D2/D3/D4)*
+
 
 
 
