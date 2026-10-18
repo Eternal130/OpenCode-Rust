@@ -294,6 +294,7 @@ pub struct Span {
 /// The textarea's wrap model. Units: spaces (kept on the line they fit
 /// on, consumed at a break that lands on them), words (moved whole),
 /// wide CJK clusters (break anywhere), chips (atomic).
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum UnitKind {
     Space,
     Word,
@@ -306,11 +307,39 @@ impl UnitKind {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Unit {
     text: String,
     width: usize,
     chip: bool,
     kind: UnitKind,
+}
+
+// SE-F11 (E1 wheel@34k residue): the unit model is memoized per
+// draft — the frame loop re-derives units for an UNCHANGED draft
+// every tick, and a 34 KB paste makes those allocations the
+// dominant per-frame cost (139–143 ms ticks, 174–177 ms wheel
+// windows). The memo keys on full draft equality (correct, no hash
+// collisions) at one entry — the shape path is single-draft.
+thread_local! {
+    static UNITS_MEMO: std::cell::RefCell<Option<(PromptDraft, std::rc::Rc<Vec<Unit>>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn draft_units(draft: &PromptDraft) -> std::rc::Rc<Vec<Unit>> {
+    UNITS_MEMO.with(|memo| {
+        {
+            let slot = memo.borrow();
+            if let Some((cached, units)) = slot.as_ref() {
+                if cached == draft {
+                    return std::rc::Rc::clone(units);
+                }
+            }
+        }
+        let units = std::rc::Rc::new(draft_units_uncached(draft));
+        *memo.borrow_mut() = Some((draft.clone(), std::rc::Rc::clone(&units)));
+        units
+    })
 }
 
 fn unit_kind(ch: char) -> UnitKind {
@@ -325,7 +354,7 @@ fn unit_kind(ch: char) -> UnitKind {
 
 /// Split the draft into wrap units, honoring file-mention chips as
 /// atomic spans (their chars join the unit stream but never split).
-fn draft_units(draft: &PromptDraft) -> Vec<Unit> {
+fn draft_units_uncached(draft: &PromptDraft) -> Vec<Unit> {
     let chars: Vec<char> = draft.text.chars().collect();
     let chip_at =
         |index: usize| draft.files.iter().any(|file| index >= file.start && index < file.end);
@@ -412,7 +441,7 @@ pub fn caret_cell(draft: &PromptDraft, inner: usize, caret: usize) -> (usize, us
     let mut col = 0usize;
     let mut consumed = 0usize; // chars consumed so far (incl. newlines)
     let mut line_width = 0usize;
-    for unit in draft_units(draft) {
+    for unit in draft_units(draft).iter() {
         if unit.text == "\n" {
             if consumed >= caret {
                 break;
@@ -464,16 +493,43 @@ pub fn caret_cell(draft: &PromptDraft, inner: usize, caret: usize) -> (usize, us
 /// Lay the draft out at `inner` columns: source lines wrap
 /// independently; a break keeps the trailing space on the previous
 /// line when it fits there, and consumes it when it does not.
+///
+/// SE-F11: memoized per (draft, inner) — see [`UNITS_MEMO`]. The
+/// returned `Rc` shares one allocation across the per-frame callers
+/// (the shape walk, the caret mapping) while the draft is unchanged.
 #[must_use]
-pub fn layout_draft_lines(draft: &PromptDraft, inner: usize) -> Vec<Vec<Span>> {
+pub fn layout_draft_lines(draft: &PromptDraft, inner: usize) -> std::rc::Rc<Vec<Vec<Span>>> {
+    LAYOUT_MEMO.with(|memo| {
+        {
+            let slot = memo.borrow();
+            if let Some((cached_draft, cached_inner, lines)) = slot.as_ref() {
+                if *cached_inner == inner && cached_draft == draft {
+                    return std::rc::Rc::clone(lines);
+                }
+            }
+        }
+        let lines = std::rc::Rc::new(layout_draft_lines_uncached(draft, inner));
+        *memo.borrow_mut() = Some((draft.clone(), inner, std::rc::Rc::clone(&lines)));
+        lines
+    })
+}
+
+/// The memoized layout entry (SE-F11 — see [`UNITS_MEMO`]).
+type LayoutMemoEntry = (PromptDraft, usize, std::rc::Rc<Vec<Vec<Span>>>);
+thread_local! {
+    static LAYOUT_MEMO: std::cell::RefCell<Option<LayoutMemoEntry>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn layout_draft_lines_uncached(draft: &PromptDraft, inner: usize) -> Vec<Vec<Span>> {
     // Split into source lines first (newlines are hard breaks), then
     // wrap each line's units.
     let mut source_lines: Vec<Vec<Unit>> = vec![Vec::new()];
-    for unit in draft_units(draft) {
+    for unit in draft_units(draft).iter() {
         if unit.text == "\n" {
             source_lines.push(Vec::new());
         } else {
-            source_lines.last_mut().expect("seeded").push(unit);
+            source_lines.last_mut().expect("seeded").push(unit.clone());
         }
     }
     let mut lines: Vec<Vec<Span>> = Vec::new();

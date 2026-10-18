@@ -878,8 +878,7 @@ impl HarnessHandle {
     /// SIGWINCH exactly as a terminal resize delivers it.
     pub fn resize_pty(&self, cols: u16, rows: u16) {
         unsafe {
-            let winsize =
-                libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+            let winsize = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
             libc::ioctl(self.writer.as_raw_fd(), libc::TIOCSWINSZ, &winsize);
         }
     }

@@ -116,8 +116,11 @@ fn e12_second_pass_canary_rankorder_normalization() {
         }
     }
     let flags = cross_check_flags(&poisoned, &sessions);
-    assert_eq!(flags, vec!["支付宝".to_string()],
-        "canary must flag EXACTLY the poisoned query, got {flags:?}");
+    assert_eq!(
+        flags,
+        vec!["支付宝".to_string()],
+        "canary must flag EXACTLY the poisoned query, got {flags:?}"
+    );
     eprintln!("[E12-2] I8 canary PASS: poisoned cell flips exactly q=支付宝");
 
     // ---------- rank-order + set diff table ----------
@@ -131,8 +134,7 @@ fn e12_second_pass_canary_rankorder_normalization() {
         let expected_ref = ref_filter(&sessions, query);
         let ours = ours_filter(&sessions, query);
         let set_ok = ours == expected_ref;
-        let order_ok = ours.iter().collect::<Vec<_>>()
-            == expected_ref.iter().collect::<Vec<_>>();
+        let order_ok = ours.iter().collect::<Vec<_>>() == expected_ref.iter().collect::<Vec<_>>();
         if !set_ok {
             set_div += 1;
         } else if !order_ok {
