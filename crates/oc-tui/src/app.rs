@@ -4444,6 +4444,13 @@ pub async fn run_with_size(
     size: Option<(u16, u16)>,
     boot: BootArgs,
 ) -> Result<(), String> {
+    let fixw2_t0 = std::time::Instant::now();
+    let fixw2_ms = |label: &str| {
+        if std::env::var("FIXW2_TRACE").is_ok() {
+            eprintln!("[fixw2ms] {label} +{}ms", fixw2_t0.elapsed().as_millis());
+        }
+    };
+    fixw2_ms("boot-entry");
     use crossterm::event::Event as CrosstermEvent;
     use crossterm::event::KeyEventKind;
     use crossterm::terminal::{
@@ -4493,6 +4500,7 @@ pub async fn run_with_size(
     // `crate::image` for why not a DA1 round-trip).
     app.store.set_graphics_protocol(crate::image::detect_protocol());
     let config = crate::config::TuiConfig::load(&oc_util::global_roots::resolve());
+    fixw2_ms("config-loaded");
     // SURF-2 (F-1): the config persistence sink — cli.json
     // write-through for the theme name/mode pins and
     // `session.sidebar` (oc-core's comment-preserving updater). The
@@ -4944,6 +4952,7 @@ pub async fn run_with_size(
     // any live StartupLoading pill to "Finishing startup…" and starts
     // its 3 s hold (startup-loading.tsx:13-31).
     app.store.set_plugins_ready();
+    fixw2_ms("pre-loop");
 
     let result: Result<(), String> = loop {
         // The plugin pump (wave-12): refresh the palette sink's active
@@ -5698,6 +5707,7 @@ pub async fn run_with_size(
             if draw.is_err() {
                 break Err("terminal draw failed".to_owned());
             }
+            fixw2_ms("first-draw-done");
             // R-07: the frame's image overlays — emit AFTER the cell
             // grid flushed (the placements sit over their placeholder
             // rects); ids that left the frame delete first.
@@ -5737,6 +5747,7 @@ pub async fn run_with_size(
         }
         match event {
             Some(CrosstermEvent::Key(key)) => {
+                fixw2_ms(&format!("key-{key:?}"));
                 if key.kind == KeyEventKind::Press {
                     if let Some(spec) = crossterm_key_to_spec(&key) {
                         if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
