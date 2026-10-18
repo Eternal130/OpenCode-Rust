@@ -38,6 +38,9 @@ REQUIRED = [
     "status", "title", "symptom", "expected", "actual", "ref", "rust",
     "repro", "test", "owner", "upstream", "wiring", "evidence",
 ]
+# Fields that must be present but are allowed to be empty strings:
+# owner is only set once a lane claims the item (B0-1 imports unclaimed rows).
+MAY_BE_EMPTY = {"owner"}
 SEV_ORDER = {"S0": 0, "S1": 1, "S2": 2, "S3": 3, "needs-runtime": 4}
 
 
@@ -74,7 +77,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
         rid = row.get("id", "<missing-id>")
         for key in REQUIRED:
             value = row.get(key)
-            if value is None or value == "":
+            if value is None or (value == "" and key not in MAY_BE_EMPTY):
                 errors.append(f"{rid}: missing/empty {key}")
         if rid in ids:
             errors.append(f"{rid}: duplicate id")
