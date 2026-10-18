@@ -78,7 +78,24 @@
 - **(b) agents (live)**: `.opencode/agent/md-agent.md` + `.opencode/mode/md-mode.md` both discovered, ids from relative path ✓; `mode` default "primary" both sides (ref fills `Info.default` mode:"primary" via `update()`; the legacySources primary:false only forces mode/ files — verified ref agent.ts:177-210 + core/src/agent.ts:69-82 — NOT a divergence); unknown frontmatter key triggers legacy-v1 migration into `request.body` (ref `legacy = some(!agentKeys.has(key))` → decodeLegacyAgent+migrateAgent — same chain) ✓; collision (markdown vs config `agents.md-agent`) → markdown wins, ref-equivalent by document ordering (synthetic .opencode-dir docs load after the project's direct opencode.json; findLast precedence).
 - Prompt-copy note: `prompt` has no file-discovery source in ref (v9 census re-verified: `grep -n 'Prompt' …/{command,agent}.ts` = 0) — MCP prompts are C9/C20 cells (carried).
 
-*(execution continues — D1, D5 next per lane priority)*
+### CD-15 (MED) — D1: `session.forked` published without the `location` envelope field
+- **Evidence (I1 live both legs, same flow)**: ours `{"id","created","type","durable","data"}` vs ref-binary 2.0.25 `{...,"location":{directory}}` — the ONLY envelope diff on the only diverging shared type. Every other shared event type matched envelope+payload key sets exactly (`/tmp/opencode/scancd/d1/fielddiff.py` over ourssse.log vs refsse2.log; 30 vs 31 types; run-asymmetry rows adjudicated below).
+- **Effect**: location-keyed SSE consumers (per-directory routing in webui/session-ui class) misroute fork events. Narrow fix: publish with location like every other session event.
+
+### CD-16 (LOW) — D1: reasoning emission is lazy on ours, eager on ref (openai-compat)
+- **Evidence**: content-only stream → ref emits `session.reasoning.started{state:{reasoningField}}`+deltas+ended even with NO reasoning content; ours emits nothing. Positive control (mock sends `reasoning_content`): ours emits all 3 events AND stores the reasoning part `{state:{reasoningField:"reasoning_content"},text,type:reasoning}` — payload-shape exact vs ref. Divergence = eager-open vs lazy-open of the reasoning fragment (timing/visibility cell; end-state identical).
+
+### CD-17 (INFO) — D1 verified-parity rows
+- **Field-level universe (live, both legs, same scripted flow)**: envelope `{id, created?, type, location, data, durable?{aggregateID,seq,version}}` + `: heartbeat` keepalives on both; payload key sets identical on every shared type (session.created/inbox.enqueued/inbox.delivered/execution.started/step.started/step.streamed/text.started/text.delta/text.ended/step.ended/step.failed/usage.updated/instructions.updated/forked); boot registry snapshot events identical on both (server.connected + agent/command/integration/model/plugin/project/provider/reference/skill/websearch .updated — ours under OPENCODE_CATALOG_FETCH=0 suppressed only `models-dev.refreshed`, which ours implements: provider_catalog/refresh.rs).
+- **Error-injection**: mid-stream provider abort → ours `session.step.failed` + retry path + `session.execution.interrupted{reason}` on interrupt (live); ref leg produced `session.execution.failed{error,sessionID}` — our schema `ExecutionFailed{sessionID, error}` field-exact (`oc-schema/src/session_event.rs:236-242`). Provider-unreachable leg (C1 first run): outcome=failed + assistant error part `{type,message}` ✓.
+- **Ordering guarantee**: within-aggregate durable `seq` strictly monotonic on ours across the full capture (2 aggregates, 0 violations).
+- **TUI consumer**: store.rs ingest arms exist for every streaming type (text/reasoning/tool/step/inbox — enumerated during C1); webui consumer rides D6 (carried).
+
+### CD-18 (I8) — D1 canary executed: v1 FAIL → oracle redesigned → PASS (recorded per the on-the-spot rule)
+- Canary A (adjacent same-type event reorder) was INVISIBLE to a type-sequence ordering check — the method's blindspot; redesigned to instance fingerprints (type + payload digest): 2 mismatched positions detected. Canary B (optional `location` drop) flagged by the field-diff. Final: **I8-D1 PASS** with the fingerprint oracle; the v1 oracle is recorded as insufficient (an agent re-running D1 must use instance fingerprints, not type sequences).
+
+*(execution continues — D5 next per lane priority, then second-tier C2/C3/C5/C9/C13/C15/C16/C20/D2/D3/D4)*
+
 
 
 
