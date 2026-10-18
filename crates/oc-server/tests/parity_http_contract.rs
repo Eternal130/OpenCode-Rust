@@ -157,33 +157,40 @@ async fn cursor_absent_not_null() {
     assert!(body2["cursor"]["previous"].is_string(), "non-final page carries previous");
     assert!(body2["cursor"]["next"].is_string(), "non-final page carries next");
 
-    // Page 3 (empty): v2 omits both keys entirely — `cursor: {}`.
+    // Page 3 (empty): v2's RUNTIME emits explicit nulls — probed 2026-10-19
+    // against the live reference: `{"data":[],"cursor":{"previous":null,"next":null}}`
+    // (the cursor serializer renders undefined as null, not omitted; the
+    // static reading of session.ts:79-96 was corrected by this probe).
     let next2 = cursor_string(&body2, "next");
     let page3 = server.raw(&format!("/api/session?limit=2&cursor={next2}")).await;
     assert_eq!(page3.status, 200);
     let body3 = page3.json();
     assert_eq!(body3["data"].as_array().expect("data array").len(), 0);
     assert!(
-        body3["cursor"].get("previous").is_none(),
-        "empty page must OMIT previous (absent, not null): {}",
+        body3["cursor"].get("previous").is_some()
+            && body3["cursor"]["previous"].is_null(),
+        "empty page must emit previous:null (v2 runtime probe): {}",
         body3["cursor"]
     );
     assert!(
-        body3["cursor"].get("next").is_none(),
-        "empty page must OMIT next (absent, not null): {}",
+        body3["cursor"].get("next").is_some()
+            && body3["cursor"]["next"].is_null(),
+        "empty page must emit next:null (v2 runtime probe): {}",
         body3["cursor"]
     );
 
-    // Message endpoint: a session with no messages returns `cursor: {}`.
+    // Message endpoint: a session with no messages returns explicit nulls too.
     let session_id = create_session(&server.client, "h2-empty").await;
     let messages = server.raw(&format!("/api/session/{session_id}/message")).await;
     assert_eq!(messages.status, 200);
     let message_body = messages.json();
     assert_eq!(message_body["data"].as_array().expect("data array").len(), 0);
     assert!(
-        message_body["cursor"].get("previous").is_none()
-            && message_body["cursor"].get("next").is_none(),
-        "empty message page must omit cursor keys: {}",
+        message_body["cursor"].get("previous").is_some()
+            && message_body["cursor"]["previous"].is_null()
+            && message_body["cursor"].get("next").is_some()
+            && message_body["cursor"]["next"].is_null(),
+        "empty message page must emit cursor nulls (v2 runtime probe): {}",
         message_body["cursor"]
     );
 }
