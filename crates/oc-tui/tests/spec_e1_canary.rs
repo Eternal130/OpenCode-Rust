@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use vt_harness::{
     open_first_session, pty_lock, run_tui, sandbox_env, standard_sessions,
-    streaming_thinking_script, FakeLlm, LiveHarness, HarnessHandle, Snapshot, WORDMARK,
+    streaming_thinking_script, FakeLlm, HarnessHandle, LiveHarness, Snapshot, WORDMARK,
 };
 
 // ------------------------------------------------------------- detector
@@ -80,11 +80,7 @@ fn detect(name: &'static str, stamps: &[u64]) -> CellAudit {
 /// exactly what a 250ms render-flush sleep looks like at the PTY boundary.
 fn inject_one_shot_stall(stamps: &[u64], frac: f64, stall_ms: u64) -> Vec<u64> {
     let idx = ((stamps.len() as f64) * frac) as usize;
-    stamps
-        .iter()
-        .enumerate()
-        .map(|(i, t)| if i >= idx { t + stall_ms } else { *t })
-        .collect()
+    stamps.iter().enumerate().map(|(i, t)| if i >= idx { t + stall_ms } else { *t }).collect()
 }
 
 // ------------------------------------------------------------- orchestration
@@ -185,7 +181,10 @@ fn e1_stall_canary_localizes_and_no_false_positives() {
     for a in &audits {
         eprintln!(
             "[E1] drive-audit {}: flushes-gap median={}ms cadence_active={} natural_bursts={}",
-            a.name, a.median_gap, a.cadence_active, a.bursts.len()
+            a.name,
+            a.median_gap,
+            a.cadence_active,
+            a.bursts.len()
         );
     }
     let natural: usize = audits.iter().map(|a| a.bursts.len()).sum();

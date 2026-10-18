@@ -32,7 +32,12 @@ const ROWS: usize = 28;
 fn note(file: &str, line: &str) {
     std::fs::create_dir_all(OUT).ok();
     use std::io::Write;
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(format!("{OUT}/{file}")).ok().unwrap();
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(format!("{OUT}/{file}"))
+        .ok()
+        .unwrap();
     writeln!(f, "{line}").ok();
 }
 
@@ -101,13 +106,15 @@ fn b1_i8_canary_keybind_override() {
             // default chord: ctrl+c on an EMPTY draft (app.exit enabled)
             let from = h.raw_len();
             h.write(b"\x03");
-            let default_dead = !h.wait_for_after(vt_harness::ALT_SCREEN_LEAVE, from, Duration::from_secs(3));
+            let default_dead =
+                !h.wait_for_after(vt_harness::ALT_SCREEN_LEAVE, from, Duration::from_secs(3));
             // custom chord: ctrl+q = 0x11 (terminal-encodable; if the
             // rebind took, THIS exits — and the trailing exit_chord
             // (ctrl+c dead) never matters).
             let from2 = h.raw_len();
             h.write(b"\x11"); // ctrl+q
-            let custom_live = h.wait_for_after(vt_harness::ALT_SCREEN_LEAVE, from2, Duration::from_secs(4));
+            let custom_live =
+                h.wait_for_after(vt_harness::ALT_SCREEN_LEAVE, from2, Duration::from_secs(4));
             Ok((default_dead, custom_live))
         },
     );
@@ -160,7 +167,8 @@ fn b1_end_effect_table() {
             // home/base + ctrl+c on empty draft: exit (default binding)
             let from = h.raw_len();
             h.write(b"\x03");
-            let ctrlc_exits = h.wait_for_after(vt_harness::ALT_SCREEN_LEAVE, from, Duration::from_secs(3));
+            let ctrlc_exits =
+                h.wait_for_after(vt_harness::ALT_SCREEN_LEAVE, from, Duration::from_secs(3));
             rows.push(format!(
                 "| home | empty draft | ctrl+c (app.exit default) | teardown | {} |",
                 if ctrlc_exits { "exits" } else { "no-exit" }
@@ -236,10 +244,7 @@ fn b1_end_effect_table() {
         table.iter().any(|r| r.contains("| composer echo | echoed")),
         "composer echo cell failed"
     );
-    assert!(
-        table.iter().any(|r| r.contains("| teardown | exits")),
-        "default app.exit cell failed"
-    );
+    assert!(table.iter().any(|r| r.contains("| teardown | exits")), "default app.exit cell failed");
 }
 
 /// Session-route cells (runs its own boot; SA-F13 forbids double boot).
@@ -267,7 +272,8 @@ fn b1_end_effect_table_session() {
             // `messages_copy_resolves_text_and_toasts` (I5).
             let from = h.raw_len();
             h.write(b"\x18y");
-            let miss_toast = h.wait_for_after(b"No assistant messages", from, Duration::from_secs(4));
+            let miss_toast =
+                h.wait_for_after(b"No assistant messages", from, Duration::from_secs(4));
             let osc = h.raw_mirror().windows(7).any(|w| w == b"\x1b]52;c;");
             rows.push(format!(
                 "| session | user-only transcript | <leader>y (messages.copy) | v2 miss toast, no OSC 52 | toast={} osc52={} |",
@@ -377,7 +383,11 @@ fn b2_pointer_end_effects() {
             let scrolled = before5 != after5;
             rows.push(format!(
                 "| transcript | short (no overflow) | wheel down | viewport/repaint change | {} |",
-                if scrolled { "changes" } else { "no-op (no overflow — disposition: fixture-bound)" }
+                if scrolled {
+                    "changes"
+                } else {
+                    "no-op (no overflow — disposition: fixture-bound)"
+                }
             ));
 
             // (6) drag across the tab strip: observed effect + lifetime

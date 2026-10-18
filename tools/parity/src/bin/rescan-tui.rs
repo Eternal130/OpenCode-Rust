@@ -71,11 +71,7 @@ fn seed_home_plugin(home: &Path, omos: &Path, suffix: &str) -> std::io::Result<(
         std::fs::create_dir_all(home.join(dir))?;
     }
     // omos = <base>/<pkg>@<spec>/<stamp>/node_modules/<pkg>
-    let stamp = omos
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .expect("stamp dir");
+    let stamp = omos.parent().and_then(Path::parent).map(Path::to_path_buf).expect("stamp dir");
     let name = stamp.file_name().and_then(|n| n.to_str()).unwrap_or("stamp").to_owned();
     copy_dir_all(
         &stamp,
@@ -123,13 +119,23 @@ fn seed_project(project: &Path, stub_url: &str, plugin_spec: &str) -> anyhow::Re
 }
 "#,
     )?;
-    let _ = std::process::Command::new("git").args(["init", "--quiet"]).current_dir(project).output();
+    let _ =
+        std::process::Command::new("git").args(["init", "--quiet"]).current_dir(project).output();
     let _ = std::process::Command::new("git")
         .args(["-c", "user.email=r@opencode.ai", "-c", "user.name=R", "add", "-A"])
         .current_dir(project)
         .output();
     let _ = std::process::Command::new("git")
-        .args(["-c", "user.email=r@opencode.ai", "-c", "user.name=R", "commit", "--quiet", "-m", "seed"])
+        .args([
+            "-c",
+            "user.email=r@opencode.ai",
+            "-c",
+            "user.name=R",
+            "commit",
+            "--quiet",
+            "-m",
+            "seed",
+        ])
         .current_dir(project)
         .output();
     Ok(())
@@ -190,8 +196,7 @@ fn ref_checkout_root() -> PathBuf {
 }
 
 fn resolve_bun() -> PathBuf {
-    std::env::var("PARITY_BUN")
-        .map_or_else(|_| PathBuf::from("/root/.bun/bin/bun"), PathBuf::from)
+    std::env::var("PARITY_BUN").map_or_else(|_| PathBuf::from("/root/.bun/bin/bun"), PathBuf::from)
 }
 
 struct Args {
@@ -347,7 +352,8 @@ async fn spawn_ref_bin(
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {    let args = parse_args();
+async fn main() -> anyhow::Result<()> {
+    let args = parse_args();
     let root = args.out.clone();
     std::fs::create_dir_all(&root)?;
 
@@ -382,19 +388,30 @@ async fn main() -> anyhow::Result<()> {    let args = parse_args();
         let ref_server = if let Some(bin) = args.ref_bin.clone() {
             spawn_ref_bin(&bin, &ref_home, &project, &config_env).await?
         } else {
-            RefSide::Checkout(parity::reference::spawn_reference(parity::reference::ReferenceSpawn {
-                extra_env: vec![
-                    ("OPENCODE_CONFIG", config_env.as_str()),
-                    ("HOME", ref_home.display().to_string().as_str()),
-                    ("XDG_CONFIG_HOME", ref_home.join(".config").display().to_string().as_str()),
-                    ("XDG_CACHE_HOME", ref_home.join(".cache").display().to_string().as_str()),
-                    ("XDG_DATA_HOME", ref_home.join(".local/share").display().to_string().as_str()),
-                    ("XDG_STATE_HOME", ref_home.join(".local/state").display().to_string().as_str()),
-                    ("OPENCODE_DISABLE_MODELS_FETCH", "1"),
-                ],
-                seed_files: Vec::new(),
-            })
-            .await?)
+            RefSide::Checkout(
+                parity::reference::spawn_reference(parity::reference::ReferenceSpawn {
+                    extra_env: vec![
+                        ("OPENCODE_CONFIG", config_env.as_str()),
+                        ("HOME", ref_home.display().to_string().as_str()),
+                        (
+                            "XDG_CONFIG_HOME",
+                            ref_home.join(".config").display().to_string().as_str(),
+                        ),
+                        ("XDG_CACHE_HOME", ref_home.join(".cache").display().to_string().as_str()),
+                        (
+                            "XDG_DATA_HOME",
+                            ref_home.join(".local/share").display().to_string().as_str(),
+                        ),
+                        (
+                            "XDG_STATE_HOME",
+                            ref_home.join(".local/state").display().to_string().as_str(),
+                        ),
+                        ("OPENCODE_DISABLE_MODELS_FETCH", "1"),
+                    ],
+                    seed_files: Vec::new(),
+                })
+                .await?,
+            )
         };
         let our_server = parity::rust_server::spawn_rust(parity::rust_server::RustSpawn {
             extra_env: vec![
@@ -414,8 +431,8 @@ async fn main() -> anyhow::Result<()> {    let args = parse_args();
         let ref_argv = if let Some(bin) = args.ref_bin.clone() {
             vec!["--server".to_owned(), ref_server.url()]
         } else {
-            let preload =
-                ref_checkout_root().join("packages/cli/node_modules/@opentui/solid/scripts/preload.js");
+            let preload = ref_checkout_root()
+                .join("packages/cli/node_modules/@opentui/solid/scripts/preload.js");
             let entry = ref_checkout_root().join("packages/cli/src/index.ts");
             vec![
                 "--preload".to_owned(),
@@ -436,14 +453,8 @@ async fn main() -> anyhow::Result<()> {    let args = parse_args();
         let our_env = home_env(&our_home, our_server.password(), &config_path);
 
         let ref_program: PathBuf = args.ref_bin.clone().unwrap_or_else(|| resolve_bun());
-        let mut ref_tui = PtyChild::spawn(
-            &ref_program,
-            &ref_argv,
-            &project,
-            &ref_env,
-            args.cols,
-            args.rows,
-        )?;
+        let mut ref_tui =
+            PtyChild::spawn(&ref_program, &ref_argv, &project, &ref_env, args.cols, args.rows)?;
         let mut our_tui =
             PtyChild::spawn(&cli, &our_argv, &project, &our_env, args.cols, args.rows)?;
 
