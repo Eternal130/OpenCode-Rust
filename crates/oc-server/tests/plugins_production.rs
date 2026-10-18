@@ -373,13 +373,7 @@ async fn mcp_tool_appears_only_behind_execute_with_the_builtin_runtime() {
     // The MCP tool registers once the bridge's initial discovery
     // settles (the fixture answers tools/list with `probe`).
     let registered = wait_for(Duration::from_secs(20), || {
-        services
-            .graph
-            .tools
-            .snapshot(None)
-            .iter()
-            .find(|tool| tool.name == "fixture_probe")
-            .cloned()
+        services.graph.tools.snapshot(None).iter().find(|tool| tool.name == "probe").cloned()
     })
     .await
     .expect("the fixture MCP tool registered");
@@ -397,7 +391,7 @@ async fn mcp_tool_appears_only_behind_execute_with_the_builtin_runtime() {
         code_mode,
     );
     let names: Vec<&str> = shaped.iter().map(|tool| tool.name.as_str()).collect();
-    assert!(!names.contains(&"fixture_probe"), "the MCP tool is hidden behind execute: {names:?}");
+    assert!(!names.contains(&"probe"), "the MCP tool is hidden behind execute: {names:?}");
     assert!(names.contains(&"execute"), "execute is advertised: {names:?}");
 
     // The catalog lists the fixture tool under its namespace (what a
@@ -405,7 +399,7 @@ async fn mcp_tool_appears_only_behind_execute_with_the_builtin_runtime() {
     let catalog = oc_core::tool::codemode::code_mode_entries(&services.graph.tools);
     let paths: Vec<&str> = catalog.iter().map(|entry| entry.path.as_str()).collect();
     assert!(
-        paths.iter().any(|path| path.ends_with("fixture.fixture_probe")),
+        paths.iter().any(|path| path.ends_with("fixture.probe")),
         "the catalog carries the fixture tool: {paths:?}"
     );
 

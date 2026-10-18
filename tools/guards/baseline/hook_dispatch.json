@@ -1,6 +1,6 @@
 {
   "guard": "hook_dispatch",
-  "count": 10,
+  "count": 9,
   "violations": [
     "hook:aisdk_language",
     "hook:aisdk_sdk",
@@ -10,7 +10,6 @@
     "hook:session_http_response",
     "hook:session_ws_handshake",
     "hook:session_ws_receive",
-    "hook:session_ws_send",
-    "hook:shell_create_before"
+    "hook:session_ws_send"
   ]
 }

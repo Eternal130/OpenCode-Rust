@@ -927,7 +927,19 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
                 let context = call_context.clone();
                 let name = name.to_string();
                 Box::pin(async move {
-                    let Some(executor) = registry.executor(&name) else {
+                    // The guest calls by QUALIFIED path (`namespace.name` —
+                    // buildToolsTree marks every callable with entry.path);
+                    // executors register under the bare name. Direct hit
+                    // first (unnamed tools), then the path resolves through
+                    // the registration table.
+                    let executor = registry.executor(&name).or_else(|| {
+                        registry
+                            .list()
+                            .into_iter()
+                            .find(|registration| qualified_path(registration) == name)
+                            .and_then(|registration| registry.executor(&registration.name))
+                    });
+                    let Some(executor) = executor else {
                         return Err(format!("Unknown Code Mode tool: {name}"));
                     };
                     executor
@@ -1280,6 +1292,7 @@ mod executor_tests {
             input: serde_json::json!({ "type": "object", "properties": { "name": { "type": "string" } } }),
             permission: None,
             codemode: true,
+            namespace: None,
             execute: Arc::new(Leaf { text, fail }),
         }
     }
