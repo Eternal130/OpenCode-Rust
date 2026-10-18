@@ -992,6 +992,14 @@ impl Engine {
             Arc::clone(&resolver),
             Arc::clone(&self.rng),
         ));
+        // The config `compaction` key (v2 `ConfigCompactionPlugin`,
+        // config/plugin/compaction.ts): every document's
+        // `editor.configure({...})` spreads over the current settings —
+        // per-key latest-wins across the location's documents
+        // (`Config.latest` per key, not per section).
+        if let Some(settings) = config_compaction_settings(&inputs.config_documents) {
+            compaction.configure(settings);
+        }
         let title = Arc::new(SessionTitle::new(
             (*self.db).clone(),
             (*self.bus).clone(),
@@ -1878,6 +1886,32 @@ fn config_shell_of(documents: &[oc_schema::config::Document]) -> Option<String> 
         .iter()
         .rev()
         .find_map(|document| document.info.shell.clone().filter(|shell| !shell.is_empty()))
+}
+
+/// The config `compaction` key (v2 `ConfigCompactionPlugin`,
+/// config/plugin/compaction.ts:15-22): each document's
+/// `editor.configure({ ...present keys })` spreads over the running
+/// settings, so a key only changes when a LATER document owns it —
+/// per-key latest-wins, the section never resets wholesale. `None`
+/// when no document configures compaction (service defaults).
+fn config_compaction_settings(
+    documents: &[oc_schema::config::Document],
+) -> Option<crate::session::runner::compaction::Settings> {
+    let mut settings: Option<crate::session::runner::compaction::Settings> = None;
+    for document in documents {
+        let Some(compaction) = document.info.compaction.as_ref() else { continue };
+        let current = settings.get_or_insert_with(Default::default);
+        if let Some(auto) = compaction.auto {
+            current.auto = auto;
+        }
+        if let Some(buffer) = compaction.buffer {
+            current.buffer = Some(i64::try_from(buffer).unwrap_or(i64::MAX));
+        }
+        if let Some(tokens) = compaction.keep.as_ref().and_then(|keep| keep.tokens) {
+            current.keep = i64::try_from(tokens).unwrap_or(i64::MAX);
+        }
+    }
+    settings
 }
 
 /// The config `experimental` key (`Config.latest(entries, "experimental")`):
