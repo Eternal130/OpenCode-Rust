@@ -44,6 +44,8 @@ pub mod reference;
 pub mod rust_server;
 pub mod scenario;
 pub mod sse;
+pub mod termatrix;
+pub mod tui_diff;
 pub mod tui_frame;
 
 pub mod minih;
