@@ -5400,23 +5400,32 @@ pub async fn run_with_size(
             }
         }
         // Toast/spinner clock — with the marquee's own steady ticker
-        // riding on top (beta.13 bug 3): while a hover scroll runs,
-        // the loop wakes exactly on the next 80 ms boundary and PINS
-        // the clock to it, so the offset advances by exactly one cell
-        // per tick (v2's `setInterval(…, MARQUEE_INTERVAL)` —
-        // createMarquee, session-tabs.tsx:279-369). The plain 100 ms
-        // tick only advances while it CANNOT cross a boundary
-        // (toasts/spinners keep their cadence; the marquee never
-        // samples past a step it should land on).
+        // riding on top (beta.13 bug 3 + SA-F3): while a hover scroll
+        // runs, the loop wakes exactly on the next 80 ms boundary and
+        // PINS the clock to the most recent PASSED boundary, so the
+        // offset advances by exactly one cell per tick (v2's
+        // `setInterval(…, MARQUEE_INTERVAL)` — createMarquee,
+        // session-tabs.tsx:279-369). The pin compares against the
+        // CLOCK, never against `now` (the next boundary is strictly
+        // future by construction — the old `deadline <= now` form
+        // never fired and the plain 100 ms tick advanced the clock
+        // two boundaries at a time: the measured ~166 ms/step). The
+        // plain 100 ms tick serves everything else and stays SUSPENDED
+        // while a scroll is live (the pin cadence subsumes it — the
+        // clock never samples past a boundary the marquee should land
+        // on).
         let now_ms = system_now_ms();
+        let passed_boundary = crate::components::session_tabs_solid::marquee_passed_step(now_ms);
         let marquee_deadline = crate::components::session_tabs_solid::marquee_next_step(now_ms);
         let mut ticked = false;
-        if let Some(deadline) = marquee_deadline.filter(|deadline| *deadline <= now_ms) {
-            app.store.advance_clock(deadline);
-            app.store.toast_advance(deadline);
+        if let Some(boundary) = passed_boundary.filter(|boundary| *boundary > app.store.clock()) {
+            app.store.advance_clock(boundary);
+            app.store.toast_advance(boundary);
             ticked = true;
-        } else if last_tick.elapsed() >= std::time::Duration::from_millis(100)
-            && marquee_deadline.is_none_or(|deadline| deadline > now_ms)
+        }
+        if !ticked
+            && last_tick.elapsed() >= std::time::Duration::from_millis(100)
+            && passed_boundary.is_none()
         {
             app.store.advance_clock(now_ms);
             app.store.toast_advance(now_ms);

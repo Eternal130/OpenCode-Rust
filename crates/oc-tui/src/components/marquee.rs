@@ -200,6 +200,34 @@ impl Marquee {
         }
         Some(start + k * MARQUEE_INTERVAL)
     }
+
+    /// The most recent boundary AT OR BEFORE `now_ms` while the scroll
+    /// is live — the pin the run loop advances the store clock to
+    /// (SA-F3: the old loop compared `next_step_ms` — a STRICTLY
+    /// FUTURE instant, `k = q+1 ⇒ start + k·interval > now` — against
+    /// `now` and the pin branch never fired; the clock only advanced
+    /// on the plain 100 ms ticks, which (with wakes landing on every
+    /// 80 ms boundary) fired every OTHER boundary → the offset jumped
+    /// +2 cells per ~160 ms — the measured ~166 ms/step vs the 80 ms
+    /// pin). `None` while idle, inside the delay, or past the
+    /// one-pass clamp (mirrors `next_step_ms`'s liveness exactly).
+    #[must_use]
+    pub fn passed_step_ms(&self, now_ms: u64) -> Option<u64> {
+        self.active.as_ref()?;
+        if self.cycle_width <= 1 {
+            return None;
+        }
+        let start = self.entered_ms.saturating_add(MARQUEE_DELAY);
+        if now_ms < start {
+            return None;
+        }
+        let q = (now_ms - start) / MARQUEE_INTERVAL;
+        let max_k = u64::try_from(self.cycle_width.saturating_sub(2)).unwrap_or(0);
+        if q + 1 > max_k {
+            return None;
+        }
+        Some(start + q * MARQUEE_INTERVAL)
+    }
 }
 
 #[cfg(test)]
@@ -290,5 +318,40 @@ mod tests {
         // A hover-off kills the ticker.
         marquee.leave("s1");
         assert_eq!(marquee.next_step_ms(now), None);
+    }
+
+    /// SA-F3: `passed_step_ms` is the pin the run loop needs — the
+    /// most recent boundary AT OR BEFORE `now` (so a wake landing on a
+    /// boundary can pin the clock to exactly it), liveness mirroring
+    /// `next_step_ms` exactly. The OLD loop's `deadline <= now`
+    /// comparison against `next_step_ms` could never fire (the next
+    /// boundary is strictly future by construction) — this test pins
+    /// the invariant that makes the fixed loop's pin branch fire.
+    #[test]
+    fn passed_step_names_the_boundary_to_pin_each_wake() {
+        let mut marquee = Marquee::default();
+        assert_eq!(marquee.passed_step_ms(0), None, "idle: nothing to pin");
+        marquee.enter("s1", "A very long session title that overflows", 10, 0);
+        assert_eq!(marquee.passed_step_ms(599), None, "inside the delay: nothing yet");
+        // AT the delay's end the first boundary has passed (offset 1).
+        assert_eq!(marquee.passed_step_ms(600), Some(600));
+        assert_eq!(marquee.passed_step_ms(679), Some(600), "pre-boundary: still 600");
+        assert_eq!(marquee.passed_step_ms(680), Some(680));
+        assert_eq!(marquee.passed_step_ms(1_000), Some(1_000), "the grid: 600+5·80");
+        // The next deadline is ALWAYS strictly future — the invariant
+        // the old pin branch violated (it compared this against now).
+        let mut now = 600u64;
+        while let Some(next) = marquee.next_step_ms(now) {
+            assert!(next > now, "the next boundary is strictly future");
+            let passed = marquee.passed_step_ms(now).expect("live while next exists");
+            assert!(passed <= now, "the pin is at or before now");
+            assert_eq!(passed + MARQUEE_INTERVAL, next, "pin and next are one interval apart");
+            now = next;
+        }
+        // Past the one-pass clamp BOTH go None (plain ticks resume).
+        let cycle = marquee_cycle_width("A very long session title that overflows");
+        let end = MARQUEE_DELAY + u64::try_from(cycle).unwrap_or(0) * MARQUEE_INTERVAL + 500;
+        assert_eq!(marquee.next_step_ms(end), None);
+        assert_eq!(marquee.passed_step_ms(end), None, "the clamp ends the pin too");
     }
 }

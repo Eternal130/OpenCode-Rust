@@ -283,6 +283,14 @@ pub fn marquee_next_step(now_ms: u64) -> Option<u64> {
     MARQUEE.with(|marquee| marquee.borrow().next_step_ms(now_ms))
 }
 
+/// The running marquee's most recent PASSED boundary (`None` while no
+/// scroll is active) — the instant the run loop pins the store clock
+/// to each wake (SA-F3: the true 80 ms step grid, one cell per tick).
+#[must_use]
+pub fn marquee_passed_step(now_ms: u64) -> Option<u64> {
+    MARQUEE.with(|marquee| marquee.borrow().passed_step_ms(now_ms))
+}
+
 /// The sweep band's cell color for a busy tab (the `TabPulse` active
 /// phase): `pulseColor = tint(bg, text.base, 0.45)`
 /// (session-tabs.tsx:1575), the band profile `intensityAt(cell, front,
