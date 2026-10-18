@@ -119,8 +119,10 @@ async fn handlers_session_list_cursor_round_trip() {
         .await
         .expect("list");
     assert_eq!(page.data.len(), 2);
-    assert!(page.cursor.next.is_some(), "has-more must produce a next cursor");
-    assert!(page.cursor.previous.is_none());
+    // v2 session.ts:79-96 — every non-empty page carries BOTH cursors
+    // (first/last row anchors, no has-more gate).
+    assert!(page.cursor.next.is_some(), "non-empty pages carry a next cursor");
+    assert!(page.cursor.previous.is_some(), "page 1 carries a previous cursor");
 
     let next = client
         .session()
@@ -133,8 +135,21 @@ async fn handlers_session_list_cursor_round_trip() {
         .expect("list next");
     assert_eq!(next.data.len(), 1);
     assert!(next.cursor.previous.is_some(), "cursor'd pages carry a previous cursor");
+    assert!(next.cursor.next.is_some(), "final non-empty page still carries next");
     let page_one_last = page.data.last().unwrap().id.clone();
     assert_ne!(next.data[0].id, page_one_last, "descending default order");
+
+    // Following the last page's cursor yields the empty terminal page.
+    let terminal = client
+        .session()
+        .list(&SessionListQuery {
+            cursor: next.cursor.next.clone(),
+            limit: Some("2".to_owned()),
+            ..Default::default()
+        })
+        .await
+        .expect("terminal page");
+    assert!(terminal.data.is_empty(), "pagination terminates: {:?}", terminal.data);
 
     let error = client
         .session()
@@ -250,12 +265,13 @@ async fn handlers_prompt_image_files_materialize_into_the_inbox() {
 }
 
 #[tokio::test]
-async fn handlers_messages_invalid_cursor_xor_order() {
+async fn handlers_messages_cursor_order_rules() {
     let server = boot().await;
     let client = &server.client;
     let session_id = create_session(client, "msgs").await.id;
 
-    // An asc-order cursor against the default desc request → 400 (XOR rule).
+    // v2 message.ts:35-36 — cursor + order → 400 "Cursor cannot be
+    // combined with order".
     let asc_cursor = handlers::common::encode_message_cursor(&handlers::common::MessageCursor {
         id: "msg_1".to_owned(),
         order: handlers::common::ListOrderWire::Asc,
@@ -266,11 +282,26 @@ async fn handlers_messages_invalid_cursor_xor_order() {
         .message()
         .list(
             &session_id,
-            &SessionMessageListQuery { cursor: Some(asc_cursor), ..Default::default() },
+            &SessionMessageListQuery {
+                cursor: Some(asc_cursor.clone()),
+                order: Some(SessionMessageListQueryOrder::Asc),
+                ..Default::default()
+            },
         )
         .await
-        .expect_err("cursor XOR order");
+        .expect_err("cursor+order rejected");
     assert_api(&error, 400, "InvalidCursorError");
+
+    // Cursor-only: the order comes from the token (message.ts:40) — an
+    // asc cursor pages ascending even though the request says nothing.
+    let page = client
+        .message()
+        .list(
+            &session_id,
+            &SessionMessageListQuery { cursor: Some(asc_cursor), ..Default::default() },
+        )
+        .await;
+    assert!(page.is_ok(), "cursor-only pages use the token's order: {:?}", page.err());
 
     let error = client
         .message()
