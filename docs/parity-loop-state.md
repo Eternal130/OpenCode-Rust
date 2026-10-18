@@ -18,9 +18,12 @@ Ledger: 380 rows, validate --paths errors=0. Gates: Gate 0 strict + 5 skeletons,
 
 | lane | cluster | worktree | branch | owner | entries | status |
 |---|---|---|---|---|---|---|
-| lane-cred | C1 CRED | `.worktrees/lane-cred` | `lane/cred` | fix-11 (bg) | CRED-B1, CRED-B2, CRED-B3(needs-runtime→repro first) | dispatched |
-| lane-tui | C6a TUI-FORM | `.worktrees/lane-tui` | `lane/tui-form` | fix-12 (bg) | TUI-TD16, TD17, TD18, TD19 | dispatched |
-| lane-plugin | C2a PLUGIN-core | `.worktrees/lane-plugin` | `lane/plugin-core` | fix-13 (bg) | PLUG-D21, D18, D14 | dispatched |
+| lane-cred | C1 CRED | removed (merged) | `lane/cred` | fix-11→lane-verify | CRED-B1, CRED-B2, CRED-B3 | **MERGED @bc7fdd3, all 3 verified** (+2 follow-up entries: CRED-CONSOLE-KEYAUTH S1, CRED-AUTHNONE S2) |
+| lane-tui | C6a TUI-FORM | `.worktrees/lane-tui` | `lane/tui-form` | fix-12 (bg) | TUI-TD16, TD17, TD18, TD19 | running |
+| lane-plugin | C2a PLUGIN-core | `.worktrees/lane-plugin` | `lane/plugin-core` | fix-13 (bg) | PLUG-D21, D18, D14 | running |
+
+Post-merge gates for CRED @bc7fdd3: oc-core+oc-server **1080/1080**, fmt clean, clippy clean, ledger validate errors=0.
+Infra note: repo-wide root-owned sweep executed under the user's chown approval after a root-owned source dir (`crates/oc-core/src/integration/`) blocked the merge; remaining root-owned outside `.worktrees` = 0. Merge-leftover cleanup (untracked mid-checkout files) handled.
 
 Hot files: app.rs/store.rs → lane-tui (C6a owns this batch); hooks.rs → lane-plugin (C2a owns 1A seam); resolver.rs → lane-cred. C2b (D33/D35) waits for C2a; C2c (TUI slot) waits for C6a seam + C2b.
 Merge order when lanes return: serial, one cluster at a time, affected tests + gate subset + fmt/clippy after each.
