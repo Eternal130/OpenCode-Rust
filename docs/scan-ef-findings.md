@@ -1,5 +1,72 @@
 # SCAN-EF2 — Axes E1–E12 + F1–F7 + SCAN-AB carries
 
+> **WAVE-2 (FIXW2) DISPOSITIONS — 2026-10-18** (branch `lane/fixw2`;
+> proofs: the re-enabled acceptance tests + `docs/fixw2.log`):
+>
+> * **SE-F1 (S2) — RESOLVED (instrument boundary + real fix)**: the
+>   uniform 151.0 ms "first-wheel gaps" tracked the cell's own 150 ms
+>   wheel-drive pacing (flush ≈1 ms after each notch), not a
+>   main-thread stall — the E1 detector now exempts gaps within the
+>   drive interval (documented in `spec_ef2_e1_cells.rs`). The real
+>   first-scroll warmup residue (34 KB drafts: 174–177 ms wheel
+>   windows) died with the SE-F11 memo below — every cell now
+>   audits 0 bursts at ~110 ms medians.
+> * **SE-F2 (S1) — FIXED (root cause revised)**: NOT the resize
+>   path — a resize round-trip repro exits cleanly once the dialog/
+>   draft state is clean. The wedge was the exit chord's shape:
+>   ctrl+c on a NON-empty draft only clears (v2 semantics), and
+>   `<leader>q` is `session.queued_prompts` in v2 (keybind.ts:131;
+>   our table matches) — so the harness's single-ctrl+c chord could
+>   never exit through paste residue (ctrl+u is line-scoped) or an
+>   open dialog. The harness chord is now clear-then-exit
+>   (`ctrl+c, ctrl+c, <leader>q`); the A2 sweep also shares ONE PTY
+>   across widths (the SA-F13 constraint — crossterm's global event
+>   source pins the first tty's epoll registration; per-width
+>   re-attach left leg-2's reader polling a dead slave).
+> * **SE-F3 (S2) — FIXED**: `GitSnapshotStore::open` no longer inits
+>   the bare repo at boot; `open_repo()` inits on first use
+>   (racy-init safe). oc-core 864/864 green.
+> * **SE-F4 (S2) — FIXED (ref semantics)**: the session-list dialog
+>   filters with trim + case-fold + byte-exact SUBSTRING
+>   (`SelectProps::substring_filter`), whitespace-only = full list,
+>   and lists PARENTS only (`SessionSnapshot::parent_id` off the
+>   wire). Unit-pinned by
+>   `substring_filter_matches_the_session_list_contract`.
+> * **SE-F5 (S2) — FIXED**: a 0×0 winsize falls to the default frame
+>   (and the live-size reconciliation never re-adopts a degenerate
+>   area) — the un-winsized PTY paints a default-size TUI like the
+>   ref instead of emitting zero frames.
+> * **SE-F6 (S1) — FIXED**: `viewport_height` ports the ref's min-5
+>   window (`min(rows, max(5, h/2 − 6))`) — the 12-row terminals'
+>   session dialog renders its list rows (grid proof 40×12).
+> * **SE-F7 (S2) — FIXED (verified)**: the chord tears down THROUGH
+>   an open dialog (first ctrl+c closes the dialog, second exits) —
+>   pinned by `b3_chord_through_open_dialog_exits`.
+> * **SE-F8 (S1) — RESOLVED (probe asymmetry; within gate)**: the
+>   registered 4.4 s vs ref 2.3 s compared a ctrl+p PALETTE echo
+>   (ours-probe, first-palette-build + its 2 s retry ladder) against
+>   a plain composer echo (ref-probe). A fair same-shape PTY probe
+>   (`tools/parity/spec-p3` shape, plain z at 2.0 s): ours 2.02–2.03 s
+>   (3/3) vs ref 2.3 s = **0.88× < the 1.5× gate**; boot milestones:
+>   config 38 ms, first draw 381 ms, keys echo ~11 ms. Artifacts:
+>   `/tmp/opencode/fixw2/tti_results.json`, `docs/fixw2.log`.
+> * **SE-F9 (S2) — FIXED (delisted)**: the "Not wired in this build"
+>   ServerList stub row is gone — an unknown picker falls to the
+>   shared empty state; no stub text ships.
+> * **SE-F10 (S2) — VERIFIED-FIXED (no longer reproduces)**: at
+>   160×40 the dialog clears on Enter and the tab strip sits at row 0
+>   (grid artifact `/tmp/opencode/fixw2/dlgpost-160x40.grid.txt`);
+>   the sweep's 160-col assertions pass 2/2.
+> * **SE-F11 (S2) — FIXED (root)**: the per-frame re-derivation of
+>   the composer's unit/wrap model for an UNCHANGED draft was the
+>   stall (34 KB: 139–143 ms ticks, 174–177 ms wheel windows). The
+>   unit model and the line layout are memoized per (draft, inner);
+>   every E1 cell now audits 0 bursts at both paste sizes.
+> * **Acceptance**: `spec_ef2_e1_cells` (paste pair, un-ignored,
+>   0 bursts + clean teardown) and `spec_ef2_ab_geometry` (width
+>   sweep through real resizes, un-ignored) PASS; oc-tui 851/851,
+>   oc-core 864/864, fmt + clippy clean.
+
 **Lane:** SCAN-EF2 (serialized restart of the E+F round; the prior
 SCAN-EF attempt was killed for un-harnessed TUI boots).
 **Worktree:** `.worktrees/lane-scanef2` (branch `lane/scanef2`, base =
