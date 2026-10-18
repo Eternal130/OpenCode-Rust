@@ -330,9 +330,19 @@ async fn attach_session(
             StreamEvent::Output(bytes) => {
                 let _ = outbox.send(Message::Binary(bytes));
             }
-            StreamEvent::Resized { cols, rows } => {
+            StreamEvent::Resized { cols, rows, generation, checkpoint } => {
+                // v2 handlers/persistent-pty.ts:141-145 — JSON.stringify({
+                // ...event, checkpoint: base64(event.checkpoint) }).
+                use base64::Engine as _;
                 let _ = outbox.send(Message::Text(
-                    json!({ "type": "resized", "cols": cols, "rows": rows }).to_string(),
+                    json!({
+                        "type": "resized",
+                        "cols": cols,
+                        "rows": rows,
+                        "generation": generation,
+                        "checkpoint": base64::engine::general_purpose::STANDARD.encode(&checkpoint),
+                    })
+                    .to_string(),
                 ));
             }
             StreamEvent::Exited { exit_code } => {

@@ -128,6 +128,35 @@ pub struct Info {
     pub output: (usize, usize),
 }
 
+/// The wire shape of `PersistentPty.Info` (schema/src/persistent-pty.ts:13-19):
+/// camelCase keys, `size: {cols, rows}` and `output: {head, tail}` objects,
+/// `exitCode` only once exited. The internal struct keeps `snake_case`
+/// names and pair fields, so events (and only events) serialize through
+/// this mapper.
+#[must_use]
+pub fn terminal_wire_json(info: &Info) -> serde_json::Value {
+    let mut terminal = serde_json::json!({
+        "id": info.id.0,
+        "title": info.title,
+        "command": info.command,
+        "args": info.args,
+        "cwd": info.cwd,
+        "status": match info.status {
+            crate::pty::Status::Running => "running",
+            crate::pty::Status::Exited => "exited",
+        },
+        "pid": info.pid,
+        "sessionID": info.session_id.as_str(),
+        "foregroundProcess": info.foreground_process,
+        "size": { "cols": info.size.0, "rows": info.size.1 },
+        "output": { "head": info.output.0, "tail": info.output.1 },
+    });
+    if let Some(exit_code) = info.exit_code {
+        terminal["exitCode"] = serde_json::json!(exit_code);
+    }
+    terminal
+}
+
 /// `PersistentPty.Snapshot`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
@@ -322,8 +351,10 @@ impl Attachment {
 pub enum StreamEvent {
     /// Live output bytes.
     Output(Vec<u8>),
-    /// Terminal resized.
-    Resized { cols: u16, rows: u16 },
+    /// Terminal resized (daemon.ts:107-113): the post-resize emulator
+    /// checkpoint rides along so clients can fast-forward instead of
+    /// replaying from scratch.
+    Resized { cols: u16, rows: u16, generation: u64, checkpoint: Vec<u8> },
     /// The terminal exited.
     Exited { exit_code: Option<i32> },
 }
@@ -678,7 +709,7 @@ impl PersistentPty {
             "persistent-pty.added",
             serde_json::json!({
                 "sessionID": session_id.as_str(),
-                "terminal": serde_json::to_value(&info).unwrap_or_default(),
+                "terminal": terminal_wire_json(&info),
             }),
         )
         .await;
@@ -1176,17 +1207,21 @@ impl Inner {
         }
         live.info.size = (cols, rows);
         live.rows.resize(rows as usize, String::new());
-        let event = StreamEvent::Resized { cols, rows };
+        if let Some(attachment) = attachment {
+            if live.controller.as_deref() == Some(attachment) {
+                live.generation += 1;
+            }
+        }
+        // The resized event carries the post-resize checkpoint (the same
+        // screen-text stub `snapshot` records) and the generation
+        // (v2 daemon.ts:81-87, handlers/persistent-pty.ts:141-145).
+        let checkpoint = live.rows.join("\n").into_bytes();
+        let event = StreamEvent::Resized { cols, rows, generation: live.generation, checkpoint };
         for subscriber in live.subscribers.values_mut() {
             if subscriber.active {
                 (subscriber.on_event)(event.clone());
             } else {
                 subscriber.pending.push(event.clone());
-            }
-        }
-        if let Some(attachment) = attachment {
-            if live.controller.as_deref() == Some(attachment) {
-                live.generation += 1;
             }
         }
     }
