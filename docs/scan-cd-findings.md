@@ -156,7 +156,20 @@
 - Code-level: `session.skill.activated` event in schema ✓; skill tool (`tool/skill.rs`) + permission phase present; embedded-via-plugin path exists (schema) — no live plugin-skill instrument in this lane (I2 sandbox = D3's leg); dialog-skill UI cell rides C16.
 
 *(next: C15, C16, C20)*
-*(execution continues — second tier: C15/C16/C20/D2/D3/D4)*
+### CD-31 (MED-HIGH) — C15: `@`-mention completion unwired (trigger detected, no live source)
+- `composer/autocomplete.rs:283-285` — "reference mode has no live file source yet — an empty list renders no popup"; `Composer::live_autocomplete()` builds only the slash registry (composer/mod.rs:343-345); no `with_options` caller attaches reference-mode options in production. Typing `@` in the composer completes NOTHING on ours; ref completes files/agents/skills/references. The mention-grammar trigger + chip-aware wrap exist (render.rs treats file-mention chips as atomic) — the payload-resolution chain (mention → payload path) is therefore unreachable end-to-end.
+
+### CD-32 (MED) — C16: four named TUI dialogs absent + pierre family unported
+- Ref-tree census (`ls tui/src/component/`): `dialog-experiments.tsx`, `retry-provider.tsx`, `masked-text.ts` (+ dialog-stash via CD-20) have NO counterpart in ours' 29-variant DialogKind (grep-zero). Pierre review-mode family (commented-lines, comment-hover, diff-selection, file-find) lives in ref's **session-ui** tree (session-review.tsx, line-comment-annotations.tsx, pierre/) — ours ships no session-ui port (rides D6's U10 disposition; the diff-viewer carries only `mark_reviewed` names, diff_viewer.rs:266-267).
+- Present-and-verified TUI named cells: dialog-debug ✓, dialog-status ✓, dialog-shell-output ✓, command-palette ✓, session-tabs-rail ✓, workspace-file-changes partial (CD-23).
+
+### CD-33 (INFO) — C15 verified-parity rows
+- Slash-command grammar: `/` at line-head triggers; registry = v2 command set with honest no-op notes (`/skills` runs but surface absent — matches v2's own behavior per port comment); argument-taking commands insert (`/cd`).
+- Composer tabs: {Subagents, Shell, Terminals} ring in mount order (PickerTab, store.rs:1758-1793 = composer/index.tsx:65-70) ✓; prompt history with draft-stash ✓ (frecency: absent both sides for composer — ref's frecency cells live in command/picker catalogs, CD-20's dead keybinds cover the gap surface).
+- Attachment/chip rendering: file-mention chips atomic in wrap; `[Image 1]` extmark chips styled (render.rs:21,286-296).
+
+*(next: C20, D2, D3, D4)*
+*(execution continues — second tier: C20/D2/D3/D4)*
 
 
 
