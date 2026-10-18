@@ -50,3 +50,24 @@ Survey done (spec + code + scan artifacts under /tmp/opencode/scanab):
 
 Next: gate baseline (fmt/clippy/test oc-tui + oc-plugin-host), then
 implement in order SA-F6 → SA-F5 → SA-F3 → SA-F13 → S2 set.
+
+## Item SA-F6 (S1) — FIXED (commit 318372b)
+
+- autocomplete.rs: V2_SLASH += ("plugins","Plugins") (between pair and
+  project, alphabetical); SLASH_COMMANDS += ("plugins","plugins.list")
+  with the source cite (feature-plugins/system/plugins.tsx:337-347).
+- command_palette.rs DialogKind::Plugins: empty ids → EMPTY options so
+  the shared select empty state renders "No items available"
+  (dialog-select.tsx:723; was a "No plugins registered" status row);
+  footer hint pair SelectAction("dialog.plugins.check","ctrl+a","show
+  internal") rides the footer bar like the ref's footerHints
+  (plugins.tsx:199 + dialog-select.tsx:170-173 — a FooterHint renders
+  `title label`; the ctrl+a TOGGLE itself has no ported surface — the
+  pair is display-only with a surfaceless command id).
+- dialog_select.rs: with_action() helper.
+- Tests: slash_registry_has_the_live_plugins_command (unit),
+  plugins_dialog_renders_the_reference_shape (rendered overlay),
+  vt_plugins_dialog.rs (PTY: type /plugins + Enter → Plugins/Search/
+  "No items available"/ctrl+a hint on screen; composer does NOT retain
+  the text). PASS 1.43s. 727 lib tests green (no golden churn:
+  /worktrees stays the pad anchor, /plugins sorts inside).
