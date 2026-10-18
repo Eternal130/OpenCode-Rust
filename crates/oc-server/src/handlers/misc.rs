@@ -177,14 +177,37 @@ async fn plugin_update(
 // POST /api/rpc/:rpcID/:method — {input} → {output}
 // ---------------------------------------------------------------------------
 
+/// `/api/rpc` dispatch (PLUG-D14): route the call into the booted
+/// plugin host's guest (`Rpc.Service.call` parity — handlers/rpc.ts):
+/// unknown ids/methods map to `RpcError` 400 with the v2 failure type;
+/// handler defects and the invalid-output/internal types map to
+/// `RpcInternalError` 500; a successful output returns `{output}`
+/// (omitted when `undefined`, per the v2 handler).
 async fn rpc_call(
     State(state): State<SharedState>,
-    Path((rpc_id, _method)): Path<(String, String)>,
-    axum::Json(_body): axum::Json<Value>,
+    Path((rpc_id, method)): Path<(String, String)>,
+    axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let _ = state;
-    // No plugin host → rpc.internal (§3: rpc.internal|invalid_output → 500).
-    Err(ApiError::rpc_internal(format!("rpc {rpc_id} not available"), "rpc.internal"))
+    let input = body.get("input").cloned().unwrap_or(Value::Null);
+    let Some(boot) = state.plugins.clone() else {
+        // No plugin subsystem at all = an empty registry: v2's
+        // `rpc.unavailable` (RpcError 400), never a 500 stub.
+        return Err(ApiError::rpc(format!("RPC is unavailable: {rpc_id}"), "rpc.unavailable"));
+    };
+    match boot.rpc_call(&rpc_id, &method, input).await {
+        // `output === undefined ? {} : { output }` (rpc.ts:10-11).
+        Ok(output) => Ok(axum::Json(match output {
+            Some(output) => json!({ "output": output }),
+            None => json!({}),
+        })
+        .into_response()),
+        Err(crate::plugins::RpcCallError::Failure { type_, message, .. }) => {
+            Err(ApiError::rpc(message, type_))
+        }
+        Err(crate::plugins::RpcCallError::Internal(message)) => {
+            Err(ApiError::rpc_internal(message, "rpc.internal"))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

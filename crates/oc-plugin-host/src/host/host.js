@@ -354,10 +354,55 @@ async function rederiveDomain(kind, pluginId) {
 }
 
 // ---------------------------------------------------------------------------
-// Runtime hook registry (guest-side handlers; coverage registered)
+// RPC handler registry (PLUG-D14: rpc id -> method -> handler; the
+// definitions cross to the supervisor at register time, the handlers
+// stay here and run under the host's `rpc.call` requests)
 // ---------------------------------------------------------------------------
 
-const hookHandlers = { session: new Map(), tool: new Map() };
+/** @type {Map<string, Map<string, Function>>} */
+const rpcHandlers = new Map();
+
+/** One host→guest `rpc.call` — run the registered handler with the v2
+ *  call context (`ctx.error(type, message, data)` declares a typed
+ *  failure; anything else thrown is a defect → rpc.internal). */
+async function handleRpcCall({ pluginId, rpcId, method, input }) {
+  const table = rpcHandlers.get(String(rpcId ?? ""));
+  const handler = table?.get(String(method ?? ""));
+  if (typeof handler !== "function") {
+    return { ok: false, failure: { type: "rpc.method_not_found", message: `Unknown RPC method: ${rpcId}.${method}` } };
+  }
+  notify("plugin.busy", { pluginId });
+  try {
+    const callContext = {
+      error(type, message, data) {
+        const failure = new Error(message ?? "RPC call failed");
+        failure.__rpcFailure = { type: String(type ?? "rpc.internal"), message: String(message ?? ""), data };
+        return failure;
+      },
+    };
+    const output = await handler(input ?? {}, callContext);
+    const result = { ok: true };
+    if (output !== undefined) result.output = output;
+    return result;
+  } catch (error) {
+    if (error && typeof error === "object" && error.__rpcFailure) {
+      const failure = { type: error.__rpcFailure.type, message: error.__rpcFailure.message ?? "" };
+      if (error.__rpcFailure.data !== undefined) failure.data = error.__rpcFailure.data;
+      return { ok: false, failure };
+    }
+    // A defect (handler bug / transport throw): normalize to the v2
+    // rpc.internal shape without echoing internals to the client.
+    notify("log", { pluginId, level: "error", message: `rpc ${rpcId}.${method} handler failed: ${errText(error)}` });
+    return { ok: false, failure: { type: "rpc.internal", message: "RPC call failed" } };
+  } finally {
+    notify("plugin.idle", { pluginId });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime hook registry (guest-side handlers; coverage registered)
+// ---------------------------------------------------------------------------
+const hookHandlers = { session: new Map(), tool: new Map(), shell: new Map() };
 
 const SESSION_HOOKS = new Set([
   "prompt", "context", "compaction", "generate", "title", "model.request",
@@ -366,9 +411,12 @@ const SESSION_HOOKS = new Set([
   "retry",
 ]);
 const TOOL_HOOKS = new Set(["execute.before", "execute.after"]);
+const SHELL_HOOKS = new Set(["create.before"]);
 
 async function registerHook(pluginId, domain, name, handlers) {
-  if (domain === "session" ? !SESSION_HOOKS.has(name) : !TOOL_HOOKS.has(name)) {
+  const known =
+    domain === "session" ? SESSION_HOOKS : domain === "tool" ? TOOL_HOOKS : domain === "shell" ? SHELL_HOOKS : null;
+  if (!known || !known.has(name)) {
     throw new Error(`unknown ${domain} hook ${name}`);
   }
   const map = hookHandlers[domain];
@@ -599,6 +647,45 @@ function makeCtx(pluginId, options) {
     permission: {
       async reply(args) {
         return hostRequest("permission.reply", { pluginId, args: args ?? {} });
+      },
+    },
+
+    // -- shell (the v2 ShellHooks domain: `create.before`) --------------------
+    shell: {
+      hook: (name, handler) => registerHook(pluginId, "shell", name, handler),
+    },
+
+    // -- rpc (PLUG-D14: `ctx.rpc.register(definition, handlers)`) ------------
+    rpc: {
+      async register(definition, handlers) {
+        const id = String(definition?.id ?? "");
+        if (!id) throw new Error("rpc.register requires a definition id");
+        // The portable definition crosses as JSON (Effect Schema
+        // instances degrade to their method-name skeleton — dispatch
+        // routes by name; schema validation stays a JS-side concern).
+        let portable = null;
+        try {
+          portable = JSON.parse(JSON.stringify(definition));
+        } catch {
+          portable = null;
+        }
+        if (!portable || typeof portable !== "object") {
+          portable = { id, methods: {}, events: {} };
+        }
+        portable.id = id;
+        if (!portable.methods || typeof portable.methods !== "object") portable.methods = {};
+        if (!portable.events || typeof portable.events !== "object") portable.events = {};
+        if (!rpcHandlers.has(id)) rpcHandlers.set(id, new Map());
+        const table = rpcHandlers.get(id);
+        for (const [name, handler] of Object.entries(handlers ?? {})) {
+          table.set(name, typeof handler === "function" ? handler : null);
+        }
+        await hostRequest("rpc.register", { pluginId, definition: portable });
+        return {
+          async dispose() {
+            table.clear();
+          },
+        };
       },
     },
 
@@ -1766,6 +1853,7 @@ const METHODS = {
   dispatch: handleDispatch,
   "command.execute": handleCommandExecute,
   "hook.dispatch": handleHookDispatch,
+  "rpc.call": handleRpcCall,
   "tool.execute": handleToolExecute,
   "codemode.evaluate": handleCodemodeEvaluate,
   "dialog.materialize": handleDialogMaterialize,
