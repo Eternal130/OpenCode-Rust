@@ -59,7 +59,7 @@ pub fn valid_namespace(name: &str) -> bool {
 /// `registrationError` — `None` when the tool registers.
 #[must_use]
 pub fn registration_error(tool: &BuiltinTool) -> Option<String> {
-    let id = effective_name(None, tool.name);
+    let id = effective_name(tool.namespace, tool.name);
     if !valid_name(&normalized_name(tool.name)) {
         return Some(format!("Invalid tool name: {}", normalized_name(tool.name)));
     }
@@ -273,13 +273,17 @@ pub fn register(
     }
     let mut registration =
         ToolRegistration::new(tool.name, tool.description.clone(), tool.input.clone());
-    registration.namespace = None;
+    // `options.namespace` survives registration (v2 editor.add keys the
+    // table by effectiveName and keeps options.namespace — opencode.ts's
+    // three tools advertise `opencode_*` and the Code Mode catalog lists
+    // `opencode.*` paths).
+    registration.namespace = tool.namespace.map(str::to_string);
     registration.permission = tool.permission.map(str::to_string);
     registration.codemode = tool.codemode;
     state.register(registration);
 
     let pipeline = PipelineExecutor {
-        name: effective_name(None, tool.name),
+        name: effective_name(tool.namespace, tool.name),
         schema: tool.input,
         leaf: tool.execute,
         services: Arc::clone(services),

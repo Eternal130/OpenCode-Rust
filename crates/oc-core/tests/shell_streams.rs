@@ -1,9 +1,9 @@
 //! TOOLS-EXEC regressions (ledger TOOL-C1, TOOL-C2): the shell runtime
 //! must pump stdout/stderr CONCURRENTLY into the combined capture (no
-//! >64 KiB pipe interlock, arrival-order interleave preserved, timeout
-//! kills TERM → 3 s → KILL), and every production spawn path must
-//! dispatch the `shell.create.before` hook before the permission
-//! pipeline runs.
+//! 64 KiB pipe interlock, arrival-order interleave preserved, timeout
+//! kills with TERM first and KILL after 3 s), and every production
+//! spawn path must dispatch the `shell.create.before` hook before the
+//! permission pipeline runs.
 //!
 //! Hermetic: capture dirs sandboxed under /tmp/opencode, /bin/sh only,
 //! no network; child processes are owned by the Shell service (which
@@ -48,13 +48,13 @@ fn create_input(command: impl Into<String>, cwd: &tempfile::TempDir) -> CreateIn
 /// `out*` line before every `err*` line.
 #[tokio::test]
 async fn interleaved_streams() {
+    use std::fmt::Write as _;
     let tmp = sandbox();
     let shell = service(&tmp);
     let mut command = String::new();
     for i in 1..=5 {
-        command.push_str(&format!(
-            "printf 'err{i}\\n' >&2; sleep 0.06; printf 'out{i}\\n'; sleep 0.06; "
-        ));
+        let _ =
+            write!(command, "printf 'err{i}\\n' >&2; sleep 0.06; printf 'out{i}\\n'; sleep 0.06; ");
     }
     let info = shell
         .create(create_input(command, &tmp), Some("/bin/sh"), None, None)
@@ -63,12 +63,14 @@ async fn interleaved_streams() {
     let result = shell.result(info).await;
     assert_eq!(result.info.status, Status::Exited, "command must run to completion");
     let capture = result.capture.expect("capture");
-    let err1 = capture.output.find("err1").unwrap_or_else(|| {
-        panic!("err1 missing from capture: {}", capture.output)
-    });
-    let out2 = capture.output.find("out2").unwrap_or_else(|| {
-        panic!("out2 missing from capture: {}", capture.output)
-    });
+    let err1 = capture
+        .output
+        .find("err1")
+        .unwrap_or_else(|| panic!("err1 missing from capture: {}", capture.output));
+    let out2 = capture
+        .output
+        .find("out2")
+        .unwrap_or_else(|| panic!("out2 missing from capture: {}", capture.output));
     assert!(
         err1 < out2,
         "stderr chunks must interleave by arrival order; capture was: {}",
@@ -85,13 +87,12 @@ async fn interleaved_streams() {
 async fn stderr_beyond_pipe_capacity_completes_without_timeout() {
     let tmp = sandbox();
     let shell = service(&tmp);
-    let command =
-        "head -c 131072 /dev/zero | tr '\\0' 'B' >&2; printf done".to_string();
+    let command = "head -c 131072 /dev/zero | tr '\\0' 'B' >&2; printf done".to_string();
     let info = shell
         .create(create_input(command, &tmp), Some("/bin/sh"), None, None)
         .await
         .expect("create");
-    let result = shell.result(info).await;
+    let result = shell.result(info.clone()).await;
     assert_eq!(
         result.info.status,
         Status::Exited,
@@ -103,9 +104,13 @@ async fn stderr_beyond_pipe_capacity_completes_without_timeout() {
         "stdout tail must be captured after the large stderr; capture: {} bytes",
         capture.output.len()
     );
+    // The bounded capture tail cannot hold 128 KiB by design — the full
+    // stream must be in the capture FILE the tool tails from.
+    let written = std::fs::read_to_string(&result.info.file).expect("capture file");
     assert!(
-        capture.output.bytes().filter(|byte| *byte == b'B').count() >= 131_000,
-        "the full stderr stream must be drained into the capture"
+        written.bytes().filter(|byte| *byte == b'B').count() >= 131_000,
+        "the full stderr stream must be drained into the capture file; got {} bytes",
+        written.len()
     );
 }
 
@@ -121,7 +126,17 @@ async fn timeout_term_then_kill_escalation() {
                    while true; do sleep 0.05; done"
         .to_string();
     let info = shell
-        .create(create_input(command, &tmp), Some("/bin/sh"), None, None)
+        .create(
+            CreateInput {
+                command,
+                cwd: Some(tmp.path().to_string_lossy().to_string()),
+                timeout: Some(800),
+                metadata: None,
+            },
+            Some("/bin/sh"),
+            None,
+            None,
+        )
         .await
         .expect("create");
     let result = shell.result(info).await;
@@ -165,9 +180,10 @@ impl HookHandler<ShellCreateBeforeEvent> for RejectShell {
 async fn create_before_hook() {
     let tmp = sandbox();
     let hooks = Arc::new(HookRegistry::new());
-    hooks
-        .register_shell_create_before(Arc::new(RewriteCommand), HookOptions::default())
-        .await;
+    // The registration guard must outlive the create (dropping it
+    // unregisters the handler).
+    let _guard =
+        hooks.register_shell_create_before(Arc::new(RewriteCommand), HookOptions::default()).await;
     let shell = service(&tmp).with_hooks(hooks);
     let info = shell
         .create(create_input("printf original", &tmp), Some("/bin/sh"), None, None)
@@ -189,13 +205,11 @@ async fn create_before_hook() {
 async fn create_before_hook_rejection_fails_create() {
     let tmp = sandbox();
     let hooks = Arc::new(HookRegistry::new());
-    hooks
-        .register_shell_create_before(Arc::new(RejectShell), HookOptions::default())
-        .await;
+    let _guard =
+        hooks.register_shell_create_before(Arc::new(RejectShell), HookOptions::default()).await;
     let shell = service(&tmp).with_hooks(hooks);
-    let outcome = shell
-        .create(create_input("printf never", &tmp), Some("/bin/sh"), None, None)
-        .await;
+    let outcome =
+        shell.create(create_input("printf never", &tmp), Some("/bin/sh"), None, None).await;
     let error = outcome.expect_err("a rejected hook must fail the create");
     assert!(
         error.to_string().contains("rejected"),

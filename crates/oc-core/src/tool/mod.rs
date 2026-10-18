@@ -185,10 +185,13 @@ pub struct BuiltinTool {
     pub description: String,
     /// JSON-Schema of the input (v2 shape).
     pub input: serde_json::Value,
-    /// `options.permission` (defaults to the name).
+    /// `options.permission` (defaults to the effective tool name).
     pub permission: Option<&'static str>,
     /// All six filesystem tools are direct (`codemode: false`).
     pub codemode: bool,
+    /// `options.namespace` — namespacing prefixes the effective name
+    /// (`opencode` for the engine's own management tools).
+    pub namespace: Option<&'static str>,
     /// The leaf executor (context-aware).
     pub execute: Arc<dyn ToolExecuteWithContext>,
 }

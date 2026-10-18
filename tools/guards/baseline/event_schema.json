@@ -1,10 +1,7 @@
 {
   "guard": "event_schema",
-  "count": 33,
+  "count": 30,
   "violations": [
-    "event:form.cancelled",
-    "event:form.created",
-    "event:form.replied",
     "event:installation.update-available",
     "event:installation.updated",
     "event:integration.updated",

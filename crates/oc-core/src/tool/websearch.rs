@@ -602,6 +602,7 @@ pub fn tool(execute: Arc<WebSearchExecute>) -> BuiltinTool {
         }),
         permission: Some("websearch"),
         codemode: false,
+        namespace: None,
         execute,
     }
 }

@@ -462,10 +462,22 @@ impl ToolRegistration {
         }
     }
 
-    /// The effective permission action (`options.permission ?? name`).
+    /// The effective permission action (`options.permission ?? name` —
+    /// v2 keys the tool table by `effectiveName`, so the default action
+    /// for a namespaced tool is its `namespace_name` form).
     #[must_use]
-    pub fn permission_action(&self) -> &str {
-        self.permission.as_deref().unwrap_or(&self.name)
+    pub fn permission_action(&self) -> String {
+        match &self.permission {
+            Some(action) => action.clone(),
+            None => self.effective_name(),
+        }
+    }
+
+    /// The model-facing name (`effectiveName`: `<namespace>_<name>` with
+    /// dots flattened, `runtime.ts:276-278`).
+    #[must_use]
+    pub fn effective_name(&self) -> String {
+        crate::tool::registry::effective_name(self.namespace.as_deref(), &self.name)
     }
 }
 
@@ -555,7 +567,7 @@ impl ToolRegistryState {
         self.tools
             .lock()
             .values()
-            .filter(|tool| !wholly_denied(tool.permission_action(), rules))
+            .filter(|tool| !wholly_denied(&tool.permission_action(), rules))
             .cloned()
             .collect()
     }

@@ -52,6 +52,9 @@ pub struct ShellToolServices {
     pub env: SessionEnv,
     /// `experimental.portable_shell_scanner`.
     pub portable_scanner: bool,
+    /// Config `shell` — the `ShellSelect` "config"-priority input for
+    /// the tool's compat resolve.
+    pub config_shell: Option<String>,
     /// Emits the synthetic notification into the owning session
     /// (`sessions.synthetic`).
     pub synthetic: Arc<dyn SyntheticPublisher>,
@@ -266,19 +269,18 @@ impl ToolExecuteWithContext for ShellExecute {
                 input.timeout.unwrap_or(DEFAULT_TIMEOUT_MS)
             };
 
-            // Build the invocation (session env + markers + agent env), run
-            // the permission pipeline, then spawn.
+            // Build the invocation (session env + markers), dispatch
+            // `shell.create.before`, layer the agent markers, run the
+            // permission pipeline over the FINAL invocation, then spawn
+            // (v2 ordering: hooks.trigger before the `before` closure,
+            // shell.ts:274-275).
             let session_env = deps.env.get(context.session_id.as_str());
             let mut env: HashMap<String, String> =
                 session_env.unwrap_or_else(|| std::env::vars().collect());
             for (key, value) in crate::shell::TERMINAL_ENV {
                 env.insert((*key).to_string(), (*value).to_string());
             }
-            env.insert("AGENT".into(), "1".into());
-            env.insert("OPENCODE".into(), "1".into());
-            env.entry("AI_AGENT".to_string()).or_insert_with(|| "opencode".to_string());
-            env.insert("OPENCODE_SESSION_ID".into(), context.session_id.to_string());
-            let compatible_shell = select::resolve(None, true);
+            let compatible_shell = select::resolve(deps.config_shell.as_deref(), true);
             let mut invocation = crate::shell::Invocation {
                 cwd: input
                     .workdir
@@ -289,6 +291,16 @@ impl ToolExecuteWithContext for ShellExecute {
                 shell: compatible_shell,
                 env,
             };
+            deps.shell.trigger_create_before(&mut invocation).await.map_err(|error| {
+                ToolFailure {
+                    message: format!("Unable to execute command: {}", input.command),
+                    cause: Some(super::FailureCause::Nested(error.to_string())),
+                }
+            })?;
+            invocation.env.insert("AGENT".into(), "1".into());
+            invocation.env.insert("OPENCODE".into(), "1".into());
+            invocation.env.entry("AI_AGENT".to_string()).or_insert_with(|| "opencode".to_string());
+            invocation.env.insert("OPENCODE_SESSION_ID".into(), context.session_id.to_string());
             let final_timeout =
                 prepare(services, &mut invocation, &context, deps.portable_scanner).await?;
             invocation.timeout = final_timeout;
@@ -537,7 +549,7 @@ fn tool_result(output: &ShellToolOutput) -> ToolOutcome {
 
 /// The shell builtin registration.
 pub fn tool(deps: Arc<ShellToolServices>) -> BuiltinTool {
-    let shell_path = select::resolve(None, true);
+    let shell_path = select::resolve(deps.config_shell.as_deref(), true);
     BuiltinTool {
         name: "shell",
         description: description(Some(select::name(&shell_path).as_str())),
@@ -553,6 +565,7 @@ pub fn tool(deps: Arc<ShellToolServices>) -> BuiltinTool {
         }),
         permission: Some("shell"),
         codemode: false,
+        namespace: None,
         execute: Arc::new(ShellExecute { deps }),
     }
 }
@@ -564,16 +577,12 @@ pub async fn user_command(
     session_id: &str,
     command: &str,
 ) -> Result<shell_result::Notification, ToolFailure> {
-    let shell_path = select::resolve(None, true);
+    let shell_path = select::resolve(deps.config_shell.as_deref(), true);
     let mut env: HashMap<String, String> =
         deps.env.get(session_id).unwrap_or_else(|| std::env::vars().collect());
     for (key, value) in crate::shell::TERMINAL_ENV {
         env.insert((*key).to_string(), (*value).to_string());
     }
-    env.insert("AGENT".into(), "1".into());
-    env.insert("OPENCODE".into(), "1".into());
-    env.entry("AI_AGENT".to_string()).or_insert_with(|| "opencode".to_string());
-    env.insert("OPENCODE_SESSION_ID".into(), session_id.to_string());
     let mut invocation = crate::shell::Invocation {
         command: command.to_string(),
         cwd: services.directory.to_string_lossy().to_string(),
@@ -581,6 +590,16 @@ pub async fn user_command(
         shell: shell_path,
         env,
     };
+    // The user `!` path goes through `Shell.create` in v2 — the
+    // `shell.create.before` dispatch applies here too.
+    deps.shell.trigger_create_before(&mut invocation).await.map_err(|error| ToolFailure {
+        message: format!("Unable to execute command: {command}"),
+        cause: Some(super::FailureCause::Nested(error.to_string())),
+    })?;
+    invocation.env.insert("AGENT".into(), "1".into());
+    invocation.env.insert("OPENCODE".into(), "1".into());
+    invocation.env.entry("AI_AGENT".to_string()).or_insert_with(|| "opencode".to_string());
+    invocation.env.insert("OPENCODE_SESSION_ID".into(), session_id.to_string());
     let context = crate::location::ToolCallContext {
         session_id: oc_schema::id::SessionId(session_id.to_string()),
         agent: oc_schema::id::AgentId("code".to_string()),

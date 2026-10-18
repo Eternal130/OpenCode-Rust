@@ -12,14 +12,16 @@
 use std::sync::Arc;
 
 use oc_core::engine::{Engine, EngineOptions};
-use oc_core::location::{LocationRef, ToolExecute as _};
+use oc_core::location::LocationRef;
 use oc_core::session::store::CreateInput as SessionCreateInput;
 use oc_schema::id::SessionId;
 use serde_json::{json, Value};
 
 /// Boots an engine over a sandboxed project, optionally writing a
 /// project config document first (`<project>/.opencode/opencode.json`).
-async fn engine_with_config(config: Option<Value>) -> (Arc<Engine>, tempfile::TempDir, LocationRef) {
+async fn engine_with_config(
+    config: Option<Value>,
+) -> (Arc<Engine>, tempfile::TempDir, LocationRef) {
     let dir = tempfile::Builder::new()
         .prefix("oc-core-tools-")
         .tempdir_in("/tmp/opencode")
@@ -59,7 +61,8 @@ async fn allow_all_session(
     id: &str,
     parent: Option<SessionId>,
 ) -> SessionId {
-    let session_id = SessionId::parse(id.to_string()).unwrap_or_else(|error| SessionId(error.value));
+    let session_id =
+        SessionId::parse(id.to_string()).unwrap_or_else(|error| SessionId(error.value));
     engine
         .create_session(
             location,
@@ -166,14 +169,10 @@ async fn session_move_tool() {
             &call_context(&session),
         )
         .await;
-    let result = outcome.unwrap_or_else(|failure| {
-        panic!("session_move must succeed, got: {}", failure.message())
-    });
+    let result = outcome
+        .unwrap_or_else(|failure| panic!("session_move must succeed, got: {}", failure.message()));
     let text = serde_json::to_string(&result.content).unwrap_or_default();
-    assert!(
-        text.contains("Moved session"),
-        "the tool reports the move; content: {text}"
-    );
+    assert!(text.contains("Moved session"), "the tool reports the move; content: {text}");
 
     // The admitted move is delivered (drain → InboxDelivered + Moved);
     // the projector repoints the session row at the destination.
@@ -291,12 +290,13 @@ async fn config_shell_key() {
         .expect("shell tool runs");
     let output = serde_json::to_string(&outcome.content).unwrap_or_default();
     assert!(output.contains("tool-path"), "tool output: {output}");
-    let shell_id = outcome.metadata.as_ref().and_then(|metadata| {
-        metadata.get("shellID").and_then(Value::as_str).map(str::to_string)
-    });
+    let shell_id = outcome
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("shellID").and_then(Value::as_str).map(str::to_string));
     let shell_id = shell_id.expect("shellID metadata");
-    let shell_id =
-        oc_schema::id::ShellId::parse(shell_id).unwrap_or_else(|error| oc_schema::id::ShellId(error.value));
+    let shell_id = oc_schema::id::ShellId::parse(shell_id)
+        .unwrap_or_else(|error| oc_schema::id::ShellId(error.value));
     let tool_info = services.shell.get(&shell_id).expect("shell info");
     assert_eq!(
         tool_info.shell,
