@@ -406,10 +406,19 @@ async fn seed_settled_history(state: &Arc<AppState>, session_id: &str) {
 async fn be1_fork_copies_history_and_fork_styles_the_title() {
     let server = boot(tempfile::tempdir().expect("workspace").keep()).await;
     let client = &server.client;
+    // CD-15: the forked event carries the `location` envelope like every
+    // other session event (the SSE tap observes the wire frame).
+    let mut stream = feed(&server.state).subscribe();
     let parent = create_session(client, "fork me").await;
     seed_settled_history(&server.state, &parent).await;
 
     let fork = client.session().fork(&parent, &SessionForkBody::default()).await.expect("fork");
+    let forked_frame =
+        expect_frame(&mut stream, "\"type\":\"session.forked\"", "session.forked").await;
+    assert!(
+        forked_frame.contains("\"location\":{"),
+        "CD-15: the fork envelope carries location: {forked_frame}"
+    );
     // v2 wire shape for forks (info.ts:21-27): the `fork` object rides
     // the `forkSessionId` column, and CD-2 (scan-cd) adds the
     // parent→child chain: the fork child ALSO carries `parentID` (the

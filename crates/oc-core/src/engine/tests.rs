@@ -1456,27 +1456,20 @@ async fn engine_boot_opens_the_channel_suffixed_database() {
 // dir as a one-generation back-compat read when the v2 file is absent.
 // ===========================================================================
 
-/// Asserts the instruction ledger paths of one settled prompt.
-async fn instruction_ledger_paths(engine: &Engine, session_id: &SessionId) -> Vec<String> {
-    let events = wait_for_events(engine, session_id, |events| {
-        events.iter().any(|(type_, _, _)| type_ == "session.synthetic")
-    })
-    .await;
-    events
+/// The materialized system-prompt text of every recorded LLM request.
+fn system_prompt_text(llm: &TestLlm) -> String {
+    llm.requests()
         .iter()
-        .filter(|(type_, _, _)| type_ == "session.synthetic")
-        .flat_map(|(_, _, data)| {
-            data["metadata"]["instruction"]["paths"].as_array().cloned().unwrap_or_default()
-        })
-        .filter_map(|path| path.as_str().map(String::from))
-        .collect()
+        .flat_map(|request| request.system.iter().map(|part| part.text.clone()))
+        .collect::<Vec<String>>()
+        .join("\n\n")
 }
 
 #[tokio::test]
 async fn engine_e2e_global_agents_md_prefers_the_v2_config_dir() {
     let llm = TestLlm::new();
     llm.push([parity_text_response("Done.", 1.0, 1.0)]);
-    let (engine, dir, location) = engine_with(llm).await;
+    let (engine, dir, location) = engine_with(llm.clone()).await;
     // The synthetic v2-layout home: global instructions at the DOCUMENTED
     // location (`.config/opencode`) AND at our old suffixed dir — the
     // v2 file must win (the suffixed read is back-compat only).
@@ -1494,16 +1487,18 @@ async fn engine_e2e_global_agents_md_prefers_the_v2_config_dir() {
     engine.location(location.clone()).await.expect("assemble");
     let session_id = create_titled_session(&engine, &location, "ses_cd13_v2").await;
     engine.prompt(&location, &session_id, "msg_user_1", "hello").await.expect("prompt exit");
-    let paths = instruction_ledger_paths(&engine, &session_id).await;
+    let system = system_prompt_text(&llm);
     let v2 = home.join(".config").join("opencode").join("AGENTS.md");
     let suffixed = home.join(".config").join("opencode-rust").join("AGENTS.md");
     assert!(
-        paths.contains(&v2.to_string_lossy().into_owned()),
-        "the v2 global file is read: {paths:?}"
+        system.contains(&format!("Instructions from: {}", v2.display()))
+            && system.contains("V2 global guidance."),
+        "the v2 global file is materialized into the system prompt"
     );
     assert!(
-        !paths.contains(&suffixed.to_string_lossy().into_owned()),
-        "the suffixed dir loses when both exist: {paths:?}"
+        !system.contains(&format!("Instructions from: {}", suffixed.display()))
+            && !system.contains("Suffixed guidance."),
+        "the suffixed dir loses when both exist"
     );
 }
 
@@ -1511,7 +1506,7 @@ async fn engine_e2e_global_agents_md_prefers_the_v2_config_dir() {
 async fn engine_e2e_global_agents_md_backcompat_reads_the_suffixed_dir() {
     let llm = TestLlm::new();
     llm.push([parity_text_response("Done.", 1.0, 1.0)]);
-    let (engine, dir, location) = engine_with(llm).await;
+    let (engine, dir, location) = engine_with(llm.clone()).await;
     // Only the old suffixed file exists — it must still be read.
     let home = dir.path().join("home");
     std::fs::create_dir_all(home.join(".config").join("opencode-rust")).expect("suffixed dir");
@@ -1524,10 +1519,11 @@ async fn engine_e2e_global_agents_md_backcompat_reads_the_suffixed_dir() {
     engine.location(location.clone()).await.expect("assemble");
     let session_id = create_titled_session(&engine, &location, "ses_cd13_compat").await;
     engine.prompt(&location, &session_id, "msg_user_1", "hello").await.expect("prompt exit");
-    let paths = instruction_ledger_paths(&engine, &session_id).await;
+    let system = system_prompt_text(&llm);
     let suffixed = home.join(".config").join("opencode-rust").join("AGENTS.md");
     assert!(
-        paths.contains(&suffixed.to_string_lossy().into_owned()),
-        "back-compat: the suffixed-only install keeps its global instructions: {paths:?}"
+        system.contains(&format!("Instructions from: {}", suffixed.display()))
+            && system.contains("Suffixed guidance."),
+        "back-compat: the suffixed-only install keeps its global instructions"
     );
 }

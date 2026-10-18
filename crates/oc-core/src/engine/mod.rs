@@ -901,7 +901,8 @@ impl Engine {
                     // an install that only ever wrote the old path keeps
                     // its global instructions while the v2 file always
                     // wins when both exist.
-                    let v2_global_file = discovery_home.join(".config").join("opencode").join("AGENTS.md");
+                    let v2_global_file =
+                        discovery_home.join(".config").join("opencode").join("AGENTS.md");
                     let global_file = if v2_global_file.is_file() {
                         v2_global_file
                     } else {

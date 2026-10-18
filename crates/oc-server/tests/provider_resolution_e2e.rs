@@ -127,10 +127,11 @@ async fn case_mismatched_provider_resolves_and_failed_turn_surfaces_everywhere()
     let session_id = created.id.clone();
 
     // (1) prompt → 200: the failed turn is a session outcome, not an
-    // HTTP error (the response resolves after the execution settles —
-    // INCLUDING v2's retry schedule for a retryable transport failure:
-    // 2s→10s backoff over 10 attempts, ≈67–101s jittered, so the call
-    // legitimately takes a while against a dead endpoint).
+    // HTTP error. CD-1: the response returns the Inbox info immediately
+    // (v2's fire-and-forget wake) — the turn itself, INCLUDING v2's
+    // retry schedule for a retryable transport failure (2s→10s backoff
+    // over 10 attempts, ≈67–101s jittered), settles asynchronously and
+    // is observed through the surfaces below.
     tokio::time::timeout(
         Duration::from_secs(300),
         client.session().prompt(
@@ -139,7 +140,7 @@ async fn case_mismatched_provider_resolves_and_failed_turn_surfaces_everywhere()
         ),
     )
     .await
-    .expect("prompt settles within the retry budget")
+    .expect("prompt admits within the retry budget")
     .expect("session.prompt must succeed (the turn outcome is not an HTTP error)");
 
     // (2)+(3) resolution succeeded and the error part is visible in the
@@ -174,7 +175,10 @@ async fn case_mismatched_provider_resolves_and_failed_turn_surfaces_everywhere()
 
     // (4) exactly ONE engine-level stderr line, with the session id and
     // the resolved model id (the canonical config keys, not `Own/`).
-    let stderr_text = wait_for(Duration::from_secs(10), || {
+    // CD-1: the prompt response no longer waits out the retry schedule
+    // (v2's fire-and-forget wake), so the budget here must cover it
+    // (2s→10s backoff over 10 attempts, ≈67–101s jittered).
+    let stderr_text = wait_for(Duration::from_secs(150), || {
         let text = std::fs::read_to_string(&stderr_file).unwrap_or_default();
         async move { text.contains("[session] turn failed:").then_some(text) }.boxed()
     })
@@ -196,7 +200,7 @@ async fn wait_for_errored_assistant(
     client: &oc_client::Client,
     session_id: &str,
 ) -> oc_client::types::SessionMessageAssistant {
-    wait_for(Duration::from_secs(15), || {
+    wait_for(Duration::from_secs(150), || {
         let client = client.clone();
         let session_id = session_id.to_owned();
         async move {
