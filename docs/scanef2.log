@@ -228,3 +228,35 @@ No live processes (token computation + standing canary test via dev-gate).
   the C16 leg (carried).
 - (c) color-independence: canary leg B + computed pairs (busy
   ΔL=0.278 vs ε) — sampled set passes.
+
+## Leg 5 — E12 search second pass (priority #5) — EXECUTED (2026-10-18)
+
+No live processes (unit-level, real code path via dev-gate).
+
+- First pass re-run on main: 9 divergent queries (table class-consistent
+  with SPEC-R6's record).
+- **I8 canary (R7 design, binding before the verdict): RUN + PASS** —
+  poisoned corpus cell (q=支付宝 expected_match ses_gamma flipped to
+  expected_nonmatch, in-memory) flags EXACTLY that query; clean corpus
+  flags zero (`spec_ef2_e12_second_pass.rs`, committed).
+- Rank-order audit: 0 order-divergences among set-parity queries
+  (single-result class; multi-result order parity rides a richer
+  corpus next round).
+- Normalization audit (behavioral + code-cited): ref = trim +
+  case-fold + byte-exact includes (dialog-session-list.tsx); ours =
+  case-fold + NFD-accent-fold (fuzzy.rs remove_accents) + NO trim
+  (dialog_select.rs::filter_indices).
+
+### SE-F4 (S2) — session-list search diverges from ref on 5 dimensions
+ours (fuzzysort via the palette's Select filter) vs ref (plain
+substring filter in dialog-session-list): (1) child sessions included
+in results (ref excludes non-root); (2) fuzzy matches (loginredirect /
+zln match on ours, nothing on ref); (3) whitespace-only query returns
+EMPTY on ours vs the full list on ref; (4) no query trim; (5)
+accent-insensitive matching vs ref's byte-exact. Artifact:
+/tmp/opencode/scanef2/e12-second-pass.md. Disposition: per-cell product
+decision (match ref's session-list predicate, or keep fuzzy as a
+deliberate improvement — then it must be dispositioned as ours-extra
+by design). Also rides E1's search-in-10k disposition: ours has NO
+in-transcript search surface at all (E12 [G] names it; ref-side
+existence unverified this lane — carried).
