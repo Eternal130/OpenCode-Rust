@@ -3,7 +3,7 @@
 > Orchestrator scratch state for the parity loop (docs/PARITY-LOOP.md).
 > Updated at the end of every iteration. Not a task queue — the ledger is.
 
-- **updated**: 2026-10-18 (iteration 1, in flight — B0-8 merged; B0-1 lane running)
+- **updated**: 2026-10-18 (iteration 1 — B0-1 + B0-8 merged; B0-2 baseline in progress, p10 reds under triage)
 - **batch**: 0 — NOT exited (B0-1..B0-9 pending/in progress; no product bug fixes allowed)
 - **iteration**: 1
 - **baseline**: main @ eb4023d (pre-bootstrap) → bootstrap commit adds PARITY-LOOP.md / ledger seed / ledger tool / this file
@@ -12,10 +12,16 @@
 
 | lane | task | worktree | branch | owner | write scope | status |
 |---|---|---|---|---|---|---|
-| lane-b0-ledger | B0-1 ledger import | `.worktrees/lane-b0-ledger` | `lane/b0-ledger` | fixer (bg) | `docs/parity-ledger.jsonl`, `tools/parity-import.py`, `docs/parity-ledger-reconciliation.md`, (`tools/parity-ledger.py` ext. if needed) | dispatched |
+| lane-b0-ledger | B0-1 ledger import | removed (merged) | `lane/b0-ledger` | fixer→verifier | `docs/parity-ledger.jsonl`, `tools/parity-import.py`, `docs/parity-ledger-reconciliation.md`, `tools/parity-ledger.py` (owner-empty relaxation) | **MERGED @e2b5b73** (lane commit f04f986, verifier PASS) |
 | ~~lane-b0-gate0~~ | B0-8 Gate 0 env | removed (merged) | `lane/b0-gate0` | fixer→verifier | `tools/parity/src/*` skip/strict seam, `docs/parity-b0-gate0.md` | **MERGED @729725d** (lane commit 0d95bbf, verifier PASS) |
 
-WIP: 1 active lane (lane-b0-ledger). Max 3.
+WIP: 0 active lanes. Full p10 baseline re-run (no-fail-fast) in flight as orchestrator background shell.
+
+## B0-1 record (complete)
+
+- Lane commit `f04f986` → merge commit `e2b5b73` (main, --no-ff). Verifier: PASS on all 9 checks (validate errors=0; determinism double-run byte-identical sha256 9cbcb6c3…; 114 seeds immutable except 13 documented alias-only additions; 30-ID orphan sampling 0 orphans; 12-row field-fidelity sampling clean; reconciliation 407=113+16+253+25 independently re-summed; tool change only relaxes owner-emptiness).
+- Ledger now: **367 rows** (open=357, needs-runtime=10; S0=6, S1=108, S2=233, S3=20; clusters: WIRE 71, TUI 55, CONFIG 44, TOOLS-EXEC 42, RUNTIME 33, AI 31, CRED 24, DB 23, PLUGIN 23, SURFACES 21).
+- Verifier observations (documentation-level, non-blocking): report-01 §10 KNOWN cross-ref `01:X-01` outside the 407 enumeration (legacy registration, consistent with detail-rows-authoritative rule); report-10 P→S ladder (P0→S1, P1/P2→S2, P3→S3) defensible but undocumented in reconciliation §4.
 
 ## B0-8 record (complete)
 
@@ -37,9 +43,9 @@ WIP: 1 active lane (lane-b0-ledger). Max 3.
 
 ## Batch 0 checklist
 
-- [ ] B0-1 台账导入 — in progress (lane-b0-ledger)
+- [x] B0-1 台账导入 — **DONE** (merged @e2b5b73; 367 rows, validate --paths errors=0, 407→367 reconciled)
 - [x] B0-8 Gate 0 双端环境 — **DONE** (merged @729725d; OC_GATE_STRICT fail-not-skip live; lane bun discovery works; ref/rust boot evidence recorded)
-- [ ] B0-2 基线（workspace + p10 → docs/parity-baseline.md；五组 gate 骨架）
+- [~] B0-2 基线 — in progress: workspace `nextest --workspace --locked --no-fail-fast` → **3391/3391 passed, 10 skipped, 0 failed** (1 leaky flag); `fmt --all --check` OK; clippy `-p parity` → 15 errors ALL in pre-existing `tools/parity/src/bin/rescan-tui.rs` (byte-identical to main, known-red); **p10 strict battery RED on main@729725d**: `p10_ts_tui_against_rust_server` (rename never reached v2 session row; ref-side poll timeout) + `p10_db_interop_stable_channel_same_file` (v2 did not read model switch) — full no-fail-fast re-run in flight for complete picture + flake-vs-deterministic classification. Remaining: docs/parity-baseline.md + 5 gate skeletons + known-red ledger entries.
 - [ ] B0-4 静态守卫 tools/guards/*（目录尚不存在，需从零建）
 - [ ] B0-5 ADR 0001–0005
 - [ ] B0-7 测试隔离债（legacy pkill 脚本登记、root-owned auth_e2e.rs、8080 skip 语义）
@@ -64,6 +70,14 @@ WIP: 1 active lane (lane-b0-ledger). Max 3.
 ## Blockers
 
 - B0-9 requires user decision (live fixture window). Deferred until rest of Batch 0 lands; will ask once.
+- p10 strict battery red on main (2+ failures) — must be classified (flake vs deterministic vs pre-existing before eb4023d) and ledger-ized as known-red with owner/expiry in B0-2; blocks nothing else in Batch 0.
+
+## Known-red register (to ledger-ize in B0-2)
+
+1. `tools/parity/src/bin/rescan-tui.rs` clippy debt — 15 errors, pre-existing, byte-identical to main@2693ae8.
+2. `parity::scenarios scenario_permission_saved` — 1 flaky failure in 3 repetitions (B0-8 verifier observation; passed in all orchestrator runs since).
+3. p10 strict failures (pending full run): `p10_ts_tui_against_rust_server`, `p10_db_interop_stable_channel_same_file` (+ any revealed by no-fail-fast run).
+4. tmux-availability skips in opt-in TUI tests remain skips under OC_GATE_STRICT (documented B0-8 follow-up; decision needed whether p10 battery requires tmux strictness).
 
 ## Next
 
