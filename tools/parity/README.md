@@ -209,3 +209,36 @@ and `reference::spawn_reference` accepts seed files + env (mirroring
 `RustSpawn`). The full battery ledger — table, whitelist, findings (all
 closed by the final remediation sweep except note P10-N1) — is
 `goldens/p10/VERIFICATION.md`.
+
+## Phase-10 differential gates (§8.3 skeletons + known-red)
+
+The five minimal dual-end gates of `docs/PARITY-LOOP.md` §8.3 (B0-2).
+Each is `#[ignore]` + `OC_P10=1`; strict runs add `OC_GATE_STRICT=1`
+(fail-not-skip, `parity::gate`):
+
+```bash
+OC_P10=1 OC_GATE_STRICT=1 PARITY_BUN=$HOME/.bun/bin/bun \
+  cargo nextest run -p parity --locked --run-ignored only --no-fail-fast -E 'test(p10_)' \
+  2>&1 | tee /tmp/opencode/p10-strict.log
+python3 tools/parity/known-red-summary.py /tmp/opencode/p10-strict.log
+```
+
+| Gate | File | Live today / structured gaps |
+| --- | --- | --- |
+| 1 HTTP/SSE contract | `tests/p10_http_contract.rs` | pagination absent-vs-null + order + limit + cursor round-trips, error envelopes, 2-route validation matrix (full 141-op table in the artifact), first SSE event — live; `previous`-cursor presence and cursor-token payloads recorded as gap facts (unregistered divergences, pending ledger triage). |
+| 2b real-v2 import | `tests/p10_db_import.rs` | copies a REAL v2 library DB into a lane sandbox (`PARITY_V2_DB_FIXTURE`), journal 0-rerun + project-id no-double-rows + continue smoke, then the reference re-opens. No fixture exists in-tree: strict mode fails named-missing until one is provided; `PARITY_V2_DB_FIXTURE_PROMPT=1` enables the write-path continue. |
+| 3 tools | `tests/p10_tools.rs` | read/edit/glob/grep dual-end compares (normalized tool part + file side effects) — live; shell/timeout/permission/patch are ledger-linkable checkpoints. |
+| 4 TUI five flows | `tests/p10_tui_frames.rs` | flow 1 (boot/home) structural smoke at 80x24 + 120x30 via `tui_diff::PtyChild`/`Grid` — live; flows 2–5 not-wired checkpoints (form/permission surfaces → ledger `TUI-TD16`/`TUI-TD18`). |
+| 5 CLI | `tests/p10_cli.rs` | `--version`/`--help`/`serve --hostname localhost`/`auth list`/`models`/`session list`/`run --format json` + early error/`--print-logs` — live (both CLIs pinned to their own server; the managed-service port is never touched); help text, TTY branches and table time formats are recorded gaps. |
+
+**Known-red workflow (§8.5):** expected mismatches are registered in
+`goldens/p10/known-red.json` (`ledger_id`, `test`, `pattern`, `added`,
+`expiry_batch`, `owner`). Gate tests wrap registered failures with
+`p10_common::known_red(ledger_id, expiry_batch)` — the test still FAILS,
+with the message prefixed `KNOWN-RED:<ledger-id>:` (a missing/expired/
+drifted entry prefixes `NEW-RED:` instead). `known-red-summary.py`
+classifies a strict-run log: exit 0 only when there are no `NEW-RED` and
+no expired known-red; strict-mode prerequisite failures (e.g. the unset
+Gate 2b fixture) are labeled `MISSING-PREREQ` — labeled, never counted as
+passes. Known-red may only shrink: registering a new entry is a triage
+decision (ledger + expiry + owner), not a lane-side shortcut.

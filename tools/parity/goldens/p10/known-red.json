@@ -1,0 +1,42 @@
+[
+  {
+    "ledger_id": "GATE-DB-STABLE",
+    "test": "p10_db_interop_stable_channel_same_file",
+    "pattern": "v2 re-open does not reflect the Rust-side model switch on opencode-stable.db (model.id stays fake-model-a)",
+    "added": "2026-10-18",
+    "expiry_batch": "Batch 1B",
+    "owner": ""
+  },
+  {
+    "ledger_id": "GATE-DB-NULLROWS",
+    "test": "p10_db_interop_v2_written_null_rows",
+    "pattern": "three-boot NULL-heavy interop flow fails (~15s; see docs/parity-baseline.md §2.1)",
+    "added": "2026-10-18",
+    "expiry_batch": "Batch 1B",
+    "owner": ""
+  },
+  {
+    "ledger_id": "GATE-TUI-RENAME",
+    "test": "p10_ts_tui_against_rust_server",
+    "pattern": "rename exact-title poll times out; last row title 'The outside file says p10-secret.p10 renamed from tui' (auto-title merge suspected)",
+    "added": "2026-10-18",
+    "expiry_batch": "Batch 1B",
+    "owner": ""
+  },
+  {
+    "ledger_id": "GATE-FLAKE-PERM-SAVED",
+    "test": "m1_scenario_permission_saved",
+    "pattern": "flaky permission_saved scenario replay (not part of the strict p10 battery filter; tracked as a flake, deterministic when it fires)",
+    "added": "2026-10-18",
+    "expiry_batch": "Batch 1B",
+    "owner": ""
+  },
+  {
+    "ledger_id": "HYGIENE-CLIPPY-RESCAN-TUI",
+    "test": "clippy -p parity --lib --tests (tools/parity/src/bin/rescan-tui.rs)",
+    "pattern": "15 clippy errors in tools/parity/src/bin/rescan-tui.rs (byte-identical set; see docs/parity-baseline.md §2)",
+    "added": "2026-10-18",
+    "expiry_batch": "Batch 0",
+    "owner": ""
+  }
+]
