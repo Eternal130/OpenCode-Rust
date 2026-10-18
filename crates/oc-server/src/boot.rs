@@ -102,6 +102,15 @@ impl Default for BootOptions {
 // budget and splitting it would only hide the boot ordering.
 #[allow(clippy::too_many_lines)]
 pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
+    // RUNTIME-SWEEP-RACE — the recovery sweep's world boundary, captured
+    // at process entry (strictly before this boot can serve a request or
+    // claim anything): claims recorded at or after this instant belong to
+    // the CURRENT boot or a concurrently-live peer sharing the database,
+    // and the sweep must never touch them (v2 restart.ts:44-52 — the
+    // sweep assumes every orphaned claim's owner is dead, an invariant
+    // its managed-server protocol enforces; the timestamp guard gives the
+    // same "pre-boot claims only" semantics to unregistered servers).
+    let boot_started_ms = oc_core::database::migrations::now_ms();
     // One-way v2→rust data migration (lane B), BEFORE any database or
     // config resolution so the boot reads migrated state. Marker-latched:
     // the second entry point (after the CLI's own call) is one stat.
@@ -268,8 +277,13 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     // forked at boot before ready): execution claims are written at turn
     // start, so the sweep covers graceful restarts AND unclean deaths
     // (kill -9) with no shutdown-hook participation. Forked: readiness
-    // never waits on a drain (v2 `Effect.forkScoped`).
-    tokio::spawn(recovery_sweep(Arc::clone(&state.engine)));
+    // never waits on a drain (v2 `Effect.forkScoped`). RUNTIME-
+    // SWEEP-RACE: the process-entry timestamp bounds the sweep to
+    // pre-boot claims — a session claimed milliseconds ago by THIS boot's
+    // first prompt or a live peer sharing the database is never resumed,
+    // released, or replayed (the 1-in-50 standalone race: a peer's sweep
+    // double-drove a live session — doubled turn, disconnected stream).
+    tokio::spawn(recovery_sweep(Arc::clone(&state.engine), boot_started_ms));
     let shell = AppShell::new(Arc::clone(&state));
     let router = shell.router();
     let on_listen = trace_boot.then(|| {
@@ -301,9 +315,19 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
 ///
 /// A location that fails to assemble keeps its claims — the next boot
 /// retries (recovery is at-least-once).
-async fn recovery_sweep(engine: Arc<Engine>) {
+///
+/// RUNTIME-SWEEP-RACE — `boot_started_ms` (captured at process entry,
+/// before the sweep forks) bounds every claim query: only claims recorded
+/// strictly before it are pre-boot state. v2's sweep carries no timestamp
+/// because its managed-server protocol guarantees the predecessor is dead
+/// and "unregistered servers sharing the database never sweep"
+/// (restart.ts:44-52, process.ts:104-110); the guard restores those
+/// semantics for every boot mode, so a live session claimed by the
+/// CURRENT boot or a concurrently-booted peer can never be resumed,
+/// released, or double-driven by this sweep.
+async fn recovery_sweep(engine: Arc<Engine>, boot_started_ms: i64) {
     let store = SessionStore::new((*engine.db).clone());
-    let Ok(suspended_ids) = store.list_suspended().await else {
+    let Ok(suspended_ids) = store.list_suspended_before(boot_started_ms).await else {
         eprintln!("[restart] list_suspended failed; skipping recovery sweep");
         return;
     };
@@ -320,7 +344,7 @@ async fn recovery_sweep(engine: Arc<Engine>) {
             JobRecovery::Shell { .. } => None,
         })
         .collect();
-    if let Err(error) = store.release_child_claims(&children).await {
+    if let Err(error) = store.release_child_claims_before(&children, boot_started_ms).await {
         eprintln!("[restart] release_child_claims failed: {error}");
     }
     // The v2 suspended set (listSuspended ∪ children): early replay

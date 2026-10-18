@@ -363,6 +363,31 @@ impl SessionStore {
             .await
     }
 
+    /// RUNTIME-SWEEP-RACE — `listSuspended` under the boot-start guard:
+    /// only claims recorded strictly BEFORE `before_ms` are pre-boot
+    /// state. `time_suspended` is the claim timestamp (`claim`/the
+    /// `session.execution.started` commit hook), so a row claimed at or
+    /// after this process started belongs to the CURRENT boot or a
+    /// concurrently-live peer sharing the database — the sweep must not
+    /// resume it. v2's equivalent invariant is process-level: the sweep
+    /// "assumes every orphaned claim's owner is dead" and "unregistered
+    /// servers sharing the database never sweep" (restart.ts:44-52 —
+    /// only the managed lifecycle installs it, process.ts:104-110).
+    pub async fn list_suspended_before(&self, before_ms: i64) -> Result<Vec<String>> {
+        self.db
+            .transaction(move |tx| {
+                let mut statement = tx.conn().prepare(
+                    "SELECT id FROM session_v2 WHERE time_suspended IS NOT NULL \
+                     AND parent_id IS NULL AND time_suspended < ?1",
+                )?;
+                let rows = statement
+                    .query_map(rusqlite::params![before_ms], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .await
+    }
+
     /// `claim` (store.ts:205-216): records the durable write-ahead intent;
     /// re-claiming a claimed session is a no-op and `time_updated` stays
     /// pinned (claim bookkeeping is not user activity).
@@ -419,6 +444,46 @@ impl SessionStore {
                 );
                 let params: Vec<&dyn rusqlite::ToSql> =
                     recoverable.iter().map(|value| value as &dyn rusqlite::ToSql).collect();
+                tx.execute(&sql, params.as_slice())?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// RUNTIME-SWEEP-RACE — `releaseChildClaims` under the boot-start
+    /// guard: only child claims recorded strictly BEFORE `before_ms` are
+    /// orphaned pre-boot state; a child claimed at or after this process
+    /// started is live work of the CURRENT boot or a peer sharing the
+    /// database and must keep its claim.
+    pub async fn release_child_claims_before(
+        &self,
+        recoverable: &[String],
+        before_ms: i64,
+    ) -> Result<()> {
+        let recoverable: Vec<String> = recoverable.to_vec();
+        self.db
+            .transaction(move |tx| {
+                if recoverable.is_empty() {
+                    tx.execute(
+                        "UPDATE session_v2 SET time_suspended = NULL, resume_attempts = 0, \
+                         time_updated = time_updated \
+                         WHERE time_suspended IS NOT NULL AND parent_id IS NOT NULL \
+                         AND time_suspended < ?1",
+                        rusqlite::params![before_ms],
+                    )?;
+                    return Ok(());
+                }
+                let marks = recoverable.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+                let sql = format!(
+                    "UPDATE session_v2 SET time_suspended = NULL, resume_attempts = 0, \
+                     time_updated = time_updated \
+                     WHERE time_suspended IS NOT NULL AND parent_id IS NOT NULL \
+                     AND id NOT IN ({marks}) AND time_suspended < ?{}",
+                    recoverable.len() + 1
+                );
+                let mut params: Vec<&dyn rusqlite::ToSql> =
+                    recoverable.iter().map(|value| value as &dyn rusqlite::ToSql).collect();
+                params.push(&before_ms);
                 tx.execute(&sql, params.as_slice())?;
                 Ok(())
             })
