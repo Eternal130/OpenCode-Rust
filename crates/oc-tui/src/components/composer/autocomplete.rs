@@ -70,6 +70,7 @@ pub const V2_SLASH: &[(&str, &str)] = &[
     ("new", "New session"),
     ("open", "Open session or project"),
     ("pair", "Pair device"),
+    ("plugins", "Plugins"),
     ("project", "Open session or project"),
     ("projects", "Open session or project"),
     ("q", "Exit the app"),
@@ -91,11 +92,14 @@ pub const V2_SLASH: &[(&str, &str)] = &[
 
 /// Slash name/alias → the dot command v2's registry runs on select
 /// (`onSelect: command.run`, `autocomplete.tsx:481`; the command ids
-/// come from `app.tsx`'s `slash: { name, aliases }` entries and the
-/// prompt's own `/editor` `/skills` `/worktrees`). `/cd` takes
-/// arguments (`slash.arguments: true`) and stays an INSERT; the
-/// skills dialog is not ported (no dispatcher entry — the run is a
-/// no-op there, matching v2's "runs but the surface is absent").
+/// come from `app.tsx`'s `slash: { name, aliases }` entries, the
+/// prompt's own `/editor` `/skills` `/worktrees`, and the system
+/// plugin's `/plugins` — feature-plugins/system/plugins.tsx:337-347,
+/// SA-F6: the live-typed command opens the Plugins dialog on Enter).
+/// `/cd` takes arguments (`slash.arguments: true`) and stays an
+/// INSERT; the skills dialog is not ported (no dispatcher entry — the
+/// run is a no-op there, matching v2's "runs but the surface is
+/// absent").
 pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("agents", "agent.list"),
     ("clear", "session.clear"),
@@ -112,6 +116,7 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("new", "session.new"),
     ("open", "open.menu"),
     ("pair", "server.pair"),
+    ("plugins", "plugins.list"),
     ("project", "open.menu"),
     ("projects", "open.menu"),
     ("q", "app.exit"),
@@ -420,6 +425,31 @@ mod tests {
         let registry = SlashRegistry::golden_harness();
         assert_eq!(registry.display_width(), 12, "'/worktrees' (10) + 2");
         assert!(registry.entries.iter().any(|entry| entry.display == "/redo"));
+    }
+
+    /// SA-F6: `/plugins` is a live slash command (the system plugin's
+    /// `plugins.list` registration — feature-plugins/system/
+    /// plugins.tsx:337-347): typing it opens the autocomplete popup,
+    /// Enter selects and RUNS the Plugins dialog command.
+    #[test]
+    fn slash_registry_has_the_live_plugins_command() {
+        let registry = SlashRegistry::v2();
+        assert!(
+            registry.entries.iter().any(|entry| entry.display == "/plugins"),
+            "the v2 registry lists /plugins"
+        );
+        assert_eq!(
+            SlashRegistry::command_for("/plugins").as_deref(),
+            Some("plugins.list"),
+            "Enter on /plugins dispatches plugins.list (the Plugins dialog)"
+        );
+        // The filter narrows to exactly the typed command.
+        let options = filter_commands(&registry, "plugins");
+        assert!(
+            options.iter().all(|option| option.display == "/plugins"),
+            "typing /plugins leaves only the plugins entry: {:?}",
+            options.iter().map(|o| &o.display).collect::<Vec<_>>()
+        );
     }
 
     /// The golden's filter: `/re` ranks `/redo` then `/rename` (the

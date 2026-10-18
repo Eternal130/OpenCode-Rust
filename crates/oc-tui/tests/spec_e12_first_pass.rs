@@ -82,10 +82,7 @@ fn e12_first_pass_session_list_filter() {
 
         let expected_ref = ref_filter(&sessions, query);
         let ours_idx = filter_indices(&props, query);
-        let ours: Vec<String> = ours_idx
-            .iter()
-            .map(|i| sessions[*i].id.clone())
-            .collect();
+        let ours: Vec<String> = ours_idx.iter().map(|i| sessions[*i].id.clone()).collect();
 
         // Port cross-check against hand-computed corpus cells.
         for id in q["expected_match"].as_array().unwrap_or(&Vec::new()) {
@@ -108,7 +105,8 @@ fn e12_first_pass_session_list_filter() {
             ours.iter().filter(|id| !expected_ref.contains(*id)).cloned().collect();
         let ref_only: Vec<String> =
             expected_ref.iter().filter(|id| !ours.contains(id)).cloned().collect();
-        let status = if ours_only.is_empty() && ref_only.is_empty() { "PARITY" } else { "DIVERGENT" };
+        let status =
+            if ours_only.is_empty() && ref_only.is_empty() { "PARITY" } else { "DIVERGENT" };
         if status == "DIVERGENT" {
             findings += 1;
         }
