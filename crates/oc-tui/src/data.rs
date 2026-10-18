@@ -194,6 +194,14 @@ pub enum Ingest {
         unread: Vec<String>,
         /// `(sessionID, messages)` per OPEN session at resync time.
         messages: Vec<(String, Vec<crate::components::message::model::Message>)>,
+        /// Pending permission asks re-listed per session
+        /// (`GET /session/:id/permission`) — the open sessions plus
+        /// their descendants (RUNTIME-TD04: asks that happened while
+        /// offline are re-delivered on resubscribe).
+        permissions: Vec<(String, Vec<crate::components::footer::PermissionRequest>)>,
+        /// Pending forms re-listed per session
+        /// (`GET /session/:id/form`) — same fetch set.
+        forms: Vec<(String, Vec<crate::components::footer::FormRequest>)>,
     },
 }
 
@@ -231,8 +239,9 @@ impl ConnectionConfig {
 }
 
 /// How the reconnect resync re-fetches state (swappable for tests;
-/// production uses [`HttpResync`]): the session list plus the
-/// `message.list` of every open session.
+/// production uses [`HttpResync`]): the session list, the
+/// `message.list` of every open session, and the pending
+/// permission/form asks of the open family (RUNTIME-TD04).
 pub trait ResyncSource: Send {
     fn fetch_sessions(
         &self,
@@ -246,6 +255,48 @@ pub trait ResyncSource: Send {
     ) -> impl std::future::Future<
         Output = Result<Vec<crate::components::message::model::Message>, String>,
     > + Send;
+    /// Pending permission asks (`GET /session/:id/permission`).
+    fn fetch_permissions(
+        &self,
+        session_id: &str,
+    ) -> impl std::future::Future<
+        Output = Result<Vec<crate::components::footer::PermissionRequest>, String>,
+    > + Send;
+    /// Pending forms (`GET /session/:id/form`).
+    fn fetch_forms(
+        &self,
+        session_id: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<crate::components::footer::FormRequest>, String>>
+           + Send;
+}
+
+/// The reconnect resync's blocker fetch set (RUNTIME-TD04): every OPEN
+/// session plus its descendants, computed over the FRESH session list
+/// (`parentID` links) — v2 syncs `permission.sync`/`form.sync` for the
+/// route session AND `descendantSessionIDs`
+/// (routes/session/index.tsx:313-320), using the server's current
+/// family rather than the possibly-stale local index.
+#[must_use]
+pub fn resync_family(sessions: &[SessionSnapshot], open: &[String]) -> Vec<String> {
+    let mut family: Vec<String> = Vec::new();
+    let mut frontier: Vec<String> = open.to_vec();
+    while let Some(id) = frontier.pop() {
+        if family.contains(&id) {
+            continue;
+        }
+        family.push(id.clone());
+        for session in sessions {
+            if session.parent_id.as_deref() == Some(id.as_str())
+                && !family.contains(&session.id)
+                && !frontier.contains(&session.id)
+            {
+                frontier.push(session.id.clone());
+            }
+        }
+    }
+    family.sort();
+    family.dedup();
+    family
 }
 
 /// The open-session registry the store side keeps current (tab
@@ -315,6 +366,51 @@ impl ResyncSource for HttpResync {
     ) -> Result<Vec<crate::components::message::model::Message>, String> {
         fetch_session_messages(&self.client, session_id).await
     }
+
+    async fn fetch_permissions(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<crate::components::footer::PermissionRequest>, String> {
+        let list = self
+            .client
+            .session()
+            .permission_list(session_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        list.into_iter().map(|request| wire_permission(&request)).collect()
+    }
+
+    async fn fetch_forms(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<crate::components::footer::FormRequest>, String> {
+        let list = self
+            .client
+            .session()
+            .form()
+            .list(session_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        list.into_iter().map(|form| wire_form(&form)).collect()
+    }
+}
+
+/// Wire `PermissionRequest` → the footer shape (serde round-trip: the
+/// HTTP and SSE payloads share the same JSON shape; unknown wire
+/// fields — `message`, `source` — drop, the footer's defaults fill).
+fn wire_permission(
+    request: &oc_client::types::PermissionRequest,
+) -> Result<crate::components::footer::PermissionRequest, String> {
+    serde_json::from_value(serde_json::to_value(request).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())
+}
+
+/// Wire `FormInfo` → the footer `FormRequest` (same round-trip).
+fn wire_form(
+    form: &oc_client::types::FormInfo,
+) -> Result<crate::components::footer::FormRequest, String> {
+    serde_json::from_value(serde_json::to_value(form).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())
 }
 
 /// One session's `message.list` as a CHRONOLOGICAL transcript (the
@@ -775,7 +871,12 @@ impl Connection {
             // sent and ahead of the new stream's events. Unread marks
             // derive from `idle > viewed`, known-only; the message trees
             // of every OPEN session re-fetch through `message.list` and
-            // rebuild through the store reducers.
+            // rebuild through the store reducers. The open family's
+            // pending permission asks and forms re-list too
+            // (RUNTIME-TD04: asks that happened while offline are
+            // re-delivered after the resubscribe; per-id fetch errors
+            // — e.g. a session deleted while offline — drop that id
+            // only).
             if let Ok(sessions) = fetcher.fetch_sessions().await {
                 let unread = resync_unread(&sessions);
                 let mut messages = Vec::new();
@@ -784,7 +885,25 @@ impl Connection {
                         messages.push((session_id, list));
                     }
                 }
-                if tx.send(Ingest::Resync { sessions, unread, messages }).await.is_err() {
+                let family = resync_family(&sessions, &fetcher.open_sessions());
+                let mut permissions = Vec::new();
+                let mut forms = Vec::new();
+                for session_id in family {
+                    match fetcher.fetch_permissions(&session_id).await {
+                        Ok(list) => permissions.push((session_id.clone(), list)),
+                        // A session deleted while offline 404s: no data,
+                        // no decision for that id.
+                        Err(_) => continue,
+                    }
+                    if let Ok(list) = fetcher.fetch_forms(&session_id).await {
+                        forms.push((session_id, list));
+                    }
+                }
+                if tx
+                    .send(Ingest::Resync { sessions, unread, messages, permissions, forms })
+                    .await
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -1199,7 +1318,7 @@ mod tests {
             &observed[4],
             Ingest::Connection(ConnectionState::Reconnecting { attempt: 2 })
         ));
-        let Ingest::Resync { sessions, unread, messages } = &observed[5] else {
+        let Ingest::Resync { sessions, unread, messages, .. } = &observed[5] else {
             panic!("resync snapshot: {observed:?}");
         };
         assert_eq!(sessions[0].title.as_deref(), Some("Resynced"));
