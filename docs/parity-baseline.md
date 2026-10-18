@@ -36,16 +36,19 @@
 
 ## 3. Five minimal differential gates (§8.3) — build state
 
-| gate | file (planned) | state at baseline |
+| gate | file (planned) | state after B0-2 (2026-10-18) |
 |---|---|---|
 | Gate 0 env precheck | `tools/parity/tests/gate0_environment.rs` | **live** (B0-8) |
-| Gate 1 HTTP/SSE contract | `tools/parity/tests/p10_http_contract.rs` | skeleton to build (B0-2 remainder) |
-| Gate 2 DB | `tools/parity/tests/p10_db_interop.rs` + `p10_db_import.rs` | interop partially live (3 red lanes ledger-ized above); import skeleton to build |
-| Gate 3 Tools | `tools/parity/tests/p10_tools.rs` | skeleton to build |
-| Gate 4 TUI five flows | `tools/parity/tests/p10_tui_frames.rs` | precursor `p10_cross_tui` live with 1 red; skeleton to build |
-| Gate 5 CLI | `tools/parity/tests/p10_cli.rs` | skeleton to build |
+| Gate 1 HTTP/SSE contract | `tools/parity/tests/p10_http_contract.rs` | **skeleton built** (B0-2): pagination null/order/limit/round-trip, error envelope, 2-route validation matrix (141 ops tabled), SSE first-event live; `previous`-cursor + cursor-token payload divergences recorded as gap facts (unregistered, pending triage) |
+| Gate 2 DB | `tools/parity/tests/p10_db_interop.rs` + `p10_db_import.rs` | interop partially live (3 red lanes ledger-ized in §2.1/§4, failures now `KNOWN-RED:`-prefixed); **import skeleton built** (B0-2) — fixture-gated behind `PARITY_V2_DB_FIXTURE` (strict mode fails named-missing until a real v2 library copy exists) |
+| Gate 3 Tools | `tools/parity/tests/p10_tools.rs` | **skeleton built** (B0-2): read/edit/glob/grep dual-end content+metadata+side-effect compares live; shell/timeout/permission/patch recorded as ledger-linkable checkpoints |
+| Gate 4 TUI five flows | `tools/parity/tests/p10_tui_frames.rs` | **skeleton built** (B0-2): flow 1 (boot/home) live as structural smoke at 80x24+120x30 (chrome-EXACT machinery with empty certified-row list); flows 2–5 not-wired checkpoints (form/permission → `TUI-TD16`/`TUI-TD18`) |
+| Gate 5 CLI | `tools/parity/tests/p10_cli.rs` | **skeleton built** (B0-2): version/help/serve/auth/models/session-list/run-json/early-error/--print-logs live; help text, TTY branches, session-list full-JSON + table time, run-json event coverage recorded as gaps |
 
-Known-red registry: `tools/parity/goldens/p10/known-red.json` (to be created with the skeleton lane; entries below).
+Known-red registry: `tools/parity/goldens/p10/known-red.json` (created B0-2;
+entries below). Classify a strict-run log with
+`tools/parity/known-red-summary.py <log>` (exit 0 only when 0 NEW-RED and
+0 expired known-red).
 
 ## 4. Known-red register (all carry ledger IDs)
 

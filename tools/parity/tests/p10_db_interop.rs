@@ -100,18 +100,20 @@ fn journal(dump: &Value) -> Value {
     dump["migrations"].clone()
 }
 
-fn session_row<'a>(dump: &'a Value, id: &str) -> &'a Value {
+/// `Result` form (B0-2): a missing row FAILS the test as an `Err` so the
+/// known-red wrapper can categorize it — the pre-B0-2 form panicked, which
+/// bypassed categorization (same assertion, different failure channel).
+fn session_row<'a>(dump: &'a Value, id: &str) -> Result<&'a Value> {
     dump["sessions"]
         .as_array()
-        .expect("sessions array")
+        .ok_or_else(|| anyhow::anyhow!("sessions missing from dump: {dump:?}"))?
         .iter()
         .find(|row| row["id"] == json!(id))
-        .unwrap_or_else(|| panic!("session {id} missing from dump"))
+        .ok_or_else(|| anyhow::anyhow!("session {id} missing from dump"))
 }
 
 #[tokio::test]
 #[ignore = "Phase-10 battery: opt in with OC_P10=1 (needs bun + reference)"]
-#[allow(clippy::too_many_lines)]
 async fn p10_db_interop_v2_written_null_rows() -> Result<()> {
     if !enabled() {
         skip("OC_P10 != 1");
@@ -123,6 +125,19 @@ async fn p10_db_interop_v2_written_null_rows() -> Result<()> {
     if parity::rust_server::skip_if_no_cargo() {
         return Ok(());
     }
+    // Known-red wrapper (B0-2, §8.5): this lane is a registered red — the
+    // failure stays a failure, only the message is categorized so
+    // known-red-summary.py can tell KNOWN-RED from NEW-RED.
+    if let Err(error) = run_v2_written_null_rows().await {
+        return Err(p10_common::known_red("GATE-DB-NULLROWS", "Batch 1B").categorize(error));
+    }
+    Ok(())
+}
+
+// The debug-formatting allow keeps the extracted body byte-identical to the
+// pre-B0-2 #[tokio::test] fn (clippy only sees through the plain-async form).
+#[allow(clippy::too_many_lines, clippy::unnecessary_debug_formatting)]
+async fn run_v2_written_null_rows() -> Result<()> {
     let bun = bun_path()?;
 
     // -- the shared home + project -----------------------------------------
@@ -251,13 +266,13 @@ async fn p10_db_interop_v2_written_null_rows() -> Result<()> {
     )?;
 
     // The D3 column class, on REAL v2 rows:
-    let row_a = session_row(&dump_a, &a);
+    let row_a = session_row(&dump_a, &a)?;
     ensure!(row_a["model"].is_null(), "A model not NULL: {row_a:?}");
     ensure!(row_a["agent"].is_null(), "A agent not NULL: {row_a:?}");
     ensure!(row_a["parent_id"].is_null(), "A parent not NULL: {row_a:?}");
-    let row_b = session_row(&dump_a, &b);
+    let row_b = session_row(&dump_a, &b)?;
     ensure!(!row_b["model"].is_null(), "B model unexpectedly NULL: {row_b:?}");
-    let row_c = session_row(&dump_a, &c);
+    let row_c = session_row(&dump_a, &c)?;
     ensure!(row_c["parent_id"] == json!(a), "C parent not A: {row_c:?}");
     let journal_a = journal(&dump_a);
     let ids_a: Vec<&str> = dump_a["migrations"]
@@ -399,7 +414,7 @@ async fn p10_db_interop_v2_written_null_rows() -> Result<()> {
         format!("{}\n", serde_json::to_string_pretty(&dump_b)?),
     )?;
     ensure!(journal(&dump_b) == journal_a, "the journal changed after the port's writes");
-    let row_b = session_row(&dump_b, &b);
+    let row_b = session_row(&dump_b, &b)?;
     ensure!(!row_b["model"].is_null(), "B model NULL after the port switch: {row_b:?}");
 
     // ======================================================================
@@ -503,7 +518,6 @@ async fn p10_db_interop_v2_written_null_rows() -> Result<()> {
 
 #[tokio::test]
 #[ignore = "Phase-10 battery: opt in with OC_P10=1 (needs bun + reference)"]
-#[allow(clippy::too_many_lines)]
 async fn p10_db_interop_stable_channel_same_file() -> Result<()> {
     if !enabled() {
         skip("OC_P10 != 1");
@@ -515,6 +529,17 @@ async fn p10_db_interop_stable_channel_same_file() -> Result<()> {
     if parity::rust_server::skip_if_no_cargo() {
         return Ok(());
     }
+    // Known-red wrapper (B0-2, §8.5): registered red GATE-DB-STABLE — see
+    // docs/parity-baseline.md §2.1; categorized, never skipped.
+    if let Err(error) = run_stable_channel_same_file().await {
+        return Err(p10_common::known_red("GATE-DB-STABLE", "Batch 1B").categorize(error));
+    }
+    Ok(())
+}
+
+// Same: extracted verbatim from the #[tokio::test] wrapper (B0-2).
+#[allow(clippy::too_many_lines, clippy::unnecessary_debug_formatting)]
+async fn run_stable_channel_same_file() -> Result<()> {
     let bun = bun_path()?;
 
     let root = PathBuf::from(format!("/tmp/opencode/p10-db-stable-{}", std::process::id()));
@@ -612,7 +637,7 @@ async fn p10_db_interop_stable_channel_same_file() -> Result<()> {
     // The dump's session projection is (id, parent_id, agent, model) —
     // `session_row` panics when the id is absent, so this is the
     // port-write-landed assertion.
-    let _ = session_row(&dump, &b);
+    let _ = session_row(&dump, &b)?;
 
     // Phase C — the reference re-opens the same file and reads the port's row.
     let reference = parity::reference::spawn_reference(parity::reference::ReferenceSpawn {
