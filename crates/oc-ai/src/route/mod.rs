@@ -14,6 +14,7 @@ pub use client::{merge_route_defaults, Route, RouteDefaults, RouteInput, RoutePa
 pub use endpoint::{render, Endpoint, EndpointInput, EndpointPart, EndpointPatch};
 pub use framing::{Framing, FramingDecoder, FramingKind};
 pub use protocol::{Protocol, ProtocolState};
+pub use transport::timeouts::TimeoutBudget;
 pub use transport::{
     shared, ByteStream, FailingTransport, SharedTransport, Transport, TransportError,
     TransportOperation, TransportRequest, TransportResponse,
