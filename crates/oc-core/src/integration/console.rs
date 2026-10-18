@@ -77,11 +77,23 @@ pub struct ConsoleModel {
 }
 
 /// `RemoteResponse` (opencode.ts:29-45) — providers today; websearch /
-/// mcp / policies remain on the deferred list.
+/// mcp stay on the deferred list. `experimental.policies` is the
+/// organization policy compiled for the authenticated caller
+/// (CONFIG-C7: the Console managed-policy source).
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ConsoleConfig {
     #[serde(default)]
     pub providers: BTreeMap<String, ConsoleProvider>,
+    #[serde(default)]
+    pub experimental: Option<ConsoleExperimental>,
+}
+
+/// `RemoteResponse.experimental` (opencode.ts:37-40).
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ConsoleExperimental {
+    /// Organization policy statements; omitted when there is none.
+    #[serde(default)]
+    pub policies: Option<Vec<oc_schema::config::policy::Policy>>,
 }
 
 fn server_of(credential: &OAuthValue) -> String {
@@ -227,6 +239,10 @@ pub struct ConsoleProviders {
     /// oauth access token onto the api key
     /// (model-resolver.ts:308-319,364-371).
     token: parking_lot::RwLock<Option<String>>,
+    /// The Console managed-policy state (CONFIG-C7, managed-policy.ts):
+    /// the organization statements + organization name the config
+    /// policy runtime consults on both execution surfaces.
+    managed: std::sync::Arc<crate::config::managed_policy::ManagedPolicy>,
 }
 
 impl ConsoleProviders {
@@ -245,6 +261,14 @@ impl ConsoleProviders {
     #[must_use]
     pub fn token(&self) -> Option<String> {
         self.token.read().clone()
+    }
+
+    /// The Console managed-policy state (CONFIG-C7): the organization
+    /// statements the config policy runtime merges after every
+    /// authored document's.
+    #[must_use]
+    pub fn managed(&self) -> &std::sync::Arc<crate::config::managed_policy::ManagedPolicy> {
+        &self.managed
     }
 
     fn set_token(&self, token: Option<String>) {
@@ -285,28 +309,67 @@ impl IntegrationHost {
     pub async fn refresh_console(self: &Arc<Self>) {
         let Some(connection) = self.connection_active("opencode").await.ok().flatten() else {
             self.console_providers_shared.set_token(None);
+            self.console_providers_shared
+                .managed()
+                .set(crate::config::managed_policy::ManagedState::default());
             return;
         };
         let ConnectionInfo::Credential { id, .. } = &connection else {
             self.console_providers_shared.set_token(None);
+            self.console_providers_shared
+                .managed()
+                .set(crate::config::managed_policy::ManagedState::default());
             return;
         };
         let Some(stored) = self.store().get(id).await.ok().flatten() else {
             self.console_providers_shared.set_token(None);
+            self.console_providers_shared
+                .managed()
+                .set(crate::config::managed_policy::ManagedState::default());
             return;
         };
         let CredentialValue::OAuth(oauth) = &stored.value else {
             self.console_providers_shared.set_token(None);
+            self.console_providers_shared
+                .managed()
+                .set(crate::config::managed_policy::ManagedState::default());
             return;
         };
         self.console_providers_shared.set_token(Some(oauth.access.clone()));
+        // `organizationName` (opencode.ts:531-533): the credential's
+        // `orgName` metadata, when present.
+        let organization = oauth
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("orgName"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         match fetch_config(oauth).await {
             Ok(Some(config)) => {
+                // `publish` (opencode.ts:244-245): statements ride the
+                // snapshot — `managed.set` REPLACES the state (a load,
+                // 404, or disconnect swaps them wholesale).
+                self.console_providers_shared.managed().set(
+                    crate::config::managed_policy::ManagedState {
+                        statements: config
+                            .experimental
+                            .as_ref()
+                            .and_then(|experimental| experimental.policies.clone())
+                            .unwrap_or_default(),
+                        organization: organization.clone(),
+                    },
+                );
                 self.console_providers_shared.swap(to_custom_providers(&config));
                 // A healthy load clears any previously reported status.
                 self.connection_status("opencode", &connection, None).await;
             }
             Ok(None) => {
+                self.console_providers_shared.managed().set(
+                    crate::config::managed_policy::ManagedState {
+                        statements: Vec::new(),
+                        organization: organization.clone(),
+                    },
+                );
                 self.console_providers_shared.swap(Vec::new());
                 self.connection_status("opencode", &connection, None).await;
             }
@@ -335,7 +398,10 @@ impl IntegrationHost {
                 .await;
             }
             // Transient failures never change the connection status
-            // (opencode.ts:188-192).
+            // (opencode.ts:188-192) — and keep the last config's
+            // statements too: dropping them would lift organization
+            // policy while personal credentials keep working
+            // (opencode.ts:218-226).
             Err(ConsoleError::Http(_) | ConsoleError::Parse(_)) => {}
         }
     }
