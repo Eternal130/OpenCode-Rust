@@ -38,8 +38,10 @@ use parity::sse;
 use serde_json::Value;
 
 /// Rebuild the /tmp/opencode/ref bun runtime if it was wiped (it has been,
-/// twice, by /tmp cleaners). Best-effort: returns false (and skips tests)
-/// when the pinned worktree or bun is unavailable.
+/// twice, by /tmp cleaners). Best-effort in daily runs: returns false
+/// (and skips tests) when the pinned worktree or bun is unavailable.
+/// Under `OC_GATE_STRICT=1` the unavailable path fails the test instead
+/// (Gate 0; see `parity::gate`).
 fn ensure_ref_runtime_or_skip(name: &str) -> bool {
     let marker = std::path::Path::new("/tmp/opencode/ref/packages/cli/src/index.ts");
     let node_modules = std::path::Path::new("/tmp/opencode/ref/node_modules");
@@ -60,13 +62,15 @@ fn ensure_ref_runtime_or_skip(name: &str) -> bool {
     match out {
         Ok(o) if o.status.success() => {}
         _ => {
-            eprintln!("[m1:{name}] ref rebuild (copy) failed — skipping");
-            return false;
+            return parity::gate::skip_or_fail(&format!(
+                "m1:{name}: reference runtime rebuild failed (copy from /opt/opencode-ref)"
+            ));
         }
     }
     let Ok(bun) = bun else {
-        eprintln!("[m1:{name}] bun unavailable — skipping ref install");
-        return false;
+        return parity::gate::skip_or_fail(&format!(
+            "m1:{name}: bun unavailable for the reference runtime install (set PARITY_BUN)"
+        ));
     };
     let out = std::process::Command::new(&bun)
         .args(["install", "--frozen-lockfile"])
@@ -76,12 +80,16 @@ fn ensure_ref_runtime_or_skip(name: &str) -> bool {
         eprintln!("[m1:{name}] reference runtime rebuilt");
         true
     } else {
-        eprintln!("[m1:{name}] bun install failed — skipping");
-        false
+        parity::gate::skip_or_fail(&format!(
+            "m1:{name}: bun install failed for the reference runtime"
+        ))
     }
 }
 
 fn which_bun() -> Result<String, ()> {
+    if let Ok(path) = std::env::var("PARITY_BUN") {
+        return Ok(path);
+    }
     for candidate in ["/usr/local/bin/bun", "/root/.bun/bin/bun", "/home/eternal130/.bun/bin/bun"] {
         if std::path::Path::new(candidate).exists() {
             return Ok(candidate.to_owned());
@@ -113,7 +121,6 @@ async fn rust_scenario(name: &str) -> anyhow::Result<()> {
         return Ok(());
     }
     if rust_server::skip_if_no_cargo() {
-        eprintln!("skipping {name}: cargo not found on PATH");
         return Ok(());
     }
     let fake = if name == "prompt_fake_llm" { Some(FakeLlm::start().await?) } else { None };

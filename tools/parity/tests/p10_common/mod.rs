@@ -79,6 +79,8 @@ pub fn bun_path() -> Result<PathBuf> {
 }
 
 /// Whether the runnable reference checkout is present (or rebuildable).
+/// Strict-aware: under `OC_GATE_STRICT=1` an unusable reference side
+/// fails the test instead of skipping (Gate 0; see `parity::gate`).
 pub fn reference_runnable() -> bool {
     !parity::reference::skip_if_no_bun()
 }

@@ -102,16 +102,22 @@ async fn p10_ts_tui_against_rust_server() -> Result<()> {
         &std::env::var("PARITY_REF_ROOT").unwrap_or_else(|_| "/tmp/opencode/ref".to_owned()),
     )
     .join("packages/tui");
-    if !tui_root.is_dir() {
-        skip(&format!("reference TUI checkout missing at {}", tui_root.display()));
+    if !tui_root.is_dir()
+        && parity::gate::skip_or_fail(&format!(
+            "reference TUI checkout missing at {} (set PARITY_REF_ROOT or rebuild \
+             /tmp/opencode/ref)",
+            tui_root.display()
+        ))
+    {
         return Ok(());
     }
-    let Ok(bun) = p10_common::bun_path() else {
-        skip("bun not found");
+    if p10_common::bun_path().is_err()
+        && parity::gate::skip_or_fail("bun not found (set PARITY_BUN)")
+    {
         return Ok(());
-    };
+    }
+    let bun = p10_common::bun_path().expect("bun path checked above");
     if parity::rust_server::skip_if_no_cargo() {
-        skip("cargo not found on PATH");
         return Ok(());
     }
 

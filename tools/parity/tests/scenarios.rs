@@ -10,7 +10,8 @@
 //! (M1 parity gate).
 //!
 //! All tests skip (pass, with a note) when bun or the reference checkout
-//! is missing.
+//! is missing — unless `OC_GATE_STRICT=1`, where a missing prerequisite
+//! FAILS the test instead (Gate 0; see `parity::gate`).
 
 use parity::reference::{self, ReferenceServer};
 use parity::scenario::{self, scripts, FakeLlm};
@@ -26,9 +27,6 @@ async fn scenario_test(
         -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + '_>>,
 ) -> anyhow::Result<()> {
     if reference::skip_if_no_bun() {
-        eprintln!(
-            "skipping {name}: bun or reference checkout not available (see tools/parity/README.md)"
-        );
         return Ok(());
     }
     let server = reference::spawn().await?;
