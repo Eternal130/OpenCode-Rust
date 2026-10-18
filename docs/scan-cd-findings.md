@@ -133,7 +133,23 @@
 - Carried: partial-write mid-state (needs fs-level fault injection — no standing instrument); plugin-crash recovery folded into C6 (same supervision surface).
 
 *(next: C9, C13)*
-*(execution continues — second tier: C9/C13/C15/C16/C20/D2/D3/D4)*
+### CD-26 (MED) — C9: cold-start MCP race — zero rows for seconds after boot
+- **Evidence (I1 live, repeated)**: fresh home + config-mcp {c9echo(ok), c9bad(dead)} → `GET /api/mcp` returns `[]` at t+2-4s, rows appear ~t+5s (c9bad failed with os-error detail ✓, c9echo connected ✓). Ref registers the config-derived ROW synchronously (status transitions pending→connected async); ours defers even row registration to the async connect, so listing consumers (sidebar MCP section, DialogStatus) see nothing then a jump.
+- Same window affects first-request tool visibility (snapshot before bridge sync).
+
+### CD-27 (LOW) — C9: connect/remove/disconnect map EVERY error to 404 `McpServerNotFoundError`
+- `handlers/mcp.rs:73-74, 84-86, 89` — `map_err` collapses spawn failures/timeouts into "not found" (a connect failure of an existing server reads as a missing server). Ref surfaces connect errors distinctly (status row error detail — which ours DOES show in rows once registered).
+
+### CD-28 (LOW) — C9: ours accepts a flat `mcp: {<server>: cfg}` map ref rejects
+- Ref `Config.MCP.Info = {timeout?, servers: Record<id, Server>}` (schema/config/mcp.ts:17-20) — nested only. Ours normalized+registered my flat probe map (both servers live). Lenient-shape acceptance (ours-extra; silent divergence for shared configs).
+
+### CD-29 (INFO) — C9 verified-parity rows
+- **Live round-trip**: config mcp local server (stdio JSON-RPC) → boot auto-connect → status events (`mcp.status.changed`/`tools.changed`/`resources.changed`/`prompts.changed`, ref type set) → `GET /api/mcp` rows {name,status{status,error},integrationID} → `POST …/connect` 204 (post-warmup) → `DELETE` remove 204 → disconnect 204. Dead-server fail path carries the spawn error string in the row ✓.
+- **MCP tool exposure = Code Mode design, NOT a gap** (instrument correction recorded): with `execute` registered, `shape_request_tools` (tool/codemode.rs:91-107) filters flat MCP tools from the request and exposes them via `execute` under `tools[<server>]` (the CODEMODE catalog instruction) — matches ref's Code Mode architecture; the bridge registers namespaced `<server>_<tool>` + executors into the live registry (mcp/registry.rs:1404-1432), debounced refresh on `mcp.tools.changed`.
+- Carried: needs-auth (OAuth MCP) + elicitation-blocked live cells (elicitation.rs port present; needs a real authenticated MCP server — no standing instrument; code-level verified only).
+
+*(next: C13)*
+*(execution continues — second tier: C13/C15/C16/C20/D2/D3/D4)*
 
 
 
