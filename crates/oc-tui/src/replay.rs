@@ -230,6 +230,8 @@ mod tests {
             ],
             unread: Vec::new(),
             messages: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
         }]);
         run_steps(&mut pump, &script);
     }

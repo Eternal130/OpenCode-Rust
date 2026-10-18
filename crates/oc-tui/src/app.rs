@@ -5553,10 +5553,15 @@ pub async fn run_with_size(
                 }
                 LoopFetch::SessionList(Ok(sessions)) => {
                     let unread = crate::data::resync_unread(&sessions);
+                    // Blockers: not fetched on the dialog refresh (the
+                    // reconnect loop owns the blocker resync) — empty
+                    // lists are per-type no-ops in the Resync arm.
                     app.store.ingest_all([Ingest::Resync {
                         sessions,
                         unread,
                         messages: Vec::new(),
+                        permissions: Vec::new(),
+                        forms: Vec::new(),
                     }]);
                 }
                 LoopFetch::SessionList(Err(error)) => {

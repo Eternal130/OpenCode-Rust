@@ -245,6 +245,8 @@ impl Harness {
             }],
             unread: Vec::new(),
             messages: vec![(SESSION.to_owned(), snapshot)],
+            permissions: Vec::new(),
+            forms: Vec::new(),
         })
         .chain(server.stream_from(subscribe_at).into_iter().map(Ingest::Event))
         .collect();
@@ -591,6 +593,8 @@ fn snapshot_queued_mid_stream_serializes_in_channel_order() {
             sessions: Vec::new(),
             unread: Vec::new(),
             messages: vec![(SESSION.to_owned(), server.fetch_messages_at(45))],
+            permissions: Vec::new(),
+            forms: Vec::new(),
         },
         Ingest::Event(server.frames[3].event()), // d2 (t=40)
         Ingest::Event(server.frames[4].event()), // d3 (t=50)
