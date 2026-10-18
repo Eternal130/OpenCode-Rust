@@ -169,9 +169,85 @@
 - Attachment/chip rendering: file-mention chips atomic in wrap; `[Image 1]` extmark chips styled (render.rs:21,286-296).
 
 *(next: C20, D2, D3, D4)*
-*(execution continues — second tier: C20/D2/D3/D4)*
+### CD-34 (MED) — D3/C14(b) sharpened with live-plugin evidence: plugin commands register but never surface
+- **Live (real omo-slim from the user's install cache, isolated scratch home)**: plugin resolves + loads ("tui entry loaded … sidebar slot: true"), its 8 agents surface via `/api/agent` (orchestrator/council/designer/explorer/fixer/librarian/observer/oracle), and its `dist/index.js` calls `registerCommand` **20×** — our host implements `command.add` (host.js:369-380) and the registry type exists (`registrations.rs` PluginCommand) — yet `GET /api/command` = `[]`. The handler's "TODO(phase-9)" comment is stale: the host landed, the wiring didn't.
+
+### CD-35 (LOW-MED) — D2: session-list cursor encoding diverges (opaque base64 vs ref's JSON string)
+- Ours: `cursor.next` = base64(JSON) (live, C1). Ref: `SessionsCursor` = `Schema.fromJsonString(...)` — the cursor IS the plain JSON string of the query+anchor (`protocol/groups/session.ts:89-96`). Wire-incompatible both directions for paging clients.
+
+### CD-36 (LOW) — D2: `/api/fs/read` loses ref's `/*` wildcard path shape; ours-experimental route set is a superset
+- Ref path `/api/fs/read/*` vs ours `/api/fs/read` (routes.gen census; ref-paths 98 extracted vs ours 116 — ours adds pty-token/worktree/project/instructions-entries/terminal routes and `/api/session/` trailing-slash duplicate; several are ours-extra surfaces to disposition under F7, not scanned here).
+
+### CD-37 (MED-LOW) — D4: `events.persist` capability unimplemented; dead event-table reader; two dead tables
+- **Pairing lint (mechanical, production code only)**: `event` table — reader `events_page` (schema.rs:761) has ZERO callers and the table has ZERO production writers (only tests insert); durable events persist NOWHERE on ours (`event_sequence` upsert only, schema.rs:703). Ref's `Bus.configured({persist})` is **off by default** (`bus.ts:203 persist ?? false`) — so default behavior matches — but ref SHIPS the persist=true path (bus.ts:338-616); ours has no mode at all.
+- `session_pending`: created (bootstrap.rs:179) with ZERO writers AND readers — dead table. `account`/`account_state`/`control_account`: created, unwired (ref's multi-account store family — carried note, F7-class until shipped).
+- Verified pairs: session_v2 (3W/5R), session_message (1W/9R), session_inbox, instruction_state, instruction_blob, permission, credential, project, workspace, worktree, kv, migration — all writer+reader paired.
+
+### CD-38 (INFO) — D3 verified-parity rows
+- Plugin resolution: install-cache layout `<cache>/opencode-rust/npm/<pkg>@<ver>/<stamp>/node_modules/<pkg>` (resolve.rs + context/install.rs default_root — XDG_CACHE_HOME-aware) — loaded the real omo-slim; config-dir `plugin: ["oh-my-opencode-slim"]` honored; **note**: ref ALSO resolves config-dir `node_modules` installs (how this plugin is installed on the user's machine) — ours' resolver supports cache + local paths only (the config-dir node_modules form errored "not installed" pre-cache — LOW carry-note for plugin-install parity).
+- I2's ≥3-ecosystems leg: CARRIED (only omo-slim + @opencode-ai/plugin runtime available locally; no network installs in-lane). I2b rule honored: the plugin-era evidence above is OURS-leg only; the ref-binary plugin leg was not re-driven this round (standing rescan-tui instrument exists for it) — dispositions citing ref use ref CODE, not 2.0.24-source claims.
+
+## Execution ledger (33 clauses)
+
+| Clause | Status | Notes |
+|---|---|---|
+| C1 | EXECUTED-with-artifact | CD-1..CD-5 |
+| C2 | EXECUTED-with-artifact | CD-20, CD-21 |
+| C3 | EXECUTED-with-artifact | CD-22 (once/reject/queueing residual carried) |
+| C4 | EXECUTED-with-artifact | CD-6..CD-8 |
+| C5 | EXECUTED-with-artifact | CD-23..CD-25 (partial-write carried — no fs-fault instrument; plugin-crash folded to C6) |
+| C6 | CARRIED | plugin lifecycle 3-layer assert vs I2b ref-binary leg: needs the standing plugin-armed driver (rescan-tui) + a second/third ecosystem; C9/D3's live plugin leg covers load+register only. Reason: single-window budget; the I2b both-legs comparison is its own lane-sized task. |
+| C7 | CARRIED | background-jobs surface table needs long-running real jobs (ours: jobs.rs + subagent job family code-verified during D5); no standing job-surface instrument. |
+| C8 | CARRIED | worktree op matrix {create,remove,refresh,list}×6 repo states needs real git-state fixtures; ours' worktree table + dialog port verified only structurally (D4 lint + dialog census). |
+| C9 | EXECUTED-with-artifact | CD-26..CD-29 (needs-auth/elicitation carried — no OAuth MCP instrument) |
+| C10 | EXECUTED-with-artifact | CD-9..CD-11 |
+| C11 | CARRIED | updater matrix {curl,npm,pnpm,bun,yarn,vp,brew} = network installs + staged updates; no sandbox in-lane; census pin re-verified (updater.ts:14 method list — file exists with the exact array in ref). |
+| C12 | CARRIED | first-run/migration shapes: fresh + v2-migration boots exercised incidentally (C4/C5 legs boot v2-migration.json); the full {fresh, migrated, mixed} × seeding/StartupLoading/MigrationOverlay matrix not driven (needs TUI-level capture). |
+| C13 | EXECUTED-with-artifact | CD-30 |
+| C14 | EXECUTED-with-artifact | CD-12..CD-14 |
+| C15 | EXECUTED-with-artifact | CD-31, CD-33 |
+| C16 | EXECUTED-with-artifact | CD-32 (+CD-23) |
+| C17 | CARRIED | PTY family: persistent_pty.rs + tickets + pty routes exist (D2 census); the {spawn,resize,scroll,exit-status,handoff,daemon-restart}×surfaces drive needs a PTY harness lane. |
+| C18 | CARRIED | CLI handler matrix (19 handler families ref-side) — oc-cli exists; full command×args×tty/non-tty×exit-code matrix is its own lane. |
+| C19 | CARRIED | integrations enumerate only via `integration.list` on the I2b binary leg (R9-L8) — the ref-binary integration-list drive was not in this window's budget; ours' registry structurally verified (providers.rs installs github-copilot/opencode/xai/do/zen). |
+| C20 | EXECUTED-with-artifact | census 15/15 + root families; live tool schema exposure; tool test-suite fragility instance recorded (CD-9 family extension). |
+| C21 | CARRIED | determinism/idempotency repetition scripts: partially evidenced (D5 exactly-once notification set; C3 single-ask replay) but the rapid-input × double-submit × order-stability matrix under vt-clock not driven. |
+| C22 | CARRIED | standing divergence per spec v7: ours has zero OTel implementation (grep re-verified this round: 0 code hits) — the clause's own disposition (absent-until-product-decision) stands; the mock-OTLP collector commit is bound to C22's first EXECUTION, which this is not (carried per lane priority). |
+| D1 | EXECUTED-with-artifact | CD-15..CD-18 |
+| D2 | EXECUTED-with-artifact | CD-35, CD-36 (error-code cells verified across the round's live legs: 401/404/400/204 + `_tag` shapes) |
+| D3 | EXECUTED-with-artifact | CD-34, CD-38 (≥3-ecosystems + ref-binary plugin leg carried) |
+| D4 | EXECUTED-with-artifact | CD-37 (longitudinal N-1 shapes carried — no real old snapshots) |
+| D5 | EXECUTED-with-artifact | CD-19 |
+| D6 | CARRIED | webui serving + desktop/app absent-justified adjudication needs the served-app e2e + desktop census; SSE/webui consumer cells partially ridden by D1. |
+| D7 | CARRIED | ACP adapter interop needs a real ACP client (none standing in-lane). |
+| D8 | CARRIED | share/export round-trips hit the hosted `function` backend (out-of-scope standing entry) — export-side CLI formats untested. |
+| D9 | CARRIED | model/variant matrix folds on models-dev catalog data (I10 pin exists in-tree: models-dev-snapshot.txt); dialog-model/variant UI cells partially covered by C2's dispatch census. |
+| D10 | CARRIED | Code Mode stdlib/openapi surface = its own lane; codemode exposure verified incidentally (C9's execute-routing). |
+| D11 | CARRIED | SDK shape-diff per pinned version pair needs the ref .d.ts tooling run; client surface partially diffed via routes.gen (D2). |
+
+**Totals: EXECUTED-with-artifact 17 · CARRIED-with-reason 16.**
 
 
 
 
 
+
+
+## Top-10 (by severity × freshness)
+
+1. **CD-12/CD-34 (HIGH)** — command discovery dead end-to-end: no markdown/config command discovery AND plugin-registered commands (20 registerCommand calls from the real omo-slim) never surface; `/api/command` hardcoded `[]`.
+2. **CD-13 (HIGH)** — global AGENTS.md read from `.config/opencode-rust/` instead of `.config/opencode/` — every v2-shaped install silently loses global instructions.
+3. **CD-2 (HIGH)** — fork children persist `parent_id=NULL` (projector VALUES hardcodes NULL); ref stores it — breaks every parent→child chain consumer.
+4. **CD-1 (HIGH)** — `POST /api/session/:id/prompt` blocks until run settlement (awaits resume-join; ref fire-and-forget wake) — hung providers stall clients.
+5. **CD-31 (MED-HIGH)** — `@`-mention completion unwired (trigger detected, no live file/agent/skill source) — the composer's core context mechanism.
+6. **CD-20 (MED-HIGH)** — 21 ref commands keymap-declared but dispatcher-dead (silent no-op keys), incl. the whole prompt-stash family and family navigation.
+7. **CD-9 (MED)** — auth integration suite fails under default parallelism at main HEAD (3/41; GitLab pinned-port 8080 collision) — CI-flaky guard over the freshest code (BE-3/3b); second instance found in tool::tests.
+8. **CD-6 (MED)** — `OPENCODE_CONFIG_CONTENT` env overlay declared in the Loader, unwired in every production call site.
+9. **CD-26 (MED)** — MCP cold-start race: zero rows for seconds after boot (ref registers rows synchronously, transitions status async).
+10. **CD-15 (MED)** — `session.forked` SSE event missing the `location` envelope field (only envelope divergence found in the field-level both-legs diff).
+
+**Severity roll-up**: HIGH 4 (CD-1, CD-2, CD-12/34, CD-13) · MED/MED-HIGH 9 · LOW/LOW-MED 7 · INFO/parity rows 8 · carry-notes 3.
+
+**I-bindings honored**: I1 (every live leg chains real server→real ids; only upstream LLM/IdP scripted, I9-declared) · I2 partial (omo-slim live; ≥3 ecosystems carried) · I2b (ref-binary leg used for D1; plugin-era comparisons cite ref CODE, no 2.0.24-source plugin claims) · I5 (standing instruments reused: dev-gate, in-repo test suites, mock_llm-class instruments declared as instruments) · I6 (attribution per finding) · I8 (D1 canary run: v1 FAIL → redesign → PASS, recorded) · I9 (provenance per artifact) · I10/I10b (pins verified).
+
+*Artifacts: `/tmp/opencode/scancd/{c1,c4,c10,c14,c2,c3,c5,c9,c13,d1,d3,d5}/` (scripts, captures, diffs, DBs); logs in `docs/scancd.log` (append-only); this file is the round deliverable.*
