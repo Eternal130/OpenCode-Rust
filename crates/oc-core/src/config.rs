@@ -14,6 +14,7 @@ pub mod command_md;
 pub mod discovery;
 pub mod instruction;
 pub mod jsonc_edit;
+pub mod managed_policy;
 pub mod markdown;
 pub mod normalize;
 pub mod variable;
