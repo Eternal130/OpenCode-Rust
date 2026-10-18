@@ -19,6 +19,8 @@
 //!
 //! The product is never modified — the stall lives in the copied series.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+
 #[path = "vt_harness.rs"]
 mod vt_harness;
 
@@ -32,6 +34,7 @@ use vt_harness::{
 // ------------------------------------------------------------- detector
 
 #[derive(Debug)]
+#[allow(dead_code)] // the audit record's fields ride along in the Debug dump
 struct CellAudit {
     name: &'static str,
     gaps_ms: Vec<u64>,
@@ -40,6 +43,7 @@ struct CellAudit {
     bursts: Vec<StallBurst>,
 }
 #[derive(Debug)]
+#[allow(dead_code)] // printed verbatim in the PATCHED-cell burst dump
 struct StallBurst {
     at_ms: u64,
     gap_ms: u64,
@@ -53,7 +57,7 @@ fn median(v: &mut [u64]) -> u64 {
 
 /// The v5 E1 detector, verbatim semantics.
 fn detect(name: &'static str, stamps: &[u64]) -> CellAudit {
-    let mut gaps: Vec<u64> = stamps.windows(2).map(|w| w[1] - w[0]).collect();
+    let gaps: Vec<u64> = stamps.windows(2).map(|w| w[1] - w[0]).collect();
     let mut sorted = gaps.clone();
     let med = if sorted.is_empty() { 0 } else { median(&mut sorted) };
     // Cadence source active: a periodic flush stream exists in-window
@@ -84,6 +88,9 @@ fn inject_one_shot_stall(stamps: &[u64], frac: f64, stall_ms: u64) -> Vec<u64> {
 }
 
 // ------------------------------------------------------------- orchestration
+
+/// One capture window: the cell's label plus its flush-stamp series.
+type CellSeries = (&'static str, Vec<u64>);
 
 fn boot_to_session(harness: &mut HarnessHandle) -> Result<(), String> {
     if !harness.wait_for(WORDMARK, Duration::from_secs(8)) {
@@ -127,7 +134,7 @@ fn e1_stall_canary_localizes_and_no_false_positives() {
     let harness = LiveHarness::attach(80, 24);
     let mut driver = harness.handle();
 
-    let cells: Arc<Mutex<Vec<(&'static str, Vec<u64>)>>> = Arc::new(Mutex::new(Vec::new()));
+    let cells: Arc<Mutex<Vec<CellSeries>>> = Arc::new(Mutex::new(Vec::new()));
     let slot = Arc::clone(&cells);
     let result: Arc<Mutex<Option<Result<(), String>>>> = Arc::new(Mutex::new(None));
     let rslot = Arc::clone(&result);

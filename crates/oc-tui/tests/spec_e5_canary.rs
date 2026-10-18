@@ -232,10 +232,10 @@ fn e5_leg_a_baseline_and_injection() {
 /// luminance-equal red/green pair.
 #[test]
 fn e5_leg_b_color_independence() {
+    const EPS: f64 = 0.02; // grayscale-confusion band for relative luminance
     let theme = load_default_dark();
     let error = theme.tokens.text.feedback.error.base;
     let busy = theme.tokens.text.feedback.success.base; // success/busy family
-    const EPS: f64 = 0.02; // grayscale-confusion band for relative luminance
 
     // The clause: pairs distinguishable by non-hue channel OR glyph/shape.
     // busy/error text rows carry glyphs (spinners/icons) in the product;
@@ -252,9 +252,9 @@ fn e5_leg_b_color_independence() {
     // |L(red) - L(green)| <= EPS/4.
     let red = Rgba { r: 220, g: 40, b: 40, a: 255 };
     let target = rel_lum(red);
-    let mut g = 40u16;
+    let mut g = 40u8;
     let green = loop {
-        let cand = Rgba { r: 40, g: g as u8, b: 40, a: 255 };
+        let cand = Rgba { r: 40, g, b: 40, a: 255 };
         if rel_lum(cand) >= target || g == 255 {
             break cand;
         }

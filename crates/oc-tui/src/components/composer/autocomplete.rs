@@ -439,7 +439,7 @@ mod tests {
             "the v2 registry lists /plugins"
         );
         assert_eq!(
-            SlashRegistry::command_for("/plugins").as_deref(),
+            SlashRegistry::command_for("/plugins"),
             Some("plugins.list"),
             "Enter on /plugins dispatches plugins.list (the Plugins dialog)"
         );
