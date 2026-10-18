@@ -6564,7 +6564,7 @@ impl Store {
                     tap.publish(&event);
                 }
             }
-            Ingest::Resync { sessions, unread, messages } => {
+            Ingest::Resync { sessions, unread, messages, permissions, forms } => {
                 // A resync only happens after a successful subscribe —
                 // the stream is attached, the client is connected
                 // (SURF-2: servers that never emit the `server.
@@ -6584,14 +6584,19 @@ impl Store {
                 // `data.session.list()`).
                 self.session_history.set(sessions.clone());
                 // The session registry (#44/#46): the snapshot seeds
-                // titles like v2's `session.sync` cache fill (events
-                // refine parent/agent/status later).
+                // titles AND parent links like v2's
+                // `session.sync(sessionID, { children: true })` cache
+                // fill (RUNTIME-TD04: the family tree re-builds from
+                // the fresh list; events refine agent/status later).
                 {
                     let mut index = self.session_index.borrow_mut();
                     for session in &sessions {
                         let info = index.registry_entry_mut(&session.id);
                         if let Some(title) = &session.title {
                             info.title = Some(title.clone());
+                        }
+                        if let Some(parent) = &session.parent_id {
+                            info.parent_id = Some(parent.clone());
                         }
                     }
                 }
@@ -6613,6 +6618,10 @@ impl Store {
                         state.unread.entry(id).or_insert(Unread::Activity);
                     }
                 });
+                // RUNTIME-TD04 — the blocker resync + the
+                // Session-not-found wrap-up (helpers below).
+                self.resync_reconcile_blockers(&permissions, &forms);
+                self.resync_close_missing_sessions(&sessions);
                 for (session_id, list) in messages {
                     self.set_messages(&session_id, list);
                 }
@@ -6634,6 +6643,89 @@ impl Store {
                     merged.extend(local.into_iter().filter(|message| !ids.contains(message.id())));
                     state.by_session.insert(session_id, merged);
                 });
+            }
+        }
+    }
+
+    /// RUNTIME-TD04 — the blocker resync (v2
+    /// `data.session.permission.sync` / `form.sync` after a reconnect,
+    /// routes/session/index.tsx:313-320): asks that happened while
+    /// offline re-deliver; asks replied while offline CLEAR. Per-type
+    /// replace semantics over the fetched sessions only — an id we
+    /// have no data for keeps its current blockers (no fetch, no
+    /// decision).
+    fn resync_reconcile_blockers(
+        &self,
+        permissions: &[(String, Vec<crate::components::footer::PermissionRequest>)],
+        forms: &[(String, Vec<crate::components::footer::FormRequest>)],
+    ) {
+        self.footer.update(|footer| {
+            let fetched_permissions: std::collections::HashSet<&str> =
+                permissions.iter().map(|(id, _)| id.as_str()).collect();
+            let live: std::collections::HashSet<&str> = permissions
+                .iter()
+                .flat_map(|(_, list)| list.iter().map(|request| request.id.as_str()))
+                .collect();
+            footer.permissions.retain(|request| {
+                !fetched_permissions.contains(request.session_id.as_str())
+                    || live.contains(request.id.as_str())
+            });
+            for (_, list) in permissions {
+                for request in list {
+                    footer.permission_asked(request.clone());
+                }
+            }
+            let fetched_forms: std::collections::HashSet<&str> =
+                forms.iter().map(|(id, _)| id.as_str()).collect();
+            let live_forms: std::collections::HashSet<&str> = forms
+                .iter()
+                .flat_map(|(_, list)| list.iter().map(|form| form.id.as_str()))
+                .collect();
+            footer.forms.retain(|form| {
+                !fetched_forms.contains(form.session_id.as_str())
+                    || live_forms.contains(form.id.as_str())
+            });
+            for (_, list) in forms {
+                for form in list {
+                    footer.form_created(form.clone());
+                }
+            }
+        });
+    }
+
+    /// RUNTIME-TD04 — the "Session not found" wrap-up (v2
+    /// routes/session/index.tsx:340-353): a session deleted while
+    /// offline is absent from the snapshot; its tab closes
+    /// (`close_tab` routes to the neighbor, else home) and the ACTIVE
+    /// route's miss surfaces the v2 toast.
+    fn resync_close_missing_sessions(&self, sessions: &[crate::data::SessionSnapshot]) {
+        let live_ids: std::collections::HashSet<&str> =
+            sessions.iter().map(|session| session.id.as_str()).collect();
+        let open_tabs: Vec<String> =
+            self.tabs().tabs.iter().map(|tab| tab.session_id.clone()).collect();
+        for id in open_tabs {
+            if live_ids.contains(id.as_str()) {
+                continue;
+            }
+            if let Route::Session { session_id } = self.route() {
+                if session_id == id {
+                    self.toast_show(ToastOptions {
+                        title: None,
+                        message: format!("Session not found: {id}"),
+                        variant: "error",
+                        duration_ms: 5000,
+                        action_label: None,
+                        action_command: None,
+                        modal: false,
+                    });
+                }
+            }
+            if self.tabs_enabled() {
+                self.close_tab(Some(&id));
+            } else if let Route::Session { session_id } = self.route() {
+                if session_id == id {
+                    self.navigate(Route::Home);
+                }
             }
         }
     }
@@ -8001,6 +8093,8 @@ mod tests {
             }],
             unread: Vec::new(),
             messages: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
         }]);
         store.ingest_all([Ingest::Event(BusEvent::new(
             "session.renamed",
@@ -8044,6 +8138,8 @@ mod tests {
                 ],
                 unread: vec!["a".to_owned()],
                 messages: Vec::new(),
+                permissions: Vec::new(),
+                forms: Vec::new(),
             },
         ]);
         let tabs = store.tabs();
@@ -9150,6 +9246,8 @@ mod tests {
             }],
             unread: Vec::new(),
             messages: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
         }]);
         assert_eq!(
             store.resolve_model("s1").map(|model| model.model_id),

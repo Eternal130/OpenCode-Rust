@@ -2810,6 +2810,8 @@ mod tests {
             ],
             unread: Vec::new(),
             messages: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
         }]);
         let props = select_props_for(
             &DialogKind::ServerList { command: "session.list", title: "Sessions" },
