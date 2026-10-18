@@ -1,0 +1,104 @@
+# SCAN-EF2 lane log (serialized restart of the E+F round)
+
+Spec: docs/scan-spec.md v9 LOCKED. Lane: SCAN-EF2, worktree
+`.worktrees/lane-scanef2`, branch `lane/scanef2`, base = main `bb364b6`.
+Scope: axes E1-E12 + F1-F7 + SCAN-AB carries (A2/A3/A6/A7/A9/B3-B9).
+Priorities per lane brief: E1, F7, F1, E5, E12, then AB carries, then
+E2/E3/E4 as window allows.
+
+## REGIME COMPLIANCE (standing, applies to every entry below)
+
+- TERMINAL ISOLATION: every TUI-binary boot goes under the vt/PTY harness
+  (in-process `run_with_size` PTY-pair boots inside `cargo test`, or the
+  spec-p3 PTY-probe wrappers with stdout/stderr redirected to files) —
+  NO raw `cargo run` boot of any TUI binary this lane, NO /dev/tty access,
+  OSC/escape probes only on owned PTYs, tmux (if used) only via
+  self-created sockets. The forbidden un-wrapped E2 spawn recipe was NOT
+  run; the E2 spawn leg is either PTY-wrapped (spec-p3 probes) or carried.
+- SERIALIZATION: single lane, no parallel lanes, no background tasks;
+  foreground calls ≤45 min; live-process legs in small batches (≤3) with
+  sleeps between legs.
+- All cargo via
+  `OPENCODE_DEV_GATE_DIR=/opt/opencode-rust/.worktrees/lane-scanef2
+  /opt/opencode-rust/tools/dev-gate.sh '<cmd>'` (CPU 400%/10G cap, uid
+  eternal130). Load checked before gate legs (courtesy <2).
+- This log is append-only. English. WIP commits every ~6 legs.
+- Final report pastes `git log --oneline -1 lane/scanef2` as
+  commit-landing proof.
+
+## Leg 0 — setup (2026-10-18)
+
+- Worktree created from main `bb364b6`, chowned to eternal130 (dev-gate
+  identity rule), safe.directory registered. Load at start: 1.15 (<2 OK).
+- Instruments present: strace, bun, node, python3, tmux; ref 2.0.25
+  binary at /root/.opencode/bin/opencode (I2b ground truth).
+- Scope of "live process" legs this lane (all isolated): (a) in-process
+  PTY boots inside cargo tests (harness-owned pty pairs); (b) spec-p3
+  PTY probe wrappers (pty + redirected logs) for E2 spawn legs; (c) no
+  other live TUI boots.
+
+## Leg 1 — E1 perf feel (priority #1) — EXECUTED (2026-10-18)
+
+Compliance note: all legs = in-process PTY boots inside `cargo test`
+under dev-gate (harness-owned pty pairs); no raw TUI-binary boots, no
+/dev/tty, no ref-binary boots this leg.
+
+- **Marquee 80ms (lane headline): VERIFIED on main post-FIXW1A.**
+  `vt_temporal_marquee_shifts_one_cell_per_tick` PASS — 27 title-window
+  shifts, gaps median **76 ms** (min 75, max 88) vs pinned
+  MARQUEE_INTERVAL=80ms. SA-F3 fix (1f9b433) holds.
+- vt_temporal individually: spinner PASS (33 changes, median 108ms,
+  10-glyph cycle), cursor-blink PASS, idle byte-stable PASS (19
+  bursts/640B/2s, caret-blink class — E11 disposition input),
+  busy-strip PASS, style-sampler PASS. NOTE (known class): running
+  multiple vt_temporal tests in ONE process self-poisons (SCAN-AB
+  instrument note re-confirmed: paired run FAILED at 121s, standalone
+  PASS) — run individually.
+- **E1 I8 canary: RUN + PASS** (`spec_e1_canary`): 250ms injected stall
+  localized to the patched cell (gap 359ms flagged), 0 bursts in 3
+  real controls, 0 on synthetic even series. The canary itself yielded
+  4 cell audits (idle/streaming/dialog-under-streaming/post-dialog;
+  medians 107-109ms; 0 natural bursts).
+- frame_budget 12/12 PASS (incl. large_transcript 200x50);
+  replay 16/16 PASS.
+- **New instrument** `spec_ef2_e1_cells.rs` (committed): 7-cell
+  interaction sampler — typing×idle (median 120ms), dialog-open×idle
+  (107ms), paste-8.5KB×idle (115ms), typing×streaming (120ms),
+  paste-8.5KB×during-stream (116ms), wheel-scroll×transcript (117ms),
+  resize-100x30 (117ms) — all cadence-active, **0 stall-bursts except
+  SE-F1 below**. vt_harness gained `HarnessHandle::resize_pty`
+  (TIOCSWINSZ; serves E1+B5).
+- Cells dispositioned: search-in-10k-transcript = ours ships NO
+  in-transcript search surface (dialog_select filter only) → rides
+  E12; 10k-msg-transcript-open load column = FakeLlm fixture-bound
+  (SA-F2 class), in-process cost owned by frame_budget PASS.
+- Ref-side E1 fresh PTY capture: CARRIED (regime minimizes ref live
+  boots; ours-leg detector is the clause [F]; ref baseline rides the
+  I10 pin + standing rescan captures).
+
+### SE-F1 (S2) — first wheel event after stream: 151ms flush gap (threshold-grazer)
+`wheel-scroll-transcript` cell: gap150@15008ms=151ms on the FIRST gap
+of the wheel window, 3/3 reproducible runs (details:
+/tmp/opencode/scanef2/e1-burst-details.log). 1ms over the clause's
+>150ms rule with a ~117ms drive tick — logged per the threshold's
+letter; user impact marginal (single 151ms hitch, scroll remains
+fluid after). Suspect: lazy viewport work on first scroll. Fix-wave
+target, not release-blocking.
+
+### SE-F2 (S1) — PTY resize kills the exit chord: teardown wedge (deterministic)
+Grow 80x24→100x30 (TIOCSWINSZ on the harness master, real SIGWINCH)
+→ from that point the exit chord (\x03 + leader-q) NEVER tears the app
+down; run-loop future does not return; app keeps rendering. Bisect
+evidence (all under the same suite):
+- resize present: wedge 5/5 runs (incl. settle 2500ms after restore,
+  and grow-only with NO restore);
+- resize skipped (EF2_SKIP=resize): 0 wedges;
+- wheel skipped, resize kept: wedge (not wheel-related);
+- **input stays ALIVE post-resize**: ctrl+p opens the palette
+  (10.4KB emitted, `opened=true`), esc closes it, composer echoes
+  'zz' (1455B) — everything works EXCEPT exit (probe log:
+  /tmp/opencode/scanef2/e1-probe.log).
+E9/B5-class (teardown residue + terminal-events family). User shape:
+resize the window during a session → cannot quit with the chord (must
+kill). Root-cause owned by the fix wave; repro = the committed test
+with EF2 env knobs.
