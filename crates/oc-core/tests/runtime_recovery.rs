@@ -185,6 +185,21 @@ async fn seed_session(db: &Database, id: &str, parent: Option<&str>) {
     .expect("seed session");
 }
 
+/// Pins a session's claim timestamp (`claim()` writes `now_ms()`; the
+/// deterministic timestamps this file's sweep-guard test needs).
+async fn claim_at(db: &Database, id: &str, time_suspended_ms: i64) {
+    let id = id.to_string();
+    db.transaction(move |tx| {
+        tx.execute(
+            "UPDATE session_v2 SET time_suspended = ?2 WHERE id = ?1",
+            (id, time_suspended_ms),
+        )?;
+        Ok(())
+    })
+    .await
+    .expect("pin claim timestamp");
+}
+
 fn recovery(parent: &str, child: &str) -> SubagentRecovery {
     let sid = |raw: &str| oc_schema::id::SessionId::parse(raw.to_string()).expect("session id");
     SubagentRecovery {
@@ -380,6 +395,61 @@ async fn boot_sweep_releases_orphan_claims() {
     // The hanging drain keeps both claims (mid-turn state, no terminal yet).
     assert!(claimed("ses_sweep_parent"));
     assert!(claimed("ses_sweep_child"));
+}
+
+/// RUNTIME-SWEEP-RACE — the boot-start guard over the sweep's claim
+/// queries (boot.rs `recovery_sweep` → `list_suspended_before` /
+/// `release_child_claims_before`): only claims recorded strictly before
+/// the process started are pre-boot state. A claim made after boot-start
+/// — the CURRENT boot's first prompt or a concurrently-live peer sharing
+/// the database — is invisible to the sweep and keeps its claim (the
+/// 1-in-50 standalone race: a peer's sweep resumed a live session,
+/// double-drove it, and disconnected the event stream). A dead
+/// predecessor's pre-boot claims are still swept (L01 recovery intact).
+/// Deterministic: claim timestamps are pinned, no loop, no timing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn boot_sweep_skips_claims_made_after_boot_start() {
+    let site = site(DrainKind::Hanging).await;
+    // The dead predecessor claimed a parent, a recoverable subagent
+    // child, and an orphaned child at t=1000; the replacement boots at
+    // t=2000; the live boot (this process / a concurrent peer) claims
+    // its parent and child at t=3000.
+    seed_session(&site.db, "ses_pre_parent", None).await;
+    seed_session(&site.db, "ses_pre_child", Some("ses_pre_parent")).await;
+    seed_session(&site.db, "ses_pre_orphan", Some("ses_pre_parent")).await;
+    seed_session(&site.db, "ses_live_parent", None).await;
+    seed_session(&site.db, "ses_live_child", Some("ses_live_parent")).await;
+    claim_at(&site.db, "ses_pre_parent", 1000).await;
+    claim_at(&site.db, "ses_pre_child", 1000).await;
+    claim_at(&site.db, "ses_pre_orphan", 1000).await;
+    claim_at(&site.db, "ses_live_parent", 3000).await;
+    claim_at(&site.db, "ses_live_child", 3000).await;
+
+    // The guarded resume query sees ONLY the predecessor's top-level
+    // claim; the unguarded v2-shape list sees both parents (sanity).
+    let suspended = site.store.list_suspended_before(2000).await.expect("guarded list");
+    assert_eq!(suspended, vec!["ses_pre_parent".to_string()]);
+    let unguarded = site.store.list_suspended().await.expect("unguarded list");
+    assert_eq!(unguarded.len(), 2, "both parents hold real claims");
+
+    // Guarded child-claim release with a recoverable child: the
+    // predecessor's orphan is released, its recoverable child survives,
+    // and BOTH live-boot claims are untouched (post-boot-start rows are
+    // invisible even when not recoverable).
+    site.store
+        .release_child_claims_before(&["ses_pre_child".to_string()], 2000)
+        .await
+        .expect("guarded release (recoverable arm)");
+    site.store.release_child_claims_before(&[], 2000).await.expect("guarded release (empty arm)");
+    let map = claims(&site.db).await.expect("claims");
+    let claimed = |id: &str| map.iter().find(|(row, _)| row == id).is_some_and(|(_, c)| *c);
+    assert!(!claimed("ses_pre_orphan"), "pre-boot orphan child claim must be released");
+    assert!(!claimed("ses_pre_child"), "pre-boot child claim releases once not recoverable");
+    assert!(claimed("ses_live_parent"), "a parent claimed after boot-start must never be swept");
+    assert!(claimed("ses_live_child"), "a child claimed after boot-start must never be swept");
+    // And the resume side of the guard: the live parent never reaches
+    // the sweep's resume targets, so its durable budget is untouched.
+    assert_eq!(attempts(&site.db, "ses_live_parent").await.unwrap(), Some(0));
 }
 
 /// Boot-sweep pending-background replay (restart.ts:119-186): settled
