@@ -40,8 +40,7 @@ async fn boot() -> TestServer {
     std::fs::create_dir_all(&workspace).expect("workspace");
     std::env::set_current_dir(&workspace).expect("chdir to workspace");
     let engine =
-        Engine::boot(EngineOptions::new(data.path().join("data"), data.path().join("home")))
-            .await;
+        Engine::boot(EngineOptions::new(data.path().join("data"), data.path().join("home"))).await;
     let state = Arc::new(AppState::new(
         engine,
         AuthConfig { password: None },
@@ -61,12 +60,12 @@ async fn boot() -> TestServer {
     TestServer { client, state, _workspace: workspace, _data: data }
 }
 
-fn cwd_location() -> Option<QueryLocation> {
-    Some(QueryLocation {
+fn cwd_location() -> QueryLocation {
+    QueryLocation {
         directory: Some(
             std::env::current_dir().map(|path| path.display().to_string()).unwrap_or_default(),
         ),
-    })
+    }
 }
 
 fn session_row() -> SessionRow {
@@ -140,7 +139,7 @@ async fn stored_credential_reaches_request_headers() {
         .connect()
         .key(
             "anthropic",
-            &IntegrationConnectKeyQuery { location: cwd_location() },
+            &IntegrationConnectKeyQuery { location: Some(cwd_location()) },
             &IntegrationConnectKeyBody {
                 key: "sk-ant-wire".into(),
                 answer: None,
@@ -156,10 +155,7 @@ async fn stored_credential_reaches_request_headers() {
     let services = server
         .state
         .engine
-        .location(oc_core::location::LocationRef::new(
-            std::env::current_dir().expect("cwd"),
-            None,
-        ))
+        .location(oc_core::location::LocationRef::new(std::env::current_dir().expect("cwd"), None))
         .await
         .expect("location services");
     let resolved = services
@@ -183,7 +179,7 @@ async fn model_availability_matches_credentials() {
         std::env::remove_var("ANTHROPIC_API_KEY");
     }
     let server = boot().await;
-    let query = ModelListQuery { location: cwd_location() };
+    let query = ModelListQuery { location: Some(cwd_location()) };
 
     // No credential, no env: the anthropic catalog is unavailable.
     let before = server.client.model().list(&query).await.expect("list before");
@@ -198,7 +194,7 @@ async fn model_availability_matches_credentials() {
         .connect()
         .key(
             "anthropic",
-            &IntegrationConnectKeyQuery { location: cwd_location() },
+            &IntegrationConnectKeyQuery { location: Some(cwd_location()) },
             &IntegrationConnectKeyBody { key: "sk-ant-avail".into(), answer: None, label: None },
         )
         .await
@@ -237,10 +233,7 @@ async fn no_credential_error_shape() {
     let services = server
         .state
         .engine
-        .location(oc_core::location::LocationRef::new(
-            std::env::current_dir().expect("cwd"),
-            None,
-        ))
+        .location(oc_core::location::LocationRef::new(std::env::current_dir().expect("cwd"), None))
         .await
         .expect("location services");
     let resolved = services

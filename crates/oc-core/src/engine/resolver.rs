@@ -73,8 +73,10 @@ pub struct CatalogModelResolver {
     custom: Vec<CustomProvider>,
     /// The default model selection (config `model`).
     default: Option<oc_schema::config::ModelSelection>,
-    /// Credential-driven provider bindings (copilot transport), shared
-    /// with the integration host and refreshed on credential events.
+    /// Credential-driven provider bindings (the generalized stored-
+    /// credential fold — copilot/vertex transports plus every registered
+    /// integration's active credential), shared with the integration
+    /// host and refreshed on credential events.
     credentials: Option<Arc<crate::integration::copilot::CredentialBindings>>,
     /// Console-issued providers (integration `opencode`), shared with the
     /// host and refreshed on credential events.
@@ -195,9 +197,19 @@ impl CatalogModelResolver {
                     console
                         .entries_iter()
                         .find(|(key, _)| key.eq_ignore_ascii_case(&reference.provider_id.0))
-                        .map(|(_, value)| value.clone())
+                        .map(|(_, value)| value)
                 })
             }) {
+                // CRED-B2: console-issued providers ride the Console
+                // credential — their integrationID is "opencode"
+                // (opencode.ts:251), and the resolver's credential fold
+                // maps the active token onto the api key
+                // (nativeCredentialSettings oauth → apiKey,
+                // model-resolver.ts:308-319,364-371).
+                let mut provider = provider;
+                if let Some(token) = console.token() {
+                    provider.api_key = Some(token);
+                }
                 let canonical_model = provider
                     .models
                     .iter()
@@ -226,11 +238,13 @@ impl CatalogModelResolver {
                 ModelError::Unavailable(reference.provider_id.0.clone(), reference.id.0.clone())
             })?;
         let mut connection = self.connection_for(&reference.provider_id.0);
-        // Credential-driven providers (copilot transport, BE-3b): the
-        // stored integration credential wins over config/env — base URL,
-        // token, and client headers merge into the connection before the
-        // facade builds the route (v2 resolves the same per attempt via
-        // the plugin context, github-copilot.ts:165-207).
+        // Credential-driven providers, the generalized fold (CRED-B1):
+        // every integration's ACTIVE stored credential wins over
+        // config/env — base URL, token, and client headers merge into
+        // the connection before the facade builds the route (v2
+        // resolves the same per attempt through the integration
+        // connection, model-resolver.ts:364-371; copilot's transport
+        // bindings were the BE-3b special case of this fold).
         if let Some(bindings) = &self.credentials {
             if let Some(binding) = bindings.get(&provider_id) {
                 connection.api_key = Some(binding.api_key.clone());
@@ -239,6 +253,17 @@ impl CatalogModelResolver {
                     connection.headers.insert(key, value);
                 }
             }
+        }
+        // Keyless zen (CRED-B3, opencode.ts:317-325): no `OPENCODE_API_KEY`,
+        // no Console connection (the binding above would carry its
+        // token), and no configured key → v2 forces the enabled zen
+        // provider to `apiKey: "public"`, so the free tier
+        // authenticates with the public key instead of failing.
+        if provider_id == "opencode"
+            && connection.api_key.is_none()
+            && std::env::var_os("OPENCODE_API_KEY").is_none()
+        {
+            connection.api_key = Some("public".to_owned());
         }
         let model = language_model(
             &self.context,
