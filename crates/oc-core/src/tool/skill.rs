@@ -153,6 +153,7 @@ pub fn tool(table: Arc<dyn SkillTable>) -> BuiltinTool {
         }),
         permission: Some("skill"),
         codemode: false,
+        namespace: None,
         execute: Arc::new(SkillExecute { table }),
     }
 }

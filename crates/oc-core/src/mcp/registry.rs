@@ -1408,15 +1408,21 @@ impl McpToolBridge {
         owned: &SyncMutex<std::collections::BTreeSet<String>>,
     ) {
         let discovered = registry.tools();
+        // v2 registration shape (tool/mcp.ts:40-45): bare `tool.name` +
+        // `options.namespace = server` — the registry derives the
+        // effective `server_tool` name and the `server.tool` Code Mode
+        // path. The `{server}_{tool}` form is the PERMISSION ACTION
+        // (mcp.ts:17), asserted below.
         let current: std::collections::BTreeSet<String> =
-            discovered.iter().map(|tool| tool_name(&tool.server, &tool.name)).collect();
+            discovered.iter().map(|tool| tool.name.clone()).collect();
         // Remove bridge-owned registrations that left the catalog; other
         // registrations are never touched.
         for stale in owned.lock().difference(&current) {
             tools.remove(stale);
         }
         for tool in discovered {
-            let name = tool_name(&tool.server, &tool.name);
+            let name = tool.name.clone();
+            let action = tool_name(&tool.server, &tool.name);
             let executor = McpToolExecutor {
                 registry: registry.clone(),
                 tool: tool.clone(),
@@ -1428,7 +1434,7 @@ impl McpToolBridge {
                 tool.input_schema.clone(),
             );
             registration.namespace = Some(namespace(&tool.server));
-            registration.permission = Some(name.clone());
+            registration.permission = Some(action);
             registration.codemode = tool.codemode_enabled();
             tools.register(registration);
             tools.register_executor(name.clone(), Arc::new(executor));

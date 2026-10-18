@@ -399,16 +399,33 @@ impl Shell {
             return;
         }
         if kill {
-            let _ = command.child.lock().as_mut().is_some_and(|live| live.start_kill().is_ok());
+            // v2 `handle.kill({ forceKillAfter: 3s })`: TERM the detached
+            // group first; escalate to SIGKILL only if it survives 3s.
             // The command spawned its own process group (`process_group(0)`);
-            // SIGKILL the group too so orphaned grandchildren release the
-            // output pipes (v2 kills the detached group with TERM → force
-            // escalation; SIGKILL is the closest available primitive). The
-            // signal goes through a dedicated blocking thread — tokio's own
-            // child driver is unreliable for one-shot helpers here.
+            // signalling the group releases orphaned grandchildren holding
+            // the output pipes. Signals go through a dedicated blocking
+            // thread — tokio's own child driver is unreliable for one-shot
+            // helpers here.
             #[cfg(unix)]
             if let Some(pid) = command.pid {
-                let _ = tokio::task::spawn_blocking(move || kill_process_group(pid)).await;
+                let _ = tokio::task::spawn_blocking(move || {
+                    signal_process_group(pid, libc::SIGTERM);
+                })
+                .await;
+                // Escalation (3s → KILL). Detached: the TERM path usually
+                // settles the group, and the escalation must fire even if
+                // this finish future is cancelled.
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    let _ = tokio::task::spawn_blocking(move || {
+                        signal_process_group(pid, libc::SIGKILL);
+                    })
+                    .await;
+                });
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = command.child.lock().as_mut().is_some_and(|live| live.start_kill().is_ok());
             }
         }
         // The capture file must be fully written before waiters resolve
@@ -465,13 +482,58 @@ impl Shell {
             command: input.command.clone(),
             cwd: input.cwd.clone().unwrap_or_default(),
             timeout: input.timeout.unwrap_or(0),
-            shell: shell_path.map_or_else(|| select::resolve(None, false), String::from),
+            shell: shell_path.map_or_else(
+                || select::resolve(self.inner.config_shell.as_deref(), false),
+                String::from,
+            ),
             env,
         };
+        // `hooks.trigger("shell", "create.before", invocation)` — BEFORE
+        // the caller's `before` closure (shell.ts:274-275): the hook shapes
+        // the invocation the permission pipeline then validates.
+        self.trigger_create_before(&mut invocation).await?;
         if let Some(before) = before {
             before(&mut invocation);
         }
         self.create_invocation(invocation, input.metadata.unwrap_or_default()).await
+    }
+
+    /// The production `shell.create.before` dispatch site (shell.ts:274):
+    /// the location's hook registry mutates the invocation copy-in, and
+    /// the (possibly rewritten) invocation is copied back out. A hook
+    /// failure fails the create — nothing spawns. The tool path calls
+    /// this before its permission pipeline, mirroring the v2 ordering.
+    pub async fn trigger_create_before(
+        &self,
+        invocation: &mut Invocation,
+    ) -> Result<(), std::io::Error> {
+        let Some(hooks) = self.inner.hooks.clone() else { return Ok(()) };
+        let event = crate::hooks::ShellCreateBeforeEvent {
+            command: invocation.command.clone(),
+            cwd: invocation.cwd.clone(),
+            timeout_ms: invocation.timeout,
+            shell: invocation.shell.clone(),
+            env: invocation
+                .env
+                .iter()
+                .map(|(key, value)| (key.clone(), Some(value.clone())))
+                .collect(),
+        };
+        let shaped = hooks.dispatch_shell_create_before(event).await.map_err(|error| {
+            std::io::Error::other(format!("shell.create.before hook failed: {error}"))
+        })?;
+        invocation.command = shaped.command;
+        invocation.cwd = shaped.cwd;
+        invocation.timeout = shaped.timeout_ms;
+        invocation.shell = shaped.shell;
+        // Hook env entries: `Some(value)` sets, `None` removes (the v2
+        // JSON shape's null erasure).
+        invocation.env = shaped
+            .env
+            .into_iter()
+            .filter_map(|(key, value)| value.map(|value| (key, value)))
+            .collect();
+        Ok(())
     }
 
     /// `Shell.create` over a fully prepared invocation (the shell tool runs
@@ -540,40 +602,66 @@ impl Shell {
         });
         self.inner.commands.lock().insert(id.clone(), Arc::clone(&active));
 
-        // Combined stream → file, with newline counting while streaming so
-        // truncation notices never rescan the output file.
+        // Combined streams → file, with newline counting while streaming so
+        // truncation notices never rescan the output file. stdout and
+        // stderr are pumped CONCURRENTLY (v2 streams `handle.all` — one
+        // merged arrival-ordered stream): draining them sequentially
+        // deadlocks once the unpumped pipe fills (64 KiB), killing
+        // healthy commands with a false timeout.
         {
             let active = Arc::clone(&active);
             let file = file.clone();
             tokio::spawn(async move {
                 use tokio::io::AsyncWriteExt;
-                let Ok(mut writer) = tokio::fs::File::create(&file).await else {
+                /// One pump source pipe.
+                type PumpStream = Box<dyn tokio::io::AsyncRead + Unpin + Send>;
+                let Ok(file) = tokio::fs::File::create(&file).await else {
                     let _ = active.output_done.send(true);
                     return;
                 };
-                let mut streams: Vec<Box<dyn tokio::io::AsyncRead + Unpin + Send>> = Vec::new();
-                if let Some(stream) = stdout {
-                    streams.push(Box::new(stream));
+                let writer = Arc::new(tokio::sync::Mutex::new(file));
+                let mut pumps = Vec::new();
+                let streams: Vec<PumpStream> = [
+                    stdout.map(|stream| Box::new(stream) as PumpStream),
+                    stderr.map(|stream| Box::new(stream) as PumpStream),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                for stream in streams {
+                    let writer = Arc::clone(&writer);
+                    let active = Arc::clone(&active);
+                    // One pump per pipe: chunks land in the capture in
+                    // arrival order as each read completes.
+                    pumps.push(tokio::spawn(async move {
+                        let mut stream = stream;
+                        let mut buffer = vec![0u8; 16 * 1024];
+                        loop {
+                            match stream.read(&mut buffer).await {
+                                Ok(0) | Err(_) => break,
+                                Ok(read) => {
+                                    let chunk = &buffer[..read];
+                                    active.size.fetch_add(read as u64, Ordering::SeqCst);
+                                    // Streaming count mirrors v2's
+                                    // incremental newline tally.
+                                    #[allow(clippy::naive_bytecount)]
+                                    active.newlines.fetch_add(
+                                        chunk.iter().filter(|&&byte| byte == b'\n').count() as u64,
+                                        Ordering::SeqCst,
+                                    );
+                                    let mut writer = writer.lock().await;
+                                    if writer.write_all(chunk).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }));
                 }
-                if let Some(stream) = stderr {
-                    streams.push(Box::new(stream));
+                for pump in pumps {
+                    let _ = pump.await;
                 }
-                for mut stream in streams {
-                    let mut buffer = Vec::new();
-                    if stream.read_to_end(&mut buffer).await.is_err() {
-                        buffer.clear();
-                    }
-                    if !buffer.is_empty() {
-                        active.size.fetch_add(buffer.len() as u64, Ordering::SeqCst);
-                        // Streaming count mirrors v2's incremental newline tally.
-                        #[allow(clippy::naive_bytecount)]
-                        active.newlines.fetch_add(
-                            buffer.iter().filter(|&&byte| byte == b'\n').count() as u64,
-                            Ordering::SeqCst,
-                        );
-                    }
-                    let _ = writer.write_all(&buffer).await;
-                }
+                let mut writer = writer.lock().await;
                 let _ = writer.flush().await;
                 let _ = active.output_done.send(true);
             });
@@ -620,16 +708,17 @@ impl Shell {
     }
 }
 
-/// SIGKILL every process in `leader`'s process group. Some sandboxes
-/// silently drop `kill(-pgid, …)`, so members are enumerated from `/proc`
-/// and signalled individually.
+/// Signal every process in `leader`'s process group (TERM first, KILL on
+/// escalation — v2 `forceKillAfter`). Some sandboxes silently drop
+/// `kill(-pgid, …)`, so members are enumerated from `/proc` and
+/// signalled individually.
 ///
 /// Safety (incident 2026-10): the pgrp scan only runs while the group
 /// LEADER (`/proc/<leader>`) still exists — a live leader pins the process
 /// group id, so it cannot have been recycled onto innocent processes.
 /// Members are signalled via kill(2) on individually-verified pids.
 #[cfg(unix)]
-fn kill_process_group(leader: u32) {
+fn signal_process_group(leader: u32, signal: i32) {
     // A live leader is the precondition for interpreting `pgrp == leader`
     // at all; without it the id may name a recycled group.
     if std::fs::read_to_string(format!("/proc/{leader}/stat")).is_err() {
@@ -662,7 +751,7 @@ fn kill_process_group(leader: u32) {
         // member of the pinned group; the live-leader precondition rules
         // out group-id recycling.
         unsafe {
-            let rc = libc::kill(i32::try_from(member).unwrap_or(-1), libc::SIGKILL);
+            let rc = libc::kill(i32::try_from(member).unwrap_or(-1), signal);
             let _ = rc;
         }
     }

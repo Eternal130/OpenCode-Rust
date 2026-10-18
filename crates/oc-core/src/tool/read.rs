@@ -49,6 +49,7 @@ pub fn tool(_services: &std::sync::Arc<ToolServices>) -> BuiltinTool {
         input: schema(),
         permission: None,
         codemode: false,
+        namespace: None,
         execute: std::sync::Arc::new(ReadExecutor),
     }
 }

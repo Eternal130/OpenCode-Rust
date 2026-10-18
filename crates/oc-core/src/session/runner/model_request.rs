@@ -448,8 +448,10 @@ pub struct SessionModelRequest {
 }
 
 fn tool_definition(registration: &crate::location::ToolRegistration) -> ToolDefinition {
+    // `definition(tool).name = effectiveName(tool)` (runtime.ts:22 — the
+    // model sees `opencode_session_move`, not the bare registration key).
     ToolDefinition::new(
-        registration.name.clone(),
+        registration.effective_name(),
         registration.description.clone(),
         registration.input.clone(),
     )
@@ -482,9 +484,12 @@ impl SessionModelRequest {
                 (definition.description.clone(), canonical(&definition.input_schema)),
                 tool.clone(),
             );
-            by_name.insert(tool.name.clone(), tool.clone());
+            // The draft/context-hook keys are the EFFECTIVE names — v2's
+            // tool table is keyed by `effectiveName` (tool.ts:188).
+            let advertised = tool.effective_name();
+            by_name.insert(advertised.clone(), tool.clone());
             draft_tools.insert(
-                tool.name.clone(),
+                advertised,
                 crate::hooks::ToolDescriptor {
                     description: definition.description,
                     input: definition.input_schema,
@@ -800,4 +805,43 @@ pub async fn prepare_primary(
             input_tokens,
         })
         .await
+}
+
+#[cfg(test)]
+mod tools_exec_name_tests {
+    // TOOL-A1: the model-facing tool name is the EFFECTIVE name
+    // (`<namespace>_<name>` — runtime.ts:22 `definition().name =
+    // effectiveName(tool)`; v2 keys the tool table by effectiveName).
+    use super::tool_definition;
+    use crate::location::ToolRegistration;
+
+    #[test]
+    fn model_tool_definitions_use_effective_names() {
+        let mut namespaced = ToolRegistration::new(
+            "session_move",
+            "Move".to_string(),
+            serde_json::json!({"type": "object"}),
+        );
+        namespaced.namespace = Some("opencode".to_string());
+        namespaced.codemode = true;
+        assert_eq!(tool_definition(&namespaced).name, "opencode_session_move");
+
+        // MCP shape (tool/mcp.ts:44-45): bare tool name + server
+        // namespace → effective `server_tool`.
+        let mut mcp_style = ToolRegistration::new(
+            "create_issue",
+            "Issue".to_string(),
+            serde_json::json!({"type": "object"}),
+        );
+        mcp_style.namespace = Some("github".to_string());
+        mcp_style.permission = Some("github_create_issue".to_string());
+        assert_eq!(tool_definition(&mcp_style).name, "github_create_issue");
+
+        let bare = ToolRegistration::new(
+            "read",
+            "Read".to_string(),
+            serde_json::json!({"type": "object"}),
+        );
+        assert_eq!(tool_definition(&bare).name, "read");
+    }
 }

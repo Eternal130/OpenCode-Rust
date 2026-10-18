@@ -225,6 +225,7 @@ pub fn tool(forms: Forms) -> BuiltinTool {
         }),
         permission: Some("question"),
         codemode: false,
+        namespace: None,
         execute: Arc::new(QuestionExecute { forms }),
     }
 }
