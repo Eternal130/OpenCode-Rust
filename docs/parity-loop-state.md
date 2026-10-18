@@ -3,10 +3,26 @@
 > Orchestrator scratch state for the parity loop (docs/PARITY-LOOP.md).
 > Updated at the end of every iteration. Not a task queue — the ledger is.
 
-- **updated**: 2026-10-19 (iteration 3 — 1B core clusters merged; C3 RUNTIME dispatched)
-- **batch**: 1B remainder — C3 RUNTIME (C3a + C3b) — iteration 4 in flight
-- **iteration**: 4
-- **baseline**: main @ 5c838a1 (1B merges + exit fixes + C3 claims)
+- **updated**: 2026-10-19 (iteration 4 COMPLETE — Batch 1B exited incl. regression fix; Batch 2 wave 1 dispatched)
+- **batch**: 2 (CONFIG / AI-PROVIDERS / TUI-DAILY active; C4b WIRE-DETAIL + SURFACES queued wave 2) — iteration 5 in flight
+- **iteration**: 5
+- **baseline**: main @ 8ff3fd4 (1B final + B2 wave-1 claims)
+
+## Batch 1B — EXITED (2026-10-19)
+
+4 clusters merged & verified (28 entries + 1 regression): WIRE-PROTOCOL @ef1d201 (15) · TOOLS-EXEC @fda1daf (7) · AI-TIMEOUT @1ab94f0 (1) · RUNTIME @86a37c7+9fcd97a (5) · **RUNTIME-SWEEP-RACE regression** @d73218f (found by batch-exit gate, bisected to runtime-a, root-caused as claim-sweep without owner signature, fixed with pre-boot-claim bound; verifier PASS).
+Exit: workspace **3470/3470**, p10 strict **clean** (3 KNOWN-RED, 0 NEW-RED), fmt --all green, guards 8/8.
+Notable: Gate 1 caught WIRE's static-reading error (empty-page cursor = explicit nulls per live-ref probe); merge conflicts resolved by integrator (ledger rows + add/add test file split into prompt_prepare_hooks.rs).
+
+## Active lanes (Batch 2 wave 1)
+
+| lane | cluster | worktree | branch | owner | entries | status |
+|---|---|---|---|---|---|---|
+| lane-config | C5 CONFIG | `.worktrees/lane-config` | `lane/config` | fix-29 (bg) | CONFIG-C7,C8,C1,T1,T3,T4 | dispatched |
+| lane-ai-prov | C7b AI-PROVIDERS | `.worktrees/lane-ai-prov` | `lane/ai-prov` | fix-30 (bg) | AI-M1, M10, AZURE | dispatched |
+| lane-tui-daily | C6c TUI-DAILY | `.worktrees/lane-tui-daily` | `lane/tui-daily` | fix-31 (bg) | TUI-3, TUI-11, TUI-13 | dispatched |
+
+Queued wave 2: C4b (HTTP-H0 validator generator, oracle-reviewed spike first per §4.5 设计门), C9a SURFACES (browser tool + LaTeX/Mermaid), rest of C7b (Cohere/Mistral/Copilot/Bedrock-remainder), C6b session-route, C5a keys-env remainder.
 
 ## Batch 1B — core clusters EXITED (2026-10-19); C3 in flight
 
