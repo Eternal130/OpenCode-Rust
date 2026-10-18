@@ -62,11 +62,7 @@ fn fg_of(style: u64) -> u64 {
 /// The RGB payload of a packed color (None = default/indexed).
 fn rgb_of(packed: u64) -> Option<(u8, u8, u8)> {
     if (packed >> 24) & 0x3 == 2 {
-        Some((
-            ((packed >> 16) & 0xFF) as u8,
-            ((packed >> 8) & 0xFF) as u8,
-            (packed & 0xFF) as u8,
-        ))
+        Some((((packed >> 16) & 0xFF) as u8, ((packed >> 8) & 0xFF) as u8, (packed & 0xFF) as u8))
     } else {
         None
     }
@@ -108,7 +104,8 @@ fn robust_exit(h: &mut HarnessHandle) {
 // ---------------------------------------------------------------------------
 
 fn token_pair_file() -> String {
-    std::fs::read_to_string("/tmp/opencode/scanab/a1/canary-tokens.txt").expect("token pair file (run leg A first)")
+    std::fs::read_to_string("/tmp/opencode/scanab/a1/canary-tokens.txt")
+        .expect("token pair file (run leg A first)")
 }
 
 /// Boot helper used by both tests (driver leaves via exit chord; the
@@ -194,8 +191,8 @@ fn boot_and_drive<T: Send + 'static>(
         // B of the canary). Registered as a finding; the harness
         // proceeds on the observed teardown bytes.
         let raw = harness.handle().raw_mirror();
-        let dumped = std::fs::read(format!("/tmp/opencode/scanab/a1/timeout-{tag}.raw"))
-            .unwrap_or_default();
+        let dumped =
+            std::fs::read(format!("/tmp/opencode/scanab/a1/timeout-{tag}.raw")).unwrap_or_default();
         let tore_down = raw.windows(ALT_SCREEN_LEN).any(|w| w == vt_harness::ALT_SCREEN_LEAVE)
             || dumped.windows(ALT_SCREEN_LEN).any(|w| w == vt_harness::ALT_SCREEN_LEAVE);
         eprintln!(
@@ -289,12 +286,16 @@ fn a1_canary_leg_default() {
     )
     .expect("token pair");
 
-    let (g1, g2) = boot_and_drive("a1canA", |_| {}, |h| {
-        if !h.wait_for(WORDMARK, Duration::from_secs(8)) {
-            return Err("wordmark never rendered".to_owned());
-        }
-        settled_pair(h)
-    });
+    let (g1, g2) = boot_and_drive(
+        "a1canA",
+        |_| {},
+        |h| {
+            if !h.wait_for(WORDMARK, Duration::from_secs(8)) {
+                return Err("wordmark never rendered".to_owned());
+            }
+            settled_pair(h)
+        },
+    );
     dump(&g1, "canary-default");
     dump_full(&g1, "canary-default");
     dump_full(&g2, "canary-default-b");
@@ -312,35 +313,38 @@ fn hex_to_rgb(hex: &str) -> (u8, u8, u8) {
 #[test]
 fn a1_canary_leg_swap_verdict() {
     let tokens = token_pair_file();
-    let (base_hex, muted_hex) =
-        tokens.trim().split_once(' ').expect("base muted hex pair");
+    let (base_hex, muted_hex) = tokens.trim().split_once(' ').expect("base muted hex pair");
     let base = hex_to_rgb(base_hex);
     let muted = hex_to_rgb(muted_hex);
 
-    let (g1, g2) = boot_and_drive("a1canB", |_| {
-        let config_root =
-            std::env::var("OPENCODE_TEST_HOME").map(std::path::PathBuf::from).expect("home");
-        let themes_dir = config_root.join(".config/themes");
-        std::fs::create_dir_all(&themes_dir).expect("themes dir");
-        std::fs::write(
-            themes_dir.join("swapcanary.json"),
-            swap_theme_doc(
-                oc_theme::Rgba { r: base.0, g: base.1, b: base.2, a: 255 },
-                oc_theme::Rgba { r: muted.0, g: muted.1, b: muted.2, a: 255 },
-            ),
-        )
-        .expect("theme file");
-        std::env::set_var("OPENCODE_CONFIG_DIR", config_root.join(".config"));
-        std::env::set_var(
-            "OPENCODE_CLI_CONFIG_CONTENT",
-            r#"{"theme":{"name":"swapcanary","mode":"dark"}}"#,
-        );
-    }, |h| {
-        if !h.wait_for(WORDMARK, Duration::from_secs(8)) {
-            return Err("wordmark never rendered (swap theme broke boot?)".to_owned());
-        }
-        settled_pair(h)
-    });
+    let (g1, g2) = boot_and_drive(
+        "a1canB",
+        |_| {
+            let config_root =
+                std::env::var("OPENCODE_TEST_HOME").map(std::path::PathBuf::from).expect("home");
+            let themes_dir = config_root.join(".config/themes");
+            std::fs::create_dir_all(&themes_dir).expect("themes dir");
+            std::fs::write(
+                themes_dir.join("swapcanary.json"),
+                swap_theme_doc(
+                    oc_theme::Rgba { r: base.0, g: base.1, b: base.2, a: 255 },
+                    oc_theme::Rgba { r: muted.0, g: muted.1, b: muted.2, a: 255 },
+                ),
+            )
+            .expect("theme file");
+            std::env::set_var("OPENCODE_CONFIG_DIR", config_root.join(".config"));
+            std::env::set_var(
+                "OPENCODE_CLI_CONFIG_CONTENT",
+                r#"{"theme":{"name":"swapcanary","mode":"dark"}}"#,
+            );
+        },
+        |h| {
+            if !h.wait_for(WORDMARK, Duration::from_secs(8)) {
+                return Err("wordmark never rendered (swap theme broke boot?)".to_owned());
+            }
+            settled_pair(h)
+        },
+    );
     dump(&g1, "canary-swapped");
     dump_full(&g1, "canary-swapped");
     dump_full(&g2, "canary-swapped-b");
@@ -361,10 +365,8 @@ fn a1_canary_leg_swap_verdict() {
         }
         set
     };
-    let mask: HashSet<(usize, usize)> = stable(&leg_a1, &leg_a2)
-        .intersection(&stable(&leg_b1, &leg_b2))
-        .copied()
-        .collect();
+    let mask: HashSet<(usize, usize)> =
+        stable(&leg_a1, &leg_a2).intersection(&stable(&leg_b1, &leg_b2)).copied().collect();
 
     let mut a_to_b = 0usize;
     let mut b_to_a = 0usize;
@@ -436,7 +438,10 @@ fn a1_canary_leg_swap_verdict() {
         derived
     );
     assert!(changed > 50, "the swap must paint a real population (changed={changed})");
-    assert!(a_to_b > 5 && b_to_a > 5, "both swap directions must been observed ({a_to_b}/{b_to_a})");
+    assert!(
+        a_to_b > 5 && b_to_a > 5,
+        "both swap directions must been observed ({a_to_b}/{b_to_a})"
+    );
     assert!(
         derived * 20 <= changed,
         "derived-neutral class unbounded (derived={derived} changed={changed})"
@@ -496,8 +501,8 @@ fn a1_probe_theme_exit_chord() {
                 "opencode",
             )
             .expect("parse");
-            let resolved =
-                oc_theme::resolve_theme_document(&doc, Some(oc_theme::Mode::Dark)).expect("resolve");
+            let resolved = oc_theme::resolve_theme_document(&doc, Some(oc_theme::Mode::Dark))
+                .expect("resolve");
             let sw = swap_theme_doc(resolved.tokens.text.base, resolved.tokens.text.muted);
             std::fs::write(themes_dir.join("swapcanary.json"), sw).expect("theme");
             std::env::set_var("OPENCODE_CONFIG_DIR", config_root.join(".config"));
@@ -624,7 +629,10 @@ fn a4_marquee_flush_cadence_probe() {
         format!("changes={changes} gaps={gaps:?}\n"),
     )
     .ok();
-    assert!(changes >= 10, "marquee flush cadence too slow: {changes} changes in 2.4 s (gaps={gaps:?})");
+    assert!(
+        changes >= 10,
+        "marquee flush cadence too slow: {changes} changes in 2.4 s (gaps={gaps:?})"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -632,7 +640,6 @@ fn a4_marquee_flush_cadence_probe() {
 // ours-vs-ref diff; anchors: tab strip row 0, transcript rows, footer
 // bottom rows, sidebar right columns, dialog overlay)
 // ---------------------------------------------------------------------------
-
 
 #[test]
 fn a1_ours_state_matrix_cells() {

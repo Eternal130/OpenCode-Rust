@@ -641,6 +641,14 @@ pub fn render_sidebar_scrolled(
         if section.title.is_empty() && section.rows.is_empty() {
             continue;
         }
+        // SA-F5 (SCAN-AB): the plugin section's own render contract —
+        // the ref's plugin-rendered sidebar paints EVERY section cell
+        // at the plugin's plain white (idx15 emission under the
+        // 256-color degrade; ref capture ref-session-00.styles.txt
+        // y13-y19: header AND rows fg=idx15, bg=idx233, mods=0 — no
+        // bold). The native surface mirrors the plugin's renderer
+        // output, not the sidebar's base/muted ladder.
+        let plugin_fg = ratatui::style::Color::Rgb(255, 255, 255);
         let place_slot = |paint: &mut SidebarPaint, text: &str, y: usize| {
             let Some(row) = slot_row(y) else { return };
             if row >= footer_top {
@@ -651,10 +659,7 @@ pub fn render_sidebar_scrolled(
                 x: 2,
                 y: row,
                 width: crate::wrap::display_width(&text),
-                lines: vec![PlacedLine::plain(
-                    text,
-                    Style::new().fg(fg_base).bg(raised).add_modifier(Modifier::BOLD),
-                )],
+                lines: vec![PlacedLine::plain(text, Style::new().fg(plugin_fg).bg(raised))],
                 tag: Some("sidebar.plugin-section".into()),
             });
         };
@@ -669,7 +674,7 @@ pub fn render_sidebar_scrolled(
                     x: 2,
                     y: slot,
                     width: crate::wrap::display_width(&text),
-                    lines: vec![PlacedLine::plain(text, Style::new().fg(fg_muted).bg(raised))],
+                    lines: vec![PlacedLine::plain(text, Style::new().fg(plugin_fg).bg(raised))],
                     tag: None,
                 });
                 // The row's click surface (the plugin's own onMouseUp —
@@ -908,10 +913,11 @@ mod tests {
     }
 
     /// The wave-3 plugin section renders under the title (the blank
-    /// seam filled): bold header at row 2, muted rows under it, a gap
-    /// between sections — and empty sections stay invisible (the
-    /// golden fixture's shape). Text-grid pinned locally (plugins are
-    /// not in the reference corpus).
+    /// seam filled): header at row 2, rows under it, a gap between
+    /// sections — and empty sections stay invisible (the golden
+    /// fixture's shape). Text-grid pinned locally (plugins are not in
+    /// the reference corpus); the cells' COLORS are the SA-F5 test
+    /// below.
     #[test]
     fn plugin_section_renders_under_the_title() {
         let theme = theme();
@@ -958,6 +964,46 @@ mod tests {
         );
         // The empty section painted nothing at row 5.
         assert!(paint.placed.iter().all(|p| p.y != 5), "the gap row stays blank");
+    }
+
+    /// SA-F5 (SCAN-AB): the plugin section's cells paint the PLUGIN's
+    /// own render contract — plain white text (the ref's plugin-rendered
+    /// sidebar emits fg idx15 for header AND rows, bg idx233, NO bold —
+    /// ref-session-00.styles.txt y13-y19; our degrade maps #ffffff →
+    /// idx15 exactly, color_mode quantize tie-break). Not the sidebar's
+    /// base/muted ladder the host bridge used before.
+    #[test]
+    fn plugin_section_paints_the_plugin_white() {
+        let theme = theme();
+        let mut view = SidebarView::fixture("Sidebar fixture", "/tmp/opencode/x:main");
+        view.sections.plugins = vec![SidebarSection {
+            plugin_id: "omos".into(),
+            title: "OMO-Slim".into(),
+            rows: vec!["orchestrator".into()],
+            clickable: vec![],
+        }];
+        let paint = render_sidebar(&view, &theme, 30);
+        let section: Vec<&Placed> = paint.placed.iter().filter(|p| p.y == 2 || p.y == 3).collect();
+        assert_eq!(section.len(), 2, "header + one row: {:?}", section);
+        for placed in &section {
+            for line in &placed.lines {
+                let style = &line.runs[0].style;
+                assert_eq!(
+                    style.fg,
+                    Some(ratatui::style::Color::Rgb(255, 255, 255)),
+                    "plugin cells paint plain white (idx15 emission)"
+                );
+                assert_eq!(
+                    style.bg,
+                    Some(theme.background_raised),
+                    "the raised background stays (ref idx233)"
+                );
+                assert!(
+                    !style.add_modifier.contains(ratatui::style::Modifier::BOLD),
+                    "no bold on the ref's plugin cells (mods=0)"
+                );
+            }
+        }
     }
 
     /// The wheel offset re-slices the content slot (auditA #1): the

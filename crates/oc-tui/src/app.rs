@@ -39,6 +39,7 @@
 //! tears the terminal down and returns.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::components::command_palette::{CommandDispatcher as _, Dispatch, StoreDispatcher};
 use crate::components::composer::render::prompt_text_width;
@@ -4754,26 +4755,60 @@ pub async fn run_with_size(
     let mut last_frame_images: Vec<crate::image::ImagePlacement> = Vec::new();
 
     // Input thread: crossterm's blocking read (keys + resize) bridged
-    // into the async loop (the detached thread exits with the process;
-    // terminal teardown below runs first). The thread FIRST probes the
-    // terminal background (OSC 11 — same-thread input ownership, no
-    // keystroke stealing) and reports the system mode before reading.
+    // into the async loop. The thread FIRST probes the terminal
+    // background (OSC 11 — same-thread input ownership, no keystroke
+    // stealing) and reports the system mode before reading.
+    //
+    // SA-F13 (re-entrance): the reader must STOP at teardown — a
+    // thread parked in `event::read()` holds crossterm's GLOBAL
+    // reader lock and swallows the first key(s) a SECOND
+    // `run_with_size` boot's reader (or an embedder's own reader)
+    // waits on, killing that boot's exit chord (the SCAN-AB
+    // double-boot finding: leg-2 rendered home but ignored \x03 and
+    // the loop never returned). The loop therefore polls in bounded
+    // windows against a stop flag owned by a Drop guard — the flag
+    // fires on the normal return AND when an outer timeout cancels
+    // the run future — and a stale reader from an abandoned boot is
+    // stopped by the slot swap below before this one spawns.
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CrosstermEvent>(64);
     let (probe_tx, probe_rx) = std::sync::mpsc::channel::<(Mode, bool)>();
-    std::thread::spawn(move || {
-        // The combined boot probe (lane TAIL): OSC 11 background + the
-        // kitty keyboard capability query, one read window.
-        let probe = crate::theme::probe_terminal();
-        let mode = probe
-            .background
-            .map_or(Mode::Dark, |(r, g, b)| crate::theme::mode_for_background(r, g, b));
-        let _ = probe_tx.send((mode, probe.kitty_keyboard));
-        while let Ok(event) = crossterm::event::read() {
-            if event_tx.blocking_send(event).is_err() {
-                break;
+    let input_stop = {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if let Ok(mut slot) = INPUT_READER_STOP.lock() {
+            if let Some(stale) = slot.replace(Arc::clone(&stop)) {
+                stale.store(true, std::sync::atomic::Ordering::Relaxed);
             }
         }
-    });
+        stop
+    };
+    let _input_guard = StopInputReader(Arc::clone(&input_stop));
+    {
+        let input_stop = Arc::clone(&input_stop);
+        std::thread::spawn(move || {
+            // The combined boot probe (lane TAIL): OSC 11 background +
+            // the kitty keyboard capability query, one read window.
+            let probe = crate::theme::probe_terminal();
+            let mode = probe
+                .background
+                .map_or(Mode::Dark, |(r, g, b)| crate::theme::mode_for_background(r, g, b));
+            let _ = probe_tx.send((mode, probe.kitty_keyboard));
+            loop {
+                if input_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                match crossterm::event::poll(std::time::Duration::from_millis(50)) {
+                    Ok(true) => {
+                        let Ok(event) = crossterm::event::read() else { break };
+                        if event_tx.blocking_send(event).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(_) => break,
+                }
+            }
+        });
+    }
     if let Ok((mode, kitty_keyboard)) = probe_rx.recv_timeout(std::time::Duration::from_millis(800))
     {
         system_mode = mode;
@@ -5400,23 +5435,32 @@ pub async fn run_with_size(
             }
         }
         // Toast/spinner clock — with the marquee's own steady ticker
-        // riding on top (beta.13 bug 3): while a hover scroll runs,
-        // the loop wakes exactly on the next 80 ms boundary and PINS
-        // the clock to it, so the offset advances by exactly one cell
-        // per tick (v2's `setInterval(…, MARQUEE_INTERVAL)` —
-        // createMarquee, session-tabs.tsx:279-369). The plain 100 ms
-        // tick only advances while it CANNOT cross a boundary
-        // (toasts/spinners keep their cadence; the marquee never
-        // samples past a step it should land on).
+        // riding on top (beta.13 bug 3 + SA-F3): while a hover scroll
+        // runs, the loop wakes exactly on the next 80 ms boundary and
+        // PINS the clock to the most recent PASSED boundary, so the
+        // offset advances by exactly one cell per tick (v2's
+        // `setInterval(…, MARQUEE_INTERVAL)` — createMarquee,
+        // session-tabs.tsx:279-369). The pin compares against the
+        // CLOCK, never against `now` (the next boundary is strictly
+        // future by construction — the old `deadline <= now` form
+        // never fired and the plain 100 ms tick advanced the clock
+        // two boundaries at a time: the measured ~166 ms/step). The
+        // plain 100 ms tick serves everything else and stays SUSPENDED
+        // while a scroll is live (the pin cadence subsumes it — the
+        // clock never samples past a boundary the marquee should land
+        // on).
         let now_ms = system_now_ms();
+        let passed_boundary = crate::components::session_tabs_solid::marquee_passed_step(now_ms);
         let marquee_deadline = crate::components::session_tabs_solid::marquee_next_step(now_ms);
         let mut ticked = false;
-        if let Some(deadline) = marquee_deadline.filter(|deadline| *deadline <= now_ms) {
-            app.store.advance_clock(deadline);
-            app.store.toast_advance(deadline);
+        if let Some(boundary) = passed_boundary.filter(|boundary| *boundary > app.store.clock()) {
+            app.store.advance_clock(boundary);
+            app.store.toast_advance(boundary);
             ticked = true;
-        } else if last_tick.elapsed() >= std::time::Duration::from_millis(100)
-            && marquee_deadline.is_none_or(|deadline| deadline > now_ms)
+        }
+        if !ticked
+            && last_tick.elapsed() >= std::time::Duration::from_millis(100)
+            && passed_boundary.is_none()
         {
             app.store.advance_clock(now_ms);
             app.store.toast_advance(now_ms);
@@ -5758,6 +5802,22 @@ fn system_now_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0))
 }
 
+/// The live input reader's stop flag (SA-F13 — one reader per process
+/// at a time; see the input-thread comment in [`run_with_size`]).
+static INPUT_READER_STOP: std::sync::Mutex<Option<Arc<std::sync::atomic::AtomicBool>>> =
+    std::sync::Mutex::new(None);
+
+/// Stops this boot's input reader on drop — the normal teardown AND
+/// an outer cancellation (a test's `tokio::time::timeout` dropping
+/// the run future) both route through here, so no reader ever stays
+/// parked on crossterm's global lock after its loop is gone.
+struct StopInputReader(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for StopInputReader {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 /// crossterm key event → the pump's key spec vocabulary.
 fn crossterm_key_to_spec(key: &crossterm::event::KeyEvent) -> Option<String> {
     use crossterm::event::{KeyCode, KeyModifiers};
@@ -6555,7 +6615,11 @@ fn mouse_home_strip_click_selects_the_restored_tab() {
     // The body release selects: home → the restored session's route.
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 0));
     assert_eq!(app.store.route(), Route::Session { session_id: "r1".to_owned() });
-    // The ` + ` affordance still navigates home from the session...
+    // The ` + ` affordance navigates home from the session — SA-F7's
+    // verified ref pairing: v2's `+` release runs `tabs.add()` which
+    // is `route.navigate({type:"home", …})` (context/session-tabs.tsx
+    // :406-420 — the ref does NOT create a session/tab on the click;
+    // the home composer's next submit does). Ours matches.
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 65, 0));
     assert_eq!(app.store.route(), Route::Home);
     // ...and the second restored tab's body selects from home (tab 2

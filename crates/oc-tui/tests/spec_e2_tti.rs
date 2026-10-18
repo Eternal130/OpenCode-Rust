@@ -24,7 +24,9 @@ mod vt_harness;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use vt_harness::{pty_lock, run_tui, sandbox_env, standard_sessions, FakeLlm, LiveHarness, WORDMARK};
+use vt_harness::{
+    pty_lock, run_tui, sandbox_env, standard_sessions, FakeLlm, LiveHarness, WORDMARK,
+};
 
 fn percentile(sorted: &[u128], p: f64) -> u128 {
     let idx = (((sorted.len() as f64) - 1.0) * p).round() as usize;
@@ -76,7 +78,8 @@ fn e2_tti_baseline_n10() {
                     (0..grid.rows).any(|y| grid.row_text(y).contains('z'))
                 };
                 if echoed {
-                    *slot.lock().expect("slot") = Some((t_wordmark, t_session, driver.now_ms() as u128));
+                    *slot.lock().expect("slot") =
+                        Some((t_wordmark, t_session, driver.now_ms() as u128));
                     vt_harness::exit_chord(&mut driver);
                     return;
                 }
@@ -101,13 +104,8 @@ fn e2_tti_baseline_n10() {
     let _ = wordmark_times.sort_unstable();
     let line = format!(
         "run={run} wordmark_ms={} session_ms={} t_interactive_ms={}\n",
-        wordmark_times[0],
-        times[0],
-        times[0]
+        wordmark_times[0], times[0], times[0]
     );
     eprintln!("[E2] RUN-DONE {line}");
-    let _ = std::fs::write(
-        format!("/tmp/opencode/spec-r6/e2_run_{run}.txt"),
-        &line,
-    );
+    let _ = std::fs::write(format!("/tmp/opencode/spec-r6/e2_run_{run}.txt"), &line);
 }

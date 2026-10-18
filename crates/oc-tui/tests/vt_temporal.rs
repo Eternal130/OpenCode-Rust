@@ -317,14 +317,18 @@ fn vt_temporal_cursor_blinks_500ms() {
 // ---------------------------------------------------------------------------
 
 /// v2 marquees a hovered TRUNCATED tab title: the visible content
-/// window shifts ~1 cell per tick while hovered. Lane TAIL landed the
+/// window shifts one cell per tick while hovered. Lane TAIL landed the
 /// marquee (`components/marquee.rs` + `title_chunks`'s scrolling
 /// window): a hovered overflowing title scrolls one cell per 80 ms
-/// after a 600 ms still frame. The body is the acceptance check
-/// (≥5 one-cell shifts of the hovered title region over the window).
+/// after a 600 ms still frame. SA-F3 hardened the acceptance: the
+/// measured gap between consecutive one-cell shifts must sit ON the
+/// 80 ms pin (median within 75–105 ms, no gap above 140 ms — the
+/// registered failure's signature was a uniform ~166 ms, the plain
+/// 100 ms render tick advancing the clock two boundaries at a time),
+/// and the window must step by EXACTLY one cell (no skipped offsets).
 #[test]
 fn vt_temporal_marquee_shifts_one_cell_per_tick() {
-    let shifts: usize = run_temporal_test(
+    let report: (usize, u64, u64, u64) = run_temporal_test(
         "marquee",
         80,
         24,
@@ -354,27 +358,80 @@ fn vt_temporal_marquee_shifts_one_cell_per_tick() {
                 .ok_or_else(|| format!("no title block found in the strip: {strip:?}"))?;
             let hover_x = (title_start + 6).min(baseline.cols - 2) as u16;
             harness.sgr_motion(hover_x, 0);
-            // Observe ≥5 ticks (v2's marquee interval ~120 ms; watch 2 s).
-            let snaps = collect_snapshots(harness, 2000);
-            // Count one-cell shifts of the hovered title region: each
-            // consecutive pair of row-0 texts differing INSIDE the
-            // tab's span (a window shift), not elsewhere.
-            let mut shifts = 0;
-            for pair in snaps.windows(2) {
-                let before = pair[0].grid.row_text(0);
-                let after = pair[1].grid.row_text(0);
-                if before != after {
-                    shifts += 1;
+            // SA-F3 vt-clock proof: poll the LIVE grid directly (the
+            // snapshot instrument's 80 ms quiet window cannot resolve
+            // an 80 ms cadence — consecutive frames merge into one
+            // burst). Each row-0 text change is one offset step; the
+            // gaps between changes must sit ON the 80 ms grid.
+            let start = harness.now_ms();
+            let mut last = harness.grid_now().row_text(0);
+            let mut change_times: Vec<u64> = Vec::new();
+            while harness.now_ms() - start < 2600 {
+                std::thread::sleep(Duration::from_millis(12));
+                let now_text = harness.grid_now().row_text(0);
+                if now_text != last {
+                    change_times.push(harness.now_ms());
+                    last = now_text;
                 }
             }
-            Ok(shifts)
+            if change_times.len() < 10 {
+                return Err(format!(
+                    "only {} title-window shifts in 2.6 s of hover — the 80 ms cadence cannot be measured: times {:?}",
+                    change_times.len(),
+                    change_times
+                ));
+            }
+            // The FIRST gap carries the 600 ms still delay and the
+            // scroll's END leaves a trailing stall (post-marquee
+            // repaints) — measure the STEADY run: the longest stretch
+            // of shifts separated by ≤300 ms.
+            let gaps: Vec<u64> =
+                change_times[1..].iter().zip(change_times[..].iter()).map(|(a, b)| a - b).collect();
+            let mut best_run: Vec<u64> = Vec::new();
+            let mut current: Vec<u64> = Vec::new();
+            for gap in gaps {
+                if gap > 300 {
+                    if current.len() > best_run.len() {
+                        best_run = current.clone();
+                    }
+                    current.clear();
+                } else {
+                    current.push(gap);
+                }
+            }
+            if current.len() > best_run.len() {
+                best_run = current;
+            }
+            if best_run.len() < 9 {
+                return Err(format!(
+                    "no steady shift run ≥9 gaps in 2.6 s of hover (times {change_times:?})"
+                ));
+            }
+            let mut sorted = best_run.clone();
+            sorted.sort_unstable();
+            let median = sorted[sorted.len() / 2];
+            let max = *sorted.last().unwrap_or(&0);
+            let min = sorted[0];
+            Ok((change_times.len(), median, min, max))
         },
     );
-    eprintln!("[vt_temporal marquee] {shifts} title-window shifts while hovered");
-    assert!(
-        shifts >= 5,
-        "the hovered truncated title shifted only {shifts} times (<5) — no marquee"
+    let (shifts, median, min, max) = report;
+    eprintln!(
+        "[vt_temporal marquee] {shifts} title-window shifts, gaps median {median} ms (min {min}, max {max})"
     );
+    assert!(
+        shifts >= 10,
+        "the hovered truncated title shifted only {shifts} times (<10) — no marquee"
+    );
+    assert!(
+        (70..=105).contains(&median),
+        "the marquee cadence must sit on the 80 ms pin (median {median} ms; the registered failure measured ~166)"
+    );
+    assert!(
+        max <= 140,
+        "no shift gap may exceed 140 ms (max {max} ms — a render-tick quantization leak, SA-F3)"
+    );
+    assert!(min >= 55, "no gap may collapse below 55 ms (min {min} — double-steps)");
 }
 
 // ---------------------------------------------------------------------------
@@ -462,6 +519,53 @@ fn vt_temporal_idle_composer_is_byte_stable_2s() {
     for line in findings {
         eprintln!("[vt_temporal idle] {line}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// SA-F4's instrument: the before-settle sampler catches in-flight churn
+// ---------------------------------------------------------------------------
+
+/// SA-F4's instrument repair, demonstrated on a genuine time-driven
+/// transient: the busy tab's sweep ramps per-column backgrounds while
+/// the turn streams (tab_pulse's run envelope — the A4 drive-source
+/// audit). The BEFORE-SETTLE sampler observes the style churn with NO
+/// settle wait (the settle-first collectors structurally miss exactly
+/// this class — the scan's shimmer leg recorded 0 style deltas across
+/// 60 ref frames after typing settled).
+#[test]
+fn vt_temporal_style_sampler_catches_inflight_churn() {
+    let (samples, distinct): (usize, usize) = run_temporal_test(
+        "sampler",
+        80,
+        24,
+        |fake| fake.arm_script(busy_window_script()),
+        |harness| {
+            boot_to_session(harness)?;
+            harness.write(b"busy turn\r");
+            if !harness.wait_for(b"Thinking", Duration::from_secs(5)) {
+                return Err("the streaming turn never showed its Thinking row".to_owned());
+            }
+            // Sample row 0 (the busy tab's sweep region) DURING the
+            // held-open busy window — no settle, polls straight away.
+            let series = harness.style_series_during(1200, 25, (0, 0, 40, 1), || {});
+            let samples = series.len();
+            let mut distinct_sets: Vec<&Vec<u64>> = Vec::new();
+            for (_t, styles) in &series {
+                if !distinct_sets.contains(&styles) {
+                    distinct_sets.push(styles);
+                }
+            }
+            Ok((samples, distinct_sets.len()))
+        },
+    );
+    eprintln!(
+        "[vt_temporal sampler] {samples} in-flight samples, {distinct} distinct style frames"
+    );
+    assert!(samples >= 20, "the sampler polled the live grid ({samples} samples)");
+    assert!(
+        distinct >= 8,
+        "the busy sweep's style churn was caught in flight ({distinct} distinct frames — a settle-first collector would see far fewer)"
+    );
 }
 
 // ---------------------------------------------------------------------------

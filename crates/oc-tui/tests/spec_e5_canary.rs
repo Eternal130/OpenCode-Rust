@@ -35,7 +35,11 @@ use oc_tui::keymap::default_table;
 fn rel_lum(c: Rgba) -> f64 {
     let ch = |v: u8| -> f64 {
         let s = f64::from(v) / 255.0;
-        if s <= 0.03928 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        if s <= 0.03928 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
     };
     0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b)
 }
@@ -50,10 +54,7 @@ fn contrast(a: Rgba, b: Rgba) -> f64 {
 // ------------------------------------------------------------------ theme IO
 
 fn load_default_dark() -> oc_theme::ResolvedTheme {
-    let path = format!(
-        "{}/../oc-theme/assets/v2/opencode.json",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let path = format!("{}/../oc-theme/assets/v2/opencode.json", env!("CARGO_MANIFEST_DIR"));
     let asset = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("asset {path}: {e}"));
     let json: serde_json::Value = serde_json::from_str(&asset).expect("asset parses");
     let doc = parse_theme_document(&json, "opencode").expect("v2 parse");
@@ -81,14 +82,49 @@ fn real_pairs(t: &oc_theme::ResolvedTheme) -> Vec<Cell> {
     vec![
         Cell { name: "text.base / background.base", fg: tk.text.base, bg, class: Class::Text },
         Cell { name: "text.muted / background.base", fg: tk.text.muted, bg, class: Class::Text },
-        Cell { name: "text.base / background.raised.base", fg: tk.text.base, bg: raised, class: Class::Text },
-        Cell { name: "feedback.error.base / background.base", fg: tk.text.feedback.error.base, bg, class: Class::Text },
-        Cell { name: "feedback.warning.base / background.base", fg: tk.text.feedback.warning.base, bg, class: Class::Text },
-        Cell { name: "feedback.success.base / background.base", fg: tk.text.feedback.success.base, bg, class: Class::Text },
-        Cell { name: "feedback.info.base / background.base", fg: tk.text.feedback.info.base, bg, class: Class::Text },
-        Cell { name: "action.primary.base / background.base", fg: tk.text.action.primary.base, bg, class: Class::Ui },
+        Cell {
+            name: "text.base / background.raised.base",
+            fg: tk.text.base,
+            bg: raised,
+            class: Class::Text,
+        },
+        Cell {
+            name: "feedback.error.base / background.base",
+            fg: tk.text.feedback.error.base,
+            bg,
+            class: Class::Text,
+        },
+        Cell {
+            name: "feedback.warning.base / background.base",
+            fg: tk.text.feedback.warning.base,
+            bg,
+            class: Class::Text,
+        },
+        Cell {
+            name: "feedback.success.base / background.base",
+            fg: tk.text.feedback.success.base,
+            bg,
+            class: Class::Text,
+        },
+        Cell {
+            name: "feedback.info.base / background.base",
+            fg: tk.text.feedback.info.base,
+            bg,
+            class: Class::Text,
+        },
+        Cell {
+            name: "action.primary.base / background.base",
+            fg: tk.text.action.primary.base,
+            bg,
+            class: Class::Ui,
+        },
         Cell { name: "border.base / background.base", fg: tk.border.base, bg, class: Class::Ui },
-        Cell { name: "scrollbar.base / background.base", fg: tk.scrollbar.base, bg, class: Class::Ui },
+        Cell {
+            name: "scrollbar.base / background.base",
+            fg: tk.scrollbar.base,
+            bg,
+            class: Class::Ui,
+        },
     ]
 }
 
@@ -183,7 +219,10 @@ fn e5_leg_a_baseline_and_injection() {
     let mut expected = baseline_failures.clone();
     expected.push(victim_name.to_string());
     expected.sort();
-    assert_eq!(failures_sorted, expected, "post-poison failures = baseline + exactly the poisoned cell");
+    assert_eq!(
+        failures_sorted, expected,
+        "post-poison failures = baseline + exactly the poisoned cell"
+    );
     let ratio = contrast(bg, bg);
     assert!((ratio - 1.0).abs() < 1e-9, "1:1 setup sanity");
     eprintln!("[E5-A] PASS: injected fg==bg localized to '{victim_name}' (ratio 1.00); inherited-findings (ref-theme, listed): {baseline_failures:?}");
@@ -204,10 +243,7 @@ fn e5_leg_b_color_independence() {
     let distinguishable = |a: Rgba, b: Rgba, glyph_carrying: bool| {
         (rel_lum(a) - rel_lum(b)).abs() > EPS || glyph_carrying
     };
-    assert!(
-        distinguishable(busy, error, true),
-        "real pair sanity"
-    );
+    assert!(distinguishable(busy, error, true), "real pair sanity");
     let real_dl = (rel_lum(busy) - rel_lum(error)).abs();
     eprintln!("[E5-B] real busy/error ΔL = {real_dl:.3}");
 
@@ -263,7 +299,11 @@ fn e5_leg_c_key_walk_unbind() {
         bound,
         "every key-bound command reachable; {none_count} palette-only ('none') dispositioned"
     );
-    eprintln!("[E5-C] table: {} commands, {} key-bound, {none_count} palette-only", all.len(), bound);
+    eprintln!(
+        "[E5-C] table: {} commands, {} key-bound, {none_count} palette-only",
+        all.len(),
+        bound
+    );
 
     // DEFECT (throwaway copy): strip bindings from ONE command that has no
     // alternates (single spec) so removal ⇒ unreachable.
@@ -277,8 +317,7 @@ fn e5_leg_c_key_walk_unbind() {
     let mut poisoned = all.clone();
     poisoned[victim_idx].defaults = "";
     let reach_after = walk_reachable(&poisoned);
-    let now_unreachable: Vec<String> =
-        reach_before.difference(&reach_after).cloned().collect();
+    let now_unreachable: Vec<String> = reach_before.difference(&reach_after).cloned().collect();
     assert_eq!(
         now_unreachable,
         vec![all[victim_idx].bind_name.to_string()],
