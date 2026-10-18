@@ -873,6 +873,17 @@ pub struct HarnessHandle {
 }
 
 impl HarnessHandle {
+    /// Resize the harness PTY (SCAN-EF2: E1 resize cell + B5 event
+    /// scripts) — real TIOCSWINSZ on the master, so the app observes
+    /// SIGWINCH exactly as a terminal resize delivers it.
+    pub fn resize_pty(&self, cols: u16, rows: u16) {
+        unsafe {
+            let winsize =
+                libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+            libc::ioctl(self.writer.as_raw_fd(), libc::TIOCSWINSZ, &winsize);
+        }
+    }
+
     /// Harness clock (ms since attach).
     #[must_use]
     pub fn now_ms(&self) -> u64 {
