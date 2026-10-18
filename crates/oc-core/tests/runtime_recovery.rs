@@ -269,7 +269,8 @@ fn messages_blocking(site: &Site, session_id: &str) -> Vec<(String, String)> {
 // ---------------------------------------------------------------------------
 
 use oc_core::jobs::{
-    BackgroundRecord, Recovery as JobRecovery, RestartDeps, RestartOptions, Status as JobStatus,    CONTINUE_AFTER_SERVER_RESTART, RESUME_EXHAUSTED_MESSAGE,
+    BackgroundRecord, Recovery as JobRecovery, RestartDeps, RestartOptions, Status as JobStatus,
+    CONTINUE_AFTER_SERVER_RESTART, RESUME_EXHAUSTED_MESSAGE,
 };
 use oc_core::session::store::{attempts, claims};
 
