@@ -29,7 +29,7 @@ use serde_json::{json, Value};
 use super::common::{
     decode_session_cursor, encode_session_cursor, json_data, message_row_to_info, no_content,
     now_ms, resolve_location, revert_error, session_location, session_row_to_info, ApiError,
-    CursorDirection, SessionAnchor, SessionCursor, SessionCursorScope, SharedState,
+    CursorDirection, ListOrderWire, SessionAnchor, SessionCursor, SessionCursorScope, SharedState,
 };
 
 /// The default page size (v2: 50).
@@ -203,6 +203,7 @@ pub(crate) async fn publish_session_event(
 // GET /api/session — list (cursor pagination, §3)
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_lines)] // one v2 handler chain (session.ts:63-96)
 async fn list(
     State(state): State<SharedState>,
     uri: Uri,
@@ -222,19 +223,8 @@ async fn list(
     // SSE-visible).
     let store = oc_core::session::store::SessionStore::new((*state.engine.db).clone());
 
-    let directory = query_field(&uri, "directory");
-    let project = query_field(&uri, "project");
-    let subpath = query_field(&uri, "subpath");
-    let search = query_field(&uri, "search");
-    let parent_id = query_field(&uri, "parentID");
-    let order_param = query_field(&uri, "order");
-    // Schema validation upstream (P10-E2) guarantees limit parses as a
-    // positive integer; the parse fallback only guards absurdly large
-    // JS-safe integers beyond i64 (v2 accepts them; the store clamps).
-    let limit = query_field(&uri, "limit")
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or(DEFAULT_LIMIT);
-
+    let directory_param = query_field(&uri, "directory");
+    let project_param = query_field(&uri, "project");
     let cursor_param = query_field(&uri, "cursor");
     let decoded_cursor = match &cursor_param {
         Some(encoded) => Some(
@@ -243,6 +233,42 @@ async fn list(
         ),
         None => None,
     };
+
+    // v2 session.ts:64-70 — a cursor REPLACES the query wholesale: every
+    // filter field (scope, subpath, search, order, parentID) is read back
+    // out of the token; only `limit` still comes from the request.
+    let (directory, project, subpath, search, parent_id, order_param) = match &decoded_cursor {
+        Some(cursor) => (
+            match &cursor.scope {
+                SessionCursorScope::Directory(directory) => Some(directory.clone()),
+                SessionCursorScope::Project(project) => Some(project.clone()),
+                SessionCursorScope::All => None,
+            },
+            match &cursor.scope {
+                SessionCursorScope::Project(project) => Some(project.clone()),
+                _ => None,
+            },
+            cursor.subpath.clone(),
+            cursor.search.clone(),
+            cursor.parent_id.clone(),
+            cursor.order.map(|order| order.as_str().to_owned()),
+        ),
+        None => (
+            directory_param,
+            project_param,
+            query_field(&uri, "subpath"),
+            query_field(&uri, "search"),
+            query_field(&uri, "parentID"),
+            query_field(&uri, "order"),
+        ),
+    };
+    // Schema validation upstream (P10-E2) guarantees limit parses as a
+    // positive integer; the parse fallback only guards absurdly large
+    // JS-safe integers beyond i64 (v2 accepts them; the store clamps).
+    let limit = query_field(&uri, "limit")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(DEFAULT_LIMIT);
+
     let anchor_direction = decoded_cursor
         .as_ref()
         .and_then(|cursor| cursor.anchor.as_ref())
@@ -250,9 +276,9 @@ async fn list(
     let input = ListInput {
         directory: directory.clone(),
         project: project.clone(),
-        subpath,
-        search,
-        limit: Some(limit + 1),
+        subpath: subpath.clone(),
+        search: search.clone(),
+        limit: Some(limit),
         order: Some(order_from_str(order_param.as_deref())),
         parent_id: match parent_id.as_deref() {
             Some("null" | "") => Some(None),
@@ -280,9 +306,10 @@ async fn list(
     if anchor_direction == CursorDirection::Previous {
         rows.reverse();
     }
-    let has_more = rows.len() as i64 > limit;
     rows.truncate(limit as usize);
 
+    // v2 session.ts:79-96 — the emitted token is the effective query
+    // (scope + preserved filters) plus the anchor.
     let scope = if let Some(directory) = &directory {
         SessionCursorScope::Directory(directory.clone())
     } else if let Some(project) = &project {
@@ -290,38 +317,52 @@ async fn list(
     } else {
         SessionCursorScope::All
     };
+    let token_query = SessionCursor {
+        scope,
+        subpath,
+        search,
+        order: order_param.as_deref().map(|order| match order {
+            "asc" => ListOrderWire::Asc,
+            _ => ListOrderWire::Desc,
+        }),
+        parent_id,
+        anchor: None,
+    };
 
-    let mut next = None;
-    let mut previous = None;
-    if has_more {
-        if let Some(last) = rows.last() {
-            next = encode_session_cursor(&SessionCursor {
-                scope: scope.clone(),
-                anchor: Some(SessionAnchor {
-                    id: last.id.clone(),
-                    time: last.time_updated,
-                    direction: CursorDirection::Next,
-                }),
-            });
-        }
-    }
-    if cursor_param.is_some() {
-        if let Some(first) = rows.first() {
-            previous = encode_session_cursor(&SessionCursor {
-                scope: scope.clone(),
-                anchor: Some(SessionAnchor {
-                    id: first.id.clone(),
-                    time: first.time_updated,
-                    direction: CursorDirection::Previous,
-                }),
-            });
-        }
-    }
+    // v2 emits previous/next from the first/last row of every non-empty
+    // page (no has-more gate); the keys are OMITTED when absent.
+    let previous = rows.first().map(|first| {
+        encode_session_cursor(&SessionCursor {
+            anchor: Some(SessionAnchor {
+                id: first.id.clone(),
+                time: first.time_updated,
+                direction: CursorDirection::Previous,
+            }),
+            ..token_query.clone()
+        })
+    });
+    let next = rows.last().map(|last| {
+        encode_session_cursor(&SessionCursor {
+            anchor: Some(SessionAnchor {
+                id: last.id.clone(),
+                time: last.time_updated,
+                direction: CursorDirection::Next,
+            }),
+            ..token_query.clone()
+        })
+    });
 
     let data: Vec<Value> = rows.iter().map(session_row_to_info).collect();
+    let mut cursor = serde_json::Map::new();
+    if let Some(previous) = previous.flatten() {
+        cursor.insert("previous".to_owned(), json!(previous));
+    }
+    if let Some(next) = next.flatten() {
+        cursor.insert("next".to_owned(), json!(next));
+    }
     Ok(axum::Json(json!({
         "data": data,
-        "cursor": { "previous": previous, "next": next },
+        "cursor": cursor,
     }))
     .into_response())
 }
@@ -1772,37 +1813,599 @@ async fn export(
 async fn stats(
     State(state): State<SharedState>,
     uri: Uri,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let _ = (
-        query_field(&uri, "from"),
-        query_field(&uri, "to"),
-        query_field(&uri, "timezone"),
-        query_field(&uri, "tools"),
-    );
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
-    let services = services(&state, &location).await?;
-    let sessions = services.store.list(ListInput::default()).await.map_err(|error| {
-        crate::errors::debug_cause("session:unknown_ref", &error);
-        ApiError::unknown_ref()
-    })?;
-    // Aggregate a minimal stats view (session count + usage totals);
-    // the binned activity/model breakdown is TODO(phase-9).
-    let mut input = 0i64;
-    let mut output = 0i64;
-    let mut reasoning = 0i64;
-    let mut cost = 0.0f64;
-    for row in &sessions {
-        input += row.tokens_input;
-        output += row.tokens_output;
-        reasoning += row.tokens_reasoning;
-        cost += row.cost;
+    // v2 session.ts:session.stats — SessionStats.get with from/to/project/
+    // timezone/tools; invalid range → 400 InvalidRequestError
+    // ("Stats range must end after it starts"), invalid tz → 400
+    // ("Invalid time zone: <tz>").
+    let timezone = query_field(&uri, "timezone").unwrap_or_else(|| "UTC".to_owned());
+    if !valid_timezone(&timezone) {
+        return Err(ApiError::invalid_request(format!("Invalid time zone: {timezone}")));
     }
-    Ok(json_data(json!({
-        "sessions": { "total": sessions.len() },
-        "tokens": { "input": input, "output": output, "reasoning": reasoning },
+    let number_field = |name: &str| -> Result<Option<i64>, ApiError> {
+        query_field(&uri, name)
+            .map(|value| {
+                value
+                    .parse::<i64>()
+                    .map_err(|_| ApiError::invalid_request(format!("invalid {name}: {value}")))
+            })
+            .transpose()
+    };
+    let from = number_field("from")?;
+    let to = number_field("to")?;
+    let project = query_field(&uri, "project");
+    let tools = query_field(&uri, "tools").unwrap_or_else(|| "summary".to_owned());
+    if !matches!(tools.as_str(), "none" | "summary" | "detail") {
+        return Err(ApiError::invalid_request(
+            "Expected \"none\" | \"summary\" | \"detail\"\n  at [\"tools\"]".to_owned(),
+        ));
+    }
+    let to = to.unwrap_or_else(|| i64::try_from(now_ms(&state)).unwrap_or_default());
+    if let Some(from) = from {
+        if from >= to {
+            return Err(ApiError::invalid_request("Stats range must end after it starts"));
+        }
+    }
+    let data = session_stats(&state, from, to, project.as_deref(), &timezone, &tools).await?;
+    Ok(json_data(data))
+}
+
+/// An IANA-shaped timezone identifier (the port buckets activity days in
+/// UTC — no tz database rides the server crate; non-UTC bucketing is a
+/// registered approximation, HTTP-H4 notes).
+fn valid_timezone(timezone: &str) -> bool {
+    if timezone.is_empty() || timezone == "UTC" {
+        return true;
+    }
+    let mut segments = 0;
+    for segment in timezone.split('/') {
+        segments += 1;
+        if segment.is_empty()
+            || !segment
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '+')
+        {
+            return false;
+        }
+    }
+    (2..=3).contains(&segments)
+}
+
+#[derive(Default)]
+struct StatsTokens {
+    input: i64,
+    output: i64,
+    reasoning: i64,
+    cache_read: i64,
+    cache_write: i64,
+}
+
+impl StatsTokens {
+    fn total(&self) -> i64 {
+        self.input + self.output + self.reasoning + self.cache_read + self.cache_write
+    }
+    fn merge(&mut self, other: &Self) {
+        self.input += other.input;
+        self.output += other.output;
+        self.reasoning += other.reasoning;
+        self.cache_read += other.cache_read;
+        self.cache_write += other.cache_write;
+    }
+    fn to_json(&self) -> Value {
+        json!({
+            "input": self.input,
+            "output": self.output,
+            "reasoning": self.reasoning,
+            "cache": { "read": self.cache_read, "write": self.cache_write },
+        })
+    }
+}
+
+/// One message-scan row (`message_stats_sql` columns, in order).
+type MessageStatRow = (
+    String,
+    Option<String>,
+    String,
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<f64>,
+);
+
+/// One model aggregate: (dedup key, provider, model id, variant, steps,
+/// tokens, cost).
+type ModelAggregate = (String, String, String, Option<String>, i64, StatsTokens, f64);
+
+/// `SessionStats.get` (core/src/session/stats.ts:85-422): aggregates
+/// user/assistant messages, tool reliability, and compaction usage events
+/// over `[from, to)` into the wire `SessionStats.Info`.
+#[allow(clippy::too_many_lines)] // one v2 Effect chain; splitting adds no clarity
+async fn session_stats(
+    state: &SharedState,
+    from: Option<i64>,
+    to: i64,
+    project: Option<&str>,
+    timezone: &str,
+    tool_mode: &str,
+) -> Result<Value, ApiError> {
+    let db = state.engine.db.clone();
+    let project = project.filter(|project| !project.is_empty()).map(str::to_owned);
+
+    // Default from: the earliest qualifying message (stats.ts:95-112).
+    let from = if let Some(from) = from {
+        from
+    } else {
+        let lookup = project.clone();
+        db.transaction(move |tx| {
+            let value = if let Some(project) = lookup {
+                tx.conn().query_row(
+                    "SELECT min(m.time_created) FROM session_message AS m \
+                     JOIN session_v2 AS s ON s.id = m.session_id \
+                     WHERE m.type IN ('user','assistant') AND m.time_created < ?1 \
+                     AND (s.fork_session_id IS NULL OR m.time_created >= s.time_created) \
+                     AND s.project_id = ?2",
+                    (to, project),
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+            } else {
+                tx.conn().query_row(
+                    "SELECT min(m.time_created) FROM session_message AS m \
+                     JOIN session_v2 AS s ON s.id = m.session_id \
+                     WHERE m.type IN ('user','assistant') AND m.time_created < ?1 \
+                     AND (s.fork_session_id IS NULL OR m.time_created >= s.time_created)",
+                    (to,),
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+            }
+            .unwrap_or(None);
+            Ok(value)
+        })
+        .await
+        .map_err(|error| {
+            crate::errors::debug_cause("stats:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?
+        .unwrap_or(to)
+    };
+
+    let mut sessions = std::collections::HashSet::new();
+    let mut subagents = std::collections::HashSet::new();
+    let mut prompts = 0i64;
+    let mut steps = 0i64;
+    let mut tokens = StatsTokens::default();
+    let mut cost = 0f64;
+    let mut activity: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    let mut models: Vec<ModelAggregate> = Vec::new();
+
+    let rows: Vec<MessageStatRow> = {
+        let project_filter = project.clone();
+        db.transaction(move |tx| {
+            let mut statement = tx.conn().prepare(&message_stats_sql(project_filter.is_some()))?;
+            let rows = if let Some(project) = project_filter {
+                statement
+                    .query_map((from, to, project), |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                            row.get(6)?,
+                            row.get(7)?,
+                            row.get(8)?,
+                            row.get(9)?,
+                            row.get(10)?,
+                            row.get(11)?,
+                            row.get(12)?,
+                        ))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?
+            } else {
+                statement
+                    .query_map((from, to), |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                            row.get(6)?,
+                            row.get(7)?,
+                            row.get(8)?,
+                            row.get(9)?,
+                            row.get(10)?,
+                            row.get(11)?,
+                            row.get(12)?,
+                        ))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            Ok(rows)
+        })
+        .await
+        .map_err(|error| {
+            crate::errors::debug_cause("stats:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?
+    };
+
+    for (
+        session,
+        parent,
+        type_,
+        time_created,
+        provider,
+        model_id,
+        variant,
+        input,
+        output,
+        reasoning,
+        cache_read,
+        cache_write,
+        row_cost,
+    ) in rows
+    {
+        match parent.as_deref() {
+            Some(_) => {
+                subagents.insert(session);
+            }
+            None => {
+                sessions.insert(session);
+            }
+        }
+        if type_ == "user" {
+            if parent.is_none() {
+                prompts += 1;
+            }
+            continue;
+        }
+        steps += 1;
+        let row_tokens = StatsTokens {
+            input: input.unwrap_or(0),
+            output: output.unwrap_or(0),
+            reasoning: reasoning.unwrap_or(0),
+            cache_read: cache_read.unwrap_or(0),
+            cache_write: cache_write.unwrap_or(0),
+        };
+        tokens.merge(&row_tokens);
+        cost += row_cost.unwrap_or(0.0);
+        let day = date_key(time_created, timezone);
+        *activity.entry(day).or_insert(0) += 1;
+        if let (Some(provider), Some(model_id)) = (provider, model_id) {
+            let key = format!("{provider}/{model_id}#{}", variant.clone().unwrap_or_default());
+            match models.iter_mut().find(|(existing, ..)| existing == &key) {
+                Some(entry) => {
+                    entry.4 += 1;
+                    entry.6 += row_cost.unwrap_or(0.0);
+                    entry.5.merge(&row_tokens);
+                }
+                None => models.push((
+                    key,
+                    provider,
+                    model_id,
+                    variant,
+                    1,
+                    row_tokens,
+                    row_cost.unwrap_or(0.0),
+                )),
+            }
+        }
+    }
+
+    // Tool reliability from assistant tool parts (stats.ts:200-280).
+    let mut tool_totals = (0i64, 0i64, 0i64, 0i64); // calls, succeeded, failed, unfinished
+    let mut tools: Vec<(String, i64, i64, i64, i64, Vec<f64>)> = Vec::new();
+    if tool_mode != "none" {
+        let rows: Vec<(Option<String>, Option<String>, Option<f64>)> = {
+            let project_filter = project.clone();
+            db.transaction(move |tx| {
+                let mut statement = tx.conn().prepare(&tool_stats_sql(project_filter.is_some()))?;
+                let rows = if let Some(project) = project_filter {
+                    statement
+                        .query_map((from, to, project), |row| {
+                            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                        })?
+                        .collect::<Result<Vec<_>, _>>()?
+                } else {
+                    statement
+                        .query_map((from, to), |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                        .collect::<Result<Vec<_>, _>>()?
+                };
+                Ok(rows)
+            })
+            .await
+            .map_err(|error| {
+                crate::errors::debug_cause("stats:unknown_ref", &error);
+                ApiError::unknown_ref()
+            })?
+        };
+        for (name, status, duration) in rows {
+            let tally = |totals: &mut (i64, i64, i64, i64), status: &Option<String>| match status
+                .as_deref()
+            {
+                Some("completed") => {
+                    totals.0 += 1;
+                    totals.1 += 1;
+                }
+                Some("error") => {
+                    totals.0 += 1;
+                    totals.2 += 1;
+                }
+                _ => {
+                    totals.0 += 1;
+                    totals.3 += 1;
+                }
+            };
+            tally(&mut tool_totals, &status);
+            let Some(name) = name else { continue };
+            let (calls, succeeded, failed, unfinished) = {
+                let mut wrapped = (0, 0, 0, 0);
+                tally(&mut wrapped, &status);
+                wrapped
+            };
+            match tools.iter_mut().find(|(existing, ..)| existing == &name) {
+                Some(entry) => {
+                    entry.1 += calls;
+                    entry.2 += succeeded;
+                    entry.3 += failed;
+                    entry.4 += unfinished;
+                    if let Some(duration) = duration {
+                        entry.5.push(duration);
+                    }
+                }
+                None => tools.push((
+                    name,
+                    calls,
+                    succeeded,
+                    failed,
+                    unfinished,
+                    duration.into_iter().collect(),
+                )),
+            }
+        }
+    }
+
+    // Compaction usage events (stats.ts:286-319): billed usage the
+    // message rows do not carry.
+    let versioned = registry::by_type_latest("session.usage.recorded")
+        .and_then(oc_core::bus::registry::EventDefinition::versioned_type)
+        .unwrap_or_else(|| "session.usage.recorded.1".to_owned());
+    let events: Vec<String> = {
+        let versioned = versioned.clone();
+        let project_filter = project.clone();
+        db.transaction(move |tx| {
+            let mut statement =
+                tx.conn().prepare(&compaction_events_sql(project_filter.is_some()))?;
+            let rows = if let Some(project) = project_filter {
+                statement
+                    .query_map((versioned, from, to, project), |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?
+            } else {
+                statement
+                    .query_map((versioned, from, to), |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            Ok(rows)
+        })
+        .await
+        .unwrap_or_default()
+    };
+    for event in events {
+        let Ok(data) = serde_json::from_str::<Value>(&event) else { continue };
+        let usage = StatsTokens {
+            input: data["tokens"]["input"].as_i64().unwrap_or(0),
+            output: data["tokens"]["output"].as_i64().unwrap_or(0),
+            reasoning: data["tokens"]["reasoning"].as_i64().unwrap_or(0),
+            cache_read: data["tokens"]["cache"]["read"].as_i64().unwrap_or(0),
+            cache_write: data["tokens"]["cache"]["write"].as_i64().unwrap_or(0),
+        };
+        tokens.merge(&usage);
+        cost += data["cost"].as_f64().unwrap_or(0.0);
+    }
+
+    // Output shaping (stats.ts:325-360).
+    let days: Vec<(String, i64)> = activity.into_iter().collect();
+    let streak = longest_streak(&days);
+    let mut sorted_models = models;
+    sorted_models.sort_by_key(|model| std::cmp::Reverse(model.5.total()));
+    let models_json: Vec<Value> = sorted_models
+        .into_iter()
+        .map(|(_, provider, model_id, variant, steps, tokens, cost)| {
+            let mut model = json!({ "providerID": provider, "id": model_id });
+            if let Some(variant) = variant {
+                model["variant"] = json!(variant);
+            }
+            json!({
+                "model": model,
+                "steps": steps,
+                "tokens": tokens.to_json(),
+                "cost": cost,
+            })
+        })
+        .collect();
+    let tools_json = match tool_mode {
+        "none" => json!({ "mode": "none" }),
+        "summary" => json!({
+            "mode": "summary",
+            "totals": {
+                "calls": tool_totals.0,
+                "succeeded": tool_totals.1,
+                "failed": tool_totals.2,
+                "unfinished": tool_totals.3,
+            },
+        }),
+        _ => {
+            let mut sorted = tools;
+            sorted.sort_by_key(|tool| std::cmp::Reverse(tool.1));
+            json!({
+                "mode": "detail",
+                "totals": {
+                    "calls": tool_totals.0,
+                    "succeeded": tool_totals.1,
+                    "failed": tool_totals.2,
+                    "unfinished": tool_totals.3,
+                },
+                "usage": sorted
+                    .into_iter()
+                    .map(|(name, calls, succeeded, failed, unfinished, durations)| {
+                        let mut entry = json!({
+                            "name": name,
+                            "calls": calls,
+                            "succeeded": succeeded,
+                            "failed": failed,
+                            "unfinished": unfinished,
+                        });
+                        if let Some(median) = median(&durations) {
+                            entry["durationP50"] = json!(median);
+                        }
+                        entry
+                    })
+                    .collect::<Vec<Value>>(),
+            })
+        }
+    };
+    Ok(json!({
+        "range": { "from": from, "to": to },
+        "sessions": sessions.len(),
+        "subagents": subagents.len(),
+        "prompts": prompts,
+        "steps": steps,
+        "tokens": tokens.to_json(),
         "cost": cost,
-    })))
+        "tools": tools_json,
+        "activeDays": days.len(),
+        "streak": streak,
+        "activity": days
+            .into_iter()
+            .map(|(date, steps)| json!({ "date": date, "steps": steps }))
+            .collect::<Vec<Value>>(),
+        "models": models_json,
+    }))
+}
+
+/// The message-scan SQL (stats.ts:128-155) with the optional project
+/// filter as `?3`.
+fn message_stats_sql(projected: bool) -> String {
+    format!(
+        "SELECT m.session_id, s.parent_id, m.type, m.time_created, \
+         json_extract(m.data, '$.model.providerID'), \
+         json_extract(m.data, '$.model.id'), \
+         json_extract(m.data, '$.model.variant'), \
+         json_extract(m.data, '$.tokens.input'), \
+         json_extract(m.data, '$.tokens.output'), \
+         json_extract(m.data, '$.tokens.reasoning'), \
+         json_extract(m.data, '$.tokens.cache.read'), \
+         json_extract(m.data, '$.tokens.cache.write'), \
+         json_extract(m.data, '$.cost') \
+         FROM session_message AS m JOIN session_v2 AS s ON s.id = m.session_id \
+         WHERE m.type IN ('user','assistant') AND m.time_created >= ?1 \
+         AND m.time_created < ?2 \
+         AND (s.fork_session_id IS NULL OR m.time_created >= s.time_created) {}",
+        if projected { "AND s.project_id = ?3" } else { "" }
+    )
+}
+
+/// The assistant tool-part scan (stats.ts:203-266 / 268-280) with the
+/// optional project filter as `?3`.
+fn tool_stats_sql(projected: bool) -> String {
+    format!(
+        "SELECT json_extract(c.value, '$.name'), \
+         json_extract(c.value, '$.state.status'), \
+         CASE WHEN json_extract(c.value, '$.time.completed') IS NULL THEN NULL \
+         ELSE json_extract(c.value, '$.time.completed') - coalesce( \
+           json_extract(c.value, '$.time.ran'), \
+           json_extract(c.value, '$.time.created')) END \
+         FROM session_message AS m JOIN session_v2 AS s ON s.id = m.session_id, \
+         json_each(m.data, '$.content') AS c \
+         WHERE m.type = 'assistant' AND m.time_created >= ?1 \
+         AND m.time_created < ?2 \
+         AND (s.fork_session_id IS NULL OR m.time_created >= s.time_created) \
+         AND json_extract(c.value, '$.type') = 'tool' {}",
+        if projected { "AND s.project_id = ?3" } else { "" }
+    )
+}
+
+/// The compaction usage-event scan (stats.ts:286-319) with the optional
+/// project filter as `?4`.
+fn compaction_events_sql(projected: bool) -> String {
+    format!(
+        "SELECT e.data FROM event AS e WHERE e.type = ?1 \
+         AND json_extract(e.data, '$.source') = 'compaction' \
+         AND e.created >= ?2 AND e.created < ?3 AND e.aggregate_id IN \
+         (SELECT id FROM session_v2 {})",
+        if projected { "WHERE project_id = ?4" } else { "" }
+    )
+}
+
+/// UTC day bucket `YYYY-MM-DD` for an epoch-ms timestamp. Non-UTC
+/// timezones bucket in UTC (registered approximation; see HTTP-H4).
+fn date_key(time: i64, _timezone: &str) -> String {
+    let days = time.div_euclid(86_400_000);
+    // Civil-from-days (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Consecutive-day streak (stats.ts:393-405).
+fn longest_streak(days: &[(String, i64)]) -> i64 {
+    let mut longest = 0i64;
+    let mut current = 0i64;
+    for (index, (day, _)) in days.iter().enumerate() {
+        current = match index.checked_sub(1).map(|previous| &days[previous].0) {
+            Some(previous) if day_ordinal(day).saturating_sub(day_ordinal(previous)) == 1 => {
+                current + 1
+            }
+            _ => 1,
+        };
+        longest = longest.max(current);
+    }
+    longest
+}
+
+fn day_ordinal(date: &str) -> i64 {
+    let Some((year, rest)) = date.split_once('-') else { return 0 };
+    let Some((month, day)) = rest.split_once('-') else { return 0 };
+    let (Ok(year), Ok(month), Ok(day)) =
+        (year.parse::<i64>(), month.parse::<i64>(), day.parse::<i64>())
+    else {
+        return 0;
+    };
+    // Days since 1970-01-01 (civil-from-days inverse approximation).
+    let (year, month) = if month <= 2 { (year - 1, month + 12) } else { (year, month) };
+    365 * year + year / 4 - year / 100 + year / 400 + (153 * month - 457) / 5 + day - 306
+}
+
+/// Median (stats.ts:418-423): None for an empty sample.
+fn median(values: &[f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).expect("finite durations"));
+    let middle = sorted.len() / 2;
+    Some(if sorted.len().is_multiple_of(2) {
+        f64::midpoint(sorted[middle - 1], sorted[middle])
+    } else {
+        sorted[middle]
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -131,10 +131,12 @@ async fn resource_catalog(
         .templates
         .iter()
         .map(|template| {
+            // v2 schema `Mcp.ResourceTemplate` names the key `uriTemplate`
+            // (schema/src/mcp.ts:109-115) — never `uri`.
             json!({
                 "server": template.server,
                 "name": template.name,
-                "uri": template.uri_template,
+                "uriTemplate": template.uri_template,
                 "description": template.description,
                 "mimeType": template.mime_type,
             })
