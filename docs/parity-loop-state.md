@@ -3,7 +3,7 @@
 > Orchestrator scratch state for the parity loop (docs/PARITY-LOOP.md).
 > Updated at the end of every iteration. Not a task queue — the ledger is.
 
-- **updated**: 2026-10-18 (iteration 1 — B0-1/B0-8/B0-2 merged; next: B0-4 guards)
+- **updated**: 2026-10-18 (iteration 1 — B0-1/B0-2/B0-5/B0-8 merged; B0-4 guards lane in flight)
 - **batch**: 0 — NOT exited (B0-1..B0-9 pending/in progress; no product bug fixes allowed)
 - **iteration**: 1
 - **baseline**: main @ eb4023d (pre-bootstrap) → bootstrap commit adds PARITY-LOOP.md / ledger seed / ledger tool / this file
@@ -48,7 +48,7 @@ WIP: 0 active lanes.
 - [x] B0-8 Gate 0 双端环境 — **DONE** (merged @729725d; OC_GATE_STRICT fail-not-skip live; lane bun discovery works; ref/rust boot evidence recorded)
 - [x] B0-2 基线 — **DONE**: `docs/parity-baseline.md` @fe2a97d; five gate skeletons + known-red registry + known-red-summary.py merged @3eea5fa (lane f7b44f4, verifier PASS incl. adversarial script tests); post-merge: default suite 103/14 skip, strict battery verdict **clean** (3 KNOWN-RED registered, 1 MISSING-PREREQ by design, 0 NEW-RED, exit 0); +4 gate-gap divergence entries (GATE-GAP-CURSOR-PAGE/TUI-FOOTER/CLI-JSON-EPOCH/RUN-JSON-EVENTS) → ledger 376 rows. Polish nits (non-blocking, recorded): stale comment p10_db_interop.rs:~637 "panics"→Err; README lacks OPENCODE_RG_PATH note; baseline §3 Gate-4 row understates certified chrome rows.
 - [ ] B0-4 静态守卫 tools/guards/*（目录尚不存在，需从零建）
-- [ ] B0-5 ADR 0001–0005
+- [x] B0-5 ADR 0001–0005 — **DONE** (merged @cc092d9; verifier PASS, 44/44 citations verified; 3 OPEN questions recorded: 0002 miniaudio-vs-system-player ruling, 0004 README scope staleness at release, 0001 KV persistence → C2)
 - [ ] B0-7 测试隔离债（legacy pkill 脚本登记、root-owned auth_e2e.rs、8080 skip 语义）
 - [ ] B0-9 live fixture 窗口 — **需要用户决策**（endpoint/credential sandbox + 时段）；其余 Batch 0 完成后集中询问
 
