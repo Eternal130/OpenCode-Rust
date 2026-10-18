@@ -101,7 +101,18 @@
 - **Step-cap semantics = ref**: cap applies only when `agent.steps` is set (ours drain.rs:541 ↔ ref llm.ts:223 identical); a tool-looping model with steps unset loops unbounded on BOTH (my instrument's 241-loop reproduces ref semantics — I6/I9: instrument artifact, not a divergence; recorded because quota-burn is a real shared property, dispositioned ref-equal).
 - LOW-note: subagent child sessions get empty titles (`title: ''` in DB); ref derives child titles from the prompt (title.ts) — carried to a UI lane if visible.
 
-*(execution continues — second tier: C2/C3/C5/C9/C13/C15/C16/C20/D2/D3/D4)*
+### CD-20 (MED-HIGH) — C2: 21 ref commands declared in the keymap table with NO dispatcher arm (silent dead keybinds)
+- **Evidence (mechanical census)**: `oc-tui-core/src/keymap/table.rs` declares each with its binding; `command_palette.rs` dispatcher (76 arms) + full-tree grep find NO handler: `session.parent, session.pin.toggle, session.copy, session.unshare, session.toggle.scrollbar, session.toggle.thinking, model.dialog.favorite, app.toggle.animations, app.toggle.diffwrap, permission.prompt.fullscreen, plugins.toggle, prompt.images.view, terminal.suspend, terminal.title.toggle, prompt.stash, prompt.stash.list, prompt.stash.pop, stash.delete` (+ CD-3's 4 `session.message.*`). Census table: `keymap-table=1 dispatcher=0` ×17 rows + message-nav rows (`/tmp/opencode/scancd/c2/` outputs inline in log).
+- **Adjudication**: `prompt.history.next/previous` also dispatcher-dead BUT the feature exists composer-internally (PromptHistory with draft-stash, composer/mod.rs:132-181) — cosmetic only. The rest have NO feature substitute (grep-verified): family-up navigation, tab pinning, scrollbar/thinking toggles, animations/diffwrap toggles, permission fullscreen, plugins toggle, image viewer, terminal suspend/title, **the whole persistent prompt-stash family** (ref `prompt/stash.tsx` + `dialog-stash.tsx`; ours has only the in-composer draft stash — also a C16 cell), model-dialog favorite.
+- **I6**: the keymap parity test guards TABLE parity only — it masks the missing actions (fixture-happy guard class).
+
+### CD-21 (INFO) — C2 verified-parity rows
+- Dialog graph: 29 DialogKind variants, ZERO unreachable (all referenced; mechanical comm of defined vs used).
+- Tabs: session.tab.{close,next,previous,reopen,history.back,history.forward,previous_unread} all dispatched ✓; picker family (session.list/model.list/agent.list/command.palette) ✓; session.child.first handled in app.rs ✓ (session.parent dead per CD-20).
+- Grouping/tree: `session.grouping` state persisted (store.rs:1723), `session.toggle.exploration_grouping` dispatched ✓, group-view row rendering ported (components/session.rs citing group-view.tsx lines).
+
+*(next: C3)*
+*(execution continues — second tier: C3/C5/C9/C13/C15/C16/C20/D2/D3/D4)*
 
 
 
