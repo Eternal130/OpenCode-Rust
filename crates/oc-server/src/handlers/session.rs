@@ -573,15 +573,14 @@ async fn prompt(
         .await
         .map_err(|error| inbox_error(&error, &message_id))?;
 
+    // CD-1 (scan-cd): v2's `Session.prompt` registers the work with a
+    // fire-and-forget `execution.wake` (`session.ts:174` — scope
+    // defaults to "input", `run-coordinator.ts:136`) and the HTTP
+    // response returns the Inbox info immediately; joining the run
+    // (the old `resume().await`) let a slow provider stall the
+    // response for the whole stream.
     if body["resume"].as_bool().unwrap_or(true) {
-        services
-            .execution
-            .resume(&session_id)
-            .await
-            .map_err(|error| {
-                run_error(error).err();
-            })
-            .ok();
+        services.execution.wake(&session_id, oc_core::session::Promotable::Input);
     }
     Ok(json_data(inbox_info_json(&info)))
 }
@@ -595,7 +594,7 @@ async fn synthetic(
     Path(session_id): Path<String>,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let (services, _) = session_services(&state, &session_id).await?;
+    let (services, row) = session_services(&state, &session_id).await?;
     let message_id = body["id"].as_str().map_or_else(|| state.ids.new_id("msg"), String::from);
     let delivery = match body["delivery"].as_str() {
         Some("queue") => Delivery::Queue,
@@ -611,15 +610,11 @@ async fn synthetic(
         .admit(&message_id, &session_id, Item::Synthetic { payload, delivery })
         .await
         .map_err(|error| inbox_error(&error, &message_id))?;
-    if body["resume"].as_bool().unwrap_or(true) {
-        services
-            .execution
-            .resume(&session_id)
-            .await
-            .map_err(|error| {
-                run_error(error).err();
-            })
-            .ok();
+    // CD-1: same wake-not-join semantics as prompt (ref `session.ts:310`
+    // — synthetic wakes unless `resume: false` or a staged revert is
+    // pending).
+    if body["resume"].as_bool().unwrap_or(true) && row.revert.is_none() {
+        services.execution.wake(&session_id, oc_core::session::Promotable::Input);
     }
     Ok(json_data(inbox_info_json(&info)))
 }
@@ -667,14 +662,9 @@ async fn compact(
             _ => ApiError::unknown_ref(),
         },
     )?;
-    services
-        .execution
-        .resume(&session_id)
-        .await
-        .map_err(|error| {
-            run_error(error).err();
-        })
-        .ok();
+    // CD-1: compact wakes unconditionally (ref `session.ts:262` — no
+    // resume option on this path).
+    services.execution.wake(&session_id, oc_core::session::Promotable::Input);
     Ok(json_data(inbox_info_json(&info)))
 }
 
@@ -730,14 +720,8 @@ async fn move_session(
         )
         .await
         .map_err(|error| inbox_error(&error, &message_id))?;
-    services
-        .execution
-        .resume(&session_id)
-        .await
-        .map_err(|error| {
-            run_error(error).err();
-        })
-        .ok();
+    // CD-1: move wakes the queued relocation (ref `move.ts:157`).
+    services.execution.wake(&session_id, oc_core::session::Promotable::Input);
     Ok(no_content())
 }
 
@@ -898,16 +882,181 @@ async fn fork(
 // POST /:id/command — 204; NotFound 404 / Execution 500 (§3)
 // ---------------------------------------------------------------------------
 
+// POST /:id/command — v2 `session.command`: dispatch a registered
+// command (config/markdown template semantics, or a plugin guest call).
 async fn command(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let _ = session_services(&state, &session_id).await?;
+    let (services, row) = session_services(&state, &session_id).await?;
     let name = body["name"].as_str().unwrap_or_default();
-    // Commands are plugin-registered (phase-9 plugin host); none are
-    // registered in this build → the documented 404.
-    Err(ApiError::command_not_found(name))
+    let text = body["text"].as_str().unwrap_or_default().to_owned();
+    let Some(registration) = services.commands.get(name) else {
+        return Err(ApiError::command_not_found(name));
+    };
+
+    let delivery = match body["delivery"].as_str() {
+        Some("queue") => Delivery::Queue,
+        _ => Delivery::Steer,
+    };
+    let input_files: Option<Vec<oc_schema::prompt::InputFileAttachment>> = typed_value(&body, "files");
+    let files = super::attachment::materialize_files(input_files.as_deref())
+        .map_err(|error| ApiError::invalid_request(error.to_string()))?;
+
+    match registration.source {
+        oc_core::engine::commands::CommandSource::Plugin => {
+            // Guest dispatch: the host's `command.execute` runs the
+            // plugin's registered closure (its ctx.session.prompt routes
+            // back through the engine port).
+            let Some(boot) = state.plugins.as_ref() else {
+                return Err(ApiError::command_execution(name, "plugin subsystem disabled"));
+            };
+            boot.host
+                .execute_command_in_session(
+                    name,
+                    Some(text.as_str()),
+                    &session_id,
+                    std::time::Duration::from_secs(30),
+                )
+                .map_err(|error| ApiError::command_execution(name, error))?;
+            Ok(no_content())
+        }
+        oc_core::engine::commands::CommandSource::Config(command) => {
+            // Template semantics (ref ConfigCommandPlugin.execute):
+            // placeholders, then agent/model selection, then the
+            // subagent-vs-prompt fork.
+            let expanded = oc_core::config::command_md::evaluate_template(&command.template, &text);
+            let agent = command.agent.clone();
+            let subagent = command.subagent.or(command.subtask).unwrap_or(false)
+                || agent.as_deref().is_some_and(|id| {
+                    services
+                        .graph
+                        .agents
+                        .get(&oc_schema::id::AgentId(id.to_owned()))
+                        .is_some_and(|info| info.mode == oc_schema::agent::Mode::Subagent)
+                });
+
+            if subagent {
+                // Spawn a child session under this parent (title =
+                // description ?? name; agent/model inherited per the
+                // command), prompt it with the subagent prefix, and ride
+                // the subagent-job machinery for completion delivery.
+                let selected_agent =
+                    agent.clone().unwrap_or_else(|| row.agent.clone().unwrap_or_default());
+                let location = services.graph.location.clone();
+                let child_id = state.ids.new_id("ses");
+                let input = CreateInput {
+                    id: Some(parse_session_id(&child_id)),
+                    parent_id: Some(parse_session_id(&session_id)),
+                    location: Some(oc_schema::location::Ref {
+                        directory: oc_schema::common::AbsolutePath(
+                            location.as_path().to_string_lossy().into_owned(),
+                        ),
+                        workspace_id: None,
+                    }),
+                    title: Some(command.description.clone().unwrap_or_else(|| name.to_owned())),
+                    agent: Some(selected_agent.clone()),
+                    model: command.model.map(|model| oc_schema::model::Ref {
+                        provider_id: model.provider_id,
+                        id: model.model,
+                        variant: model.variant,
+                    }),
+                    metadata: None,
+                    permissions: None,
+                    project: Some(ResolvedProject {
+                        id: services.project.id.clone(),
+                        directory: services.project.canonical.to_string_lossy().into_owned(),
+                    }),
+                    version: state.version.clone(),
+                };
+                let child = state.engine.create_session(&location, input).await.map_err(
+                    |error| {
+                        crate::errors::debug_cause("session:unknown_ref", &error);
+                        ApiError::unknown_ref()
+                    },
+                )?;
+                let message_id = state.ids.new_id("msg");
+                let payload = oc_schema::session_inbox::UserPayload {
+                    text: format!("{}\n{}", oc_core::subagent::FIRST_PROMPT_PREFIX, expanded),
+                    files,
+                    agents: typed_value(&body, "agents"),
+                    skills: typed_value(&body, "skills"),
+                    metadata: record_value(&body, "metadata"),
+                };
+                services
+                    .inbox
+                    .admit(
+                        &message_id,
+                        child.id.as_str(),
+                        Item::User { payload, delivery: Delivery::Steer },
+                    )
+                    .await
+                    .map_err(|error| inbox_error(&error, &message_id))?;
+                let recovery = oc_core::subagent::SubagentRecovery {
+                    parent_session_id: parse_session_id(&session_id),
+                    child_session_id: parse_session_id(&child.id),
+                    agent: selected_agent,
+                    description: command.description.clone().unwrap_or_else(|| name.to_owned()),
+                };
+                services.subagents.start(&recovery).await;
+                services.subagents.background(&recovery).await;
+                return Ok(no_content());
+            }
+
+            // Same-session path: agent/model switches, then the prompt.
+            if let Some(agent) = &agent {
+                if row.agent.as_deref() != Some(agent.as_str()) {
+                    if services
+                        .graph
+                        .agents
+                        .get(&oc_schema::id::AgentId(agent.to_owned()))
+                        .is_none()
+                    {
+                        return Err(ApiError::agent_not_found(agent));
+                    }
+                    publish_session_event(
+                        &services,
+                        "session.agent.selected",
+                        json!({ "sessionID": session_id, "agent": agent }),
+                    )
+                    .await?;
+                }
+            }
+            if let Some(model) = &command.model {
+                let model = oc_schema::model::Ref {
+                    provider_id: model.provider_id.clone(),
+                    id: model.model.clone(),
+                    variant: model.variant.clone(),
+                };
+                publish_session_event(
+                    &services,
+                    "session.model.selected",
+                    json!({
+                        "sessionID": session_id,
+                        "model": serde_json::to_value(&model).unwrap_or_default()
+                    }),
+                )
+                .await?;
+            }
+            let message_id = state.ids.new_id("msg");
+            let payload = oc_schema::session_inbox::UserPayload {
+                text: expanded,
+                files,
+                agents: typed_value(&body, "agents"),
+                skills: typed_value(&body, "skills"),
+                metadata: record_value(&body, "metadata"),
+            };
+            services
+                .inbox
+                .admit(&message_id, &session_id, Item::User { payload, delivery })
+                .await
+                .map_err(|error| inbox_error(&error, &message_id))?;
+            // CD-1 family: fire-and-forget wake, never a run join.
+            services.execution.wake(&session_id, oc_core::session::Promotable::Input);
+            Ok(no_content())
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1480,14 +1629,17 @@ async fn skill(
         .await
         .map_err(|error| inbox_error(&error, &message_id))?;
     if body["resume"].as_bool().unwrap_or(true) {
-        services
-            .execution
-            .resume(&session_id)
-            .await
-            .map_err(|error| {
-                run_error(error).err();
-            })
-            .ok();
+        // CD-1: the skill path is the one resume-join in the family, but
+        // v2 FORKS it off the request fiber (ref `session.ts:241-244`:
+        // `resume` piped through `Effect.forkIn`) — the HTTP response
+        // never waits on run settlement.
+        let services = std::sync::Arc::clone(&services);
+        let session_id = session_id.clone();
+        tokio::spawn(async move {
+            if let Err(error) = services.execution.resume(&session_id).await {
+                let _ = run_error(error);
+            }
+        });
     }
     Ok(no_content())
 }

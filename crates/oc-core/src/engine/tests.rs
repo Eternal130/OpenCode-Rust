@@ -1449,3 +1449,85 @@ async fn engine_boot_opens_the_channel_suffixed_database() {
         drop(engine);
     }
 }
+
+// ===========================================================================
+// CD-13 (scan-cd): the global AGENTS.md reads from the SHARED v2 global
+// config dir (`.config/opencode`), with the suffixed `opencode-rust`
+// dir as a one-generation back-compat read when the v2 file is absent.
+// ===========================================================================
+
+/// Asserts the instruction ledger paths of one settled prompt.
+async fn instruction_ledger_paths(engine: &Engine, session_id: &SessionId) -> Vec<String> {
+    let events = wait_for_events(engine, session_id, |events| {
+        events.iter().any(|(type_, _, _)| type_ == "session.synthetic")
+    })
+    .await;
+    events
+        .iter()
+        .filter(|(type_, _, _)| type_ == "session.synthetic")
+        .flat_map(|(_, _, data)| {
+            data["metadata"]["instruction"]["paths"].as_array().cloned().unwrap_or_default()
+        })
+        .filter_map(|path| path.as_str().map(String::from))
+        .collect()
+}
+
+#[tokio::test]
+async fn engine_e2e_global_agents_md_prefers_the_v2_config_dir() {
+    let llm = TestLlm::new();
+    llm.push([parity_text_response("Done.", 1.0, 1.0)]);
+    let (engine, dir, location) = engine_with(llm).await;
+    // The synthetic v2-layout home: global instructions at the DOCUMENTED
+    // location (`.config/opencode`) AND at our old suffixed dir — the
+    // v2 file must win (the suffixed read is back-compat only).
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join(".config").join("opencode")).expect("v2 dir");
+    std::fs::create_dir_all(home.join(".config").join("opencode-rust")).expect("suffixed dir");
+    std::fs::write(home.join(".config").join("opencode").join("AGENTS.md"), "V2 global guidance.")
+        .expect("v2 agents");
+    std::fs::write(
+        home.join(".config").join("opencode-rust").join("AGENTS.md"),
+        "Suffixed guidance.",
+    )
+    .expect("suffixed agents");
+
+    engine.location(location.clone()).await.expect("assemble");
+    let session_id = create_titled_session(&engine, &location, "ses_cd13_v2").await;
+    engine.prompt(&location, &session_id, "msg_user_1", "hello").await.expect("prompt exit");
+    let paths = instruction_ledger_paths(&engine, &session_id).await;
+    let v2 = home.join(".config").join("opencode").join("AGENTS.md");
+    let suffixed = home.join(".config").join("opencode-rust").join("AGENTS.md");
+    assert!(
+        paths.contains(&v2.to_string_lossy().into_owned()),
+        "the v2 global file is read: {paths:?}"
+    );
+    assert!(
+        !paths.contains(&suffixed.to_string_lossy().into_owned()),
+        "the suffixed dir loses when both exist: {paths:?}"
+    );
+}
+
+#[tokio::test]
+async fn engine_e2e_global_agents_md_backcompat_reads_the_suffixed_dir() {
+    let llm = TestLlm::new();
+    llm.push([parity_text_response("Done.", 1.0, 1.0)]);
+    let (engine, dir, location) = engine_with(llm).await;
+    // Only the old suffixed file exists — it must still be read.
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join(".config").join("opencode-rust")).expect("suffixed dir");
+    std::fs::write(
+        home.join(".config").join("opencode-rust").join("AGENTS.md"),
+        "Suffixed guidance.",
+    )
+    .expect("suffixed agents");
+
+    engine.location(location.clone()).await.expect("assemble");
+    let session_id = create_titled_session(&engine, &location, "ses_cd13_compat").await;
+    engine.prompt(&location, &session_id, "msg_user_1", "hello").await.expect("prompt exit");
+    let paths = instruction_ledger_paths(&engine, &session_id).await;
+    let suffixed = home.join(".config").join("opencode-rust").join("AGENTS.md");
+    assert!(
+        paths.contains(&suffixed.to_string_lossy().into_owned()),
+        "back-compat: the suffixed-only install keeps its global instructions: {paths:?}"
+    );
+}

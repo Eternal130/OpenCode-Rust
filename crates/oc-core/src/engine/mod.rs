@@ -88,6 +88,7 @@
     clippy::question_mark // the early-return shape mirrors the TS branch
 )]
 
+pub mod commands;
 pub mod instructions;
 pub mod resolver;
 pub mod skills;
@@ -751,6 +752,10 @@ impl Engine {
         ));
         let skills =
             Arc::new(skills::ConfigSkillTable::discover(&loaded, location.as_path(), &self.home));
+        // The command table (CD-12/CD-34): config `commands` maps +
+        // `{command,commands}/**/*.md` discovery; plugin registrations
+        // apply below through the location plugin seam.
+        let commands = Arc::new(commands::CommandTable::discover(&loaded));
 
         // The bundle's background-task shutdown: `invalidate` rings it
         // (and the sender's drop fires it on an assemble error path), so
@@ -851,8 +856,12 @@ impl Engine {
         // plugin tools (code-mode-eligible ones hide behind `execute`
         // exactly like MCP tools).
         if let Some(source) = &self.plugin_source {
-            let applied =
-                crate::plugin_apply::apply_location_plugins(source.as_ref(), &agents, &tools);
+            let applied = crate::plugin_apply::apply_location_plugins(
+                source.as_ref(),
+                &agents,
+                &tools,
+                Some(&commands),
+            );
             let _ = applied; // diagnostics only (boot-trace reads the registry)
         }
 
@@ -881,14 +890,31 @@ impl Engine {
                 let discovery_project = worktree.clone();
                 let discovery_home = self.home.clone();
                 Arc::new(move || {
+                    // CD-13 (scan-cd): the global AGENTS.md lives in the
+                    // SHARED v2 global config dir (`{home}/.config/opencode`)
+                    // — the same dir every other config consumer reads
+                    // (boot.rs, handlers/config.rs, the Loader's GlobalDirs;
+                    // ref `config/plugin/instruction.ts:38` =
+                    // `{global.config}/AGENTS.md`). The suffixed
+                    // `opencode-rust` dir is a one-generation back-compat
+                    // read: consulted only when the v2 file is absent, so
+                    // an install that only ever wrote the old path keeps
+                    // its global instructions while the v2 file always
+                    // wins when both exist.
+                    let v2_global_file = discovery_home.join(".config").join("opencode").join("AGENTS.md");
+                    let global_file = if v2_global_file.is_file() {
+                        v2_global_file
+                    } else {
+                        discovery_home
+                            .join(".config")
+                            .join(oc_util::global_roots::APP_NAME)
+                            .join("AGENTS.md")
+                    };
                     let scope = crate::config::instruction::Scope {
                         start: &discovery_location,
                         home: &discovery_home,
                         project_root: Some(discovery_project.as_path()),
-                        global_file: &discovery_home
-                            .join(".config")
-                            .join(oc_util::global_roots::APP_NAME)
-                            .join("AGENTS.md"),
+                        global_file: &global_file,
                     };
                     match crate::config::instruction::discover(
                         &scope,
@@ -1022,12 +1048,14 @@ impl Engine {
             session_env,
             mcp,
             skills,
+            commands,
             instructions,
             snapshot,
             store,
             inbox,
             execution,
             runner,
+            subagents,
             resolver,
             websearch,
         });
@@ -1374,12 +1402,18 @@ pub struct LocationServices {
     pub session_env: Arc<crate::env::SessionEnv>,
     pub mcp: McpRegistry,
     pub skills: Arc<skills::ConfigSkillTable>,
+    /// The command registry (v2 `Command.Service` state): config +
+    /// markdown + plugin-registered commands.
+    pub commands: Arc<commands::CommandTable>,
     pub instructions: Arc<instructions::SessionInstructions>,
     pub snapshot: Arc<dyn SnapshotService>,
     pub store: SessionStore,
     pub inbox: SessionInbox,
     pub execution: SessionExecution,
     pub runner: Arc<SessionRunner>,
+    /// The subagent-job machinery (v2 `SubagentJob`) — command-sourced
+    /// subagent spawns ride it exactly like the subagent tool.
+    pub subagents: Arc<crate::session::subagent_job::SubagentJob>,
     /// This location's model resolver: the config overlay first, then the
     /// engine-level bindings (per-location provider wiring).
     pub resolver: Arc<dyn ModelResolver>,

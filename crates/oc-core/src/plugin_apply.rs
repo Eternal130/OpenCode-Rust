@@ -91,6 +91,13 @@ pub trait LocationPluginSource: Send + Sync {
         Vec::new()
     }
 
+    /// Plugin-registered commands (`command.add` registrations: name +
+    /// description; execution dispatches back into the guest through
+    /// the host's `command.execute` — CD-34's unsurfaced surface).
+    fn commands(&self) -> Vec<PluginCommandDef> {
+        Vec::new()
+    }
+
     /// The executor dispatching one plugin tool by name (guest
     /// `tool.execute`, timeout-bounded by the implementation).
     fn tool_executor(&self, name: &str) -> Option<Arc<dyn ToolExecute>> {
@@ -99,14 +106,24 @@ pub trait LocationPluginSource: Send + Sync {
     }
 }
 
+/// One plugin-registered command as the engine sees it (the host
+/// snapshot's `PluginCommand` mirrored; oc-plugin-host stays dep-light).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginCommandDef {
+    pub name: String,
+    pub description: String,
+}
+
 /// Apply one plugin source into a freshly built location graph's
 /// registries (the `assemble` step): agents + default, then the tool
-/// rows + executors. Returns the applied agent count.
+/// rows + executors, then the plugin command registrations into the
+/// location's command table. Returns the applied agent count.
 #[must_use]
 pub fn apply_location_plugins(
     source: &dyn LocationPluginSource,
     agents: &Arc<AgentRegistry>,
     tools: &Arc<ToolRegistryState>,
+    commands: Option<&Arc<crate::engine::commands::CommandTable>>,
 ) -> usize {
     let snapshot_agents = source.agents();
     let applied =
@@ -123,6 +140,11 @@ pub fn apply_location_plugins(
         tools.register(registration);
         if let Some(executor) = source.tool_executor(&definition.name) {
             tools.register_executor(definition.name.clone(), executor);
+        }
+    }
+    if let Some(commands) = commands {
+        for definition in source.commands() {
+            commands.register_plugin(&definition.name, &definition.description);
         }
     }
     applied

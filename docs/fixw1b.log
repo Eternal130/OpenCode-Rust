@@ -1,0 +1,18 @@
+# FIXW1B log (backend lane: oc-core/oc-server/oc-plugin-host only)
+
+- 2026-10-18T01:38Z lane start. Worktree `.worktrees/lane-fixw1b` @ f5196af (branch lane/fixw1b). Register: docs/scan-cd-findings.md.
+- Plan (register order, HIGHs first):
+  1. CD-12/CD-34: new `oc-core/src/config/command_md.rs` (port of ref `config/plugin/command.ts`: `{command,commands}/**/*.md` discovery + config `commands` map), new engine `CommandTable` (config+md+plugin registrations via `LocationPluginSource::commands()`), `/api/command` lists them; `POST /api/session/:id/command` executes (config/md: template eval + prompt/subagent semantics; plugin: `PluginHost::execute_command_in_session` — dispatch path already exists in host).
+  2. CD-13: engine/mod.rs:888-894 global AGENTS.md path `.config/opencode-rust` → v2 `.config/opencode` (with back-compat: old suffixed path only when the v2 file is absent).
+  3. CD-2: projector.rs project_fork INSERT — bind real `parent_id` (row carries BOTH parentID + fork{sessionID=parent,boundary}, ref register row CD-2).
+  4. CD-1: prompt/synthetic/compact/move handlers `execution.resume().await` → `execution.wake(id, Promotable::Input)` (ref session.ts:139/174/262/157 all wake; skill = forked resume → spawn).
+  5. CD-6: `Loader::new` reads `OPENCODE_CONFIG_CONTENT` env → `options.content` (mirrors existing OPENCODE_CONFIG wiring; ref server-process.ts:118 passes the env into every load).
+  6. CD-9: serialize the env-mutating integration tests (GITLAB_OAUTH_CLIENT_ID race: pkce set vs bundled remove; GOOGLE_APPLICATION_CREDENTIALS race: adc vs service-account) with a shared lock.
+- 01:38Z+~50min WIP: all six items implemented, cargo check clean (oc-core/oc-server/oc-plugin-host, tests included).
+  - CD-2: projector.rs fork INSERT binds parent_id (?4 into BOTH parent_id + fork_session_id); session/tests.rs asserts both; be1_lane.rs fork E2E asserts parentID.
+  - CD-13: engine discovery global_file = {home}/.config/opencode/AGENTS.md, suffixed dir only as absent-v2 fallback; two engine E2E tests (v2-wins + back-compat).
+  - CD-1: prompt/synthetic/compact/move → execution.wake(Input) fire-and-forget (synthetic guarded by row.revert); skill → spawned resume (ref forks it); new fixw1b test proves prompt returns <3s while the hung provider holds the run.
+  - CD-6: Loader::new reads OPENCODE_CONFIG_CONTENT → options.content (every production load site inherits; config.rs test asserts the overlay wins the latest-fold).
+  - CD-12/34: new config/command_md.rs (md discovery + decode + is_command_source + evaluate_template), new engine/commands.rs CommandTable (config+md, plugin registrations via new LocationPluginSource::commands()/PluginCommandDef, applied in apply_location_plugins), LocationServices.commands + .subagents wired; /api/command lists {name,description}; POST /api/session/:id/command executes (config: template + agent/model switch + subagent spawn w/ SubagentJob; plugin: host execute_command_in_session); HostPluginSource::commands from the registration snapshot. oc-server tests: fixw1b_lane.rs (list/execute/404 + plugin E2E through boot_and_serve with a real bun plugin + marker dispatch proof).
+  - CD-9: ENV_TEST_LOCK serializes the 4 env-mutating integration tests (gitlab pkce/bundled, vertex adc/service-account).
+  - Next: fmt + clippy + affected-crate nextest (+ the in-process `cargo test --lib integration::tests` repro for CD-9).

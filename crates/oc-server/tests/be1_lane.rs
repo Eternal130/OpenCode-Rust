@@ -410,11 +410,14 @@ async fn be1_fork_copies_history_and_fork_styles_the_title() {
     seed_settled_history(&server.state, &parent).await;
 
     let fork = client.session().fork(&parent, &SessionForkBody::default()).await.expect("fork");
-    // v2 wire shape for forks (info.ts:21-27): parent linkage rides the
-    // `fork` object (`forkSessionId` column), not `parentID` (NULL for
-    // forks — projector.ts:151-152).
+    // v2 wire shape for forks (info.ts:21-27): the `fork` object rides
+    // the `forkSessionId` column, and CD-2 (scan-cd) adds the
+    // parent→child chain: the fork child ALSO carries `parentID` (the
+    // register's ref-binary row — children carry BOTH parentID and
+    // fork{sessionID,boundary}).
     let fork_info = fork.fork.as_ref().expect("fork linkage");
     assert_eq!(fork_info.session_id, parent, "fork points at the parent");
+    assert_eq!(fork.parent_id.as_deref(), Some(parent.as_str()), "CD-2: parent chain persisted");
     match &fork_info.boundary {
         SessionForkBoundary::Through(variant) => {
             assert_eq!(variant.message_id, "msg_assistant_root", "through = newest message");

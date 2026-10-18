@@ -10,6 +10,7 @@
 //! isolation (a bad document never fails the whole load).
 
 pub mod agent_md;
+pub mod command_md;
 pub mod discovery;
 pub mod instruction;
 pub mod jsonc_edit;
@@ -386,9 +387,19 @@ impl Loader {
         // for EVERY load — boot-time provider seeding, location assembly,
         // and the config surfaces must see the same document. An explicit
         // `Options::file` still wins.
+        //
+        // CD-6 (scan-cd): `OPENCODE_CONFIG_CONTENT` (v2
+        // `server-process.ts:118` passes `process.env
+        // .OPENCODE_CONFIG_CONTENT` into the loader options) is likewise
+        // an every-load source at highest priority — wiring it here means
+        // boot, the config endpoint and every location assembly see the
+        // inline overlay instead of only the test harness.
         let mut options = Options::default();
         if let Some(explicit) = std::env::var_os("OPENCODE_CONFIG") {
             options.file = Some(PathBuf::from(explicit));
+        }
+        if options.content.is_none() {
+            options.content = std::env::var("OPENCODE_CONFIG_CONTENT").ok();
         }
         Self {
             location,
@@ -844,6 +855,36 @@ mod tests {
             })
             .collect();
         assert_eq!(shells, vec!["global", "explicit", "project", "content"]);
+    }
+
+    /// CD-6 (scan-cd): `OPENCODE_CONFIG_CONTENT` is wired into
+    /// `Loader::new` for EVERY production load (the ref's
+    /// `server-process.ts:118` passes the env into the config options —
+    /// ours previously only exercised `Options::content` from tests).
+    #[test]
+    fn config_env_content_source_loads_through_loader_new() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _env = ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        let dir = tempdir("env-content");
+        write(&dir.join("opencode.json"), r#"{"username": "file-user"}"#);
+        let globals = GlobalDirs { config: dir.join("global"), home: dir.join("home") };
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("OPENCODE_CONFIG_CONTENT", r#"{"username": "content-user"}"#);
+        }
+        let loaded = loader_for(&dir, &globals).load();
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::remove_var("OPENCODE_CONFIG_CONTENT");
+        }
+        // The inline document is the LAST entry (highest priority) and
+        // wins the `latest` fold.
+        assert_eq!(
+            latest(&loaded.entries, |info| info.username.clone()).as_deref(),
+            Some("content-user"),
+            "entries: {:?}",
+            loaded.entries.len()
+        );
     }
 
     #[test]

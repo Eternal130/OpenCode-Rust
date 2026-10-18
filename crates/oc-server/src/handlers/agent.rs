@@ -58,10 +58,24 @@ async fn command_list(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
-    let _services = services(&state, &location).await?;
-    // Commands are plugin-registered (TODO(phase-9): plugin host lands the
-    // registry); the documented shape is the empty list.
-    Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(Vec::new())))
+    let services = services(&state, &location).await?;
+    // CD-12/CD-34: the v2 `command.list` surface — config `commands`
+    // maps, `{command,commands}/**/*.md` discovery, and plugin
+    // `command.add` registrations, all merged in the location's command
+    // table (`{name, description?}` per `Command.Info`).
+    let data: Vec<Value> = services
+        .commands
+        .list()
+        .into_iter()
+        .map(|command| {
+            let mut entry = json!({ "name": command.name });
+            if let Some(description) = &command.description {
+                entry["description"] = json!(description);
+            }
+            entry
+        })
+        .collect();
+    Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
 }
 
 async fn skill_list(
