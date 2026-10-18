@@ -22,7 +22,9 @@ def run_once(idx, total_window=90):
     if pid == 0:
         os.chdir(cwd)
 
-        os.execvpe("~/.opencode/bin/opencode", ["~/.opencode/bin/opencode"], env)
+        b = os.environ.get("EF2_BIN", "~/.opencode/bin/opencode"); a = [b] + ([x for x in os.environ.get("EF2_ARGS","").split(",") if x]); os.execvpe(b, a, env)
+    import fcntl, struct, termios
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
     t0 = time.time()
     buf = b""
     state = {"echo": None, "session": None}

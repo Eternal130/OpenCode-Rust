@@ -35,6 +35,8 @@ def main() -> int:
     ap.add_argument("--window", type=float, default=18.0)
     ap.add_argument("--channel-env", default=None, help="extra KEY=VAL appended to the child env")
     ap.add_argument("--extra-arg", default=None, help="one extra CLI arg (e.g. --standalone)")
+    ap.add_argument("--env-del", default="", help="comma list of env keys to delete")
+    ap.add_argument("--env-set", default="", help="semicolon list of K=V to set after base env")
     ap.add_argument("--canary", action="store_true",
                     help="inject ONE extra fs write + ONE extra loopback "
                          "connect from a sibling process during the window "
@@ -54,6 +56,11 @@ def main() -> int:
         "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "LANG": "en_US.UTF-8",
     }
+    for k in [k for k in args.env_del.split(",") if k]:
+        env.pop(k, None)
+    for kv in [kv for kv in args.env_set.split(";") if "=" in kv]:
+        k, v = kv.split("=", 1)
+        env[k] = v
     if args.channel_env:
         for kv in args.channel_env.split(";"):
             if "=" in kv:
@@ -87,11 +94,18 @@ def main() -> int:
         os.chdir(cwd)
         # stderr to a file: keeps the owned-PTY stream clean and
         # guarantees no escape leakage outside the harness.
-    # NOTE: pty.fork child continues below; stderr redirect there.
         with open(stderr_out, "wb") as err:
             os.dup2(err.fileno(), 2)
         os.execve(cmd[0], cmd, env)
         os._exit(127)
+
+    # A real terminal has a size: 0x0 winsize would collapse the TUI to
+    # zero frames (pty_boot.rs discipline; see the lane's SE-F5 note for
+    # the 0x0 behavior divergence the un-set probe exposed).
+    import fcntl
+    import struct
+    import termios
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 
     t0 = time.time()
     buf = b""
