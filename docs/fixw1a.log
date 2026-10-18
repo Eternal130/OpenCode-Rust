@@ -243,3 +243,19 @@ PASS. The shimmer-specific ref pairing stays A4-carried
   env PRE-EXISTING (verified via git stash — the fixture lacks the
   preset config the /root cache had); they early-skip under the gate
   user (bun path) exactly as on main.
+
+## Lane footprint note (disclosure)
+
+`cargo fmt --all` (the standing gate rule) also reformatted
+pre-existing unformatted files on main that this lane never edited
+semantically: tools/parity/src/bin/rescan-tui.rs + the scan lanes'
+scaffolds (spec_e1/e2/e5/e12, spec_scanab_a1/b). Spot-checked: pure
+rustfmt line joins/splits, no semantic change; the full suite
+(902/902) passes with them. The final `cargo fmt --all --check` is
+clean. No SCAN-CD register file was touched (verified: zero
+scan-cd/fixw1b paths in the lane diff).
+
+Flaky note: pty_core_interactions worddelete pair flaked ONCE in the
+final full-suite run under load and passed on retry + 4/4 standalone
+re-runs; unrelated to this lane's changes (no input-path edits beyond
+the SA-F13 reader, which those tests do not exercise twice).
