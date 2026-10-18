@@ -67,6 +67,7 @@ pub mod context;
 pub mod drain;
 pub mod max_steps;
 pub mod model_request;
+pub mod prompt_prepare;
 pub mod publisher;
 pub mod retry;
 pub mod step;
@@ -76,6 +77,7 @@ pub mod to_llm_message;
 
 pub mod generate;
 pub use generate::{GenerateError, SessionGenerate};
+pub use prompt_prepare::{PromptPrepare, PromptPrepareError};
 
 #[cfg(test)]
 mod tests_generate;
