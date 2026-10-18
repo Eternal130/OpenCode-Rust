@@ -1,0 +1,2 @@
+# ledger_integrity allowlist — empty: no accepted exceptions; current findings live in the baseline (§9.2).
+# Format: pattern | reason | ledger-id | owner | review-date

@@ -1,0 +1,24 @@
+{
+  "guard": "process_safety",
+  "count": 18,
+  "violations": [
+    "crates/oc-core/src/shell/parse.rs:46:killall",
+    "crates/oc-tui/src/components/home.rs:628:killall",
+    "crates/oc-tui/src/components/home.rs:629:killall",
+    "crates/oc-tui/src/components/home.rs:636:killall",
+    "tools/parity/spec-ef2/f7_boot_trace.py:131:killpg",
+    "tools/parity/spec-p3/ours_tti_probe.py:70:killpg",
+    "tools/parity/spec-p3/ours_tti_probe.py:88:kill-by-name",
+    "tools/parity/spec-p3/ours_tti_probe.py:88:pkill",
+    "tools/parity/spec-p3/ours_tti_probe.py:89:pkill",
+    "tools/parity/spec-p3/ref_tti_probe.py:65:killpg",
+    "tools/parity/spec-p3/ref_tti_probe.py:83:kill-by-name",
+    "tools/parity/spec-p3/ref_tti_probe.py:83:pkill",
+    "tools/parity/spec-p3/ref_tti_probe.py:84:pkill",
+    "tools/parity/spec-p3/refbin_tti_probe.py:69:killpg",
+    "tools/parity/spec-p3/refbin_tti_probe.py:87:pkill",
+    "tools/release-smoke.sh:51:tools-sh-kill",
+    "tools/release-smoke.sh:57:tools-sh-kill",
+    "tools/release-smoke.sh:70:tools-sh-kill"
+  ]
+}
