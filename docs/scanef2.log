@@ -102,3 +102,85 @@ E9/B5-class (teardown residue + terminal-events family). User shape:
 resize the window during a session → cannot quit with the chord (must
 kill). Root-cause owned by the fix wave; repro = the committed test
 with EF2 env knobs.
+
+## Leg 2 — F7 negative-space ours-extra (priority #2) — EXECUTED (2026-10-18)
+
+Compliance note: 3 live TUI boots total (ours worktree debug binary x2,
+ref 2.0.25 binary x1), EACH under the lane's PTY wrapper
+(tools/parity/spec-ef2/f7_boot_trace.py: pty.fork + stderr redirected
+to file + strace to file + SIGKILL of the process group), one boot per
+invocation, sleeps between; no /dev/tty; the detached managed services
+each boot left behind were killed immediately after the legs (E9
+residue note below). The USER's live v2 (TUI 3556025 + service 3585165)
+was never touched.
+
+- **Scope executed (spec F7 trace set):**
+  - env reads: full static census both trees
+    (/tmp/opencode/scanef2/f7/env-{ours,ours-src,ref}.txt). Ours-extra
+    literal reads = 23, ALL dispositioned: internal/debug/test-gated
+    knobs (OC_*, PARITY_*, OPENCODE_*_DEBUG/TEST/SMOKE class) except
+    GOOGLE_APPLICATION_CREDENTIALS (ref reads it data-driven via the
+    models-dev snapshot — the ref literal census UNDERCOUNTS ref's
+    provider-credential env surface; methodological note recorded) and
+    TZ (ours stats-handler only; ref uses Intl — E6 note). NO product
+    env-read finding.
+  - events emitted: rides scan-cd's D1 census (51/51 event types
+    identical; CD-17) — 0 ours-extra.
+  - files written / sockets / network calls: boot-window strace pair —
+    ours default-mode (2610 syscalls, TUI rendered 4.2KB to owned PTY)
+    vs ref --standalone (805 syscalls, TUI rendered 13.9KB). Ref's
+    DEFAULT mode could not boot on this box: its managed-service port
+    derivation (10000+hash(channel)%50000; channel 'latest' class =
+    0xc0de = 49374) COLLIDES with the user's live v2 service → 273
+    EADDRINUSE retries, TUI never renders. Mode asymmetry
+    dispositioned per row below. Diff artifact:
+    /tmp/opencode/scanef2/f7/f7-diff.txt (+ raw .strace/.ansi).
+- **I8 F7 canary: RUN + PASS** — sidecar injection (product untouched)
+  of exactly one extra fs write + one extra loopback connect; the
+  differ flags BOTH rows (count+args: canary-extra-write.txt,
+  connect:tcp/127.0.0.1:9). Caveat: the canary leg used channel ef2c
+  (port collision forces distinct channels), so channel-suffixed path
+  rows are noisier; the two trip rows are unambiguous.
+- **Ours-extra rows + dispositions:**
+  - external connects 104.20.32.17 / 172.66.173.149 / 2606:4700:: →
+    PARITY: ref connects the same endpoints (443; ours' port shows 0 =
+    strace decode artifact of our connect path) = the models-dev
+    catalog fetch both trees do at boot. Justified.
+  - managed-service writes (service-<ch>.json, locks, pty service) →
+    MODE diff (ref leg was --standalone; the live v2 proves ref
+    default-mode writes service.json too). Justified.
+  - .bun/install/cache + /tmp/oc-plugin-host-* → our plugin-host
+    bootstrap; ref-standalone with zero plugins spawns none (ref's
+    plugin rig does when armed — SCAN-AB). Feature-conditional.
+    Justified; C6 ledger.
+  - v2-migration.lock → ours-specific v2 migration. Justified.
+  - **SE-F3 (below): eager boot-time git-snapshot init — ours-only.**
+  - state-file naming: ours `.local/state/opencode-rust/<ch>/tui/*` vs
+    ref `.local/state/opencode/latest/tui/{tabs,layout,system-theme,
+    update-notifications,directory-recents}.json` — both write TUI
+    boot state; path-shape class (product name + channel suffix vs
+    'latest'). Parity at feature level.
+- **Ref-extra rows (F2-class ledger, recorded, non-blocking):** ref's
+  window writes frecency.jsonl, prompt-history.jsonl, prompt-stash.jsonl,
+  kv.json, model.json, session.json, log/opencode.log (+trim) — richer
+  flat-file state surface than our window showed; F2/C4 ledger rows.
+
+### SE-F3 (S2) — eager boot-time snapshot git-init (ours-extra fs writes)
+Our server initializes TWO bare git repos under
+$HOME/.local/share/opencode-rust/snapshot/<projhash>/<snode>/ (config,
+HEAD.lock, hooks, objects/pack, refs...) at BOOT, before any session
+exists, in an EMPTY project dir. Ref has the Snapshot module
+(core/src/snapshot.ts, capture/diff/restore) but writes NOTHING to it
+in the same window (its usage sites are instance/session-scoped —
+lazy). Boot-window fs churn ours-extra; disk-per-project footprint;
+E2-boot-cost coupling. Fix-wave disposition: defer snapshot init to
+first capture (lazy, ref-shaped).
+
+### E9 residue observations (F7 legs' byproduct)
+- Both products leave a DETACHED `serve --service` child surviving
+  SIGKILL of the process group (by design — managed service; the
+  user's live v2 runs one). Rig rule: kill rig-spawned services after
+  each leg (done — 3/3 cleaned).
+- Stale lane artifacts found+killed during setup: a 100%-CPU
+  oc-plugin-host bun process from 10:55 (previous session) and the
+  spec-r6 E3 leak-canary control child from 10-17.
