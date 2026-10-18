@@ -3,10 +3,26 @@
 > Orchestrator scratch state for the parity loop (docs/PARITY-LOOP.md).
 > Updated at the end of every iteration. Not a task queue — the ledger is.
 
-- **updated**: 2026-10-18 (iteration 2 COMPLETE — Batch 1A exited; Batch 1B dispatched)
-- **batch**: 1B (WIRE-PROTOCOL / TOOLS-EXEC / AI-TIMEOUT) — iteration 3 in flight; RUNTIME queued (hooks.rs after C10, session.rs seam after C4a)
-- **iteration**: 3
-- **baseline**: main @ 5fcd634 (1A final + 1B claims)
+- **updated**: 2026-10-19 (iteration 3 — 1B core clusters merged; C3 RUNTIME dispatched)
+- **batch**: 1B remainder — C3 RUNTIME (C3a + C3b) — iteration 4 in flight
+- **iteration**: 4
+- **baseline**: main @ 5c838a1 (1B merges + exit fixes + C3 claims)
+
+## Batch 1B — core clusters EXITED (2026-10-19); C3 in flight
+
+- AI-TIMEOUT @1ab94f0 (verified; ref-constants line-exact; ref[0] citation corrected)
+- TOOLS-EXEC @fda1daf (7 verified; process-safety audited; hook_dispatch baseline shrank 10→9)
+- WIRE-PROTOCOL @ef1d201 (15 verified + fold GATE-GAP-CURSOR-PAGE→HTTP-H2; two exit fixes on main: oc-cli acp cursor test → v2 pass-through @ff1817a; empty-page cursor = EXPLICIT NULLS per live-ref probe @27405eb + evidence correction @59ebc04 — Gate 1 caught the lane verifier's static-reading error; runtime probes beat static reads)
+- Batch exit (pre-C3): workspace **3448/3448**, p10 strict verdict **clean** (3 KNOWN-RED, 0 NEW-RED), oc-server 231/231 post-fix, guards 8/8, fmt clean. Ledger: 387 rows.
+
+## Active lanes (C3 RUNTIME — cluster merge serial after both sub-lanes verify)
+
+| lane | sub-lane | worktree | branch | owner | entries | status |
+|---|---|---|---|---|---|---|
+| lane-runtime-a | C3a wake-recovery | `.worktrees/lane-runtime-a` | `lane/runtime-a` | fix-23 (bg) | RUNTIME-S01, RUNTIME-L01 | dispatched |
+| lane-runtime-b | C3b reconnect-hooks | `.worktrees/lane-runtime-b` | `lane/runtime-b` | fix-24 (bg) | RUNTIME-P01, RUNTIME-P02, RUNTIME-TD04 | dispatched |
+
+K-01 (compaction payload retry, S1) intentionally unclaimed — outside §5's 1B row; queue for Batch 2.
 
 ## Batch 1A — EXITED (2026-10-18)
 
