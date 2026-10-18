@@ -15,9 +15,18 @@ use crate::subagent::{JobControl, JobStatus, SubagentRecovery, NO_TEXT};
 /// the parent wrapped in the exact
 /// `<subagent sessionID="…" state="…" description="…">` envelope, then
 /// acknowledge the durable notification marker.
+///
+/// `wake` is `sessions.synthetic`'s execution seam (session.ts:310):
+/// after admission the parent is registered with its execution — an idle
+/// parent starts draining (coordinator default scope "input",
+/// run-coordinator.ts:136) so the result is consumed with NO further user
+/// message; a running parent re-drains at its next boundary. Suppressed
+/// by `resume: false` (the restart-recovery early notices) or a staged
+/// revert on the parent, exactly like v2.
 pub async fn deliver(
     inbox: &SessionInbox,
     jobs: &Arc<dyn JobControl>,
+    wake: &(dyn Fn(&str) + Send + Sync),
     input: DeliverInput,
 ) -> Result<(), DeliverError> {
     if input.status == JobStatus::Running {
@@ -64,6 +73,18 @@ pub async fn deliver(
         )
         .await
         .map_err(DeliverError::Inbox)?;
+    // session.ts:310 — `input.resume !== false && !(yield* get(sessionID)).revert`
+    // ⇒ `execution.wake(parent)`. This is the RUNTIME-S01 seam: without it
+    // the admitted result strands in the pending inbox of an idle parent.
+    if input.resume != Some(false) {
+        let staged_revert = inbox
+            .session_staged_revert(recovery.parent_session_id.as_str())
+            .await
+            .unwrap_or(false);
+        if !staged_revert {
+            wake(recovery.parent_session_id.as_str());
+        }
+    }
     if let Some(notification_id) = &input.notification_id {
         jobs.complete_background(notification_id.as_str()).await;
     }
@@ -78,6 +99,11 @@ pub struct DeliverInput {
     pub error: Option<String>,
     pub notification_id: Option<MessageId>,
     pub recovery: SubagentRecovery,
+    /// v2 `resume?: boolean` (subagent-completion.ts:31): `Some(false)`
+    /// suppresses the parent wake — the restart sweep's early notices
+    /// must not revive idle owners of suspended parents. `None` (the live
+    /// completion path) wakes.
+    pub resume: Option<bool>,
 }
 
 /// `deliver` errors.

@@ -456,6 +456,28 @@ impl SessionInbox {
         Ok(message_promoted_info(&message, session_id, delivery))
     }
 
+    /// Whether the session holds a staged revert (`session_v2.revert`) —
+    /// the synthetic wake guard: `sessions.synthetic` wakes the parent
+    /// only when no revert is staged (session.ts:310). Infrastructure
+    /// failures read as "no revert" (the wake stays available; the runner
+    /// itself handles a staged revert at its boundary).
+    pub async fn session_staged_revert(&self, session_id: &str) -> Result<bool> {
+        let id = session_id.to_string();
+        self.db
+            .transaction(move |tx| {
+                let revert: Option<String> = tx
+                    .conn()
+                    .query_row(
+                        "SELECT revert FROM session_v2 WHERE id = ?1",
+                        rusqlite::params![id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                Ok(revert.is_some())
+            })
+            .await
+    }
+
     /// Promotes pending input into visible messages
     /// (`SessionInbox.promote`, inbox.ts:496-531). Returns the promoted
     /// count, or `None` when the runner must first handle a pending control.
