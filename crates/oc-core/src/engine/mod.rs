@@ -295,6 +295,10 @@ struct PluginInputs {
     catalog: Arc<Catalog>,
     config_documents: Vec<oc_schema::config::Document>,
     home: PathBuf,
+    /// Project resolution for runtime destinations (`session_move`).
+    projects: Arc<dyn crate::project::ProjectStore>,
+    /// The id generator (move inbox admission ids).
+    ids: Arc<dyn IdGen>,
     /// This location's websearch service (v2 `WebSearch.Service`): the
     /// env-key-eligible providers + the config-seeded default selection.
     websearch: Arc<crate::tool::websearch::WebSearch>,
@@ -728,7 +732,11 @@ impl Engine {
             Arc::clone(&self.ids),
             Arc::clone(&self.clock),
         )
-        .with_bus((*self.bus).clone());
+        .with_bus((*self.bus).clone())
+        // The `shell.create.before` production dispatch target + the
+        // config `shell` key (ShellSelect "config" priority).
+        .with_hooks(Arc::clone(&hooks))
+        .with_config_shell(config_shell_of(&config_documents));
         let jobs =
             Arc::new(Jobs::new((*self.db).clone(), Arc::clone(&self.ids), Arc::clone(&self.clock)));
         let session_env = Arc::new(crate::env::SessionEnv::new());
@@ -844,6 +852,8 @@ impl Engine {
             catalog: Arc::clone(&self.catalog),
             config_documents,
             home: self.home.clone(),
+            projects: Arc::clone(&self.projects) as Arc<dyn crate::project::ProjectStore>,
+            ids: Arc::clone(&self.ids),
             websearch: Arc::clone(&websearch),
         });
         self.inputs.insert(location.clone(), Arc::clone(&inputs));
@@ -1608,8 +1618,8 @@ impl ChildExecution for EngineChildExecution {
 // The pre plugins beyond the six filesystem leaves
 // ===========================================================================
 
-/// `opencode` tools (session_rename + models; `session_move` stays a
-/// deferred stub per the v2 TODO).
+/// `opencode` tools (namespace `opencode`: session_rename, session_move,
+/// models — tool/plugin/opencode.ts).
 fn opencode_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
     let inputs = Arc::clone(inputs);
     InternalPlugin::new("opencode.tool.opencode", move |hooks, ports| {
@@ -1619,7 +1629,26 @@ fn opencode_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
             ports.tools,
             hooks,
             &inputs.tool_services,
-            opencode_tools::session_rename_tool(SessionStore::new(db), bus),
+            opencode_tools::session_rename_tool(SessionStore::new(db.clone()), bus.clone()),
+        )?;
+        tool::register_builtin(
+            ports.tools,
+            hooks,
+            &inputs.tool_services,
+            opencode_tools::session_move_tool(opencode_tools::SessionMoveServices {
+                store: SessionStore::new(db.clone()),
+                inbox: crate::session::inbox::SessionInbox::new(db, bus),
+                execution: Arc::new(EngineChildExecution {
+                    services: inputs.services(),
+                    location: inputs.location(),
+                }),
+                projects: crate::project::Resolver::new(
+                    Arc::clone(&inputs.projects),
+                    Arc::new(crate::project::NoEvents),
+                ),
+                home: inputs.home.clone(),
+                ids: Arc::clone(&inputs.ids),
+            }),
         )?;
         tool::register_builtin(
             ports.tools,
@@ -1658,11 +1687,16 @@ fn shell_plugin(engine: &Engine, inputs: &Arc<PluginInputs>) -> InternalPlugin {
     let inputs = Arc::clone(inputs);
     let bus = (*engine.bus).clone();
     InternalPlugin::new("opencode.tool.shell", move |hooks, ports| {
+        // `experimental.portable_shell_scanner` (default false) and the
+        // config `shell` key — consumed from the location's config
+        // snapshot (shell.ts prepare / ConfigShellPlugin).
+        let experimental = config_experimental(&inputs.config_documents);
         let deps = Arc::new(ShellToolServices {
             shell: inputs.shell_for_tools(),
             jobs: (*inputs.jobs).clone(),
             env: (*inputs.session_env).clone(),
-            portable_scanner: false,
+            portable_scanner: experimental.portable_shell_scanner.unwrap_or(false),
+            config_shell: config_shell_of(&inputs.config_documents),
             synthetic: Arc::new(BusSyntheticPublisher { bus: bus.clone() }),
         });
         tool::register_builtin(
@@ -1705,7 +1739,11 @@ fn subagent_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
             subagents: Arc::clone(&inputs.subagents),
             models,
             permission: inputs.permission.clone(),
-            depth: Arc::new(|| 1),
+            // `experimental.subagent_depth` (default 1) — subagent.ts:129.
+            depth: {
+                let experimental = config_experimental(&inputs.config_documents);
+                Arc::new(move || experimental.subagent_depth.unwrap_or(1))
+            },
             agents: Arc::new(move || {
                 agents.list().into_iter().filter(|info| !info.hidden).collect()
             }),
@@ -1818,6 +1856,28 @@ fn websearch_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
             ))),
         )
     })
+}
+
+/// The config `shell` key (v2 `ConfigShellPlugin`, config/plugin/shell.ts
+/// — `ShellSelect.transform(editor => editor.configure(configured))`): the
+/// LAST document owning the key (`Config.latest`).
+fn config_shell_of(documents: &[oc_schema::config::Document]) -> Option<String> {
+    documents
+        .iter()
+        .rev()
+        .find_map(|document| document.info.shell.clone().filter(|shell| !shell.is_empty()))
+}
+
+/// The config `experimental` key (`Config.latest(entries, "experimental")`):
+/// the LAST document owning the key — whole-key shadowing, like v2.
+fn config_experimental(
+    documents: &[oc_schema::config::Document],
+) -> oc_schema::config::Experimental {
+    documents
+        .iter()
+        .rev()
+        .find_map(|document| document.info.experimental.clone())
+        .unwrap_or_default()
 }
 
 /// The config `websearch` selection (v2 `ConfigWebSearchPlugin`,

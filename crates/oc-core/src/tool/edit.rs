@@ -183,6 +183,7 @@ pub fn tool(_services: &std::sync::Arc<ToolServices>) -> BuiltinTool {
         input: schema(),
         permission: Some("edit"),
         codemode: false,
+        namespace: None,
         execute: std::sync::Arc::new(EditExecutor),
     }
 }

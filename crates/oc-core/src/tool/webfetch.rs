@@ -224,6 +224,7 @@ pub fn tool() -> BuiltinTool {
         }),
         permission: Some("webfetch"),
         codemode: false,
+        namespace: None,
         execute: Arc::new(WebFetchExecute),
     }
 }

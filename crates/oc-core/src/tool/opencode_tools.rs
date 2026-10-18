@@ -86,15 +86,65 @@ impl ToolExecuteWithContext for SessionRenameExecute {
     }
 }
 
-/// `session_move` — TODO(wave-integration): the move inbox item + transport
-/// close live with the session-move lane; this leaf validates and parks.
-pub struct SessionMoveExecute;
+/// `session_move` dependencies (`ctx.session.move` — session/move.ts):
+/// the session store + inbox, the execution wake seam, project
+/// resolution for the destination, and the home dir for `~` expansion.
+pub struct SessionMoveServices {
+    pub store: crate::session::store::SessionStore,
+    pub inbox: crate::session::inbox::SessionInbox,
+    pub execution: std::sync::Arc<dyn crate::subagent::ChildExecution>,
+    pub projects: crate::project::Resolver,
+    pub home: std::path::PathBuf,
+    pub ids: std::sync::Arc<dyn oc_util::determinism::IdGen>,
+}
+
+/// `session_move` — admit a `move` inbox item for the target session and
+/// wake it (session/move.ts: the runner delivers the move at the next
+/// safe boundary — `session.inbox.delivered` + `session.moved`).
+pub struct SessionMoveExecute {
+    pub deps: SessionMoveServices,
+}
 
 #[derive(serde::Deserialize)]
 struct MoveInput {
     #[serde(rename = "sessionID")]
     session_id: Option<String>,
     directory: String,
+}
+
+/// `resolveDestination`'s `~` expansion + lexical resolve against the
+/// session's directory (move.ts:59-71 — `path.resolve`, no symlink
+/// resolution).
+fn resolve_destination(
+    home: &std::path::Path,
+    session_dir: &str,
+    directory: &str,
+) -> std::path::PathBuf {
+    let value = directory.trim();
+    let expanded = if value == "~" {
+        home.to_path_buf()
+    } else if let Some(rest) = value.strip_prefix("~/") {
+        home.join(rest)
+    } else {
+        std::path::PathBuf::from(value)
+    };
+    let joined = if expanded.is_absolute() {
+        expanded
+    } else {
+        std::path::Path::new(session_dir).join(expanded)
+    };
+    // Lexical `..`/`.` cleanup (path.resolve semantics).
+    let mut normalized = std::path::PathBuf::new();
+    for component in joined.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 impl ToolExecuteWithContext for SessionMoveExecute {
@@ -108,20 +158,86 @@ impl ToolExecuteWithContext for SessionMoveExecute {
     > {
         let input = input.clone();
         let context = context.clone();
+        let deps = &self.deps;
         Box::pin(async move {
             let input: MoveInput = serde_json::from_value(input)
                 .map_err(|error| ToolFailure::message(format!("Invalid arguments: {error}")))?;
-            let session_id = input.session_id.unwrap_or_else(|| context.session_id.to_string());
-            let _ = session_id;
-            // TODO(wave-integration): ctx.session.move({sessionID, directory,
-            // delivery: "steer"}) — admit a move inbox item and wake.
-            Err(ToolFailure {
+            let blanket = |cause: String| ToolFailure {
                 message: format!("Unable to move session to {}", input.directory),
-                cause: Some(super::FailureCause::Nested(
-                    "session move is not wired until the session-move lane lands".to_string(),
-                )),
+                cause: Some(super::FailureCause::Nested(cause)),
+            };
+            let session_id =
+                input.session_id.clone().unwrap_or_else(|| context.session_id.to_string());
+            let Some(session) =
+                deps.store.get(&session_id).await.map_err(|error| blanket(error.to_string()))?
+            else {
+                return Err(blanket(format!("session not found: {session_id}")));
+            };
+
+            // Destination: expand, resolve against the session's
+            // directory, and require an existing directory.
+            let destination = resolve_destination(&deps.home, &session.directory, &input.directory);
+            let directory = destination.to_string_lossy().to_string();
+            match std::fs::metadata(&destination) {
+                Ok(meta) if meta.is_dir() => {}
+                Ok(_) => return Err(blanky(&input.directory, "Not a directory")),
+                Err(_) => {
+                    return Err(blanky(&input.directory, "Directory does not exist"));
+                }
+            }
+
+            // `projects.resolve(directory)` → MovePayload
+            // (location/projectID/subpath — `path.relative(project.directory,
+            // directory)`).
+            let resolved = deps.projects.resolve(&destination).await;
+            let subpath = destination
+                .strip_prefix(&resolved.directory)
+                .ok()
+                .map(|rest| rest.to_string_lossy().to_string())
+                .filter(|rest| !rest.is_empty());
+            let payload = oc_schema::session_inbox::MovePayload {
+                location: oc_schema::location::Ref {
+                    directory: oc_schema::common::AbsolutePath(directory.clone()),
+                    workspace_id: None,
+                },
+                project_id: oc_schema::id::ProjectId::parse(resolved.id),
+                subpath: subpath.map(oc_schema::common::RelativePath),
+            };
+
+            // Admit the queued move (delivery "steer" — the tool always
+            // steers, opencode.ts:120) and wake the session.
+            let message_id = deps.ids.new_id("msg");
+            deps.inbox
+                .admit(
+                    &message_id,
+                    &session_id,
+                    oc_schema::session_inbox::Item::Move_ {
+                        payload,
+                        delivery: oc_schema::session_inbox::Delivery::Steer,
+                    },
+                )
+                .await
+                .map_err(|error| blanket(error.to_string()))?;
+            deps.execution.wake(&session_id);
+
+            Ok(ToolOutcome {
+                content: vec![oc_schema::tool::Content::Text {
+                    text: format!("Moved session {session_id} to {}.", input.directory),
+                }],
+                metadata: None,
+                output: Some(
+                    serde_json::json!({ "sessionID": session_id, "directory": input.directory }),
+                ),
             })
         })
+    }
+}
+
+/// Blanket failure helper with the exact nested cause text.
+fn blanky(directory: &str, cause: &str) -> ToolFailure {
+    ToolFailure {
+        message: format!("Unable to move session to {directory}"),
+        cause: Some(super::FailureCause::Nested(cause.to_string())),
     }
 }
 
@@ -354,12 +470,13 @@ pub fn session_rename_tool(
         }),
         permission: None,
         codemode: true,
+        namespace: Some("opencode"),
         execute: Arc::new(SessionRenameExecute { store, bus }),
     }
 }
 
-/// `session_move` registration (TODO(wave-integration)).
-pub fn session_move_tool() -> BuiltinTool {
+/// `session_move` registration (namespace `opencode`).
+pub fn session_move_tool(deps: SessionMoveServices) -> BuiltinTool {
     BuiltinTool {
         name: "session_move",
         description: "Move a session to another directory, or omit sessionID to move the current session. The current session moves at the next safe boundary; do not run destination-dependent tools in the same execute call.".into(),
@@ -373,7 +490,8 @@ pub fn session_move_tool() -> BuiltinTool {
         }),
         permission: None,
         codemode: true,
-        execute: Arc::new(SessionMoveExecute),
+        namespace: Some("opencode"),
+        execute: Arc::new(SessionMoveExecute { deps }),
     }
 }
 
@@ -394,6 +512,7 @@ pub fn models_tool(catalog: crate::provider_catalog::catalog::Catalog) -> Builti
         }),
         permission: None,
         codemode: true,
+        namespace: Some("opencode"),
         execute: Arc::new(ModelsExecute { catalog, own_provider: parking_lot::Mutex::new(None) }),
     }
 }

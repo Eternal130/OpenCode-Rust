@@ -775,9 +775,13 @@ async fn mcp_tool_bridge_registers_namespaced_tools_and_flushes() {
     bridge.flush().await;
     assert_eq!(tools.list().len(), 1);
     let registration = tools.list().remove(0);
-    assert_eq!(registration.name, "alpha_echo");
+    // v2 registration shape (tool/mcp.ts:40-45): bare tool name +
+    // namespace; the effective model-facing name is `alpha_echo` and the
+    // permission action is the composed `{server}_{tool}` form.
+    assert_eq!(registration.name, "echo");
     assert_eq!(registration.permission.as_deref(), Some("alpha_echo"));
     assert_eq!(registration.namespace.as_deref(), Some("alpha"));
+    assert_eq!(registration.effective_name(), "alpha_echo");
     assert!(registration.codemode, "codemode defaults to true");
     registry.shutdown().await;
 }
