@@ -970,7 +970,7 @@ mod tests {
     /// own render contract — plain white text (the ref's plugin-rendered
     /// sidebar emits fg idx15 for header AND rows, bg idx233, NO bold —
     /// ref-session-00.styles.txt y13-y19; our degrade maps #ffffff →
-    /// idx15 exactly, color_mode quantize tie-break). Not the sidebar's
+    /// idx15 exactly, `color_mode` quantize tie-break). Not the sidebar's
     /// base/muted ladder the host bridge used before.
     #[test]
     fn plugin_section_paints_the_plugin_white() {
@@ -984,7 +984,7 @@ mod tests {
         }];
         let paint = render_sidebar(&view, &theme, 30);
         let section: Vec<&Placed> = paint.placed.iter().filter(|p| p.y == 2 || p.y == 3).collect();
-        assert_eq!(section.len(), 2, "header + one row: {:?}", section);
+        assert_eq!(section.len(), 2, "header + one row: {section:?}");
         for placed in &section {
             for line in &placed.lines {
                 let style = &line.runs[0].style;

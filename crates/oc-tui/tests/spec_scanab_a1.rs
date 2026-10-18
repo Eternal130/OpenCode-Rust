@@ -11,9 +11,11 @@
 //! on the spot).
 //!
 //! Artifacts (I9: all real-run captures from THIS tree, our own
-//! FakeLlm server chain = I1): /tmp/opencode/scanab/a1/*.txt +
+//! `FakeLlm` server chain = I1): /tmp/opencode/scanab/a1/*.txt +
 //! *.styles.txt (the rescan-tui dump format, so the ref leg's
 //! existing `.styles.txt` files diff directly).
+
+#![allow(clippy::cast_possible_truncation)] // terminal geometry fits u16 by construction
 
 #[path = "vt_harness.rs"]
 mod vt_harness;
@@ -34,6 +36,7 @@ const ROWS: usize = 36;
 // ---------------------------------------------------------------------------
 
 fn dump(grid: &vt_harness::Grid, tag: &str) {
+    use std::fmt::Write as _;
     std::fs::create_dir_all(OUT).expect("out dir");
     let mut text = String::new();
     for y in 0..grid.rows {
@@ -46,14 +49,14 @@ fn dump(grid: &vt_harness::Grid, tag: &str) {
         for x in 0..grid.cols {
             let cell = grid.cell(x, y);
             if cell.style != 0 {
-                styles.push_str(&format!("{x},{y}:{:016x} {}\n", cell.style, cell.ch));
+                let _ = writeln!(styles, "{x},{y}:{:016x} {}", cell.style, cell.ch);
             }
         }
     }
     std::fs::write(format!("{OUT}/{tag}.styles.txt"), styles).expect("styles");
 }
 
-/// Unpack the fg slot of a style digest (see vt_harness::style_digest):
+/// Unpack the fg slot of a style digest (see `vt_harness::style_digest`):
 /// pack: Default=0, Idx=(1<<8)|i, Rgb=(2<<24)|r<<16|g<<8|b; fg=digest>>30.
 fn fg_of(style: u64) -> u64 {
     style >> 30
@@ -158,7 +161,7 @@ fn boot_and_drive<T: Send + 'static>(
     });
     let finished = {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_tui(&fake.url, COLS as u16, ROWS as u16, Duration::from_secs(40))
+            run_tui(&fake.url, COLS as u16, ROWS as u16, Duration::from_secs(40));
         })) {
             Ok(()) => Ok(()),
             Err(panic) => {
@@ -224,23 +227,25 @@ const ALT_SCREEN_LEN: usize = 8;
 /// 500 ms caret blink) — the returned pair lets the caller build a
 /// per-leg STABLE mask so volatile cells (caret) never reach the
 /// adjudication.
+#[allow(clippy::unnecessary_wraps)] // the Result unifies with the drive closures' error channel
 fn settled_pair(h: &HarnessHandle) -> Result<(vt_harness::Grid, vt_harness::Grid), String> {
-    h.wait_grid_stable(3, 250, Duration::from_secs(6));
+    let _ = h.wait_grid_stable(3, 250, Duration::from_secs(6));
     let a = h.grid_now();
     std::thread::sleep(Duration::from_millis(650));
     let b = h.grid_now();
     Ok((a, b))
 }
 
-/// Full-cell dump (every cell, unlike dump()'s non-default-only
+/// Full-cell dump (every cell, unlike `dump()`'s non-default-only
 /// styles map) — the canary adjudication reads these back in leg B.
 fn dump_full(grid: &vt_harness::Grid, tag: &str) {
+    use std::fmt::Write as _;
     std::fs::create_dir_all(OUT).expect("out dir");
     let mut out = String::new();
     for y in 0..grid.rows {
         for x in 0..grid.cols {
             let cell = grid.cell(x, y);
-            out.push_str(&format!("{x},{y}:{:016x} {}\n", cell.style, cell.ch));
+            let _ = writeln!(out, "{x},{y}:{:016x} {}", cell.style, cell.ch);
         }
     }
     std::fs::write(format!("{OUT}/{tag}.cells"), out).expect("cells dump");
@@ -252,7 +257,7 @@ fn load_full(tag: &str) -> vt_harness::Grid {
     for line in text.lines() {
         let (coord, rest) = line.split_once(':').expect("coord");
         let (style, ch) = rest.split_once(' ').expect("style ch");
-        let (_, _) = (coord, ());
+        let _ = coord;
         let style = u64::from_str_radix(style, 16).expect("style hex");
         let mut it = ch.chars();
         let c = it.next().unwrap_or(' ');
@@ -311,6 +316,8 @@ fn hex_to_rgb(hex: &str) -> (u8, u8, u8) {
 /// against leg A's dumps. PASS = the I8 A1 canary (token-cell swap
 /// caught exactly).
 #[test]
+#[allow(clippy::too_many_lines)] // one adjudication matrix per leg pair
+#[allow(clippy::similar_names)] // leg_a1/leg_b1 ARE the matrix axes (leg A vs leg B)
 fn a1_canary_leg_swap_verdict() {
     let tokens = token_pair_file();
     let (base_hex, muted_hex) = tokens.trim().split_once(' ').expect("base muted hex pair");
@@ -654,14 +661,14 @@ fn a1_ours_state_matrix_cells() {
             if !h.wait_for(WORDMARK, Duration::from_secs(8)) {
                 return Err("wordmark never rendered".to_owned());
             }
-            h.wait_grid_stable(3, 250, Duration::from_secs(6));
+            let _ = h.wait_grid_stable(3, 250, Duration::from_secs(6));
             out.push(("home-base".into(), h.grid_now()));
 
             open_first_session(h, b"Alpha")?;
             if !h.wait_for(b"Alpha", Duration::from_secs(5)) {
                 return Err("tab title never painted".to_owned());
             }
-            h.wait_grid_stable(3, 250, Duration::from_secs(6));
+            let _ = h.wait_grid_stable(3, 250, Duration::from_secs(6));
             out.push(("session-base".into(), h.grid_now()));
 
             // hover: active tab title cell (row 0, col 2..)
@@ -670,7 +677,7 @@ fn a1_ours_state_matrix_cells() {
             out.push(("session-hover-tab".into(), h.grid_now()));
             // hover: the '+' new-tab affordance — find its column on row 0
             let strip = h.grid_now().row_text(0);
-            let plus = strip.find('+').map(|i| i as u16).unwrap_or(10);
+            let plus = strip.find('+').map_or(10, |i| i as u16);
             h.sgr_motion(plus, 0);
             std::thread::sleep(Duration::from_millis(350));
             out.push(("session-hover-plus".into(), h.grid_now()));

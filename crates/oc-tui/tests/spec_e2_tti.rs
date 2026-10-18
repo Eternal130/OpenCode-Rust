@@ -3,7 +3,7 @@
 //! Marker per the clause, operationally pinned for THIS artifact: T0 =
 //! harness attach (the in-process boot the vt harness drives; the
 //! standalone-binary process-spawn variant is the P3 field-run
-//! refinement), T_interactive = first frame where a text input accepts+
+//! refinement), `T_interactive` = first frame where a text input accepts+
 //! echoes a key. Our boot lands on the HOME screen (no composer); the
 //! first text input surface is the command palette (ctrl+p) — its
 //! filter field is the echo target. The composer-on-session-screen
@@ -19,6 +19,8 @@
 //! -> poll-send "z" every 50ms until the grid echoes it. Poll overhead
 //! is included (conservative) and identical across runs.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+
 #[path = "vt_harness.rs"]
 mod vt_harness;
 
@@ -28,6 +30,7 @@ use vt_harness::{
     pty_lock, run_tui, sandbox_env, standard_sessions, FakeLlm, LiveHarness, WORDMARK,
 };
 
+#[allow(dead_code)] // the p95 half of the clause's baseline artifact
 fn percentile(sorted: &[u128], p: f64) -> u128 {
     let idx = (((sorted.len() as f64) - 1.0) * p).round() as usize;
     sorted[idx.min(sorted.len() - 1)]
@@ -56,7 +59,7 @@ fn e2_tti_baseline_n10() {
                 eprintln!("[E2] FAIL-STAGE: wordmark never painted");
                 return;
             }
-            let t_wordmark = driver.now_ms() as u128;
+            let t_wordmark = u128::from(driver.now_ms());
             // Composer marker (the clause's own marker): open the first
             // session (proven drive path from the E1 canary), then probe.
             if vt_harness::open_first_session(&mut driver, b"Alpha").is_err() {
@@ -67,7 +70,7 @@ fn e2_tti_baseline_n10() {
                 eprintln!("[E2] FAIL-STAGE: session screen");
                 return;
             }
-            let t_session = driver.now_ms() as u128;
+            let t_session = u128::from(driver.now_ms());
             // Poll-send until the composer echoes the probe key.
             loop {
                 driver.write(b"z");
@@ -79,7 +82,7 @@ fn e2_tti_baseline_n10() {
                 };
                 if echoed {
                     *slot.lock().expect("slot") =
-                        Some((t_wordmark, t_session, driver.now_ms() as u128));
+                        Some((t_wordmark, t_session, u128::from(driver.now_ms())));
                     vt_harness::exit_chord(&mut driver);
                     return;
                 }
@@ -100,8 +103,8 @@ fn e2_tti_baseline_n10() {
             None => panic!("run {run}: no echo within the window"),
         }
     }
-    let _ = times.sort_unstable();
-    let _ = wordmark_times.sort_unstable();
+    times.sort_unstable();
+    wordmark_times.sort_unstable();
     let line = format!(
         "run={run} wordmark_ms={} session_ms={} t_interactive_ms={}\n",
         wordmark_times[0], times[0], times[0]

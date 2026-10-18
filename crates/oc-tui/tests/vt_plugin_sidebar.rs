@@ -42,13 +42,14 @@ fn copy_dir(source: &Path, destination: &Path) {
     }
 }
 
-/// The packed digest fields (vt_harness::style_digest):
+/// The packed digest fields (`vt_harness::style_digest`):
 /// style = fg<<30 | bg<<4 | mods; Idx = (1<<8)|index.
 const fn idx_packed(index: u64) -> u64 {
     (1 << 8) | index
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // the staged plugin-sidebar walkthrough IS the scenario
 fn vt_plugin_sidebar_renders_the_reference_contract() {
     let _lock = pty_lock();
     let source = PathBuf::from(OMOS_SOURCE);
@@ -67,8 +68,8 @@ fn vt_plugin_sidebar_renders_the_reference_contract() {
     };
     assert!(!version.is_empty(), "the fixture package carries a version");
 
-    let _sandbox = sandbox_env("omos-sidebar");
-    let sandbox = _sandbox.clone();
+    let sandbox_guard = sandbox_env("omos-sidebar");
+    let sandbox = sandbox_guard.clone();
     // Stage the plugin + its hoisted deps under a REAL node_modules
     // layout (the package's parent dir must BE node_modules — the
     // host's @opentui shims land there and bare imports resolve

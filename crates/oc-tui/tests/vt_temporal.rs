@@ -527,7 +527,7 @@ fn vt_temporal_idle_composer_is_byte_stable_2s() {
 
 /// SA-F4's instrument repair, demonstrated on a genuine time-driven
 /// transient: the busy tab's sweep ramps per-column backgrounds while
-/// the turn streams (tab_pulse's run envelope — the A4 drive-source
+/// the turn streams (`tab_pulse`'s run envelope — the A4 drive-source
 /// audit). The BEFORE-SETTLE sampler observes the style churn with NO
 /// settle wait (the settle-first collectors structurally miss exactly
 /// this class — the scan's shimmer leg recorded 0 style deltas across

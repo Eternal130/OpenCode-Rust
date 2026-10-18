@@ -9,7 +9,7 @@
 //! reference's shape — the "Plugins" title, the "Search" placeholder,
 //! the shared "No items available" empty state (ui/dialog-select.tsx
 //! :723) and the `ctrl+a show internal` footer hint — and the
-//! composer does NOT keep the typed text (select() removes the
+//! composer does NOT keep the typed text (`select()` removes the
 //! trigger token, autocomplete.tsx:615-626).
 
 #[path = "vt_harness.rs"]

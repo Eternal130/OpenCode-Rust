@@ -16,6 +16,8 @@
 //! in the A1 matrix) — its falsifiability leg is the OSC-52 payload
 //! assert (a wrong binding or missing sink fails it).
 
+#![allow(clippy::cast_possible_truncation)] // terminal geometry fits u16 by construction
+
 #[path = "vt_harness.rs"]
 mod vt_harness;
 
@@ -26,12 +28,12 @@ use vt_harness::{
 };
 
 const OUT: &str = "/tmp/opencode/scanab/b";
-const COLS: usize = 100;
-const ROWS: usize = 28;
+const COLS: u16 = 100;
+const ROWS: u16 = 28;
 
 fn note(file: &str, line: &str) {
-    std::fs::create_dir_all(OUT).ok();
     use std::io::Write;
+    std::fs::create_dir_all(OUT).ok();
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -59,7 +61,7 @@ fn boot_b<T: Send + 'static>(
     }
     let fake = FakeLlm::spawn(standard_sessions());
     arm(&fake);
-    let harness = LiveHarness::attach(COLS as u16, ROWS as u16);
+    let harness = LiveHarness::attach(COLS, ROWS);
     let slot: std::sync::Arc<std::sync::Mutex<Option<Result<T, String>>>> =
         std::sync::Arc::new(std::sync::Mutex::new(None));
     let slot2 = std::sync::Arc::clone(&slot);
@@ -69,7 +71,7 @@ fn boot_b<T: Send + 'static>(
         vt_harness::exit_chord(&mut driver);
         *slot2.lock().expect("slot") = Some(outcome);
     });
-    run_tui(&fake.url, COLS as u16, ROWS as u16, Duration::from_secs(60));
+    run_tui(&fake.url, COLS, ROWS, Duration::from_secs(60));
     fake.stop();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while slot.lock().expect("slot").is_none() && std::time::Instant::now() < deadline {
@@ -221,7 +223,7 @@ fn b1_end_effect_table() {
             let grid = h.grid_now();
             let leaked = (0..6).rev().any(|off| {
                 let row = grid.row_text(grid.rows - 1 - off);
-                row.trim_end().ends_with('l') || row.contains("l") && !row.contains("Alpha")
+                row.trim_end().ends_with('l') || row.contains('l') && !row.contains("Alpha")
             });
             rows.push(format!(
                 "| session | base | <leader> +600ms + 'l' (timeout 300) | 'l' types into composer | {} |",
@@ -322,7 +324,7 @@ fn b2_pointer_end_effects() {
             // (1) click the FIRST tab (inactive target): active tab must
             // switch (style/underline change on row 0)
             let strip = baseline.row_text(0);
-            let first_tab = strip.find("Alpha").map(|i| i as u16 + 2).unwrap_or(3);
+            let first_tab = strip.find("Alpha").map_or(3, |i| i as u16 + 2);
             h.sgr_press(first_tab, 0);
             std::thread::sleep(Duration::from_millis(80));
             h.sgr_release(first_tab, 0);
@@ -336,7 +338,7 @@ fn b2_pointer_end_effects() {
 
             // (2) click the '+' affordance: new tab (Untitled)
             let strip2 = after.row_text(0);
-            let plus = strip2.find('+').map(|i| i as u16).unwrap_or(10);
+            let plus = strip2.find('+').map_or(10, |i| i as u16);
             let tabs_before = strip2.matches("Alpha").count() + strip2.matches("Untitled").count();
             h.sgr_press(plus, 0);
             std::thread::sleep(Duration::from_millis(80));
