@@ -3,7 +3,7 @@
 > Orchestrator scratch state for the parity loop (docs/PARITY-LOOP.md).
 > Updated at the end of every iteration. Not a task queue — the ledger is.
 
-- **updated**: 2026-10-18 (iteration 1, in flight)
+- **updated**: 2026-10-18 (iteration 1, in flight — B0-8 merged; B0-1 lane running)
 - **batch**: 0 — NOT exited (B0-1..B0-9 pending/in progress; no product bug fixes allowed)
 - **iteration**: 1
 - **baseline**: main @ eb4023d (pre-bootstrap) → bootstrap commit adds PARITY-LOOP.md / ledger seed / ledger tool / this file
@@ -13,9 +13,20 @@
 | lane | task | worktree | branch | owner | write scope | status |
 |---|---|---|---|---|---|---|
 | lane-b0-ledger | B0-1 ledger import | `.worktrees/lane-b0-ledger` | `lane/b0-ledger` | fixer (bg) | `docs/parity-ledger.jsonl`, `tools/parity-import.py`, `docs/parity-ledger-reconciliation.md`, (`tools/parity-ledger.py` ext. if needed) | dispatched |
-| lane-b0-gate0 | B0-8 Gate 0 env | `.worktrees/lane-b0-gate0` | `lane/b0-gate0` | fixer (bg) | `tools/parity/src/*` skip/strict seam, `docs/parity-b0-gate0.md` | dispatched |
+| ~~lane-b0-gate0~~ | B0-8 Gate 0 env | removed (merged) | `lane/b0-gate0` | fixer→verifier | `tools/parity/src/*` skip/strict seam, `docs/parity-b0-gate0.md` | **MERGED @729725d** (lane commit 0d95bbf, verifier PASS) |
 
-WIP: 2 active lanes (max 3). Disjoint write scopes; no hot-file overlap.
+WIP: 1 active lane (lane-b0-ledger). Max 3.
+
+## B0-8 record (complete)
+
+- Lane commit `0d95bbf` → merge commit `729725d` (main, --no-ff). Verifier: PASS on all 9 checks (strict-red exit 100 with named-missing-bun panic; green 1/0; lane discovery 1/0; gate_ran record reproduced with ref_commit e7a34f09…, both boots ok; scope clean; fmt OK; clippy errors confined to pre-existing `tools/parity/src/bin/rescan-tui.rs`, byte-identical to main).
+- Post-merge gates on main: `nextest -p parity` 103 passed / 0 failed / 9 skipped; `fmt -p parity` OK; clippy 15 errors all in rescan-tui (pre-existing).
+- Evidence: `docs/parity-b0-gate0.md`, `/tmp/opencode/parity-evidence/B0-8/{red-strict.log,gate-ran.json,verify-gate-ran.json,...}`.
+- Follow-ups (to ledger-ize after B0-1 merge):
+  1. `parity::scenarios scenario_permission_saved` showed 1 flaky failure under repetition (verifier run) — §8.2 requires flaky ledger entry.
+  2. tmux-availability skips in opt-in TUI tests remain skips under strict mode (documented in evidence doc §7) — p10 battery owner decision.
+  3. `rescan-tui.rs` pre-existing clippy debt — B0-2 baseline known-red.
+  4. `env-identity.log` artifact is root-owned (content correct) — capture-process slip only.
 
 ## Ledger snapshot (pre-B0-1)
 
@@ -27,7 +38,7 @@ WIP: 2 active lanes (max 3). Disjoint write scopes; no hot-file overlap.
 ## Batch 0 checklist
 
 - [ ] B0-1 台账导入 — in progress (lane-b0-ledger)
-- [ ] B0-8 Gate 0 双端环境 — in progress (lane-b0-gate0)
+- [x] B0-8 Gate 0 双端环境 — **DONE** (merged @729725d; OC_GATE_STRICT fail-not-skip live; lane bun discovery works; ref/rust boot evidence recorded)
 - [ ] B0-2 基线（workspace + p10 → docs/parity-baseline.md；五组 gate 骨架）
 - [ ] B0-4 静态守卫 tools/guards/*（目录尚不存在，需从零建）
 - [ ] B0-5 ADR 0001–0005
