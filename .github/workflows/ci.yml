@@ -41,6 +41,12 @@ jobs:
           # each lane rebuild the chain independently).
           shared-key: opencode-ci
 
+      # sccache: content-addressed compilation cache shared across ALL
+      # jobs and runs (merges concurrent writers — the immutable
+      # rust-cache entry cannot). Deps compile exactly once, ever; each
+      # job then only compiles its own workspace crates.
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
       - name: rustfmt
         run: cargo fmt --all -- --check
 
@@ -64,6 +70,12 @@ jobs:
           # once and are reused by every job (per-job default keys made
           # each lane rebuild the chain independently).
           shared-key: opencode-ci
+
+      # sccache: content-addressed compilation cache shared across ALL
+      # jobs and runs (merges concurrent writers — the immutable
+      # rust-cache entry cannot). Deps compile exactly once, ever; each
+      # job then only compiles its own workspace crates.
+      - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
@@ -91,6 +103,12 @@ jobs:
           # once and are reused by every job (per-job default keys made
           # each lane rebuild the chain independently).
           shared-key: opencode-ci
+
+      # sccache: content-addressed compilation cache shared across ALL
+      # jobs and runs (merges concurrent writers — the immutable
+      # rust-cache entry cannot). Deps compile exactly once, ever; each
+      # job then only compiles its own workspace crates.
+      - uses: mozilla-actions/sccache-action@v0.0.9
 
       # Tests stage scratch sandboxes under /tmp/opencode (PIDs-unique
       # names). The dev box pre-creates it; runners do not.
@@ -134,6 +152,12 @@ jobs:
           # once and are reused by every job (per-job default keys made
           # each lane rebuild the chain independently).
           shared-key: opencode-ci
+
+      # sccache: content-addressed compilation cache shared across ALL
+      # jobs and runs (merges concurrent writers — the immutable
+      # rust-cache entry cannot). Deps compile exactly once, ever; each
+      # job then only compiles its own workspace crates.
+      - uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: taiki-e/install-action@v2
         with:
