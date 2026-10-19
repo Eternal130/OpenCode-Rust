@@ -107,7 +107,7 @@ use oc_schema::id::SessionId;
 use oc_util::determinism::{Clock, IdGen, RngSource, SystemClock, SystemRng, UuidV4IdGen};
 
 use crate::bus::{Bus, BusOptions, Subscription};
-use crate::config::{self, GlobalDirs, Loader};
+use crate::config::{self, managed_policy, GlobalDirs, Loader};
 use crate::database::Database;
 use crate::forms::Forms;
 use crate::hooks::{InternalPlugin, PluginSupervisor, RpcDefinition, RpcError, RpcPort};
@@ -130,7 +130,7 @@ use crate::session::runner::drain::SessionRunner;
 use crate::session::runner::model_request::{AppMetadata, SessionModelRequest};
 use crate::session::runner::prompt_prepare::PromptPrepare;
 use crate::session::runner::title::SessionTitle;
-use crate::session::runner::{LlmClient, ModelResolver, RouteLlmClient};
+use crate::session::runner::{LlmClient, ModelResolver, ResolvedModel, RouteLlmClient};
 use crate::session::store::{CreateInput, ListInput, MessagesInput, SessionStore};
 use crate::session::subagent_job::SubagentJob;
 use crate::shell::Shell;
@@ -294,7 +294,7 @@ struct PluginInputs {
     skills: Arc<skills::ConfigSkillTable>,
     subagents: Arc<SubagentJob>,
     catalog: Arc<Catalog>,
-    config_documents: Vec<oc_schema::config::Document>,
+    config_documents: Arc<Vec<oc_schema::config::Document>>,
     home: PathBuf,
     /// Project resolution for runtime destinations (`session_move`).
     projects: Arc<dyn crate::project::ProjectStore>,
@@ -667,7 +667,36 @@ impl Engine {
         // consulted before the engine-level (boot/global) bindings. A
         // daemon booted in one directory thereby serves every project's
         // config-seeded providers.
-        let location_providers = providers_from_config(&loaded);
+        let mut location_providers = providers_from_config(&loaded);
+        let config_documents = Arc::new(crate::config::agent_md::load_documents(&loaded.entries));
+
+        // The managed-policy runtime (CONFIG-C7, config/plugin/policy.ts):
+        // the merged statement list — authored documents reversed (the
+        // user-global document outranks the repository's) with the
+        // connected Console's organization statements last — executes on
+        // two surfaces here: `provider.use` deny prunes the location's
+        // config provider bindings and refuses model resolution (v2's
+        // provider catalog transform removes denied records), and
+        // `permission` deny rides the permission engine's evaluate hook
+        // (below).
+        let policy_managed = Arc::clone(self.integration.console_providers().managed());
+        let policy_documents = Arc::clone(&config_documents);
+        let policy_list: Arc<
+            dyn Fn() -> Vec<crate::config::managed_policy::Statement> + Send + Sync,
+        > = Arc::new(move || {
+            crate::config::managed_policy::policies(&policy_managed, &policy_documents)
+        });
+        if !policy_list().is_empty() {
+            location_providers.custom.retain(|provider| {
+                managed_policy::provider_denied(&policy_list(), &provider.id).is_none()
+            });
+            if location_providers.default_model.as_ref().is_some_and(|selection| {
+                managed_policy::provider_denied(&policy_list(), &selection.provider_id.as_str())
+                    .is_some()
+            }) {
+                location_providers.default_model = None;
+            }
+        }
         let resolver: Arc<dyn ModelResolver> =
             if crate::provider_catalog::overlay::is_empty(&location_providers) {
                 Arc::clone(&self.resolver)
@@ -685,13 +714,24 @@ impl Engine {
                     Arc::clone(&self.resolver),
                 ))
             };
+        // The `provider.use` deny surface on resolution: a denied
+        // provider never resolves, exactly like a removed catalog
+        // record (the catalog-transform equivalent — the engine-level
+        // resolver is wrapped only when policies exist).
+        let resolver: Arc<dyn ModelResolver> = if policy_list().is_empty() {
+            resolver
+        } else {
+            Arc::new(ManagedPolicyModelResolver {
+                inner: resolver,
+                policies: Arc::clone(&policy_list),
+            })
+        };
 
         // Agents: v2 builtins + config markdown ingestion (seeded by the
         // agent plugin during the graph build over THIS registry).
         let agents = Arc::new(crate::location::AgentRegistry::new());
         let tools = Arc::new(crate::location::ToolRegistryState::new());
         let hooks = Arc::new(crate::hooks::HookRegistry::new());
-        let config_documents = crate::config::agent_md::load_documents(&loaded.entries);
 
         // The websearch service (v2 `WebSearch.Service` +
         // `ConfigWebSearchPlugin`): providers eligible through the v2 env
@@ -706,7 +746,29 @@ impl Engine {
         );
 
         // Permission engine (session/agent ruleset resolver over the row +
-        // the agent table).
+        // the agent table). The managed-policy `permission` deny hook
+        // (CONFIG-C7, policy.ts:54-67) rides the evaluate step: a
+        // matching `{action}:{resource}` policy denies the whole request
+        // with the policy's message — the hook only runs on the
+        // non-short-circuited path, matching v2's plugin registration.
+        let permission_policies = Arc::clone(&policy_list);
+        let policy_hook: Option<crate::permission::HookOverride> =
+            Some(Arc::new(move |input: crate::permission::HookInput| {
+                let policies = permission_policies();
+                Box::pin(async move {
+                    let Some(denied) = managed_policy::permission_denied(
+                        &policies,
+                        &input.action,
+                        &input.resources,
+                    ) else {
+                        return None;
+                    };
+                    Some(crate::permission::HookVerdict {
+                        effect: oc_schema::permission::Effect::Deny,
+                        message: Some(denied.message.clone()),
+                    })
+                })
+            }));
         let permission = Permission::new(
             Arc::clone(&self.ids),
             Arc::clone(&self.clock),
@@ -721,7 +783,7 @@ impl Engine {
             )),
             Arc::new(SessionRuleResolver { db: (*self.db).clone(), agents: Arc::clone(&agents) }),
             oc_schema::id::ProjectId::parse(project.id.clone()),
-            None,
+            policy_hook,
         );
 
         // Forms + shell + jobs + env.
@@ -992,6 +1054,14 @@ impl Engine {
             Arc::clone(&resolver),
             Arc::clone(&self.rng),
         ));
+        // The config `compaction` key (v2 `ConfigCompactionPlugin`,
+        // config/plugin/compaction.ts): every document's
+        // `editor.configure({...})` spreads over the current settings —
+        // per-key latest-wins across the location's documents
+        // (`Config.latest` per key, not per section).
+        if let Some(settings) = config_compaction_settings(&inputs.config_documents) {
+            compaction.configure(settings);
+        }
         let title = Arc::new(SessionTitle::new(
             (*self.db).clone(),
             (*self.bus).clone(),
@@ -1880,6 +1950,32 @@ fn config_shell_of(documents: &[oc_schema::config::Document]) -> Option<String> 
         .find_map(|document| document.info.shell.clone().filter(|shell| !shell.is_empty()))
 }
 
+/// The config `compaction` key (v2 `ConfigCompactionPlugin`,
+/// config/plugin/compaction.ts:15-22): each document's
+/// `editor.configure({ ...present keys })` spreads over the running
+/// settings, so a key only changes when a LATER document owns it —
+/// per-key latest-wins, the section never resets wholesale. `None`
+/// when no document configures compaction (service defaults).
+fn config_compaction_settings(
+    documents: &[oc_schema::config::Document],
+) -> Option<crate::session::runner::compaction::Settings> {
+    let mut settings: Option<crate::session::runner::compaction::Settings> = None;
+    for document in documents {
+        let Some(compaction) = document.info.compaction.as_ref() else { continue };
+        let current = settings.get_or_insert_with(Default::default);
+        if let Some(auto) = compaction.auto {
+            current.auto = auto;
+        }
+        if let Some(buffer) = compaction.buffer {
+            current.buffer = Some(i64::try_from(buffer).unwrap_or(i64::MAX));
+        }
+        if let Some(tokens) = compaction.keep.as_ref().and_then(|keep| keep.tokens) {
+            current.keep = i64::try_from(tokens).unwrap_or(i64::MAX);
+        }
+    }
+    settings
+}
+
 /// The config `experimental` key (`Config.latest(entries, "experimental")`):
 /// the LAST document owning the key — whole-key shadowing, like v2.
 fn config_experimental(
@@ -1966,11 +2062,53 @@ impl SyntheticPublisher for BusSyntheticPublisher {
     }
 }
 
+/// The managed-policy `provider.use` deny surface on model resolution
+/// (CONFIG-C7, policy.ts:44-52): a denied provider never resolves —
+/// the resolution error carries the policy's message, exactly like a
+/// provider removed from the catalog by v2's transform.
+struct ManagedPolicyModelResolver {
+    inner: Arc<dyn ModelResolver>,
+    policies: Arc<dyn Fn() -> Vec<crate::config::managed_policy::Statement> + Send + Sync>,
+}
+
+impl ManagedPolicyModelResolver {
+    fn check(
+        &self,
+        reference: &oc_schema::model::Ref,
+    ) -> Result<(), crate::session::runner::ModelError> {
+        let policies = (self.policies)();
+        match managed_policy::provider_denied(&policies, reference.provider_id.as_str()) {
+            Some(denied) => Err(crate::session::runner::ModelError::Resolver(format!(
+                "Blocked by configuration policy: {} (provider.use deny on {})",
+                denied.message, reference.provider_id
+            ))),
+            None => Ok(()),
+        }
+    }
+}
+
+impl ModelResolver for ManagedPolicyModelResolver {
+    fn resolve(
+        &self,
+        session: &crate::database::schema::SessionRow,
+    ) -> Result<ResolvedModel, crate::session::runner::ModelError> {
+        self.inner.resolve(session)
+    }
+
+    fn resolve_selected(
+        &self,
+        session: &crate::database::schema::SessionRow,
+        reference: &oc_schema::model::Ref,
+    ) -> Result<ResolvedModel, crate::session::runner::ModelError> {
+        self.check(reference)?;
+        self.inner.resolve_selected(session, reference)
+    }
+}
+
 /// The subagent lane's model source over the catalog.
 struct CatalogModelSource {
     catalog: Arc<Catalog>,
 }
-
 impl crate::subagent::ModelSource for CatalogModelSource {
     fn model(&self, provider_id: &str, model_id: &str) -> Option<crate::subagent::ModelEntry> {
         crate::subagent::ModelSource::model(self.catalog.as_ref(), provider_id, model_id)

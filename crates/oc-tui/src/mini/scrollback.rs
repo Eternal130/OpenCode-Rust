@@ -174,11 +174,39 @@ pub fn entry_flags(commit: &Commit) -> (bool, bool) {
     }
 }
 
+/// `canonicalToolName` (`util/tool-display.ts:1-5`): the display-name
+/// aliases (the `shell_output` gate keys on the canonical name).
+#[must_use]
+pub fn canonical_tool_name(name: &str) -> &str {
+    match name {
+        "bash" => "shell",
+        "task" => "subagent",
+        "apply_patch" => "patch",
+        other => other,
+    }
+}
+
 /// `entryBody` for the mono writer (`entry.body.ts:189-239` with
 /// `mono: true`): the text rows the entry prints, in order (empty ⇒
 /// nothing).
 #[must_use]
 pub fn entry_body(commit: &Commit) -> Vec<String> {
+    entry_body_with(commit, true)
+}
+
+/// `entryBody(commit, { shellOutput })` (`tool.ts:1278-1301` —
+/// CONFIG-T4's `mini.shell_output`): a shell-family tool's streaming
+/// rows vanish when the knob hides them (the start caption and the
+/// final row always render — v2 gates only the live output body).
+#[must_use]
+pub fn entry_body_with(commit: &Commit, shell_output: bool) -> Vec<String> {
+    if !shell_output
+        && commit.kind == CommitKind::Tool
+        && commit.phase == Phase::Progress
+        && commit.tool.as_deref().is_some_and(|tool| canonical_tool_name(tool) == "shell")
+    {
+        return Vec::new();
+    }
     if commit.summary {
         return Vec::new();
     }
@@ -255,6 +283,19 @@ fn split_rows(raw: &str) -> Vec<String> {
 /// terminal width, and the trailing blank row (`trailingNewline`).
 #[must_use]
 pub fn format_commit(prev: Option<&Commit>, commit: &Commit, width: usize) -> Vec<String> {
+    format_commit_with(prev, commit, width, true)
+}
+
+/// `format_commit` with the `mini.shell_output` knob
+/// (`scrollback.surface.ts:457`'s `entryBody(commit, { shellOutput })`
+/// pass-through — CONFIG-T4).
+#[must_use]
+pub fn format_commit_with(
+    prev: Option<&Commit>,
+    commit: &Commit,
+    width: usize,
+    shell_output: bool,
+) -> Vec<String> {
     let (start_on_new_line, trailing_newline) = entry_flags(commit);
     let _ = start_on_new_line; // the mono writer always starts entries on new rows
     let mut rows = Vec::new();
@@ -270,7 +311,7 @@ pub fn format_commit(prev: Option<&Commit>, commit: &Commit, width: usize) -> Ve
         rows.push(commit.text.clone());
         return rows;
     }
-    let body = entry_body(commit);
+    let body = entry_body_with(commit, shell_output);
     for row in body {
         if row.is_empty() {
             rows.push(String::new());
