@@ -871,6 +871,155 @@ pub fn skill_message_row(name: &str, theme: &ThemeStyles, width: usize) -> RowRe
     completed_tool_row('→', &format!("Skill {name}"), theme, width)
 }
 
+/// TUI-TD01 — the switch row (`SessionSwitchMessageV2`,
+/// session/index.tsx:1904-1932): one muted line at paddingLeft 3 —
+/// "Switched agent [from {previous}] to {agent}" /
+/// "Switched model to {label}" / "Switched variant to {variant}".
+#[must_use]
+pub fn switch_message_row(text: &str, theme: &ThemeStyles, width: usize) -> RowRender {
+    let muted = theme.text_muted;
+    let label_width = width.saturating_sub(3);
+    let mut placed =
+        wrapped_label(3, 0, &crate::wrap::take_width(text, label_width), label_width, muted);
+    for item in &mut placed {
+        item.width = item.width.min(label_width.max(1));
+    }
+    RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() }
+}
+
+/// `switchLabel` (util/model.ts:10-25) over the message's model refs:
+/// same provider+model ⇒ the variant switch; a catalog name wins the
+/// display, else `providerID/id[/variant]`. `model_names` carries the
+/// combined `providerID/modelID` → display-name pairs (the assistant
+/// footer's table).
+#[must_use]
+pub fn model_switch_label(
+    model: &(String, String, Option<String>),
+    previous: &Option<(String, String, Option<String>)>,
+    model_names: &[(String, String)],
+) -> String {
+    let (provider_id, model_id, variant) = model;
+    if let Some((prev_provider, prev_id, _)) = previous {
+        if prev_provider == provider_id && prev_id == model_id {
+            return format!("Switched variant to {}", variant.as_deref().unwrap_or("default"));
+        }
+    }
+    let key = format!("{provider_id}/{model_id}");
+    match model_names.iter().find(|(id, _)| *id == key) {
+        None => {
+            let formatted = [provider_id.clone(), model_id.clone()]
+                .into_iter()
+                .chain(variant.clone())
+                .collect::<Vec<_>>()
+                .join("/");
+            format!("Switched model to {formatted}")
+        }
+        Some((_, display)) => {
+            let suffix = variant
+                .as_deref()
+                .filter(|variant| *variant != "default")
+                .map(|variant| format!(" ({variant})"))
+                .unwrap_or_default();
+            format!("Switched model to {display}{suffix}")
+        }
+    }
+}
+
+/// TUI-TD01 — the location switch row (`SessionSwitchMessageV2`'s
+/// location arm, session/index.tsx:1908-1916): "↳ Moved to " muted +
+/// the directory in `text.feedback.info.base`, paddingLeft 3.
+#[must_use]
+pub fn location_switch_row(directory: &str, theme: &ThemeStyles, width: usize) -> RowRender {
+    let muted = theme.text_muted;
+    let prefix = "↳ Moved to ";
+    // The prefix contains `↳` (3 UTF-8 bytes, 1 cell) — offset by the
+    // DISPLAY width, never the byte length.
+    let prefix_width = crate::wrap::display_width(prefix);
+    let budget = width.saturating_sub(3 + prefix_width);
+    let directory = crate::wrap::take_width(directory, budget);
+    let placed = vec![
+        text_at(3, 0, prefix, muted),
+        text_at(3 + prefix_width, 0, directory, Style::new().fg(theme.info).bg(theme.background)),
+    ];
+    RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() }
+}
+
+/// TUI-TD01 — the plain notice row ([`SessionNoticeMessageV2`]'s
+/// fallback arm, session/index.tsx:1967-1971): the `◈`-led
+/// `InlineToolRow`, complete, muted — the body as the label.
+#[must_use]
+pub fn notice_row(text: &str, theme: &ThemeStyles, width: usize) -> RowRender {
+    completed_tool_row('◈', text, theme, width)
+}
+
+/// The completion notice's status word (`SessionNoticeMessageV2`,
+/// index.tsx:1951-1954): completed → "finished", error → "failed",
+/// else the raw state (default "finished").
+#[must_use]
+fn notice_status(state: Option<&str>) -> &str {
+    match state {
+        Some("error") => "failed",
+        Some("completed") | None => "finished",
+        Some(other) => other,
+    }
+}
+
+/// TUI-TD01 — the synthetic completion row (`SessionNoticeMessageV2`'s
+/// completion arm, index.tsx:1956-1966): `{↳|!} {actor} {status}`
+/// colored (error red / cancelled warning / else info) + the muted
+/// ` · description` suffix, truncated to the width (wrapMode none).
+#[must_use]
+pub fn completion_notice_row(
+    state: Option<&str>,
+    source: Option<&str>,
+    agent: Option<&str>,
+    description: &str,
+    theme: &ThemeStyles,
+    width: usize,
+) -> RowRender {
+    let actor = if source == Some("shell") {
+        "Shell".to_owned()
+    } else {
+        titlecase(agent.filter(|agent| !agent.is_empty()).unwrap_or("Subagent"))
+    };
+    let state = state.filter(|state| !state.is_empty());
+    let heading = format!(
+        "{} {actor} {}",
+        if state == Some("completed") { "↳" } else { "!" },
+        notice_status(state)
+    );
+    let color = match state {
+        Some("error") => theme.error,
+        Some("cancelled") => theme.warning,
+        _ => theme.info,
+    };
+    // Shell descriptions collapse whitespace (index.tsx:1955).
+    let body = if source == Some("shell") {
+        description.split_whitespace().collect::<Vec<_>>().join(" ")
+    } else {
+        description.to_owned()
+    };
+    let muted = theme.text_muted;
+    let mut placed = vec![text_at(3, 0, &heading, Style::new().fg(color).bg(theme.background))];
+    if !body.is_empty() {
+        let heading_width = crate::wrap::display_width(&heading);
+        let budget = width.saturating_sub(3 + heading_width);
+        let suffix = crate::wrap::take_width(&format!(" · {body}"), budget);
+        if !suffix.is_empty() {
+            placed.push(text_at(3 + heading_width, 0, suffix, muted));
+        }
+    }
+    RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() }
+}
+
+/// `Locale.titlecase` re-export seam for the switch rows
+/// (agent-switched's label, index.tsx:1917-1921) — the model's shared
+/// helper re-exported for the row builders.
+#[must_use]
+pub fn switch_actor(agent: &str) -> String {
+    titlecase(agent)
+}
+
 /// One staged-revert file row (`A path.txt +3 -1`,
 /// index.tsx:2131-2148): status letter muted, the path in `text.base`
 /// (FilePath-contracted), `+A`/`-D` in the diff added/removed colors.

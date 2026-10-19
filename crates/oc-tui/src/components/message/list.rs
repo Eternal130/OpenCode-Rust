@@ -381,6 +381,63 @@ pub fn render_transcript(
     Transcript { rows: measured, content_height: y, inset, images }
 }
 
+/// TUI-TD05 — the tail-first mount budgets (session/index.tsx:132-135):
+/// a collapsed group costs one entry however many parts it holds, so
+/// the measured-row count IS the rendered-entry count.
+pub const TRANSCRIPT_TAIL_ROWS: usize = 40;
+pub const TRANSCRIPT_BACKFILL_CHUNK: usize = 60;
+
+/// TUI-TD05 — the session's mount-window signals
+/// (`hiddenRows()` / `visibleRowsEnd()`, index.tsx:397-410): `None`
+/// mirrors the reference's `undefined` (no pin; the tail budget rules
+/// the top, the full list the bottom).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MountWindow {
+    /// The pinned count of hidden rows at the top (`setHiddenRows`).
+    pub hidden: Option<usize>,
+    /// The pinned end row index (`setVisibleRowsEnd`).
+    pub end: Option<usize>,
+}
+
+/// `rowsBefore` (mount-budget.ts:28-34) with flat weights: the first
+/// row index such that rows `[index, end)` spend at least `budget`.
+#[must_use]
+pub fn rows_before(end: usize, budget: usize) -> usize {
+    end.saturating_sub(budget)
+}
+
+/// `rowsAfter` (mount-budget.ts:36-42) with flat weights: the end row
+/// index such that rows `[start, index)` spend at least `budget`.
+#[must_use]
+pub fn rows_after(start: usize, budget: usize, len: usize) -> usize {
+    (start + budget).min(len)
+}
+
+/// TUI-TD05 — apply the mount window to a rendered transcript
+/// (`hidden()` / `visibleEnd()` / `visibleRows`, index.tsx:407-411):
+/// the rows OUTSIDE the window drop from the render set, but every
+/// coordinate stays ABSOLUTE — v2's scrollbox keeps the hidden region
+/// as a spacer (the mount budget saves render work, never reshapes
+/// the scroll math: sticky offsets, pageup walks and reveal growth
+/// all address the SAME document space, so growing the window above
+/// never moves the viewport).
+pub fn apply_mount_window(transcript: &mut Transcript, window: MountWindow) {
+    let len = transcript.rows.len();
+    if len == 0 {
+        return;
+    }
+    let hidden = window.hidden.unwrap_or(usize::MAX).min(rows_before(len, TRANSCRIPT_TAIL_ROWS));
+    let end = window.end.unwrap_or(len).min(len).max(hidden);
+    if hidden == 0 && end >= len {
+        return; // the full list is mounted
+    }
+    // Slice the render set; keep the rows' absolute y (the spacer
+    // above is simply "rows that don't paint" — content_height keeps
+    // measuring the FULL transcript).
+    transcript.rows.drain(..hidden);
+    transcript.rows.truncate(end - hidden);
+}
+
 /// Render one reduced row.
 // The per-kind match grew with the SURF-1 detail arms.
 #[allow(clippy::too_many_lines)]
@@ -446,10 +503,89 @@ fn render_row(
                 Message::Skill { name, .. } => {
                     crate::components::message::rows::skill_message_row(name, theme, width)
                 }
-                // Idle markers render nothing.
-                Message::Idle { .. } | Message::Synthetic { .. } | Message::Assistant { .. } => {
-                    RowRender::default()
+                // TUI-TD01 — the synthetic message: instruction loads
+                // render nothing here (the Instructions group owns
+                // them); the notice forms render
+                // `SessionNoticeMessageV2` (index.tsx:1934-1986) —
+                // the subagent/shell completion heading, else the
+                // `◈ Notice` row over the description.
+                Message::Synthetic {
+                    instruction_paths, description, source, state, agent, ..
+                } => {
+                    // An instruction load renders nothing here (the
+                    // Instructions group owns it); otherwise the
+                    // `SessionNoticeMessageV2` row.
+                    if instruction_paths.is_empty() {
+                        let text = description.as_deref().unwrap_or("");
+                        match source.as_deref() {
+                            Some("subagent" | "shell") => {
+                                crate::components::message::rows::completion_notice_row(
+                                    state.as_deref(),
+                                    source.as_deref(),
+                                    agent.as_deref(),
+                                    text,
+                                    theme,
+                                    width,
+                                )
+                            }
+                            _ => crate::components::message::rows::notice_row(text, theme, width),
+                        }
+                    } else {
+                        RowRender::default()
+                    }
                 }
+                // TUI-TD01 — the user `!` shell row (`ShellMessage` →
+                // `ShellDisplay`, index.tsx:2166-2186).
+                Message::Shell { command, status, exit, output, .. } => {
+                    crate::components::message::tool_detail::shell_message_row(
+                        command,
+                        status,
+                        *exit,
+                        output.as_deref(),
+                        options.clock_ms,
+                        theme,
+                        width,
+                    )
+                }
+                // TUI-TD01 — the three switch rows
+                // (`SessionSwitchMessageV2`, index.tsx:1904-1932).
+                Message::AgentSwitched { agent, previous, .. } => {
+                    let label = match previous {
+                        Some(previous) if previous != agent => format!(
+                            "Switched agent from {} to {}",
+                            crate::components::message::rows::switch_actor(previous),
+                            crate::components::message::rows::switch_actor(agent)
+                        ),
+                        _ => format!(
+                            "Switched agent to {}",
+                            crate::components::message::rows::switch_actor(agent)
+                        ),
+                    };
+                    crate::components::message::rows::switch_message_row(&label, theme, width)
+                }
+                Message::ModelSwitched { provider_id, model_id, variant, previous, .. } => {
+                    let model = (provider_id.clone(), model_id.clone(), variant.clone());
+                    let label = crate::components::message::rows::model_switch_label(
+                        &model,
+                        previous,
+                        &options.model_names,
+                    );
+                    crate::components::message::rows::switch_message_row(&label, theme, width)
+                }
+                Message::LocationSwitched { directory, .. } => {
+                    crate::components::message::rows::location_switch_row(directory, theme, width)
+                }
+                // TUI-TD01 — the system notice (`◈ Notice` over the
+                // description; "Instructions updated" when absent).
+                Message::System { description, .. } => {
+                    crate::components::message::rows::notice_row(
+                        description.as_deref().unwrap_or("Instructions updated"),
+                        theme,
+                        width,
+                    )
+                }
+                // Idle markers render nothing.
+                Message::Idle { .. } | Message::Assistant { .. } => RowRender::default(),
             }
         }
         Row::Entry(Entry::Part { message_id, part_id }) => {

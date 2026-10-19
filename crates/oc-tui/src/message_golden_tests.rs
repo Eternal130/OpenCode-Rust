@@ -325,11 +325,21 @@ fn instructions_fixture(
         Message::Synthetic {
             id: "AGENTS.md".into(),
             instruction_paths: vec!["AGENTS.md".into()],
+            description: None,
+            source: None,
+            state: None,
+            agent: None,
+            child_id: None,
             created: 1,
         },
         Message::Synthetic {
             id: "packages/tui/AGENTS.md".into(),
             instruction_paths: vec!["packages/tui/AGENTS.md".into()],
+            description: None,
+            source: None,
+            state: None,
+            agent: None,
+            child_id: None,
             created: 1,
         },
     ];

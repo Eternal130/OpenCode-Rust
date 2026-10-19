@@ -75,7 +75,14 @@ fn resync(
     permissions: Vec<(String, Vec<PermissionRequest>)>,
     forms: Vec<(String, Vec<FormRequest>)>,
 ) -> Ingest {
-    Ingest::Resync { sessions, unread: Vec::new(), messages: Vec::new(), permissions, forms }
+    Ingest::Resync {
+        sessions,
+        unread: Vec::new(),
+        messages: Vec::new(),
+        cursors: Vec::new(),
+        permissions,
+        forms,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +249,7 @@ fn message_tail_resync() {
         sessions: vec![snapshot("ses_1", None)],
         unread: Vec::new(),
         messages: vec![("ses_1".to_owned(), vec![offline_message])],
+        cursors: Vec::new(),
         permissions: Vec::new(),
         forms: Vec::new(),
     }]);

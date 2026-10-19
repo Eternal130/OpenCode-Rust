@@ -250,6 +250,7 @@ impl Harness {
             }],
             unread: Vec::new(),
             messages: vec![(SESSION.to_owned(), snapshot)],
+            cursors: Vec::new(),
             permissions: Vec::new(),
             forms: Vec::new(),
         })
@@ -598,6 +599,7 @@ fn snapshot_queued_mid_stream_serializes_in_channel_order() {
             sessions: Vec::new(),
             unread: Vec::new(),
             messages: vec![(SESSION.to_owned(), server.fetch_messages_at(45))],
+            cursors: Vec::new(),
             permissions: Vec::new(),
             forms: Vec::new(),
         },
