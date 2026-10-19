@@ -903,6 +903,117 @@ function makeCtx(pluginId, options) {
           });
         },
       },
+      // -- slot / router (PLUG-TUI-SLOT: the v2 TUI-plugin UI
+      //    surface, api.tsx:298-312 + 204-224) -------------------------
+      slot(claim) {
+        // api.tsx:298-312 — exactly one placement key, enforced at
+        // runtime for untyped plugins; keys counter-suffixed so one
+        // plugin may claim several places.
+        const kinds = ["prepend", "append", "before", "after", "replace"];
+        const present = kinds.filter((kind) => claim && claim[kind] !== undefined);
+        if (present.length !== 1) {
+          throw new Error("Slot claim requires exactly one placement key");
+        }
+        const kind = present[0];
+        const target = String(claim[kind] ?? "");
+        const render = claim.render;
+        if (!target) throw new Error("Slot claim requires a target");
+        if (typeof render !== "function") throw new Error("Slot claim requires a render function");
+        if (!slotClaims.has(pluginId)) slotClaims.set(pluginId, new Map());
+        const key = `slot#${slotClaimCounter(pluginId)}`;
+        slotClaims.get(pluginId).set(key, { kind, target, render, clickHandlers: new Map() });
+        hostRequest("ui.slot.claim", { pluginId, key, kind, target }).catch((error) => {
+          notify("log", { pluginId, level: "error", message: `ui.slot claim failed: ${errText(error)}` });
+        });
+        let registered = true;
+        return () => {
+          if (!registered) return;
+          registered = false;
+          slotClaims.get(pluginId)?.delete(key);
+        };
+      },
+      router: {
+        /** api.tsx:204-212 — register a named plugin page. */
+        async register(page) {
+          const name = String(page?.name ?? "");
+          if (!name) throw new Error("router.register requires a name");
+          if (typeof page?.render !== "function") {
+            throw new Error("router.register requires a render function");
+          }
+          if (!pluginRoutes.has(pluginId)) pluginRoutes.set(pluginId, new Map());
+          pluginRoutes.get(pluginId).set(name, page.render);
+          await hostRequest("ui.router.register", { pluginId, name });
+          return () => {
+            pluginRoutes.get(pluginId)?.delete(name);
+          };
+        },
+        /** api.tsx:211-224 — `{type:"plugin", name, data?}` targets
+         *  this plugin's registered page (the ref attributes the id);
+         *  session targets reuse the bridge's navigation ask. */
+        navigate(destination) {
+          const target = destination ?? {};
+          if (target.type === "plugin") {
+            notify("tui.route.plugin", {
+              pluginId: "id" in target && typeof target.id === "string" ? target.id : pluginId,
+              name: String(target.name ?? ""),
+              data: target.data && typeof target.data === "object" ? target.data : null,
+            });
+            return;
+          }
+          if (target.type === "session") {
+            notify("tui.route.navigate", {
+              sessionID: typeof target.sessionID === "string" ? target.sessionID : null,
+              name: "session",
+            });
+            return;
+          }
+          if (typeof target.sessionID === "string") {
+            notify("tui.route.navigate", { sessionID: target.sessionID, name: "session" });
+          }
+        },
+        /** The live route view (the host-pushed `tui.route`). */
+        current() {
+          return tuiRoute;
+        },
+      },
+    },
+
+    // -- keymap (api.tsx:179-199: `ctx.keymap.layer(factory)`) -------
+    keymap: {
+      async layer(factory) {
+        if (typeof factory !== "function") throw new Error("keymap.layer requires a factory");
+        const layer = factory() ?? {};
+        const commands = Array.isArray(layer.commands) ? layer.commands : [];
+        const mode = typeof layer.mode === "string" ? layer.mode : "global";
+        const portable = [];
+        for (const command of commands) {
+          const id = String(command?.id ?? command?.title ?? "");
+          const bind = String(command?.bind ?? "");
+          if (!id || !bind) throw new Error(`keymap.layer command requires id and bind`);
+          if (typeof command?.run !== "function") {
+            throw new Error(`keymap.layer command ${id} requires a run function`);
+          }
+          if (!keymapRuns.has(pluginId)) keymapRuns.set(pluginId, new Map());
+          keymapRuns.get(pluginId).set(id, command.run);
+          portable.push({
+            id,
+            title: String(command.title ?? id),
+            group: String(command.group ?? ""),
+            bind,
+            palette: command.palette === true,
+            slash:
+              command.slash && typeof command.slash === "object" && typeof command.slash.name === "string"
+                ? command.slash.name
+                : null,
+            mode,
+          });
+        }
+        await hostRequest("keymap.layer", { pluginId, commands: portable });
+        return () => {
+          const table = keymapRuns.get(pluginId);
+          for (const command of portable) table?.delete(command.id);
+        };
+      },
     },
   };
 }
@@ -983,6 +1094,10 @@ async function handleUnload({ pluginId }) {
   plugins.delete(pluginId);
   dialogProviders.delete(pluginId);
   sidebarSlots.delete(pluginId);
+  slotClaims.delete(pluginId);
+  slotClaimCounters.delete(pluginId);
+  pluginRoutes.delete(pluginId);
+  keymapRuns.delete(pluginId);
   return { ok: true };
 }
 
@@ -1364,6 +1479,22 @@ async function scanDigests(entry) {
 const sidebarSlots = new Map();
 /** pluginId -> disposal for the loaded tui entry. */
 const tuiDisposers = new Map();
+/** PLUG-TUI-SLOT: pluginId -> Map(claim key -> {kind, target, render,
+ * clickHandlers}) — the generic `ctx.ui.slot` claim table
+ * (api.tsx:298-312; keys counter-suffixed `slot#N`). */
+const slotClaims = new Map();
+/** Per-plugin claim counter (the `slot#N` suffix source). */
+const slotClaimCounters = new Map();
+/** pluginId -> Map(route name -> render) — `ctx.ui.router.register`. */
+const pluginRoutes = new Map();
+/** pluginId -> Map(command id -> run) — `ctx.keymap.layer` runs. */
+const keymapRuns = new Map();
+
+function slotClaimCounter(pluginId) {
+  const next = (slotClaimCounters.get(pluginId) ?? 0) + 1;
+  slotClaimCounters.set(pluginId, next);
+  return next - 1;
+}
 /** The host-pushed current route ({type:"session",sessionID}|{name:"home"}). */
 let tuiRoute = { name: "home" };
 /** The host-pushed flat v2 theme view (TuiThemeCurrent's sidebar subset). */
@@ -1797,14 +1928,19 @@ async function handleSlotMaterialize({ pluginId }) {
   if (!slot || typeof slot.render !== "function") {
     throw new Error(`${pluginId}: no sidebar_content slot registered`);
   }
-  const tree = slot.render();
+  const { section, handlers } = flattenRenderTree(slot.render());
+  slot.clickHandlers = handlers;
+  return section;
+}
+
+/** Flatten one rendered tree (the claim/route renders use the same
+ *  native section shape as the sidebar bridge — PLUG-TUI-SLOT):
+ *  `{title, rows:[{text,click}]}` plus the per-row activate handler
+ *  table (index-aligned with the body rows). */
+function flattenRenderTree(tree) {
   const lines = treeLines(tree)
     .map((line) => line.replace(/\s+$/, ""))
     .filter((line) => line.trim() !== "");
-  // The rows' activate handlers: walk the root's direct children (the
-  // row boxes); a child's lines inherit its handler (one line per row
-  // in this tree). flatChildren is index-aligned with `lines` — the
-  // rows start one past the title.
   const handlers = new Map();
   const flatChildren = [];
   for (const child of tree?.children ?? []) {
@@ -1821,11 +1957,56 @@ async function handleSlotMaterialize({ pluginId }) {
     const handler = flatChildren[index + 1];
     if (handler) handlers.set(index, handler);
   });
-  slot.clickHandlers = handlers;
   return {
-    title: lines.length > 0 ? lines[0] : "",
-    rows: bodyRows.map((text, index) => ({ text, click: handlers.has(index) })),
+    section: {
+      title: lines.length > 0 ? lines[0] : "",
+      rows: bodyRows.map((text, index) => ({ text, click: handlers.has(index) })),
+    },
+    handlers,
   };
+}
+
+/** `slot.claim.render` — run one `ctx.ui.slot` claim's render NOW
+ *  (api.tsx:298-312's claim table; bounded by the host's request
+ *  timeout) and flatten to the native section shape. */
+async function handleClaimRender({ pluginId, key }) {
+  const claim = slotClaims.get(pluginId)?.get(String(key ?? ""));
+  if (!claim || typeof claim.render !== "function") {
+    throw new Error(`${pluginId}: no slot claim ${key}`);
+  }
+  const { section, handlers } = flattenRenderTree(claim.render({}));
+  claim.clickHandlers = handlers;
+  return section;
+}
+
+/** `slot.claim.click` — run one claim row's stashed `onMouseUp`. */
+async function handleClaimClick({ pluginId, key, row }) {
+  const claim = slotClaims.get(pluginId)?.get(String(key ?? ""));
+  if (!claim) throw new Error(`${pluginId}: no slot claim ${key}`);
+  const handler = claim.clickHandlers?.get(Number(row));
+  if (typeof handler !== "function") return { ok: false };
+  handler();
+  return { ok: true };
+}
+
+/** `route.render` — run one registered route page's render
+ *  (api.tsx:204-212) with the navigation data and flatten. */
+async function handleRouteRender({ pluginId, name, data }) {
+  const render = pluginRoutes.get(pluginId)?.get(String(name ?? ""));
+  if (typeof render !== "function") {
+    throw new Error(`${pluginId}: no route ${name}`);
+  }
+  const { section, handlers } = flattenRenderTree(render({ data: data ?? undefined }));
+  return section;
+}
+
+/** `keymap.command.run` — run one keymap-layer command's `run`
+ *  (api.tsx:179-199; the TUI dispatches a resolved bind back). */
+async function handleKeymapRun({ pluginId, id }) {
+  const run = keymapRuns.get(pluginId)?.get(String(id ?? ""));
+  if (typeof run !== "function") return { ok: false };
+  await run();
+  return { ok: true };
 }
 
 /** `slot.click` — run one row's stashed activate handler (the click
@@ -1859,6 +2040,10 @@ const METHODS = {
   "dialog.materialize": handleDialogMaterialize,
   "slot.materialize": handleSlotMaterialize,
   "slot.click": handleSlotClick,
+  "slot.claim.render": handleClaimRender,
+  "slot.claim.click": handleClaimClick,
+  "route.render": handleRouteRender,
+  "keymap.command.run": handleKeymapRun,
   scan: async ({ entry }) => ({ digests: await scanDigests(entry) }),
 };
 

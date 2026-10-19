@@ -98,13 +98,13 @@ pub use context::{
 };
 pub use registrations::{
     PluginAgent, PluginCommand, PluginDialog, PluginGroupRule, PluginHomeAction, PluginHook,
-    PluginMcp, PluginRpc, PluginSkill, PluginState, PluginStatus, PluginTheme, PluginTool,
-    RegistrationSnapshot,
+    PluginKeymapCommand, PluginMcp, PluginRoute, PluginRpc, PluginSkill, PluginSlotClaim,
+    PluginState, PluginStatus, PluginTheme, PluginTool, RegistrationSnapshot,
 };
 pub use resolve::{parse_ops, resolve, PluginOp, PluginSourceKind, Resolution, ResolvedPlugin};
 pub use supervisor::{HostError, StoragePort, StorageScanQuery, SupervisorConfig};
 pub use tap::{BroadcastTap, TapEvent};
-pub use ui::{PluginDialogOption, PluginDialogSpec, UiRequest};
+pub use ui::{PluginDialogOption, PluginDialogSpec, PluginSectionSpec, UiRequest};
 
 /// The embedded guest script (materialized into the sandbox at start).
 const HOST_JS: &str = include_str!("host/host.js");
@@ -805,6 +805,95 @@ impl PluginHost {
             .block_on(facade.shared.request(
                 "slot.click",
                 json!({ "pluginId": plugin_id, "row": row }),
+                timeout,
+            ))
+            .map_err(|error| error.to_string())?;
+        Ok(result.get("ok").and_then(Value::as_bool).unwrap_or(false))
+    }
+
+    /// Materialize one UI slot claim's content (`ctx.ui.slot`,
+    /// api.tsx:298-312): the guest runs the claim's render function
+    /// NOW (synchronously, bounded by `timeout`) and the flattened
+    /// `{title, rows, clickable}` crosses once — rendering afterwards
+    /// is native, no per-frame IPC.
+    pub fn render_slot_claim(
+        &self,
+        plugin_id: &str,
+        key: &str,
+        timeout: Duration,
+    ) -> Result<PluginSectionSpec, String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
+        let result = runtime
+            .block_on(facade.shared.request(
+                "slot.claim.render",
+                json!({ "pluginId": plugin_id, "key": key }),
+                timeout,
+            ))
+            .map_err(|error| error.to_string())?;
+        Ok(PluginSectionSpec::from_json(&result))
+    }
+
+    /// Run one slot-claim row's `onMouseUp` (the click side of the
+    /// claim surface; navigation asks flow back as UI requests).
+    pub fn click_slot_claim(
+        &self,
+        plugin_id: &str,
+        key: &str,
+        row: usize,
+        timeout: Duration,
+    ) -> Result<bool, String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
+        let result = runtime
+            .block_on(facade.shared.request(
+                "slot.claim.click",
+                json!({ "pluginId": plugin_id, "key": key, "row": row }),
+                timeout,
+            ))
+            .map_err(|error| error.to_string())?;
+        Ok(result.get("ok").and_then(Value::as_bool).unwrap_or(false))
+    }
+
+    /// Materialize one plugin route page's content
+    /// (`ctx.ui.router.register({name, render})`, api.tsx:204-212):
+    /// the guest runs the route's render NOW with the navigation
+    /// `data`, bounded by `timeout`; the flattened content renders
+    /// natively.
+    pub fn render_route(
+        &self,
+        plugin_id: &str,
+        name: &str,
+        data: Option<&Value>,
+        timeout: Duration,
+    ) -> Result<PluginSectionSpec, String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
+        let result = runtime
+            .block_on(facade.shared.request(
+                "route.render",
+                json!({ "pluginId": plugin_id, "name": name, "data": data }),
+                timeout,
+            ))
+            .map_err(|error| error.to_string())?;
+        Ok(PluginSectionSpec::from_json(&result))
+    }
+
+    /// Run one keymap-layer command's `run` callback
+    /// (`ctx.keymap.layer`, api.tsx:179-199): the TUI dispatches a
+    /// resolved plugin bind back into the guest, bounded by `timeout`.
+    pub fn run_keymap_command(
+        &self,
+        plugin_id: &str,
+        command_id: &str,
+        timeout: Duration,
+    ) -> Result<bool, String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
+        let result = runtime
+            .block_on(facade.shared.request(
+                "keymap.command.run",
+                json!({ "pluginId": plugin_id, "id": command_id }),
                 timeout,
             ))
             .map_err(|error| error.to_string())?;
