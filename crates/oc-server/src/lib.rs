@@ -16,6 +16,7 @@ pub mod announce;
 pub mod boot;
 pub mod handlers;
 pub mod plugins;
+pub mod request_validation;
 #[path = "routes.gen.rs"]
 pub mod routes_gen;
 pub mod safekill;
@@ -33,6 +34,8 @@ pub mod pairing;
 pub mod readiness;
 pub mod sse;
 pub mod tickets;
+#[path = "validation.gen.rs"]
+pub mod validation_gen;
 
 /// In-crate boot helper for unit tests: engine over a temp dir, app shell,
 /// ephemeral port (never the default 49374).

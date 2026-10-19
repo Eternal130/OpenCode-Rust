@@ -1,4 +1,4 @@
-//! CLI: `cargo run -p openapi-gen [-- --check | --stdout routes|types|methods] [--spec PATH]`
+//! CLI: `cargo run -p openapi-gen [-- --check | --stdout routes|types|methods|validation] [--spec PATH]`
 
 #![allow(clippy::too_many_lines)]
 
@@ -65,6 +65,7 @@ fn main() -> ExitCode {
             "routes" => &generated.routes_rs,
             "types" => &generated.types_rs,
             "methods" => &generated.methods_rs,
+            "validation" => &generated.validation_rs,
             other => {
                 eprintln!("unknown --stdout target {other:?}");
                 return ExitCode::from(2);
@@ -79,6 +80,7 @@ fn main() -> ExitCode {
         (generated.routes_rs.as_str(), "crates/oc-server/src/routes.gen.rs"),
         (generated.types_rs.as_str(), "crates/oc-client/src/types.gen.rs"),
         (generated.methods_rs.as_str(), "crates/oc-client/src/methods.gen.rs"),
+        (generated.validation_rs.as_str(), "crates/oc-server/src/validation.gen.rs"),
     ];
 
     if check {

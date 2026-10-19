@@ -1,6 +1,6 @@
 {
   "guard": "route_validation",
-  "count": 138,
+  "count": 130,
   "violations": [
     "route:DELETE /api/credential/:credentialID",
     "route:DELETE /api/experimental/mcp/:server",
@@ -81,9 +81,7 @@
     "route:GET /api/websearch/provider",
     "route:GET /api/worktree",
     "route:GET /auth/connect/:code",
-    "route:PATCH /api/credential/:credentialID",
     "route:PATCH /api/experimental/config",
-    "route:PATCH /api/project/:projectID",
     "route:PATCH /api/session/:sessionID",
     "route:PATCH /api/session/:sessionID/inbox/:inboxID",
     "route:POST /api/credential",
@@ -107,8 +105,6 @@
     "route:POST /api/location/reload",
     "route:POST /api/pair",
     "route:POST /api/plugin/check",
-    "route:POST /api/plugin/update",
-    "route:POST /api/pty",
     "route:POST /api/pty/:ptyID/connect-token",
     "route:POST /api/rpc/:rpcID/:method",
     "route:POST /api/session/:sessionID/agent",
@@ -121,7 +117,6 @@
     "route:POST /api/session/:sessionID/generate",
     "route:POST /api/session/:sessionID/interrupt",
     "route:POST /api/session/:sessionID/model",
-    "route:POST /api/session/:sessionID/move",
     "route:POST /api/session/:sessionID/permission",
     "route:POST /api/session/:sessionID/permission/:requestID/reply",
     "route:POST /api/session/:sessionID/prompt",
@@ -130,15 +125,12 @@
     "route:POST /api/session/:sessionID/shell",
     "route:POST /api/session/:sessionID/synthetic",
     "route:POST /api/session/:sessionID/view",
-    "route:POST /api/shell",
     "route:POST /api/vcs/init",
-    "route:POST /api/websearch",
     "route:POST /api/worktree",
     "route:POST /api/worktree/refresh",
     "route:PUT /api/experimental/mcp/:server",
     "route:PUT /api/experimental/persistent-pty/:ptyID",
     "route:PUT /api/experimental/session/:sessionID/instructions/entries/:key",
-    "route:PUT /api/pty/:ptyID",
     "route:PUT /api/session/:sessionID/environment"
   ]
 }
