@@ -78,3 +78,9 @@ pub mod vertex;
 // GitHub Copilot chat — the openai-compatible chat protocol with the
 // Copilot client header policy over the credential-bound transport.
 pub mod copilot;
+
+// GitHub Copilot responses lane (AI-COPILOT-C1) — per-model endpoint
+// selection between the `/responses` (OpenAI Responses) and
+// `/chat/completions` (openai-compatible chat) deployments, plus the
+// dispatching protocol/route that serves both behind one facade binding.
+pub mod copilot_responses;
