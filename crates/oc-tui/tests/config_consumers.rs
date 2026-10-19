@@ -135,24 +135,25 @@ fn cli_json_autoaccept() {
     use oc_tui::config::TuiConfig;
 
     // The decoded-document mapping.
-    let mut info = oc_core::cli_config::Info::default();
-    info.session = Some(oc_core::cli_config::SessionInfo {
-        permissions: Some("autoaccept".to_owned()),
+    let info = oc_core::cli_config::Info {
+        session: Some(oc_core::cli_config::SessionInfo {
+            permissions: Some("autoaccept".to_owned()),
+            ..Default::default()
+        }),
         ..Default::default()
-    });
+    };
     let config = TuiConfig::from_info(&info, None);
-    assert!(
-        config.permission_autoaccept(false),
-        "autoaccept through cli.json without the flag"
-    );
+    assert!(config.permission_autoaccept(false), "autoaccept through cli.json without the flag");
     assert!(config.permission_autoaccept(true), "the flag stays a superset");
 
     // The truth table (v2's `args.auto ? "autoaccept" : config...`).
-    let mut prompt = oc_core::cli_config::Info::default();
-    prompt.session = Some(oc_core::cli_config::SessionInfo {
-        permissions: Some("prompt".to_owned()),
+    let prompt = oc_core::cli_config::Info {
+        session: Some(oc_core::cli_config::SessionInfo {
+            permissions: Some("prompt".to_owned()),
+            ..Default::default()
+        }),
         ..Default::default()
-    });
+    };
     let config = TuiConfig::from_info(&prompt, None);
     assert!(!config.permission_autoaccept(false), "prompt stays manual");
     assert!(config.permission_autoaccept(true), "the flag overrides prompt");
@@ -162,4 +163,164 @@ fn cli_json_autoaccept() {
     // The raw-document parse path (cli.json on disk).
     let config = TuiConfig::parse(r#"{ "session": { "permissions": "autoaccept" } }"#, None);
     assert!(config.permission_autoaccept(false), "the parse path reads the key");
+}
+
+// ---------------------------------------------------------------------------
+// CONFIG-T3 — session.* display keys: read side + rendering consumers
+// ---------------------------------------------------------------------------
+
+mod t3 {
+    use oc_tui::components::message::list::{
+        render_transcript, FollowState, ThinkingMode, TranscriptOptions, Verbosity,
+    };
+    use oc_tui::components::message::model::{Message, Part, PartTime, ToolState, ToolStatus};
+    use oc_tui::theme::ThemeState;
+
+    fn t3_messages() -> Vec<Message> {
+        vec![
+            Message::User {
+                id: "t3-user".into(),
+                text: "plan it".into(),
+                created: 0,
+                files: Vec::new(),
+            },
+            Message::Assistant {
+                id: "t3-assistant".into(),
+                agent: "build".into(),
+                model: "fixture/fixture".into(),
+                parts: vec![
+                    Part::Reasoning {
+                        text: "INNER-THOUGHT-XYZ planning the run".into(),
+                        time: PartTime { created: Some(10), completed: Some(12) },
+                    },
+                    Part::Text {
+                        text: "**BOLD-MARKER** answer".into(),
+                        time: PartTime { created: Some(10), completed: Some(12) },
+                    },
+                    Part::Tool {
+                        id: "tool_1".into(),
+                        name: "read".into(),
+                        time: PartTime { created: Some(10), completed: Some(11) },
+                        state: ToolState {
+                            status: ToolStatus::Completed,
+                            input: [("path".to_owned(), "src/main.rs".to_owned())]
+                                .into_iter()
+                                .collect(),
+                            ..ToolState::default()
+                        },
+                    },
+                ],
+                finish: Some("stop".into()),
+                error: None,
+                time: PartTime { created: Some(1000), completed: Some(2000) },
+                tokens: Some(900),
+                usage_total: None,
+            },
+        ]
+    }
+
+    fn frame_text(options: &TranscriptOptions) -> String {
+        let theme = ThemeState::v2_dark().styles();
+        let transcript = render_transcript(&t3_messages(), options, &theme, 80);
+        let frame = transcript.paint(
+            FollowState::Free { offset: 0, maximum: 200 },
+            &theme,
+            (80, 200),
+            None,
+        );
+        frame.text_grid().join("\n")
+    }
+
+    /// Every `session.*` key has a read-side consumer: the config maps
+    /// the key, the store carries it, and the transcript rendering
+    /// changes observable output per key (thinking disclosure,
+    /// verbosity expansion/wrapping, the tps span, markdown source,
+    /// the grouping seed).
+    #[test]
+    fn session_keys_consumed() {
+        // 1. Defaults (hide / medium / tps off / rendered): the
+        // collapsed Thought header, no thought text, no tok/s span,
+        // no raw markdown markers.
+        let base = frame_text(&TranscriptOptions::default());
+        assert!(base.contains("Thought"), "hide mode keeps the collapsed header");
+        assert!(!base.contains("INNER-THOUGHT-XYZ"), "hide collapses the thought body");
+        assert!(!base.contains("tok/s"), "tps defaults off");
+        assert!(!base.contains("**BOLD-MARKER**"), "rendered markdown consumes markers");
+
+        // 2. thinking=show: thoughts render inline.
+        let options =
+            TranscriptOptions { thinking_mode: ThinkingMode::Show, ..TranscriptOptions::default() };
+        let shown = frame_text(&options);
+        assert!(shown.contains("INNER-THOUGHT-XYZ"), "show renders the thought body");
+
+        // 3. verbosity=high: the exploration group opens — the tool
+        // caption becomes visible.
+        let options =
+            TranscriptOptions { verbosity: Verbosity::High, ..TranscriptOptions::default() };
+        let high = frame_text(&options);
+        assert!(
+            high.contains("src/main.rs"),
+            "high opens exploration summaries (the read's file shows)"
+        );
+
+        // 4. verbosity=low: one activity summary wraps the run —
+        // neither the thought header nor the body render standalone.
+        let options =
+            TranscriptOptions { verbosity: Verbosity::Low, ..TranscriptOptions::default() };
+        let low = frame_text(&options);
+        assert!(!low.contains("Thought"), "low wraps thoughts into the activity summary");
+        assert!(!low.contains("INNER-THOUGHT-XYZ"), "the body stays inside the summary");
+
+        // 5. tps: the `· X.X tok/s` span appears only when enabled.
+        let options = TranscriptOptions { tps_enabled: true, ..TranscriptOptions::default() };
+        let tps = frame_text(&options);
+        assert!(tps.contains("900.0 tok/s"), "the span renders with the key on");
+
+        // 6. markdown=source: the raw markers survive.
+        let options = TranscriptOptions { markdown_source: true, ..TranscriptOptions::default() };
+        let source = frame_text(&options);
+        assert!(source.contains("**BOLD-MARKER**"), "source keeps the raw markdown text");
+    }
+
+    /// The config side: `TuiConfig` maps every key from the decoded
+    /// cli.json document, and the grouping seed restores the
+    /// exploration toggle (`grouping=none` applies after startup).
+    #[test]
+    fn session_keys_config_mapping() {
+        use oc_tui::config::TuiConfig;
+        use oc_tui::reactive::Runtime;
+        use oc_tui::store::Store;
+
+        let info = oc_core::cli_config::Info {
+            session: Some(oc_core::cli_config::SessionInfo {
+                thinking: Some("show".to_owned()),
+                verbosity: Some("low".to_owned()),
+                tps: Some(true),
+                markdown: Some("source".to_owned()),
+                grouping: Some("none".to_owned()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let config = TuiConfig::from_info(&info, None);
+        assert!(config.session_thinking);
+        assert_eq!(config.session_verbosity.as_deref(), Some("low"));
+        assert!(config.session_tps);
+        assert!(config.session_markdown_source);
+        assert!(!config.session_grouping, "grouping=none seeds the toggle off");
+
+        // The store boot restore: grouping=none survives startup.
+        let store = Store::new(Runtime::new());
+        assert!(store.exploration_grouping(), "default on");
+        store.restore_session_grouping(config.session_grouping);
+        assert!(!store.exploration_grouping(), "grouping=none applies after startup");
+        store.set_session_thinking(true);
+        assert!(store.session_thinking());
+        store.set_session_verbosity("high");
+        assert_eq!(store.session_verbosity(), "high");
+        store.set_session_tps(true);
+        assert!(store.session_tps());
+        store.set_session_markdown_source(true);
+        assert!(store.session_markdown_source());
+    }
 }

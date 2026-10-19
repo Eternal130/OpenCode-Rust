@@ -448,17 +448,40 @@ enum PartKind {
     Tool(String),
 }
 
-/// `partPath`: reasoning groups; exploration tools group; text parts
-/// and non-exploration tools stand alone (verbosity medium — "low"'s
-/// activity wrapping is out of scope). Plugin rules are checked AFTER
-/// the native kinds (wave 3's open rules table).
-fn part_path(part: &PartKind, rules: &GroupRules, group_exploration: bool) -> Vec<GroupKind> {
-    match part {
-        PartKind::Reasoning => vec![GroupKind::Reasoning],
-        PartKind::Tool(name) if group_exploration && EXPLORATION_TOOLS.contains(&name.as_str()) => {
-            vec![GroupKind::Exploration]
+/// `partPath` (grouping/session.ts:85-97): reasoning groups;
+/// exploration tools group; text parts stand alone. Low verbosity
+/// wraps every run of non-text parts in one ACTIVITY summary
+/// (`activity` leads the path, the native kind follows). Plugin rules
+/// are checked AFTER the native kinds (wave 3's open rules table).
+fn part_path(
+    part: &PartKind,
+    rules: &GroupRules,
+    group_exploration: bool,
+    low_verbosity: bool,
+) -> Vec<GroupKind> {
+    // `const activity = verbosity === "low" && part.type !== "text" ?
+    // ["activity"] : []` (session.ts:89).
+    let activity = |path: &mut Vec<GroupKind>| {
+        if low_verbosity {
+            path.insert(0, GroupKind::Activity);
         }
-        PartKind::Tool(name) => rules.group_for(name).map(|kind| vec![kind]).unwrap_or_default(),
+    };
+    match part {
+        PartKind::Reasoning => {
+            let mut path = vec![GroupKind::Reasoning];
+            activity(&mut path);
+            path
+        }
+        PartKind::Tool(name) if group_exploration && EXPLORATION_TOOLS.contains(&name.as_str()) => {
+            let mut path = vec![GroupKind::Exploration];
+            activity(&mut path);
+            path
+        }
+        PartKind::Tool(name) => {
+            let mut path = rules.group_for(name).map(|kind| vec![kind]).unwrap_or_default();
+            activity(&mut path);
+            path
+        }
         PartKind::Text => Vec::new(),
     }
 }
@@ -483,17 +506,20 @@ pub fn reduce_rows<S: std::hash::BuildHasher>(
     messages: &[Message],
     inputs: &std::collections::HashSet<String, S>,
 ) -> Vec<Row> {
-    reduce_rows_with_rules(messages, inputs, &GroupRules::empty(), true)
+    reduce_rows_with_rules(messages, inputs, &GroupRules::empty(), true, false)
 }
 
 /// [`reduce_rows`] with the plugin-provided grouping rules (wave 3's
-/// open rules table — see [`GroupRules`]).
+/// open rules table — see [`GroupRules`]) and the `session.verbosity`
+/// low flag (`low` wraps runs of non-text parts in one activity
+/// summary — grouping/session.ts:89-96).
 #[must_use]
 pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
     messages: &[Message],
     inputs: &std::collections::HashSet<String, S>,
     rules: &GroupRules,
     group_exploration: bool,
+    low_verbosity: bool,
 ) -> Vec<Row> {
     let mut pending: std::collections::HashSet<String> = inputs
         .iter()
@@ -542,7 +568,7 @@ pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
                     projections.push(Projection {
                         entry: Entry::Part { message_id: id.clone(), part_id },
                         part: Some(kind.clone()),
-                        path: part_path(&kind, rules, group_exploration),
+                        path: part_path(&kind, rules, group_exploration, low_verbosity),
                         closes_previous: None,
                         reasoning_completed: part.time().completed.is_some(),
                     });

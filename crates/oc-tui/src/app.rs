@@ -266,6 +266,17 @@ impl App {
         self.remerge_keybinds();
         // R-07: the transcript image strip's gate (`session.image_preview`).
         self.store.set_image_preview(config.session_image_preview);
+        // CONFIG-T3 — the session.* display keys (index.tsx:229-241):
+        // thinking/verbosity/tps/markdown reach the store on boot AND
+        // every reload; grouping seeds the exploration toggle (the
+        // runtime toggle flips it afterwards).
+        self.store.set_session_thinking(config.session_thinking);
+        if let Some(verbosity) = &config.session_verbosity {
+            self.store.set_session_verbosity(verbosity);
+        }
+        self.store.set_session_tps(config.session_tps);
+        self.store.set_session_markdown_source(config.session_markdown_source);
+        self.store.restore_session_grouping(config.session_grouping);
     }
 
     fn config_directories() -> Vec<std::path::PathBuf> {
