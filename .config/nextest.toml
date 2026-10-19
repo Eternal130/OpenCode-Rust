@@ -1,5 +1,9 @@
 [profile.default]
 slow-timeout = "60s"
+# Hard per-test ceiling: kills pathological CI hangs (WIRE-BE1-FLAKE ran
+# 900s+ on a 2-core runner 2026-10-19 while green on other runs) so one
+# stuck test cannot eat the job. Normal suites are far below this.
+timeout = "900s"
 # Global single retry: parallel-spawn interference flakes (PTY/shared-CWD
 # classes observed across oc-core/oc-cli/oc-server) pass on retry, while
 # real failures fail consistently both attempts. Per-suite overrides
