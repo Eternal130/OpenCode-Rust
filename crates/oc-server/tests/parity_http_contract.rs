@@ -583,6 +583,7 @@ async fn session_stats_shape() {
 /// resolve the session (404) BEFORE payload decode — the middleware must
 /// NOT fire for them (see the LOC-MW control at the end).
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one pinned probe table (slice + batch 1), one test
 async fn all_routes_reject_wrong_payload() {
     let server = boot().await;
     let probes: &[(&str, &str, &str, &str)] = &[
@@ -631,6 +632,90 @@ async fn all_routes_reject_wrong_payload() {
             r#"{"commands": 5}"#,
             "Expected Project.Commands\n  at [\"commands\"]",
         ),
+        // `^ses` startsWith patterns (round-4 probe,
+        // ref-validation-messages-4.json): predicate message without the
+        // `| null` suffix; kind mismatch keeps it.
+        (
+            "POST",
+            "/api/session",
+            r#"{"parentID": "not_ses"}"#,
+            "Expected a string starting with \"ses\"\n  at [\"parentID\"]",
+        ),
+        (
+            "POST",
+            "/api/session",
+            r#"{"id": "not_ses"}"#,
+            "Expected a string starting with \"ses\"\n  at [\"id\"]",
+        ),
+        ("POST", "/api/session", r#"{"id": 5}"#, "Expected string | null\n  at [\"id\"]"),
+        // HTTP-H0 batch 1 (8 ops, wrong-type + missing-key per route —
+        // messages byte-pinned against live v2.0.24 before enforcement).
+        (
+            "POST",
+            "/api/experimental/generate",
+            r#"{"prompt": 5}"#,
+            "Expected string\n  at [\"prompt\"]",
+        ),
+        ("POST", "/api/experimental/generate", r"{}", "Missing key\n  at [\"prompt\"]"),
+        (
+            "POST",
+            "/api/experimental/integration/wellknown",
+            r#"{"url": 5}"#,
+            "Expected string\n  at [\"url\"]",
+        ),
+        ("POST", "/api/experimental/integration/wellknown", r"{}", "Missing key\n  at [\"url\"]"),
+        (
+            "PATCH",
+            "/api/experimental/config",
+            r#"{"shell": 5}"#,
+            "Expected string | null\n  at [\"shell\"]",
+        ),
+        ("PATCH", "/api/experimental/config", r"{}", "Missing key\n  at [\"shell\"]"),
+        (
+            "POST",
+            "/api/integration/int_H0PROBE/connect/command",
+            r#"{"methodID": 5}"#,
+            "Expected string\n  at [\"methodID\"]",
+        ),
+        (
+            "POST",
+            "/api/integration/int_H0PROBE/connect/command",
+            r"{}",
+            "Missing key\n  at [\"methodID\"]",
+        ),
+        (
+            "PUT",
+            "/api/session/ses_H0PROBE/environment",
+            r#"{"variables": 5}"#,
+            "Expected object\n  at [\"variables\"]",
+        ),
+        ("PUT", "/api/session/ses_H0PROBE/environment", r"{}", "Missing key\n  at [\"variables\"]"),
+        (
+            "POST",
+            "/api/experimental/session/ses_H0PROBE/terminal",
+            r#"{"args": 5}"#,
+            "Expected array\n  at [\"args\"]",
+        ),
+        (
+            "POST",
+            "/api/experimental/session/ses_H0PROBE/terminal",
+            r"{}",
+            "Missing key\n  at [\"args\"]",
+        ),
+        (
+            "PUT",
+            "/api/experimental/persistent-pty/pty_H0PROBE",
+            r#"{"size": 5}"#,
+            "Expected object\n  at [\"size\"]",
+        ),
+        (
+            "PUT",
+            "/api/experimental/persistent-pty/pty_H0PROBE",
+            r"{}",
+            "Missing key\n  at [\"size\"]",
+        ),
+        ("POST", "/api/worktree", r#"{"projectID": 5}"#, "Expected string\n  at [\"projectID\"]"),
+        ("POST", "/api/worktree", r"{}", "Missing key\n  at [\"projectID\"]"),
     ];
     for (method, target, body, message) in probes {
         let headers: &[(&str, &str)] =
