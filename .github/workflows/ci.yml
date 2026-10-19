@@ -134,6 +134,15 @@ jobs:
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
 
+      # oc-plugin-host suites host TS plugins via bun. The download
+      # kill-switch (OPENCODE_DISABLE_BUN_DOWNLOAD=1) is enforced below,
+      # so provision the pinned bun (oc-util bunman BUN_VERSION) once
+      # per job instead — tests that previously self-downloaded 40 MiB
+      # (the profile env was silently ignored on runners) now use this.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
