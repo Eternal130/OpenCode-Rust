@@ -19,10 +19,11 @@
 
 Queued wave 3: C6b session-route (TD-01/02/03/05/07), C9a SURFACES, C7b remainder (M2-M5), C5a keys-env remainder.
 
-## EXECUTION PROTOCOL v2 (2026-10-19, user ruling: 本机开发 + GitHub CI 测试)
+## EXECUTION PROTOCOL v3 (2026-10-19 晚, user ruling: 本地+CI 混合；auditd execve 监控已启用)
 
-- **本机只做**：代码/文档编辑、git 操作、python 台账/守卫（python3 only）。**禁止本机任何 cargo/fmt/clippy/nextest/PTY 执行**（三次事故后用户裁定）。
-- **验证**：GitHub CI（origin Eternal130/OpenCode-Rust，ci.yml：guards/lint/pty-integration/test 四任务）。
+- **本机允许** cargo/fmt/clippy/nextest/PTY —— 一律走 tools/dev-gate.sh（全局 flock 单 scope + MemoryMax 6G）；auditd execve 记录（root+eternal130）提供事后取证。
+- **CI 保留为权威**：merge 前主分支必须 CI 绿；lane 分支 CI 绿 + 独立 verifier。
+- 快速迭代用本地 gate；正式验证证据来自 CI 日志或本地 gate 输出皆可（记入 ledger）。
 - **Lane 流程**：worktree 编辑 → commit → push 分支 → gh pr create → CI 绿 → 独立 verifier（静态代码审查 + gh run 日志分析）→ 串行 merge → push main → post-merge CI 绿。
 - **Red artifact**：需要执行的 red 从 CI 日志取证（push 红态分支或复用 PR 检查），或记录 compile-absent 推理；证据路径入台账。
 - dev-gate flock 保留仅供绝对紧急，日常禁用。
