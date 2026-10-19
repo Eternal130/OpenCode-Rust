@@ -8,8 +8,10 @@
 //! `response.completed/failed/incomplete`) normalized into common
 //! [`LLMEvent`]s with item-id-keyed state.
 //!
-//! Deferred (per ai-map §10): the WebSocket channel/continuation transport —
-//! SSE is the parity path.
+//! The WebSocket channel/continuation transport lives in
+//! [`crate::protocols::open_responses_channel`] /
+//! [`crate::protocols::open_responses_continuation`] (AI-M1); this module
+//! carries the shared event decoding both paths use.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -1360,6 +1362,47 @@ pub fn decode_event(frame: &str) -> Result<Event, AiError> {
         .ok_or_else(|| event_error(ADAPTER, format!("Failed to decode {ADAPTER} event")))?
         .to_string();
     Ok(Event { raw, kind })
+}
+
+/// Decode one event value after JSON parsing (shared by SSE and the
+/// WebSocket channel).
+fn decode_event_value(raw: Value) -> Result<Event, AiError> {
+    if !raw.is_object() {
+        return Err(event_error(ADAPTER, format!("Failed to decode {ADAPTER} event")));
+    }
+    let kind = raw
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| event_error(ADAPTER, format!("Failed to decode {ADAPTER} event")))?
+        .to_string();
+    Ok(Event { raw, kind })
+}
+
+/// Decode one WebSocket channel frame (port of `decodeChannelEvent`): a
+/// frame without a `type` but with an `error` is the provider's bare error
+/// shape — inject `type: "error"` before the event decode.
+pub fn decode_channel_event(frame: &str) -> Result<Event, AiError> {
+    let raw = shared::decode_json(frame).map_err(|cause| {
+        AiError::new(AiErrorReason::InvalidProviderOutput {
+            fields: ReasonFields {
+                message: format!("Failed to decode {ADAPTER} event"),
+                body: Some(frame.to_string()),
+                cause: Some(cause),
+                http: None,
+            },
+            classification: None,
+            route: Some(ADAPTER.to_string()),
+        })
+    })?;
+    let raw = match raw {
+        Value::Object(object) if !object.contains_key("type") && object.contains_key("error") => {
+            let mut object = object;
+            object.insert("type".to_string(), Value::String("error".to_string()));
+            Value::Object(object)
+        }
+        other => other,
+    };
+    decode_event_value(raw)
 }
 
 /// Per-summary-part lifecycle status.

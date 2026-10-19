@@ -15,6 +15,13 @@ pub use endpoint::{render, Endpoint, EndpointInput, EndpointPart, EndpointPatch}
 pub use framing::{Framing, FramingDecoder, FramingKind};
 pub use protocol::{Protocol, ProtocolState};
 pub use transport::timeouts::TimeoutBudget;
+pub use transport::websocket::{
+    make_direct, to_websocket_url, ChannelCheckpoint, ChannelConnect, ChannelCreate, ChannelMode,
+    ChannelObservation, CompleteFn, FallbackFn, RawFrameStream, SessionChannel,
+    SessionChannelConfig, SessionChannels, WebSocketChannelDriver, WebSocketChannelExchange,
+    WebSocketChannelExecution, WebSocketChannelExecutor, WebSocketConnector, WebSocketMessage,
+    WebSocketRequest,
+};
 pub use transport::{
     shared, ByteStream, FailingTransport, SharedTransport, Transport, TransportError,
     TransportOperation, TransportRequest, TransportResponse,
