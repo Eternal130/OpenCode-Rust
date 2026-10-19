@@ -35,6 +35,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # One shared cache entry across jobs: dep artifacts compile
+          # once and are reused by every job (per-job default keys made
+          # each lane rebuild the chain independently).
+          shared-key: opencode-ci
 
       - name: rustfmt
         run: cargo fmt --all -- --check
@@ -54,6 +59,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # One shared cache entry across jobs: dep artifacts compile
+          # once and are reused by every job (per-job default keys made
+          # each lane rebuild the chain independently).
+          shared-key: opencode-ci
 
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
@@ -76,6 +86,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # One shared cache entry across jobs: dep artifacts compile
+          # once and are reused by every job (per-job default keys made
+          # each lane rebuild the chain independently).
+          shared-key: opencode-ci
 
       # Tests stage scratch sandboxes under /tmp/opencode (PIDs-unique
       # names). The dev box pre-creates it; runners do not.
@@ -114,6 +129,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # One shared cache entry across jobs: dep artifacts compile
+          # once and are reused by every job (per-job default keys made
+          # each lane rebuild the chain independently).
+          shared-key: opencode-ci
 
       - uses: taiki-e/install-action@v2
         with:

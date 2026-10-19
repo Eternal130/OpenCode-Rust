@@ -61,6 +61,10 @@ fn a2_geometry_width_sweep_10_40_160() {
             let out = (|| -> Result<(), String> {
                 let log = |m: &str| {
                     use std::io::Write;
+                    // CI runners pre-create only /tmp/opencode — the
+                    // scanef2 subdir may not exist yet (TRY1 NotFound
+                    // race, absorbed by retries but rooted here).
+                    let _ = std::fs::create_dir_all("/tmp/opencode/scanef2");
                     let mut f = std::fs::OpenOptions::new()
                         .create(true)
                         .append(true)
