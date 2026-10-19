@@ -58,6 +58,7 @@ use oc_ai::LanguageModel;
 use oc_schema::model::Info as ModelInfo;
 use oc_schema::provider::Settings as ProviderSettings;
 
+use crate::provider_catalog::native::package_name;
 use crate::provider_catalog::{Catalog, Snapshot};
 
 /// Typed provider-binding failures (gate 3, Task 5: selecting a
@@ -278,7 +279,13 @@ pub fn language_model_for_model(
     connection: &ModelConnection,
 ) -> Result<LanguageModel, ProviderError> {
     let provider_id = snapshot.info.id.0.as_str();
-    let package = model.package.as_deref().unwrap_or(&snapshot.info.package);
+    let stored = model.package.as_deref().unwrap_or(&snapshot.info.package);
+    // `loadPackage` (provider.ts:112-115) unwraps the `aisdk:` storage
+    // form via `packageName` before the builtin lookup — a v2-era
+    // models.dev npm name (`@opencode/ai/providers/*`, stored as
+    // `aisdk:…` by nativePackage) binds to the same native builtin as
+    // its `@ai-sdk` counterpart (CRED-AUTHNONE-DOWNGRADE v2 delta).
+    let package = package_name(stored);
     // Copilot: the catalog entry is plain openai-compatible, but the bound
     // credential transport (BE-3b CredentialBindings) + the Copilot header
     // policy make it its own family (github-copilot.ts:434-505).
@@ -287,9 +294,9 @@ pub fn language_model_for_model(
     {
         ProtocolFamily::CopilotChat
     } else {
-        family_of(package).ok_or_else(|| ProviderError::UnsupportedProtocol {
+        family_of(&package).ok_or_else(|| ProviderError::UnsupportedProtocol {
             provider: provider_id.to_string(),
-            package: package.to_string(),
+            package: stored.to_string(),
         })?
     };
 
@@ -305,7 +312,7 @@ pub fn language_model_for_model(
     let env = &snapshot.environment;
 
     let route =
-        build_route(context, family, provider_id, package, base_url, env, connection, model)?;
+        build_route(context, family, provider_id, &package, base_url, env, connection, model)?;
     // Connection headers ride the route defaults (transport headers) —
     // the seam credential-driven providers (copilot) use for their
     // client headers; model overlays apply after and win per key.

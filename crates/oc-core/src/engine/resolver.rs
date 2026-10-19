@@ -606,10 +606,12 @@ fn merge_overlay_records(
     Some(merged)
 }
 
-/// `usesAPIKeyAuth` (model-resolver.ts:430-452): the packages whose auth
+/// `usesAPIKeyAuth` (model-resolver.ts:430-468): the packages whose auth
 /// is a plain API key — the only ones the generic keyless downgrade may
 /// run anonymously. Ported verbatim (aisdk names apply through
-/// `package_name`'s unwrap).
+/// `package_name`'s unwrap), including the v2-era
+/// `@opencode/ai/providers/*` npm names fireworks/openai-compatible/google
+/// at model-resolver.ts:455-457.
 fn uses_api_key_auth(package: &str) -> bool {
     const LIST: &[&str] = &[
         "@ai-sdk/openai",
@@ -633,6 +635,9 @@ fn uses_api_key_auth(package: &str) -> bool {
         "@opencode/ai/providers/cloudflare-workers-ai",
         "@opencode/ai/providers/deepinfra",
         "@opencode/ai/providers/deepseek",
+        "@opencode/ai/providers/fireworks",
+        "@opencode/ai/providers/openai-compatible",
+        "@opencode/ai/providers/google",
         "@opencode/ai/providers/google/interactions",
         "@opencode/ai/providers/groq",
         "@opencode/ai/providers/mistral",
