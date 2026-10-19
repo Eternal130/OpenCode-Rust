@@ -265,15 +265,73 @@ pub enum Message {
     /// `skill` message — the `→ Skill {name}` inline row
     /// (`SessionSkillMessage`, session/index.tsx:1993-1999).
     Skill { id: String, name: String, created: u64 },
-    /// `synthetic` message: an instruction load (`metadata.instruction`)
-    /// — groups under one `◈ Instructions: N files` summary row
-    /// (`instructionPaths`).
+    /// `synthetic` message (TUI-TD01): an instruction load
+    /// (`metadata.instruction`) groups under one `◈ Instructions:
+    /// N files` summary row (`instructionPaths`); otherwise the
+    /// `SessionNoticeMessageV2` notice (a subagent/shell completion
+    /// heading when `metadata.source` says so, else the `◈ Notice`
+    /// row — session/index.tsx:1934-1986).
     Synthetic {
         id: String,
         /// `metadata.instruction.paths` — one load can carry several.
         instruction_paths: Vec<String>,
+        /// `description` (the notice body; absent → "").
+        description: Option<String>,
+        /// `metadata.source` — "subagent" / "shell" arm the
+        /// completion heading (anything else renders the notice row).
+        source: Option<String>,
+        /// `metadata.state` — completed/error/cancelled drive the
+        /// status word + color.
+        state: Option<String>,
+        /// `metadata.agent` — the completion heading's actor
+        /// (titlecased; default "Subagent").
+        agent: Option<String>,
+        /// `metadata.childID` — the subagent child session (the
+        /// clickable target upstream; recorded for the hit surface).
+        child_id: Option<String>,
         created: u64,
     },
+    /// `shell` message (TUI-TD01): the user `!` shell transcript row
+    /// (`ShellMessage` → `ShellDisplay`, session/index.tsx:2166-2186)
+    /// — the `┃` block over the `$ command` + output preview.
+    Shell {
+        id: String,
+        /// `shellID` (the persistent shell that ran it).
+        shell_id: String,
+        /// The command line.
+        command: String,
+        /// `status`: running / exited / timeout / killed.
+        status: String,
+        /// `exit` code (non-zero → the `Command exited with code N`
+        /// error row).
+        exit: Option<i64>,
+        /// `output.output` (the trimmed preview text).
+        output: Option<String>,
+        created: u64,
+    },
+    /// `agent-switched` message (TUI-TD01): the muted
+    /// `Switched agent [from {previous}] to {agent}` row
+    /// (`SessionSwitchMessageV2`, session/index.tsx:1904-1932).
+    AgentSwitched { id: String, agent: String, previous: Option<String>, created: u64 },
+    /// `model-switched` message (TUI-TD01): the muted
+    /// `Switched model to {label}` / `Switched variant to {variant}`
+    /// row (`switchLabel`, util/model.ts:10-25).
+    ModelSwitched {
+        id: String,
+        /// `providerID/id[/variant]` of the new model.
+        provider_id: String,
+        model_id: String,
+        variant: Option<String>,
+        previous: Option<(String, String, Option<String>)>,
+        created: u64,
+    },
+    /// `location-switched` message (TUI-TD01): the
+    /// `↳ Moved to {directory}` row (info-colored directory).
+    LocationSwitched { id: String, directory: String, created: u64 },
+    /// `system` message (TUI-TD01): the `◈ Notice` row with the
+    /// description (`SessionNoticeMessageV2`'s fallback arm —
+    /// "Instructions updated" when absent).
+    System { id: String, description: Option<String>, created: u64 },
 }
 
 impl Message {
@@ -285,7 +343,12 @@ impl Message {
             | Self::Idle { id, .. }
             | Self::Compaction { id, .. }
             | Self::Skill { id, .. }
-            | Self::Synthetic { id, .. } => id,
+            | Self::Synthetic { id, .. }
+            | Self::Shell { id, .. }
+            | Self::AgentSwitched { id, .. }
+            | Self::ModelSwitched { id, .. }
+            | Self::LocationSwitched { id, .. }
+            | Self::System { id, .. } => id,
         }
     }
 
@@ -306,7 +369,12 @@ impl Message {
             | Self::Idle { created, .. }
             | Self::Compaction { created, .. }
             | Self::Skill { created, .. }
-            | Self::Synthetic { created, .. } => *created,
+            | Self::Synthetic { created, .. }
+            | Self::Shell { created, .. }
+            | Self::AgentSwitched { created, .. }
+            | Self::ModelSwitched { created, .. }
+            | Self::LocationSwitched { created, .. }
+            | Self::System { created, .. } => *created,
             Self::Assistant { .. } => 0,
         }
     }
@@ -594,7 +662,12 @@ pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
             Message::User { id, .. }
             | Message::Compaction { id, .. }
             | Message::Skill { id, .. }
-            | Message::Synthetic { id, .. } => {
+            | Message::Synthetic { id, .. }
+            | Message::Shell { id, .. }
+            | Message::AgentSwitched { id, .. }
+            | Message::ModelSwitched { id, .. }
+            | Message::LocationSwitched { id, .. }
+            | Message::System { id, .. } => {
                 projections.push(Projection {
                     entry: Entry::Message { message_id: id.clone() },
                     part: None,
@@ -1132,11 +1205,21 @@ mod tests {
             Message::Synthetic {
                 id: "a".into(),
                 instruction_paths: vec!["AGENTS.md".into()],
+                description: None,
+                source: None,
+                state: None,
+                agent: None,
+                child_id: None,
                 created: 1,
             },
             Message::Synthetic {
                 id: "b".into(),
                 instruction_paths: vec!["packages/tui/AGENTS.md".into()],
+                description: None,
+                source: None,
+                state: None,
+                agent: None,
+                child_id: None,
                 created: 2,
             },
             user("u", "?", 3),
@@ -1152,8 +1235,16 @@ mod tests {
         assert_eq!(instructions_label(1), "Instructions: 1 file");
         assert_eq!(instructions_label(2), "Instructions: 2 files");
         // A synthetic message with no paths stands alone (no group).
-        let bare =
-            vec![Message::Synthetic { id: "s".into(), instruction_paths: vec![], created: 0 }];
+        let bare = vec![Message::Synthetic {
+            id: "s".into(),
+            instruction_paths: vec![],
+            description: None,
+            source: None,
+            state: None,
+            agent: None,
+            child_id: None,
+            created: 0,
+        }];
         let rows = reduce_rows(&bare, &std::collections::HashSet::<String>::new());
         assert_eq!(row_shape(&rows[0]), "message:s");
     }

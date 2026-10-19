@@ -2343,11 +2343,21 @@ impl App {
             return;
         }
         if self.store.session_running(&session_id) {
-            // The Admit path (mini/queue.rs): the queued copy IS the
-            // record; the draft clears (submit semantics) but the
-            // sink send waits for the drain.
+            // TUI-TD07 — the v2 queue submit (prompt/index.tsx:446-458
+            // → `session.prompt {delivery: "queue"}`): the queued copy
+            // IS the server inbox row (optimistically admitted under
+            // the minted id); the draft clears (submit semantics).
             let text = draft.text.clone();
-            self.store.queue_prompt(&session_id, &text);
+            let files = draft
+                .files
+                .iter()
+                .filter_map(|file| {
+                    file.payload
+                        .as_ref()
+                        .map(crate::components::composer::AttachmentPayload::to_data_uri)
+                })
+                .collect::<Vec<String>>();
+            self.store.queue_prompt(&session_id, &text, &files);
             let mut composer = self.store.composer(key);
             if let Some(prompt) = composer.take_submit() {
                 composer.history = composer.history.clone().push(&prompt.text);
@@ -2363,18 +2373,14 @@ impl App {
     /// The empty-enter steering (v2 `submitInner`, prompt/index.tsx:
     /// 1120-1121 + the session route's `onEmptySubmit`,
     /// index.tsx:1504-1508): an empty submit with queued prompts
-    /// promotes the head — `mutatePending("steer")` locally.
+    /// promotes the head — TUI-TD07: `mutatePending("steer")`, the
+    /// server PATCH (`session.inbox.update {delivery: "steer"}`), NOT
+    /// a local delete + re-POST.
     fn steer_queued_head(&mut self) -> bool {
         let Route::Session { session_id } = self.store.route() else { return false };
         let head = self.store.queued_prompts(&session_id).first().cloned();
         let Some(head) = head else { return false };
-        self.store.delete_queued_prompt(&session_id, &head.id);
-        let prompt = crate::components::composer::SubmittedPrompt {
-            text: head.text,
-            ..crate::components::composer::SubmittedPrompt::default()
-        };
-        self.store.forward_submission(&session_id, &prompt);
-        true
+        self.store.steer_queued_prompt(&session_id, &head.id)
     }
 
     /// Post-`handle_key` routing of a consumed composer outcome: a
@@ -3537,6 +3543,14 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
             })
             .collect();
         let session_key = session_id.to_owned();
+        let delivery = match prompt.delivery.as_deref() {
+            // TUI-TD07: the queue submit POSTs `delivery: "queue"`
+            // (prompt/index.tsx:1322's `delivery`); every other submit
+            // is v2's default "steer".
+            Some("queue") => Some(oc_client::types::SessionInboxDelivery::Queue),
+            _ => Some(oc_client::types::SessionInboxDelivery::Steer),
+        };
+        let inbox_id = prompt.inbox_id.clone();
         tokio::spawn(async move {
             let target = if session_key == HOME_PROMPT_KEY {
                 // Home submission: create the session first.
@@ -3594,6 +3608,8 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
             let body = oc_client::types::SessionPromptBody {
                 text,
                 files: (!files.is_empty()).then_some(files),
+                delivery,
+                id: inbox_id,
                 ..oc_client::types::SessionPromptBody::default()
             };
             if let Err(error) = client.session().prompt(&target, &body).await {
@@ -3671,6 +3687,77 @@ impl crate::store::InterruptSink for HttpInterruptSink {
     }
 }
 
+/// TUI-TD07 — the production inbox mutation sink ([`mutatePending`],
+/// routes/session/index.tsx:605-623): [`update`] `PATCHes` the delivery,
+/// `cancel` DELETEs the row; a failure surfaces as the
+/// "Failed to {label} pending prompt" error toast.
+pub struct HttpInboxSink {
+    client: oc_client::Client,
+}
+
+impl HttpInboxSink {
+    #[must_use]
+    pub fn new(client: oc_client::Client) -> Self {
+        Self { client }
+    }
+}
+
+impl crate::store::InboxSink for HttpInboxSink {
+    fn update(&self, session_id: &str, inbox_id: &str, delivery: &str) {
+        let client = self.client.clone();
+        let session_id = session_id.to_owned();
+        let inbox_id = inbox_id.to_owned();
+        let delivery = delivery.to_owned();
+        tokio::spawn(async move {
+            let body = oc_client::types::SessionInboxUpdateBody {
+                delivery: if delivery == "queue" {
+                    oc_client::types::SessionInboxDelivery::Queue
+                } else {
+                    oc_client::types::SessionInboxDelivery::Steer
+                },
+            };
+            if let Err(error) = client.session().inbox().update(&session_id, &inbox_id, &body).await
+            {
+                eprintln!("opencode tui: inbox update failed: {error}");
+            }
+        });
+    }
+
+    fn cancel(&self, session_id: &str, inbox_id: &str) {
+        let client = self.client.clone();
+        let session_id = session_id.to_owned();
+        let inbox_id = inbox_id.to_owned();
+        tokio::spawn(async move {
+            if let Err(error) = client.session().inbox().cancel(&session_id, &inbox_id).await {
+                eprintln!("opencode tui: inbox cancel failed: {error}");
+            }
+        });
+    }
+}
+
+/// TUI-TD05 — the production older-history sink (`loadMore`): the
+/// request rides the loop fetcher's ordered channel.
+pub struct HttpTranscriptSink {
+    requests: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+}
+
+impl HttpTranscriptSink {
+    #[must_use]
+    pub fn new(requests: tokio::sync::mpsc::UnboundedSender<LoopRequest>) -> Self {
+        Self { requests }
+    }
+}
+
+impl crate::store::TranscriptSink for HttpTranscriptSink {
+    fn load_older(&self, session_id: &str, cursor: &str, all: bool) {
+        let _ = self.requests.send(LoopRequest::TranscriptOlder {
+            session_id: session_id.to_owned(),
+            cursor: cursor.to_owned(),
+            all,
+        });
+    }
+}
+
 /// The model-preference repository path (`<state>/tui/model.json` —
 /// the mini host's `preferences` seam, mini-host.ts:18-30; the main
 /// TUI shares the document).
@@ -3689,6 +3776,13 @@ pub enum LoopRequest {
     /// `message.list` for one session (chronological — see
     /// [`crate::data::fetch_session_messages`]).
     Transcript(String),
+    /// TUI-TD05 — `loadMore`: fetch the older page after `cursor`
+    /// (`all` walks every remaining page, `session.first`).
+    TranscriptOlder {
+        session_id: String,
+        cursor: String,
+        all: bool,
+    },
     /// `session.list` (the dialog-open refetch).
     SessionList,
     /// `vcs.get` for one directory (the footer's branch lookup).
@@ -3799,7 +3893,13 @@ pub struct IntegrationOauthOutcome {
 pub enum LoopFetch {
     Transcript {
         session_id: String,
-        result: Result<Vec<crate::components::message::model::Message>, String>,
+        result: Result<(Vec<crate::components::message::model::Message>, Option<String>), String>,
+    },
+    /// TUI-TD05 — an older-history page (`loadMore`): the page's
+    /// messages (chronological) + the next older cursor.
+    TranscriptOlder {
+        session_id: String,
+        result: Result<(Vec<crate::components::message::model::Message>, Option<String>), String>,
     },
     SessionList(Result<Vec<crate::data::SessionSnapshot>, String>),
     LocationVcs {
@@ -3888,8 +3988,43 @@ pub fn spawn_loop_fetcher(
                     let tx = tx.clone();
                     tokio::spawn(async move {
                         let result =
-                            crate::data::fetch_session_messages(&client, &session_id).await;
+                            crate::data::fetch_message_page(&client, &session_id, None).await;
                         let _ = tx.send(LoopFetch::Transcript { session_id, result });
+                    });
+                }
+                // TUI-TD05 — `loadMore`: one page (or every remaining
+                // page while a cursor stays — `session.first`'s
+                // `loadMore({all: true})`, client/solid/data.ts:
+                // 1694-1707 walking `limit: 200` pages).
+                LoopRequest::TranscriptOlder { session_id, cursor, all } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let mut next = Some(cursor);
+                        let mut fetched: Vec<crate::components::message::model::Message> =
+                            Vec::new();
+                        let result = loop {
+                            let Some(cursor) = next.clone() else {
+                                break Ok((fetched, None));
+                            };
+                            match crate::data::fetch_message_page(
+                                &client,
+                                &session_id,
+                                Some(&cursor),
+                            )
+                            .await
+                            {
+                                Ok((mut page, cursor_next)) => {
+                                    fetched.append(&mut page);
+                                    next = cursor_next;
+                                    if !all || next.is_none() {
+                                        break Ok((fetched, next));
+                                    }
+                                }
+                                Err(error) => break Err(error),
+                            }
+                        };
+                        let _ = tx.send(LoopFetch::TranscriptOlder { session_id, result });
                     });
                 }
                 LoopRequest::SessionList => {
@@ -5111,6 +5246,9 @@ pub async fn run_with_size(
     // path) + the model-preference ring boot (`<state>/tui/model.json`
     // — shared with the mini host's document).
     app.store.set_interrupt_sink(std::rc::Rc::new(HttpInterruptSink::new(client.clone())));
+    // TUI-TD07 — the inbox mutations (steer/cancel) POST through the
+    // generated client.
+    app.store.set_inbox_sink(std::rc::Rc::new(HttpInboxSink::new(client.clone())));
     if let Some(repository) = model_preference_repository() {
         let document = repository.read();
         app.store.set_model_ring(crate::store::ModelRing { document });
@@ -5268,6 +5406,9 @@ pub async fn run_with_size(
     // ids seed `fetched_transcripts`) + the /sessions dialog's
     // open-time session-list refetch.
     let (loop_fetch_tx, mut loop_fetch_rx) = spawn_loop_fetcher(client.clone());
+    // TUI-TD05 — the older-history loads ride the same ordered
+    // channel (`loadMore`'s fetch).
+    app.store.set_transcript_sink(std::rc::Rc::new(HttpTranscriptSink::new(loop_fetch_tx.clone())));
     // SURF-2: the diff viewer's fetch seam — the loop fetcher's
     // `vcs.base`/`vcs.diff`/`session.diff` worker.
     {
@@ -5839,7 +5980,11 @@ pub async fn run_with_size(
                 LoopFetch::Transcript { session_id, result } => {
                     app.store.set_history_loading(&session_id, false);
                     match result {
-                        Ok(messages) => {
+                        Ok((messages, cursor)) => {
+                            // TUI-TD05: the tail page's cursor records
+                            // `more()` (a fresh mount resets the paging
+                            // state, client/solid/data.ts:1652).
+                            app.store.set_message_cursor(&session_id, cursor);
                             app.store
                                 .ingest_all([Ingest::MessagesSnapshot { session_id, messages }]);
                         }
@@ -5847,6 +5992,19 @@ pub async fn run_with_size(
                             crate::keymap::log_skip(&format!("transcript fetch {error}"));
                             fetched_transcripts.remove(&session_id);
                         }
+                    }
+                }
+                // TUI-TD05 — the older pages PREPEND (`loadMore`'s
+                // publish, client/solid/data.ts:1700-1709).
+                LoopFetch::TranscriptOlder { session_id, result } => {
+                    app.store.set_history_loading(&session_id, false);
+                    if let Ok((messages, cursor)) = result {
+                        app.store.set_message_cursor(&session_id, cursor.clone());
+                        app.store.ingest_all([Ingest::MessagesOlder {
+                            session_id,
+                            messages,
+                            cursor,
+                        }]);
                     }
                 }
                 LoopFetch::SessionList(Ok(sessions)) => {
@@ -5858,6 +6016,7 @@ pub async fn run_with_size(
                         sessions,
                         unread,
                         messages: Vec::new(),
+                        cursors: Vec::new(),
                         permissions: Vec::new(),
                         forms: Vec::new(),
                     }]);
@@ -6470,6 +6629,16 @@ fn crossterm_key_to_spec(key: &crossterm::event::KeyEvent) -> Option<String> {
             KeyCode::Char(ch) => Some(format!("alt+{}", ch.to_ascii_lowercase())),
             KeyCode::Down => Some("alt+down".to_owned()),
             KeyCode::Up => Some("alt+up".to_owned()),
+            KeyCode::Left => Some("alt+left".to_owned()),
+            KeyCode::Right => Some("alt+right".to_owned()),
+            // TUI-TD02 — `session.messages_last_user` (alt+end) and
+            // `session.first`'s alt+home alias: the CSI-modified
+            // Home/End (`ESC[1;3F` …) must reach the command layer,
+            // not drop.
+            KeyCode::Home => Some("alt+home".to_owned()),
+            KeyCode::End => Some("alt+end".to_owned()),
+            KeyCode::PageUp => Some("alt+pageup".to_owned()),
+            KeyCode::PageDown => Some("alt+pagedown".to_owned()),
             _ => None,
         };
     }
@@ -7975,7 +8144,10 @@ mod core_interaction_tests {
         assert_eq!(app.store.queued_prompts("s1"), Vec::<crate::store::QueuedPrompt>::new());
         assert_eq!(app.store.prompt_draft("s1").text, "", "the draft cleared");
 
-        // A running turn: the same chord queues (the Admit path).
+        // A running turn: the same chord queues — TUI-TD07: the POST
+        // goes out immediately with `delivery: "queue"` (v2's queue
+        // submit, prompt/index.tsx:446-458); the optimistic admit
+        // renders the dock row.
         streaming_session(&app.store, "s1");
         for key in ["n", "e", "x", "t"] {
             app.press(key);
@@ -7984,31 +8156,47 @@ mod core_interaction_tests {
         assert!(!before.contains("queued"), "no dock yet: {before}");
         app.press("ctrl+x");
         app.press("return");
-        assert_eq!(sink.submissions.borrow().len(), 1, "nothing sent while running");
+        assert_eq!(sink.submissions.borrow().len(), 2, "the queue submit POSTs now");
+        assert_eq!(
+            sink.submissions.borrow()[1].1.delivery.as_deref(),
+            Some("queue"),
+            "the queued POST carries the queue delivery"
+        );
         assert_eq!(app.store.queued_prompts("s1").len(), 1);
         assert_eq!(app.store.prompt_draft("s1").text, "", "the draft cleared into the queue");
         let dock = app.frame_text();
         assert!(dock.contains("1 queued · next"), "the dock row: {dock}");
 
-        // The turn goes idle: the drain delivers the head.
+        // The turn goes idle: the SERVER owns the queue now — the row
+        // stays until `session.inbox.delivered` clears it (TUI-TD07:
+        // no local drain/re-POST).
         let mut event =
             crate::data::BusEvent::new("session.idle", serde_json::json!({ "sessionID": "s1" }));
         event.id = "evt_idle1".into();
         event.created = Some(10);
         app.store.ingest_all([crate::data::Ingest::Event(event)]);
-        assert!(app.store.queued_prompts("s1").is_empty(), "the idle drained the queue");
-        assert_eq!(sink.submissions.borrow().len(), 2, "the head delivered");
-        assert_eq!(sink.submissions.borrow()[1].1.text, "next");
+        assert_eq!(app.store.queued_prompts("s1").len(), 1, "idle alone does not drain");
+        assert_eq!(sink.submissions.borrow().len(), 2, "no local re-send");
+        let inbox_id = app.store.pending_inbox("s1")[0].id.clone();
+        let delivered = crate::data::BusEvent::new(
+            "session.inbox.delivered",
+            serde_json::json!({ "sessionID": "s1", "inboxID": inbox_id }),
+        );
+        app.store.ingest_all([crate::data::Ingest::Event(delivered)]);
+        assert!(app.store.queued_prompts("s1").is_empty(), "the delivery cleared the row");
     }
 
     /// Empty-enter steering (v2 `onEmptySubmit` → steer): an empty
-    /// submit with queued prompts promotes the head immediately.
+    /// submit with queued prompts promotes the head — TUI-TD07: the
+    /// server PATCH (`session.inbox.update`), never a local re-POST.
     #[test]
     fn empty_enter_steers_the_queued_head() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
         let sink = std::rc::Rc::new(crate::components::composer::RecordingPromptSink::default());
         app.store.set_prompt_sink(sink.clone());
+        let inbox = std::rc::Rc::new(crate::store::RecordingInboxSink::default());
+        app.store.set_inbox_sink(inbox.clone());
         streaming_session(&app.store, "s1");
         for key in ["q", "u", "e", "u", "e"] {
             app.press(key);
@@ -8016,11 +8204,21 @@ mod core_interaction_tests {
         app.press("ctrl+x");
         app.press("return");
         assert_eq!(app.store.queued_prompts("s1").len(), 1);
-        // Empty enter steers.
+        // Empty enter steers: the PATCH fires, the queue row flips
+        // delivery (it leaves the queue list), NOTHING re-sends.
         app.press("enter");
         assert!(app.store.queued_prompts("s1").is_empty(), "steered");
-        assert_eq!(sink.submissions.borrow().len(), 1);
-        assert_eq!(sink.submissions.borrow()[0].1.text, "queue");
+        assert_eq!(sink.submissions.borrow().len(), 1, "no local re-POST");
+        assert_eq!(
+            app.store.pending_inbox("s1").first().map(|item| item.delivery.as_str()),
+            Some("steer"),
+            "the pending row still mirrors (as steer)"
+        );
+        assert!(
+            inbox.calls.borrow().iter().any(|call| call.contains(" steer")),
+            "the inbox PATCH fired: {:?}",
+            inbox.calls.borrow()
+        );
     }
 
     /// The queued-prompts manager (`<leader>q`, v2 index.tsx:627-675):
@@ -8030,8 +8228,8 @@ mod core_interaction_tests {
     fn leader_q_opens_the_queue_manager_and_ctrl_d_deletes() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
-        app.store.queue_prompt("s1", "first queued");
-        app.store.queue_prompt("s1", "second queued");
+        app.store.queue_prompt("s1", "first queued", &[]);
+        app.store.queue_prompt("s1", "second queued", &[]);
         app.press("ctrl+x");
         app.press("q");
         let dialog = app.frame_text();
@@ -8049,6 +8247,40 @@ mod core_interaction_tests {
         app.press("ctrl+x");
         app.press("q");
         assert!(app.store.dialogs().is_empty(), "empty queue never opens");
+    }
+
+    /// TUI-TD07 — the manager's ctrl+u undo: the SELECTED row cancels
+    /// server-side and its payload refills the composer (appendPrompt).
+    #[test]
+    fn queued_prompt_undo_refills_the_composer() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        let inbox = std::rc::Rc::new(crate::store::RecordingInboxSink::default());
+        app.store.set_inbox_sink(inbox.clone());
+        app.store.queue_prompt("s1", "first queued", &[]);
+        app.store.queue_prompt("s1", "second queued", &[]);
+        app.press("ctrl+x");
+        app.press("q");
+        // ctrl+u undoes the SELECTED row (the first).
+        app.press("ctrl+u");
+        assert_eq!(
+            app.store.prompt_draft("s1").text,
+            "first queued",
+            "the payload refilled the composer"
+        );
+        assert_eq!(app.store.queued_prompts("s1").len(), 1, "one row left");
+        assert!(app.store.dialogs().is_empty(), "the undo closed the manager");
+        assert!(
+            inbox.calls.borrow().iter().any(|call| call.starts_with("cancel")),
+            "the cancel fired: {:?}",
+            inbox.calls.borrow()
+        );
+        // The SECOND undo picks the next last row.
+        app.press("ctrl+x");
+        app.press("q");
+        app.press("ctrl+u");
+        assert_eq!(app.store.prompt_draft("s1").text, "first queued\n\nsecond queued");
+        assert_eq!(app.store.queued_prompts("s1"), Vec::<crate::store::QueuedPrompt>::new());
     }
 
     /// The unqueueable drafts warn (v2 index.tsx:1134-1136).

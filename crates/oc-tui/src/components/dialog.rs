@@ -242,8 +242,26 @@ pub fn handle_dialog_key(
         // The queued-prompts manager's action layer (v2
         // index.tsx:641-672): `queued_prompt.delete` (ctrl+d) removes
         // the row — the LAST removal closes the dialog
-        // (`if (cancelled && last) dialog.clear()`).
+        // (`if (cancelled && last) dialog.clear()`); TUI-TD07's
+        // `queued_prompt.undo` (ctrl+u) cancels the SELECTED row
+        // server-side (`session.inbox.cancel`), refills the composer
+        // (`appendPrompt` over the payload) and closes.
         let selected = entry.select.submit(&props).map(|option| option.value.clone());
+        if keymap.stroke_triggers(&stroke, "queued_prompt.undo") {
+            if let (Route::Session { session_id }, Some(id)) = (store.route(), selected.as_deref())
+            {
+                if let Some(payload) = store.queued_prompt_payload(&session_id, id) {
+                    store.delete_queued_prompt(&session_id, id);
+                    crate::components::command_palette::append_prompt_payload(
+                        store,
+                        &session_id,
+                        &payload,
+                    );
+                    store.clear_dialogs();
+                }
+            }
+            return DialogKeyOutcome::Consumed;
+        }
         if keymap.stroke_triggers(&stroke, "queued_prompt.delete") {
             if let (Route::Session { session_id }, Some(id)) = (store.route(), selected.as_deref())
             {
@@ -842,19 +860,15 @@ pub fn execute_submission(
             return crate::components::command_palette::Dispatch::Handled;
         }
         // The queued-prompts manager's steer (v2 index.tsx:636-640:
-        // `onSelect` → `mutatePending("steer", …)`): the selected
-        // prompt delivers NOW (the local serial queue's head-jump).
+        // `onSelect` → `mutatePending("steer", …)`): TUI-TD07 — the
+        // server-side PATCH (`session.inbox.update
+        // {delivery: "steer"}`), NOT a local re-send; the row keeps
+        // its place until the turn admits it.
         Some(DialogKind::QueuedPrompts) => {
             if let Route::Session { session_id } = store.route() {
-                let queued = store.queued_prompts(&session_id);
-                if let Some(prompt) = queued.iter().find(|item| item.id == value) {
-                    let payload = crate::components::composer::SubmittedPrompt {
-                        text: prompt.text.clone(),
-                        ..crate::components::composer::SubmittedPrompt::default()
-                    };
-                    store.delete_queued_prompt(&session_id, value);
+                if store.queued_prompts(&session_id).iter().any(|item| item.id == value) {
+                    store.steer_queued_prompt(&session_id, value);
                     store.clear_dialogs();
-                    store.forward_submission(&session_id, &payload);
                     return crate::components::command_palette::Dispatch::Handled;
                 }
             }

@@ -185,6 +185,15 @@ pub enum Ingest {
         session_id: String,
         messages: Vec<crate::components::message::model::Message>,
     },
+    /// TUI-TD05 — an older-history page landed (`loadMore`,
+    /// client/solid/data.ts:1673-1712): the fetched page (chronological)
+    /// PREPENDS ahead of the known rows, deduped by id; `cursor` is the
+    /// next older cursor (`None` = history exhausted).
+    MessagesOlder {
+        session_id: String,
+        messages: Vec<crate::components::message::model::Message>,
+        cursor: Option<String>,
+    },
     /// A post-reconnect resync snapshot (applied only after the channel
     /// drained — see [`crate::store::Store::ingest_all`]): refreshed
     /// sessions, the idle>viewed unread derivation, and the re-fetched
@@ -194,6 +203,9 @@ pub enum Ingest {
         unread: Vec<String>,
         /// `(sessionID, messages)` per OPEN session at resync time.
         messages: Vec<(String, Vec<crate::components::message::model::Message>)>,
+        /// TUI-TD05 — `(sessionID, cursor.next)` per OPEN session:
+        /// the tail page's older-history cursor (`Some` ⇒ `more()`).
+        cursors: Vec<(String, Option<String>)>,
         /// Pending permission asks re-listed per session
         /// (`GET /session/:id/permission`) — the open sessions plus
         /// their descendants (RUNTIME-TD04: asks that happened while
@@ -253,7 +265,7 @@ pub trait ResyncSource: Send {
         &self,
         session_id: &str,
     ) -> impl std::future::Future<
-        Output = Result<Vec<crate::components::message::model::Message>, String>,
+        Output = Result<(Vec<crate::components::message::model::Message>, Option<String>), String>,
     > + Send;
     /// Pending permission asks (`GET /session/:id/permission`).
     fn fetch_permissions(
@@ -363,8 +375,11 @@ impl ResyncSource for HttpResync {
     async fn fetch_messages(
         &self,
         session_id: &str,
-    ) -> Result<Vec<crate::components::message::model::Message>, String> {
-        fetch_session_messages(&self.client, session_id).await
+    ) -> Result<(Vec<crate::components::message::model::Message>, Option<String>), String> {
+        // TUI-TD05 — the resync's tail page keeps the older-history
+        // cursor (`cursor.next`: the boot sessions' `more()` state,
+        // client/solid/data.ts:1652).
+        fetch_message_page(&self.client, session_id, None).await
     }
 
     async fn fetch_permissions(
@@ -414,19 +429,33 @@ fn wire_form(
 }
 
 /// One session's `message.list` as a CHRONOLOGICAL transcript (the
-/// store's bucket order). v2 fetches `order: "desc"` and
-/// `toReversed()`s the page (client/solid/data.ts:1633-1637) — the
-/// wire default is newest-first, and the transcript renders oldest →
-/// newest with the sticky-bottom viewport, so the raw page order would
-/// scramble the restored transcript (F19: new turns landing "after"
-/// the oldest rows, below the fold).
+/// TAIL PAGE — TUI-TD05: v2's `data.session.message.sync` fetches
+/// `limit: messagePageLimit (20), order: desc` and keeps
+/// `cursor.next` for `loadMore`, client/solid/data.ts:1630-1655).
+/// The wire default is newest-first, and the transcript renders
+/// oldest → newest with the sticky-bottom viewport, so the raw page
+/// order would scramble the restored transcript (F19: new turns
+/// landing "after" the oldest rows, below the fold).
 pub async fn fetch_session_messages(
     client: &oc_client::Client,
     session_id: &str,
 ) -> Result<Vec<crate::components::message::model::Message>, String> {
+    let (messages, _cursor) = fetch_message_page(client, session_id, None).await?;
+    Ok(messages)
+}
+
+/// TUI-TD05 — fetch one `message.list` page in DESC order and return
+/// it CHRONOLOGICAL plus the older-history cursor (`cursor.next`:
+/// `Some` ⇒ `more()` is true, `loadMore` walks pages).
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // epoch ms: bounded by real time
+pub async fn fetch_message_page(
+    client: &oc_client::Client,
+    session_id: &str,
+    cursor: Option<&str>,
+) -> Result<(Vec<crate::components::message::model::Message>, Option<String>), String> {
     let query = oc_client::types::SessionMessageListQuery {
-        cursor: None,
-        limit: None,
+        cursor: cursor.map(str::to_owned),
+        limit: Some(MESSAGE_PAGE_LIMIT.to_owned()),
         order: Some(oc_client::types::SessionMessageListQueryOrder::Desc),
         type_: None,
     };
@@ -434,8 +463,11 @@ pub async fn fetch_session_messages(
     let mut messages: Vec<crate::components::message::model::Message> =
         response.data.iter().filter_map(message_from_info).collect();
     messages.reverse();
-    Ok(messages)
+    Ok((messages, response.cursor.next))
 }
+
+/// v2's `messagePageLimit` (client/solid/data.ts:77).
+pub const MESSAGE_PAGE_LIMIT: &str = "20";
 
 /// Convert the wire `files` array (resolved `Prompt.FileAttachment`)
 /// into the model's [`UserFile`] set — inline images only matter for
@@ -778,7 +810,81 @@ pub fn message_from_info(
             name: skill.name.clone(),
             created: epoch(Some(skill.time.created)).unwrap_or(0),
         }),
-        _ => None,
+        // TUI-TD01 — the six wire classes the transcript renders that
+        // the drop arm used to discard (SessionMessageView's Switch/
+        // Shell/Notice arms, session/index.tsx:1781-1812).
+        SessionMessageInfo::Shell(shell) => Some(Message::Shell {
+            id: shell.id.clone(),
+            shell_id: shell.shell_id.clone(),
+            command: shell.command.clone(),
+            status: shell.status.as_str().to_owned(),
+            exit: shell.exit.as_ref().and_then(|exit| match exit {
+                // The wire models the exit code as a JSON number; the
+                // integral value survives the f64 round-trip.
+                oc_client::types::SessionMessageShellExit::Number(code) => {
+                    #[allow(clippy::cast_possible_truncation)] // exit codes are integral
+                    Some(code.round() as i64)
+                }
+                oc_client::types::SessionMessageShellExit::SessionMessageShellExitVariant2(_) => {
+                    None
+                }
+            }),
+            output: shell.output.as_ref().map(|output| output.output.clone()),
+            created: epoch(Some(shell.time.created)).unwrap_or(0),
+        }),
+        SessionMessageInfo::AgentSelected(agent) => Some(Message::AgentSwitched {
+            id: agent.id.clone(),
+            agent: agent.agent.clone(),
+            previous: agent.previous.clone(),
+            created: epoch(Some(agent.time.created)).unwrap_or(0),
+        }),
+        SessionMessageInfo::ModelSelected(model) => Some(Message::ModelSwitched {
+            id: model.id.clone(),
+            provider_id: model.model.provider_id.clone(),
+            model_id: model.model.id.clone(),
+            variant: model.model.variant.clone(),
+            previous: model.previous.as_ref().map(|previous| {
+                (previous.provider_id.clone(), previous.id.clone(), previous.variant.clone())
+            }),
+            created: epoch(Some(model.time.created)).unwrap_or(0),
+        }),
+        SessionMessageInfo::LocationSwitched(location) => Some(Message::LocationSwitched {
+            id: location.id.clone(),
+            directory: location.location.directory.clone(),
+            created: epoch(Some(location.time.created)).unwrap_or(0),
+        }),
+        SessionMessageInfo::System(system) => Some(Message::System {
+            id: system.id.clone(),
+            description: system.description.clone(),
+            created: epoch(Some(system.time.created)).unwrap_or(0),
+        }),
+        SessionMessageInfo::Synthetic(synthetic) => {
+            let metadata = synthetic.metadata.as_ref();
+            let instruction_paths = metadata
+                .and_then(|map| map.get("instruction"))
+                .and_then(|value| value.get("paths"))
+                .and_then(|value| value.as_array())
+                .map(|paths| {
+                    paths
+                        .iter()
+                        .filter_map(|path| path.as_str().map(str::to_owned))
+                        .collect::<Vec<String>>()
+                })
+                .unwrap_or_default();
+            let field = |key: &str| {
+                metadata.and_then(|map| map.get(key)).and_then(crate::data::stringify_value)
+            };
+            Some(Message::Synthetic {
+                id: synthetic.id.clone(),
+                instruction_paths,
+                description: synthetic.description.clone(),
+                source: field("source"),
+                state: field("state"),
+                agent: field("agent"),
+                child_id: field("childID"),
+                created: epoch(Some(synthetic.time.created)).unwrap_or(0),
+            })
+        }
     }
 }
 
@@ -880,8 +986,10 @@ impl Connection {
             if let Ok(sessions) = fetcher.fetch_sessions().await {
                 let unread = resync_unread(&sessions);
                 let mut messages = Vec::new();
+                let mut cursors = Vec::new();
                 for session_id in fetcher.open_sessions() {
-                    if let Ok(list) = fetcher.fetch_messages(&session_id).await {
+                    if let Ok((list, cursor)) = fetcher.fetch_messages(&session_id).await {
+                        cursors.push((session_id.clone(), cursor));
                         messages.push((session_id, list));
                     }
                 }
@@ -900,7 +1008,14 @@ impl Connection {
                     }
                 }
                 if tx
-                    .send(Ingest::Resync { sessions, unread, messages, permissions, forms })
+                    .send(Ingest::Resync {
+                        sessions,
+                        unread,
+                        messages,
+                        cursors,
+                        permissions,
+                        forms,
+                    })
                     .await
                     .is_err()
                 {

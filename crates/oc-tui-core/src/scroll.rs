@@ -178,6 +178,14 @@ impl ScrollDriver {
         Self { follow: FollowState::Sticky }
     }
 
+    /// TUI-TD02/TD05 — a driver seeded from a follow state (the
+    /// message-navigation `alignMessage` and `session.first` jumps
+    /// pin `Free { offset, maximum }` directly).
+    #[must_use]
+    pub const fn from_follow(follow: FollowState) -> Self {
+        Self { follow }
+    }
+
     #[must_use]
     pub const fn follow(&self) -> FollowState {
         self.follow
