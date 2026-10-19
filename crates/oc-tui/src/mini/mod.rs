@@ -26,6 +26,8 @@
 //!   (`mini/stream-v2.transport.ts`)
 //! * [`demo`] — `--demo` offline mode with `/permission` `/form`
 //!   `/fmt` (`mini/demo.ts`)
+//! * [`spinner`] — the work-spinner frame tables
+//!   (`ui/one-cell-motion.ts`, `mini.work_spinner`)
 //! * [`runtime`] — the orchestrator: boot → lifecycle → transport →
 //!   queue (`mini/runtime.ts`)
 //!
@@ -42,6 +44,7 @@ pub mod prompt_shared;
 pub mod queue;
 pub mod runtime;
 pub mod scrollback;
+pub mod spinner;
 pub mod splash;
 pub mod theme;
 pub mod transport;

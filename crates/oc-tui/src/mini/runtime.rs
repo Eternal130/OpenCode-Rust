@@ -55,6 +55,97 @@ pub struct ResolvedSession {
     pub resume: bool,
 }
 
+/// `MiniSettings` (`resolveMiniSettings`, runtime.boot.ts:87-98 —
+/// CONFIG-T4): the cli.json `mini` section's display keys, resolved
+/// with v2's per-key defaults.
+#[allow(clippy::struct_excessive_bools)] // the knob set mirrors resolveMiniSettings
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MiniSettings {
+    /// `mini.thinking === "show"` (default show): reasoning commits
+    /// reach the scrollback.
+    pub thinking: bool,
+    /// `mini.tools === "show"` (default HIDE): tool commits reach the
+    /// scrollback (stream.ts:802-803's `tools` flag).
+    pub tools: bool,
+    /// `mini.shell_output === "show"` (default hide): raw shell tool
+    /// output in the scrollback stream.
+    pub shell_output: bool,
+    /// `mini.turn_summary === "show"` (default show): the agent/model/
+    /// duration summary row after each turn (footer.ts:457).
+    pub turn_summary: bool,
+    /// `mini.footer === "show"` (default show): the footer's
+    /// persistent details strip.
+    pub footer: bool,
+    /// `mini.splash === "show"` (default show): the entry/exit splash.
+    pub splash: bool,
+    /// `mini.work_spinner`: the footer spinner animation id.
+    pub work_spinner: String,
+    /// `mini.mono` (default false): monochrome ASCII output.
+    pub mono: bool,
+}
+
+impl Default for MiniSettings {
+    fn default() -> Self {
+        Self {
+            thinking: true,
+            tools: false,
+            shell_output: false,
+            turn_summary: true,
+            footer: true,
+            splash: true,
+            work_spinner: "block-soft-slide".to_owned(),
+            mono: false,
+        }
+    }
+}
+
+impl MiniSettings {
+    /// `resolveMiniSettings(config)` (runtime.boot.ts:87-98): each key
+    /// falls back to its per-key default when absent.
+    #[must_use]
+    pub fn resolve(info: &oc_core::cli_config::Info) -> Self {
+        let mini = info.mini.as_ref();
+        let flag = |value: Option<&String>| value.map(|text| text == "show");
+        Self {
+            thinking: flag(mini.and_then(|m| m.thinking.as_ref())).unwrap_or(true),
+            tools: flag(mini.and_then(|m| m.tools.as_ref())).unwrap_or(false),
+            shell_output: flag(mini.and_then(|m| m.shell_output.as_ref())).unwrap_or(false),
+            turn_summary: flag(mini.and_then(|m| m.turn_summary.as_ref())).unwrap_or(true),
+            footer: flag(mini.and_then(|m| m.footer.as_ref())).unwrap_or(true),
+            splash: flag(mini.and_then(|m| m.splash.as_ref())).unwrap_or(true),
+            work_spinner: mini
+                .and_then(|m| m.work_spinner.clone())
+                .unwrap_or_else(|| "block-soft-slide".to_owned()),
+            mono: mini.and_then(|m| m.mono).unwrap_or(false),
+        }
+    }
+
+    /// `resolveRunTuiConfig`'s default path (runtime.boot.ts:76-85):
+    /// no injected config — read the global cli.json (missing/invalid
+    /// file degrades to the defaults).
+    #[must_use]
+    pub fn from_global_config() -> Self {
+        let roots = oc_util::global_roots::resolve();
+        let service = oc_core::cli_config::CliConfig::open(&roots);
+        Self::resolve(&service.get())
+    }
+
+    /// The transport-fold gate (stream-v2.transport.ts:870,1219 —
+    /// `input.thinking`; :682 `showTools()`): whether one folded
+    /// scrollback commit renders. Reasoning commits need
+    /// `thinking=show`; tool commits need `tools=show`; everything
+    /// else always flows.
+    #[must_use]
+    pub fn commit_visible(&self, commit: &super::scrollback::Commit) -> bool {
+        use super::scrollback::CommitKind;
+        match commit.kind {
+            CommitKind::Reasoning => self.thinking,
+            CommitKind::Tool => self.tools,
+            _ => true,
+        }
+    }
+}
+
 /// The frontend inputs (`RunDeferredInput`, `runtime.ts:68-85`).
 pub struct MiniInput {
     pub client: Client,
@@ -68,6 +159,11 @@ pub struct MiniInput {
     pub version: String,
     pub home: String,
     pub state_dir: std::path::PathBuf,
+    /// The mini display settings (`resolveMiniSettings` over the
+    /// cli.json `mini` section — CONFIG-T4). `None` resolves from the
+    /// global config here, like v2's `resolveRunTuiConfig` default
+    /// path (the CLI host may pre-resolve for tests).
+    pub settings: Option<MiniSettings>,
 }
 
 /// The runtime loop. Returns the process exit status.
@@ -80,14 +176,23 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
     // with `createMiniHost` (`mini-host.ts:18-30`); variant switching
     // itself arrives with the model picker panel.
     let _preferences = ModelPreferenceRepository::new(input.state_dir.join("model.json"));
+    // CONFIG-T4 — `resolveMiniSettings(tuiConfig)` (runtime.ts:197-199
+    // via runtime.boot.ts:76-98): the cli.json `mini` section drives
+    // the display (splash/mono into the lifecycle boot, the fold gates
+    // and the turn summary below); absent config = v2's per-key
+    // defaults.
+    let settings = input.settings.clone().unwrap_or_else(MiniSettings::from_global_config);
     let mut lifecycle = Lifecycle::boot(LifecycleInput {
         version: input.version.clone(),
         home: input.home.clone(),
         directory: input.target.directory.clone(),
         agent: input.target.agent.clone(),
         model_label: input.target.model_label.clone(),
-        splash: true,
-        mono: true,
+        splash: settings.splash,
+        mono: settings.mono,
+        footer: settings.footer,
+        work_spinner: settings.work_spinner.clone(),
+        shell_output: settings.shell_output,
     })?;
     let client = input.client.clone();
     let session_id = input.target.session_id.clone();
@@ -147,6 +252,9 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         shown,
         exit_code: 0,
         turn_idle: false,
+        settings,
+        turn_agent: input.target.agent.clone(),
+        turn_model: input.target.model_label.clone(),
     };
 
     // The initial input submits first (`runPromptQueue`'s
@@ -165,6 +273,9 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         runtime.pump_keys().await;
         runtime.pump_events();
         runtime.drain_queue().await;
+        // CONFIG-T4 — `busy()` (`footer.view.tsx:980`): a running turn
+        // anchors the footer's work-spinner cell.
+        runtime.lifecycle.pane.set_busy(runtime.transport.is_running());
         runtime.lifecycle.flush()?;
         tokio::time::sleep(TICK).await;
     }
@@ -190,6 +301,14 @@ struct Runtime {
     exit_code: i32,
     /// A terminal execution fold arrived this turn (`waitForIdle`).
     turn_idle: bool,
+    /// CONFIG-T4: the resolved mini display settings (the fold gates
+    /// + the turn summary).
+    settings: MiniSettings,
+    /// The turn summary's labels (v2's `turnAgent ?? currentAgent()`
+    /// / `currentModel()` — the resolved target's labels stand in for
+    /// the per-turn tracking the footer owns).
+    turn_agent: Option<String>,
+    turn_model: Option<String>,
 }
 
 impl Runtime {
@@ -294,6 +413,13 @@ impl Runtime {
                     self.lifecycle.pane.machine.form_removed(&id);
                 }
                 Fold::Commit(commit) => {
+                    // CONFIG-T4 — the display gates (stream-v2.
+                    // transport.ts:870,1219 `input.thinking`, :682
+                    // `showTools()`): hidden kinds never reach the
+                    // scrollback (the fold still tracks them).
+                    if !self.settings.commit_visible(&commit) {
+                        continue;
+                    }
                     self.shown = true;
                     self.lifecycle.append(commit);
                 }
@@ -409,12 +535,16 @@ impl Runtime {
         // running → idle transition, or a terminal fold that arrived in
         // the same batch), then drain once more.
         let deadline = Instant::now() + TURN_TIMEOUT;
+        let turn_started = Instant::now();
         let mut observed_running = self.transport.is_running();
         self.turn_idle = false;
         self.transport.begin_turn();
         while Instant::now() < deadline && !self.lifecycle.is_closed() {
             self.pump_keys().await;
             self.pump_events();
+            // CONFIG-T4 — the busy cell stays live through the turn
+            // (the settle loop owns the footer while it waits).
+            self.lifecycle.pane.set_busy(self.transport.is_running());
             let running = self.transport.is_running();
             if self.turn_idle || (observed_running && !running) {
                 break;
@@ -422,6 +552,24 @@ impl Runtime {
             observed_running = running;
             let _ = self.lifecycle.flush();
             tokio::time::sleep(TICK).await;
+        }
+        // CONFIG-T4 — `turn.duration` → `writeTurnSummary`
+        // (footer.ts:455-470): the agent/model/duration summary row
+        // lands in the scrollback after every settled turn unless
+        // `mini.turn_summary` is "hide".
+        if self.settings.turn_summary {
+            let agent = self.turn_agent.clone().unwrap_or_else(|| "Build".to_owned());
+            let model = self.turn_model.clone().unwrap_or_else(|| "default".to_owned());
+            #[allow(clippy::cast_possible_truncation)]
+            let duration = crate::components::message::model::locale_duration(
+                u64::try_from(turn_started.elapsed().as_millis()).unwrap_or(0),
+            );
+            self.lifecycle.append(super::scrollback::turn_summary(
+                &agent,
+                &model,
+                &duration,
+                self.settings.mono,
+            ));
         }
         if !self.lifecycle.is_closed() {
             let _ = self.lifecycle.flush();

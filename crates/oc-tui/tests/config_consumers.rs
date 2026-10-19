@@ -3,8 +3,8 @@
 //! `by_session` and `session.deleted` clears the family cache;
 //! `session.permissions` from cli.json arms autoaccept at boot; the
 //! `session.*` display keys get read-side consumers; the `mini.*`
-//! display keys reach the mini runtime's lifecycle and scrollback
-//! filters.
+//! display keys reach the mini runtime's fold gates, scrollback
+//! filters, statusline details and the busy work-spinner cell.
 //!
 //! Hermetic: /tmp/opencode sandboxes for the config roots, no network.
 
@@ -322,5 +322,200 @@ mod t3 {
         assert!(store.session_tps());
         store.set_session_markdown_source(true);
         assert!(store.session_markdown_source());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CONFIG-T4 — mini display keys: MiniSettings resolve + fold gates
+// ---------------------------------------------------------------------------
+
+mod t4 {
+    use oc_tui::mini::runtime::MiniSettings;
+    use oc_tui::mini::scrollback::{Commit, CommitKind, Phase};
+
+    /// Every `mini.*` display key resolves from the cli.json document
+    /// with v2's per-key defaults (runtime.boot.ts:87-98).
+    #[test]
+    fn mini_keys_consumed() {
+        // Defaults: thinking/turn_summary/footer/splash show, tools/
+        // shell_output hide, mono off, block-soft-slide spinner.
+        let defaults = MiniSettings::resolve(&oc_core::cli_config::Info::default());
+        assert!(defaults.thinking);
+        assert!(!defaults.tools, "tools default HIDE (runtime.ts:802)");
+        assert!(!defaults.shell_output);
+        assert!(defaults.turn_summary);
+        assert!(defaults.footer);
+        assert!(defaults.splash);
+        assert!(!defaults.mono);
+        assert_eq!(defaults.work_spinner, "block-soft-slide");
+
+        // Every key maps from the document.
+        let info = oc_core::cli_config::Info {
+            mini: Some(oc_core::cli_config::MiniInfo {
+                thinking: Some("hide".to_owned()),
+                tools: Some("show".to_owned()),
+                shell_output: Some("show".to_owned()),
+                turn_summary: Some("hide".to_owned()),
+                footer: Some("hide".to_owned()),
+                splash: Some("hide".to_owned()),
+                work_spinner: Some("seed".to_owned()),
+                mono: Some(true),
+                replay: None,
+                replay_limit: None,
+            }),
+            ..Default::default()
+        };
+        let settings = MiniSettings::resolve(&info);
+        assert!(!settings.thinking);
+        assert!(settings.tools);
+        assert!(settings.shell_output);
+        assert!(!settings.turn_summary);
+        assert!(!settings.footer);
+        assert!(!settings.splash);
+        assert!(settings.mono);
+        assert_eq!(settings.work_spinner, "seed");
+    }
+
+    /// The transport-fold gates (stream-v2.transport.ts:682,870):
+    /// `tools: false` drops tool commits, `thinking: false` drops
+    /// reasoning commits — everything else always flows (defaults:
+    /// tools hidden, thinking shown).
+    #[test]
+    fn mini_fold_gates() {
+        let defaults = MiniSettings::resolve(&oc_core::cli_config::Info::default());
+        let tool = Commit { kind: CommitKind::Tool, phase: Phase::Final, ..Commit::default() };
+        let reasoning =
+            Commit { kind: CommitKind::Reasoning, phase: Phase::Progress, ..Commit::default() };
+        let assistant =
+            Commit { kind: CommitKind::Assistant, phase: Phase::Final, ..Commit::default() };
+        assert!(!defaults.commit_visible(&tool), "tools default hidden");
+        assert!(defaults.commit_visible(&reasoning), "thinking default shown");
+        assert!(defaults.commit_visible(&assistant));
+
+        let flipped = MiniSettings::resolve(&oc_core::cli_config::Info {
+            mini: Some(oc_core::cli_config::MiniInfo {
+                thinking: Some("hide".to_owned()),
+                tools: Some("show".to_owned()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert!(flipped.commit_visible(&tool), "tools=show flows");
+        assert!(!flipped.commit_visible(&reasoning), "thinking=hide drops reasoning");
+        assert!(flipped.commit_visible(&assistant), "assistant text always flows");
+    }
+
+    /// `mini.shell_output` (tool.ts:1301 + scrollback.surface.ts:457):
+    /// a shell-family tool's PROGRESS rows vanish when the knob hides
+    /// them; the final row and non-shell tools always render
+    /// (`bash` canonicalizes to `shell`, tool-display.ts:1-5).
+    #[test]
+    fn mini_shell_output_gates_shell_progress_rows() {
+        use oc_tui::mini::scrollback::format_commit_with;
+        let bash_progress = Commit {
+            kind: CommitKind::Tool,
+            phase: Phase::Progress,
+            text: "$ echo hi\nhi".to_owned(),
+            tool: Some("bash".to_owned()),
+            ..Commit::default()
+        };
+        let bash_final = Commit {
+            kind: CommitKind::Tool,
+            phase: Phase::Final,
+            text: "Bash · echo hi".to_owned(),
+            tool: Some("bash".to_owned()),
+            ..Commit::default()
+        };
+        let read_progress = Commit {
+            kind: CommitKind::Tool,
+            phase: Phase::Progress,
+            text: "Read · main.rs".to_owned(),
+            tool: Some("read".to_owned()),
+            ..Commit::default()
+        };
+
+        let hidden = format_commit_with(None, &bash_progress, 80, false);
+        assert!(hidden.is_empty(), "shell live rows hidden: {hidden:?}");
+        let shown = format_commit_with(None, &bash_progress, 80, true);
+        assert!(
+            shown.iter().any(|row| row.contains("echo hi")),
+            "shell_output=show streams the live rows: {shown:?}"
+        );
+
+        // The final row survives both settings.
+        let final_hidden = format_commit_with(None, &bash_final, 80, false);
+        assert!(
+            final_hidden.iter().any(|row| row.contains("Bash")),
+            "final row survives: {final_hidden:?}"
+        );
+        // Non-shell tools ignore the knob.
+        let read_hidden = format_commit_with(None, &read_progress, 80, false);
+        assert!(
+            read_hidden.iter().any(|row| row.contains("Read")),
+            "non-shell tools ignore the knob: {read_hidden:?}"
+        );
+    }
+
+    /// `mini.footer` (footer.view.tsx:220,416-500): `hide` blanks the
+    /// statusline's informational groups — the composer row stays.
+    #[test]
+    fn mini_footer_hides_statusline_details() {
+        use oc_tui::components::footer::FooterTheme;
+        use oc_tui::mini::lifecycle::FooterPane;
+
+        let mut pane = FooterPane::new(FooterTheme::fallback_dark());
+        pane.agent = Some("Build".into());
+        pane.model_label = Some("gpt-5".into());
+        let frame = pane.render_frame(40, 4);
+        assert!(frame.text_grid()[1].starts_with("Build · gpt-5"), "details shown by default");
+
+        pane.footer_details = false;
+        let hidden = pane.render_frame(40, 4).text_grid();
+        assert_eq!(hidden[1].trim(), "", "footer=hide blanks the status groups");
+        assert!(hidden[0].starts_with('┃'), "the composer rail stays");
+    }
+
+    /// `mini.work_spinner` (footer.view.tsx:978-988): a running turn
+    /// mounts the one-cell busy spinner at the statusline's left edge
+    /// (glyph + gap — the status text renders into the narrowed
+    /// width); `mono` swaps in the ASCII animation.
+    #[test]
+    fn mini_work_spinner_mounts_the_busy_cell() {
+        use oc_tui::components::footer::FooterTheme;
+        use oc_tui::mini::lifecycle::FooterPane;
+
+        let mut pane = FooterPane::new(FooterTheme::fallback_dark());
+        pane.agent = Some("Build".into());
+        pane.model_label = Some("gpt-5".into());
+        let idle = pane.render_frame(40, 4).text_grid();
+        assert!(idle[1].starts_with("Build"), "no spinner while idle: {:?}", idle[1]);
+
+        pane.set_busy(true);
+        pane.work_spinner = "square-toggle".into();
+        let busy = pane.render_frame(40, 4);
+        let grid = busy.text_grid();
+        assert!(
+            matches!(grid[1].chars().next(), Some('□' | '■')),
+            "the square-toggle frames mount at col 0: {:?}",
+            grid[1]
+        );
+        assert_eq!(grid[1].chars().nth(1), Some(' '), "the gap cell follows");
+        assert!(grid[1].contains("Build · gpt-5"), "the status text shifts right, not away");
+        assert_eq!(busy.width, 40, "the frame keeps the terminal width");
+        assert!(grid[0].starts_with('┃'), "the composer row keeps the full width");
+
+        // mono swaps in the ASCII quartet (SEED_MONO — "-\\|/").
+        pane.mono = true;
+        let mono = pane.render_frame(40, 4).text_grid();
+        assert!(
+            matches!(mono[1].chars().next(), Some('-' | '\\' | '|' | '/')),
+            "mono uses the ASCII animation: {:?}",
+            mono[1]
+        );
+
+        // Idle clears the cell.
+        pane.set_busy(false);
+        let settled = pane.render_frame(40, 4).text_grid();
+        assert!(settled[1].starts_with("Build"), "idle restores the plain statusline");
     }
 }

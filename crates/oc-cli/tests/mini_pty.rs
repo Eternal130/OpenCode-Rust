@@ -301,6 +301,11 @@ struct MiniPty {
 
 impl MiniPty {
     fn spawn(port: u16, extra: &[&str]) -> Self {
+        // The pinned rendering shape (see spawn_with_cli).
+        Self::spawn_with_cli(port, extra, r#"{ "mini": { "tools": "show", "mono": true } }"#)
+    }
+
+    fn spawn_with_cli(port: u16, extra: &[&str], cli_json: &str) -> Self {
         let master = unsafe {
             let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
             assert!(fd >= 0, "posix_openpt");
@@ -332,6 +337,16 @@ impl MiniPty {
         std::fs::create_dir_all(sandbox.join(".config")).expect("config dir");
         std::fs::create_dir_all(sandbox.join(".local/state")).expect("state dir");
         std::fs::create_dir_all(sandbox.join("work")).expect("work dir");
+        // CONFIG-T4: the mini display keys now follow cli.json with
+        // v2's defaults (`mini.tools` defaults HIDE — runtime.ts:802,
+        // `mini.mono` defaults false); the harness pins the previous
+        // rendering shape (tool rows on, mono ASCII) so the flow
+        // assertions keep their original scrollback bytes. NOTE the
+        // config root is `opencode-rust` (global_roots::resolve's
+        // APP_NAME), not the legacy v2 `opencode` directory.
+        std::fs::create_dir_all(sandbox.join(".config/opencode-rust"))
+            .expect("opencode config dir");
+        std::fs::write(sandbox.join(".config/opencode-rust/cli.json"), cli_json).expect("cli.json");
 
         let binary = env!("CARGO_BIN_EXE_opencode-rust");
         let mut command = Command::new(binary);
@@ -532,6 +547,44 @@ async fn mini_pty_permission_ask_allow_continues() {
         stub.replies.lock().expect("lock").iter().any(|id| id.contains("prm_stub")),
         "the permission reply reached the server"
     );
+}
+
+/// CONFIG-T4: the cli.json `mini` section drives the real binary.
+/// `mini.tools: "hide"` keeps the tool caption rows out of the
+/// scrollback while the turn still completes — the summary row lands
+/// (`turn_summary` defaults show, mono defaults off → `·`
+/// separators).
+#[tokio::test(flavor = "multi_thread")]
+async fn mini_pty_cli_json_tools_hide_drops_tool_rows() {
+    let stub = start_stub(PromptMode::PermissionAsk).await;
+    let mut mini = MiniPty::spawn_with_cli(stub.port, &[], r#"{ "mini": { "tools": "hide" } }"#);
+
+    assert!(mini.wait_for("oc mini", Duration::from_secs(30)), "boot");
+    mini.type_text("run the tool\r");
+    assert!(
+        mini.wait_for("Permission required", Duration::from_secs(30)),
+        "the permission body mounted: {}",
+        mini.output()
+    );
+    mini.type_text("\r");
+    // The turn completes: the summary row lands after the tool would
+    // have rendered (ordering — a gated caption can no longer appear).
+    assert!(
+        mini.wait_for("Build · default ·", Duration::from_secs(30)),
+        "the turn summary row: {}",
+        mini.output()
+    );
+    assert!(
+        !mini.output().contains("Bash ·"),
+        "tools=hide keeps tool caption rows out of the scrollback: {}",
+        mini.output()
+    );
+    assert!(
+        stub.replies.lock().expect("lock").iter().any(|id| id.contains("prm_stub")),
+        "the permission reply reached the server"
+    );
+    mini.exit_sequence();
+    mini.finish();
 }
 
 /// `--demo`: the intro note lists the slash commands and `/fmt` emits

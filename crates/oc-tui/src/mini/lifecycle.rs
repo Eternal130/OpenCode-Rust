@@ -34,7 +34,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::Terminal;
 
-use super::scrollback::{format_commit, Commit};
+use super::scrollback::{format_commit_with, Commit};
 use super::splash::{directory_label, entry_splash_rows, exit_splash_rows};
 use super::{footer_base, FOOTER_HEIGHT, FORM_ROWS, PERMISSION_ROWS};
 use crate::components::footer::form::{
@@ -98,6 +98,19 @@ pub struct FooterPane {
     pub permission_replies: Vec<PermissionReply>,
     pub form_replies: Vec<FormReply>,
     pub form_cancels: Vec<String>,
+    /// CONFIG-T4 `mini.footer`: the statusline's informational groups
+    /// render while set (v2's `footerDetails` memo,
+    /// `footer.view.tsx:220`).
+    pub footer_details: bool,
+    /// CONFIG-T4 `mini.work_spinner`: the busy cell's animation id.
+    pub work_spinner: String,
+    /// CONFIG-T4 `mini.mono` (the render-side copy): the ASCII
+    /// spinner swap (`animation={mono ? SEED_MONO : …}`,
+    /// `footer.view.tsx:983`).
+    pub mono: bool,
+    /// CONFIG-T4: the busy-cell clock anchor (`started()`,
+    /// `footer.view.tsx:988`'s `age` input) — `None` while idle.
+    busy_since: Option<Instant>,
 }
 
 impl FooterPane {
@@ -119,7 +132,20 @@ impl FooterPane {
             permission_replies: Vec::new(),
             form_replies: Vec::new(),
             form_cancels: Vec::new(),
+            footer_details: true,
+            work_spinner: "block-soft-slide".to_owned(),
+            mono: false,
+            busy_since: None,
         }
+    }
+
+    /// The busy-cell state (`busy()` in `footer.view.tsx:980`): a
+    /// running turn anchors the spinner clock; idle clears it. The
+    /// anchor only moves on transitions so the animation never
+    /// restarts mid-turn.
+    pub fn set_busy(&mut self, busy: bool) {
+        self.busy_since =
+            if busy { self.busy_since.or_else(|| Some(Instant::now())) } else { None };
     }
 
     /// Expire armed two-press counters (`armExitTimer` /
@@ -393,8 +419,31 @@ impl FooterPane {
                         .unwrap_or_else(|| "Default model".to_owned()),
                     command_shortcut: "ctrl+p".to_owned(),
                 };
-                let mut frame = render_prompt_idle(&idle, width, height, &self.theme);
+                // CONFIG-T4 — the busy statusline (`footer.view.tsx:210`
+                // + `:978-988`): while a turn runs, the status text
+                // narrows by the one-cell spinner box + its gap; the
+                // `mono` flag swaps in the ASCII animation.
+                let busy = self.busy_since.is_some();
+                let status_width = if busy { width.saturating_sub(2).max(1) } else { width };
+                let mut frame = render_prompt_idle(&idle, status_width, height, &self.theme);
                 self.paint_draft(&mut frame);
+                if !self.footer_details {
+                    blank_statusline_details(&mut frame);
+                }
+                if let Some(since) = self.busy_since {
+                    let motion = if self.mono {
+                        super::spinner::seed_mono()
+                    } else {
+                        super::spinner::work_spinner(&self.work_spinner)
+                    };
+                    paint_busy_cell(
+                        &mut frame,
+                        motion.frame(since.elapsed()),
+                        self.theme.agent_color(0),
+                        width,
+                    );
+                    frame.width = width;
+                }
                 frame
             }
         }
@@ -423,8 +472,39 @@ impl FooterPane {
     }
 }
 
+/// CONFIG-T4 `mini.footer === "hide"`: the statusline's informational
+/// groups vanish (v2's `footerDetails` memo returning empty status
+/// sections — `footer.view.tsx:220,416-500`); the composer row and
+/// the row itself stay (the height never changes).
+fn blank_statusline_details(frame: &mut crate::render::Frame) {
+    if let Some(row) = frame.cells.get_mut(1) {
+        for cell in row.iter_mut() {
+            *cell = crate::render::Cell::default();
+        }
+    }
+}
+
+/// CONFIG-T4 busy cell (`footer.view.tsx:978-988`): the one-cell
+/// spinner box (glyph at col 0, its `gap={1}` at col 1) prepended to
+/// the statusline row; the status text was already rendered into the
+/// narrowed width, so the cells shift into place.
+fn paint_busy_cell(
+    frame: &mut crate::render::Frame,
+    glyph: char,
+    color: crate::render::CellColor,
+    width: usize,
+) {
+    let Some(row) = frame.cells.get_mut(1) else { return };
+    let spacer = crate::render::Cell { ch: ' ', fg: color, ..crate::render::Cell::default() };
+    let cell = crate::render::Cell { ch: glyph, fg: color, ..crate::render::Cell::default() };
+    row.insert(0, cell);
+    row.insert(1, spacer);
+    row.truncate(width);
+}
+
 /// [`Lifecycle::boot`]'s inputs (`LifecycleInput`,
 /// `runtime.lifecycle.ts:55-83`, the host-provided subset).
+#[allow(clippy::struct_excessive_bools)] // the display-flag set mirrors the reference
 pub struct LifecycleInput {
     pub version: String,
     pub home: String,
@@ -433,6 +513,17 @@ pub struct LifecycleInput {
     pub model_label: Option<String>,
     pub splash: bool,
     pub mono: bool,
+    /// `mini.footer` (CONFIG-T4): the statusline's informational
+    /// groups render while "show" (`footerDetails`,
+    /// `footer.view.tsx:220`).
+    pub footer: bool,
+    /// `mini.work_spinner` (CONFIG-T4): the busy cell's animation id
+    /// (`WORK_SPINNERS[miniSettings().work_spinner]`,
+    /// `footer.view.tsx:983`).
+    pub work_spinner: String,
+    /// `mini.shell_output` (CONFIG-T4): shell-family tools stream
+    /// their live rows while "show" (`footer.ts:234`).
+    pub shell_output: bool,
 }
 
 /// The split-footer renderer handle (`createRuntimeLifecycle`'s
@@ -463,6 +554,10 @@ pub struct Lifecycle {
     force_draw: bool,
     splash_enabled: bool,
     mono: bool,
+    /// CONFIG-T4 `mini.shell_output`: shell-family tools stream their
+    /// live rows while set (`entryBody(commit, { shellOutput })`,
+    /// `scrollback.surface.ts:457`).
+    shell_output: bool,
     version: String,
     home: String,
     directory: String,
@@ -495,6 +590,11 @@ impl Lifecycle {
         if let Some(model_label) = input.model_label {
             pane.model_label = Some(model_label);
         }
+        // CONFIG-T4: the display knobs ride the pane (`miniSettings()`
+        // reads in `footer.view.tsx`).
+        pane.footer_details = input.footer;
+        pane.work_spinner = input.work_spinner;
+        pane.mono = input.mono;
         let mut lifecycle = Self {
             terminal,
             pane,
@@ -507,6 +607,7 @@ impl Lifecycle {
             force_draw: true,
             splash_enabled: input.splash,
             mono: input.mono,
+            shell_output: input.shell_output,
             version: input.version,
             home: input.home,
             directory: input.directory,
@@ -540,9 +641,15 @@ impl Lifecycle {
     }
 
     /// `footer.append` → scrollback rows (`entryWriter`,
-    /// `scrollback.writer.tsx:278-295`).
+    /// `scrollback.writer.tsx:278-295`) — the `mini.shell_output`
+    /// knob rides the entry-body call (`scrollback.surface.ts:457`).
     pub fn append(&mut self, commit: Commit) {
-        let rows = format_commit(self.last_commit.as_ref(), &commit, self.width.max(1));
+        let rows = format_commit_with(
+            self.last_commit.as_ref(),
+            &commit,
+            self.width.max(1),
+            self.shell_output,
+        );
         self.last_commit = Some(commit);
         self.queue_rows(rows);
     }
