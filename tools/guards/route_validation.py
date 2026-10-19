@@ -21,13 +21,20 @@ HEURISTIC (pragmatic — this is the documented approximation)
     `:param` templates on both sides — they match 1:1).
   * Handler body: the `async fn <fn>` block in the mounting file, located
     by paren/brace matching (not regex-on-body).
-  * "Validation" = the handler body contains a validator invocation:
-    a `schema_check::<fn>(..)` call (the port's byte-pinned Effect-schema
-    error surface) or any call whose callee contains `validat`.
-    v2 validates EVERY route through schema middleware; the port pins
-    `session.create`'s payload and `session.list`'s query — so today the
-    unvalidated set is ~139 routes and lives in the baseline, exactly as
-    §9.2 prescribes ("不要把 139 条未校验路由全部写成 allowlist").
+  * "Validation" = EITHER of:
+      a) the handler body contains a validator invocation: a
+         `schema_check::<fn>(..)` call (the port's byte-pinned Effect-
+         schema error surface) or any call whose callee contains
+         `validat`; OR
+      b) the operation is listed in `ENFORCED_OPS` of the HTTP-H0
+         generated-table middleware seam
+         (`crates/oc-server/src/request_validation.rs`, wired as
+         `schema_error_middleware` around the handler table in
+         `handlers/mod.rs::mount`). The list is parsed from the seam the
+         same way mounts are parsed from handlers — mechanical, no
+         per-route allowlist. v2 validates EVERY route through schema
+         middleware; the seam's list is the incremental rollout valve
+         (HTTP-H0), so the baseline shrinks as the slice grows.
 
 KNOWN LIMITATIONS
   * Deserialization via `Json<T>` extractors is treated as NOT validation
@@ -36,10 +43,14 @@ KNOWN LIMITATIONS
   * Closures or indirect mounts (`get(|| async ..)`) map to no named fn
     and count as unvalidated.
   * A validator invoked but ignored (`let _ =`) still counts as coverage.
+  * The seam covers validate-first routes only; endpoints carrying v2's
+    sessionLocationMiddleware (404-before-payload-400) deliberately stay
+    unvalidated until their post-resolution seam lands (ledger HTTP-H0).
 
 UPDATE BASELINE (`--update-baseline`) when a handler gains a validator
 (shrink) or the OpenAPI surface is regenerated and grew (grow — justify
-with the regeneration commit; README § Updating).
+with the regeneration commit; README § Updating). Shrink-by-seam updates
+quote the HTTP-H0 slice commit.
 """
 
 import re
@@ -51,6 +62,8 @@ import guardlib  # noqa: E402
 
 ROUTES_GEN = guardlib.ROOT / "crates" / "oc-server" / "src" / "routes.gen.rs"
 HANDLERS_DIR = guardlib.ROOT / "crates" / "oc-server" / "src" / "handlers"
+SEAM = guardlib.ROOT / "crates" / "oc-server" / "src" / "request_validation.rs"
+SEAM_WIRING = HANDLERS_DIR / "mod.rs"
 
 ROUTE_RE = re.compile(
     r"Route\s*\{\s*method:\s*Method::(\w+)\s*,\s*path:\s*\"([^\"]+)\"\s*,"
@@ -63,6 +76,37 @@ MOUNT_RE = re.compile(
 )
 FN_RE = re.compile(r"(?:pub\s+)?async\s+fn\s+(\w+)\s*\(")
 VALIDATOR_RE = re.compile(r"schema_check::\s*\w+\s*\(|\b\w*validat\w*\s*\(")
+SEAM_OPS_RE = re.compile(
+    r"const ENFORCED_OPS:\s*&\[\&str\]\s*=\s*&\[(.*?)\]", re.S
+)
+SEAM_OP_ITEM_RE = re.compile(r"\"([^\"]+)\"")
+SEAM_WIRING_RE = re.compile(r"request_validation::schema_error_middleware")
+
+
+def middleware_enforced_ops() -> set[str]:
+    """Operation ids enforced by the HTTP-H0 middleware seam.
+
+    Raises when the seam declares ops but lost its wiring — a dead seam
+    must fail the guard, not silently shrink the baseline.
+    """
+    if not SEAM.is_file():
+        return set()
+    text = guardlib.read_text(SEAM)
+    match = SEAM_OPS_RE.search(text)
+    if not match:
+        raise guardlib.GuardError(f"seam {SEAM} has no ENFORCED_OPS const")
+    ops = set(SEAM_OP_ITEM_RE.findall(match.group(1)))
+    if ops and SEAM_WIRING.is_file():
+        wiring = guardlib.read_text(SEAM_WIRING)
+        cfg_test_at = wiring.find("#[cfg(test)]")
+        searchable = wiring if cfg_test_at == -1 else wiring[:cfg_test_at]
+        if not SEAM_WIRING_RE.search(searchable):
+            raise guardlib.GuardError(
+                f"seam declares {len(ops)} enforced ops but {SEAM_WIRING.name} "
+                "does not layer request_validation::schema_error_middleware "
+                "(production call site missing)"
+            )
+    return ops
 
 
 def _fn_body(text: str, name: str) -> str | None:
@@ -141,9 +185,19 @@ def collect() -> tuple[list[dict], dict]:
 
     violations: list[dict] = []
     validated: list[str] = []
+    seam_ops = middleware_enforced_ops()
+    known_ops = {(method, route_path, op) for method, route_path, op in routes}
+    unknown_seam = sorted(op for op in seam_ops if op not in {o for _, _, o in known_ops})
+    if unknown_seam:
+        raise guardlib.GuardError(
+            f"seam ENFORCED_OPS names operations absent from routes.gen.rs: {unknown_seam}"
+        )
     route_keys = {(method, route_path) for method, route_path, _ in routes}
     route_paths = {route_path for _, route_path, _ in routes}
     for method, route_path, op in routes:
+        if op in seam_ops:
+            validated.append(op)
+            continue
         candidates = [c for c in mounts.get(route_path, []) if c[0] == method]
         if not candidates:
             if mounts.get(route_path):
@@ -190,6 +244,7 @@ def collect() -> tuple[list[dict], dict]:
         "mount_drift": drift,
         "validated_ops": len(validated),
         "validated": sorted(validated),
+        "seam_enforced_ops": len(seam_ops),
     }
     return violations, meta
 
