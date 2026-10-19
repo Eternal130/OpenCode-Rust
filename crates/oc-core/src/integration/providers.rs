@@ -38,7 +38,7 @@ pub fn install(host: &IntegrationHost, catalog: &crate::provider_catalog::catalo
 // Catalog key/env methods (plugin/models-dev.ts:33-52)
 // ---------------------------------------------------------------------------
 
-fn install_catalog_methods(
+pub(crate) fn install_catalog_methods(
     host: &IntegrationHost,
     catalog: &crate::provider_catalog::catalog::Catalog,
 ) {
@@ -49,19 +49,38 @@ fn install_catalog_methods(
         let id = snapshot.info.id.0.clone();
         host.update_integration(&id, &snapshot.info.name);
         host.update_method(&id, Method::Key { label: None, form: None }, None);
-        // v2's environmentNames filter (models-dev.ts:77-84): azure
-        // advertises project/location/ADC vars that are not keys.
-        let names = if id == "azure" {
-            let mut filtered: Vec<String> = snapshot
-                .environment
-                .iter()
-                .filter(|name| name.ends_with("_API_KEY"))
-                .cloned()
-                .collect();
-            filtered.push("AZURE_COGNITIVE_SERVICES_API_KEY".to_owned());
-            filtered
-        } else {
-            snapshot.environment.clone()
+        // v2's environmentNames filter (models-dev.ts:77-87): providers
+        // advertise env vars that configure auth rather than carry a key
+        // — azure (project/location/ADC), google-vertex (project,
+        // location, ADC file), cloudflare-workers-ai (account/token
+        // scoping), and bedrock (SigV4 chain) — only the listed names
+        // may become env credentials.
+        let names = match id.as_str() {
+            "azure" => {
+                let mut filtered: Vec<String> = snapshot
+                    .environment
+                    .iter()
+                    .filter(|name| name.ends_with("_API_KEY"))
+                    .cloned()
+                    .collect();
+                filtered.push("AZURE_COGNITIVE_SERVICES_API_KEY".to_owned());
+                filtered
+            }
+            // GoogleVertexPlugin handles activation/credentials
+            // (google-vertex.ts) — only the Express Mode key is a
+            // credential.
+            "google-vertex" => vec!["GOOGLE_VERTEX_API_KEY".to_owned()],
+            "cloudflare-workers-ai" => vec![
+                "CLOUDFLARE_API_KEY".to_owned(),
+                "CLOUDFLARE_WORKERS_AI_TOKEN".to_owned(),
+                "CLOUDFLARE_API_TOKEN".to_owned(),
+            ],
+            // AmazonBedrockPlugin (amazon-bedrock.ts:22-27): models.dev
+            // advertises AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/
+            // AWS_REGION alongside the bearer token; only the bearer
+            // token is a key — the rest feed the SigV4 chain.
+            "amazon-bedrock" => vec!["AWS_BEARER_TOKEN_BEDROCK".to_owned()],
+            _ => snapshot.environment.clone(),
         };
         host.update_method(&id, Method::Env { names }, None);
     }

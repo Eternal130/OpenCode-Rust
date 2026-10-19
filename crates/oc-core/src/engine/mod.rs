@@ -463,9 +463,15 @@ impl Engine {
             &catalog,
             &crate::session::runner::model_request::useragent(&options.app),
         );
+        // CRED-A1: keep the TYPED resolver handle when we own it — the
+        // `models-dev.refreshed` subscription swaps its catalog cell so
+        // refreshes propagate to resolution without a re-boot (v2
+        // re-reads `ModelsDev.get()` on every Refreshed event and
+        // reloads integrations + providers, models-dev.ts:61-66).
+        let mut catalog_resolver: Option<Arc<resolver::CatalogModelResolver>> = None;
         let resolver: Arc<dyn ModelResolver> =
             options.model_resolver.clone().unwrap_or_else(|| {
-                Arc::new(
+                let typed = Arc::new(
                     resolver::CatalogModelResolver::new(
                         FacadeContext::new(Arc::clone(&facade_transport)),
                         Arc::clone(&catalog),
@@ -475,7 +481,9 @@ impl Engine {
                     )
                     .with_credentials(Arc::clone(&integration.credential_bindings()))
                     .with_console(Arc::clone(&integration.console_providers())),
-                )
+                );
+                catalog_resolver = Some(Arc::clone(&typed));
+                typed
             });
 
         // Credential-driven provider bindings (copilot transport): the
@@ -509,6 +517,26 @@ impl Engine {
                     host.refresh_provider_bindings().await;
                     host.refresh_console().await;
                     host.refresh_wellknown_documents().await;
+                }
+            });
+        }
+        // CRED-A1 catalog-refresh propagation (v2 models-dev.ts:61-66:
+        // on `ModelsDev.Event.Refreshed`, re-read the live service and
+        // reload the integration + provider registries): the resolver's
+        // shared catalog cell swaps to the fetched snapshot and the
+        // integration host re-installs the catalog key/env methods, so a
+        // refresh mid-session needs no re-boot.
+        if let Some(typed) = catalog_resolver {
+            use futures::StreamExt as _;
+            let mut subscription =
+                bus.subscribe_types(&[crate::bus::registry::MODELS_DEV_REFRESHED]);
+            let service = Arc::clone(&catalog_service);
+            let host = Arc::clone(&integration);
+            tokio::spawn(async move {
+                while subscription.next().await.is_some() {
+                    let next = service.get();
+                    typed.refresh_catalog(Arc::clone(&next));
+                    host.reload_catalog(&next);
                 }
             });
         }
@@ -704,8 +732,14 @@ impl Engine {
                 Arc::new(resolver::LocationModelResolver::new(
                     resolver::CatalogModelResolver::new(
                         FacadeContext::new(Arc::clone(&self.facade_transport)),
-                        Arc::clone(&self.catalog),
-                        BTreeMap::new(),
+                        // CRED-A1: locations assemble over the LIVE
+                        // service catalog — a refresh mid-session feeds
+                        // every newly assembled location.
+                        self.catalog_service.get(),
+                        // CRED-A4: the location's apiKey/baseURL overlays
+                        // ride the connection map (catalog-matching ids
+                        // keep their native protocol).
+                        location_providers.connections.clone(),
                         location_providers.custom,
                         location_providers.default_model,
                     )

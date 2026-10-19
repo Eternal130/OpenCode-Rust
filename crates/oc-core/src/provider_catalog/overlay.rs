@@ -12,10 +12,12 @@
 //! each location's loaded config — the overlay half of
 //! [`crate::engine::resolver::LocationModelResolver`].
 
+use std::collections::BTreeMap;
+
 use oc_schema::config::ModelSelection;
 
 use crate::config::Loaded;
-use crate::provider_catalog::facade::{CustomModel, CustomProvider};
+use crate::provider_catalog::facade::{CustomModel, CustomProvider, ModelConnection};
 
 /// The config-derived provider bindings for one loaded document set
 /// (boot seeding and the per-location overlay share this shape).
@@ -23,6 +25,12 @@ use crate::provider_catalog::facade::{CustomModel, CustomProvider};
 pub struct ConfigProviders {
     /// `providers.<id>` with a `settings.baseURL` (openai-compatible).
     pub custom: Vec<CustomProvider>,
+    /// CRED-A4: EVERY configured provider's `settings.apiKey`/`baseURL`
+    /// as a connection overlay — catalog-matching ids keep their native
+    /// protocol and take the key/base URL as the connection (v2
+    /// config/plugin/provider.ts:70-79 merges settings onto the existing
+    /// provider record instead of rebinding it).
+    pub connections: BTreeMap<String, ModelConnection>,
     /// The `model` default selection.
     pub default_model: Option<ModelSelection>,
 }
@@ -49,7 +57,6 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
                     .or_else(|| settings.rest.get("base_url"))
                     .and_then(|value| value.as_ref().and_then(|value| value.as_str()))
                     .map(str::to_owned);
-                let Some(base_url) = base_url else { continue };
                 let api_key = settings
                     .rest
                     .get("apiKey")
@@ -63,6 +70,26 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
                             .and_then(|names| names.first())
                             .and_then(|name| std::env::var(name).ok())
                     });
+                // CRED-A4: every apiKey/baseURL lands as a connection
+                // overlay for the provider id — apiKey-only entries are
+                // no longer dropped, and catalog-matching ids take the
+                // overlay without rebinding to openai-compatible. Later
+                // documents merge per key (v2 foldSettings /
+                // mergeOverlay, plugin/provider/configured.ts:14-18).
+                if base_url.is_some() || api_key.is_some() {
+                    let entry = out.connections.entry(id.clone()).or_default();
+                    if base_url.is_some() {
+                        entry.base_url.clone_from(&base_url);
+                    }
+                    if api_key.is_some() {
+                        entry.api_key.clone_from(&api_key);
+                    }
+                }
+                // The openai-compatible custom binding only covers
+                // entries with a baseURL AND no catalog record of their
+                // own (the resolver overlays the connection onto the
+                // native binding for catalog ids).
+                let Some(base_url) = base_url else { continue };
                 let models = provider
                     .models
                     .as_ref()
@@ -121,7 +148,9 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
 /// the location).
 #[must_use]
 pub fn is_empty(providers: &ConfigProviders) -> bool {
-    providers.custom.is_empty() && providers.default_model.is_none()
+    providers.custom.is_empty()
+        && providers.connections.is_empty()
+        && providers.default_model.is_none()
 }
 
 #[cfg(test)]
@@ -273,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn overlay_entries_without_base_url_are_skipped() {
+    fn overlay_entries_without_base_url_become_connections() {
         let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
         let project = root.path().join("proj");
         let home = root.path().join("home");
@@ -285,6 +314,13 @@ mod tests {
         )
         .unwrap();
         let providers = providers_from_config(&loader(&project, &home).load());
+        // CRED-A4: an apiKey-only entry no longer drops — it becomes the
+        // connection overlay for its provider id (v2 merges settings onto
+        // the provider record; only entries with a baseURL AND no catalog
+        // record of their own become openai-compatible customs).
         assert!(providers.custom.is_empty());
+        let connection = providers.connections.get("conn").expect("connection overlay");
+        assert_eq!(connection.api_key.as_deref(), Some("k"));
+        assert!(connection.base_url.is_none());
     }
 }

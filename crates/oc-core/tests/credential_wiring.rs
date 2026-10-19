@@ -382,6 +382,461 @@ async fn console_key_credential_loads_providers() {
 }
 
 // ---------------------------------------------------------------------------
+// CRED-AUTHNONE-DOWNGRADE: activation-enabled keyless providers resolve
+// with Auth.none (generic, not zen-only)
+// ---------------------------------------------------------------------------
+
+/// A synthetic activation-ENABLED keyless provider (no catalog provider
+/// exercises this today): with no credential, no env, and no configured
+/// auth, resolution must build an anonymous request (ref
+/// model-resolver.ts:379-385) instead of failing on the missing env key.
+#[tokio::test]
+async fn generic_keyless_downgrades_to_auth_none() {
+    let _env = env_guard().await;
+    // SAFETY: test-scoped env scrub — the keyless leg.
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::remove_var("KEYLESS_API_KEY");
+    }
+    let body = r#"{
+        "keyless": {
+            "id": "keyless",
+            "name": "Keyless Gateway",
+            "env": ["KEYLESS_API_KEY"],
+            "npm": "@ai-sdk/groq",
+            "api": "https://gw.keyless.test/v1",
+            "models": {
+                "keyless-1": {
+                    "id": "keyless-1",
+                    "name": "Keyless One",
+                    "release_date": "2026-01-01",
+                    "attachment": false,
+                    "reasoning": false,
+                    "tool_call": true,
+                    "limit": {"context": 8192, "output": 1024}
+                }
+            }
+        }
+    }"#;
+    let catalog = Arc::new(
+        Catalog::parse(body)
+            .expect("synthetic catalog parses")
+            .with_activation("keyless", oc_schema::provider::Activation::Enabled),
+    );
+    let transport: oc_ai::route::SharedTransport =
+        Arc::new(oc_ai::route::transport::reqwest_transport::ReqwestTransport::new());
+    let resolver = CatalogModelResolver::new(
+        FacadeContext::new(transport),
+        catalog,
+        BTreeMap::new(),
+        Vec::new(),
+        None,
+    );
+
+    let session = session_row();
+    let bound = resolver
+        .resolve_selected(&session, &model_ref("keyless", "keyless-1"))
+        .expect("activation-enabled keyless provider resolves");
+    let header = wire_header(&bound, "authorization")
+        .unwrap_or_else(|error| panic!("keyless request must build anonymously, got: {error}"));
+    assert_eq!(
+        header, None,
+        "no credential, no env, no configured auth → Auth.none (no authorization header)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CRED-A1: catalog refresh propagates to resolver + integrations
+// ---------------------------------------------------------------------------
+
+/// One `api.json` server on 127.0.0.1:0 (the refresh loop's source).
+async fn mock_catalog_api(body: String) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else { break };
+            let body = body.clone();
+            tokio::spawn(async move {
+                let mut buffer = [0u8; 4096];
+                let _ = socket.read(&mut buffer).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+    (format!("http://{addr}"), handle)
+}
+
+fn tiny_catalog_body() -> String {
+    serde_json::json!({
+        "tiny": {
+            "id": "tiny",
+            "name": "Tiny",
+            "env": ["TINY_API_KEY"],
+            "npm": "@ai-sdk/openai-compatible",
+            "api": "https://api.tiny.test/v1",
+            "models": {
+                "tiny-1": {
+                    "id": "tiny-1",
+                    "name": "Tiny One",
+                    "release_date": "2026-01-01",
+                    "attachment": false,
+                    "reasoning": false,
+                    "tool_call": true,
+                    "limit": {"context": 8192, "output": 1024}
+                }
+            }
+        }
+    })
+    .to_string()
+}
+
+/// CRED-A1 (ref models-dev.ts:61-66: on `models-dev.refreshed` the
+/// integration + provider registries re-read the live catalog): after
+/// the boot refresh loop swaps the served catalog, the engine resolver
+/// binds the fetched provider and the integration registry carries its
+/// env method — no re-boot.
+#[tokio::test]
+async fn catalog_refresh_propagates() {
+    let (url, server) = mock_catalog_api(tiny_catalog_body()).await;
+    let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox home");
+    let engine = Engine::boot(EngineOptions {
+        catalog_fetch: true,
+        catalog_url: Some(url),
+        ..EngineOptions::new(dir.path().join("data"), dir.path().join("home"))
+    })
+    .await;
+
+    // Wait for the refresh loop to land the fetched catalog.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while engine.catalog_service.get().provider_count() != 1 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "refresh loop never applied the fetched catalog"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    // CRED-A1: the resolver's shared catalog cell follows the refresh —
+    // `tiny/tiny-1` (unknown to the boot snapshot) binds.
+    let session = session_row();
+    let services = engine
+        .location(oc_core::location::LocationRef::new(dir.path().to_owned(), None))
+        .await
+        .expect("location services");
+    let reference = model_ref("tiny", "tiny-1");
+    let bound = loop {
+        match services.resolver.resolve_selected(&session, &reference) {
+            Ok(bound) => break bound,
+            Err(_) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+            Err(error) => panic!("refreshed provider never reached the resolver: {error}"),
+        }
+    };
+    assert_eq!(bound.model.provider.as_str(), "tiny");
+    assert_eq!(
+        bound.model.route.endpoint.base_url.as_deref(),
+        Some("https://api.tiny.test/v1"),
+        "the FETCHED catalog binds (not the boot snapshot's provider set)"
+    );
+
+    // The integration registry re-installed the fetched provider's
+    // key/env methods (v2 ctx.integration.reload()).
+    let integration = engine.integration.get("tiny").await.expect("get").expect("integration row");
+    let env_names = integration
+        .methods
+        .iter()
+        .filter_map(|method| match method {
+            oc_core::integration::types::Method::Env { names } => Some(names.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    assert_eq!(env_names, vec!["TINY_API_KEY"], "env method follows the refreshed catalog");
+    server.abort();
+}
+
+// ---------------------------------------------------------------------------
+// CRED-A3: variant overlays merge into the resolved request
+// ---------------------------------------------------------------------------
+
+/// A deepseek-family catalog model with a toggle reasoning lane: the
+/// `thinking`/`none` variants carry BODY overlays (`thinking.type`),
+/// which must reach the wire body of the resolved request (v2
+/// withVariant, model-resolver.ts:137-161 + 196-257).
+#[tokio::test]
+async fn variant_overlay_request() {
+    let body = r#"{
+        "deepseek": {
+            "id": "deepseek",
+            "name": "Deep Variant",
+            "npm": "@ai-sdk/openai-compatible",
+            "models": {
+                "dv-1": {
+                    "id": "dv-1",
+                    "name": "DV One",
+                    "release_date": "2026-01-01",
+                    "attachment": false,
+                    "reasoning": true,
+                    "reasoning_options": [{"type": "toggle"}],
+                    "tool_call": true,
+                    "limit": {"context": 8192, "output": 1024}
+                }
+            }
+        }
+    }"#;
+    let catalog = Arc::new(Catalog::parse(body).expect("catalog parses"));
+    let model = catalog.model("deepseek", "dv-1").expect("model");
+    let variants: Vec<String> = model.variants.iter().map(|v| v.id.0.clone()).collect();
+    assert!(
+        variants.iter().any(|id| id == "thinking") && variants.iter().any(|id| id == "none"),
+        "toggle variants resolve: {variants:?}"
+    );
+
+    let transport: oc_ai::route::SharedTransport =
+        Arc::new(oc_ai::route::transport::reqwest_transport::ReqwestTransport::new());
+    let resolver = CatalogModelResolver::new(
+        FacadeContext::new(transport),
+        catalog,
+        BTreeMap::from([(
+            "deepseek".to_owned(),
+            oc_core::provider_catalog::facade::ModelConnection {
+                api_key: Some("dv-key".to_owned()),
+                ..Default::default()
+            },
+        )]),
+        Vec::new(),
+        None,
+    );
+    let session = session_row();
+
+    let mut reference = model_ref("deepseek", "dv-1");
+    reference.variant = Some(oc_schema::id::ModelVariantId::parse("thinking".to_owned()));
+    let bound = resolver.resolve_selected(&session, &reference).expect("variant resolves");
+    let wire = wire_body(&bound);
+    assert_eq!(
+        wire.get("thinking").and_then(|value| value.get("type")),
+        Some(&serde_json::json!("enabled")),
+        "the `thinking` variant's body overlay reaches the request body"
+    );
+
+    reference.variant = Some(oc_schema::id::ModelVariantId::parse("none".to_owned()));
+    let bound = resolver.resolve_selected(&session, &reference).expect("none variant resolves");
+    let wire = wire_body(&bound);
+    assert_eq!(
+        wire.get("thinking").and_then(|value| value.get("type")),
+        Some(&serde_json::json!("disabled")),
+        "the `none` variant's body overlay reaches the request body"
+    );
+
+    reference.variant = Some(oc_schema::id::ModelVariantId::parse("bogus".to_owned()));
+    let error = resolver.resolve_selected(&session, &reference).expect_err("unknown variant fails");
+    assert!(
+        error.to_string().contains("variant `bogus`"),
+        "variant-unavailable error names the variant: {error}"
+    );
+}
+
+/// Renders the resolved model's request body (the wire-shape seam).
+fn wire_body(resolved: &ResolvedModel) -> serde_json::Value {
+    let route = Arc::clone(&resolved.model.route);
+    let mut request = oc_ai::schema::LLMRequest::new(resolved.model.clone());
+    request.messages = vec![oc_ai::schema::Message::user("hi")];
+    let prepared = route.prepare_request(&request);
+    let body = route.build_body(&prepared).expect("body");
+    let (_, body_text) = route.prepare_transport(&prepared, &body).expect("wire");
+    serde_json::from_str(&body_text).expect("json wire body")
+}
+
+// ---------------------------------------------------------------------------
+// CRED-A4: config provider apiKey/baseURL overlay semantics
+// ---------------------------------------------------------------------------
+
+/// apiKey-only entries on catalog ids inject auth without rebinding the
+/// protocol; baseURL-only entries override the endpoint only (v2 merges
+/// settings onto the provider record — config/plugin/provider.ts:70-79,
+/// configured.ts:14-18).
+#[tokio::test]
+async fn config_provider_overlay() {
+    let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+    let project = root.path().join("proj");
+    let home = root.path().join("home");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        project.join("opencode.json"),
+        r#"{
+            "providers": {
+                "anthropic": { "settings": { "apiKey": "cfg-ant-key" } },
+                "groq": { "settings": { "baseURL": "https://gw.groq.test/v1" } }
+            }
+        }"#,
+    )
+    .unwrap();
+    let loaded = oc_core::config::Loader::new(
+        project,
+        oc_core::config::GlobalDirs {
+            config: home.join(".config").join("opencode"),
+            home: home.clone(),
+        },
+    )
+    .load();
+    let providers = oc_core::provider_catalog::providers_from_config(&loaded);
+
+    let catalog = Arc::new(Catalog::embedded().clone());
+    let groq_catalog = catalog.provider("groq").expect("groq present");
+    let groq_model = groq_catalog.models.first().expect("groq model").id.0.clone();
+    let session = session_row();
+
+    // The shadow leg (v2 config/plugin/provider.ts:70-79): the config
+    // entry's custom record must NOT rebind the catalog provider to
+    // openai-compatible — the resolver overlays it onto the NATIVE
+    // binding (baseURL from the entry, protocol from the catalog).
+    {
+        let transport: oc_ai::route::SharedTransport =
+            Arc::new(oc_ai::route::transport::reqwest_transport::ReqwestTransport::new());
+        let resolver = CatalogModelResolver::new(
+            FacadeContext::new(transport),
+            Arc::new(Catalog::embedded().clone()),
+            BTreeMap::new(),
+            providers.custom.clone(),
+            None,
+        );
+        let bound = resolver
+            .resolve_selected(&session, &model_ref("groq", &groq_model))
+            .expect("groq resolves");
+        assert_eq!(
+            bound.model.route.id, "groq-chat",
+            "a baseURL entry on a catalog id keeps the native protocol"
+        );
+        assert_eq!(
+            bound.model.route.endpoint.base_url.as_deref(),
+            Some("https://gw.groq.test/v1"),
+            "the entry's baseURL still overrides the endpoint"
+        );
+    }
+
+    // The connection leg (what providers_from_config now extracts —
+    // `overlay_entries_without_base_url_become_connections` pins the
+    // extraction): apiKey/baseURL ride the connection overlay; the
+    // apiKey reaches the native anthropic header, the baseURL overrides
+    // the groq endpoint only.
+    let connections = BTreeMap::from([
+        (
+            "anthropic".to_owned(),
+            oc_core::provider_catalog::facade::ModelConnection {
+                api_key: Some("cfg-ant-key".to_owned()),
+                ..Default::default()
+            },
+        ),
+        (
+            "groq".to_owned(),
+            oc_core::provider_catalog::facade::ModelConnection {
+                base_url: Some("https://gw.groq.test/v1".to_owned()),
+                ..Default::default()
+            },
+        ),
+    ]);
+    let transport: oc_ai::route::SharedTransport =
+        Arc::new(oc_ai::route::transport::reqwest_transport::ReqwestTransport::new());
+    let resolver = CatalogModelResolver::new(
+        FacadeContext::new(transport),
+        catalog,
+        connections,
+        providers.custom.clone(),
+        None,
+    );
+    let bound = resolver
+        .resolve_selected(&session, &model_ref("anthropic", "claude-opus-4-5"))
+        .expect("anthropic resolves");
+    assert!(
+        bound.model.route.id.contains("anthropic"),
+        "apiKey-only keeps the native anthropic protocol (route {})",
+        bound.model.route.id
+    );
+    assert_eq!(
+        wire_header(&bound, "x-api-key").expect("wire").as_deref(),
+        Some("cfg-ant-key"),
+        "the config apiKey reaches the anthropic request header"
+    );
+    let bound = resolver
+        .resolve_selected(&session, &model_ref("groq", &groq_model))
+        .expect("groq resolves");
+    assert_eq!(bound.model.route.id, "groq-chat", "baseURL-only keeps the groq protocol");
+    assert_eq!(
+        bound.model.route.endpoint.base_url.as_deref(),
+        Some("https://gw.groq.test/v1"),
+        "the config baseURL overrides the endpoint only"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CRED-A5: env method filtering (vertex/bedrock/cloudflare)
+// ---------------------------------------------------------------------------
+
+/// v2's environmentNames filter + the Bedrock plugin's env override
+/// (models-dev.ts:77-87, amazon-bedrock.ts:22-27): only the listed names
+/// become env credentials — ambient AWS/Vertex configuration never makes
+/// a provider fake-connected.
+#[tokio::test]
+async fn env_method_filter() {
+    async fn env_names(host: &IntegrationHost, id: &str) -> Vec<String> {
+        let integration = host.get(id).await.expect("get").expect("integration row");
+        integration
+            .methods
+            .iter()
+            .filter_map(|method| match method {
+                oc_core::integration::types::Method::Env { names } => Some(names.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    let _env = env_guard().await;
+    // SAFETY: test-scoped env scrub — the "ambient AWS config" leg.
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::remove_var("AWS_BEARER_TOKEN_BEDROCK");
+        std::env::set_var("AWS_ACCESS_KEY_ID", "AKIA-fake");
+    }
+    let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox tempdir");
+    let db = Arc::new(
+        oc_core::database::Database::open_file(dir.path().join("t.db")).await.expect("db"),
+    );
+    let bus = Arc::new(oc_core::bus::Bus::new(
+        (*db).clone(),
+        oc_core::bus::BusOptions { persist: false, ..oc_core::bus::BusOptions::deterministic() },
+    ));
+    let host = IntegrationHost::new(db, bus, Catalog::embedded(), "opencode-test");
+
+    // Vertex: project/location/ADC vars drop; only the Express key stays.
+    assert_eq!(env_names(&host, "google-vertex").await, vec!["GOOGLE_VERTEX_API_KEY"]);
+    // Cloudflare Workers AI: the token trio replaces the raw env list.
+    assert_eq!(
+        env_names(&host, "cloudflare-workers-ai").await,
+        vec!["CLOUDFLARE_API_KEY", "CLOUDFLARE_WORKERS_AI_TOKEN", "CLOUDFLARE_API_TOKEN"]
+    );
+    // Bedrock: only the bearer token is a key credential.
+    assert_eq!(env_names(&host, "amazon-bedrock").await, vec!["AWS_BEARER_TOKEN_BEDROCK"]);
+    // …and ambient SigV4 env no longer fakes a connected bedrock.
+    assert!(
+        host.connection_active("amazon-bedrock").await.expect("active").is_none(),
+        "AWS_ACCESS_KEY_ID alone must not connect bedrock"
+    );
+    // The azure filter keeps its shape (regression guard for the fold).
+    let azure = env_names(&host, "azure").await;
+    assert!(azure.iter().all(|name| name.ends_with("_API_KEY")), "{azure:?}");
+    assert!(azure.contains(&"AZURE_COGNITIVE_SERVICES_API_KEY".to_owned()));
+}
+
+// ---------------------------------------------------------------------------
 // CRED-B3 (runtime repro): keyless zen downgrades to the public key
 // ---------------------------------------------------------------------------
 
