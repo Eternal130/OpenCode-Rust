@@ -190,6 +190,15 @@ impl IntegrationHost {
         Arc::new(host)
     }
 
+    /// Re-runs the catalog key/env method installation over a refreshed
+    /// catalog (CRED-A1, v2 `ctx.integration.reload()` on
+    /// `models-dev.refreshed` — models-dev.ts:61-66): new providers'
+    /// env/key methods register without a re-boot. The registry reads
+    /// live, so no notify is needed.
+    pub fn reload_catalog(&self, catalog: &crate::provider_catalog::catalog::Catalog) {
+        providers::install_catalog_methods(self, catalog);
+    }
+
     #[must_use]
     pub fn empty(db: Arc<Database>, bus: Arc<Bus>, useragent: &str) -> Self {
         #[allow(clippy::needless_pass_by_value)]

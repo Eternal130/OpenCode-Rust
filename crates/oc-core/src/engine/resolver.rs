@@ -57,10 +57,16 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use serde_json::Value;
+
+use oc_ai::route::auth;
+use oc_ai::route::client::RoutePatch;
+
 use crate::database::schema::SessionRow;
 use crate::provider_catalog::facade::{
-    custom_language_model, language_model, CustomProvider, FacadeContext, ModelConnection,
+    custom_language_model, language_model_for_model, CustomProvider, FacadeContext, ModelConnection,
 };
+use crate::provider_catalog::native::package_name;
 use crate::provider_catalog::Catalog;
 use crate::session::runner::{ModelError, ModelResolver, ResolvedModel};
 
@@ -68,7 +74,11 @@ use crate::session::runner::{ModelError, ModelResolver, ResolvedModel};
 /// providers over one shared transport.
 pub struct CatalogModelResolver {
     context: FacadeContext,
-    catalog: Arc<Catalog>,
+    /// The catalog snapshot behind a shared cell (CRED-A1): boot seeds
+    /// it; `models-dev.refreshed` swaps in the live service catalog so
+    /// refreshes propagate to resolution without a re-boot (v2 re-reads
+    /// `ModelsDev.get()` on every Refreshed event, models-dev.ts:61-66).
+    catalog: parking_lot::RwLock<Arc<Catalog>>,
     connections: BTreeMap<String, ModelConnection>,
     custom: Vec<CustomProvider>,
     /// The default model selection (config `model`).
@@ -93,7 +103,27 @@ impl CatalogModelResolver {
         custom: Vec<CustomProvider>,
         default: Option<oc_schema::config::ModelSelection>,
     ) -> Self {
-        Self { context, catalog, connections, custom, default, credentials: None, console: None }
+        Self {
+            context,
+            catalog: parking_lot::RwLock::new(catalog),
+            connections,
+            custom,
+            default,
+            credentials: None,
+            console: None,
+        }
+    }
+
+    /// Swaps the served catalog snapshot (CRED-A1: the engine's
+    /// `models-dev.refreshed` subscription keeps resolution live).
+    pub fn refresh_catalog(&self, catalog: Arc<Catalog>) {
+        *self.catalog.write() = catalog;
+    }
+
+    /// The current catalog snapshot.
+    #[must_use]
+    pub fn catalog(&self) -> Arc<Catalog> {
+        Arc::clone(&self.catalog.read())
     }
 
     /// Attaches the credential-driven provider bindings.
@@ -124,14 +154,54 @@ impl CatalogModelResolver {
     /// our tolerance so a mixed-case reference resolves to the
     /// configured provider instead of `provider.no-route`.
     fn canonical_catalog_provider(&self, requested: &str) -> Option<String> {
-        if self.catalog.provider(requested).is_some() {
+        let catalog = self.catalog();
+        if catalog.provider(requested).is_some() {
             return Some(requested.to_owned());
         }
-        self.catalog
+        catalog
             .providers()
             .iter()
             .find(|snapshot| snapshot.info.id.0.eq_ignore_ascii_case(requested))
             .map(|snapshot| snapshot.info.id.0.clone())
+    }
+
+    /// Whether this binding takes the generic keyless `Auth.none`
+    /// downgrade (CRED-AUTHNONE-DOWNGRADE port of
+    /// model-resolver.ts:379-385). Returns the downgrade's diagnostic
+    /// message when it applies.
+    fn keyless_downgrade(
+        &self,
+        provider_id: &str,
+        connection: &ModelConnection,
+        model_id: &str,
+    ) -> Option<String> {
+        let catalog = self.catalog();
+        let snapshot = catalog.provider(provider_id)?;
+        if snapshot.info.activation != oc_schema::provider::Activation::Enabled {
+            return None;
+        }
+        // `credential === undefined`: no stored credential binding, no
+        // configured key, and no env connection (v2's connection.active
+        // counts a set env method as a credential).
+        let has_credential = connection.api_key.is_some()
+            || self
+                .credentials
+                .as_ref()
+                .is_some_and(|bindings| bindings.get(provider_id).is_some())
+            || snapshot.environment.iter().any(|name| std::env::var_os(name).is_some());
+        if has_credential {
+            return None;
+        }
+        let model = snapshot.models.iter().find(|model| model.id.0 == model_id)?;
+        let package = model.package.as_deref().unwrap_or(&snapshot.info.package).to_owned();
+        if !uses_api_key_auth(&package)
+            || has_configured_auth(&snapshot.info.settings, &model.settings)
+        {
+            return None;
+        }
+        Some(format!(
+            "provider `{provider_id}` is activation-enabled with no credential; downgrading to anonymous auth"
+        ))
     }
 
     /// The connections entry for a provider prefix: the exact key first,
@@ -172,21 +242,28 @@ impl CatalogModelResolver {
                     .find(|custom| custom.id.eq_ignore_ascii_case(&reference.provider_id.0))
             })
         {
-            let canonical_model = custom
-                .models
-                .iter()
-                .find(|model| model.id.eq_ignore_ascii_case(&reference.id.0))
-                .map(|model| model.id.clone())
-                .unwrap_or_else(|| reference.id.0.clone());
-            let model = custom_language_model(&self.context, custom, &canonical_model)
-                .map_err(|error| map_custom(error, &custom.id, &canonical_model))?;
-            let info = custom_model_info(custom);
-            let canonical = oc_schema::model::Ref {
-                provider_id: oc_schema::id::ProviderId::parse(custom.id.clone()),
-                id: oc_schema::id::ModelId::parse(canonical_model),
-                variant: reference.variant.clone(),
-            };
-            return Ok((model, info, canonical));
+            // CRED-A4: an entry whose id names a CATALOG provider falls
+            // through to the catalog path below — v2 merges its settings
+            // (apiKey/baseURL) onto the existing provider record instead
+            // of rebinding the provider to openai-compatible
+            // (config/plugin/provider.ts:70-79).
+            if self.catalog().provider(&custom.id).is_none() {
+                let canonical_model = custom
+                    .models
+                    .iter()
+                    .find(|model| model.id.eq_ignore_ascii_case(&reference.id.0))
+                    .map(|model| model.id.clone())
+                    .unwrap_or_else(|| reference.id.0.clone());
+                let model = custom_language_model(&self.context, custom, &canonical_model)
+                    .map_err(|error| map_custom(error, &custom.id, &canonical_model))?;
+                let info = custom_model_info(custom);
+                let canonical = oc_schema::model::Ref {
+                    provider_id: oc_schema::id::ProviderId::parse(custom.id.clone()),
+                    id: oc_schema::id::ModelId::parse(canonical_model),
+                    variant: reference.variant.clone(),
+                };
+                return Ok((model, info, canonical));
+            }
         }
         // Console-issued providers (integration `opencode`): resolved
         // before the catalog exactly like config customs — the console
@@ -238,6 +315,20 @@ impl CatalogModelResolver {
                 ModelError::Unavailable(reference.provider_id.0.clone(), reference.id.0.clone())
             })?;
         let mut connection = self.connection_for(&reference.provider_id.0);
+        // CRED-A4: a config entry with this provider id contributes its
+        // apiKey/baseURL as the connection overlay (the custom branch
+        // above deferred catalog-matching entries here; v2 merges the
+        // same keys into the provider settings).
+        if let Some(custom) = self
+            .custom
+            .iter()
+            .find(|custom| custom.id == provider_id || custom.id.eq_ignore_ascii_case(&provider_id))
+        {
+            connection.api_key = custom.api_key.clone().or(connection.api_key);
+            if !custom.base_url.is_empty() {
+                connection.base_url = Some(custom.base_url.clone());
+            }
+        }
         // Credential-driven providers, the generalized fold (CRED-B1):
         // every integration's ACTIVE stored credential wins over
         // config/env — base URL, token, and client headers merge into
@@ -265,18 +356,45 @@ impl CatalogModelResolver {
         {
             connection.api_key = Some("public".to_owned());
         }
-        let model = language_model(
-            &self.context,
-            &self.catalog,
-            &provider_id,
-            &reference.id.0,
-            &connection,
-        )
-        .map_err(|error| map_provider(error, &provider_id, &reference.id.0))?;
-        let info =
-            self.catalog.model(&provider_id, &reference.id.0).cloned().ok_or_else(|| {
-                ModelError::Unavailable(provider_id.clone(), reference.id.0.clone())
-            })?;
+        let catalog = self.catalog();
+        let snapshot = catalog
+            .provider(&provider_id)
+            .ok_or_else(|| ModelError::Unavailable(provider_id.clone(), reference.id.0.clone()))?;
+        let base_info = snapshot
+            .models
+            .iter()
+            .find(|model| model.id.0 == reference.id.0)
+            .ok_or_else(|| ModelError::Unavailable(provider_id.clone(), reference.id.0.clone()))?
+            .clone();
+        // CRED-A3: the selected variant's settings/headers/body merge
+        // into the model info BEFORE binding (v2 withVariant,
+        // model-resolver.ts:137-161) so `#high/#thinking` overlays reach
+        // the route defaults exactly like the model's own overlays.
+        let info = with_variant(base_info, reference.variant.as_ref().map(|id| id.0.as_str()))?;
+        let model = language_model_for_model(&self.context, snapshot, &info, &connection)
+            .map_err(|error| map_provider(error, &provider_id, &reference.id.0))?;
+        // Generic keyless downgrade (CRED-AUTHNONE-DOWNGRADE, ref
+        // model-resolver.ts:379-385): an activation-ENABLED provider
+        // with no credential (no stored binding, no env connection, no
+        // configured key), no configured auth, and an API-key package
+        // resolves with `Auth.none` instead of failing on the missing
+        // key — v2's config provider plugin enables every configured
+        // provider, so a deliberately keyless local/enterprise gateway
+        // stays usable. (The zen fold above already injected the public
+        // key, so it never reaches this branch.)
+        let model = match self.keyless_downgrade(&provider_id, &connection, &reference.id.0) {
+            Some(message) => {
+                let route = Arc::clone(&model.route).with(RoutePatch {
+                    auth: Some(auth::Definition::none()),
+                    ..Default::default()
+                });
+                route
+                    .model(model.id.as_str(), None)
+                    .map_err(|error| ModelError::Resolver(format!("{message}: {error}")))?
+            }
+            None => model,
+        };
+
         let canonical = oc_schema::model::Ref {
             provider_id: oc_schema::id::ProviderId::parse(provider_id),
             id: reference.id.clone(),
@@ -408,6 +526,141 @@ fn resolved_from(
         compaction,
         transport: None,
     }
+}
+
+/// `withVariant` (model-resolver.ts:137-161): fold the selected
+/// variant's overlays into the model info — settings (deep merge,
+/// variant wins per key), headers, and body — without changing the
+/// committed catalog snapshot. `"default"` means no overlay; an unknown
+/// variant fails the resolution (`VariantUnavailableError`).
+fn with_variant(
+    mut info: oc_schema::model::Info,
+    variant: Option<&str>,
+) -> Result<oc_schema::model::Info, ModelError> {
+    let Some(id) = variant.filter(|id| *id != "default") else {
+        return Ok(info);
+    };
+    let Some(found) = info.variants.iter().find(|candidate| candidate.id.0 == id) else {
+        return Err(ModelError::Resolver(format!(
+            "variant `{id}` is not available for {}/{}",
+            info.provider_id.0, info.id.0
+        )));
+    };
+    if let Some(variant_settings) = &found.settings {
+        let mut next = info.settings.clone().unwrap_or_default();
+        next.rest = merge_overlay_records(
+            info.settings.as_ref().map(|settings| &settings.rest),
+            Some(&variant_settings.rest),
+        )
+        .unwrap_or_default();
+        info.settings = Some(next);
+    }
+    if found.headers.is_some() {
+        info.headers = oc_ai::schema::options::merge_string_records(&[
+            info.headers.as_ref(),
+            found.headers.as_ref(),
+        ]);
+    }
+    if found.body.is_some() {
+        info.body = merge_overlay_records(info.body.as_ref(), found.body.as_ref());
+    }
+    Ok(info)
+}
+
+/// `Provider.mergeOverlay`'s value rule (provider.ts:176-190): nested
+/// records merge recursively, anything else takes the overlay.
+fn merge_overlay_value(base: &Value, overlay: &Value) -> Value {
+    match (base, overlay) {
+        (Value::Object(base_map), Value::Object(overlay_map)) => {
+            let mut merged = base_map.clone();
+            for (key, value) in overlay_map {
+                let merged_value = merged
+                    .get(key)
+                    .map(|existing| merge_overlay_value(existing, value))
+                    .unwrap_or_else(|| value.clone());
+                merged.insert(key.clone(), merged_value);
+            }
+            Value::Object(merged)
+        }
+        (_, overlay) => overlay.clone(),
+    }
+}
+
+/// `Provider.mergeOverlay` over `BTreeMap` records: union of keys, the
+/// overlay winning per key (nested records deep-merge).
+fn merge_overlay_records(
+    base: Option<&BTreeMap<String, Value>>,
+    overlay: Option<&BTreeMap<String, Value>>,
+) -> Option<BTreeMap<String, Value>> {
+    let (Some(base), Some(overlay)) = (base, overlay) else {
+        return base.or(overlay).cloned();
+    };
+    let mut merged = base.clone();
+    for (key, value) in overlay {
+        let value = merged
+            .get(key.as_str())
+            .map(|existing| merge_overlay_value(existing, value))
+            .unwrap_or_else(|| value.clone());
+        merged.insert(key.clone(), value);
+    }
+    Some(merged)
+}
+
+/// `usesAPIKeyAuth` (model-resolver.ts:430-452): the packages whose auth
+/// is a plain API key — the only ones the generic keyless downgrade may
+/// run anonymously. Ported verbatim (aisdk names apply through
+/// `package_name`'s unwrap).
+fn uses_api_key_auth(package: &str) -> bool {
+    const LIST: &[&str] = &[
+        "@ai-sdk/openai",
+        "@ai-sdk/anthropic",
+        "@ai-sdk/cerebras",
+        "@ai-sdk/deepinfra",
+        "@ai-sdk/openai-compatible",
+        "@ai-sdk/google",
+        "@ai-sdk/groq",
+        "@ai-sdk/mistral",
+        "@ai-sdk/togetherai",
+        "@ai-sdk/xai",
+        "@openrouter/ai-sdk-provider",
+        "@ai-sdk/azure",
+        "@opencode/ai/providers/openai",
+        "@opencode/ai/providers/anthropic",
+        "@opencode/ai/providers/anthropic-compatible",
+        "@opencode/ai/providers/baseten",
+        "@opencode/ai/providers/cerebras",
+        "@opencode/ai/providers/cloudflare-ai-gateway",
+        "@opencode/ai/providers/cloudflare-workers-ai",
+        "@opencode/ai/providers/deepinfra",
+        "@opencode/ai/providers/deepseek",
+        "@opencode/ai/providers/google/interactions",
+        "@opencode/ai/providers/groq",
+        "@opencode/ai/providers/mistral",
+        "@opencode/ai/providers/togetherai",
+        "@opencode/ai/providers/vercel-ai-gateway",
+        "@opencode/ai/providers/xai",
+        "@opencode/ai/providers/openrouter",
+        "@opencode/ai/providers/azure",
+    ];
+    let name = package_name(package);
+    LIST.contains(&name.as_str())
+        || name.starts_with("@opencode/ai/providers/openai/")
+        || name.starts_with("@opencode/ai/providers/azure/")
+}
+
+/// `hasConfiguredAuth` (model-resolver.ts:424-428): a non-empty
+/// apiKey/authToken/accessToken in the provider or model settings.
+fn has_configured_auth(
+    provider_settings: &Option<oc_schema::provider::Settings>,
+    model_settings: &Option<oc_schema::model::Settings>,
+) -> bool {
+    fn has_key(settings: &BTreeMap<String, Value>) -> bool {
+        ["apiKey", "authToken", "accessToken"].iter().any(|key| {
+            settings.get(*key).and_then(Value::as_str).is_some_and(|value| !value.is_empty())
+        })
+    }
+    provider_settings.as_ref().is_some_and(|settings| has_key(&settings.rest))
+        || model_settings.as_ref().is_some_and(|settings| has_key(&settings.rest))
 }
 
 fn map_provider(

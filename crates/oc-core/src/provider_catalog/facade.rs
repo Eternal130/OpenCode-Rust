@@ -58,7 +58,7 @@ use oc_ai::LanguageModel;
 use oc_schema::model::Info as ModelInfo;
 use oc_schema::provider::Settings as ProviderSettings;
 
-use crate::provider_catalog::Catalog;
+use crate::provider_catalog::{Catalog, Snapshot};
 
 /// Typed provider-binding failures (gate 3, Task 5: selecting a
 /// catalog-listed but unported provider must fail cleanly).
@@ -263,6 +263,21 @@ pub fn language_model(
         snapshot.models.iter().find(|model| model.id.as_str() == model_id).ok_or_else(|| {
             ProviderError::UnknownModel(provider_id.to_string(), model_id.to_string())
         })?;
+    language_model_for_model(context, snapshot, model, connection)
+}
+
+/// Bind one catalog model whose [`ModelInfo`] the caller already
+/// resolved (CRED-A3: the model resolver applies variant overlays to the
+/// catalog info BEFORE binding — v2 `withVariant`,
+/// model-resolver.ts:137-161 — so variant settings/headers/body reach
+/// the route defaults like the model's own overlays).
+pub fn language_model_for_model(
+    context: &FacadeContext,
+    snapshot: &Snapshot,
+    model: &ModelInfo,
+    connection: &ModelConnection,
+) -> Result<LanguageModel, ProviderError> {
+    let provider_id = snapshot.info.id.0.as_str();
     let package = model.package.as_deref().unwrap_or(&snapshot.info.package);
     // Copilot: the catalog entry is plain openai-compatible, but the bound
     // credential transport (BE-3b CredentialBindings) + the Copilot header
@@ -497,29 +512,21 @@ fn build_route(
             // protocol at api.cohere.com/v2, `/chat` rides the OpenAI
             // chat protocol at the COMPATIBILITY_BASE_URL; optional
             // bearer (explicit key → COHERE_API_KEY).
-            cohere_route_for_package(
-                package,
-                transport,
-                CohereConfig { api_key, base_url },
-            )
-            .ok_or_else(|| ProviderError::Configuration {
-                provider: provider_id.to_string(),
-                message: format!("package `{package}` is not a Cohere package"),
-            })
+            cohere_route_for_package(package, transport, CohereConfig { api_key, base_url })
+                .ok_or_else(|| ProviderError::Configuration {
+                    provider: provider_id.to_string(),
+                    message: format!("package `{package}` is not a Cohere package"),
+                })
         }
         ProtocolFamily::MistralChat => {
             // AI-COHERE-MISTRAL: the native mistral-chat protocol at
             // api.mistral.ai/v1 with optional bearer (explicit key →
             // MISTRAL_API_KEY).
-            mistral_route_for_package(
-                package,
-                transport,
-                MistralConfig { api_key, base_url },
-            )
-            .ok_or_else(|| ProviderError::Configuration {
-                provider: provider_id.to_string(),
-                message: format!("package `{package}` is not a Mistral package"),
-            })
+            mistral_route_for_package(package, transport, MistralConfig { api_key, base_url })
+                .ok_or_else(|| ProviderError::Configuration {
+                    provider: provider_id.to_string(),
+                    message: format!("package `{package}` is not a Mistral package"),
+                })
         }
         ProtocolFamily::OpenAICompatible => {
             let base_url = base_url.ok_or_else(|| ProviderError::Configuration {
@@ -921,7 +928,10 @@ mod tests {
             .first()
             .and_then(|model| model.package.clone())
             .unwrap_or_else(|| cohere.info.package.clone());
-        assert_eq!(package, "@opencode/ai/providers/cohere", "catalog maps npm @ai-sdk/cohere natively");
+        assert_eq!(
+            package, "@opencode/ai/providers/cohere",
+            "catalog maps npm @ai-sdk/cohere natively"
+        );
         let model = language_model(
             &context,
             catalog,
@@ -942,8 +952,7 @@ mod tests {
         assert_eq!(transport_request.header("authorization"), Some("Bearer cohere-key"));
 
         let mistral = catalog.provider("mistral").expect("mistral in catalog");
-        let model_id =
-            mistral.models.first().expect("mistral has models").id.as_str().to_string();
+        let model_id = mistral.models.first().expect("mistral has models").id.as_str().to_string();
         let package = mistral
             .models
             .first()
