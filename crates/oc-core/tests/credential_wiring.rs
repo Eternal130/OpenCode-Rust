@@ -261,6 +261,127 @@ async fn console_provider_gets_token() {
 }
 
 // ---------------------------------------------------------------------------
+// CRED-CONSOLE-KEYAUTH: Method::Key console credentials load providers
+// ---------------------------------------------------------------------------
+
+/// A capturing console mock: records one request's request-line + headers
+/// (the `authorization` / `x-org-id` assertions of the key path).
+async fn mock_console_capture(
+    body: Value,
+    seen: tokio::sync::mpsc::UnboundedSender<String>,
+) -> MockConsole {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else { return };
+            let seen = seen.clone();
+            let body = body.clone();
+            tokio::spawn(async move {
+                let mut buffer = [0u8; 8192];
+                let read = stream.read(&mut buffer).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
+                let authorization = request.lines().find_map(|line| {
+                    line.split_once(':')
+                        .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                        .map(|(_, value)| value.trim().to_owned())
+                });
+                let org = request.lines().find_map(|line| {
+                    line.split_once(':')
+                        .filter(|(name, _)| name.eq_ignore_ascii_case("x-org-id"))
+                        .map(|(_, value)| value.trim().to_owned())
+                });
+                if let Some(authorization) = authorization {
+                    let _ = seen.send(format!("{authorization}|{}", org.unwrap_or_default()));
+                }
+                let text = body.to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    text.len(),
+                    text
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+    MockConsole { base: format!("http://127.0.0.1:{port}"), handle }
+}
+
+/// CRED-CONSOLE-KEYAUTH (ref provider/opencode.ts:535-541
+/// `credentialHeaders`: `Bearer oauth.access OR key`): a service-account
+/// API-key credential on the `opencode` integration must resolve the
+/// console connection, fetch `/api/v2/config` with the key bearer +
+/// `x-org-id`, and key the console-issued providers with the same token.
+#[tokio::test]
+async fn console_key_credential_loads_providers() {
+    let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mock = mock_console_capture(
+        json!({
+            "providers": {
+                "acme-key": {
+                    "settings": { "baseURL": "https://gw.acme.test/v1" },
+                    "models": { "acme-key-large": {} }
+                }
+            }
+        }),
+        seen_tx,
+    )
+    .await;
+    let (host, _dir) = host().await;
+    // A service-account key credential (Method::Key path), server = mock.
+    let value = CredentialValue::Key(oc_core::integration::types::KeyValue {
+        key: "sa-console-key".into(),
+        metadata: Some(BTreeMap::from([
+            ("server".to_owned(), Value::String(mock.base.clone())),
+            ("orgID".to_owned(), Value::String("org_9".into())),
+        ])),
+        configuration: None,
+    });
+    host.store()
+        .create(CreateInput {
+            id: None,
+            integration_id: "opencode",
+            label: Some("service account"),
+            value: &value,
+            activate: None,
+        })
+        .await
+        .expect("create key console credential");
+    host.refresh_console().await;
+
+    // The console fetch ran with the KEY credential's headers.
+    let seen = tokio::time::timeout(std::time::Duration::from_secs(5), seen_rx.recv())
+        .await
+        .expect("timeout waiting for console fetch")
+        .expect("captured request");
+    assert_eq!(seen, "Bearer sa-console-key|org_9", "key credentials key the console fetch");
+
+    let catalog = Arc::new(Catalog::embedded().clone());
+    let transport: oc_ai::route::SharedTransport =
+        Arc::new(oc_ai::route::transport::reqwest_transport::ReqwestTransport::new());
+    let resolver = CatalogModelResolver::new(
+        FacadeContext::new(transport),
+        catalog,
+        BTreeMap::new(),
+        Vec::new(),
+        None,
+    )
+    .with_console(Arc::clone(host.console_providers()));
+
+    let session = session_row();
+    let bound = resolver
+        .resolve_selected(&session, &model_ref("acme-key", "acme-key-large"))
+        .expect("console provider loads for key credentials");
+    let header = wire_header(&bound, "authorization")
+        .unwrap_or_else(|error| panic!("console key provider request: {error}"));
+    assert_eq!(
+        header.as_deref(),
+        Some("Bearer sa-console-key"),
+        "console-issued providers must carry the service-account key token"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // CRED-B3 (runtime repro): keyless zen downgrades to the public key
 // ---------------------------------------------------------------------------
 
