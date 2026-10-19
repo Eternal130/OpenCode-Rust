@@ -21,6 +21,8 @@
 //! Expected number\n  at ["timeout"]              (integer field, wrong kind)
 //! Expected an integer\n  at ["timeout"]           (fractional)
 //! Expected a value greater than or equal to 0\n  at ["timeout"]
+//! Expected boolean\n  at ["force"]               (boolean field, wrong kind)
+//! Expected a string starting with "ses"\n  at ["parentID"]  (^ses pattern)
 //! ```
 //!
 //! **Seam position** (probe-verified): v2 endpoints carrying
@@ -32,9 +34,13 @@
 //! middleware in `protocol/src/groups/*`), where v2 rejects wrong payloads
 //! regardless of resource existence.
 //!
-//! Unverified label note: `Bool` renders `boolean` by analogy (no
-//! validate-first body in the slice carries a boolean field; probe list
-//! kept in the evidence file).
+//! Label provenance (round-4 probes,
+//! `ref-validation-messages-4.json`): `boolean` renders `Expected boolean`
+//! (worktree.remove `force`, credential.create `activate`); `^ses` pattern
+//! fields render `Expected a string starting with "ses"` — and predicate
+//! (filter) failures inside `anyOf [X, null]` do NOT gain the `| null`
+//! suffix (the value matched the member's kind), while kind mismatches do
+//! (`{"parentID": 5}` → `Expected string | null`).
 
 use axum::body::Body;
 use axum::extract::Request;
@@ -49,21 +55,71 @@ use serde_json::Value;
 /// same budget the handlers' `Json` extractors apply after pass-through.
 const BODY_LIMIT: usize = 2 * 1024 * 1024;
 
-/// The HTTP-H0 first slice: validate-first operations whose JSON payloads
-/// are enforced in middleware (sorted; mirrors the generated table). This
-/// is the incremental rollout valve — it grows to the full
-/// validate-first set after oracle review, and LOC-MW routes get their
-/// post-session seam in the follow-up lane.
+/// The HTTP-H0 rollout (batch 1 after the oracle's APPROVE WITH
+/// CONDITIONS): validate-first operations whose JSON payloads are enforced
+/// in middleware (sorted; mirrors the generated table). This is the
+/// incremental rollout valve — it grows toward the full validate-first
+/// set; LOC-MW routes get their post-session seam in a follow-up lane.
+///
+/// Batch 1 (2026-10-19, lane-h0roll) added 8 ops — wrong-type +
+/// missing-key probes per route byte-pinned against a live v2.0.24 boot
+/// (`ref-validation-messages-4.json`) and dual-end verified via the
+/// `OC_P10` gate before this list grew. Still excluded: the oracle's
+/// deferred trio (`session.form.create`, `experimental.session.import`,
+/// `experimental.mcp.add`) and the Bool/Num routes whose labels are now
+/// pinned but whose enforcement lands with a later batch
+/// (`credential.create`, `worktree.remove`, `session.view`,
+/// `session.form.reply`, `integration.connect.key`,
+/// `integration.oauth.connect`).
 const ENFORCED_OPS: &[&str] = &[
     "credential.update",
+    "experimental.config.update",
+    "experimental.generate.text",
+    "experimental.integration.wellknown.add",
+    "integration.command.connect",
     "plugin.update",
     "project.update",
     "pty.create",
     "pty.update",
+    "server.experimental.persistentPty.create",
+    "server.experimental.persistentPty.update",
     "session.create",
+    "session.environment",
     "session.move",
     "shell.create",
     "websearch.query",
+    "worktree.create",
+];
+
+/// Every operation whose v2 endpoint carries `sessionLocationMiddleware`
+/// (`protocol/src/groups/session.ts` — 18 — and
+/// `protocol/src/groups/permission.ts` — 3): the session resolves (404)
+/// BEFORE payload decode, so the validate-first middleware must NOT fire
+/// for them; their post-session seam is a follow-up slice. Regression pin
+/// for the exclusion (oracle condition 4).
+#[cfg(test)]
+const LOC_MW_OPS: &[&str] = &[
+    "session.background",
+    "session.command",
+    "session.compact",
+    "session.fork",
+    "session.generate",
+    "session.inbox.update",
+    "session.interrupt",
+    "session.permission.create",
+    "session.permission.get",
+    "session.permission.reply",
+    "session.prompt",
+    "session.revert.clear",
+    "session.revert.commit",
+    "session.revert.stage",
+    "session.shell",
+    "session.skill",
+    "session.switchAgent",
+    "session.switchModel",
+    "session.synthetic",
+    "session.update",
+    "session.wait",
 ];
 
 // ---------------------------------------------------------------------------
@@ -87,14 +143,24 @@ impl Seg {
 }
 
 /// A validation failure: the `Expected …` / `Missing key` line plus where.
+/// `predicate` marks a filter failure (the value's JSON kind matched but
+/// a constraint rejected it — e.g. the `^ses` startsWith pattern): those
+/// do NOT gain the `| null` union suffix inside nullable fields (probe:
+/// `{"parentID": "not_ses"}` → `Expected a string starting with "ses"`
+/// while `{"parentID": 5}` → `Expected string | null`).
 struct Reject {
     message: String,
     path: Vec<Seg>,
+    predicate: bool,
 }
 
 impl Reject {
     fn expected(label: &str, path: &[Seg]) -> Self {
-        Self { message: format!("Expected {label}"), path: path.to_vec() }
+        Self { message: format!("Expected {label}"), path: path.to_vec(), predicate: false }
+    }
+
+    fn at(message: String, path: &[Seg]) -> Self {
+        Self { message, path: path.to_vec(), predicate: false }
     }
 
     /// The full Effect message: message line + two-space-indented path
@@ -130,8 +196,10 @@ fn check(node: u32, value: &Value, path: &mut Vec<Seg>) -> Result<(), Reject> {
                 Err(Reject::expected("string", path))
             }
         }
+        SchemaNode::Pattern { prefix } => check_pattern(prefix, value, path),
         SchemaNode::Bool => {
-            // Label by analogy — see module docs (no slice probe yet).
+            // Label pinned vs live v2.0.24 (worktree.remove `force`,
+            // credential.create `activate`): `Expected boolean`.
             if value.is_boolean() {
                 Ok(())
             } else {
@@ -154,19 +222,24 @@ fn check(node: u32, value: &Value, path: &mut Vec<Seg>) -> Result<(), Reject> {
                 return Ok(());
             }
             check(*inner, value, path).map_err(|reject| {
-                if reject.path.len() == path.len() {
-                    // The nullable node itself mismatched: Effect appends
-                    // `| null` to the inner expectation.
-                    Reject { message: format!("{} | null", reject.message), path: reject.path }
+                if reject.path.len() == path.len() && !reject.predicate {
+                    // The nullable node itself mismatched by KIND: Effect
+                    // appends `| null` to the inner expectation. Filter
+                    // failures (predicate) keep their own message.
+                    Reject {
+                        message: format!("{} | null", reject.message),
+                        path: reject.path,
+                        predicate: false,
+                    }
                 } else {
                     reject
                 }
             })
         }
         SchemaNode::Ref { label, node } => check(*node, value, path).map_err(|reject| {
-            if reject.path.len() == path.len() {
-                // Whole-field mismatch: print the annotated identifier.
-                Reject { message: format!("Expected {label}"), path: reject.path }
+            if reject.path.len() == path.len() && !reject.predicate {
+                // Whole-field kind mismatch: print the annotated identifier.
+                Reject { message: format!("Expected {label}"), path: reject.path, predicate: false }
             } else {
                 reject
             }
@@ -212,25 +285,45 @@ fn check_int(
         return Err(Reject::expected("number", path));
     };
     if !number.is_finite() || number.fract() != 0.0 {
-        return Err(Reject { message: "Expected an integer".to_owned(), path: path.to_vec() });
+        return Err(Reject::at("Expected an integer".to_owned(), path));
     }
     if let Some(bound) = exclusive_minimum {
         if number <= bound {
-            return Err(Reject {
-                message: format!("Expected a value greater than {}", fmt_bound(bound)),
-                path: path.to_vec(),
-            });
+            return Err(Reject::at(
+                format!("Expected a value greater than {}", fmt_bound(bound)),
+                path,
+            ));
         }
     }
     if let Some(bound) = minimum {
         if number < bound {
-            return Err(Reject {
-                message: format!("Expected a value greater than or equal to {}", fmt_bound(bound)),
-                path: path.to_vec(),
-            });
+            return Err(Reject::at(
+                format!("Expected a value greater than or equal to {}", fmt_bound(bound)),
+                path,
+            ));
         }
     }
     Ok(())
+}
+
+/// `SchemaNode::Pattern`: the spec's `^literal` startsWith filter.
+/// Non-strings are KIND mismatches (`Expected string`, which gains
+/// `| null` inside nullables); strings with the wrong prefix are
+/// predicate failures with the pinned Effect message
+/// (`Expected a string starting with "ses"` — no `| null`).
+fn check_pattern(prefix: &str, value: &Value, path: &[Seg]) -> Result<(), Reject> {
+    let Some(text) = value.as_str() else {
+        return Err(Reject::expected("string", path));
+    };
+    if text.starts_with(prefix) {
+        Ok(())
+    } else {
+        Err(Reject {
+            message: format!("Expected a string starting with {prefix:?}"),
+            path: path.to_vec(),
+            predicate: true,
+        })
+    }
 }
 
 /// `SchemaNode::Literal`: inline string-literal union
@@ -238,13 +331,13 @@ fn check_int(
 fn check_literal(values: &[&str], value: &Value, path: &[Seg]) -> Result<(), Reject> {
     match value.as_str() {
         Some(text) if values.contains(&text) => Ok(()),
-        _ => Err(Reject {
-            message: format!(
+        _ => Err(Reject::at(
+            format!(
                 "Expected {}",
                 values.iter().map(|v| format!("{v:?}")).collect::<Vec<_>>().join(" | ")
             ),
-            path: path.to_vec(),
-        }),
+            path,
+        )),
     }
 }
 
@@ -265,7 +358,7 @@ fn check_object(
                 if field.required {
                     let mut reject_path = path.clone();
                     reject_path.push(Seg::Key(field.name.to_owned()));
-                    return Err(Reject { message: "Missing key".to_owned(), path: reject_path });
+                    return Err(Reject::at("Missing key".to_owned(), &reject_path));
                 }
             }
             Some(member) => {
@@ -399,6 +492,31 @@ mod tests {
             err("session.create", json!({"title": 1, "parentID": 2})),
             "Expected string | null\n  at [\"parentID\"]"
         );
+        // `^ses` startsWith patterns (round-4 probe, ref-validation-messages-4):
+        // predicate failures keep their own message (no `| null`);
+        // kind mismatches on the same field gain `| null`; declaration
+        // order puts id before parentID.
+        assert_eq!(
+            err("session.create", json!({"parentID": "not_ses"})),
+            "Expected a string starting with \"ses\"\n  at [\"parentID\"]"
+        );
+        assert_eq!(
+            err("session.create", json!({"id": "not_ses"})),
+            "Expected a string starting with \"ses\"\n  at [\"id\"]"
+        );
+        assert_eq!(
+            err("session.create", json!({"id": "x", "parentID": "y"})),
+            "Expected a string starting with \"ses\"\n  at [\"id\"]"
+        );
+        assert_eq!(
+            err("session.create", json!({"parentID": 5})),
+            "Expected string | null\n  at [\"parentID\"]"
+        );
+        assert_eq!(
+            err("session.create", json!({"id": "ses_ok", "parentID": "not_ses"})),
+            "Expected a string starting with \"ses\"\n  at [\"parentID\"]"
+        );
+        assert!(validate_payload("session.create", &json!({"id": "ses_ok"})).is_ok());
 
         // plugin.update (required array-of-string)
         assert_eq!(
@@ -512,6 +630,97 @@ mod tests {
         );
     }
 
+    /// Bool/Num labels pinned vs live v2.0.24 (round-4 probe; oracle
+    /// condition 2): these routes stay OUT of `ENFORCED_OPS` until their
+    /// batch, but the interpreter's labels are already byte-pinned.
+    #[test]
+    fn pinned_boolean_and_number_labels() {
+        assert_eq!(
+            err(
+                "worktree.remove",
+                json!({"projectID": "prj_P", "directory": "/tmp/x", "force": 5})
+            ),
+            "Expected boolean\n  at [\"force\"]"
+        );
+        assert_eq!(
+            err(
+                "credential.create",
+                json!({"integrationID": "int_P", "value": {"type": "key", "key": "v"}, "activate": 5})
+            ),
+            "Expected boolean\n  at [\"activate\"]"
+        );
+        assert_eq!(err("session.view", json!({"idle": "x"})), "Expected number\n  at [\"idle\"]");
+        assert_eq!(err("session.view", json!({"idle": true})), "Expected number\n  at [\"idle\"]");
+        assert_eq!(err("session.view", json!({})), "Missing key\n  at [\"idle\"]");
+        assert_eq!(err("worktree.remove", json!({})), "Missing key\n  at [\"projectID\"]");
+    }
+
+    /// Batch-1 ops (round-4 probe): wrong-type + missing-key per route,
+    /// byte-pinned against live v2.0.24 BEFORE the `ENFORCED_OPS` edit.
+    #[test]
+    fn pinned_batch1_messages() {
+        // experimental.generate.text
+        assert_eq!(
+            err("experimental.generate.text", json!({"prompt": 5})),
+            "Expected string\n  at [\"prompt\"]"
+        );
+        assert_eq!(err("experimental.generate.text", json!({})), "Missing key\n  at [\"prompt\"]");
+        // experimental.integration.wellknown.add
+        assert_eq!(
+            err("experimental.integration.wellknown.add", json!({"url": 5})),
+            "Expected string\n  at [\"url\"]"
+        );
+        assert_eq!(
+            err("experimental.integration.wellknown.add", json!({})),
+            "Missing key\n  at [\"url\"]"
+        );
+        // experimental.config.update (required nullable shell)
+        assert_eq!(
+            err("experimental.config.update", json!({"shell": 5})),
+            "Expected string | null\n  at [\"shell\"]"
+        );
+        assert_eq!(err("experimental.config.update", json!({})), "Missing key\n  at [\"shell\"]");
+        // integration.command.connect
+        assert_eq!(
+            err("integration.command.connect", json!({"methodID": 5})),
+            "Expected string\n  at [\"methodID\"]"
+        );
+        assert_eq!(
+            err("integration.command.connect", json!({})),
+            "Missing key\n  at [\"methodID\"]"
+        );
+        // session.environment (required record)
+        assert_eq!(
+            err("session.environment", json!({"variables": 5})),
+            "Expected object\n  at [\"variables\"]"
+        );
+        assert_eq!(err("session.environment", json!({})), "Missing key\n  at [\"variables\"]");
+        // server.experimental.persistentPty.create (args array first required)
+        assert_eq!(
+            err("server.experimental.persistentPty.create", json!({"args": 5})),
+            "Expected array\n  at [\"args\"]"
+        );
+        assert_eq!(
+            err("server.experimental.persistentPty.create", json!({})),
+            "Missing key\n  at [\"args\"]"
+        );
+        // server.experimental.persistentPty.update (required inline size)
+        assert_eq!(
+            err("server.experimental.persistentPty.update", json!({"size": 5})),
+            "Expected object\n  at [\"size\"]"
+        );
+        assert_eq!(
+            err("server.experimental.persistentPty.update", json!({})),
+            "Missing key\n  at [\"size\"]"
+        );
+        // worktree.create
+        assert_eq!(
+            err("worktree.create", json!({"projectID": 5})),
+            "Expected string\n  at [\"projectID\"]"
+        );
+        assert_eq!(err("worktree.create", json!({})), "Missing key\n  at [\"projectID\"]");
+    }
+
     /// Effect strips unknown fields (additionalProperties: false is NOT a
     /// rejection) and nulls pass nullable fields only.
     #[test]
@@ -558,9 +767,17 @@ mod tests {
             );
         }
         // LOC-MW (session-resolution-first) routes must NOT be enforced by
-        // the middleware — their payload 400 comes after the 404.
-        for op in ["session.update", "session.switchAgent", "session.prompt", "session.shell"] {
-            assert!(!enforces(op), "{op} must not be middleware-enforced");
+        // the middleware — their payload 400 comes after the 404. The full
+        // 21-op set (18 session + 3 permission, per groups/session.ts and
+        // groups/permission.ts), oracle condition 4.
+        assert_eq!(LOC_MW_OPS.len(), 21);
+        assert!(LOC_MW_OPS.windows(2).all(|w| w[0] < w[1]));
+        for op in LOC_MW_OPS {
+            assert!(!enforces(op), "{op} is LOC-MW: 404 must precede its payload 400");
+        }
+        // Deferred trio (oracle): stay out until their batch.
+        for op in ["session.form.create", "experimental.session.import", "experimental.mcp.add"] {
+            assert!(!enforces(op), "{op} is deferred by oracle review");
         }
     }
 }
