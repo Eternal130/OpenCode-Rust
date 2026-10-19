@@ -34,6 +34,7 @@
 //! the core Code Mode runtime).
 
 use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -45,16 +46,16 @@ use serde_json::Value;
 use oc_client::Client;
 use oc_plugin_host::registrations::RegistrationSnapshot;
 use oc_plugin_host::{
-    Bridge, BroadcastTap, PluginHost, PluginHostConfig, PluginOp, Resolution, SessionPort,
-    TapEvent, UiRequest,
+    Bridge, BroadcastTap, PluginHost, PluginHostConfig, PluginOp, PluginSectionSpec, Resolution,
+    SessionPort, TapEvent, UiRequest,
 };
 
 use crate::data::BusEvent;
 use crate::keymap::OwnedCommandDef;
 use crate::plugin_ui::{apply_plugin_ui, PluginUiEvent};
 use crate::store::{
-    EventTap, PluginCommandEntry, PluginDialogContent, PluginDialogOption, PluginDialogSource,
-    Store,
+    EventTap, McpServerRow, PluginCommandEntry, PluginDialogContent, PluginDialogOption,
+    PluginDialogSource, Store,
 };
 
 /// How long boot waits for the registration pass (the flagship loads
@@ -84,6 +85,15 @@ pub struct BootedPluginHost {
     pub ready: bool,
 }
 
+/// The refreshed MCP rows waiting for the pump (the sync task's
+/// post-push `mcp.list` re-fetch + the new pushed-name set).
+type McpRowsRx = Rc<RefCell<Option<tokio::sync::mpsc::Receiver<McpSyncOutcome>>>>;
+/// One sync outcome: the refreshed rows + the new pushed-name set.
+type McpSyncOutcome = (Vec<McpServerRow>, BTreeSet<String>);
+/// The plugin route page's materialized content channel.
+type RouteContentRx =
+    Rc<RefCell<Option<std::sync::mpsc::Receiver<Result<PluginSectionSpec, String>>>>>;
+
 /// The booted TUI plugin runtime.
 pub struct TuiPluginRuntime {
     pub booted: BootedPluginHost,
@@ -100,6 +110,27 @@ pub struct TuiPluginRuntime {
     /// Whether the sidebar layout budget was pushed once (SA-F5: the
     /// width is a painter constant — a single `tui.layout` push).
     pushed_layout: Rc<RefCell<bool>>,
+    /// The active sidebar claim key per plugin (PLUG-TUI-SLOT: the
+    /// click sink routes a section row release through the CLAIM's
+    /// `onMouseUp`, not the legacy `sidebar_content` bridge).
+    sidebar_claim_keys: Rc<RefCell<BTreeMap<String, String>>>,
+    /// The MCP server names already pushed into the server's real
+    /// registry (PLUG-D33: `registrations.mcps` → `experimental.
+    /// mcp.add` — the ref's `ctx.mcp.transform` → real-registry
+    /// editor seam, host.ts:374-403, over the wire in the split).
+    pushed_mcps: Rc<RefCell<BTreeSet<String>>>,
+    /// The refreshed MCP rows waiting for the pump (the sync task's
+    /// post-push `mcp.list` re-fetch + the new pushed-name set).
+    mcp_rows_rx: McpRowsRx,
+    /// The owned keymap refresh queued for the App (dynamic layer
+    /// registrations — a claim render installed a layer mid-flight).
+    owned_updates: Rc<RefCell<Option<Vec<OwnedCommandDef>>>>,
+    /// The last owned+palette fingerprint pushed (change detection
+    /// for the dynamic keymap/palette refresh).
+    dynamic_fingerprint: Rc<RefCell<String>>,
+    /// The plugin route page's materialized content (the bounded
+    /// `route.render` replies, applied by the pump).
+    route_content_rx: RouteContentRx,
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +216,12 @@ impl TuiPluginRuntime {
             pushed_route: Rc::new(RefCell::new(None)),
             pushed_theme: Rc::new(RefCell::new(None)),
             pushed_layout: Rc::new(RefCell::new(false)),
+            sidebar_claim_keys: Rc::new(RefCell::new(BTreeMap::new())),
+            pushed_mcps: Rc::new(RefCell::new(BTreeSet::new())),
+            mcp_rows_rx: Rc::new(RefCell::new(None)),
+            owned_updates: Rc::new(RefCell::new(None)),
+            dynamic_fingerprint: Rc::new(RefCell::new(String::new())),
+            route_content_rx: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -263,16 +300,239 @@ impl TuiPluginRuntime {
         // next drain applies.
         {
             let host = Arc::clone(host);
+            let claim_keys = Rc::clone(&self.sidebar_claim_keys);
             store.set_plugin_section_click_sink(Some(Rc::new(
                 move |plugin_id: &str, row: usize| {
-                    let _ = host.click_sidebar_row(plugin_id, row, CLICK_TIMEOUT);
+                    // PLUG-TUI-SLOT: a claim-backed section routes
+                    // through the claim's own handler table; the
+                    // legacy `sidebar_content` bridge keeps its path.
+                    let claim = claim_keys.borrow().get(plugin_id).cloned();
+                    match claim {
+                        Some(key) => {
+                            let _ = host.click_slot_claim(plugin_id, &key, row, CLICK_TIMEOUT);
+                        }
+                        None => {
+                            let _ = host.click_sidebar_row(plugin_id, row, CLICK_TIMEOUT);
+                        }
+                    }
                 },
             )));
         }
+        self.materialize_slot_claims(store);
         let snapshot = host.registrations();
-        project_registrations(store, &snapshot)
+        let projection = project_registrations(store, &snapshot);
+        let owned = Self::owned_keymap_entries(&snapshot);
+        *self.dynamic_fingerprint.borrow_mut() = dynamic_fingerprint(&owned, &snapshot);
+        project_palette(store, &snapshot);
+        PluginProjection { owned, themes: projection.themes }
     }
 
+    /// Resolve + materialize the snapshot's UI slot claims
+    /// (PLUG-TUI-SLOT): the pure router buckets the claims
+    /// (`plugin_slots::resolve_slots` — the ref's structure.ts
+    /// policy), then each live claim renders ONCE through the host's
+    /// bounded call (sidebar claims land as sections; `app` claims
+    /// run for their side effects — the ref's stats plugin installs
+    /// its keymap layer from the app claim's render,
+    /// stats.tsx:185-203).
+    fn materialize_slot_claims(&self, store: &Store) {
+        let host = &self.booted.host;
+        let snapshot = host.registrations();
+        let claims = crate::components::plugin_slots::project_claims(&snapshot.slot_claims);
+        if claims.is_empty() {
+            return;
+        }
+        let resolution = crate::components::plugin_slots::resolve_slots(
+            &crate::components::plugin_slots::mounted_paths(),
+            &claims,
+        );
+        for (path, bucket) in &resolution.slotted {
+            for claim in bucket.prepend.iter().chain(&bucket.append) {
+                let plugin = claim.plugin.clone();
+                let key = claim.key.clone();
+                let host = Arc::clone(host);
+                let content = offload_bounded(Duration::from_secs(5), move || {
+                    host.render_slot_claim(&plugin, &key, Duration::from_secs(4))
+                });
+                match content {
+                    Ok(Ok(spec)) => {
+                        if path == "sidebar.content" {
+                            self.sidebar_claim_keys
+                                .borrow_mut()
+                                .insert(claim.plugin.clone(), claim.key.clone());
+                            store.set_plugin_sidebar_section(
+                                &crate::components::sidebar::SidebarSection {
+                                    plugin_id: claim.plugin.clone(),
+                                    title: spec.title,
+                                    rows: spec.rows,
+                                    clickable: spec.clickable,
+                                },
+                            );
+                        }
+                        // `app` claims run for their side effects (the
+                        // renders install keymap layers guest-side;
+                        // the next registration read picks them up).
+                    }
+                    Ok(Err(error)) | Err(error) => crate::keymap::log_skip(&format!(
+                        "plugin slot claim {} {}: {error}",
+                        claim.plugin, claim.key
+                    )),
+                }
+            }
+        }
+    }
+
+    /// The full owned keymap entry set (PLUG-TUI-SLOT): the
+    /// `command.add` keybind chords PLUS every keymap-layer command
+    /// (`ctx.keymap.layer` — api.tsx:179-199; dispatched as
+    /// `<plugin>::<id>` through the palette sink).
+    fn owned_keymap_entries(snapshot: &RegistrationSnapshot) -> Vec<OwnedCommandDef> {
+        let mut owned = Vec::new();
+        for command in &snapshot.commands {
+            if !command.keybinds.is_empty() {
+                owned.push(OwnedCommandDef {
+                    command: command.name.clone(),
+                    description: command.description.clone(),
+                    defaults: command.keybinds.clone(),
+                    layer: "base".to_owned(),
+                    palette: command.palette,
+                    plugin: command.plugin_id.clone(),
+                });
+            }
+        }
+        for command in &snapshot.keymap_commands {
+            owned.push(OwnedCommandDef {
+                command: format!("{}::{}", command.plugin_id, command.id),
+                description: command.title.clone(),
+                defaults: vec![command.bind.clone()],
+                layer: "base".to_owned(),
+                palette: command.palette,
+                plugin: command.plugin_id.clone(),
+            });
+        }
+        owned
+    }
+
+    /// The dynamic keymap refresh (the pump's post-drain step): a
+    /// claim render that installed a layer mid-flight re-projects
+    /// the owned set when its fingerprint changed, and the palette
+    /// rows pick up palette-visible layer commands.
+    fn refresh_dynamic_registrations(&self, store: &Store) {
+        let snapshot = self.booted.host.registrations();
+        let owned = Self::owned_keymap_entries(&snapshot);
+        let fingerprint = dynamic_fingerprint(&owned, &snapshot);
+        if fingerprint == *self.dynamic_fingerprint.borrow() {
+            return;
+        }
+        *self.dynamic_fingerprint.borrow_mut() = fingerprint;
+        *self.owned_updates.borrow_mut() = Some(owned);
+        project_palette(store, &snapshot);
+    }
+
+    /// The App-side owned update, when the dynamic refresh queued one.
+    #[must_use]
+    pub fn take_owned_updates(&self) -> Option<Vec<OwnedCommandDef>> {
+        self.owned_updates.borrow_mut().take()
+    }
+
+    /// PLUG-D33 — the registry integration seam: push the plugin
+    /// snapshot's MCP servers into the REAL runtime registry the app
+    /// serves/queries. The ref's plugin host mutates the MCP service
+    /// editor directly (`ctx.mcp.transform` → `mcp.transform`,
+    /// host.ts:374-403); in the client/server split the TUI plugin
+    /// host carries the servers to the server's registry over the
+    /// wire — `experimental.mcp.add` (`McpRegistry::add`: the config
+    /// row lands, the connection starts, `mcp.status.changed`
+    /// publishes) — so `/api/mcp` (the sidebar's MCP section +
+    /// `DialogMcp`) and the tool bridge see them like every
+    /// config-sourced server. After the diff settles, the refreshed
+    /// `mcp.list` rows flow back for the pump to apply.
+    pub fn start_mcp_sync(&self, client: &Client) {
+        if !self.booted.host.enabled() {
+            return;
+        }
+        // The diff inputs cross the spawn boundary as plain data (the
+        // runtime's Rc cells stay loop-thread-owned).
+        let snapshot = self.booted.host.registrations();
+        let servers: BTreeMap<String, Value> =
+            snapshot.mcps.iter().map(|mcp| (mcp.name.clone(), mcp.config.clone())).collect();
+        let previously_pushed: BTreeSet<String> = self.pushed_mcps.borrow().clone();
+        let client = client.clone();
+        let (tx, rx) = tokio::sync::mpsc::channel::<(Vec<McpServerRow>, BTreeSet<String>)>(1);
+        *self.mcp_rows_rx.borrow_mut() = Some(rx);
+        tokio::spawn(async move {
+            let (rows, pushed) = sync_and_fetch(&client, servers, previously_pushed).await;
+            let _ = tx.send((rows, pushed)).await;
+        });
+    }
+
+    /// The post-sync MCP rows (the pump applies them to the store
+    /// and adopts the new pushed-name set).
+    #[must_use]
+    pub fn take_mcp_rows(&self) -> Option<McpSyncOutcome> {
+        let mut slot = self.mcp_rows_rx.borrow_mut();
+        let rx = slot.as_mut()?;
+        rx.try_recv().ok()
+    }
+
+    /// Adopt the sync task's pushed-name set (the pump's step).
+    pub fn adopt_pushed_mcps(&self, pushed: BTreeSet<String>) {
+        *self.pushed_mcps.borrow_mut() = pushed;
+    }
+
+    /// Materialize the open plugin route page's content (the pump's
+    /// step when a `NavigateToPluginRoute` opened a page without
+    /// content yet) — bounded, thread-offloaded like the dialog
+    /// source (the facade's `block_on` may not nest in the loop's
+    /// executor). One materialization in flight at a time
+    /// (idempotent across pumps); a closed page cancels the wait.
+    fn materialize_open_route(&self, store: &Store) {
+        if self.route_content_rx.borrow().is_some() {
+            return; // already in flight
+        }
+        let Some(page) = store.plugin_route_page() else { return };
+        if !page.rows.is_empty() || page.title != page.name {
+            return;
+        }
+        let host = Arc::clone(&self.booted.host);
+        let (tx, rx) = std::sync::mpsc::channel();
+        *self.route_content_rx.borrow_mut() = Some(rx);
+        let plugin = page.plugin_id.clone();
+        let name = page.name.clone();
+        let data = page.data.clone();
+        let spawned = std::thread::Builder::new()
+            .name("oc-tui-plugin-route".into())
+            .spawn(move || {
+                let content = host.render_route(&plugin, &name, data.as_ref(), DIALOG_TIMEOUT);
+                let _ = tx.send(content);
+            })
+            .is_ok();
+        if !spawned {
+            *self.route_content_rx.borrow_mut() = None;
+        }
+    }
+
+    /// Apply a finished route materialization (the pump's step); a
+    /// closed page drops the in-flight wait.
+    fn apply_route_content(&self, store: &Store) {
+        let content = {
+            let mut slot = self.route_content_rx.borrow_mut();
+            let Some(rx) = slot.as_mut() else { return };
+            match rx.try_recv() {
+                Ok(content) => {
+                    *slot = None;
+                    content
+                }
+                Err(_) => return,
+            }
+        };
+        if store.plugin_route_page().is_none() {
+            return;
+        }
+        if let Ok(spec) = content {
+            store.set_plugin_route_content(&spec.title, spec.rows);
+        }
+    }
     /// The per-pump UI-request drain: every queued plugin UI request
     /// lands in the store through the neutral apply seam. The same
     /// pump pushes the live route + theme view to the guest (the v2
@@ -326,6 +586,13 @@ impl TuiPluginRuntime {
                 apply_plugin_ui(store, &plugin_id, &to_ui_event(&request));
             }
         }
+        // PLUG-TUI-SLOT's pump steps: a freshly navigated plugin route
+        // materializes its content (bounded), finished materializations
+        // apply, and dynamic keymap layers (installed by a claim's
+        // render mid-flight) re-project when changed.
+        self.materialize_open_route(store);
+        self.apply_route_content(store);
+        self.refresh_dynamic_registrations(store);
     }
 
     /// Refresh the palette sink's active session (the run loop's
@@ -491,6 +758,11 @@ impl EventTap for HostTap {
 /// (toasts/dialogs) arrive through the per-pump drain. This also keeps
 /// the sink legal inside the async run loop (the facade's `block_on`
 /// may not nest in the executor).
+///
+/// PLUG-TUI-SLOT: `<plugin_id>::<command_id>` names are keymap-layer
+/// commands (`ctx.keymap.layer`) — they dispatch to the guest's layer
+/// `run` callback instead of a `command.add` registration
+/// (api.tsx:179-199).
 struct HostSink {
     host: Arc<PluginHost>,
     current: Rc<RefCell<Option<String>>>,
@@ -499,6 +771,23 @@ struct HostSink {
 impl crate::store::PluginCommandSink for HostSink {
     fn execute(&self, command: &str, args: Option<&str>) -> bool {
         let host = Arc::clone(&self.host);
+        // A keymap-layer command (the `::` routing convention).
+        if let Some((plugin, id)) = command.split_once("::") {
+            if !plugin.is_empty() && !id.is_empty() {
+                let plugin = plugin.to_owned();
+                let id = id.to_owned();
+                return std::thread::Builder::new()
+                    .name("oc-tui-plugin-keymap".into())
+                    .spawn(move || {
+                        if let Err(error) = host.run_keymap_command(&plugin, &id, COMMAND_TIMEOUT) {
+                            crate::keymap::log_skip(&format!(
+                                "plugin keymap command {plugin}::{id}: {error}"
+                            ));
+                        }
+                    })
+                    .is_ok();
+            }
+        }
         let command = command.to_owned();
         let args = args.map(str::to_owned);
         let session = self.current.borrow().clone().unwrap_or_default();
@@ -576,6 +865,9 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
             PluginUiEvent::NavigateToSession { session_id: session_id.clone() }
         }
         UiRequest::FooterHint { text, .. } => PluginUiEvent::FooterHint { text: text.clone() },
+        UiRequest::NavigateToPluginRoute { name, data, .. } => {
+            PluginUiEvent::NavigateToPluginRoute { name: name.clone(), data: data.clone() }
+        }
         UiRequest::DialogOpen { spec, .. } => PluginUiEvent::DialogOpen {
             content: PluginDialogContent {
                 title: spec.title.clone(),
@@ -592,6 +884,180 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
             },
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// PLUG-D33: the MCP registry sync (registrations.mcps → the real
+// server-side registry over the wire)
+// ---------------------------------------------------------------------------
+
+/// Push the plugin snapshot's MCP servers into the server's REAL
+/// registry (`experimental.mcp.add` → `McpRegistry::add` — the ref's
+/// `ctx.mcp.transform` seam, host.ts:374-403, carried over the wire
+/// in the client/server split). `previously_pushed` tracks the diff:
+/// adds PUT their config, servers a (hot-reload) removal dropped
+/// DELETE; the TUI's seed table starts EMPTY (the server's registry
+/// owns the config-sourced rows) so every snapshot entry is a plugin
+/// contribution. Returns the refreshed rows + the new pushed set.
+/// Deterministic callers (tests) drive a scripted local listener; no
+/// real network.
+pub async fn sync_and_fetch(
+    client: &Client,
+    servers: BTreeMap<String, Value>,
+    previously_pushed: BTreeSet<String>,
+) -> (Vec<McpServerRow>, BTreeSet<String>) {
+    let mut pushed = previously_pushed;
+    // Adds/updates: PUT the config (idempotent registry insert-or-
+    // replace — the ref's editor `set`). The config JSON is the v2
+    // `Mcp.ServerConfig` the guest's editor produced; the client's
+    // typed body re-validates it exactly like the ref's
+    // `Schema.decodeUnknownSync(ServerConfig)` (host.ts:387-397) —
+    // an invalid config declines THIS server (contained), never the
+    // whole pass.
+    for (name, config) in &servers {
+        let parsed = match serde_json::from_value::<oc_client::types::ExperimentalMcpAddBodyConfig>(
+            config.clone(),
+        ) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                crate::keymap::log_skip(&format!("plugin mcp config {name}: {error}"));
+                continue;
+            }
+        };
+        let body = oc_client::types::ExperimentalMcpAddBody { config: parsed };
+        if let Err(error) = client
+            .mcp()
+            .add(name, &oc_client::types::ExperimentalMcpAddQuery { location: None }, &body)
+            .await
+        {
+            crate::keymap::log_skip(&format!("experimental.mcp.add {name}: {error}"));
+            continue;
+        }
+        pushed.insert(name.clone());
+    }
+    // Removals: a plugin (or its hot reload) dropped a previously
+    // pushed server — DELETE it from the registry.
+    let live: BTreeSet<String> = servers.keys().cloned().collect();
+    let stale: Vec<String> = pushed.difference(&live).cloned().collect();
+    for name in stale {
+        if let Err(error) = client
+            .mcp()
+            .remove(name.as_str(), &oc_client::types::ExperimentalMcpRemoveQuery { location: None })
+            .await
+        {
+            crate::keymap::log_skip(&format!("experimental.mcp.remove {name}: {error}"));
+            continue;
+        }
+        pushed.remove(&name);
+    }
+    let rows = fetch_mcp_rows(client).await.unwrap_or_default();
+    (rows, pushed)
+}
+
+/// The post-sync `mcp.list` re-fetch: the refreshed rows (server
+/// truth — the registry now contains the plugin servers) mapped to
+/// the store's row shape (the same mapping the boot fetch chain
+/// uses).
+pub async fn fetch_mcp_rows(client: &Client) -> Option<Vec<McpServerRow>> {
+    let response =
+        client.mcp().list(&oc_client::types::McpListQuery { location: None }).await.ok()?;
+    Some(
+        response
+            .data
+            .iter()
+            .map(|server| {
+                let status = match &server.status {
+                    oc_client::types::McpServerStatus::Connected(_) => "connected",
+                    oc_client::types::McpServerStatus::Pending(_) => "pending",
+                    oc_client::types::McpServerStatus::Failed(_) => "failed",
+                    oc_client::types::McpServerStatus::Disabled(_) => "disabled",
+                    oc_client::types::McpServerStatus::NeedsAuth(_) => "needs_auth",
+                };
+                let error = match &server.status {
+                    oc_client::types::McpServerStatus::Failed(failed) => Some(failed.error.clone()),
+                    oc_client::types::McpServerStatus::NeedsAuth(auth) => Some(auth.error.clone()),
+                    _ => None,
+                };
+                McpServerRow { name: server.name.clone(), status, error }
+            })
+            .collect(),
+    )
+}
+
+/// Project the palette rows: `command.add` palette commands plus the
+/// palette-visible keymap-layer commands (`ctx.keymap.layer` — the
+/// ref's layer IS the feature-plugin command surface, api.tsx:
+/// 179-199; dispatched as `<plugin>::<id>`).
+fn project_palette(store: &Store, snapshot: &RegistrationSnapshot) {
+    let mut palette: Vec<PluginCommandEntry> = snapshot
+        .commands
+        .iter()
+        .filter(|command| command.palette)
+        .map(|command| PluginCommandEntry {
+            command: command.name.clone(),
+            title: command.description.clone(),
+            plugin_id: command.plugin_id.clone(),
+        })
+        .collect();
+    for command in &snapshot.keymap_commands {
+        if command.palette {
+            palette.push(PluginCommandEntry {
+                command: format!("{}::{}", command.plugin_id, command.id),
+                title: command.title.clone(),
+                plugin_id: command.plugin_id.clone(),
+            });
+        }
+    }
+    store.set_plugin_commands(palette);
+}
+
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
+
+/// Run one bounded, thread-offloaded host call (the facade's
+/// `block_on` may not nest in the loop's executor — the dialog
+/// source's pattern).
+fn offload_bounded<T: Send + 'static>(
+    bound: Duration,
+    call: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("oc-tui-plugin-bounded".into())
+        .spawn(move || {
+            let _ = tx.send(call());
+        })
+        .map_err(|error| error.to_string())?;
+    rx.recv_timeout(bound + Duration::from_secs(1)).map_err(|error| error.to_string())
+}
+
+/// The owned keymap entries' change fingerprint (command + bind
+/// pairs, order-stable).
+fn owned_fingerprint(owned: &[OwnedCommandDef]) -> String {
+    owned.iter().fold(String::new(), |acc, entry| {
+        format!("{acc}{}|{}|{};", entry.command, entry.plugin, entry.defaults.join(","))
+    })
+}
+
+/// The dynamic-registration fingerprint (owned entries + the
+/// palette-visible command table — one string, one comparison).
+fn dynamic_fingerprint(owned: &[OwnedCommandDef], snapshot: &RegistrationSnapshot) -> String {
+    let palette = snapshot
+        .commands
+        .iter()
+        .filter(|command| command.palette)
+        .map(|command| command.name.as_str())
+        .chain(
+            snapshot
+                .keymap_commands
+                .iter()
+                .filter(|command| command.palette)
+                .map(|command| command.id.as_str()),
+        )
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{}#{}", owned_fingerprint(owned), palette)
 }
 
 // ---------------------------------------------------------------------------

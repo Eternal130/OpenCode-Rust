@@ -38,6 +38,13 @@ pub mod overlays;
 /// opentui-solid — the ONLY renderer since the retirement lane
 /// deleted the `OC_SUBAGENT_OPENTUI` flag pair.
 pub mod picker_solid;
+/// PLUG-TUI-SLOT: the plugin route page — the native full-screen
+/// page a plugin's registered route renders into.
+pub mod plugin_page;
+/// PLUG-TUI-SLOT: the plugin UI-slot router — the ref's pure slot
+/// tree resolution (`packages/tui/src/plugin/structure.ts`) over the
+/// TUI's native mounted paths.
+pub mod plugin_slots;
 pub mod session;
 pub mod session_screen;
 pub mod session_tabs;

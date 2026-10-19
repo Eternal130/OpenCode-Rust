@@ -193,6 +193,61 @@ pub struct PluginDialog {
     pub id: String,
 }
 
+/// One plugin UI slot claim (`ctx.ui.slot({<placement>: target,
+/// render})` — the v2 TUI-plugin surface, ref
+/// `packages/tui/src/plugin/api.tsx:298-312`): EXACTLY one placement
+/// kind (`prepend` | `append` | `before` | `after` | `replace`) with
+/// a target slot path. The key is counter-suffixed per plugin
+/// (`slot#0`, `slot#1` …) so one plugin may claim several places; the
+/// render function stays in the guest — the TUI materializes its
+/// flattened content through [`crate::PluginHost::render_slot_claim`]
+/// (bounded, registration/pump-time — never per-frame IPC).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginSlotClaim {
+    pub plugin_id: String,
+    /// Counter-suffixed claim key (`slot#0`).
+    pub key: String,
+    /// `prepend` | `append` | `before` | `after` | `replace`.
+    pub kind: String,
+    /// The mounted slot path (`sidebar.content`, `app`).
+    pub target: String,
+}
+
+/// One plugin-registered route (`ctx.ui.router.register({name,
+/// render})` — api.tsx:204-212): a named plugin page the router can
+/// navigate to (`{type: "plugin", name}`); the render stays in the
+/// guest and materializes through [`crate::PluginHost::render_route`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginRoute {
+    pub plugin_id: String,
+    pub name: String,
+}
+
+/// One command contributed through `ctx.keymap.layer(factory)` (the
+/// v2 keymap-layer surface, api.tsx:179-199): a bind + title (+
+/// group/slash/palette metadata) whose `run` callback stays in the
+/// guest — the TUI merges the binds into the owned keymap layer and
+/// dispatches hits back through
+/// [`crate::PluginHost::run_keymap_command`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginKeymapCommand {
+    pub plugin_id: String,
+    /// The command id (`stats.open`); dispatched as
+    /// `<plugin_id>::<id>` on the TUI side.
+    pub id: String,
+    pub title: String,
+    /// Palette group (`System`); empty = the default plugin group.
+    pub group: String,
+    /// The binding spec (`escape`, `ctrl+x j`).
+    pub bind: String,
+    pub palette: bool,
+    /// The composer slash name (`stats`); carried for the slash
+    /// surface (the autocomplete table is static today).
+    pub slash: Option<String>,
+    /// The layer's mode (`global` | `local`).
+    pub mode: String,
+}
+
 /// Per-plugin lifecycle state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginState {
@@ -237,6 +292,14 @@ pub struct RegistrationSnapshot {
     pub home_actions: Vec<PluginHomeAction>,
     /// Registered dialog providers (materialize-at-open coverage).
     pub dialogs: Vec<PluginDialog>,
+    /// UI slot claims (`ctx.ui.slot` — PLUG-TUI-SLOT): registration
+    /// order (the ref resolves claims in plugin enable order within
+    /// each placement bucket).
+    pub slot_claims: Vec<PluginSlotClaim>,
+    /// Registered plugin routes (`ctx.ui.router.register`), by name.
+    pub routes: Vec<PluginRoute>,
+    /// Keymap-layer commands (`ctx.keymap.layer`), registration order.
+    pub keymap_commands: Vec<PluginKeymapCommand>,
     pub plugins: Vec<PluginStatus>,
     /// The table-global default agent (`draft.default(id)`), when set.
     pub default_agent: Option<String>,
@@ -274,6 +337,15 @@ pub struct Registrations {
     pub home_actions: Vec<PluginHomeAction>,
     /// Dialog providers: qualified id (`plugin:id`) → entry.
     pub dialogs: BTreeMap<String, PluginDialog>,
+    /// UI slot claims (`ctx.ui.slot` — PLUG-TUI-SLOT).
+    pub slot_claims: Vec<PluginSlotClaim>,
+    /// Registered plugin routes (`ctx.ui.router.register`), name →
+    /// entry (the ref throws on a duplicate name; the host keeps the
+    /// LAST registration per plugin pass — `clear_plugin` drops the
+    /// plugin's entries first on reload).
+    pub routes: BTreeMap<String, PluginRoute>,
+    /// Keymap-layer commands (`ctx.keymap.layer`), registration order.
+    pub keymap_commands: Vec<PluginKeymapCommand>,
     /// entry path (string) → status.
     pub plugins: BTreeMap<String, PluginStatus>,
     /// The table-global default agent id.
@@ -297,6 +369,9 @@ impl Registrations {
         self.group_rules.retain(|rule| rule.plugin_id != plugin_id);
         self.home_actions.retain(|action| action.plugin_id != plugin_id);
         self.dialogs.retain(|_, dialog| dialog.plugin_id != plugin_id);
+        self.slot_claims.retain(|claim| claim.plugin_id != plugin_id);
+        self.routes.retain(|_, route| route.plugin_id != plugin_id);
+        self.keymap_commands.retain(|command| command.plugin_id != plugin_id);
         if let Some(default) = self.agent_default.as_ref() {
             if !self.agents.contains_key(default) {
                 self.agent_default = None;
@@ -444,6 +519,9 @@ impl Registrations {
             group_rules: self.group_rules.clone(),
             home_actions: self.home_actions.clone(),
             dialogs: self.dialogs.values().cloned().collect(),
+            slot_claims: self.slot_claims.clone(),
+            routes: self.routes.values().cloned().collect(),
+            keymap_commands: self.keymap_commands.clone(),
             plugins: self.plugins.values().cloned().collect(),
             default_agent: self.agent_default.clone(),
         }

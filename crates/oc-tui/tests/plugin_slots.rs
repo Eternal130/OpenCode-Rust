@@ -101,6 +101,9 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
             PluginUiEvent::NavigateToSession { session_id: session_id.clone() }
         }
         UiRequest::FooterHint { text, .. } => PluginUiEvent::FooterHint { text: text.clone() },
+        UiRequest::NavigateToPluginRoute { name, data, .. } => {
+            PluginUiEvent::NavigateToPluginRoute { name: name.clone(), data: data.clone() }
+        }
         UiRequest::DialogOpen { spec, .. } => PluginUiEvent::DialogOpen {
             content: PluginDialogContent {
                 title: spec.title.clone(),
