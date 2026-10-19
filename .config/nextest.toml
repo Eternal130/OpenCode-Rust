@@ -1,9 +1,9 @@
 [profile.default]
-slow-timeout = "60s"
-# Hard per-test ceiling: kills pathological CI hangs (WIRE-BE1-FLAKE ran
-# 900s+ on a 2-core runner 2026-10-19 while green on other runs) so one
-# stuck test cannot eat the job. Normal suites are far below this.
-timeout = "900s"
+# Warn at 60s; HARD KILL at 60s x 15 = 900s (terminate-after, the only
+# hard-timeout mechanism nextest has — a `timeout` key does not exist).
+# Backstop for pathological CI hangs (WIRE-BE1-FLAKE ran 900s+ on a
+# 2-core runner 2026-10-19 while green on other runs).
+slow-timeout = { period = "60s", terminate-after = 15 }
 # Global single retry: parallel-spawn interference flakes (PTY/shared-CWD
 # classes observed across oc-core/oc-cli/oc-server) pass on retry, while
 # real failures fail consistently both attempts. Per-suite overrides
@@ -12,12 +12,10 @@ retries = 1
 # 降载纪律：newapi 同机，限制测试并行度
 test-threads = 4
 
-[profile.default.env]
-# Test processes must never bootstrap the managed pinned bun download
-# (Phase 10 packaging lane): the bun-spawning integration tests skip
-# when bun is absent instead of fetching ~40 MiB from the network
-# (MIGRATION §2.3 graceful degradation; oc-util::bunman kill switch).
-set = { OPENCODE_DISABLE_BUN_DOWNLOAD = "1" }
+# NOTE: nextest has no profile-level env mechanism (0.9.148 verified —
+# the previous [profile.default.env] block was silently ignored
+# everywhere). OPENCODE_DISABLE_BUN_DOWNLOAD is set at the CI job level
+# (.github/workflows/ci.yml); locally bun is pre-provisioned by bunman.
 
 # PTY integration suites spawn real terminals + stub servers; on shared
 # CI runners their spawn timing occasionally trips the first attempt.
@@ -28,7 +26,7 @@ set = { OPENCODE_DISABLE_BUN_DOWNLOAD = "1" }
 # instead of eating a quarter of the job budget.
 [[profile.default.overrides]]
 filter = 'test(be1_)'
-timeout = "300s"
+slow-timeout = { period = "300s", terminate-after = 1 }
 
 [[profile.default.overrides]]
 filter = 'test(mini_pty)'
