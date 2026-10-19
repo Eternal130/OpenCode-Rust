@@ -36,8 +36,10 @@ use serde_json::Value;
 
 use oc_ai::protocols::anthropic_messages::{anthropic_messages_route, anthropic_route};
 use oc_ai::protocols::bedrock::{self as bedrock_lane, BedrockAuthOptions};
+use oc_ai::protocols::cohere_chat::{cohere_route_for_package, CohereConfig};
 use oc_ai::protocols::copilot::{copilot_chat_route, CopilotConfig};
 use oc_ai::protocols::gemini::{google_route, GoogleConfig};
+use oc_ai::protocols::mistral_chat::{mistral_route_for_package, MistralConfig};
 use oc_ai::protocols::openai_chat::{
     alibaba_chat_route, deepseek_chat_route, groq_chat_route, openai_chat_route,
     openrouter_chat_route, venice_chat_route, zai_chat_route,
@@ -152,6 +154,11 @@ pub enum ProtocolFamily {
     OpenAIResponses,
     Gemini,
     OpenAICompatible,
+    /// Cohere native v2 chat (`cohere_route_for_package` native lane)
+    /// plus the `/chat` OpenAI-compatibility lane.
+    CohereChat,
+    /// Mistral native chat-completions (`mistral_route_for_package`).
+    MistralChat,
     /// Bedrock Converse (SigV4/bearer + AWS event-stream framing).
     BedrockConverse,
     /// Bedrock Mantle: the OpenAI chat protocol on `bedrock-mantle`.
@@ -190,7 +197,6 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         | "@opencode/ai/providers/alibaba/chat"
         | "@opencode/ai/providers/baseten"
         | "@opencode/ai/providers/cerebras"
-        | "@opencode/ai/providers/cohere/chat"
         | "@opencode/ai/providers/deepinfra"
         | "@opencode/ai/providers/deepseek"
         | "@opencode/ai/providers/digitalocean"
@@ -198,7 +204,6 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         | "@opencode/ai/providers/groq"
         | "@opencode/ai/providers/meta/chat"
         | "@opencode/ai/providers/minimax/chat"
-        | "@opencode/ai/providers/mistral"
         | "@opencode/ai/providers/moonshot/chat"
         | "@opencode/ai/providers/togetherai"
         | "@opencode/ai/providers/venice"
@@ -208,6 +213,19 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         | "@opencode/ai/providers/cloudflare-workers-ai"
         | "@opencode/ai/providers/cloudflare-ai-gateway"
         | "@opencode/ai/providers/vercel-ai-gateway" => ProtocolFamily::OpenAIChat,
+
+        // Cohere (AI-COHERE-MISTRAL): BOTH the native package and the
+        // `/chat` OpenAI-compatibility lane route through the landed
+        // oc-ai seam (`cohere_route_for_package`) — the compat lane is
+        // the OpenAI chat protocol at the Cohere COMPATIBILITY_BASE_URL,
+        // not a generic chat binding (providers/cohere.ts:21-44).
+        "@opencode/ai/providers/cohere" | "@opencode/ai/providers/cohere/chat" => {
+            ProtocolFamily::CohereChat
+        }
+        // Mistral (AI-COHERE-MISTRAL): the native mistral-chat protocol
+        // (providers/mistral.ts:23-30) — previously misrouted to
+        // OpenAIChat.
+        "@opencode/ai/providers/mistral" => ProtocolFamily::MistralChat,
 
         "@opencode/ai/providers/google" => ProtocolFamily::Gemini,
         // Vertex native (BE-4): the Gemini protocol deployed on aiplatform.
@@ -472,6 +490,36 @@ fn build_route(
             };
             let route = if baked { with_base_url(route, base_url) } else { route };
             Ok(route)
+        }
+        ProtocolFamily::CohereChat => {
+            // AI-COHERE-MISTRAL: both Cohere lanes through the landed
+            // oc-ai seam — the native package runs the Cohere v2 chat
+            // protocol at api.cohere.com/v2, `/chat` rides the OpenAI
+            // chat protocol at the COMPATIBILITY_BASE_URL; optional
+            // bearer (explicit key → COHERE_API_KEY).
+            cohere_route_for_package(
+                package,
+                transport,
+                CohereConfig { api_key, base_url },
+            )
+            .ok_or_else(|| ProviderError::Configuration {
+                provider: provider_id.to_string(),
+                message: format!("package `{package}` is not a Cohere package"),
+            })
+        }
+        ProtocolFamily::MistralChat => {
+            // AI-COHERE-MISTRAL: the native mistral-chat protocol at
+            // api.mistral.ai/v1 with optional bearer (explicit key →
+            // MISTRAL_API_KEY).
+            mistral_route_for_package(
+                package,
+                transport,
+                MistralConfig { api_key, base_url },
+            )
+            .ok_or_else(|| ProviderError::Configuration {
+                provider: provider_id.to_string(),
+                message: format!("package `{package}` is not a Mistral package"),
+            })
         }
         ProtocolFamily::OpenAICompatible => {
             let base_url = base_url.ok_or_else(|| ProviderError::Configuration {
@@ -854,6 +902,97 @@ mod tests {
         assert_eq!(transport_request.url, "https://api.githubcopilot.com/chat/completions");
         assert_eq!(transport_request.header("authorization"), Some("Bearer ghu_bound_token"));
         assert_eq!(transport_request.header("X-GitHub-Api-Version"), Some("2026-08-01"));
+    }
+
+    /// AI-COHERE-MISTRAL (production mapping half): the catalog's
+    /// `cohere` (npm `@ai-sdk/cohere` → native package) and `mistral`
+    /// providers must bind through the landed oc-ai seams — native
+    /// protocol ids and default base URLs, with the bearer chain
+    /// (explicit key over the provider env var) reaching the wire.
+    #[test]
+    fn provider_facade_cohere_mistral_native_bindings() {
+        let context = context();
+        let catalog = Catalog::embedded();
+
+        let cohere = catalog.provider("cohere").expect("cohere in catalog");
+        let model_id = cohere.models.first().expect("cohere has models").id.as_str().to_string();
+        let package = cohere
+            .models
+            .first()
+            .and_then(|model| model.package.clone())
+            .unwrap_or_else(|| cohere.info.package.clone());
+        assert_eq!(package, "@opencode/ai/providers/cohere", "catalog maps npm @ai-sdk/cohere natively");
+        let model = language_model(
+            &context,
+            catalog,
+            "cohere",
+            &model_id,
+            &ModelConnection { api_key: Some("cohere-key".into()), ..Default::default() },
+        )
+        .expect("cohere binds natively");
+        assert_eq!(model.route.protocol.id(), "cohere-chat");
+        assert_eq!(model.route.endpoint.base_url.as_deref(), Some("https://api.cohere.com/v2"));
+        let route = Arc::clone(&model.route);
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let prepared = route.prepare_request(&request);
+        let body = route.build_body(&prepared).expect("body");
+        let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
+        assert_eq!(transport_request.url, "https://api.cohere.com/v2/chat");
+        assert_eq!(transport_request.header("authorization"), Some("Bearer cohere-key"));
+
+        let mistral = catalog.provider("mistral").expect("mistral in catalog");
+        let model_id =
+            mistral.models.first().expect("mistral has models").id.as_str().to_string();
+        let package = mistral
+            .models
+            .first()
+            .and_then(|model| model.package.clone())
+            .unwrap_or_else(|| mistral.info.package.clone());
+        assert_eq!(
+            package, "@opencode/ai/providers/mistral",
+            "catalog maps npm @ai-sdk/mistral natively"
+        );
+        let model = language_model(
+            &context,
+            catalog,
+            "mistral",
+            &model_id,
+            &ModelConnection { api_key: Some("mistral-key".into()), ..Default::default() },
+        )
+        .expect("mistral binds natively");
+        assert_eq!(model.route.protocol.id(), "mistral-chat");
+        let route = Arc::clone(&model.route);
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let prepared = route.prepare_request(&request);
+        let body = route.build_body(&prepared).expect("body");
+        let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
+        assert_eq!(transport_request.url, "https://api.mistral.ai/v1/chat/completions");
+        assert_eq!(transport_request.header("authorization"), Some("Bearer mistral-key"));
+    }
+
+    /// AI-COHERE-MISTRAL: the `/chat` OpenAI-compatibility lane binds at
+    /// the Cohere COMPATIBILITY_BASE_URL through the same seam (the
+    /// host-table redirect `cohere` + `@ai-sdk/openai-compatible`).
+    #[test]
+    fn provider_facade_cohere_chat_compatibility_lane() {
+        assert_eq!(
+            family_of("@opencode/ai/providers/cohere/chat"),
+            Some(ProtocolFamily::CohereChat),
+            "the compat lane routes through the Cohere seam, not generic chat"
+        );
+        let route = cohere_route_for_package(
+            "@opencode/ai/providers/cohere/chat",
+            Arc::new(oc_ai::route::transport::FailingTransport { message: "facade unit test" }),
+            CohereConfig::default(),
+        )
+        .expect("compat lane maps");
+        assert_eq!(route.id, "cohere-chat-completions");
+        assert_eq!(
+            route.endpoint.base_url.as_deref(),
+            Some("https://api.cohere.ai/compatibility/v1")
+        );
     }
 
     #[test]
