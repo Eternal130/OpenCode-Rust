@@ -44,6 +44,12 @@ impl Drop for PtyGuard {
     }
 }
 
+/// The post-merge CI regression patch (run 39317949352): the settle
+/// cap bounds ONE `screen_after_toggle` capture while a starved
+/// 2-core runner's TUI catches up on its input queue (see the
+/// helper's doc for the race it closes).
+const SETTLE_CAP: Duration = Duration::from_secs(8);
+
 fn attach_pty() -> PtyGuard {
     let master = unsafe {
         let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
@@ -111,11 +117,34 @@ fn len(boot: &Boot) -> usize {
 }
 
 /// Force ratatui's FULL repaint (a resize invalidates the diff
-/// buffer) and return the ANSI-stripped screen text emitted after
-/// `mark` — the assertion surface for state that diff rendering
-/// would split across escape sequences (the blinking caret cell,
-/// shifted statuslines).
-fn screen_after_toggle(writer: &std::fs::File, boot: &Boot, mark: usize, rows: &mut u16) -> String {
+/// buffer) and return the RECONSTRUCTED, SETTLED screen text — the
+/// assertion surface for state that diff rendering would split
+/// across escape sequences (the blinking caret cell, shifted
+/// statuslines).
+///
+/// Post-merge CI regression (run 39317949352, deterministic on
+/// 2-core runners under 6-way parallel PTY load): the previous fixed
+/// 500 ms sleep + ANSI-stripped raw tail raced the starved TUI two
+/// ways — (a) the SIGWINCH repaint is NOT input-ordered (a kernel
+/// signal can overtake still-queued keystrokes), so the captured
+/// tail could straddle states ("engine draft" beside "Ask
+/// anything…" — the ctrl+c clear landed mid-window); (b) a starved
+/// TUI streams its full repaint over seconds, and the capture cut it
+/// mid-paint ("engine d" + "raft" split across partial rows). The
+/// vt100 parser replays the stream in order, so its FINAL grid is
+/// always the settled state regardless of interleaving: we feed the
+/// post-toggle bytes incrementally and poll until two samples
+/// ≥300 ms apart AGREE (the cursor cell masked — the caret blink is
+/// the only idle animation), bounded by [`SETTLE_CAP`]. Deterministic
+/// under any load; the returned text is the settled grid, so
+/// `contains`/`!contains` asserts see one coherent frame instead of
+/// a byte tail.
+fn screen_after_toggle(
+    writer: &std::fs::File,
+    boot: &Boot,
+    _mark: usize,
+    rows: &mut u16,
+) -> String {
     // Toggling the row count guarantees a real SIGWINCH every call
     // (a same-size TIOCSWINSZ emits no signal → no repaint).
     *rows = if *rows == 25 { 24 } else { 25 };
@@ -124,9 +153,57 @@ fn screen_after_toggle(writer: &std::fs::File, boot: &Boot, mark: usize, rows: &
         libc::ioctl(writer.as_raw_fd(), libc::TIOCSWINSZ, &winsize);
     }
     std::thread::sleep(Duration::from_millis(500));
-    let data = boot.output.lock().expect("lock").clone();
-    let tail = &data[mark.min(data.len())..];
-    String::from_utf8_lossy(tail).into_owned()
+    // A fresh parser at the NEW size: the resize repaint is a FULL
+    // paint, so no pre-toggle history is needed (pre-resize stragglers
+    // land inside the old row range and are overwritten wholesale).
+    let mut parser = vt100::Parser::new(*rows, 80, 0);
+    let mut fed = 0usize;
+    let mut last_screen = String::new();
+    let mut last_sample = std::time::Instant::now();
+    let deadline = std::time::Instant::now() + SETTLE_CAP;
+    loop {
+        std::thread::sleep(Duration::from_millis(50));
+        let data = boot.output.lock().expect("lock").clone();
+        parser.process(&data[fed.min(data.len())..]);
+        fed = data.len();
+        if last_sample.elapsed() >= Duration::from_millis(300) {
+            let screen = masked_screen_text(&parser);
+            if !screen.trim().is_empty() && screen == last_screen {
+                return screen;
+            }
+            last_screen = screen;
+            last_sample = std::time::Instant::now();
+        }
+        if std::time::Instant::now() > deadline {
+            // A TUI that never settles: return the partial grid so the
+            // assert fails with the real evidence.
+            return masked_screen_text(&parser);
+        }
+    }
+}
+
+/// The parser's final grid as text with the cursor cell masked (the
+/// caret's blink glyph would otherwise flip every other sample, so
+/// stability could never be detected on an idle composer).
+fn masked_screen_text(parser: &vt100::Parser) -> String {
+    let screen = parser.screen();
+    let (height, width) = screen.size();
+    let (cursor_row, cursor_col) = screen.cursor_position();
+    let mut text = String::with_capacity(usize::from(height) * (usize::from(width) + 1));
+    for row in 0..height {
+        for col in 0..width {
+            let ch = if (row, col) == (cursor_row, cursor_col) {
+                ' '
+            } else {
+                screen
+                    .cell(row, col)
+                    .map_or(' ', |cell| cell.contents().chars().next().unwrap_or(' '))
+            };
+            text.push(ch);
+        }
+        text.push('\n');
+    }
+    text
 }
 
 /// Strip ANSI escape sequences from a captured byte string.
