@@ -570,3 +570,103 @@ async fn session_stats_shape() {
     assert_eq!(response.status, 400, "invalid timezone");
     assert_eq!(response.json()["_tag"], "InvalidRequestError");
 }
+
+// ---------------------------------------------------------------------------
+// HTTP-H0 — request-validation slice (generated table + middleware seam)
+// ---------------------------------------------------------------------------
+
+/// Wrong-payload-type probes for the enforced slice: every message is
+/// byte-pinned against a live v2.0.24 reference boot (evidence:
+/// `/tmp/opencode/parity-evidence/HTTP-H0/ref-validation-messages*.json`).
+///
+/// v2 ordering nuance this pins: endpoints WITH `sessionLocationMiddleware`
+/// resolve the session (404) BEFORE payload decode — the middleware must
+/// NOT fire for them (see the LOC-MW control at the end).
+#[tokio::test]
+async fn all_routes_reject_wrong_payload() {
+    let server = boot().await;
+    let probes: &[(&str, &str, &str, &str)] = &[
+        // (method, target, body, expected Effect message)
+        ("POST", "/api/session", r#"{"title": 12345}"#, "Expected string | null\n  at [\"title\"]"),
+        ("GET", "/api/session?limit=notanumber", "", "Expected an integer\n  at [\"limit\"]"),
+        (
+            "POST",
+            "/api/plugin/update",
+            r#"{"targets": "notanarray"}"#,
+            "Expected array\n  at [\"targets\"]",
+        ),
+        ("POST", "/api/plugin/update", r"{}", "Missing key\n  at [\"targets\"]"),
+        (
+            "POST",
+            "/api/session/ses_H0PROBE/move",
+            r#"{"directory": 5}"#,
+            "Expected string\n  at [\"directory\"]",
+        ),
+        (
+            "PATCH",
+            "/api/credential/cred_H0PROBE",
+            r#"{"label": 5}"#,
+            "Expected string\n  at [\"label\"]",
+        ),
+        ("POST", "/api/websearch", r#"{"query": 5}"#, "Expected string\n  at [\"query\"]"),
+        ("POST", "/api/shell", r#"{"command": 5}"#, "Expected string\n  at [\"command\"]"),
+        (
+            "POST",
+            "/api/shell",
+            r#"{"command": "ls", "timeout": 1.5}"#,
+            "Expected an integer\n  at [\"timeout\"]",
+        ),
+        (
+            "POST",
+            "/api/shell",
+            r#"{"command": "ls", "timeout": -1}"#,
+            "Expected a value greater than or equal to 0\n  at [\"timeout\"]",
+        ),
+        ("POST", "/api/pty", r#"{"command": 5}"#, "Expected string\n  at [\"command\"]"),
+        ("PUT", "/api/pty/pty_H0PROBE", r#"{"title": 5}"#, "Expected string\n  at [\"title\"]"),
+        ("PATCH", "/api/project/prj_H0PROBE", r#"{"name": 5}"#, "Expected string\n  at [\"name\"]"),
+        (
+            "PATCH",
+            "/api/project/prj_H0PROBE",
+            r#"{"commands": 5}"#,
+            "Expected Project.Commands\n  at [\"commands\"]",
+        ),
+    ];
+    for (method, target, body, message) in probes {
+        let headers: &[(&str, &str)] =
+            if body.is_empty() { &[] } else { &[("content-type", "application/json")] };
+        let response = support::request(server.addr, method, target, headers, body.as_bytes())
+            .await
+            .expect("raw");
+        let text = String::from_utf8_lossy(&response.body).into_owned();
+        assert_eq!(response.status, 400, "{method} {target}: {text}");
+        let envelope = response.json();
+        assert_eq!(envelope["_tag"], "InvalidRequestError", "{method} {target} tag: {envelope}");
+        assert_eq!(envelope["message"], *message, "{method} {target} message: {envelope}");
+        let expected_kind = if *method == "GET" { "Query" } else { "Payload" };
+        assert_eq!(envelope["kind"], expected_kind, "{method} {target} kind: {envelope}");
+    }
+
+    // Pass-through: valid payloads must still reach the handler (the
+    // buffered body is re-inserted, not swallowed).
+    let created = server
+        .client
+        .session()
+        .create(&SessionCreateBody { title: Some("h0-slice".to_owned()), ..Default::default() })
+        .await
+        .expect("valid create passes the middleware");
+    assert!(created.id.starts_with("ses_"));
+    // Resource-first routes keep their 404-before-400 contract: the wrong
+    // payload on a LOC-MW route answers the session 404, NOT a schema 400.
+    let response = support::request(
+        server.addr,
+        "PATCH",
+        "/api/session/ses_H0MISSING",
+        &[("content-type", "application/json")],
+        br#"{"title": 5}"#,
+    )
+    .await
+    .expect("loc-mw control");
+    assert_eq!(response.status, 404, "session resolution precedes payload decode");
+    assert_eq!(response.json()["_tag"], "SessionNotFoundError");
+}

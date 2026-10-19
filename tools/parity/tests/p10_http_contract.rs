@@ -18,12 +18,12 @@
 //! - **(b) error envelope shape on a bad route** — live checks (404
 //!   `SessionNotFoundError` envelope, 404 empty body on an unknown route).
 //! - **(c) request-validation matrix** — table-driven over the pinned
-//!   openapi document (`p10_openapi.rs` shows the pin): the two routes with
-//!   ported schema validation (`POST /api/session` payload,
-//!   `GET /api/session` query — P10-E1/E2, closed) run as real dual-end
-//!   checks; every remaining operation is an explicit `pending` row in the
-//!   matrix (structured gap, surfaced in the artifact — never a silent
-//!   pass).
+//!   openapi document (`p10_openapi.rs` shows the pin): the HTTP-H0
+//!   slice (11 probes over 10 routes — P10-E1/E2 pins + the C4b
+//!   generated-table middleware seam, validate-first routes only) runs
+//!   as real dual-end checks; every remaining operation is an explicit
+//!   `pending` row in the matrix (structured gap, surfaced in the
+//!   artifact — never a silent pass).
 //! - **(d) public SSE event stream presence** — one subscription per side,
 //!   first event must be `server.connected` with a normalized-equal
 //!   payload.
@@ -172,12 +172,63 @@ fn pinned_operations() -> Result<Vec<(String, String)>> {
     Ok(ops)
 }
 
-/// The request-validation matrix rows for the implemented probes (P10-E1/E2,
-/// closed — real dual-end checks).
+/// The request-validation matrix rows for the implemented probes.
+///
+/// Rows 1–2 are the P10-E1/E2 battery pins (closed). Rows 3–10 are the
+/// HTTP-H0 first slice (C4b spike): validate-first routes whose payload
+/// 400s are enforced by the generated-table middleware
+/// (`oc-server/src/request_validation.rs`), with messages byte-pinned
+/// against a live v2.0.24 boot (evidence:
+/// `/tmp/opencode/parity-evidence/HTTP-H0/ref-validation-messages*.json`).
 const VALIDATED_ROUTES: &[(&str, &str, Option<&str>, &str)] = &[
     // (method, path-with-query, invalid body, note)
     ("POST", "/api/session", Some(r#"{"title": 12345}"#), "payload schema reject (P10-E1)"),
     ("GET", "/api/session?limit=notanumber", None, "query schema reject (P10-E2)"),
+    (
+        "POST",
+        "/api/plugin/update",
+        Some(r#"{"targets": "notanarray"}"#),
+        "HTTP-H0 slice: required array type",
+    ),
+    (
+        "POST",
+        "/api/session/ses_P10H0/move",
+        Some(r#"{"directory": 5}"#),
+        "HTTP-H0 slice: required string",
+    ),
+    (
+        "PATCH",
+        "/api/credential/cred_P10H0",
+        Some(r#"{"label": 5}"#),
+        "HTTP-H0 slice: required string",
+    ),
+    ("POST", "/api/websearch", Some(r#"{"query": 5}"#), "HTTP-H0 slice: required string"),
+    ("POST", "/api/shell", Some(r#"{"command": 5}"#), "HTTP-H0 slice: required string"),
+    (
+        "POST",
+        "/api/shell",
+        Some(r#"{"command": "ls", "timeout": -1}"#),
+        "HTTP-H0 slice: integer minimum bound",
+    ),
+    ("POST", "/api/pty", Some(r#"{"command": 5}"#), "HTTP-H0 slice: required string"),
+    ("PUT", "/api/pty/pty_P10H0", Some(r#"{"title": 5}"#), "HTTP-H0 slice: string type"),
+    ("PATCH", "/api/project/prj_P10H0", Some(r#"{"name": 5}"#), "HTTP-H0 slice: string type"),
+];
+
+/// (method, template path) of every operation the probes above check —
+/// concrete probe paths carry path-param VALUES while the pinned document
+/// carries TEMPLATES; this list does the template-side bookkeeping.
+const VALIDATED_TEMPLATE_OPS: &[(&str, &str)] = &[
+    ("POST", "/api/session"),
+    ("GET", "/api/session"),
+    ("POST", "/api/plugin/update"),
+    ("POST", "/api/session/{sessionID}/move"),
+    ("PATCH", "/api/credential/{credentialID}"),
+    ("POST", "/api/websearch"),
+    ("POST", "/api/shell"),
+    ("POST", "/api/pty"),
+    ("PUT", "/api/pty/{ptyID}"),
+    ("PATCH", "/api/project/{projectID}"),
 ];
 
 /// Run one validation probe against one side, normalized like
@@ -464,11 +515,9 @@ async fn run(
             "normalized_response": reference_side,
         }));
     }
-    let validated: Vec<(String, String)> = VALIDATED_ROUTES
+    let validated: Vec<(String, String)> = VALIDATED_TEMPLATE_OPS
         .iter()
-        .map(|(method, path, _, _)| {
-            ((*method).to_owned(), path.split('?').next().unwrap_or(path).to_owned())
-        })
+        .map(|(method, path)| ((*method).to_owned(), (*path).to_owned()))
         .collect();
     let mut pending = 0;
     for (method, path) in &ops {
@@ -483,20 +532,23 @@ async fn run(
         }));
     }
     ensure!(
-        matrix.len() == ops.len(),
-        "[c] matrix rows {} != pinned operations {}",
-        matrix.len(),
+        pending + VALIDATED_TEMPLATE_OPS.len() == ops.len(),
+        "[c] matrix accounting: {pending} pending + {} checked != pinned operations {}",
+        VALIDATED_TEMPLATE_OPS.len(),
         ops.len()
     );
     report["validation_matrix"] = json!({
         "pinned_operations": ops.len(),
         "checked": VALIDATED_ROUTES.len(),
+        "checked_operations": VALIDATED_TEMPLATE_OPS.len(),
         "pending": pending,
         "rows": matrix,
     });
     eprintln!(
-        "[gate1] validation matrix: {}/{} operations checked, {pending} pending (structured gaps)",
+        "[gate1] validation matrix: {} probes covering {}/{} operations, {pending} pending \
+              (structured gaps)",
         VALIDATED_ROUTES.len(),
+        VALIDATED_TEMPLATE_OPS.len(),
         ops.len()
     );
 
