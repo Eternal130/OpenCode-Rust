@@ -1246,5 +1246,56 @@ pub fn mistral_route(transport: SharedTransport) -> Route {
     })
 }
 
+// =============================================================================
+// Provider configuration (port of `providers/mistral.ts` configure)
+// =============================================================================
+
+/// The native Mistral package (the v2 `/v1/chat/completions` deployment).
+pub const NATIVE_PACKAGE: &str = "@opencode/ai/providers/mistral";
+
+/// Mistral provider configuration (port of the `configure` input): the
+/// explicit key over the `MISTRAL_API_KEY` fallback, and an optional base
+/// URL override (auth is optional).
+#[derive(Default)]
+pub struct MistralConfig {
+    pub api_key: Option<crate::route::auth::Secret>,
+    pub base_url: Option<String>,
+}
+
+/// The configured native Mistral route: `POST {base}/chat/completions`
+/// with optional bearer auth (`AuthOptions.bearer(input, "MISTRAL_API_KEY")`,
+/// providers/mistral.ts:32-38). The protocol route itself is auth-free
+/// (mistral-chat.ts `Auth.none`); the provider binding adds the bearer.
+#[must_use]
+pub fn mistral_configured(transport: SharedTransport, config: MistralConfig) -> Route {
+    use crate::route::auth;
+    let auth =
+        auth::or_else(&auth::optional(config.api_key), &auth::config("MISTRAL_API_KEY")).bearer();
+    mistral_route(transport).with(crate::route::RoutePatch {
+        auth: Some(auth),
+        endpoint: Some(crate::route::endpoint::EndpointPatch {
+            base_url: Some(config.base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string())),
+            path: None,
+            query: None,
+        }),
+        ..Default::default()
+    })
+}
+
+/// Map a Mistral package onto its route (the oc-ai half of the facade's
+/// `family_of` selection — the native package runs this protocol).
+/// `None` → not a Mistral package.
+#[must_use]
+pub fn mistral_route_for_package(
+    package: &str,
+    transport: SharedTransport,
+    config: MistralConfig,
+) -> Option<Route> {
+    match package {
+        NATIVE_PACKAGE => Some(mistral_configured(transport, config)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests;
