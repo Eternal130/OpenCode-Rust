@@ -249,7 +249,7 @@ fn flagship_sidebar_renders_plugin_version_and_padded_columns() {
     );
     // The model column starts at the same cell on every row.
     let model_cols: Vec<usize> =
-        agent_rows.iter().map(|row| row.rfind(' ').map(|at| at + 1).unwrap_or(0)).collect();
+        agent_rows.iter().map(|row| row.rfind(' ').map_or(0, |at| at + 1)).collect();
     assert!(
         model_cols.windows(2).all(|pair| pair[0] == pair[1]),
         "the model column aligns: {agent_rows:?}"
