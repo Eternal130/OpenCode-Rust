@@ -74,7 +74,10 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest
+          # Pin to the dev-gate version (0.9.148): older builds silently
+          # ignore profile.default.{env,timeout,overrides[].timeout} —
+          # the hard-timeout backstops and bun kill-switch never applied.
+          tool: cargo-nextest@0.9.148
 
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
@@ -111,7 +114,10 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest
+          # Pin to the dev-gate version (0.9.148): older builds silently
+          # ignore profile.default.{env,timeout,overrides[].timeout} —
+          # the hard-timeout backstops and bun kill-switch never applied.
+          tool: cargo-nextest@0.9.148
 
       - name: Run PTY integration suites (serialized + retries)
         run: cargo nextest run --archive-file archives/nextest-debug.tar.zst --profile pty -E 'test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz) or test(vt_hover) or test(vt_temporal) or binary(pty_daily) or binary(pty_form) or binary(pty_permission)'
@@ -148,7 +154,10 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest
+          # Pin to the dev-gate version (0.9.148): older builds silently
+          # ignore profile.default.{env,timeout,overrides[].timeout} —
+          # the hard-timeout backstops and bun kill-switch never applied.
+          tool: cargo-nextest@0.9.148
 
       - name: Run test suite
         # --retries 2: absorbs the ledger-tracked CI-timing flakes
@@ -181,7 +190,10 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest
+          # Pin to the dev-gate version (0.9.148): older builds silently
+          # ignore profile.default.{env,timeout,overrides[].timeout} —
+          # the hard-timeout backstops and bun kill-switch never applied.
+          tool: cargo-nextest@0.9.148
 
       - name: Frame budget guard (release)
         # CI runners are ~2x slower than the dev box the nominal 40ms
