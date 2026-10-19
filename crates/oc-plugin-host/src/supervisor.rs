@@ -381,7 +381,11 @@ impl Shared {
                 }
                 Some(protocol::response(id, Value::Null))
             }
-            "ui.dialog.register" | "ui.group.rule" | "ui.home.quickaction" => {
+            "ui.dialog.register" | "ui.group.rule" | "ui.home.quickaction"
+            // -- the v2 TUI-plugin slot/router/keymap registrations
+            //    (PLUG-TUI-SLOT): native snapshot entries, answered
+            //    inline like every registration surface.
+            | "ui.slot.claim" | "ui.router.register" | "keymap.layer" => {
                 Some(answer_ui_registration(self, id, method, params))
             }
             "log" => {
@@ -572,6 +576,24 @@ impl Shared {
                         .lock()
                         .expect("ui request queue poisoned")
                         .push_back(UiRequest::NavigateToSession { session_id: session.to_owned() });
+                }
+            }
+            // The plugin-route navigation ask (`ctx.ui.router.navigate(
+            // {type: "plugin", name, data?})`, api.tsx:211-224): the
+            // plugin's registered page becomes the visible screen.
+            "tui.route.plugin" => {
+                if let Some(name) = params.get("name").and_then(Value::as_str) {
+                    self.ui_requests.lock().expect("ui request queue poisoned").push_back(
+                        UiRequest::NavigateToPluginRoute {
+                            plugin_id: params
+                                .get("pluginId")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                            name: name.to_owned(),
+                            data: params.get("data").cloned().filter(|data| !data.is_null()),
+                        },
+                    );
                 }
             }
             "log" => log_guest(params),
@@ -846,6 +868,7 @@ fn answer_ui_runtime(shared: &Shared, id: u64, method: &str, params: &Value) -> 
 /// rules, home quick actions — all native entries in
 /// [`Registrations`] (the snapshot is the TUI's only synchronous
 /// surface; nothing here crosses IPC again).
+#[allow(clippy::too_many_lines)] // one arm per registration surface
 fn answer_ui_registration(shared: &Shared, id: u64, method: &str, params: &Value) -> String {
     let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
     let mut registrations = shared.registrations.write().expect("registrations poisoned");
@@ -902,6 +925,98 @@ fn answer_ui_registration(shared: &Shared, id: u64, method: &str, params: &Value
                 label: label.to_owned(),
                 command: command.to_owned(),
             });
+            protocol::response(id, Value::Null)
+        }
+        // The v2 TUI-plugin slot claim (`ctx.ui.slot`, api.tsx:298-312):
+        // exactly one placement kind + a non-empty target (the guest
+        // already enforces the single-kind rule; the host re-checks —
+        // registration surfaces validate both sides).
+        "ui.slot.claim" => {
+            let kind = params.get("kind").and_then(Value::as_str).unwrap_or_default();
+            let target = params.get("target").and_then(Value::as_str).unwrap_or_default();
+            let key = params.get("key").and_then(Value::as_str).unwrap_or_default();
+            let valid_kind = matches!(kind, "prepend" | "append" | "before" | "after" | "replace");
+            if !valid_kind || target.is_empty() || key.is_empty() {
+                return protocol::error_response(
+                    id,
+                    "ui.slot.claim requires exactly one placement kind and a target",
+                );
+            }
+            registrations.slot_claims.push(crate::registrations::PluginSlotClaim {
+                plugin_id,
+                key: key.to_owned(),
+                kind: kind.to_owned(),
+                target: target.to_owned(),
+            });
+            protocol::response(id, Value::Null)
+        }
+        // The plugin route registration (`ctx.ui.router.register`,
+        // api.tsx:204-212). A duplicate name from ANOTHER plugin is
+        // rejected with the ref's error (`Route already registered`).
+        "ui.router.register" => {
+            let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
+            if name.is_empty() {
+                return protocol::error_response(id, "ui.router.register requires a name");
+            }
+            if let Some(existing) = registrations.routes.get(name) {
+                if existing.plugin_id != plugin_id {
+                    return protocol::error_response(
+                        id,
+                        &format!("Route already registered: {name}"),
+                    );
+                }
+            }
+            registrations.routes.insert(
+                name.to_owned(),
+                crate::registrations::PluginRoute { plugin_id, name: name.to_owned() },
+            );
+            protocol::response(id, Value::Null)
+        }
+        // The keymap layer (`ctx.keymap.layer(factory)`,
+        // api.tsx:179-199): the factory's command definitions land as
+        // native entries (the `run` callbacks stay in the guest).
+        "keymap.layer" => {
+            let Some(commands) = params.get("commands").and_then(Value::as_array) else {
+                return protocol::error_response(id, "keymap.layer requires commands");
+            };
+            for command in commands {
+                let id_field =
+                    command.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let bind =
+                    command.get("bind").and_then(Value::as_str).unwrap_or_default().to_owned();
+                if id_field.is_empty() || bind.is_empty() {
+                    return protocol::error_response(
+                        id,
+                        "keymap.layer commands require an id and a bind",
+                    );
+                }
+                registrations.keymap_commands.push(crate::registrations::PluginKeymapCommand {
+                    plugin_id: plugin_id.clone(),
+                    id: id_field,
+                    title: command
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    group: command
+                        .get("group")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    bind,
+                    palette: command.get("palette").and_then(Value::as_bool).unwrap_or(false),
+                    slash: command
+                        .get("slash")
+                        .and_then(Value::as_str)
+                        .filter(|slash| !slash.is_empty())
+                        .map(str::to_owned),
+                    mode: command
+                        .get("mode")
+                        .and_then(Value::as_str)
+                        .unwrap_or("global")
+                        .to_owned(),
+                });
+            }
             protocol::response(id, Value::Null)
         }
         other => protocol::error_response(id, &format!("unknown ui registration {other:?}")),

@@ -965,6 +965,9 @@ pub struct Store {
     plugin_dialog_source: std::cell::RefCell<Rc<dyn PluginDialogSource>>,
     /// Plugin sidebar sections (one per plugin, latest wins).
     plugin_sections: Signal<Vec<crate::components::sidebar::SidebarSection>>,
+    /// The open plugin route page (PLUG-TUI-SLOT's router surface);
+    /// `None` = no plugin page open.
+    plugin_route: Signal<Option<PluginRoutePage>>,
     /// `session.sidebar` — the config mode (auto/hide) after the
     /// boot merge (cli.json, then the last toggle's persisted value).
     sidebar_mode: Signal<crate::components::sidebar::SidebarMode>,
@@ -1520,6 +1523,25 @@ pub struct McpServerRow {
     pub status: &'static str,
     /// The failed/`needs_auth` error text (`DialogMcp`'s details view).
     pub error: Option<String>,
+}
+
+/// The open plugin route page (PLUG-TUI-SLOT's router surface): the
+/// plugin-registered route the router navigated to
+/// (`ctx.ui.router.navigate({type:"plugin", name})`), with the
+/// materialized content (the guest's render ran through the host's
+/// bounded `route.render`; `rows` empty until it lands).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginRoutePage {
+    pub plugin_id: String,
+    /// The registered route name (`stats`).
+    pub name: String,
+    /// The navigation data (`router.navigate({..., data})`).
+    pub data: Option<serde_json::Value>,
+    /// The materialized page title (the route name until content
+    /// lands).
+    pub title: String,
+    /// The materialized rows.
+    pub rows: Vec<String>,
 }
 
 /// The diff viewer's source (`DIFF_SOURCES`, diff-viewer.tsx:73-78):
@@ -2355,6 +2377,7 @@ struct StoreSignals {
     plugin_commands: Signal<Vec<PluginCommandEntry>>,
     plugin_dialogs: Signal<HashMap<String, PluginDialogContent>>,
     plugin_sections: Signal<Vec<crate::components::sidebar::SidebarSection>>,
+    plugin_route: Signal<Option<PluginRoutePage>>,
     /// `session.sidebar` — the config mode (auto/hide) after the
     /// boot merge (cli.json, then the last toggle's persisted value).
     sidebar_mode: Signal<crate::components::sidebar::SidebarMode>,
@@ -2498,6 +2521,7 @@ impl Store {
             plugin_commands,
             plugin_dialogs,
             plugin_sections,
+            plugin_route,
             sidebar_mode,
             sidebar_open,
             terminal_size,
@@ -2562,6 +2586,7 @@ impl Store {
             plugin_dialogs,
             plugin_dialog_source: std::cell::RefCell::new(Rc::new(NoPluginDialogs)),
             plugin_sections,
+            plugin_route,
             sidebar_mode,
             sidebar_open,
             terminal_size,
@@ -2697,6 +2722,7 @@ impl Store {
             Signal::new(&runtime, std::collections::HashMap::<String, PluginDialogContent>::new());
         let plugin_sections =
             Signal::new(&runtime, Vec::<crate::components::sidebar::SidebarSection>::new());
+        let plugin_route = Signal::new(&runtime, Option::<PluginRoutePage>::None);
         let sidebar_mode =
             Signal::new(&runtime, crate::components::sidebar::SidebarMode::default());
         let sidebar_open = Signal::new(&runtime, false);
@@ -2770,6 +2796,7 @@ impl Store {
                 plugin_commands,
                 plugin_dialogs,
                 plugin_sections,
+                plugin_route,
                 sidebar_mode,
                 sidebar_open,
                 terminal_size,
@@ -6188,6 +6215,10 @@ impl Store {
     // -- route / dialogs / theme / connection --------------------------------
 
     pub fn navigate(&self, route: Route) {
+        // A session/home navigation closes the open plugin route page
+        // (PLUG-TUI-SLOT: the plugin route is replaced exactly like
+        // the ref's router replaces the visible route).
+        self.close_plugin_route();
         // Pointer-registry lifetime (auditA §4.1, finding #2): v2's
         // hit targets are per-render-frame renderables — leaving a
         // route must disarm its recorded rects. `render_session`
@@ -6614,6 +6645,44 @@ impl Store {
     #[must_use]
     pub fn plugin_sidebar_sections(&self) -> Vec<crate::components::sidebar::SidebarSection> {
         self.plugin_sections.get()
+    }
+
+    /// Open (or replace) the plugin route page (PLUG-TUI-SLOT's
+    /// router surface — `ctx.ui.router.navigate({type:"plugin"})`):
+    /// the content materializes next pump through the host's bounded
+    /// `route.render` (the title shows the route name until then).
+    pub fn open_plugin_route(&self, plugin_id: &str, name: &str, data: Option<serde_json::Value>) {
+        self.plugin_route.set(Some(PluginRoutePage {
+            plugin_id: plugin_id.to_owned(),
+            name: name.to_owned(),
+            data,
+            title: name.to_owned(),
+            rows: Vec::new(),
+        }));
+    }
+
+    /// Fill the open page's materialized content (`route.render`'s
+    /// bounded reply). A no-op when no page is open or the route
+    /// changed mid-flight.
+    pub fn set_plugin_route_content(&self, title: &str, rows: Vec<String>) {
+        self.plugin_route.update(|page| {
+            if let Some(page) = page.as_mut() {
+                title.clone_into(&mut page.title);
+                page.rows = rows;
+            }
+        });
+    }
+
+    /// Close the plugin route page (a session/home navigation or the
+    /// page's own back bind).
+    pub fn close_plugin_route(&self) {
+        self.plugin_route.set(None);
+    }
+
+    /// The open plugin route page, when a plugin route is visible.
+    #[must_use]
+    pub fn plugin_route_page(&self) -> Option<PluginRoutePage> {
+        self.plugin_route.get()
     }
 
     // ---------------------------------------------------------------------
