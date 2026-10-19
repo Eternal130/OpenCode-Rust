@@ -3,10 +3,20 @@
 > Orchestrator scratch state for the parity loop (docs/PARITY-LOOP.md).
 > Updated at the end of every iteration. Not a task queue — the ledger is.
 
-- **updated**: 2026-10-19 (iteration 4 COMPLETE — Batch 1B exited incl. regression fix; Batch 2 wave 1 dispatched)
-- **batch**: 2 (CONFIG / AI-PROVIDERS / TUI-DAILY active; C4b WIRE-DETAIL + SURFACES queued wave 2) — iteration 5 in flight
-- **iteration**: 5
-- **baseline**: main @ 8ff3fd4 (1B final + B2 wave-1 claims)
+- **updated**: 2026-10-19 10:55 — **LOOP HALTED AFTER SECOND HOST INCIDENT** (user approval required to resume)
+- **batch**: 2 — wave 1 partially merged (AI-PROVIDERS @993a6c2, TUI-DAILY @72f7f64 + records @6f64391); CONFIG lane interrupted mid-fix (fixer session died in first restart; worktree `.worktrees/lane-config` at ff7180f — INSPECT before reuse); process_safety baseline refresh interrupted twice (home.rs line-drift still unrefreshed — guard will read 3 NEW violations until refreshed)
+
+## INCIDENT LOG (host outages caused by loop activity)
+
+1. **09:12:36** — concurrent gate scopes (10G MemoryMax each) + 4 orphaned ref-TUI bun servers (leaking since ~19h prior from failing cross-TUI runs) exhausted memory → systemd-oomd killed the eternal130 user-session cgroup + system services (caddy dead, docker disrupted, lobehub redis corrupted). User revived manually. Orphans killed (identity-verified precise-PID); hardening applied: dev-gate global flock + MemoryMax 6G + cross-TUI RAII orphan guard (verified on failing path).
+2. **10:46:06** — SECOND systemd-oomd cycle killed the user session again (caddy restarted 10:46:50, gnome/Xorg ~10:45). Occurred during/after a single serialized cross-TUI verification run + guards scan — i.e., even one 6G-capped serialized gate load can push oomd's system-wide pressure logic to sacrifice the desktop session cgroup on this 22G box.
+**Conclusion**: this machine cannot safely host loop test loads while running the user's full service stack under current oomd policy. Resume requires a user decision (see options in halt message).
+
+## Uncommitted/interrupted items (all safe to leave)
+
+- lane-config worktree: partial fixer work (inspect `git log main..lane/config` + status before re-dispatch; fixer session dead)
+- process_safety baseline: needs `--update-baseline` (pure line-drift, verifier-confirmed) — currently reads 3 false NEW
+- loop otherwise fully consistent: 391 ledger rows validate clean; all merges committed; no orphan processes remaining (verified)
 
 ## Batch 1B — EXITED (2026-10-19)
 
