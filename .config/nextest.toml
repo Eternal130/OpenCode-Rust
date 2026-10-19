@@ -23,6 +23,13 @@ set = { OPENCODE_DISABLE_BUN_DOWNLOAD = "1" }
 # CI runners their spawn timing occasionally trips the first attempt.
 # Two retries keeps them in CI without masking real failures (a genuine
 # break fails all three attempts).
+# be1 class: normally green <60s; a CI hang ran 900s+ (WIRE-BE1-FLAKE).
+# 300s hard ceiling for this family converts a hang into a fast failure
+# instead of eating a quarter of the job budget.
+[[profile.default.overrides]]
+filter = 'test(be1_)'
+timeout = "300s"
+
 [[profile.default.overrides]]
 filter = 'test(mini_pty)'
 retries = 2

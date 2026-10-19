@@ -53,29 +53,55 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-  pty-integration:
-    name: nextest (pty, serialized)
+  # ONE compilation for the whole pipeline: nextest archive builds every
+  # test binary once (debug workspace + release oc-tui for frame budget)
+  # and ships them as an artifact; the three test jobs below run from the
+  # archive with ZERO compilation. (Caches could never dedupe the three
+  # concurrent per-job builds: GitHub cache entries are immutable and
+  # same-run writes are invisible to sibling jobs.)
+  build-archive:
+    name: build + archive (single compile)
     runs-on: ubuntu-latest
-    # vt-stream lane note: the cell-grid suites (test(vt_hover) /
-    # test(vt_temporal)) joined this serialized job — 13 band/Temporal
-    # tests ≈ 8 min serialized on top of the existing suites; 40 min
-    # covers worst-case retry storms of the older flake-class suites.
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
       - uses: Swatinem/rust-cache@v2
         with:
-          # One shared cache entry across jobs: dep artifacts compile
-          # once and are reused by every job (per-job default keys made
-          # each lane rebuild the chain independently).
           shared-key: opencode-ci
 
-      # sccache: content-addressed compilation cache shared across ALL
-      # jobs and runs (merges concurrent writers — the immutable
-      # rust-cache entry cannot). Deps compile exactly once, ever; each
-      # job then only compiles its own workspace crates.
       - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Archive workspace test binaries (debug)
+        run: cargo nextest archive --workspace --locked --archive-file /tmp/opencode/nextest-debug.tar.zst
+
+      - name: Archive oc-tui test binaries (release, frame budget)
+        run: cargo nextest archive --release -p oc-tui --locked --archive-file /tmp/opencode/nextest-release.tar.zst
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nextest-archives
+          path: |
+            /tmp/opencode/nextest-debug.tar.zst
+            /tmp/opencode/nextest-release.tar.zst
+          retention-days: 1
+
+  pty-integration:
+    name: nextest (pty, serialized)
+    needs: build-archive
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: nextest-archives
+          path: archives
 
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
@@ -85,30 +111,23 @@ jobs:
           tool: cargo-nextest
 
       - name: Run PTY integration suites (serialized + retries)
-        run: cargo nextest run --workspace --locked --profile pty -E 'test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz) or test(vt_hover) or test(vt_temporal) or binary(pty_daily) or binary(pty_form) or binary(pty_permission)'
+        run: cargo nextest run --archive-file archives/nextest-debug.tar.zst --profile pty -E 'test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz) or test(vt_hover) or test(vt_temporal) or binary(pty_daily) or binary(pty_form) or binary(pty_permission)'
         env:
           # Job-level: CI nextest ignores profile.default.env (see test job note)
           OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
 
   test:
     name: nextest
+    needs: build-archive
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
         with:
-          # One shared cache entry across jobs: dep artifacts compile
-          # once and are reused by every job (per-job default keys made
-          # each lane rebuild the chain independently).
-          shared-key: opencode-ci
-
-      # sccache: content-addressed compilation cache shared across ALL
-      # jobs and runs (merges concurrent writers — the immutable
-      # rust-cache entry cannot). Deps compile exactly once, ever; each
-      # job then only compiles its own workspace crates.
-      - uses: mozilla-actions/sccache-action@v0.0.9
+          name: nextest-archives
+          path: archives
 
       # Tests stage scratch sandboxes under /tmp/opencode (PIDs-unique
       # names). The dev box pre-creates it; runners do not.
@@ -125,39 +144,28 @@ jobs:
         # provider_refresh_engine_boot_loop 10s→30s budget class) while
         # those entries stay open for stabilization. Deterministic
         # failures are NOT masked by retries (both tries must pass).
-        # OPENCODE_DISABLE_BUN_DOWNLOAD duplicated at job level: the CI
-        # nextest build warns "ignoring unknown configuration key:
-        # profile.default.env" (.config/nextest.toml) — the profile env
-        # table does not apply there, so enforce it here.
-        run: cargo nextest run --workspace --locked --no-fail-fast --retries 2 -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz) or test(vt_hover) or test(vt_temporal) or binary(pty_daily) or binary(pty_form) or binary(pty_permission))'
+        # OPENCODE_DISABLE_BUN_DOWNLOAD at job level: the CI nextest
+        # warns "ignoring unknown configuration key: profile.default.env"
+        # (.config/nextest.toml) — the profile env table does not apply
+        # on runners, so enforce it here.
+        run: cargo nextest run --archive-file archives/nextest-debug.tar.zst --no-fail-fast --retries 2 -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz) or test(vt_hover) or test(vt_temporal) or binary(pty_daily) or binary(pty_form) or binary(pty_permission))'
         env:
           OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
 
   # Frame-budget runs RELEASE (the product profile; debug numbers are
-  # informational only). Split into its own job: the release codegen of
-  # the full dep chain (incl. miniaudio-sys/tree-sitter C) is 10-20 min
-  # cold on 2-core runners and used to extend the test job's critical
-  # path serially; parallel here with its own rust-cache (release
-  # artifacts persist per-job → incremental after the first run).
+  # informational only). Runs from the release archive — no compilation.
   frame-budget:
     name: frame budget (release)
+    needs: build-archive
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
         with:
-          # One shared cache entry across jobs: dep artifacts compile
-          # once and are reused by every job (per-job default keys made
-          # each lane rebuild the chain independently).
-          shared-key: opencode-ci
-
-      # sccache: content-addressed compilation cache shared across ALL
-      # jobs and runs (merges concurrent writers — the immutable
-      # rust-cache entry cannot). Deps compile exactly once, ever; each
-      # job then only compiles its own workspace crates.
-      - uses: mozilla-actions/sccache-action@v0.0.9
+          name: nextest-archives
+          path: archives
 
       - uses: taiki-e/install-action@v2
         with:
@@ -168,7 +176,7 @@ jobs:
         # budget is calibrated for (shared 2-core). The scale widens the
         # regression ceiling for slow machines only; local runs stay
         # strict. See frame_budget_tests.rs::frame_budget_ms.
-        run: cargo nextest run --release -p oc-tui --locked -E 'test(frame_budget)'
+        run: cargo nextest run --archive-file archives/nextest-release.tar.zst -E 'test(frame_budget)'
         env:
           OC_FRAME_BUDGET_SCALE: "2"
           OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
