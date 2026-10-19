@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+''''exec python3 -- "$0" "$@" # '''
 r"""Guard `hook_dispatch` (§9.1): registered hook kind, no production dispatch.
 
 WHAT IT CHECKS
@@ -31,7 +32,6 @@ UPDATE BASELINE (`--update-baseline`) only when a hook kind is ported
 (making it live) or deliberately parked with a ledger entry; justify in
 the commit message (README § Updating).
 """
-from __future__ import annotations
 
 import re
 import sys

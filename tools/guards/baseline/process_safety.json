@@ -3,9 +3,9 @@
   "count": 18,
   "violations": [
     "crates/oc-core/src/shell/parse.rs:46:killall",
-    "crates/oc-tui/src/components/home.rs:628:killall",
-    "crates/oc-tui/src/components/home.rs:629:killall",
-    "crates/oc-tui/src/components/home.rs:636:killall",
+    "crates/oc-tui/src/components/home.rs:677:killall",
+    "crates/oc-tui/src/components/home.rs:678:killall",
+    "crates/oc-tui/src/components/home.rs:685:killall",
     "tools/parity/spec-ef2/f7_boot_trace.py:131:killpg",
     "tools/parity/spec-p3/ours_tti_probe.py:70:killpg",
     "tools/parity/spec-p3/ours_tti_probe.py:88:kill-by-name",

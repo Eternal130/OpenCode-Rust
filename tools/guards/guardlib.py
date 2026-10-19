@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+''''exec python3 -- "$0" "$@" # '''
 r"""Shared harness for the §9.1 static guards (docs/PARITY-LOOP.md §9).
 
 Common conventions for every guard in tools/guards/:
@@ -31,7 +32,6 @@ Allowlist pattern matching (no wildcards allowed):
 Stdlib only. Nothing here signals processes, touches the network, or
 requires bun / the reference checkout / cargo.
 """
-from __future__ import annotations
 
 import argparse
 import datetime as _dt

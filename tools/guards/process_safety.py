@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+''''exec python3 -- "$0" "$@" # '''
 r"""Guard `process_safety` (§9.1/§2.1): kill-by-name / bare-PGID / privilege patterns.
 
 WHAT IT CHECKS
@@ -6,23 +7,33 @@ WHAT IT CHECKS
   patterns — the mechanisms that once killed host services by PID reuse
   or name matching:
 
+  NOTE ON WORDING: this docstring deliberately avoids backticks and
+  dollar-parentheses. If someone mistakenly runs this file THROUGH BASH
+  (bash tools/guards/process_safety.py), bash parses the python source as
+  shell — and any backticked example here would EXECUTE FOR REAL as root.
+  That exact mistake soft-rebooted this host twice on 2026-10-19 (the
+  kill-pgrep example line executed literal kill-on-pgrep-results, SIGTERM
+  to PID 1 included). Keep every guard docstring free of command-
+  substitution syntax forever.
+
     rule               pattern
     -----------------  ----------------------------------------------------
-    pkill              any `pkill` invocation (kill-by-name/class, ever)
-    killall            any `killall` invocation
-    fuser              any `fuser` invocation (e.g. `fuser -k 49374/tcp`)
-    killpg             `os.killpg(...)` / `killpg(` (python/C PGID kills)
-    kill-bare-pgid     `kill -9 -<PGID>` / `kill -TERM -<PGID>` / `kill -- -N`
-                       (signal flag followed by a NEGATIVE pid — plain
-                       `kill -9 <pid>` of a concrete pid does NOT match)
-    kill-pgrep-subst   `kill ... $(pgrep ...)` / `` kill `pgrep ...` ``
-    kill-by-name       pkill/killall lines targeting bun|node|cargo|nextest|
-                       python|opencode|oc-server
-    tools-sh-kill      any `kill` in shell scripts under `tools/**` (raw
-                       `$PID`/`$!` shell kills — §2.1 wants Child handles
-                       or signal_group_filtered instead)
-    sudo               `sudo` anywhere outside tools/dev-gate.sh
-    systemd-run        `systemd-run` anywhere outside tools/dev-gate.sh
+    pkill              any pkill invocation (kill-by-name/class, ever)
+    killall            any killall invocation
+    fuser              any fuser invocation (e.g. fuser -k on port 49374)
+    killpg             os.killpg / killpg( (python/C process-group kills)
+    kill-bare-pgid     kill with a NEGATIVE pid argument (bare PGID
+                       signals); plain kill of a concrete positive pid
+                       does NOT match
+    kill-pgrep-subst   kill with a command-substituted pgrep result
+                       (killing a pid list obtained from pgrep)
+    kill-by-name       pkill/killall lines targeting bun, node, cargo,
+                       nextest, python, opencode, oc-server
+    tools-sh-kill      any kill in shell scripts under tools/ (raw
+                       dollar-PID / dollar-bang shell kills — §2.1 wants
+                       Child handles or signal_group_filtered instead)
+    sudo               sudo anywhere outside tools/dev-gate.sh
+    systemd-run        systemd-run anywhere outside tools/dev-gate.sh
                        (dev-gate is the sanctioned scope user, §2.1)
 
   Sanctioned stops (safekill.rs, procutil signal_group_filtered, Child
@@ -52,7 +63,6 @@ UPDATE BASELINE (`--update-baseline`) only with an orchestrator-approved
 justification — for this guard a growing baseline is a red flag, not a
 routine act (README § Updating).
 """
-from __future__ import annotations
 
 import re
 import sys

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+''''exec python3 -- "$0" "$@" # '''
 r"""Guard `event_schema` (§9.1): published event type without schema/round-trip test.
 
 WHAT IT CHECKS
@@ -36,7 +37,6 @@ UPDATE BASELINE (`--update-baseline`) when an event gains tests (shrink)
 or a legitimately new unpinned event is accepted into debt (grow — with
 a ledger entry; README § Updating).
 """
-from __future__ import annotations
 
 import re
 import sys

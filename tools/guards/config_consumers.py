@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+''''exec python3 -- "$0" "$@" # '''
 r"""Guard `config_consumers` (§9.1): schema has a key, code has no read point.
 
 WHAT IT CHECKS
@@ -39,7 +40,6 @@ KNOWN LIMITATIONS (honest scoping)
 UPDATE BASELINE (`--update-baseline`) only when the key set legitimately
 changed (schema port grew); justify in the commit message (README § Updating).
 """
-from __future__ import annotations
 
 import re
 import sys

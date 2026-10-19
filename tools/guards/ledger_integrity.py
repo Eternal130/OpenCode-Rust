@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+''''exec python3 -- "$0" "$@" # '''
 r"""Guard `ledger_integrity` (§9.1): parity-ledger JSONL schema/state/evidence.
 
 WHAT IT CHECKS
@@ -28,7 +29,6 @@ KNOWN LIMITATIONS
 UPDATE BASELINE: do not. A violation here is fixed by fixing the ledger
 row (or the tool), never by baselining.
 """
-from __future__ import annotations
 
 import re
 import subprocess
