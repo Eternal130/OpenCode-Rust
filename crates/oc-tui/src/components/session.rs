@@ -327,6 +327,20 @@ pub fn render_session(
             // index.tsx:233 `config.session.grouping !== "none"`): the
             // toggle the transcript walk consults.
             group_exploration: store.exploration_grouping(),
+            // CONFIG-T3 — the session.* display keys (index.tsx:229-241):
+            // thinking mode, verbosity, tps, markdown source.
+            thinking_mode: if store.session_thinking() {
+                crate::components::message::list::ThinkingMode::Show
+            } else {
+                crate::components::message::list::ThinkingMode::Hide
+            },
+            verbosity: match store.session_verbosity().as_str() {
+                "low" => crate::components::message::list::Verbosity::Low,
+                "high" => crate::components::message::list::Verbosity::High,
+                _ => crate::components::message::list::Verbosity::Medium,
+            },
+            tps_enabled: store.session_tps(),
+            markdown_source: store.session_markdown_source(),
             // #40: the live child-session statuses (the subagent
             // card's running oracle).
             subagent_running: store.subagent_running_map(),
@@ -343,7 +357,6 @@ pub fn render_session(
             revert: store.revert(session_id),
             pending_compactions: store.pending_compactions(session_id),
             redo_key: "R".to_owned(),
-            ..TranscriptOptions::default()
         },
         styles,
         column,
@@ -1300,6 +1313,9 @@ mod tests {
         use crate::data::Ingest;
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
+        // `session.tps` (CONFIG-T3, index.tsx:1892): the tok/s span is
+        // config-gated (default OFF) — arm it for the span assertion.
+        store.set_session_tps(true);
         let mut started = crate::data::BusEvent::new(
             "session.step.started",
             serde_json::json!({

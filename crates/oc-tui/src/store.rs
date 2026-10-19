@@ -964,6 +964,19 @@ pub struct Store {
     /// session ROOTS (newest first) — the recency window beside the
     /// open tabs that keeps `by_session` bounded.
     retention_recent: Signal<Vec<String>>,
+    /// `session.thinking === "show"` (index.tsx:229,229-241 —
+    /// CONFIG-T3): reasoning renders inline instead of the collapsed
+    /// disclosure (default hide).
+    session_thinking: Signal<bool>,
+    /// `session.verbosity` (index.tsx:234): the grouping/expansion
+    /// input (low wraps activity runs, high opens summaries).
+    session_verbosity: Signal<String>,
+    /// `session.tps` (index.tsx:1892): the assistant footer's tok/s
+    /// span (default off).
+    session_tps: Signal<bool>,
+    /// `session.markdown === "source"` (index.tsx:231): raw text parts
+    /// instead of rendered markdown (default rendered).
+    session_markdown_source: Signal<bool>,
     /// Plugin footer hint segments (one per plugin, latest wins).
     plugin_hints: Signal<Vec<(String, String)>>,
     /// Plugin home quick actions (registration-time).
@@ -2235,6 +2248,10 @@ struct StoreSignals {
     permission_autoaccept: Signal<bool>,
     exploration_grouping: Signal<bool>,
     retention_recent: Signal<Vec<String>>,
+    session_thinking: Signal<bool>,
+    session_verbosity: Signal<String>,
+    session_tps: Signal<bool>,
+    session_markdown_source: Signal<bool>,
     plugin_hints: Signal<Vec<(String, String)>>,
     plugin_home_actions: Signal<Vec<crate::components::home::PluginQuickAction>>,
     plugin_group_rules: Signal<crate::components::message::model::GroupRules>,
@@ -2359,6 +2376,10 @@ impl Store {
             permission_autoaccept,
             exploration_grouping,
             retention_recent,
+            session_thinking,
+            session_verbosity,
+            session_tps,
+            session_markdown_source,
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
@@ -2415,6 +2436,10 @@ impl Store {
             permission_autoaccept,
             exploration_grouping,
             retention_recent,
+            session_thinking,
+            session_verbosity,
+            session_tps,
+            session_markdown_source,
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
@@ -2538,6 +2563,10 @@ impl Store {
         let permission_autoaccept = Signal::new(&runtime, false);
         let exploration_grouping = Signal::new(&runtime, true);
         let retention_recent = Signal::new(&runtime, Vec::new());
+        let session_thinking = Signal::new(&runtime, false);
+        let session_verbosity = Signal::new(&runtime, "medium".to_owned());
+        let session_tps = Signal::new(&runtime, false);
+        let session_markdown_source = Signal::new(&runtime, false);
         let plugin_hints = Signal::new(&runtime, Vec::<(String, String)>::new());
         let plugin_home_actions =
             Signal::new(&runtime, Vec::<crate::components::home::PluginQuickAction>::new());
@@ -2594,6 +2623,10 @@ impl Store {
                 permission_autoaccept,
                 exploration_grouping,
                 retention_recent,
+                session_thinking,
+                session_verbosity,
+                session_tps,
+                session_markdown_source,
                 plugin_hints,
                 plugin_home_actions,
                 plugin_group_rules,
@@ -6348,7 +6381,7 @@ impl Store {
     /// the recency window (`viewed !== previous`).
     pub fn enforce_session_retention(&self, current: Option<&str>, navigated: bool) {
         let root_of = |id: &str| self.session_index.borrow().root_of(id);
-        let current_root = current.map(&root_of);
+        let current_root = current.map(|id| root_of(id));
         // `recent` — newest first, roots re-resolved (metadata may
         // have arrived since the last pass).
         let mut recent: Vec<String> = Vec::new();
@@ -6408,6 +6441,64 @@ impl Store {
     /// practice — v2's args are boot-immutable).
     pub fn set_permission_autoaccept(&self, armed: bool) {
         self.permission_autoaccept.set(armed);
+    }
+
+    // -- CONFIG-T3: the session.* display keys' read side -----------
+
+    /// `session.thinking === "show"`.
+    #[must_use]
+    pub fn session_thinking(&self) -> bool {
+        self.session_thinking.get()
+    }
+
+    /// The `session.thinking` key (default hide — the collapsed
+    /// reasoning disclosure; show renders thoughts inline).
+    pub fn set_session_thinking(&self, show: bool) {
+        self.session_thinking.set(show);
+        self.request_redraw();
+    }
+
+    /// The `session.verbosity` level (`low` | `medium` | `high`).
+    #[must_use]
+    pub fn session_verbosity(&self) -> String {
+        self.session_verbosity.get()
+    }
+
+    /// The `session.verbosity` key (low wraps activity runs; high
+    /// opens exploration/instruction summaries).
+    pub fn set_session_verbosity(&self, level: &str) {
+        self.session_verbosity.set(level.to_owned());
+        self.request_redraw();
+    }
+
+    /// `session.tps`.
+    #[must_use]
+    pub fn session_tps(&self) -> bool {
+        self.session_tps.get()
+    }
+
+    /// The `session.tps` key (the assistant footer's tok/s span).
+    pub fn set_session_tps(&self, enabled: bool) {
+        self.session_tps.set(enabled);
+        self.request_redraw();
+    }
+
+    /// `session.markdown === "source"`.
+    #[must_use]
+    pub fn session_markdown_source(&self) -> bool {
+        self.session_markdown_source.get()
+    }
+
+    /// The `session.markdown` key (source renders raw text parts).
+    pub fn set_session_markdown_source(&self, source: bool) {
+        self.session_markdown_source.set(source);
+        self.request_redraw();
+    }
+
+    /// The `session.grouping` key's boot restore (`grouping !== "none"`
+    /// — index.tsx:233; the toggle flips it at runtime).
+    pub fn restore_session_grouping(&self, grouped: bool) {
+        self.exploration_grouping.set(grouped);
     }
 
     /// Whether permission autoaccept is armed (the composer

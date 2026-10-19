@@ -49,7 +49,7 @@ use oc_plugin_host::{BroadcastTap, TapEvent};
 use oc_tui::components::message::model::{Message, Part, PartTime};
 use oc_tui::data::{BusEvent, Ingest, SessionSnapshot};
 use oc_tui::reactive::Runtime;
-use oc_tui::store::{EventTap, Store};
+use oc_tui::store::{EventTap, Route, Store};
 
 // ---------------------------------------------------------------------------
 // The scripted server — commit-ordered frames + the two read surfaces
@@ -221,6 +221,11 @@ impl Harness {
         let (tx, rx) = tokio::sync::mpsc::channel(16_384);
         let tap = BroadcastTap::live(tx);
         let store = Store::new(Runtime::new());
+        // CONFIG-C8: the session-retention effect evicts every listed
+        // root outside tabs/current/recency — the harness models a TUI
+        // VIEWING `SESSION` (the production data layer only fetches
+        // messages for open sessions), so route it like the app would.
+        store.navigate(Route::Session { session_id: SESSION.to_owned() });
         let applied = Arc::new(std::sync::Mutex::new(Vec::new()));
         store.set_event_tap(Arc::new(Pair {
             real: RealTap { tap: tap.clone() },
