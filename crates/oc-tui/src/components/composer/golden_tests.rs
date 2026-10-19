@@ -15,7 +15,7 @@ use parity::tui_frame as pf;
 
 use crate::components::composer::autocomplete::{filter_commands, SlashRegistry};
 use crate::components::composer::render::{AutocompleteView, FooterHints, PromptView};
-use crate::components::composer::{Composer, ComposerKey, FileMention, PromptDraft};
+use crate::components::composer::{Composer, ComposerKey, FileMention, KeyOutcome, PromptDraft};
 use crate::components::composer_solid::render_prompt_frame_dispatch;
 use crate::theme::ThemeState;
 
@@ -216,7 +216,10 @@ fn composer_autocomplete_open_matches_golden() {
 }
 
 /// The autocomplete flow beyond the frame: typing opens, filtering
-/// ranks /redo first, enter accepts the command into the draft.
+/// ranks /redo first, enter RUNS the command (v2 `onSelect:
+/// command.run` for non-argument slashes — `/redo`'s registry entry
+/// now carries `session.redo`, TUI-11) which strips the trigger token
+/// and never inserts.
 #[test]
 fn autocomplete_accept_flow() {
     let mut composer = autocomplete_composer();
@@ -224,8 +227,13 @@ fn autocomplete_accept_flow() {
     let options = filter_commands(&composer.autocomplete.registry, "re");
     assert_eq!(options.first().map(|option| option.display.as_str()), Some("/redo"));
     composer.autocomplete = composer.autocomplete.clone().with_options(options);
-    composer.handle_key(&ComposerKey::Enter);
-    assert_eq!(composer.draft.text, "/redo ");
+    let outcome = composer.handle_key(&ComposerKey::Enter);
+    assert_eq!(
+        outcome,
+        KeyOutcome::Command("session.redo"),
+        "/redo executes the session.redo command (TUI-11)"
+    );
+    assert_eq!(composer.draft.text, "", "hide(true) removed the trigger token");
     assert!(composer.autocomplete.visible.is_none(), "accepted closes the popup");
     // Escape dismisses without inserting.
     let mut dismissed = empty_composer();

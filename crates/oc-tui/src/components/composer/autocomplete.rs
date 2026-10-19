@@ -57,6 +57,7 @@ pub const V2_SLASH: &[(&str, &str)] = &[
     ("agents", "Switch agent"),
     ("cd", "Change working directory"),
     ("clear", "Clear session"),
+    ("compact", "Compact session"),
     ("connect", "Connect an integration"),
     ("continue", "Switch session"),
     ("debug", "View debug info"),
@@ -64,6 +65,7 @@ pub const V2_SLASH: &[(&str, &str)] = &[
     ("editor", "Open editor"),
     ("effort", "Switch model variant"),
     ("exit", "Exit the app"),
+    ("fork", "Fork session"),
     ("help", "Help"),
     ("mcps", "MCP servers"),
     ("models", "Switch model"),
@@ -75,15 +77,20 @@ pub const V2_SLASH: &[(&str, &str)] = &[
     ("projects", "Open session or project"),
     ("q", "Exit the app"),
     ("quit", "Exit the app"),
+    ("redo", "Redo"),
     ("reload", "Reload configuration"),
+    ("rename", "Rename session"),
     ("restart", "Restart service"),
     ("resume", "Switch session"),
     ("sessions", "Switch session"),
     ("settings", "Open settings"),
+    ("share", "Share session"),
     ("skills", "Skills"),
     ("status", "View status"),
     ("themes", "Switch theme"),
     ("thinking", "Switch model variant"),
+    ("timeline", "Jump to message"),
+    ("undo", "Undo previous message"),
     ("update", "Update OpenCode"),
     ("variants", "Switch model variant"),
     ("web", "Pair device"),
@@ -103,6 +110,7 @@ pub const V2_SLASH: &[(&str, &str)] = &[
 pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("agents", "agent.list"),
     ("clear", "session.clear"),
+    ("compact", "session.compact"),
     ("connect", "provider.connect"),
     ("continue", "session.list"),
     ("debug", "opencode.debug"),
@@ -110,6 +118,7 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("editor", "prompt.editor"),
     ("effort", "variant.list"),
     ("exit", "app.exit"),
+    ("fork", "session.fork"),
     ("help", "help.show"),
     ("mcps", "mcp.list"),
     ("models", "model.list"),
@@ -121,20 +130,51 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("projects", "open.menu"),
     ("q", "app.exit"),
     ("quit", "app.exit"),
+    ("redo", "session.redo"),
     ("reload", "location.reload"),
     ("restart", "service.restart"),
     ("resume", "session.list"),
     ("sessions", "session.list"),
     ("settings", "opencode.settings"),
+    ("share", "session.share"),
     ("skills", "prompt.skills"),
     ("status", "opencode.status"),
     ("themes", "theme.switch"),
     ("thinking", "variant.list"),
+    ("timeline", "session.timeline"),
+    ("undo", "session.undo"),
     ("update", "opencode.update"),
     ("variants", "variant.list"),
     ("web", "server.pair"),
     ("worktrees", "session.move"),
 ];
+
+/// The argument-taking slash commands (`slash: { arguments: true }`)
+/// — the popup INSERTS the token (`insertSlash`, autocomplete.tsx:
+/// 481) and the SUBMIT path intercepts the draft instead of sending
+/// it (`argumentSlash`, prompt/index.tsx:173-183 + 1133-1146: head
+/// `/name`, run with the remaining text as `input`). v2's table:
+/// `/cd` (prompt/index.tsx:269) and `/rename`
+/// (routes/session/index.tsx:899).
+pub const ARGUMENT_SLASHES: &[(&str, &str)] = &[("cd", "session.cd"), ("rename", "session.rename")];
+
+/// `argumentSlash(input, keymapCommands())` (prompt/index.tsx:173-
+/// 183): the draft's `/name` head against the argument-taking table.
+/// Returns the dot command and the argument text (`Some("")` when the
+/// head carries NO argument — `/rename` alone still intercepts and
+/// runs with an empty input, matching v2's `head.arguments`).
+#[must_use]
+pub fn argument_slash(text: &str) -> Option<(&'static str, &str)> {
+    let name = text.strip_prefix('/')?;
+    if name.is_empty() {
+        return None;
+    }
+    let (head, args) = match name.find(char::is_whitespace) {
+        Some(at) => (&name[..at], &name[at..]),
+        None => (name, ""),
+    };
+    ARGUMENT_SLASHES.iter().find(|(slash, _)| *slash == head).map(|(_, command)| (*command, args))
+}
 
 impl SlashRegistry {
     /// The full v2 table (sorted by display like `commands()`; the

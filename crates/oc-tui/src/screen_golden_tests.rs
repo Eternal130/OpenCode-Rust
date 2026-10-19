@@ -491,7 +491,11 @@ fn session_slash_palette_matches_text_grid_and_ansi() {
     let grid = frame.text_grid().join("\n");
     assert!(grid.contains("/agents"), "palette rows list commands: {grid}");
     assert!(grid.contains("Switch agent"), "the preview/description column: {grid}");
-    assert!(grid.contains("/exit"), "the full v2 slash table");
+    // TUI-11: the enriched v2 table — the seven session commands ride
+    // the registry (`/compact` sorts early enough for the visible
+    // window; `/exit` slid past it when the table grew).
+    assert!(grid.contains("/compact"), "the full v2 slash table");
+    assert!(grid.contains("Compact session"), "the new rows carry their descriptions");
     assert_text_grid_match("session-slash-palette", 80, &frame);
     assert_ansi_byte_match("session-slash-palette", 80, &frame);
 }

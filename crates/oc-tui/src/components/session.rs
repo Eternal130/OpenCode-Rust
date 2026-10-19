@@ -156,6 +156,66 @@ pub fn paint_live_tabs_bar(
     )
 }
 
+/// TUI-3 — the vertical rail's live mount over the store's tab list
+/// (the `VerticalSessionTabs` walk, `component/session-tabs.tsx:513+`):
+/// per-tab status (unread/busy/attention) like the strip's, the
+/// active tab keyed on the routed session's family ROOT, the home
+/// route's promoted `+ New session` add slot, and the pointer states
+/// (hover / add hover / the compact search + handle highlights).
+#[must_use]
+pub fn paint_live_rail(
+    store: &Store,
+    width: usize,
+    height: usize,
+    styles: &crate::theme::ThemeStyles,
+) -> (Frame, Option<(usize, Frame)>) {
+    let tabs = store.tabs();
+    let permission_live =
+        matches!(store.footer().view, crate::components::footer::FooterView::Permission { .. });
+    let ordered = store.strip_tabs_ordered();
+    let active_id = match store.route() {
+        crate::store::Route::Session { ref session_id } => Some(store.session_root(session_id)),
+        crate::store::Route::Home => None,
+    };
+    let views: Vec<TabView> = ordered
+        .iter()
+        .map(|tab| {
+            let busy = store.session_running(&tab.session_id);
+            let status = TabStatus {
+                unread: tabs.unread.get(&tab.session_id).copied(),
+                busy,
+                attention: (permission_live
+                    && Some(tab.session_id.as_str()) == active_id.as_deref())
+                .then_some(Attention::Permission),
+            };
+            TabView {
+                tab: SessionTab { title: store.display_title(tab), ..tab.clone() },
+                status,
+                // The ref's detail line (`{project} ⎇ {branch}`) needs
+                // the per-session project/vcs registry — the store's
+                // footer location is route-scoped, so the row renders
+                // blank until that lands (follow-up with the
+                // session-route cluster).
+                detail: None,
+            }
+        })
+        .collect();
+    let tooltip =
+        tabs.hover.as_deref().and_then(|id| views.iter().find(|view| view.tab.session_id == id));
+    let inputs = crate::components::session_tabs_rail::RailInputs {
+        tabs: &views,
+        active: active_id.as_deref(),
+        hover: tabs.hover.as_deref(),
+        add_hovered: tabs.add_hovered,
+        search_hovered: store.rail_search_hovered(),
+        home_new_tab: matches!(store.route(), crate::store::Route::Home) && !views.is_empty(),
+        handle_hot: store.rail_handle_hot(),
+        tooltip,
+    };
+    let geometry = crate::components::session_tabs_rail::RailGeometry::new(views.len(), width);
+    crate::components::session_tabs_rail::paint_vertical_rail(&inputs, &geometry, height, styles)
+}
+
 /// Render the session route: the tabs strip, the transcript (lane C's
 /// renderer over the store's messages), and the composer docked at the
 /// bottom with one blank spacing row above it (the session column's
@@ -183,6 +243,15 @@ pub fn render_session(
     let fill =
         Style::new().fg(crate::components::tool_rows::DEFAULT_FOREGROUND).bg(styles.background);
 
+    // TUI-3 — the vertical rail (`app.tsx:1341-1384`): when the
+    // layout is vertical AND the split fits, the rail owns the LEFT
+    // columns at full height, the horizontal strip does NOT render
+    // (`tabsVisible() && !tabsVertical()`), and the whole content
+    // column (transcript, composer, sidebar) reflows to
+    // `width − rail` with every paste/hit origin shifted right.
+    let rail_width = store.vertical_rail_width(width);
+    let shift = rail_width.unwrap_or(0);
+
     // The tabs strip (height 1) leads the column when the tabs config
     // is enabled (v2's session-frame renders the strip behind the
     // same `enabled()` gate); the transcript starts directly under
@@ -190,7 +259,7 @@ pub fn render_session(
     // active pill keys on the routed session's family ROOT
     // (session-tabs.tsx:138 — a child-session route keeps the root's
     // pill active, #45).
-    let show_strip = store.tabs_enabled();
+    let show_strip = store.tabs_enabled() && rail_width.is_none();
     let strip_active = show_strip.then(|| store.session_root(session_id));
     let strip =
         show_strip.then(|| paint_live_tabs_bar(store, strip_active.as_deref(), width, styles));
@@ -200,17 +269,20 @@ pub fn render_session(
     // it on (at narrow widths as a scrim overlay, 385-397), subagent
     // sessions never. Docked (wide), the pane takes 42 columns and
     // the transcript column reflows to `width − 42`
-    // (SESSION_SIDEBAR_WIDTH, ui/layout.ts:1).
-    let sidebar_shown = store.sidebar_shown(session_id, width);
+    // (SESSION_SIDEBAR_WIDTH, ui/layout.ts:1). TUI-3: the auto gate
+    // reads the CONTENT width (v2's `panels.setWidth(total − rail)`,
+    // app.tsx:585).
+    let content_width = width - shift;
+    let sidebar_shown = store.sidebar_shown(session_id, content_width);
     // The session column's padding (v2's prompt mounts inside
     // paddingLeft/Right 2): the composer `┃` and footer paste at x2.
     let inset = 2;
-    let sidebar_docked = sidebar_shown && width > SIDEBAR_AUTO_BREAKPOINT;
+    let sidebar_docked = sidebar_shown && content_width > SIDEBAR_AUTO_BREAKPOINT;
     let sidebar_overlay = sidebar_shown && !sidebar_docked;
     let column = if sidebar_docked {
-        width - crate::components::session_tabs::SESSION_SIDEBAR_WIDTH
+        content_width - crate::components::session_tabs::SESSION_SIDEBAR_WIDTH
     } else {
-        width
+        content_width
     };
 
     // The composer's docked mount (popup rows above it when the
@@ -254,7 +326,7 @@ pub fn render_session(
                     index,
                     session_id: entries[index].session_id.clone(),
                     rect: crate::store::HitRect {
-                        x: 4,
+                        x: 4 + shift,
                         y: top + 3 + index,
                         width: column.saturating_sub(9).max(1),
                         height: 1,
@@ -274,18 +346,16 @@ pub fn render_session(
             None,
         )
     } else {
-        composer_mount_frame(store, session_id, &theme, column - inset, width, height)
+        composer_mount_frame(store, session_id, &theme, column - inset, content_width, height)
     };
     store.set_picker_entry_hits(picker_hits);
     // NEW-S1a: position the terminal cursor at the caret cell while
     // the composer owns the frame (cleared when a dialog overlays —
     // v2 blurs the prompt while any dialog is open). The picker
     // panel unmounts the prompt — no caret while it shows.
-    store.set_caret_cell(
-        caret_screen
-            .filter(|_| store.top_dialog().is_none())
-            .map(|(x, y)| (u16::try_from(x + inset).unwrap_or(0), u16::try_from(y).unwrap_or(0))),
-    );
+    store.set_caret_cell(caret_screen.filter(|_| store.top_dialog().is_none()).map(|(x, y)| {
+        (u16::try_from(x + inset + shift).unwrap_or(0), u16::try_from(y).unwrap_or(0))
+    }));
     // The queued-prompt dock (v2's `QueuedPromptDock`,
     // index.tsx:2312-2342): one row above the composer —
     // `┃ {n} queued · {next}` — while prompts wait in the serial
@@ -526,6 +596,12 @@ pub fn render_session(
                 }
                 hits
             })
+            // TUI-3: the column's pointer surfaces shift with the
+            // vertical rail (the rects are frame-absolute).
+            .map(|mut hit| {
+                hit.x += shift;
+                hit
+            })
             .collect(),
     );
     // The transcript's image placements (R-07) shift under the title
@@ -547,7 +623,7 @@ pub fn render_session(
                 .rows
                 .min(u16::try_from(transcript_height.saturating_sub(top)).unwrap_or(image.rows));
             Some(crate::image::ImagePlacement {
-                x: image.x,
+                x: image.x + u16::try_from(shift).unwrap_or(0),
                 y: u16::try_from(content_top + top).unwrap_or(u16::MAX),
                 id: image.id,
                 data: image.data.clone(),
@@ -574,7 +650,7 @@ pub fn render_session(
         scroll_offset,
     );
     let mut frame = paint_placed_with_fills(&[], &[], size, fill);
-    paste(&mut frame, &region, 0, content_top);
+    paste(&mut frame, &region, shift, content_top);
     // SURF-1: the jump slot's loading state ("Loading session
     // history…", index.tsx:1425-1427) — right-aligned over the slot
     // row while the transcript fetch is in flight and no rows landed
@@ -602,7 +678,7 @@ pub fn render_session(
                 .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
                 .bg(styles.background),
         );
-        paste(&mut frame, &loading, 0, slot_y);
+        paste(&mut frame, &loading, shift, slot_y);
     }
     if let Some(strip) = strip {
         paste(&mut frame, &strip, 0, 0);
@@ -610,9 +686,19 @@ pub fn render_session(
     if let Some(dock) =
         (!queued.is_empty()).then(|| paint_queued_dock(&queued, column - inset, styles))
     {
-        paste(&mut frame, &dock, inset, height - prompt_height - dock_height);
+        paste(&mut frame, &dock, inset + shift, height - prompt_height - dock_height);
     }
-    paste(&mut frame, &mount, mount_x, height - prompt_height);
+    paste(&mut frame, &mount, mount_x + shift, height - prompt_height);
+    // TUI-3: the vertical rail composites over the content column's
+    // left edge (`<Show when={verticalTabsVisible()}>` seats it at
+    // the row's head, app.tsx:1347-1349) — full height, width cols.
+    if let Some(rail) = rail_width {
+        let (pane, tooltip) = paint_live_rail(store, rail, height, styles);
+        paste(&mut frame, &pane, 0, 0);
+        if let Some((row, tip)) = tooltip {
+            paste(&mut frame, &tip, rail, row);
+        }
+    }
     // The sidebar pane mounts under the strip across the frame's full
     // remaining height (session-frame.tsx:325-331 — `flexShrink 0`,
     // width 42): docked at the right edge beside the reflowed
@@ -636,7 +722,7 @@ pub fn render_session(
             scroll,
         );
         let origin_x = if sidebar_docked {
-            column
+            column + shift
         } else {
             width.saturating_sub(crate::components::session_tabs::SESSION_SIDEBAR_WIDTH)
         };
@@ -700,7 +786,7 @@ pub fn render_session(
             rows,
         });
         if sidebar_docked {
-            paste(&mut frame, &pane, column, content_top);
+            paste(&mut frame, &pane, column + shift, content_top);
         } else if sidebar_overlay {
             // The translucent scrim (session-frame.tsx:385-397): v2
             // composites `rgba(0,0,0,70)` OVER the route content, so
@@ -901,9 +987,9 @@ fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarV
     // limit. The mm2 seam (docs/migration-m1-tabstrip.md): the ref's
     // live "Context / N tokens" meter — NOW wired on our side; the
     // rig's A/B mismatch class for it retires with this lane.
-    // `cost` (the ref's `data.session.cost()` — a per-session server
-    // total over the family) has no store source yet: the row waits
-    // for the session-info cost field (seam noted in surf1.log).
+    // `cost` (TUI-13 — the ref's `data.session.cost()`, a per-session
+    // family total fed by `session.usage.updated`) renders through
+    // [`Store::session_cost`] as the `{cost} spent` row.
     let messages = store.messages(session_id);
     let compaction_index = messages
         .iter()
@@ -959,9 +1045,14 @@ fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarV
                         percent(tokens, limit)
                     })
             },
-            cost: None,
+            cost: session_cost_row(store, session_id),
         },
-        None => SidebarContextWidget::default(),
+        // TUI-13: `state() || cost > 0` (context.tsx:24) — a cost-only
+        // session (no assistant usage yet) still renders the section.
+        None => SidebarContextWidget {
+            cost: session_cost_row(store, session_id),
+            ..SidebarContextWidget::default()
+        },
     };
     SidebarView {
         title,
@@ -977,6 +1068,13 @@ fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarV
             && !store.server_lists().connected,
         location: (!store.footer_location().is_empty()).then(|| store.footer_location().clone()),
     }
+}
+
+/// The `{cost} spent` row's value (TUI-13 — `data.session.cost()`
+/// money-formatted, gated `cost > 0` exactly like context.tsx:36-38).
+fn session_cost_row(store: &Store, session_id: &str) -> Option<String> {
+    let cost = store.session_cost(session_id);
+    (cost > 0.0).then(|| crate::components::sidebar::format_usd(cost))
 }
 
 /// The queued-prompt dock row (`QueuedPromptDock`,
@@ -1223,43 +1321,59 @@ pub fn composer_metadata(
 /// limit — `18 (0%)`; `None` until a turn completed.
 fn composer_usage(store: &Store, session_id: &str) -> String {
     let messages = store.messages(session_id);
-    let Some(crate::components::message::model::Message::Assistant { model, usage_total, .. }) =
-        messages.iter().rev().find(|message| {
-            matches!(message, crate::components::message::model::Message::Assistant { .. })
-        })
-    else {
-        return String::new();
+    let usage = messages.iter().rev().find_map(|message| match message {
+        crate::components::message::model::Message::Assistant { model, usage_total, .. } => {
+            Some((model, usage_total))
+        }
+        _ => None,
+    });
+    let context = 'context: {
+        let Some((model, usage_total)) = usage else { break 'context String::new() };
+        let Some(total) = usage_total else { break 'context String::new() };
+        if *total == 0 {
+            break 'context String::new();
+        }
+        let percent = store
+            .server_lists()
+            .models
+            .rows()
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|row| format!("{}/{}", row.provider_id, row.id) == *model)
+                    .and_then(|row| row.context_limit)
+            })
+            .filter(|limit| *limit > 0)
+            .map(|limit| {
+                // Integer floor percent — `18 (0%)`: sub-1% reads 0, the
+                // ref's Math.round only differs at a .5 boundary.
+                total.saturating_mul(100) / u64::try_from(limit).unwrap_or(u64::MAX)
+            });
+        #[allow(clippy::cast_precision_loss)]
+        let number = if *total >= 1_000_000 {
+            format!("{:.1}M", *total as f64 / 1_000_000.0)
+        } else if *total >= 1_000 {
+            format!("{:.1}K", *total as f64 / 1_000.0)
+        } else {
+            total.to_string()
+        };
+        match percent {
+            Some(percent) => format!("{number} ({percent}%)"),
+            None => number,
+        }
     };
-    let Some(total) = usage_total else { return String::new() };
-    if *total == 0 {
-        return String::new();
-    }
-    let percent = store
-        .server_lists()
-        .models
-        .rows()
-        .and_then(|rows| {
-            rows.iter()
-                .find(|row| format!("{}/{}", row.provider_id, row.id) == *model)
-                .and_then(|row| row.context_limit)
-        })
-        .filter(|limit| *limit > 0)
-        .map(|limit| {
-            // Integer floor percent — `18 (0%)`: sub-1% reads 0, the
-            // ref's Math.round only differs at a .5 boundary.
-            total.saturating_mul(100) / u64::try_from(limit).unwrap_or(u64::MAX)
-        });
-    #[allow(clippy::cast_precision_loss)]
-    let number = if *total >= 1_000_000 {
-        format!("{:.1}M", *total as f64 / 1_000_000.0)
-    } else if *total >= 1_000 {
-        format!("{:.1}K", *total as f64 / 1_000.0)
+    // TUI-13 — `PromptFooter`'s status block (footer.tsx:41-47):
+    // `[contextUsage?, cost > 0 ? money : undefined].join(" · ")` —
+    // a cost-only session still takes the usage arm.
+    let cost = store.session_cost(session_id);
+    if cost > 0.0 {
+        let money = crate::components::sidebar::format_usd(cost);
+        if context.is_empty() {
+            money
+        } else {
+            format!("{context} · {money}")
+        }
     } else {
-        total.to_string()
-    };
-    match percent {
-        Some(percent) => format!("{number} ({percent}%)"),
-        None => number,
+        context
     }
 }
 

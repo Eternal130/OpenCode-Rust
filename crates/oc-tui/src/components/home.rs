@@ -347,6 +347,7 @@ pub(crate) fn paste(target: &mut Frame, region: &Frame, x: usize, y: usize) {
 /// 0) and the crate version in the footer slot. The location label is
 /// the pump's seam (unset until the server wires it — the footer then
 /// renders the label muted like the session route).
+#[allow(clippy::too_many_lines)] // the route assembly grew the TUI-3 rail composite
 #[must_use]
 pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16, u16)) -> Frame {
     let state = store.theme();
@@ -435,8 +436,20 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
     // render the sub-frame at height-1, prepend the strip row, then
     // set the caret cell shifted by the strip's one row.
     let tabs = store.tabs();
-    let strip_shows = store.tabs_enabled() && !tabs.tabs.is_empty() && usize::from(size.1) > 1;
-    let sub_size = (size.0, if strip_shows { size.1 - 1 } else { size.1 });
+    // TUI-3 — the vertical rail replaces the strip row on the home
+    // route too (`tabsAvailable()` gates the rail on tabs.length > 0,
+    // app.tsx:576-579 + 1347-1349): the content sub-frame reflows to
+    // `width − rail` and the rail composites at the left edge.
+    let rail_width = store.vertical_rail_width(usize::from(size.0));
+    let strip_shows = store.tabs_enabled()
+        && rail_width.is_none()
+        && !tabs.tabs.is_empty()
+        && usize::from(size.1) > 1;
+    let rail_shift = rail_width.unwrap_or(0);
+    let sub_size = (
+        size.0.saturating_sub(u16::try_from(rail_shift).unwrap_or(0)),
+        if strip_shows { size.1 - 1 } else { size.1 },
+    );
     let (mut frame, caret_screen) = render_home_view(&view, &state, sub_size);
     // Lane KM (auditA #10): the footer chips' hit rects (absolute
     // cells — the strip's one-row shift applies like the caret's).
@@ -453,8 +466,8 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
     };
     store.set_home_footer_chip_hits(if plan.show_footer {
         Some(crate::store::FooterChipHits {
-            mcp: chip(plan.mcp_chip),
-            plugins: chip(plan.plugins_chip),
+            mcp: chip(plan.mcp_chip.map(|(x, width)| (x + rail_shift, width))),
+            plugins: chip(plan.plugins_chip.map(|(x, width)| (x + rail_shift, width))),
         })
     } else {
         None
@@ -470,9 +483,45 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         cells.truncate(height);
         frame = Frame { cells, width, height };
     }
+    if let Some(rail) = rail_width {
+        // TUI-3: composite the rail at the left edge, shifting the
+        // home content right (the sub-frame rendered at
+        // `width − rail` above).
+        let (width, height) = (usize::from(size.0), usize::from(size.1));
+        let (pane, tooltip) =
+            crate::components::session::paint_live_rail(store, rail, height, &state.styles());
+        let mut cells = Vec::with_capacity(height);
+        for row in 0..height {
+            let mut line = pane.cells.get(row).cloned().unwrap_or_default();
+            if line.len() < rail {
+                line.resize(rail, crate::render::Cell::default());
+            }
+            if let Some(content) = frame.cells.get(row) {
+                line.extend_from_slice(&content[..content.len().min(width.saturating_sub(rail))]);
+            }
+            line.resize(width, crate::render::Cell::default());
+            cells.push(line);
+        }
+        frame = Frame { cells, width, height };
+        if let Some((row, tip)) = tooltip {
+            let mut pasted = frame.clone();
+            for (offset, tip_row) in tip.cells.iter().enumerate() {
+                let at = row + offset;
+                if at >= height {
+                    break;
+                }
+                for (index, cell) in tip_row.iter().enumerate() {
+                    if rail + index < width {
+                        pasted.cells[at][rail + index] = *cell;
+                    }
+                }
+            }
+            frame = pasted;
+        }
+    }
     store.set_caret_cell(caret_screen.map(|(x, y)| {
         let y = y + usize::from(strip_shows);
-        (u16::try_from(x).unwrap_or(0), u16::try_from(y).unwrap_or(0))
+        (u16::try_from(x + rail_shift).unwrap_or(0), u16::try_from(y).unwrap_or(0))
     }));
     frame
 }
