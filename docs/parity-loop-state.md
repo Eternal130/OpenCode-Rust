@@ -3,8 +3,20 @@
 > Orchestrator scratch state for the parity loop (docs/PARITY-LOOP.md).
 > Updated at the end of every iteration. Not a task queue — the ledger is.
 
-- **updated**: 2026-10-19 10:55 — **LOOP HALTED AFTER SECOND HOST INCIDENT** (user approval required to resume)
-- **batch**: 2 — wave 1 partially merged (AI-PROVIDERS @993a6c2, TUI-DAILY @72f7f64 + records @6f64391); CONFIG lane interrupted mid-fix (fixer session died in first restart; worktree `.worktrees/lane-config` at ff7180f — INSPECT before reuse); process_safety baseline refresh interrupted twice (home.rs line-drift still unrefreshed — guard will read 3 NEW violations until refreshed)
+- **updated**: 2026-10-19 11:1x — **LOOP RESUMED** (user approval; root-cause fixed @18cfee2)
+- **batch**: 2 — wave 2 in flight (3 lanes); wave-1 remains: CONFIG continuation
+- **iteration**: 6
+- **baseline**: main @ cfac11e
+
+## Active lanes (Batch 2 wave 2)
+
+| lane | cluster | worktree | branch | owner | entries | status |
+|---|---|---|---|---|---|---|
+| lane-config | C5 CONFIG (continuation) | `.worktrees/lane-config` | `lane/config` | fixer (bg) | C7,C8,C1,T1,T3 (5 committed by dead session) + T4 WIP | finishing |
+| lane-ai-prov2 | C7b slice 2 | `.worktrees/lane-ai-prov2` | `lane/ai-providers-2` | fixer (bg) | AI-COPILOT-C1, AI-COPILOT-C2, AI-COHERE-MISTRAL | dispatched |
+| lane-h0spike | C4b H0 spike+slice | `.worktrees/lane-h0spike` | `lane/h0-spike` | fixer (bg) | HTTP-H0 (spike + 10 routes; oracle review after) | dispatched |
+
+Queued wave 3: C6b session-route (TD-01/02/03/05/07), C9a SURFACES, C7b remainder (M2-M5), C5a keys-env remainder.
 
 ## INCIDENT LOG — ROOT CAUSE CORRECTED (2026-10-19 11:0x)
 
