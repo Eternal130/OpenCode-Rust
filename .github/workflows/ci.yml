@@ -76,6 +76,9 @@ jobs:
         with:
           tool: cargo-nextest
 
+      - name: Prepare scratch dir
+        run: mkdir -p /tmp/opencode
+
       - name: Archive workspace test binaries (debug)
         run: cargo nextest archive --workspace --locked --archive-file /tmp/opencode/nextest-debug.tar.zst
 
