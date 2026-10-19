@@ -33,6 +33,16 @@ Queued wave 3: C6b session-route (TD-01/02/03/05/07), C9a SURFACES, C7b remainde
 - 本地靶测：oc-server 3/3（all_routes/resized_checkpoint/cursor）、parity golden_corpus 1/1、oc-tui missing_slashes 1/1。
 - auditd execve 审计已启用（root+eternal130 双 key）。
 
+## 2026-10-19 CI 流水线战役（收尾：e779e74 全六 job 绿）
+
+终态架构：guards/lint 并行 + build job 单次编译（debug, debuginfo=0, ~8.5 分钟, sccache+shared rust-cache）→ target 目录 artifact → 三个消费 job（test 11.6 分 / pty 19.6 分 / frame debug 校准 7 分）零重编并行。关键教训（全部踩过）：
+1. 归档模式与 env!(CARGO_BIN_EXE_*) 编译期烘焙绝对路径不兼容（target 同路径还原才是零改动方案）；
+2. 同 run 并发 job 无法共享缓存写入（GH cache 不可变）；跨 run 用 sccache，但 10GB 配额互相驱逐 + 取消的 job 跳过 post 保存；
+3. release 全链（20 分钟级）不配留在 per-push 路径（frame_budget 改 debug 档位 4）；
+4. nextest 无 profile env/timeout 键（0.9.148 源码级核实）；硬超时 = slow-timeout{period, terminate-after}；
+5. 插件测试依赖 bun：setup-bun 1.3.10（self-download 一直被静默忽略）；
+6. 高频推送 + 慢步骤 + 取消服务失同步 = 僵尸堆积；解法=单周期单推 + 删除幽灵 run 记录清并发组账本。
+
 ## CI 推送纪律（2026-10-19 僵尸 run 事故后追加）
 
 - **CI 基础设施调试期间：一个验证周期只推一次**。上一次推送的 run 未到终态前，不推下一个迭代（改动先攒在本地提交里）。
