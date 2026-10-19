@@ -2076,19 +2076,26 @@ impl CommandDispatcher for StoreDispatcher {
                 let _ = store.tab_history_forward();
                 Dispatch::Handled
             }
-            // `queued_prompt.undo` (index.tsx:653 + mini/footer.command.
-            // tsx:979): removes the LAST queued prompt of the route's
-            // session (v2 toasts on a miss).
+            // `queued_prompt.undo` (TUI-TD07, index.tsx:653-673): the
+            // LAST queued prompt cancels server-side
+            // (`session.inbox.cancel`) and its payload refills the
+            // composer (`appendPrompt` — text + files appended; v2
+            // toasts on a miss).
             "queued_prompt.undo" => {
                 let Route::Session { session_id } = store.route() else {
                     return Dispatch::Handled;
                 };
-                if !store.undo_queued_prompt(&session_id) {
-                    store.toast_show(crate::components::toast::ToastOptions {
-                        message: "No queued prompt to undo".to_owned(),
-                        variant: "error",
-                        ..crate::components::toast::ToastOptions::info("")
-                    });
+                match store.undo_queued_prompt(&session_id) {
+                    Some(payload) => {
+                        append_prompt_payload(store, &session_id, &payload);
+                    }
+                    None => {
+                        store.toast_show(crate::components::toast::ToastOptions {
+                            message: "No queued prompt to undo".to_owned(),
+                            variant: "error",
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    }
                 }
                 Dispatch::Handled
             }
@@ -2220,6 +2227,54 @@ impl CommandDispatcher for StoreDispatcher {
                     Route::Home => Dispatch::Handled,
                 }
             }
+            // -- TUI-TD02: message navigation (index.tsx:1101-1128 +
+            // message-navigation.ts). The five registered-but-dead
+            // commands now dispatch: next/previous (+ the user-only
+            // pair) stage the boundary walk; alt+end jumps to the
+            // last user message.
+            "session.message.next" => {
+                if let Route::Session { session_id } = store.route() {
+                    store.navigate_message(&session_id, crate::store::NavDirection::Next, false);
+                }
+                Dispatch::Handled
+            }
+            "session.message.previous" => {
+                if let Route::Session { session_id } = store.route() {
+                    store.navigate_message(
+                        &session_id,
+                        crate::store::NavDirection::Previous,
+                        false,
+                    );
+                }
+                Dispatch::Handled
+            }
+            "session.message.user.next" => {
+                if let Route::Session { session_id } = store.route() {
+                    store.navigate_message(&session_id, crate::store::NavDirection::Next, true);
+                }
+                Dispatch::Handled
+            }
+            "session.message.user.previous" => {
+                if let Route::Session { session_id } = store.route() {
+                    store.navigate_message(&session_id, crate::store::NavDirection::Previous, true);
+                }
+                Dispatch::Handled
+            }
+            "session.messages_last_user" => {
+                if let Route::Session { session_id } = store.route() {
+                    store.navigate_last_user(&session_id);
+                }
+                Dispatch::Handled
+            }
+            // -- TUI-TD03: the up-route (index.tsx:1272-1288): `up` in a
+            // child session navigates to the parent (the registry's
+            // `parentID` link; a root session no-ops).
+            "session.parent" => {
+                if let Route::Session { session_id } = store.route() {
+                    store.navigate_parent(&session_id);
+                }
+                Dispatch::Handled
+            }
             // Wave A: the 2-press escape interrupt
             // (prompt/index.tsx:500-529) — the sink POSTs
             // `session.interrupt { resume: true }`.
@@ -2349,6 +2404,45 @@ fn inherit_selection_onto_home(store: &Store) {
     if let Some(agent) = selection.agent {
         store.stage_agent(crate::app::HOME_PROMPT_KEY, &agent);
     }
+}
+
+/// TUI-TD07 — `appendPrompt` (prompt/history.tsx:33-58) over a queued
+/// payload: the undo's composer refill — the text appends after a
+/// blank-line separator, the file payloads stage as attachment chips
+/// (`{...projectedPromptInput(payload), pasted: []}`,
+/// index.tsx:662-668).
+pub fn append_prompt_payload(store: &Store, session_id: &str, payload: &crate::store::InboxItem) {
+    use crate::components::composer::attachment::prompt_attachment_label;
+    use crate::components::composer::{AttachmentPayload, FileMention, PromptDraft};
+    let mut composer = store.composer(session_id);
+    let agents = std::mem::take(&mut composer.draft.agents);
+    let mut files = std::mem::take(&mut composer.draft.files);
+    let mut text = if composer.draft.text.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n\n", composer.draft.text)
+    };
+    for uri in &payload.files {
+        let Some(attachment) = AttachmentPayload::from_data_uri(uri) else { continue };
+        let label = prompt_attachment_label(&files, &Some(attachment.clone()), None);
+        if !text.is_empty() && !text.ends_with(' ') {
+            text.push(' ');
+        }
+        let start = text.chars().count();
+        text.push_str(&label);
+        let end = start + label.chars().count();
+        text.push(' ');
+        files.push(FileMention {
+            name: "file".to_owned(),
+            start,
+            end,
+            payload: Some(attachment),
+            mention: Some(label),
+        });
+    }
+    text.push_str(&payload.text);
+    composer.draft = PromptDraft { text, files, agents };
+    store.set_composer(session_id, &composer);
 }
 
 /// Execute a submitted palette/theme selection: the suggested-section
@@ -2810,6 +2904,7 @@ mod tests {
             ],
             unread: Vec::new(),
             messages: Vec::new(),
+            cursors: Vec::new(),
             permissions: Vec::new(),
             forms: Vec::new(),
         }]);

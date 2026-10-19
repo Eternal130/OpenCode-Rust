@@ -230,6 +230,7 @@ mod tests {
             ],
             unread: Vec::new(),
             messages: Vec::new(),
+            cursors: Vec::new(),
             permissions: Vec::new(),
             forms: Vec::new(),
         }]);

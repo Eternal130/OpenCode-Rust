@@ -1088,11 +1088,36 @@ pub struct Store {
     /// [`FollowState`]); the render pass records the metrics.
     scroll: std::cell::RefCell<HashMap<String, ScrollDriver>>,
     transcript_metrics: std::cell::RefCell<HashMap<String, TranscriptMetrics>>,
-    /// The queued-prompt store (Wave A) + the interrupt-arm state +
-    /// the model ring — reactive so the dock/hints re-render.
-    queue: Signal<QueueState>,
+    /// The interrupt-arm state + the model ring — reactive so the
+    /// dock/hints re-render.
     interrupts: Signal<HashMap<String, InterruptArm>>,
     model_ring: Signal<ModelRing>,
+    /// TUI-TD07 — the server inbox mirror (`store.session.pending`,
+    /// client/solid/data.ts:117): user-type items keyed by inbox id;
+    /// the queued prompts + pending-steer markers derive from it.
+    pending_inbox: Signal<HashMap<String, Vec<InboxItem>>>,
+    /// TUI-TD07 — the inbox mutation API seam
+    /// (`session.inbox.update` PATCH / `session.inbox.cancel` DELETE).
+    inbox_sink: std::cell::RefCell<Rc<dyn InboxSink>>,
+    /// TUI-TD05 — the older-history load seam (`loadMore`).
+    transcript_sink: std::cell::RefCell<Rc<dyn TranscriptSink>>,
+    /// TUI-TD05 — per-session `messageCursor` (`cursor.next` after
+    /// the tail page; `Some` ⇒ `more()`; absent ⇒ never paged).
+    message_cursors: std::cell::RefCell<HashMap<String, Option<String>>>,
+    /// TUI-TD05 — the per-session mount window pins
+    /// (`hiddenRows()` / `visibleRowsEnd()`).
+    mount_windows:
+        std::cell::RefCell<HashMap<String, crate::components::message::list::MountWindow>>,
+    /// TUI-TD02 — the transcript's per-message row geometry from the
+    /// last render pass (`anchors.messagePositions()`' input).
+    message_positions: std::cell::RefCell<HashMap<String, Vec<MessagePosition>>>,
+    /// TUI-TD02 — the navigation target (`navigationMessage()`) per
+    /// session: the message the nav commands last aligned to.
+    navigation_message: Signal<HashMap<String, String>>,
+    /// TUI-TD02 — the pending navigation intent (the two-phase
+    /// `ensureAllRows` walk: full mount first, resolve after the next
+    /// render records fresh positions).
+    pending_navigation: std::cell::RefCell<HashMap<String, PendingNavigation>>,
     /// The composer's subagent picker (#44): v2's `composer` store
     /// (routes/session/index.tsx:217-220) + the Subagents tab's
     /// memory-scoped filter and selection (subagents-tab.tsx:35-37).
@@ -2130,35 +2155,105 @@ pub struct DialogButtonHit {
     pub rect: HitRect,
 }
 
-/// One queued prompt (`session.inbox` row with `delivery: "queue"`,
-/// the local serial-queue model lifted from mini/queue.rs — see
-/// `QueueState`).
+/// One queued prompt (`session.inbox` row with `delivery: "queue"` —
+/// TUI-TD07: the server pending inbox mirror's queue items).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedPrompt {
     pub id: String,
     pub text: String,
 }
 
-/// The queued-prompt state per session (mini/queue.rs's serial queue
-/// lifted into the MAIN store, Wave A): prompts submitted with
-/// `<leader>return` while a turn is ACTIVE wait here; the drain loop
-/// delivers the head through the prompt sink when the session goes
-/// idle; an empty-enter STEERS the head immediately (v2's
-/// `onEmptySubmit` → `mutatePending("steer", …)`,
-/// routes/session/index.tsx:1504-1508).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct QueueState {
-    pub by_session: HashMap<String, Vec<QueuedPrompt>>,
-    /// The serial drain's in-flight marker (the head being delivered).
-    pub delivering: Option<(String, String)>,
+/// TUI-TD07 — one user-type item of the server's pending inbox
+/// (`SessionInboxInfo`, client/solid/data.ts:117's
+/// `store.session.pending`): the TUI's queue + pending-steer markers
+/// derive from this registry (index.tsx:210-215).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboxItem {
+    /// The inbox id (the prompt POST's minted id; the SSE echo keys
+    /// every later mutation).
+    pub id: String,
+    /// `delivery` — "queue" | "steer".
+    pub delivery: String,
+    /// `payload.text`.
+    pub text: String,
+    /// `payload.files` (resolved attachments) — the undo refill's
+    /// composer payload (data-URI strings).
+    pub files: Vec<String>,
 }
 
-impl QueueState {
-    /// The queued prompts of one session.
-    #[must_use]
-    pub fn queue_of(&self, session_id: &str) -> &[QueuedPrompt] {
-        self.by_session.get(session_id).map_or(&[], Vec::as_slice)
+/// TUI-TD07 — the inbox mutation API seam (v2's [`mutatePending`],
+/// index.tsx:605-623): [`update`] `PATCHes` the delivery (steer/queue),
+/// `cancel` DELETEs the row. Tests record; production POSTs.
+pub trait InboxSink {
+    /// `session.inbox.update {delivery}` (PATCH).
+    fn update(&self, session_id: &str, inbox_id: &str, delivery: &str);
+    /// `session.inbox.cancel` (DELETE).
+    fn cancel(&self, session_id: &str, inbox_id: &str);
+}
+
+/// The default recording sink (tests assert against its log).
+#[derive(Debug, Default)]
+pub struct RecordingInboxSink {
+    pub calls: std::cell::RefCell<Vec<String>>,
+}
+
+impl InboxSink for RecordingInboxSink {
+    fn update(&self, session_id: &str, inbox_id: &str, delivery: &str) {
+        self.calls.borrow_mut().push(format!("update {session_id} {inbox_id} {delivery}"));
     }
+
+    fn cancel(&self, session_id: &str, inbox_id: &str) {
+        self.calls.borrow_mut().push(format!("cancel {session_id} {inbox_id}"));
+    }
+}
+
+/// TUI-TD05 — the older-history load seam (`data.session.message.
+/// loadMore`, client/solid/data.ts:1673+): one page, or `all` pages
+/// (`session.first`'s jump-through-history).
+pub trait TranscriptSink {
+    fn load_older(&self, session_id: &str, cursor: &str, all: bool);
+}
+
+/// The default recording sink (tests assert the request log).
+#[derive(Debug, Default)]
+pub struct RecordingTranscriptSink {
+    pub calls: std::cell::RefCell<Vec<String>>,
+}
+
+impl TranscriptSink for RecordingTranscriptSink {
+    fn load_older(&self, session_id: &str, cursor: &str, all: bool) {
+        self.calls
+            .borrow_mut()
+            .push(format!("load_older {session_id} {cursor} {}", if all { "all" } else { "page" }));
+    }
+}
+
+/// TUI-TD02 — one message's row geometry in the last render pass
+/// (`anchors.messagePositions()`' child: id + y).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessagePosition {
+    pub id: String,
+    /// The row's content y (the nav walk's boundary coordinate).
+    pub y: usize,
+}
+
+/// TUI-TD02 — the queued two-phase navigation intent (v2's
+/// `ensureAllRows(continuation)` — mount everything, then walk).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingNavigation {
+    /// `scrollToMessage(direction, userOnly)` after the full mount.
+    Step { forward: bool, user_only: bool },
+    /// `jumpToMessage(id)` after the full mount
+    /// (`session.messages_last_user`).
+    Jump { id: String },
+}
+
+/// The direction of one message-navigation step (`findMessageBoundary`'s
+/// `direction`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavDirection {
+    Next,
+    Previous,
 }
 
 /// The interrupt-arm state (v2's 2-press machine,
@@ -2229,6 +2324,9 @@ pub struct TranscriptMetrics {
     pub viewport: usize,
     /// The transcript's full content height.
     pub content_height: usize,
+    /// TUI-TD05 — the FULL row count of the last render (pre-window;
+    /// the mount budget + reveal walk's entry count).
+    pub rows: usize,
 }
 
 /// The store's root signals (one struct so [`Store::build`] stays
@@ -2280,9 +2378,10 @@ struct StoreSignals {
     plugin_hints: Signal<Vec<(String, String)>>,
     plugin_home_actions: Signal<Vec<crate::components::home::PluginQuickAction>>,
     plugin_group_rules: Signal<crate::components::message::model::GroupRules>,
-    queue: Signal<QueueState>,
     interrupts: Signal<HashMap<String, InterruptArm>>,
     model_ring: Signal<ModelRing>,
+    pending_inbox: Signal<HashMap<String, Vec<InboxItem>>>,
+    navigation_message: Signal<HashMap<String, String>>,
     picker: Signal<PickerState>,
     reverts: Signal<HashMap<String, RevertState>>,
     integration_list: Signal<IntegrationListState>,
@@ -2348,7 +2447,6 @@ impl Store {
                 watchers.plugin_hints.get(),
                 watchers.plugin_home_actions.get(),
                 watchers.plugin_group_rules.get(),
-                watchers.queue.get(),
                 watchers.interrupts.get(),
                 watchers.model_ring.get(),
                 watchers.reverts.get(),
@@ -2414,9 +2512,10 @@ impl Store {
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
-            queue,
             interrupts,
             model_ring,
+            pending_inbox,
+            navigation_message,
             picker,
             reverts,
             integration_list,
@@ -2519,9 +2618,16 @@ impl Store {
             location_hovered: std::cell::Cell::new(false),
             scroll: std::cell::RefCell::new(HashMap::new()),
             transcript_metrics: std::cell::RefCell::new(HashMap::new()),
-            queue,
             interrupts,
             model_ring,
+            pending_inbox,
+            inbox_sink: std::cell::RefCell::new(Rc::new(RecordingInboxSink::default())),
+            transcript_sink: std::cell::RefCell::new(Rc::new(RecordingTranscriptSink::default())),
+            message_cursors: std::cell::RefCell::new(HashMap::new()),
+            mount_windows: std::cell::RefCell::new(HashMap::new()),
+            message_positions: std::cell::RefCell::new(HashMap::new()),
+            navigation_message,
+            pending_navigation: std::cell::RefCell::new(HashMap::new()),
             picker,
             reverts,
             integration_list,
@@ -2608,9 +2714,10 @@ impl Store {
             Signal::new(&runtime, Vec::<crate::components::home::PluginQuickAction>::new());
         let plugin_group_rules =
             Signal::new(&runtime, crate::components::message::model::GroupRules::empty());
-        let queue = Signal::new(&runtime, QueueState::default());
         let interrupts = Signal::new(&runtime, HashMap::<String, InterruptArm>::new());
         let model_ring = Signal::new(&runtime, ModelRing::default());
+        let pending_inbox = Signal::new(&runtime, HashMap::<String, Vec<InboxItem>>::new());
+        let navigation_message = Signal::new(&runtime, HashMap::<String, String>::new());
         let picker = Signal::new(&runtime, PickerState::default());
         let reverts = Signal::new(&runtime, HashMap::<String, RevertState>::new());
         let integration_list = Signal::new(&runtime, IntegrationListState::Loading);
@@ -2677,9 +2784,10 @@ impl Store {
                 plugin_hints,
                 plugin_home_actions,
                 plugin_group_rules,
-                queue,
                 interrupts,
                 model_ring,
+                pending_inbox,
+                navigation_message,
                 picker,
                 reverts,
                 integration_list,
@@ -3093,7 +3201,12 @@ impl Store {
             state.autocomplete.remove(session_id);
             state.history = state.history.clone().push(&draft.text);
         });
-        let prompt = SubmittedPrompt { text: draft.text, files: draft.files, agents: draft.agents };
+        let prompt = SubmittedPrompt {
+            text: draft.text,
+            files: draft.files,
+            agents: draft.agents,
+            ..SubmittedPrompt::default()
+        };
         let model = self.resolve_model(session_id);
         self.prompt_sink.send_with_model(session_id, &prompt, model.as_ref());
         Some(prompt)
@@ -3947,17 +4060,18 @@ impl Store {
         }
     }
 
-    /// `queued_prompt.undo` (keybind.ts:132 — lane KM): remove the
-    /// LAST queued prompt of the session (`true` when one existed).
-    pub fn undo_queued_prompt(&self, session_id: &str) -> bool {
-        let last = self.queue.get().queue_of(session_id).last().cloned();
-        let Some(last) = last else { return false };
-        self.queue.update(|state| {
-            if let Some(list) = state.by_session.get_mut(session_id) {
-                list.retain(|item| item.id != last.id);
-            }
-        });
-        true
+    /// `queued_prompt.undo` (TUI-TD07, index.tsx:653-673): cancel the
+    /// LAST queued prompt server-side (`session.inbox.cancel`) and
+    /// return its payload for the composer refill
+    /// (`appendPrompt(target.current, {...payload, pasted: []})`).
+    /// The v2 shell-mode guard has no port surface (the Rust composer
+    /// has no `!` mode state), so every queue row is undoable.
+    pub fn undo_queued_prompt(&self, session_id: &str) -> Option<InboxItem> {
+        let last = self.queued_prompts(session_id).last().cloned()?;
+        let payload = self.queued_prompt_payload(session_id, &last.id)?;
+        self.inbox_sink.borrow().cancel(session_id, &last.id);
+        self.retract_inbox_item(session_id, &last.id);
+        Some(payload)
     }
 
     /// Quick slot 1-9 (and 10 via 0): select the tab at that position.
@@ -4389,13 +4503,55 @@ impl Store {
     /// Apply one of v2's scroll commands (`routes/session/index.tsx:
     /// 763-805`) against the recorded metrics; `true` when the state
     /// moved (the redraw rides the request bump).
+    ///
+    /// TUI-TD02: the six move commands clear the message-navigation
+    /// anchor (`moveTranscript`'s `clearMessageNavigation()`);
+    /// TUI-TD05: `First` is the backfill jump (`session.first`'s
+    /// window + `loadMore({all})`), `Last` is `toBottom()` (both
+    /// window pins reset), and an up-move near the mounted top
+    /// reveals the older chunk first (`revealOlderRows`).
     pub fn scroll_command(&self, session_id: &str, command: ScrollCommand) -> bool {
-        let metrics = self.transcript_metrics(session_id);
-        let mut scroll = self.scroll.borrow_mut();
-        let driver = scroll.entry(session_id.to_owned()).or_default();
-        let before = driver.follow();
-        driver.scroll(command, metrics.viewport, metrics.content_height);
-        driver.follow() != before
+        match command {
+            ScrollCommand::First => {
+                let was_sticky = self.follow_state(session_id) == FollowState::Sticky;
+                self.session_first(session_id);
+                !was_sticky
+            }
+            ScrollCommand::Last => {
+                // `toBottom()` (index.tsx:732-746).
+                self.clear_message_navigation(session_id);
+                self.clear_mount_window(session_id);
+                let was_sticky = self.follow_state(session_id) == FollowState::Sticky;
+                self.scroll.borrow_mut().insert(session_id.to_owned(), ScrollDriver::new());
+                !was_sticky
+            }
+            step => {
+                self.clear_message_navigation(session_id);
+                // `revealOlderRows`' gate: the reader sits within one
+                // viewport of the mounted top (`scrollTop >
+                // scroll.viewport.height` bails, index.tsx:435).
+                if matches!(
+                    step,
+                    ScrollCommand::PageUp | ScrollCommand::HalfPageUp | ScrollCommand::LineUp
+                ) {
+                    let metrics = self.transcript_metrics(session_id);
+                    let offset = ScrollDriver::offset(
+                        self.follow_state(session_id),
+                        metrics.viewport,
+                        metrics.content_height,
+                    );
+                    if offset <= metrics.viewport && self.reveal_older_rows(session_id) {
+                        return true;
+                    }
+                }
+                let metrics = self.transcript_metrics(session_id);
+                let mut scroll = self.scroll.borrow_mut();
+                let driver = scroll.entry(session_id.to_owned()).or_default();
+                let before = driver.follow();
+                driver.scroll(command, metrics.viewport, metrics.content_height);
+                driver.follow() != before
+            }
+        }
     }
 
     /// An append transition (a streaming part grew the transcript):
@@ -4405,6 +4561,299 @@ impl Store {
         let maximum = new_content_height.saturating_sub(viewport);
         let mut scroll = self.scroll.borrow_mut();
         scroll.entry(session_id.to_owned()).or_default().appended(maximum);
+    }
+
+    // -- TUI-TD02: message navigation (message-navigation.ts) --------
+
+    /// Record the transcript's per-message row geometry (the render
+    /// pass calls this every frame — `anchors.messagePositions()`).
+    pub fn set_message_positions(&self, session_id: &str, positions: Vec<MessagePosition>) {
+        self.message_positions.borrow_mut().insert(session_id.to_owned(), positions);
+    }
+
+    /// The recorded positions of the last render pass.
+    #[must_use]
+    pub fn message_positions(&self, session_id: &str) -> Vec<MessagePosition> {
+        self.message_positions.borrow().get(session_id).cloned().unwrap_or_default()
+    }
+
+    /// `navigationMessage()` — the message the nav walk last aligned
+    /// to (drives sticky-off + the next step's anchor).
+    #[must_use]
+    pub fn navigation_message(&self, session_id: &str) -> Option<String> {
+        self.navigation_message.get().get(session_id).cloned()
+    }
+
+    /// `clearMessageNavigation()` (index.tsx:733): the scroll commands
+    /// and `toBottom` reset the walk's anchor.
+    pub fn clear_message_navigation(&self, session_id: &str) {
+        self.navigation_message.update(|state| {
+            state.remove(session_id);
+        });
+    }
+
+    /// TUI-TD05 — full mount for the navigation walk (`ensureAllRows`,
+    /// index.tsx:469-486): pin the window to EVERYTHING (hidden 0, no
+    /// end pin), then resolve the pending intent against the NEXT
+    /// render's fresh positions.
+    fn ensure_all_rows(&self, session_id: &str, intent: PendingNavigation) {
+        self.set_mount_window(
+            session_id,
+            crate::components::message::list::MountWindow { hidden: Some(0), end: None },
+        );
+        self.pending_navigation.borrow_mut().insert(session_id.to_owned(), intent);
+    }
+
+    /// `session.message.next` / `.previous` (+ the user-only pair,
+    /// index.tsx:1101-1128): stage the boundary walk. The first press
+    /// with a windowed transcript mounts everything (v2's
+    /// `ensureAllRows`); the render pass resolves the step.
+    pub fn navigate_message(&self, session_id: &str, direction: NavDirection, user_only: bool) {
+        self.ensure_all_rows(
+            session_id,
+            PendingNavigation::Step { forward: direction == NavDirection::Next, user_only },
+        );
+    }
+
+    /// `session.messages_last_user` (alt+end, index.tsx:1084-1100):
+    /// jump to the most recent user message with text.
+    pub fn navigate_last_user(&self, session_id: &str) {
+        let Some(target) = self
+            .messages(session_id)
+            .iter()
+            .rev()
+            .find(|message| {
+                matches!(message, crate::components::message::model::Message::User { text, .. }
+                    if !text.trim().is_empty())
+            })
+            .map(|message| message.id().to_owned())
+        else {
+            return;
+        };
+        self.ensure_all_rows(session_id, PendingNavigation::Jump { id: target });
+    }
+
+    /// The candidate walk (`findMessageBoundary`,
+    /// message-navigation.ts:18-48): user messages with text are
+    /// ALWAYS candidates; assistants join when `user_only` is false
+    /// and they own a non-empty text part. Returns the target's id +
+    /// align top (assistant rows align one row above, index.tsx:691).
+    #[allow(clippy::type_complexity)]
+    fn message_boundary(
+        &self,
+        session_id: &str,
+        forward: bool,
+        user_only: bool,
+    ) -> Option<(String, usize)> {
+        use crate::components::message::model::{Message, Part};
+        let messages = self.messages(session_id);
+        let positions = self.message_positions(session_id);
+        let top_of = |id: &str, assistant: bool| -> Option<(String, usize)> {
+            let y = positions.iter().find(|pos| pos.id == id).map(|pos| pos.y)?;
+            Some((id.to_owned(), if assistant { y.saturating_sub(1) } else { y }))
+        };
+        let mut candidates: Vec<(String, usize)> = Vec::new();
+        for message in &messages {
+            match message {
+                Message::User { id, text, .. } if !text.trim().is_empty() => {
+                    if let Some(boundary) = top_of(id, false) {
+                        candidates.push(boundary);
+                    }
+                }
+                Message::Assistant { id, parts, .. } if !user_only => {
+                    let has_text = parts.iter().any(
+                        |part| matches!(part, Part::Text { text, .. } if !text.trim().is_empty()),
+                    );
+                    if has_text {
+                        if let Some(boundary) = top_of(id, true) {
+                            candidates.push(boundary);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if candidates.is_empty() {
+            return None;
+        }
+        let offset = self.scroll_offset(session_id);
+        match self.navigation_message(session_id) {
+            Some(current) => {
+                let index =
+                    candidates.iter().position(|(id, _)| id.as_str() == current.as_str())?;
+                let next = if forward { index + 1 } else { index.saturating_sub(1) };
+                candidates.get(next).cloned()
+            }
+            None => {
+                if forward {
+                    candidates.into_iter().find(|(_, y)| *y > offset)
+                } else {
+                    candidates.into_iter().rev().find(|(_, y)| *y < offset)
+                }
+            }
+        }
+    }
+
+    /// Resolve the pending navigation intent after a render pass
+    /// recorded fresh positions (`ensureAllRows`' continuation — the
+    /// session renderer calls this every frame). `alignMessage`
+    /// (index.tsx:673-688): sticky off, the anchor set, the offset
+    /// pinned at the target's top.
+    pub fn resolve_pending_navigation(&self, session_id: &str) -> bool {
+        let Some(intent) = self.pending_navigation.borrow_mut().remove(session_id) else {
+            return false;
+        };
+        let target = match intent {
+            PendingNavigation::Step { forward, user_only } => {
+                self.message_boundary(session_id, forward, user_only)
+            }
+            PendingNavigation::Jump { id } => {
+                let assistant = matches!(
+                    self.messages(session_id).iter().find(|message| message.id() == id.as_str()),
+                    Some(crate::components::message::model::Message::Assistant { .. })
+                );
+                self.message_positions(session_id).iter().find(|pos| pos.id == id).map(|pos| {
+                    (id.clone(), if assistant { pos.y.saturating_sub(1) } else { pos.y })
+                })
+            }
+        };
+        let Some((id, top)) = target else {
+            return false;
+        };
+        let metrics = self.transcript_metrics(session_id);
+        let maximum = metrics.content_height.saturating_sub(metrics.viewport);
+        self.navigation_message.update(|state| {
+            state.insert(session_id.to_owned(), id);
+        });
+        self.scroll.borrow_mut().insert(
+            session_id.to_owned(),
+            ScrollDriver::from_follow(FollowState::Free { offset: top.min(maximum), maximum }),
+        );
+        true
+    }
+
+    // -- TUI-TD05: the mount window + history pagination --------------
+
+    /// The session's mount-window pins (`hiddenRows()` /
+    /// `visibleRowsEnd()`).
+    #[must_use]
+    pub fn mount_window(&self, session_id: &str) -> crate::components::message::list::MountWindow {
+        self.mount_windows.borrow().get(session_id).copied().unwrap_or_default()
+    }
+
+    /// Pin the mount window (`setHiddenRows` / `setVisibleRowsEnd`).
+    pub fn set_mount_window(
+        &self,
+        session_id: &str,
+        window: crate::components::message::list::MountWindow,
+    ) {
+        self.mount_windows.borrow_mut().insert(session_id.to_owned(), window);
+    }
+
+    /// `toBottom()`'s reset (index.tsx:734-737): both pins clear — the
+    /// tail budget rules again.
+    pub fn clear_mount_window(&self, session_id: &str) {
+        self.mount_windows.borrow_mut().remove(session_id);
+    }
+
+    /// Record the older-history cursor after a page fetch
+    /// (`messageCursor`, client/solid/data.ts:1652).
+    pub fn set_message_cursor(&self, session_id: &str, cursor: Option<String>) {
+        self.message_cursors.borrow_mut().insert(session_id.to_owned(), cursor);
+    }
+
+    /// `data.session.message.more()` — `true` while an older page
+    /// remains (`cursor.next` present).
+    #[must_use]
+    pub fn has_more_history(&self, session_id: &str) -> bool {
+        self.message_cursors.borrow().get(session_id).is_some_and(Option::is_some)
+    }
+
+    /// The older-page request ([`loadMore`]): the sink carries the
+    /// current cursor; `all` walks every remaining page
+    /// (`session.first`'s jump-through-history, index.tsx:830-836).
+    pub fn load_older_history(&self, session_id: &str, all: bool) {
+        if let Some(cursor) = self.message_cursors.borrow().get(session_id).cloned().flatten() {
+            self.transcript_sink.borrow().load_older(session_id, &cursor, all);
+        }
+    }
+
+    /// `revealOlderRows` (index.tsx:430-447): reveal one backfill
+    /// chunk above the window; `true` when the mounted span grew (the
+    /// scroll step then skips — v2 keeps the viewport via scrollBy).
+    pub fn reveal_older_rows(&self, session_id: &str) -> bool {
+        let rows = self.transcript_metrics(session_id).rows;
+        if rows == 0 {
+            return false;
+        }
+        let current = self.mount_window(session_id).hidden.unwrap_or_else(|| {
+            crate::components::message::list::rows_before(
+                rows,
+                crate::components::message::list::TRANSCRIPT_TAIL_ROWS,
+            )
+        });
+        if current == 0 {
+            // The top is mounted: older history comes off the server.
+            if self.has_more_history(session_id) {
+                self.load_older_history(session_id, false);
+                return true;
+            }
+            return false;
+        }
+        let hidden =
+            current.saturating_sub(crate::components::message::list::TRANSCRIPT_BACKFILL_CHUNK);
+        self.set_mount_window(
+            session_id,
+            crate::components::message::list::MountWindow { hidden: Some(hidden), end: None },
+        );
+        true
+    }
+
+    /// `session.first` (index.tsx:790-873): clear the navigation, mount
+    /// from row 0 with the backfill budget, jump the offset to the
+    /// top — and when older pages remain, fetch them ALL first (the
+    /// `loadMore({all: true})` jump-through-history).
+    pub fn session_first(&self, session_id: &str) {
+        self.clear_message_navigation(session_id);
+        if self.has_more_history(session_id) {
+            self.load_older_history(session_id, true);
+        }
+        let end = Some(crate::components::message::list::TRANSCRIPT_BACKFILL_CHUNK);
+        self.set_mount_window(
+            session_id,
+            crate::components::message::list::MountWindow { hidden: Some(0), end },
+        );
+        let metrics = self.transcript_metrics(session_id);
+        let maximum = metrics.content_height.saturating_sub(metrics.viewport);
+        self.scroll.borrow_mut().insert(
+            session_id.to_owned(),
+            ScrollDriver::from_follow(FollowState::Free { offset: 0, maximum }),
+        );
+    }
+
+    // -- TUI-TD03: the parent route -----------------------------------
+
+    /// `session.parent` (index.tsx:1272-1288): the routed session's
+    /// parent id from the family registry (`session()?.parentID`);
+    /// `None` off the session route or at a root.
+    #[must_use]
+    pub fn parent_session_id(&self, session_id: &str) -> Option<String> {
+        self.session_index
+            .borrow()
+            .get(session_id)
+            .and_then(|info| info.parent_id.clone())
+            .filter(|parent| !parent.is_empty())
+    }
+
+    /// `session.parent`'s run body: route into the parent session.
+    pub fn navigate_parent(&self, session_id: &str) -> bool {
+        match self.parent_session_id(session_id) {
+            Some(parent) => {
+                self.navigate(Route::Session { session_id: parent });
+                true
+            }
+            None => false,
+        }
     }
 
     // -- interrupt (Wave A: the 2-press escape machine) ------------------------
@@ -5392,80 +5841,169 @@ impl Store {
         *self.open_url_sink.borrow_mut() = sink;
     }
 
-    /// The queued prompts of one session (the dock + manager rows).
+    /// The queued prompts of one session (the dock + manager rows) —
+    /// TUI-TD07: the server pending inbox's `delivery: "queue"` items
+    /// (`queuedPrompts()`, index.tsx:212-215).
     #[must_use]
     pub fn queued_prompts(&self, session_id: &str) -> Vec<QueuedPrompt> {
-        self.queue.get().queue_of(session_id).to_vec()
+        self.pending_inbox.get().get(session_id).map_or_else(Vec::new, |items| {
+            items
+                .iter()
+                .filter(|item| item.delivery == "queue")
+                .map(|item| QueuedPrompt { id: item.id.clone(), text: item.text.clone() })
+                .collect()
+        })
     }
 
-    /// `<leader>return` over an ACTIVE turn (mini/queue.rs's Admit):
-    /// the prompt waits in the local serial queue; the drain loop
-    /// delivers the head when the session goes idle.
-    pub fn queue_prompt(&self, session_id: &str, text: &str) {
-        let id = uuid::Uuid::new_v4().to_string();
-        self.queue.update(|state| {
-            state
-                .by_session
-                .entry(session_id.to_owned())
-                .or_default()
-                .push(QueuedPrompt { id, text: text.to_owned() });
-        });
-    }
-
-    /// Pop the head for delivery (the serial drain — one at a time,
-    /// only while the session is idle).
+    /// TUI-TD07 — the pending inbox items of one session (the
+    /// pending-steer markers + the queue derive from them).
     #[must_use]
-    pub fn pop_queued_prompt(&self, session_id: &str) -> Option<QueuedPrompt> {
-        if self.session_running(session_id) {
-            return None;
-        }
-        let head = self.queue.get().queue_of(session_id).first().cloned()?;
-        self.queue.update(|state| {
-            if let Some(list) = state.by_session.get_mut(session_id) {
-                list.retain(|item| item.id != head.id);
+    pub fn pending_inbox(&self, session_id: &str) -> Vec<InboxItem> {
+        self.pending_inbox.get().get(session_id).cloned().unwrap_or_default()
+    }
+
+    /// `pendingDelivery(messageID)` (index.tsx:211): the pending
+    /// marker on an admitted user row — `Some("steer"|"queue")`.
+    #[must_use]
+    pub fn pending_delivery(&self, session_id: &str, message_id: &str) -> Option<String> {
+        self.pending_inbox
+            .get()
+            .get(session_id)
+            .and_then(|items| items.iter().find(|item| item.id == message_id))
+            .map(|item| item.delivery.clone())
+    }
+
+    /// Swap the inbox mutation seam (tests observe the `PATCH`/`DELETE`
+    /// calls instead of `POST`ing).
+    pub fn set_inbox_sink(&self, sink: Rc<dyn InboxSink>) {
+        *self.inbox_sink.borrow_mut() = sink;
+    }
+
+    /// Swap the older-history load seam (`loadMore`).
+    pub fn set_transcript_sink(&self, sink: Rc<dyn TranscriptSink>) {
+        *self.transcript_sink.borrow_mut() = sink;
+    }
+
+    /// TUI-TD07 — `<leader>return` over an ACTIVE turn (v2's queue
+    /// submit, prompt/index.tsx:446-458 → `session.prompt` with
+    /// `delivery: "queue"` and the CLIENT-MINTED inbox id — the SSE
+    /// echo re-admits under the same id, data.ts:769-787): the
+    /// optimistic local admit renders the dock immediately; the send
+    /// goes out through the prompt sink carrying the delivery.
+    pub fn queue_prompt(&self, session_id: &str, text: &str, files: &[String]) {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.admit_inbox_item(
+            session_id,
+            InboxItem {
+                id: id.clone(),
+                delivery: "queue".to_owned(),
+                text: text.to_owned(),
+                files: files.to_vec(),
+            },
+        );
+        let prompt = crate::components::composer::SubmittedPrompt {
+            text: text.to_owned(),
+            delivery: Some("queue".to_owned()),
+            inbox_id: Some(id),
+            ..crate::components::composer::SubmittedPrompt::default()
+        };
+        let model = self.resolve_model(session_id);
+        self.prompt_sink.send_with_model(session_id, &prompt, model.as_ref());
+    }
+
+    /// `admitLocal` (client/solid/data.ts:370-383): upsert one inbox
+    /// item into the pending registry (the transcript row projection
+    /// is the event path's job).
+    fn admit_inbox_item(&self, session_id: &str, item: InboxItem) {
+        self.pending_inbox.update(|state| {
+            let items = state.entry(session_id.to_owned()).or_default();
+            match items.iter_mut().find(|existing| existing.id == item.id) {
+                Some(existing) => *existing = item,
+                None => items.push(item),
             }
         });
-        Some(head)
     }
 
-    /// Delete one queued prompt (`queued_prompt.delete`, ctrl+d in the
-    /// manager): `true` when it existed.
+    /// TUI-TD07 — `mutatePending("cancel")` (the delete action +
+    /// undo's first step, index.tsx:605-623): the server DELETE
+    /// (`session.inbox.cancel`) plus the optimistic local retract —
+    /// `retractLocal` (data.ts:403-415) also drops the admitted
+    /// transcript row; `true` when the item existed.
     pub fn delete_queued_prompt(&self, session_id: &str, id: &str) -> bool {
-        let existed = self.queue.get().queue_of(session_id).iter().any(|item| item.id == id);
+        let existed = self
+            .pending_inbox
+            .get()
+            .get(session_id)
+            .is_some_and(|items| items.iter().any(|item| item.id == id));
         if existed {
-            self.queue.update(|state| {
-                if let Some(list) = state.by_session.get_mut(session_id) {
-                    list.retain(|item| item.id != id);
-                }
-            });
+            self.inbox_sink.borrow().cancel(session_id, id);
+            self.retract_inbox_item(session_id, id);
         }
         existed
     }
 
-    /// The drain step (called between ingests): while a session with a
-    /// non-empty queue sits idle, deliver the head through the prompt
-    /// sink — one prompt at a time (serial, mini/queue.rs's drain).
-    pub fn drain_queued_prompts(&self) {
-        let sessions: Vec<String> = self.queue.get().by_session.keys().cloned().collect();
-        for session_id in sessions {
-            if self.queue.get().queue_of(&session_id).is_empty() {
-                continue;
-            }
-            if self.session_running(&session_id) {
-                continue;
-            }
-            if let Some(head) = self.pop_queued_prompt(&session_id) {
-                let prompt = crate::components::composer::SubmittedPrompt {
-                    text: head.text,
-                    ..crate::components::composer::SubmittedPrompt::default()
-                };
-                let model = self.resolve_model(&session_id);
-                self.prompt_sink.send_with_model(&session_id, &prompt, model.as_ref());
-                // The next head waits for the NEXT drain tick (serial).
-                break;
-            }
+    /// TUI-TD07 — `mutatePending("steer")` (the manager's enter, the
+    /// empty-enter head steer and the pending-steer "Move to queue",
+    /// index.tsx:612-614/1504-1508): the server PATCH
+    /// (`session.inbox.update {delivery: "steer"}`) plus the
+    /// optimistic local delivery flip; `true` when the item existed.
+    pub fn steer_queued_prompt(&self, session_id: &str, id: &str) -> bool {
+        let existed = self
+            .pending_inbox
+            .get()
+            .get(session_id)
+            .is_some_and(|items| items.iter().any(|item| item.id == id));
+        if existed {
+            self.inbox_sink.borrow().update(session_id, id, "steer");
+            self.update_inbox_delivery(session_id, id, "steer");
         }
+        existed
     }
+
+    /// TUI-TD07 — the undo's refill payload: the queued item's
+    /// text + files (`projectedPromptInput(queued.payload)`,
+    /// index.tsx:662-668) for `appendPrompt`.
+    #[must_use]
+    pub fn queued_prompt_payload(&self, session_id: &str, id: &str) -> Option<InboxItem> {
+        self.pending_inbox
+            .get()
+            .get(session_id)
+            .and_then(|items| items.iter().find(|item| item.id == id))
+            .cloned()
+    }
+
+    /// `updatePending` (client/solid/data.ts:311-317): flip one item's
+    /// delivery (`session.inbox.delivery.changed` + the optimistic
+    /// local mirror).
+    fn update_inbox_delivery(&self, session_id: &str, id: &str, delivery: &str) {
+        self.pending_inbox.update(|state| {
+            if let Some(items) = state.get_mut(session_id) {
+                if let Some(item) = items.iter_mut().find(|item| item.id == id) {
+                    item.delivery.clone_from(&delivery.to_owned());
+                }
+            }
+        });
+    }
+
+    /// `removePending` + `retractLocal` (data.ts:262-270/403-415):
+    /// drop the pending item AND its admitted transcript row.
+    fn retract_inbox_item(&self, session_id: &str, id: &str) {
+        self.pending_inbox.update(|state| {
+            if let Some(items) = state.get_mut(session_id) {
+                items.retain(|item| item.id != id);
+            }
+        });
+        self.update_messages(session_id, |messages| {
+            messages.retain(|message| message.id() != id);
+        });
+    }
+
+    /// The drain step — RETIRED by TUI-TD07: the server owns the
+    /// queue's delivery (`session.prompt {delivery: "queue"}` waits
+    /// server-side; `session.inbox.delivered` clears the pending row
+    /// when the turn admits it). Kept as the no-op seam the run loop
+    /// calls between ingests (the old local serial drain double-sent).
+    pub fn drain_queued_prompts(&self) {}
 
     // -- model ring (Wave A: the f2/favorite cycle source) --------------------
 
@@ -6520,7 +7058,7 @@ impl Store {
     /// the recency window (`viewed !== previous`).
     pub fn enforce_session_retention(&self, current: Option<&str>, navigated: bool) {
         let root_of = |id: &str| self.session_index.borrow().root_of(id);
-        let current_root = current.map(|id| self.session_index.borrow().root_of(id));
+        let current_root = current.map(root_of);
         // `recent` — newest first, roots re-resolved (metadata may
         // have arrived since the last pass).
         let mut recent: Vec<String> = Vec::new();
@@ -6855,6 +7393,7 @@ impl Store {
         false
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per wire event; splitting scatters the ingest contract
     fn ingest_one(&self, message: Ingest) {
         match message {
             Ingest::Connected => self.set_connection(ConnectionState::Connected),
@@ -6907,7 +7446,7 @@ impl Store {
                     tap.publish(&event);
                 }
             }
-            Ingest::Resync { sessions, unread, messages, permissions, forms } => {
+            Ingest::Resync { sessions, unread, messages, cursors, permissions, forms } => {
                 // A resync only happens after a successful subscribe —
                 // the stream is attached, the client is connected
                 // (SURF-2: servers that never emit the `server.
@@ -6916,6 +7455,13 @@ impl Store {
                 // healthy session).
                 if self.connection.get() != ConnectionState::Connected {
                     self.set_connection(ConnectionState::Connected);
+                }
+                // TUI-TD05 — the resync's tail pages carry each open
+                // session's older-history cursor (`messageCursor`,
+                // client/solid/data.ts:1652: `more()` + `loadMore`
+                // walk the pages the boot mount pinned away).
+                for (session_id, cursor) in cursors {
+                    self.set_message_cursor(&session_id, cursor);
                 }
                 // Reconcile AFTER the channel drained (v2's
                 // `normalize()` effect, `session-tabs.tsx:241-250`):
@@ -6994,6 +7540,22 @@ impl Store {
                     }
                     let mut merged = messages;
                     merged.extend(local.into_iter().filter(|message| !ids.contains(message.id())));
+                    state.by_session.insert(session_id, merged);
+                });
+            }
+            // TUI-TD05 — the older page PREPENDS (v2 `loadMore`:
+            // `[...fetched.reverse().filter(not-known), ...existing]`,
+            // client/solid/data.ts:1703-1704) and the cursor advances.
+            Ingest::MessagesOlder { session_id, messages, cursor } => {
+                self.set_message_cursor(&session_id, cursor);
+                self.messages.update(|state| {
+                    let known = state.by_session.remove(&session_id).unwrap_or_default();
+                    let mut ids = std::collections::HashSet::new();
+                    for message in &messages {
+                        ids.insert(message.id().to_owned());
+                    }
+                    let mut merged = messages;
+                    merged.extend(known.into_iter().filter(|message| !ids.contains(message.id())));
                     state.by_session.insert(session_id, merged);
                 });
             }
@@ -7277,6 +7839,30 @@ impl Store {
                         .and_then(Value::as_str)
                         .unwrap_or_default();
                     let created = event.created.unwrap_or(0);
+                    // TUI-TD07 — the pending-inbox admit (`admitLocal`,
+                    // data.ts:370-383): the item's delivery + resolved
+                    // file payloads mirror into the registry the queue
+                    // dock + pending-steer markers read.
+                    let delivery =
+                        item.get("delivery").and_then(Value::as_str).unwrap_or("steer").to_owned();
+                    let files = item
+                        .pointer("/payload/files")
+                        .and_then(Value::as_array)
+                        .map(|files| {
+                            files
+                                .iter()
+                                .filter_map(|file| {
+                                    let mime = file.get("mime")?.as_str()?;
+                                    let data = file.get("data")?.as_str()?;
+                                    Some(format!("data:{mime};base64,{data}"))
+                                })
+                                .collect::<Vec<String>>()
+                        })
+                        .unwrap_or_default();
+                    self.admit_inbox_item(
+                        &session,
+                        InboxItem { id: id.clone(), delivery, text: text.to_owned(), files },
+                    );
                     // `event.created` is epoch SECONDS on this event —
                     // match the transcript's ms convention loosely (the
                     // label renders relative time).
@@ -7302,6 +7888,37 @@ impl Store {
                         }
                     });
                 }
+            }
+            // TUI-TD07 — `session.inbox.delivery.changed`
+            // (`updatePending`, data.ts:765-767): the steer/queue flip
+            // lands server-side (the PATCH's echo).
+            "session.inbox.delivery.changed" => {
+                let Some(session) = event.string("sessionID") else { return };
+                let Some(id) = event.string("inboxID") else { return };
+                if let Some(delivery) = event.string("delivery") {
+                    self.update_inbox_delivery(&session, &id, &delivery);
+                }
+            }
+            // TUI-TD07 — `session.inbox.cancelled` (`retractLocal`,
+            // data.ts:775-780): the pending row AND its admitted
+            // transcript row disappear.
+            "session.inbox.cancelled" => {
+                let Some(session) = event.string("sessionID") else { return };
+                let Some(id) = event.string("inboxID") else { return };
+                self.retract_inbox_item(&session, &id);
+            }
+            // TUI-TD07 — `session.inbox.delivered` (`removePending`,
+            // data.ts:749-763): the server admitted the item into the
+            // turn — the pending marker clears (the transcript row
+            // stays as the admitted user message).
+            "session.inbox.delivered" => {
+                let Some(session) = event.string("sessionID") else { return };
+                let Some(id) = event.string("inboxID") else { return };
+                self.pending_inbox.update(|state| {
+                    if let Some(items) = state.get_mut(&session) {
+                        items.retain(|item| item.id != id);
+                    }
+                });
             }
             // -- lane C: SSE message-part reducers (`rows.ts` subscriptions) --
             "session.text.delta" => {
@@ -7650,11 +8267,12 @@ impl Store {
                     fresh
                 });
                 if appended {
-                    // The turn ended: the queued-prompt drain admits
-                    // the next head (serial — one per idle) and the
-                    // interrupt arm collapses (the hint row goes).
+                    // The turn ended: the interrupt arm collapses (the
+                    // hint row goes). TUI-TD07: the queued prompts are
+                    // the SERVER's inbox now — `session.inbox.delivered`
+                    // clears each pending row as the turn admits it (no
+                    // local re-POST drain).
                     self.interrupt_clear(&session);
-                    self.drain_queued_prompts();
                 }
             }
             "session.compaction.started" => {
@@ -8136,6 +8754,7 @@ fn files_from_event(data: &Value) -> Vec<crate::components::message::model::User
 /// subset).
 // One arm per message kind (the SURF-1 skill arm pushed it over).
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::cast_possible_truncation)] // wire numerics: integral values survive the f64 round-trip
 fn message_from_event(event: &BusEvent) -> Option<Message> {
     let id = event.string("id").or_else(|| event.string("messageID"))?;
     let time = PartTime {
@@ -8251,6 +8870,97 @@ fn message_from_event(event: &BusEvent) -> Option<Message> {
             name: event.string("name").unwrap_or_default(),
             created: time.created.unwrap_or(0),
         }),
+        // TUI-TD01 — the six wire classes the drop arm discarded
+        // (`SessionMessageView`'s remaining arms, index.tsx:1781-1812).
+        Some("shell") => Some(Message::Shell {
+            id,
+            shell_id: event.string("shellID").unwrap_or_default(),
+            command: event.string("command").unwrap_or_default(),
+            status: event.string("status").unwrap_or_else(|| "running".to_owned()),
+            exit: event.data.get("exit").and_then(Value::as_f64).map(|code| code.round() as i64),
+            output: event.data.pointer("/output/output").and_then(Value::as_str).map(str::to_owned),
+            created: time.created.unwrap_or(0),
+        }),
+        Some("agent-switched") => Some(Message::AgentSwitched {
+            id,
+            agent: event.string("agent").unwrap_or_default(),
+            previous: event.string("previous"),
+            created: time.created.unwrap_or(0),
+        }),
+        Some("model-switched") => {
+            let model_ref = |value: Option<&Value>| -> Option<(String, String, Option<String>)> {
+                let model = value?;
+                Some((
+                    model.get("providerID").and_then(Value::as_str)?.to_owned(),
+                    model.get("id").and_then(Value::as_str)?.to_owned(),
+                    model.get("variant").and_then(Value::as_str).map(str::to_owned),
+                ))
+            };
+            Some(Message::ModelSwitched {
+                id,
+                provider_id: event
+                    .data
+                    .pointer("/model/providerID")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                model_id: event
+                    .data
+                    .pointer("/model/id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                variant: event
+                    .data
+                    .pointer("/model/variant")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                previous: model_ref(event.data.get("previous")),
+                created: time.created.unwrap_or(0),
+            })
+        }
+        Some("location-switched") => Some(Message::LocationSwitched {
+            id,
+            directory: event
+                .data
+                .pointer("/location/directory")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            created: time.created.unwrap_or(0),
+        }),
+        Some("system") => Some(Message::System {
+            id,
+            description: event.string("description"),
+            created: time.created.unwrap_or(0),
+        }),
+        Some("synthetic") => {
+            let metadata = event.data.get("metadata");
+            let instruction_paths = metadata
+                .and_then(|map| map.get("instruction"))
+                .and_then(|value| value.get("paths"))
+                .and_then(Value::as_array)
+                .map(|paths| {
+                    paths
+                        .iter()
+                        .filter_map(|path| path.as_str().map(str::to_owned))
+                        .collect::<Vec<String>>()
+                })
+                .unwrap_or_default();
+            let field = |key: &str| {
+                metadata.and_then(|map| map.get(key)).and_then(crate::data::stringify_value)
+            };
+            Some(Message::Synthetic {
+                id,
+                instruction_paths,
+                description: event.string("description"),
+                source: field("source"),
+                state: field("state"),
+                agent: field("agent"),
+                child_id: field("childID"),
+                created: time.created.unwrap_or(0),
+            })
+        }
         _ => None,
     }
 }
@@ -8466,6 +9176,7 @@ mod tests {
             }],
             unread: Vec::new(),
             messages: Vec::new(),
+            cursors: Vec::new(),
             permissions: Vec::new(),
             forms: Vec::new(),
         }]);
@@ -8511,6 +9222,7 @@ mod tests {
                 ],
                 unread: vec!["a".to_owned()],
                 messages: Vec::new(),
+                cursors: Vec::new(),
                 permissions: Vec::new(),
                 forms: Vec::new(),
             },
@@ -9619,6 +10331,7 @@ mod tests {
             }],
             unread: Vec::new(),
             messages: Vec::new(),
+            cursors: Vec::new(),
             permissions: Vec::new(),
             forms: Vec::new(),
         }]);
@@ -10227,4 +10940,331 @@ fn update_command_opens_the_dialog_with_actions() {
     store.open_dialog(DialogKind::Update, DialogSize::Medium);
     let _ = crate::components::dialog::execute_submission(&store, &mut dispatcher, "skip");
     assert!(store.update_notice().is_none(), "skip dismissed the banner");
+}
+
+// -- TUI-TD01: the six wire classes project from the SSE path ----
+
+#[test]
+fn six_wire_classes_project_from_events() {
+    let store = Store::new(Runtime::new());
+    store.open_tab("s1", None);
+    let events = [
+        BusEvent::new(
+            "message.updated",
+            serde_json::json!({
+                "id": "m_shell", "sessionID": "s1", "type": "shell", "shellID": "sh",
+                "command": "ls", "status": "exited", "exit": 2,
+                "output": {"cursor": 1, "output": "nope", "size": 1, "truncated": false},
+                "time": {"created": 1}
+            }),
+        ),
+        BusEvent::new(
+            "message.updated",
+            serde_json::json!({
+                "id": "m_agent", "sessionID": "s1", "type": "agent-switched",
+                "agent": "plan", "previous": "build", "time": {"created": 2}
+            }),
+        ),
+        BusEvent::new(
+            "message.updated",
+            serde_json::json!({
+                "id": "m_model", "sessionID": "s1", "type": "model-switched",
+                "model": {"providerID": "p", "id": "m"},
+                "previous": {"providerID": "q", "id": "n"},
+                "time": {"created": 3}
+            }),
+        ),
+        BusEvent::new(
+            "message.updated",
+            serde_json::json!({
+                "id": "m_loc", "sessionID": "s1", "type": "location-switched",
+                "location": {"directory": "/elsewhere"}, "time": {"created": 4}
+            }),
+        ),
+        BusEvent::new(
+            "message.updated",
+            serde_json::json!({
+                "id": "m_sys", "sessionID": "s1", "type": "system", "text": "",
+                "description": "notice", "time": {"created": 5}
+            }),
+        ),
+        BusEvent::new(
+            "message.updated",
+            serde_json::json!({
+                "id": "m_syn", "sessionID": "s1", "type": "synthetic", "text": "done",
+                "description": "done",
+                "metadata": {"source": "subagent", "state": "completed", "agent": "helper"},
+                "time": {"created": 6}
+            }),
+        ),
+    ];
+    for event in events {
+        store.ingest_all([Ingest::Event(event)]);
+    }
+    let messages = store.messages("s1");
+    assert!(matches!(
+        messages.iter().find(|m| m.id() == "m_shell"),
+        Some(Message::Shell { command, status, exit, .. })
+            if command == "ls" && status == "exited" && *exit == Some(2)
+    ));
+    assert!(matches!(
+        messages.iter().find(|m| m.id() == "m_agent"),
+        Some(Message::AgentSwitched { agent, previous, .. })
+            if agent == "plan" && previous.as_deref() == Some("build")
+    ));
+    assert!(matches!(
+        messages.iter().find(|m| m.id() == "m_model"),
+        Some(Message::ModelSwitched { provider_id, model_id, .. })
+            if provider_id == "p" && model_id == "m"
+    ));
+    assert!(matches!(
+        messages.iter().find(|m| m.id() == "m_loc"),
+        Some(Message::LocationSwitched { directory, .. }) if directory == "/elsewhere"
+    ));
+    assert!(matches!(
+        messages.iter().find(|m| m.id() == "m_sys"),
+        Some(Message::System { description, .. })
+            if description.as_deref() == Some("notice")
+    ));
+    assert!(matches!(
+        messages.iter().find(|m| m.id() == "m_syn"),
+        Some(Message::Synthetic { source, state, agent, .. })
+            if source.as_deref() == Some("subagent")
+                && state.as_deref() == Some("completed")
+                && agent.as_deref() == Some("helper")
+    ));
+}
+
+// -- TUI-TD07: the inbox mirror's event lifecycle ------------------
+
+#[cfg(test)]
+fn queue_two(store: &Store) {
+    store.queue_prompt("s1", "first", &[]);
+    store.queue_prompt("s1", "second", &[]);
+}
+
+#[test]
+fn inbox_mirror_tracks_delivery_changes_and_cancels() {
+    let store = Store::new(Runtime::new());
+    store.open_tab("s1", None);
+    let sink = std::rc::Rc::new(RecordingInboxSink::default());
+    store.set_inbox_sink(sink.clone());
+    queue_two(&store);
+    assert_eq!(store.queued_prompts("s1").len(), 2, "both queued");
+    // The enqueued echo upserts (the same id admits once).
+    store.ingest_all([Ingest::Event(BusEvent::new(
+        "session.inbox.enqueued",
+        serde_json::json!({
+            "sessionID": "s1", "inboxID": store.queued_prompts("s1")[0].id,
+            "item": {"type": "user", "delivery": "queue", "payload": {"text": "first"}}
+        }),
+    ))]);
+    assert_eq!(store.queued_prompts("s1").len(), 2, "the echo upserted, not appended");
+    // Steer flips the delivery server-side (PATCH).
+    let head = store.queued_prompts("s1")[0].id.clone();
+    assert!(store.steer_queued_prompt("s1", &head));
+    assert_eq!(store.queued_prompts("s1").len(), 1, "steered out of the queue");
+    assert_eq!(store.pending_delivery("s1", &head).as_deref(), Some("steer"));
+    // delivery.changed refines (the PATCH's echo).
+    store.ingest_all([Ingest::Event(BusEvent::new(
+        "session.inbox.delivery.changed",
+        serde_json::json!({"sessionID": "s1", "inboxID": head, "delivery": "steer"}),
+    ))]);
+    assert_eq!(store.pending_delivery("s1", &head).as_deref(), Some("steer"));
+    // delivered clears the pending row.
+    store.ingest_all([Ingest::Event(BusEvent::new(
+        "session.inbox.delivered",
+        serde_json::json!({"sessionID": "s1", "inboxID": head}),
+    ))]);
+    assert_eq!(store.pending_inbox("s1").len(), 1);
+    // cancelled retracts the pending row AND the transcript row.
+    let second = store.queued_prompts("s1")[0].id.clone();
+    store.ingest_all([Ingest::Event(BusEvent::new(
+        "session.inbox.cancelled",
+        serde_json::json!({"sessionID": "s1", "inboxID": second}),
+    ))]);
+    assert_eq!(store.pending_inbox("s1"), Vec::<InboxItem>::new());
+    assert!(
+        sink.calls.borrow().iter().any(|call| call.contains("update") && call.contains("steer")),
+        "the steer PATCHed: {:?}",
+        sink.calls.borrow()
+    );
+}
+
+#[test]
+fn undo_returns_the_payload_and_cancels() {
+    let store = Store::new(Runtime::new());
+    store.open_tab("s1", None);
+    let sink = std::rc::Rc::new(RecordingInboxSink::default());
+    store.set_inbox_sink(sink.clone());
+    store.queue_prompt("s1", "refill me", &["data:image/png;base64,AAA".to_owned()]);
+    let payload = store.undo_queued_prompt("s1").expect("undo found the last row");
+    assert_eq!(payload.text, "refill me");
+    assert_eq!(payload.files, vec!["data:image/png;base64,AAA".to_owned()]);
+    assert_eq!(store.queued_prompts("s1"), Vec::<QueuedPrompt>::new());
+    assert!(
+        sink.calls.borrow().iter().any(|call| call.starts_with("cancel")),
+        "the cancel DELETEd: {:?}",
+        sink.calls.borrow()
+    );
+    assert!(store.undo_queued_prompt("s1").is_none(), "an empty queue misses");
+}
+
+// -- TUI-TD02/TD05: the navigation + mount-window walk ------------
+
+#[test]
+fn navigation_pins_the_boundary_target() {
+    let store = Store::new(Runtime::new());
+    store.open_tab("s1", None);
+    store.set_messages(
+        "s1",
+        vec![
+            Message::User {
+                id: "q1".into(),
+                text: "ask one".into(),
+                created: 1,
+                files: Vec::new(),
+            },
+            Message::Assistant {
+                id: "a1".into(),
+                agent: "build".into(),
+                model: "p/m".into(),
+                parts: vec![Part::Text { text: "answer one".into(), time: PartTime::default() }],
+                finish: Some("stop".into()),
+                error: None,
+                time: PartTime::default(),
+                tokens: None,
+                usage_total: None,
+            },
+            Message::User {
+                id: "q2".into(),
+                text: "ask two".into(),
+                created: 2,
+                files: Vec::new(),
+            },
+        ],
+    );
+    // The render pass's geometry: q1@10, a1@40, q2@80 (content y).
+    store.set_message_positions(
+        "s1",
+        vec![
+            MessagePosition { id: "q1".into(), y: 10 },
+            MessagePosition { id: "a1".into(), y: 40 },
+            MessagePosition { id: "q2".into(), y: 80 },
+        ],
+    );
+    store.set_transcript_metrics(
+        "s1",
+        TranscriptMetrics { viewport: 10, content_height: 100, rows: 6 },
+    );
+    // From the sticky bottom (offset 90): previous targets the
+    // LAST candidate above — q2 — and pins Free at its y.
+    store.navigate_message("s1", NavDirection::Previous, false);
+    assert!(store.resolve_pending_navigation("s1"), "the intent resolved");
+    assert_eq!(store.navigation_message("s1").as_deref(), Some("q2"));
+    assert_eq!(store.scroll_offset("s1"), 80, "aligned at the user block's head");
+    // The next step from q2 has no later candidate: no move.
+    store.navigate_message("s1", NavDirection::Next, false);
+    assert!(!store.resolve_pending_navigation("s1"), "no later target");
+    assert_eq!(store.navigation_message("s1").as_deref(), Some("q2"), "the anchor holds");
+    // User-only previous from q2: q1 (assistants skipped).
+    store.navigate_message("s1", NavDirection::Previous, true);
+    assert!(store.resolve_pending_navigation("s1"));
+    assert_eq!(store.navigation_message("s1").as_deref(), Some("q1"));
+    assert_eq!(store.scroll_offset("s1"), 10);
+    // The full mount pinned for the walk.
+    assert_eq!(
+        store.mount_window("s1"),
+        crate::components::message::list::MountWindow { hidden: Some(0), end: None }
+    );
+}
+
+#[test]
+fn first_jumps_backfills_and_reveals_walk_up() {
+    let store = Store::new(Runtime::new());
+    store.open_tab("s1", None);
+    let sink = std::rc::Rc::new(RecordingTranscriptSink::default());
+    store.set_transcript_sink(sink.clone());
+    store.set_transcript_metrics(
+        "s1",
+        TranscriptMetrics { viewport: 10, content_height: 60, rows: 100 },
+    );
+    store.set_message_cursor("s1", Some("cur1".to_owned()));
+    // session.first: the all-pages backfill + the head window.
+    store.session_first("s1");
+    assert_eq!(
+        store.mount_window("s1"),
+        crate::components::message::list::MountWindow {
+            hidden: Some(0),
+            end: Some(crate::components::message::list::TRANSCRIPT_BACKFILL_CHUNK)
+        }
+    );
+    assert_eq!(store.scroll_offset("s1"), 0, "pinned at the head");
+    assert!(
+        sink.calls.borrow().iter().any(|call| call.contains("cur1") && call.contains("all")),
+        "the all-pages load fired: {:?}",
+        sink.calls.borrow()
+    );
+    // The reveal walk: an up-move near the mounted top extends the
+    // window by the chunk; at the top with more, another page.
+    store.clear_mount_window("s1");
+    assert!(store.reveal_older_rows("s1"), "the default tail window reveals");
+    assert_eq!(
+        store.mount_window("s1").hidden,
+        Some(60 - crate::components::message::list::TRANSCRIPT_BACKFILL_CHUNK),
+        "the default tail (rows-before 40 of 100) reveals one chunk"
+    );
+    // At the top with more history: the server page load fires.
+    assert!(store.reveal_older_rows("s1"), "the top reached, the page load took over");
+    assert!(
+        sink.calls.borrow().iter().any(|call| call.contains("page")),
+        "the page load fired: {:?}",
+        sink.calls.borrow()
+    );
+    // Exhausted history: no more reveals past the top.
+    store.set_message_cursor("s1", None);
+    store.set_mount_window(
+        "s1",
+        crate::components::message::list::MountWindow { hidden: Some(0), end: None },
+    );
+    assert!(!store.reveal_older_rows("s1"), "nothing left to reveal");
+}
+
+// -- TUI-TD03: the parent lookup ---------------------------------
+
+#[test]
+fn parent_route_resolves_through_the_registry() {
+    let store = Store::new(Runtime::new());
+    store.open_tab("root", None);
+    // The resync path seeds the family links (session.list rows).
+    store.ingest_all([Ingest::Resync {
+        sessions: vec![
+            crate::data::SessionSnapshot {
+                id: "root".to_owned(),
+                title: None,
+                parent_id: None,
+                time_idle: None,
+                viewed: None,
+                model: None,
+            },
+            crate::data::SessionSnapshot {
+                id: "kid".to_owned(),
+                title: None,
+                parent_id: Some("root".to_owned()),
+                time_idle: None,
+                viewed: None,
+                model: None,
+            },
+        ],
+        unread: Vec::new(),
+        messages: Vec::new(),
+        cursors: Vec::new(),
+        permissions: Vec::new(),
+        forms: Vec::new(),
+    }]);
+    store.navigate(Route::Session { session_id: "kid".to_owned() });
+    assert_eq!(store.parent_session_id("kid").as_deref(), Some("root"));
+    assert!(store.navigate_parent("kid"), "the up-route navigated");
+    assert_eq!(store.route(), Route::Session { session_id: "root".to_owned() });
+    assert!(!store.navigate_parent("root"), "a root has no parent");
 }

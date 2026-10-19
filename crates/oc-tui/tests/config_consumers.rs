@@ -48,6 +48,7 @@ fn list_sessions(store: &Store, ids: &[&str]) {
         sessions: ids.iter().map(|id| snapshot(id)).collect(),
         unread: Vec::new(),
         messages: Vec::new(),
+        cursors: Vec::new(),
         permissions: Vec::new(),
         forms: Vec::new(),
     }]);
