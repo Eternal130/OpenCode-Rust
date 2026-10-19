@@ -26,6 +26,7 @@
 
 pub mod emit_client;
 pub mod emit_routes;
+pub mod emit_validation;
 pub mod groups;
 pub mod model;
 pub mod naming;
@@ -37,6 +38,7 @@ pub struct Generated {
     pub routes_rs: String,
     pub types_rs: String,
     pub methods_rs: String,
+    pub validation_rs: String,
     pub warnings: Vec<String>,
     pub operation_count: usize,
     pub spec_sha256: String,
@@ -100,11 +102,13 @@ pub fn generate_from_spec(spec_json: &str) -> Generated {
 
     let routes_rs = emit_routes::emit(&infos, &sha);
     let methods_rs = emit_client::emit(&infos);
+    let validation_rs = emit_validation::emit(spec_json, &operations, &sha);
 
     Generated {
         routes_rs,
         types_rs,
         methods_rs,
+        validation_rs,
         warnings,
         operation_count: operations.len(),
         spec_sha256: sha,
@@ -225,10 +229,11 @@ pub fn normalize_ws(src: &str) -> String {
 }
 
 /// Canonical output paths relative to the workspace root.
-pub fn output_paths() -> [(&'static str, &'static str); 3] {
+pub fn output_paths() -> [(&'static str, &'static str); 4] {
     [
         ("routes", "crates/oc-server/src/routes.gen.rs"),
         ("types", "crates/oc-client/src/types.gen.rs"),
         ("methods", "crates/oc-client/src/methods.gen.rs"),
+        ("validation", "crates/oc-server/src/validation.gen.rs"),
     ]
 }

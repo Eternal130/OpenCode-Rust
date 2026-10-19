@@ -36,6 +36,7 @@ fn deterministic_output() {
     assert_eq!(a.routes_rs, b.routes_rs);
     assert_eq!(a.types_rs, b.types_rs);
     assert_eq!(a.methods_rs, b.methods_rs);
+    assert_eq!(a.validation_rs, b.validation_rs);
 }
 
 #[test]
@@ -72,6 +73,7 @@ fn checked_in_artifacts_match_regeneration() {
         (&generated.routes_rs, "crates/oc-server/src/routes.gen.rs"),
         (&generated.types_rs, "crates/oc-client/src/types.gen.rs"),
         (&generated.methods_rs, "crates/oc-client/src/methods.gen.rs"),
+        (&generated.validation_rs, "crates/oc-server/src/validation.gen.rs"),
     ] {
         let path = repo_path(relative);
         let checked_in = std::fs::read_to_string(&path)
@@ -122,6 +124,7 @@ fn pinned_spec_hash_is_embedded_and_disk_copy_matches() {
     assert_eq!(generated.spec_sha256, expected);
     assert!(generated.routes_rs.contains(expected));
     assert!(generated.types_rs.contains(expected));
+    assert!(generated.validation_rs.contains(expected));
     // The on-disk pinned copy is still byte-identical to the compiled pin.
     let disk = std::fs::read(openapi_gen::spec_path()).expect("pinned openapi.json on disk");
     assert_eq!(
