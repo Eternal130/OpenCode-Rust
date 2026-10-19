@@ -877,6 +877,22 @@ pub struct Store {
     /// mutations become no-ops (navigation still works) and the
     /// strip hides. Defaults ON (mode "auto").
     tabs_enabled: Signal<bool>,
+    /// `config.tabs.layout` ("horizontal" | "vertical", default
+    /// horizontal — config/index.tsx:330's `input.tabs?.layout`).
+    /// TUI-3: the vertical rail consumes it through
+    /// [`Store::vertical_rail_width`] (app.tsx:575's `tabsVertical`).
+    tabs_layout: Signal<crate::components::session_tabs_rail::TabsLayout>,
+    /// The vertical rail's persisted width (`useStorage().store
+    /// ("layout").verticalTabsWidth`, app.tsx:503-517 — default
+    /// `SESSION_SIDEBAR_WIDTH`, clamped per resize by
+    /// [`crate::components::session_tabs_rail::clamp_session_tabs_
+    /// width`]).
+    vertical_tabs_width: Signal<usize>,
+    /// Per-session cost totals (`session.usage.updated` events —
+    /// client/solid/data.ts:646-652 writes `info[id].cost`). TUI-13:
+    /// [`Store::session_cost`] is the sidebar/footer read (the
+    /// family-summed `data.session.cost`, data.ts:1369-1379).
+    session_costs: Signal<HashMap<String, f64>>,
     /// The session HISTORY from the resync's `session.list` — the
     /// session-list dialog's data source (v2 lists history there,
     /// never the tab strip).
@@ -917,6 +933,12 @@ pub struct Store {
     /// The external `$EDITOR` request flag (the run loop drains it:
     /// suspend → run → resume → replace the focused draft).
     editor_requested: Cell<bool>,
+    /// TUI-3: the compact rail's `⌕` search button hover lift
+    /// (session-tabs-rail.tsx:24-36 — the pointer layer sets it).
+    rail_search_hovered: Cell<bool>,
+    /// TUI-3: the rail's resize-handle highlight (`hovered() ||
+    /// resizing()`, pane-resize-handle.tsx:21-27).
+    rail_handle_hot: Cell<bool>,
     /// Attention (bell + pending marker) — see `attention.rs`.
     attention: Cell<AttentionState>,
     /// The attention engine (R-06): OS notifications + sounds behind
@@ -2194,6 +2216,9 @@ pub struct TranscriptMetrics {
 struct StoreSignals {
     tabs: Signal<TabsState>,
     tabs_enabled: Signal<bool>,
+    tabs_layout: Signal<crate::components::session_tabs_rail::TabsLayout>,
+    vertical_tabs_width: Signal<usize>,
+    session_costs: Signal<HashMap<String, f64>>,
     session_history: Signal<Vec<crate::data::SessionSnapshot>>,
     route: Signal<Route>,
     dialogs: Signal<Vec<DialogEntry>>,
@@ -2275,6 +2300,9 @@ impl Store {
         let redraw_effect = Effect::new(runtime, move || {
             let _ = (
                 watchers.tabs.get(),
+                watchers.tabs_layout.get(),
+                watchers.vertical_tabs_width.get(),
+                watchers.session_costs.get(),
                 watchers.route.get(),
                 watchers.dialogs.get(),
                 watchers.theme.get(),
@@ -2326,6 +2354,9 @@ impl Store {
         let StoreSignals {
             tabs,
             tabs_enabled,
+            tabs_layout,
+            vertical_tabs_width,
+            session_costs,
             session_history,
             route,
             dialogs,
@@ -2378,6 +2409,9 @@ impl Store {
             runtime,
             tabs,
             tabs_enabled,
+            tabs_layout,
+            vertical_tabs_width,
+            session_costs,
             session_history,
             route,
             dialogs,
@@ -2414,6 +2448,8 @@ impl Store {
             selection_sink: Rc::new(RecordingSelectionSink::default()),
             clipboard_sink: Rc::new(crate::clipboard::RecordingClipboardSink::default()),
             editor_requested: Cell::new(false),
+            rail_search_hovered: Cell::new(false),
+            rail_handle_hot: Cell::new(false),
             attention: Cell::new(AttentionState::default()),
             attention_engine: std::cell::RefCell::new(crate::attention::Attention::new()),
             notifications: std::cell::RefCell::new(
@@ -2553,11 +2589,22 @@ impl Store {
         let update_notice = Signal::new(&runtime, None::<crate::components::update::UpdateNotice>);
         let update_dialog =
             Signal::new(&runtime, crate::components::update::UpdateDialogState::Current);
+        // TUI-3/TUI-13: the vertical-rail layout/width and the
+        // per-session cost totals (set at boot from config/storage,
+        // fed by `session.usage.updated`).
+        let tabs_layout =
+            Signal::new(&runtime, crate::components::session_tabs_rail::TabsLayout::default());
+        let vertical_tabs_width =
+            Signal::new(&runtime, crate::components::session_tabs_rail::SESSION_SIDEBAR_WIDTH);
+        let session_costs = Signal::new(&runtime, HashMap::<String, f64>::new());
         Self::build(
             runtime,
             StoreSignals {
                 tabs,
                 tabs_enabled,
+                tabs_layout,
+                vertical_tabs_width,
+                session_costs,
                 session_history,
                 route,
                 dialogs,
@@ -2664,6 +2711,98 @@ impl Store {
     /// Apply the resolved `tabs.enabled` config (boot / reload).
     pub fn set_tabs_enabled(&self, enabled: bool) {
         self.tabs_enabled.set(enabled);
+    }
+
+    /// Apply the resolved `tabs.layout` config (TUI-3 — boot/reload;
+    /// `config/index.tsx:330`'s `input.tabs?.layout ?? "horizontal"`).
+    pub fn set_tabs_layout(&self, layout: crate::components::session_tabs_rail::TabsLayout) {
+        self.tabs_layout.set(layout);
+    }
+
+    /// The persisted vertical-rail width (TUI-3 — the `layout`
+    /// storage doc's `verticalTabsWidth`, seeded at boot).
+    pub fn set_vertical_tabs_width(&self, width: usize) {
+        self.vertical_tabs_width.set(width);
+    }
+
+    /// The live vertical-rail width (clamped against the CURRENT
+    /// terminal width — `clampSessionTabsWidth`, ui/layout.ts:12-17).
+    #[must_use]
+    pub fn vertical_tabs_width(&self, total: usize) -> usize {
+        crate::components::session_tabs_rail::clamp_session_tabs_width(
+            self.vertical_tabs_width.get(),
+            total,
+        )
+    }
+
+    /// `verticalTabsVisible()` (app.tsx:575 + 582): the rail mounts
+    /// when the layout is vertical AND the split fits
+    /// (`sessionTabsFitVertically`, ui/layout.ts:8-10) AND tabs are
+    /// enabled with at least one open tab. Returns the rail's width.
+    #[must_use]
+    pub fn vertical_rail_width(&self, total: usize) -> Option<usize> {
+        if self.tabs_layout.get() != crate::components::session_tabs_rail::TabsLayout::Vertical {
+            return None;
+        }
+        if !self.tabs_enabled.get() || self.tabs.get().tabs.is_empty() {
+            return None;
+        }
+        let width = self.vertical_tabs_width(total);
+        crate::components::session_tabs_rail::session_tabs_fit_vertically(total, width)
+            .then_some(width)
+    }
+
+    /// The compact search button's hover state (TUI-3 — the pointer
+    /// layer's `⌕` lift, session-tabs-rail.tsx:24-36).
+    pub fn set_rail_search_hovered(&self, hovered: bool) {
+        self.rail_search_hovered.set(hovered);
+    }
+
+    /// The rail resize handle's hover/drag highlight (TUI-3).
+    pub fn set_rail_handle_hot(&self, hot: bool) {
+        self.rail_handle_hot.set(hot);
+    }
+
+    #[must_use]
+    pub fn rail_search_hovered(&self) -> bool {
+        self.rail_search_hovered.get()
+    }
+
+    #[must_use]
+    pub fn rail_handle_hot(&self) -> bool {
+        self.rail_handle_hot.get()
+    }
+
+    /// `config.tabs.layout` — the resolved rail orientation (TUI-3).
+    #[must_use]
+    pub fn tabs_layout(&self) -> crate::components::session_tabs_rail::TabsLayout {
+        self.tabs_layout.get()
+    }
+
+    /// `data.session.cost(sessionID)` (client/solid/data.ts:1369-1379,
+    /// TUI-13): a CHILD returns its own total; a root sums over its
+    /// family. Unknown-to-the-index sessions still report their own
+    /// event-fed total (v2's info map holds every listed session; the
+    /// port's index only tracks event-observed ones — the own-cost
+    /// fallback keeps the listed-session read faithful).
+    #[must_use]
+    pub fn session_cost(&self, session_id: &str) -> f64 {
+        let costs = self.session_costs.get();
+        let own = costs.get(session_id).copied().unwrap_or(0.0);
+        let index = self.session_index.borrow();
+        let is_child = index.get(session_id).is_some_and(|info| {
+            info.parent_id.as_deref().is_some_and(|parent| parent != session_id)
+        });
+        if is_child {
+            return own;
+        }
+        let mut total = own;
+        for (id, cost) in &costs {
+            if id != session_id && index.root_of(id) == session_id {
+                total += *cost;
+            }
+        }
+        total
     }
 
     /// The session history from the last resync — the session-list
@@ -6790,6 +6929,20 @@ impl Store {
                 if self.tabs.get().tabs.iter().any(|tab| tab.session_id == id) {
                     self.close_tab(Some(&id));
                 }
+            }
+            // `session.usage.updated` (client/solid/data.ts:646-652,
+            // TUI-13): the per-session cost total rides the public
+            // event — `info[id].cost = data.cost`. The sidebar's
+            // `$X.XX spent` row and the composer footer's money
+            // segment read it through [`Store::session_cost`].
+            "session.usage.updated" => {
+                let Some(id) = event.string("sessionID") else { return };
+                let Some(cost) = event.data.get("cost").and_then(serde_json::Value::as_f64) else {
+                    return;
+                };
+                self.session_costs.update(|costs| {
+                    costs.insert(id, cost);
+                });
             }
             "permission.asked" => {
                 if let Ok(request) = serde_json::from_value::<

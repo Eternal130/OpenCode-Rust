@@ -41,6 +41,10 @@ pub mod picker_solid;
 pub mod session;
 pub mod session_screen;
 pub mod session_tabs;
+/// TUI-3: the vertical session-tab rail + the compact rail controls
+/// (TD-25) — `component/session-tabs.tsx`'s `VerticalSessionTabs` +
+/// `session-tabs-rail.tsx`.
+pub mod session_tabs_rail;
 /// Lane M1: the tab strip on opentui-solid — the DEFAULT renderer
 /// (the hand-rolled one is the `OC_TABS_OPENTUI=0` fallback for one
 /// release; see the module doc + `docs/migration-m1-tabstrip.md`).
