@@ -2,14 +2,17 @@
 //! ref pair CARRIED — see docs/scanef2.log):
 //!
 //! * A2 geometry: boot at widths {10, 40, 160} — no panic, tab strip
-//!   truncates the LONG_TITLE at narrow widths, renders wider at 160.
+//!   truncates the `LONG_TITLE` at narrow widths, renders wider at 160.
 //! * A3 edge + wide-char: stream a transcript delta containing the
 //!   codepoint-class corpus (pure CJK, mixed ASCII+CJK, combining
 //!   NFD, ZWJ family emoji, VS16 flag) through the REAL render path;
 //!   assert no panic, the glyphs land on the grid, and per-class
 //!   consumed-column counts match the width contract (wide=2, VS16
 //!   zero-width, ZWJ joins to ONE glyph cluster).
-
+// Retired spec-corpus probe: sweep-loop short names and the deliberate
+// NFD/decomposed corpus cells are load-bearing (see ledger TUI-E1-FLAKE).
+#![allow(clippy::similar_names)]
+#![allow(clippy::unicode_not_nfc)]
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 
 #[path = "vt_harness.rs"]

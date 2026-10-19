@@ -3,7 +3,7 @@
 //! set diff vs the ref predicate port. This second pass adds:
 //!
 //! * **I8 canary (binding BEFORE the verdict, R6 §6.3 / R7 design):**
-//!   poison ONE corpus expected_match cell (flip a matching id to
+//!   poison ONE corpus `expected_match` cell (flip a matching id to
 //!   non-matching) — the port cross-check must flag EXACTLY that
 //!   query and no others; the unpoisoned corpus must flag zero.
 //! * **Rank-order audit:** per query, ours' fuzzy-ranked ORDER vs
@@ -18,6 +18,7 @@
 
 use oc_tui::components::dialog_select::{filter_indices, SelectOption, SelectProps};
 use serde_json::Value;
+use std::fmt::Write as _;
 
 struct Ses {
     id: String,
@@ -140,16 +141,20 @@ fn e12_second_pass_canary_rankorder_normalization() {
         } else if !order_ok {
             order_div += 1;
         }
-        report.push_str(&format!(
-            "| {class} `{:?}` | {} | {} |\n",
+        writeln!(
+            report,
+            "| {class} `{:?}` | {} | {} |",
             query,
             if set_ok { "PARITY".to_string() } else { "DIVERGENT".to_string() },
             if order_ok { "same".to_string() } else { format!("{ours:?} vs {expected_ref:?}") }
-        ));
+        )
+        .ok();
     }
-    report.push_str(&format!(
-        "\nset-divergent queries: {set_div}; set-parity but ORDER-divergent: {order_div}.\n"
-    ));
+    writeln!(
+        report,
+        "\nset-divergent queries: {set_div}; set-parity but ORDER-divergent: {order_div}."
+    )
+    .ok();
 
     // ---------- normalization audit (behavioral probes) ----------
     let probes: Vec<(&str, &str, &str, bool, bool)> = vec![
@@ -162,11 +167,13 @@ fn e12_second_pass_canary_rankorder_normalization() {
     for (name, query, note, ref_applies, ours_applies) in probes {
         let rf = ref_filter(&sessions, query);
         let of = ours_filter(&sessions, query);
-        audit.push_str(&format!(
-            "| {name} | {} | {} | {note} (q={query:?} ref={rf:?} ours={of:?}) |\n",
+        writeln!(
+            audit,
+            "| {name} | {} | {} | {note} (q={query:?} ref={rf:?} ours={of:?}) |",
             if ref_applies { "yes" } else { "no" },
             if ours_applies { "yes" } else { "no" },
-        ));
+        )
+        .ok();
     }
     audit.push_str("\ncode cites: ref = `dialog-session-list.tsx` `filter.trim().toLowerCase()`\n(byte-exact `includes`, no unicode normalization); ours = `dialog_select.rs::filter_indices`\n(`to_lowercase`, NO trim) -> `fuzzy.rs` `remove_accents` (NFD-decompose + mark-strip).\n");
 

@@ -13,9 +13,9 @@
 //! <filter>`), never as a same-process pair.
 //!
 //! Cells dispositioned elsewhere: search-in-10k-transcript — ours has
-//! NO in-transcript search surface (dialog_select filter only), so the
+//! NO in-transcript search surface (`dialog_select` filter only), so the
 //! cell is absent-dispositioned on the E12 leg, not measurable here;
-//! 10k-msg-transcript-open load column — FakeLlm serves no bulk
+//! 10k-msg-transcript-open load column — `FakeLlm` serves no bulk
 //! transcript fixture (SA-F2 fixture class), in-process cost is owned
 //! by `frame_budget_large_transcript_200x50` (PASS).
 //!
@@ -31,6 +31,7 @@
 #[path = "vt_harness.rs"]
 mod vt_harness;
 
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use vt_harness::{
@@ -72,7 +73,7 @@ fn detect(name: &str, stamps: &[u64], drive_ms: Option<u64>) -> Audit {
             gap150 += 1;
             detail.push(format!("gap150@{}ms={}ms", w[0], g));
         }
-        if u64::from(tick) * 2 < g {
+        if tick * 2 < g {
             missed += 1;
             if g <= 150 {
                 detail.push(format!("missed2ticks@{}ms={}ms", w[0], g));
@@ -120,7 +121,7 @@ fn window(h: &mut HarnessHandle, ms: u64, act: impl FnOnce(&mut HarnessHandle)) 
 fn paste_bytes(lines: usize) -> Vec<u8> {
     let mut body = String::new();
     for i in 0..lines {
-        body.push_str(&format!("line {i:04} the quick brown fox jumps over the lazy dog tail\n"));
+        writeln!(body, "line {i:04} the quick brown fox jumps over the lazy dog tail").ok();
     }
     let mut bytes = b"\x1b[200~".to_vec();
     bytes.extend_from_slice(body.as_bytes());
@@ -128,6 +129,10 @@ fn paste_bytes(lines: usize) -> Vec<u8> {
     bytes
 }
 
+type CellLog = Arc<Mutex<Vec<(String, Vec<u64>)>>>;
+
+// Retired spec-corpus probe driver kept whole (ledger TUI-E1-FLAKE).
+#[allow(clippy::too_many_lines)]
 fn run_cell_suite(tag: &str, paste: Vec<u8>) {
     let _lock = pty_lock();
     let _sandbox = sandbox_env(tag);
@@ -135,7 +140,7 @@ fn run_cell_suite(tag: &str, paste: Vec<u8>) {
     fake.arm_script(streaming_thinking_script("ses_alpha", "count slowly"));
     let harness = LiveHarness::attach(80, 24);
     let mut driver = harness.handle();
-    let cells: Arc<Mutex<Vec<(String, Vec<u64>)>>> = Arc::new(Mutex::new(Vec::new()));
+    let cells: CellLog = Arc::new(Mutex::new(Vec::new()));
     let slot = Arc::clone(&cells);
     let result: Arc<Mutex<Option<Result<(), String>>>> = Arc::new(Mutex::new(None));
     let rslot = Arc::clone(&result);
@@ -170,7 +175,7 @@ fn run_cell_suite(tag: &str, paste: Vec<u8>) {
 
             // paste x idle
             let w = window(&mut driver, 2000, |h| h.write(&paste));
-            slot.lock().unwrap().push((format!("paste-{}-idle", paste.len() / 1024).into(), w));
+            slot.lock().unwrap().push((format!("paste-{}-idle", paste.len() / 1024), w));
             driver.write(&[0x15, 0x15]);
             std::thread::sleep(Duration::from_millis(300));
 
@@ -193,9 +198,7 @@ fn run_cell_suite(tag: &str, paste: Vec<u8>) {
 
             // paste x during-stream (the Thinking row animates)
             let w = window(&mut driver, 2000, |h| h.write(&paste));
-            slot.lock()
-                .unwrap()
-                .push((format!("paste-{}-during-stream", paste.len() / 1024).into(), w));
+            slot.lock().unwrap().push((format!("paste-{}-during-stream", paste.len() / 1024), w));
             driver.write(&[0x15, 0x15]);
             std::thread::sleep(Duration::from_millis(200));
 
@@ -248,8 +251,7 @@ fn run_cell_suite(tag: &str, paste: Vec<u8>) {
                         use std::io::Write;
                         let _ = writeln!(
                             f,
-                            "post-resize ctrl+p: bytes_emitted={} opened={opened}",
-                            delta
+                            "post-resize ctrl+p: bytes_emitted={delta} opened={opened}"
                         );
                     }
                     driver.write(&[0x1b]);
@@ -294,14 +296,16 @@ fn run_cell_suite(tag: &str, paste: Vec<u8>) {
     for (name, stamps) in &cells {
         let drive = name.starts_with("wheel").then_some(150u64);
         let a = detect(name, stamps, drive);
-        report.push_str(&format!(
-            "[E1-cell] {}: flushes={} median-gap={}ms cadence={} bursts={}\n",
+        writeln!(
+            report,
+            "[E1-cell] {}: flushes={} median-gap={}ms cadence={} bursts={}",
             a.name,
             stamps.len(),
             a.median_gap,
             a.cadence_active,
             a.bursts
-        ));
+        )
+        .ok();
     }
     std::fs::write(format!("/tmp/opencode/scanef2/e1cells-{tag}.audit.txt"), &report)
         .expect("write audit");

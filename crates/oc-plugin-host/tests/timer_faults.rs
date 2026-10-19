@@ -38,8 +38,7 @@ fn scheduled_guest_faults_degrade_to_recorded_health_results() {
     assert!(!sandbox.join("never.txt").exists(), "the faulting callback stopped at the throw");
     // The guest is HEALTHY through repeated faults: dispatch answers.
     let outcome = host.execute_command("timercrasher.ping", None, Duration::from_secs(10));
-    let alive =
-        outcome.as_ref().map(|value| value.to_string().contains("alive-after-")).unwrap_or(false);
+    let alive = outcome.as_ref().is_ok_and(|value| value.to_string().contains("alive-after-"));
     assert!(alive, "dispatch stays live through repeated faults: {outcome:?}");
     host.shutdown();
 }
