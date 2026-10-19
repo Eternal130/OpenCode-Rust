@@ -125,6 +125,14 @@ pub struct App {
     /// crossed a slot boundary (`didDrag` — the release persists the
     /// move and SUPPRESSES the click-select, :1505-1514).
     strip_drag: Option<(String, bool)>,
+    /// TUI-3 — the rail's resize interaction (`createPaneResize`,
+    /// ui/pane-resize.ts): `Some(moved)` while a handle press holds
+    /// the drag (`moved` once the pointer crossed cells), else None.
+    rail_resizing: Option<bool>,
+    /// The resize handle's last boundary click (`lastBoundaryClick`,
+    /// pane-resize.ts:75 — a second click within 300 ms resets the
+    /// rail to the default width).
+    rail_boundary_click: Option<std::time::Instant>,
     /// Whether the exit command fired (the run loop's teardown gate).
     pub exit_requested: bool,
     /// `ErrorComponent` mode (auditB #9): a caught render panic swapped
@@ -169,6 +177,8 @@ impl App {
             form_replies: Vec::new(),
             form_cancels: Vec::new(),
             strip_drag: None,
+            rail_resizing: None,
+            rail_boundary_click: None,
             rename_requests: Vec::new(),
             autoaccept: false,
             auto_approved: std::collections::HashSet::new(),
@@ -360,11 +370,19 @@ impl App {
         // gates on `route.data.type !== "plugin"` only, `app.tsx:576-579`
         // — home included, no active pill). The dogfood2 repro: restored
         // tabs on the home route painted but took no clicks because this
-        // gate was session-only.
+        // gate was session-only. TUI-3: the VERTICAL rail replaces the
+        // strip (`tabsVisible() && !tabsVertical()`), so the strip row
+        // never mounts while the rail does.
+        let rail_width = self.store.vertical_rail_width(width);
         let strip_live = self.store.tabs_enabled()
+            && rail_width.is_none()
             && self.store.dialogs().is_empty()
             && !self.permission_live()
             && !self.store.tabs().tabs.is_empty();
+        // TUI-3: the rail's pointer surface — the same modal gating as
+        // the strip's, over the rail's LEFT columns instead of row 0.
+        let rail_live =
+            rail_width.is_some() && self.store.dialogs().is_empty() && !self.permission_live();
         // Track the pointer for the strip's post-mutation hover
         // re-evaluation (`refresh_strip_hover`).
         if matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Up(MouseButton::Left)) {
@@ -421,6 +439,29 @@ impl App {
                         self.store.request_redraw();
                     }
                     return;
+                }
+                // TUI-3 — the rail's hover surface (the vertical
+                // replacement of the strip's row-0 hover): tab rows
+                // lift, the add slot highlights, the compact `⌕`
+                // row arms, and the resize handle's columns light the
+                // boundary strip.
+                if rail_live && rail_width.is_some_and(|rail| col <= rail) {
+                    let (hover, add, search, handle) =
+                        self.rail_hover_at(col, row, width, rail_width.unwrap_or(0));
+                    let changed_tab = self.store.set_tab_hover(hover.as_deref(), false);
+                    let changed_add = self.store.set_tab_add_hovered(add);
+                    let changed_search = self.store.rail_search_hovered() != search;
+                    self.store.set_rail_search_hovered(search);
+                    let changed_handle = self.store.rail_handle_hot() != handle;
+                    self.store.set_rail_handle_hot(handle);
+                    if changed_tab || changed_add || changed_search || changed_handle {
+                        self.store.request_redraw();
+                    }
+                    return;
+                }
+                if rail_live {
+                    self.store.set_rail_search_hovered(false);
+                    self.store.set_rail_handle_hot(self.rail_resizing.is_some());
                 }
                 // #33 — the footer location label's hover lift
                 // (`useWorkingDirectoryActions`: muted → text.base).
@@ -528,6 +569,10 @@ impl App {
                         }
                         return;
                     }
+                }
+                if rail_live && rail_width.is_some_and(|rail| col <= rail) {
+                    self.rail_release(col, row, width);
+                    return;
                 }
                 if strip_live && row == 0 {
                     let hit = {
@@ -902,6 +947,46 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                // TUI-3 — the rail's handle press arms the resize
+                // (`onMouseDown`, pane-resize.ts:82-97); the boundary
+                // double-click (<300 ms) resets the rail to the
+                // default width instead.
+                if rail_live {
+                    if let Some(rail) = rail_width {
+                        if matches!(
+                            crate::components::session_tabs_rail::rail_hit(
+                                &self.rail_views(),
+                                &crate::components::session_tabs_rail::RailGeometry::new(
+                                    self.store.strip_tabs_ordered().len(),
+                                    rail,
+                                ),
+                                col,
+                                row,
+                                self.home_new_tab(),
+                            ),
+                            crate::components::session_tabs_rail::RailHit::Handle
+                        ) {
+                            if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                                eprintln!("[tui] rail handle press at ({col},{row})");
+                            }
+                            if let Some(last) = self.rail_boundary_click {
+                                if last.elapsed() < std::time::Duration::from_millis(300) {
+                                    self.rail_boundary_click = None;
+                                    self.rail_resizing = None;
+                                    self.store.set_rail_handle_hot(false);
+                                    self.commit_rail_width(
+                                        crate::components::session_tabs_rail::SESSION_SIDEBAR_WIDTH,
+                                    );
+                                    return;
+                                }
+                            }
+                            self.rail_boundary_click = Some(std::time::Instant::now());
+                            self.rail_resizing = Some(false);
+                            self.store.set_rail_handle_hot(true);
+                            return;
+                        }
+                    }
+                }
                 // The drag arm (session-tabs.tsx:1680-1681): a left
                 // press on a tab captures it as the drag source (the
                 // ✕'s own press never arms — it stops propagation,
@@ -925,6 +1010,23 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                // TUI-3 — the rail's resize drag (`onMouseDrag`,
+                // pane-resize.ts:99-105): the preferred width follows
+                // `event.x + 1`, clamped; the release commits.
+                if let Some(resizing) = self.rail_resizing.as_mut() {
+                    *resizing = true;
+                    let next = crate::components::session_tabs_rail::clamp_session_tabs_width(
+                        col.saturating_add(1),
+                        width,
+                    );
+                    if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                        eprintln!("[tui] rail drag → width {next}");
+                    }
+                    self.store.set_vertical_tabs_width(next);
+                    self.store.set_rail_handle_hot(true);
+                    self.store.request_redraw();
+                    return;
+                }
                 // The drag motion (session-tabs.tsx:1519-1527): map
                 // the pointer column to the visible slot beneath it
                 // and preview the reorder locally (one persist on
@@ -2071,6 +2173,136 @@ impl App {
         }
     }
 
+    // -- TUI-3: the vertical rail's pointer helpers -------------------
+
+    /// The rail's view list (the real tabs, titles resolved like the
+    /// strip's — status-free for the hit-test).
+    fn rail_views(&self) -> Vec<crate::components::session_tabs::TabView> {
+        self.store
+            .strip_tabs_ordered()
+            .iter()
+            .map(|tab| crate::components::session_tabs::TabView {
+                tab: crate::store::SessionTab {
+                    session_id: tab.session_id.clone(),
+                    title: self.store.display_title(tab),
+                },
+                status: crate::components::session_tabs::TabStatus::EMPTY,
+                detail: None,
+            })
+            .collect()
+    }
+
+    /// The home route's promoted new-tab slot (`newTab()` — route IS
+    /// home with at least one open tab).
+    fn home_new_tab(&self) -> bool {
+        matches!(self.store.route(), Route::Home) && !self.store.tabs().tabs.is_empty()
+    }
+
+    /// Resolve the rail's hover state at (`col`, `row`): the tab
+    /// under the rows, the add slot, the compact `⌕` row, and the
+    /// resize handle's boundary columns.
+    #[allow(clippy::type_complexity)]
+    fn rail_hover_at(
+        &self,
+        col: usize,
+        row: usize,
+        width: usize,
+        rail: usize,
+    ) -> (Option<String>, bool, bool, bool) {
+        let views = self.rail_views();
+        let geometry = crate::components::session_tabs_rail::RailGeometry::new(views.len(), rail);
+        let handle = col + 1 >= rail && col <= rail;
+        let _ = width;
+        match crate::components::session_tabs_rail::rail_hit(
+            &views,
+            &geometry,
+            col,
+            row,
+            self.home_new_tab(),
+        ) {
+            crate::components::session_tabs_rail::RailHit::Tab(id) => {
+                (Some(id), false, false, handle || self.rail_resizing.is_some())
+            }
+            crate::components::session_tabs_rail::RailHit::Add => {
+                (None, true, false, handle || self.rail_resizing.is_some())
+            }
+            crate::components::session_tabs_rail::RailHit::Search => (None, false, true, false),
+            crate::components::session_tabs_rail::RailHit::Handle => (None, false, false, true),
+            crate::components::session_tabs_rail::RailHit::Outside => {
+                (None, false, false, handle || self.rail_resizing.is_some())
+            }
+        }
+    }
+
+    /// The rail's release routing (`finish`, pane-resize.ts:64-73 +
+    /// the item/control `onMouseUp` bodies): a live resize commits
+    /// (`fromMouse = event.x + 1`, persist through the `layout` doc),
+    /// else the hit control runs — the tab selects, the add slot
+    /// navigates home, the `⌕` row dispatches `session.list`.
+    fn rail_release(&mut self, col: usize, row: usize, width: usize) {
+        if let Some(moved) = self.rail_resizing.take() {
+            if moved {
+                // The drag's drop: `fromMouse = event.x + 1`, clamped
+                // + persisted (`finish` → `commit`, pane-resize.ts:
+                // 64-77).
+                let next = crate::components::session_tabs_rail::clamp_session_tabs_width(
+                    col.saturating_add(1),
+                    width,
+                );
+                self.commit_rail_width(next);
+            } else {
+                // A click on the handle without a drag: the boundary
+                // click (the double press's reset stays armed).
+                self.store.set_rail_handle_hot(false);
+            }
+            return;
+        }
+        let views = self.rail_views();
+        let Some(rail) = self.store.vertical_rail_width(width) else { return };
+        let geometry = crate::components::session_tabs_rail::RailGeometry::new(views.len(), rail);
+        match crate::components::session_tabs_rail::rail_hit(
+            &views,
+            &geometry,
+            col,
+            row,
+            self.home_new_tab(),
+        ) {
+            crate::components::session_tabs_rail::RailHit::Tab(id) => {
+                self.store.select_tab(&id);
+                self.store.request_redraw();
+            }
+            crate::components::session_tabs_rail::RailHit::Add => {
+                self.store.navigate(Route::Home);
+                self.store.request_redraw();
+            }
+            crate::components::session_tabs_rail::RailHit::Search => {
+                // `tabs.search ? tabs.search() : keymap.dispatch
+                // ("session.list")` — the controller has no search
+                // surface, so the session list mounts
+                // (session-tabs-rail.tsx:26).
+                let dispatch = self.dispatcher.dispatch(&self.store, "session.list", None);
+                if let Dispatch::ServerPending(reason) = dispatch {
+                    let _ = reason;
+                }
+                self.store.request_redraw();
+            }
+            crate::components::session_tabs_rail::RailHit::Handle
+            | crate::components::session_tabs_rail::RailHit::Outside => {}
+        }
+    }
+
+    /// Persist a rail-width commit (`onCommit` — the `layout` doc's
+    /// `verticalTabsWidth`, app.tsx:512-517) and apply it live.
+    fn commit_rail_width(&mut self, width: usize) {
+        self.store.set_vertical_tabs_width(width);
+        self.store.set_rail_handle_hot(false);
+        self.store.request_redraw();
+        if let Ok(storage) = crate::storage::ChannelStorage::open_default_migrated() {
+            let doc = serde_json::json!({ "verticalTabsWidth": width });
+            let _ = storage.write("layout", &doc);
+        }
+    }
+
     /// `prompt.queue` (`<leader>return`, v2 prompt/index.tsx:444-457 +
     /// submitInner's queue arm): an EMPTY draft does nothing; an
     /// unqueueable draft (an exit word / a slash command) warns
@@ -2142,6 +2374,30 @@ impl App {
     fn handle_composer_outcome(&mut self, key: &str, outcome: KeyOutcome) {
         match outcome {
             KeyOutcome::Submitted(prompt) => {
+                // `argumentSlash` (prompt/index.tsx:1133-1146): the
+                // argument-taking slash heads (`/cd`, `/rename` —
+                // `slash: { arguments: true }`) intercept the submit
+                // — v2 clears the prompt and runs the command with
+                // the remaining text as `input`; the draft NEVER
+                // reaches the model.
+                if let Some((command, args)) =
+                    crate::components::composer::autocomplete::argument_slash(prompt.text.trim())
+                {
+                    if command == "session.rename" {
+                        // index.tsx:899-908: with input → `session.
+                        // update` (an empty/blank title → the title
+                        // GENERATE arm — the same POST with title "");
+                        // the pending shimmer + the `session.renamed`
+                        // echo land the new title.
+                        if let crate::store::Route::Session { session_id } = self.store.route() {
+                            let title = args.trim().to_owned();
+                            self.rename_requests.push((session_id, title));
+                        }
+                    } else {
+                        let _ = self.dispatcher.dispatch(&self.store, command, Some(args.trim()));
+                    }
+                    return;
+                }
                 self.store.forward_submission(key, &prompt);
             }
             KeyOutcome::Command(command) => {
@@ -4876,6 +5132,18 @@ pub async fn run_with_size(
     // (v2 app.tsx:364-371). The boot load runs the one-time
     // local→stable migration first (D-06).
     app.store.set_tabs_enabled(config.tabs.enabled);
+    // TUI-3 — `tabs.layout` ("vertical" mounts the rail): the raw
+    // section rides the CliConfig service (the same reader the
+    // TuiConfig slice delegates to; `config/index.tsx:330`).
+    {
+        let layout = oc_core::cli_config::CliConfig::open(&oc_util::global_roots::resolve())
+            .get()
+            .tabs
+            .and_then(|tabs| tabs.layout);
+        app.store.set_tabs_layout(crate::components::session_tabs_rail::TabsLayout::parse(
+            layout.as_deref(),
+        ));
+    }
     // `session.sidebar` (config/index.tsx:151-152): cli.json first,
     // then the persisted last toggle overrides (v2's toggle writes the
     // config doc; our ChannelStorage "sidebar" key stands in — the TUI
@@ -4901,6 +5169,23 @@ pub async fn run_with_size(
         let doc: crate::storage::UpdateNotificationsDoc =
             storage.read_or_default(crate::storage::KEY_UPDATE_NOTIFICATIONS);
         app.store.set_update_dismissed(doc.versions);
+        // TUI-3 — the vertical rail's persisted width (v2's
+        // `useStorage().store("layout").verticalTabsWidth`,
+        // app.tsx:502-517; the drag commit writes the same shape).
+        if let Some(width) = storage
+            .read("layout")
+            .as_ref()
+            .and_then(|doc| doc.get("verticalTabsWidth"))
+            .and_then(serde_json::Value::as_u64)
+        {
+            if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                eprintln!("[tui] vertical rail width restored: {width}");
+            }
+            app.store.set_vertical_tabs_width(
+                usize::try_from(width)
+                    .unwrap_or(crate::components::session_tabs_rail::SESSION_SIDEBAR_WIDTH),
+            );
+        }
     }
     // The CLI checker's notice file (the TUI-mode channel —
     // autoupdate.rs appends `update available`/`update installed`
@@ -6923,6 +7208,64 @@ fn mouse_strip_hover_close_select_and_add() {
     app.mouse_event(&mouse(MouseEventKind::Moved, 40, 5));
     assert_eq!(app.store.tabs().hover, None);
     assert!(!app.store.tabs().add_hovered);
+}
+
+/// TUI-3 — the vertical rail's pointer surface + the resize handle:
+/// `tabs.layout = "vertical"` mounts the rail (the strip row never
+/// does), a tab row's release selects, the `⌕` search row dispatches
+/// `session.list`, and the handle's press→drag→release re-widths the
+/// rail to `event.x + 1` clamped (`ui/pane-resize.ts`).
+#[test]
+fn mouse_vertical_rail_tabs_search_and_resize() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut app = App::new((120, 30));
+    app.store.set_tabs_layout(crate::components::session_tabs_rail::TabsLayout::Vertical);
+    app.store.open_tab("s1", Some("Alpha".to_owned()));
+    app.store.open_tab("s2", Some("Beta".to_owned()));
+    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+
+    // The rail owns the left 42 columns; the strip row 0 stays empty.
+    let frame = app.frame();
+    assert_eq!(frame.height, 30);
+    let grid = frame.text_grid();
+    assert!(grid[0].chars().take(42).all(|ch| ch == ' '), "no strip row over the rail");
+    assert!(grid[1].starts_with(" 1 Alpha"), "the rail's first tab: {:?}", grid[1]);
+    assert!(grid[4].starts_with(" 2 Beta"), "the rail's second tab: {:?}", grid[4]);
+    assert!(grid[7].starts_with(" + New session"), "the add slot: {:?}", grid[7]);
+
+    // A tab row's release selects the tab.
+    app.mouse_event(&mouse(MouseEventKind::Moved, 5, 4));
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 5, 4));
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 4));
+    assert_eq!(
+        app.store.route(),
+        Route::Session { session_id: "s2".to_owned() },
+        "the second rail row's release routed s2"
+    );
+
+    // The handle: press → drag → release re-widths to col + 1.
+    app.mouse_event(&mouse(MouseEventKind::Moved, 41, 4));
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 41, 4));
+    app.mouse_event(&mouse(MouseEventKind::Drag(MouseButton::Left), 15, 4));
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 15, 4));
+    assert_eq!(app.store.vertical_rail_width(120), Some(16), "the drag re-widthed the rail");
+    let grid = app.frame().text_grid();
+    assert!(grid[1].starts_with(" 1 Alpha"), "the rail narrowed in place: {:?}", grid[1]);
+
+    // The compact rail's ⌕ row dispatches session.list (the Sessions
+    // dialog mounts).
+    app.store.set_vertical_tabs_width(6);
+    let _ = app.frame();
+    app.mouse_event(&mouse(MouseEventKind::Moved, 2, 1));
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 2, 1));
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 2, 1));
+    assert!(
+        matches!(
+            app.store.top_dialog().map(|entry| entry.kind),
+            Some(crate::store::DialogKind::ServerList { command: "session.list", .. })
+        ),
+        "the ⌕ release opened the Sessions dialog"
+    );
 }
 
 /// dogfood2 bug 1 — the strip is a POINTER surface on the HOME route

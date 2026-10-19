@@ -145,6 +145,35 @@ impl SidebarContextWidget {
     }
 }
 
+/// `Intl.NumberFormat("en-US", { style: "currency", currency: "USD"
+/// })` — the money shape both cost surfaces paint
+/// (`$X.XX` with `,` grouping; sidebar/context.tsx:7-11 +
+/// prompt/footer.tsx:7-11). Two fraction digits; cent-sums never hit
+/// the half-expound/nearest-even boundary difference.
+#[must_use]
+pub fn format_usd(value: f64) -> String {
+    let rounded = format!("{value:.2}");
+    let (units, cents) = rounded.split_once('.').unwrap_or((rounded.as_str(), "00"));
+    let negative = units.starts_with('-');
+    let digits = if negative { &units[1..] } else { units };
+    let grouped = if digits.len() > 3 {
+        let mut out = String::new();
+        let bytes = digits.as_bytes();
+        let first = bytes.len() % 3;
+        out.push_str(&digits[..first]);
+        for chunk in bytes[first..].chunks(3) {
+            if !out.is_empty() {
+                out.push(',');
+            }
+            out.push_str(std::str::from_utf8(chunk).unwrap_or(""));
+        }
+        out
+    } else {
+        digits.to_owned()
+    };
+    format!("{}${grouped}.{cents}", if negative { "-" } else { "" })
+}
+
 /// The MCP widget's data + collapse state (mcp.tsx:19-27: `view.open`
 /// persists per storage; rows hide past two servers while closed).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
