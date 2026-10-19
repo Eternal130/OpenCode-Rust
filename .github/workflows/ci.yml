@@ -97,10 +97,9 @@ jobs:
         env:
           CARGO_PROFILE_DEV_DEBUG: "0"
 
-      - name: Build oc-tui test binaries (release, frame budget)
-        run: cargo build --release -p oc-tui --tests --locked
-        env:
-          CARGO_PROFILE_RELEASE_DEBUG: "0"
+      # (release build REMOVED 2026-10-19: a 20-min opt-level-3 chain that
+      # cache eviction kept re-cold-starting. frame_budget now runs in
+      # debug with a calibrated ceiling — regressions show in both.)
 
       - name: Prune non-relocatable artifacts
         # incremental dirs are machine-specific and huge; fingerprints
@@ -213,12 +212,13 @@ jobs:
           # the hard-timeout backstops and bun kill-switch never applied.
           tool: cargo-nextest@0.9.148
 
-      - name: Frame budget guard (release)
-        # CI runners are ~2x slower than the dev box the nominal 40ms
-        # budget is calibrated for (shared 2-core). The scale widens the
-        # regression ceiling for slow machines only; local runs stay
-        # strict. See frame_budget_tests.rs::frame_budget_ms.
-        run: cargo nextest run --release -p oc-tui --locked -E 'test(frame_budget)'
+      - name: Frame budget guard (debug-calibrated)
+        # Release chain removed from CI (20-min cold builds under cache
+        # eviction). Debug is ~2-3x slower than the release profile the
+        # nominal 40ms budget targets; combined with the ~2x slower
+        # shared 2-core runners that is scale 4. Local release runs
+        # stay strict. See frame_budget_tests.rs::frame_budget_ms.
+        run: cargo nextest run -p oc-tui --locked -E 'test(frame_budget)'
         env:
-          OC_FRAME_BUDGET_SCALE: "2"
+          OC_FRAME_BUDGET_SCALE: "4"
           OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
