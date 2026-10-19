@@ -15,6 +15,7 @@
 //! cargo run -p parity --bin rescan-tui -- --scenario boot --scenario session
 //! ```
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -50,7 +51,7 @@ fn omos_source() -> Option<PathBuf> {
     let base = Path::new("/root/.cache/opencode/npm/oh-my-opencode-slim@latest");
     let mut stamps: Vec<PathBuf> = std::fs::read_dir(base)
         .ok()?
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
         .filter(|e| e.path().is_dir())
         .map(|e| e.path())
         .collect();
@@ -63,8 +64,8 @@ fn omos_source() -> Option<PathBuf> {
 }
 
 /// Seed one side's home with the plugin through the npm-install cache
-/// layout. OUR stack reads `<cache>/opencode-rust/npm/...` (APP_NAME
-/// suffix; the live machine's migrated copy), the REF reads
+/// layout. OUR stack reads `<cache>/opencode-rust/npm/...` (`APP_NAME`
+/// suffix; the live machine's migrated copy), the `REF` reads
 /// `<cache>/opencode/npm/...` (v2 `global.cache`).
 fn seed_home_plugin(home: &Path, omos: &Path, suffix: &str) -> std::io::Result<()> {
     for dir in [".config", ".config/opencode", ".local/share", ".local/state", ".cache", "tmp"] {
@@ -178,7 +179,7 @@ fn dump_grid(grid: &Grid, path: &Path) -> anyhow::Result<()> {
         for x in 0..grid.cols {
             let cell = grid.cell(x, y);
             if cell.style != 0 {
-                styles.push_str(&format!("{x},{y}:{:016x} {}\n", cell.style, cell.ch));
+                writeln!(styles, "{x},{y}:{:016x} {}", cell.style, cell.ch).ok();
             }
         }
     }
@@ -351,7 +352,10 @@ async fn spawn_ref_bin(
     Ok(RefSide::Bin(RefBinServer { child, url }))
 }
 
+// Retired rescan probe: monolithic scenario driver kept intentionally
+// (HYGIENE-CLIPPY-RESCAN-TUI debt item in the parity ledger).
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
     let args = parse_args();
     let root = args.out.clone();
@@ -428,7 +432,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
         // --- TUIs on PTYs ---
-        let ref_argv = if let Some(bin) = args.ref_bin.clone() {
+        let ref_argv = if args.ref_bin.is_some() {
             vec!["--server".to_owned(), ref_server.url()]
         } else {
             let preload = ref_checkout_root()
@@ -452,7 +456,7 @@ async fn main() -> anyhow::Result<()> {
         let ref_env = home_env(&ref_home, &ref_server.password(), &config_path);
         let our_env = home_env(&our_home, our_server.password(), &config_path);
 
-        let ref_program: PathBuf = args.ref_bin.clone().unwrap_or_else(|| resolve_bun());
+        let ref_program: PathBuf = args.ref_bin.clone().unwrap_or_else(resolve_bun);
         let mut ref_tui =
             PtyChild::spawn(&ref_program, &ref_argv, &project, &ref_env, args.cols, args.rows)?;
         let mut our_tui =
@@ -500,7 +504,7 @@ async fn main() -> anyhow::Result<()> {
                 stub.stop();
                 ref_tui.kill();
                 our_tui.kill();
-                let _ = ref_server.stop().await;
+                ref_server.stop().await;
                 let _ = our_server.stop().await;
                 eprintln!("[rescan] scenario {scenario} captured into {}", dir.display());
                 continue;
@@ -520,9 +524,9 @@ async fn main() -> anyhow::Result<()> {
                 for i in 0..40 {
                     std::thread::sleep(Duration::from_millis(120));
                     let g1 = ref_tui.grid_now();
-                    dump_grid(&g1, &dir.join(&format!("ref-busy-{i:02}")))?;
+                    dump_grid(&g1, &dir.join(format!("ref-busy-{i:02}")))?;
                     let g2 = our_tui.grid_now();
-                    dump_grid(&g2, &dir.join(&format!("our-busy-{i:02}")))?;
+                    dump_grid(&g2, &dir.join(format!("our-busy-{i:02}")))?;
                 }
                 // settle, then rename dialog + shimmer sampling (the
                 // pending title renders with title_shimmer on the ref)
@@ -540,9 +544,9 @@ async fn main() -> anyhow::Result<()> {
                 for i in 0..30 {
                     std::thread::sleep(Duration::from_millis(120));
                     let g1 = ref_tui.grid_now();
-                    dump_grid(&g1, &dir.join(&format!("ref-shimmer-{i:02}")))?;
+                    dump_grid(&g1, &dir.join(format!("ref-shimmer-{i:02}")))?;
                     let g2 = our_tui.grid_now();
-                    dump_grid(&g2, &dir.join(&format!("our-shimmer-{i:02}")))?;
+                    dump_grid(&g2, &dir.join(format!("our-shimmer-{i:02}")))?;
                 }
                 for side in [&mut ref_tui, &mut our_tui] {
                     side.write(b"\x1b"); // esc out of the dialog
@@ -551,7 +555,7 @@ async fn main() -> anyhow::Result<()> {
                 stub.stop();
                 ref_tui.kill();
                 our_tui.kill();
-                let _ = ref_server.stop().await;
+                ref_server.stop().await;
                 let _ = our_server.stop().await;
                 eprintln!("[rescan] scenario {scenario} captured into {}", dir.display());
                 continue;
@@ -576,7 +580,7 @@ async fn main() -> anyhow::Result<()> {
                 stub.stop();
                 ref_tui.kill();
                 our_tui.kill();
-                let _ = ref_server.stop().await;
+                ref_server.stop().await;
                 let _ = our_server.stop().await;
                 eprintln!("[rescan] scenario {scenario} captured into {}", dir.display());
                 continue;
@@ -603,7 +607,7 @@ async fn main() -> anyhow::Result<()> {
         stub.stop();
         ref_tui.kill();
         our_tui.kill();
-        let _ = ref_server.stop().await;
+        ref_server.stop().await;
         let _ = our_server.stop().await;
         eprintln!("[rescan] scenario {scenario} captured into {}", dir.display());
     }

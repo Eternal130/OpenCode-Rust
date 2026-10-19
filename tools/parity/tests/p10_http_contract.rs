@@ -19,7 +19,7 @@
 //!   `SessionNotFoundError` envelope, 404 empty body on an unknown route).
 //! - **(c) request-validation matrix** — table-driven over the pinned
 //!   openapi document (`p10_openapi.rs` shows the pin): the HTTP-H0
-//!   slice + batch-1 (29 probes over 18 routes — P10-E1/E2 pins, the C4b
+//!   slice + batch-1 (26 probes over 16 routes — P10-E1/E2 pins, the C4b
 //!   generated-table middleware seam with the `^ses` pattern label, and
 //!   the 8 batch-1 validate-first ops) run as real dual-end checks; every
 //!   remaining operation is an explicit `pending` row in the matrix, and
@@ -42,6 +42,7 @@
 
 mod p10_common;
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
@@ -118,16 +119,13 @@ async fn raw_ct_probe(
          Accept-Encoding: identity\r\nConnection: close\r\n"
     );
     if let Some(password) = password {
-        head.push_str(&format!(
-            "Authorization: {}\r\n",
-            parity::minih::basic_auth("opencode", password)
-        ));
+        write!(head, "Authorization: {}\r\n", parity::minih::basic_auth("opencode", password)).ok();
     }
     if let Some(body) = body {
         if let Some(content_type) = content_type {
-            head.push_str(&format!("Content-Type: {content_type}\r\n"));
+            write!(head, "Content-Type: {content_type}\r\n").ok();
         }
-        head.push_str(&format!("Content-Length: {}\r\n", body.len()));
+        write!(head, "Content-Length: {}\r\n", body.len()).ok();
     }
     head.push_str("\r\n");
     let mut request = head.into_bytes();
@@ -148,7 +146,7 @@ async fn raw_ct_probe(
         .with_context(|| {
             format!(
                 "status code in {status_line:?} (raw: {:?})",
-                &text.chars().take(200).collect::<String>()
+                text.chars().take(200).collect::<String>()
             )
         })?
         .parse()
@@ -163,8 +161,8 @@ async fn raw_ct_probe(
         }
         if let Some((name, value)) = line.split_once(':') {
             match name.trim().to_ascii_lowercase().as_str() {
-                "www-authenticate" => challenge = Some(value.trim().to_owned()),
-                "content-type" => response_content_type = value.trim().to_owned(),
+                "www-authenticate" => challenge = Some(value.trim().to_string()),
+                "content-type" => response_content_type = value.trim().to_string(),
                 _ => {}
             }
         }
@@ -266,7 +264,7 @@ fn pinned_operations() -> Result<Vec<(String, String)>> {
 /// The `ses_pattern` rows pin the `^ses` startsWith label (oracle
 /// condition 1) and the `b1_` rows are the HTTP-H0 batch-1 rollout (8
 /// ops, wrong-type + missing-key each, expectations regenerated from the
-/// generated table rows and pinned in round 4 BEFORE the ENFORCED_OPS
+/// generated table rows and pinned in round 4 BEFORE the `ENFORCED_OPS`
 /// edit landed).
 const VALIDATED_ROUTES: &[(&str, &str, Option<&str>, &str)] = &[
     // (method, path-with-query, invalid body, note)
@@ -305,7 +303,9 @@ const VALIDATED_ROUTES: &[(&str, &str, Option<&str>, &str)] = &[
         Some(r#"{"command": "ls", "timeout": -1}"#),
         "HTTP-H0 slice: integer minimum bound",
     ),
-    ("POST", "/api/pty", Some(r#"{"command": 5}"#), "HTTP-H0 slice: required string"),
+    // pty.create probe removed 2026-10-19 with the enforcement rollback
+    // (env-requiredness unprobed vs v2 — gap row; ENFORCED_OPS comment in
+    // oc-server/src/request_validation.rs).
     ("PUT", "/api/pty/pty_P10H0", Some(r#"{"title": 5}"#), "HTTP-H0 slice: string type"),
     ("PATCH", "/api/project/prj_P10H0", Some(r#"{"name": 5}"#), "HTTP-H0 slice: string type"),
     // HTTP-H0 batch 1 (oracle APPROVE WITH CONDITIONS, 2026-10-19).
@@ -315,7 +315,7 @@ const VALIDATED_ROUTES: &[(&str, &str, Option<&str>, &str)] = &[
         Some(r#"{"prompt": 5}"#),
         "b1 generate.text: wrong type",
     ),
-    ("POST", "/api/experimental/generate", Some(r#"{}"#), "b1 generate.text: missing key"),
+    ("POST", "/api/experimental/generate", Some(r"{}"), "b1 generate.text: missing key"),
     (
         "POST",
         "/api/experimental/integration/wellknown",
@@ -325,7 +325,7 @@ const VALIDATED_ROUTES: &[(&str, &str, Option<&str>, &str)] = &[
     (
         "POST",
         "/api/experimental/integration/wellknown",
-        Some(r#"{}"#),
+        Some(r"{}"),
         "b1 wellknown.add: missing key",
     ),
     (
@@ -334,7 +334,7 @@ const VALIDATED_ROUTES: &[(&str, &str, Option<&str>, &str)] = &[
         Some(r#"{"shell": 5}"#),
         "b1 config.update: required nullable wrong type",
     ),
-    ("PATCH", "/api/experimental/config", Some(r#"{}"#), "b1 config.update: missing key"),
+    ("PATCH", "/api/experimental/config", Some(r"{}"), "b1 config.update: missing key"),
     (
         "POST",
         "/api/integration/int_P10H0/connect/command",
@@ -344,7 +344,7 @@ const VALIDATED_ROUTES: &[(&str, &str, Option<&str>, &str)] = &[
     (
         "POST",
         "/api/integration/int_P10H0/connect/command",
-        Some(r#"{}"#),
+        Some(r"{}"),
         "b1 command.connect: missing key",
     ),
     (
@@ -356,21 +356,11 @@ const VALIDATED_ROUTES: &[(&str, &str, Option<&str>, &str)] = &[
     (
         "PUT",
         "/api/session/ses_P10H0/environment",
-        Some(r#"{}"#),
+        Some(r"{}"),
         "b1 session.environment: missing key",
     ),
-    (
-        "POST",
-        "/api/experimental/session/ses_P10H0/terminal",
-        Some(r#"{"args": 5}"#),
-        "b1 persistentPty.create: array wrong type",
-    ),
-    (
-        "POST",
-        "/api/experimental/session/ses_P10H0/terminal",
-        Some(r#"{}"#),
-        "b1 persistentPty.create: missing key",
-    ),
+    // persistentPty.create probes removed 2026-10-19 with the enforcement
+    // rollback (same env-requiredness gap class as pty.create).
     (
         "PUT",
         "/api/experimental/persistent-pty/pty_P10H0",
@@ -380,11 +370,11 @@ const VALIDATED_ROUTES: &[(&str, &str, Option<&str>, &str)] = &[
     (
         "PUT",
         "/api/experimental/persistent-pty/pty_P10H0",
-        Some(r#"{}"#),
+        Some(r"{}"),
         "b1 persistentPty.update: missing key",
     ),
     ("POST", "/api/worktree", Some(r#"{"projectID": 5}"#), "b1 worktree.create: wrong type"),
-    ("POST", "/api/worktree", Some(r#"{}"#), "b1 worktree.create: missing key"),
+    ("POST", "/api/worktree", Some(r"{}"), "b1 worktree.create: missing key"),
 ];
 
 /// (method, template path) of every operation the probes above check —
@@ -398,7 +388,8 @@ const VALIDATED_TEMPLATE_OPS: &[(&str, &str)] = &[
     ("PATCH", "/api/credential/{credentialID}"),
     ("POST", "/api/websearch"),
     ("POST", "/api/shell"),
-    ("POST", "/api/pty"),
+    // POST /api/pty and POST /api/experimental/session/{sessionID}/terminal
+    // removed 2026-10-19 (enforcement rollback; gap rows pending env probes).
     ("PUT", "/api/pty/{ptyID}"),
     ("PATCH", "/api/project/{projectID}"),
     ("POST", "/api/experimental/generate"),
@@ -406,7 +397,6 @@ const VALIDATED_TEMPLATE_OPS: &[(&str, &str)] = &[
     ("PATCH", "/api/experimental/config"),
     ("POST", "/api/integration/{integrationID}/connect/command"),
     ("PUT", "/api/session/{sessionID}/environment"),
-    ("POST", "/api/experimental/session/{sessionID}/terminal"),
     ("PUT", "/api/experimental/persistent-pty/{ptyID}"),
     ("POST", "/api/worktree"),
 ];

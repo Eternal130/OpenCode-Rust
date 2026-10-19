@@ -130,6 +130,9 @@ async fn p10_ts_tui_against_rust_server() -> Result<()> {
 }
 
 #[allow(clippy::too_many_lines)]
+// The RefTuiGuard struct/impls stay local to this helper (they close over
+// its sandbox markers); items-after-statements is intentional here.
+#[allow(clippy::items_after_statements)]
 async fn run_against_rust_server(bun: &std::path::Path) -> Result<()> {
     let tui_root = std::path::PathBuf::from(
         std::env::var("PARITY_REF_ROOT").unwrap_or_else(|_| "/tmp/opencode/ref".to_owned()),
@@ -390,7 +393,8 @@ async fn run_against_rust_server(bun: &std::path::Path) -> Result<()> {
                             #[allow(unsafe_code)]
                             unsafe {
                                 let _ = libc::kill(
-                                    *pid as i32,
+                                    i32::try_from(*pid)
+                                        .expect("/proc pid fits i32 (kernel pid_max caps at 2^22)"),
                                     if attempt == 0 { libc::SIGTERM } else { libc::SIGKILL },
                                 );
                             }

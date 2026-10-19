@@ -623,7 +623,10 @@ async fn all_routes_reject_wrong_payload() {
             r#"{"command": "ls", "timeout": -1}"#,
             "Expected a value greater than or equal to 0\n  at [\"timeout\"]",
         ),
-        ("POST", "/api/pty", r#"{"command": 5}"#, "Expected string\n  at [\"command\"]"),
+        // pty.create probe REMOVED 2026-10-19: enforcement rolled back pending
+        // an env-requiredness probe against v2 (gap row; see request_validation
+        // ENFORCED_OPS comment) — the wrong-payload probe otherwise spawned a
+        // real terminal (200) on every run.
         ("PUT", "/api/pty/pty_H0PROBE", r#"{"title": 5}"#, "Expected string\n  at [\"title\"]"),
         ("PATCH", "/api/project/prj_H0PROBE", r#"{"name": 5}"#, "Expected string\n  at [\"name\"]"),
         (
@@ -690,18 +693,9 @@ async fn all_routes_reject_wrong_payload() {
             "Expected object\n  at [\"variables\"]",
         ),
         ("PUT", "/api/session/ses_H0PROBE/environment", r"{}", "Missing key\n  at [\"variables\"]"),
-        (
-            "POST",
-            "/api/experimental/session/ses_H0PROBE/terminal",
-            r#"{"args": 5}"#,
-            "Expected array\n  at [\"args\"]",
-        ),
-        (
-            "POST",
-            "/api/experimental/session/ses_H0PROBE/terminal",
-            r"{}",
-            "Missing key\n  at [\"args\"]",
-        ),
+        // persistentPty.create probes removed 2026-10-19 with the
+        // enforcement rollback (env-requiredness gap class; see the
+        // ENFORCED_OPS comment in src/request_validation.rs).
         (
             "PUT",
             "/api/experimental/persistent-pty/pty_H0PROBE",
