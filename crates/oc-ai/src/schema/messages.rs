@@ -243,6 +243,20 @@ impl ContentPart {
             ContentPart::Effort { .. } => "effort",
         }
     }
+
+    /// The part's provider metadata, when it carries any (captured handles
+    /// like Copilot's `reasoningOpaque` replay through this).
+    #[must_use]
+    pub fn provider_metadata(&self) -> Option<&ProviderMetadata> {
+        match self {
+            ContentPart::Text { provider_metadata, .. }
+            | ContentPart::Media { provider_metadata, .. }
+            | ContentPart::ToolCall { provider_metadata, .. }
+            | ContentPart::ToolResult { provider_metadata, .. }
+            | ContentPart::Reasoning { provider_metadata, .. } => provider_metadata.as_ref(),
+            ContentPart::Compaction { .. } | ContentPart::Effort { .. } => None,
+        }
+    }
 }
 
 /// Validate the compaction XOR invariant: either encrypted content or a

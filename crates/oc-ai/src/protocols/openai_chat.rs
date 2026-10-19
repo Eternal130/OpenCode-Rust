@@ -94,6 +94,10 @@ pub struct OpenAiChatExt {
     pub cache_control: bool,
     /// Venice's event schema also accepts a bare string `error`.
     pub allow_string_error: bool,
+    /// Capture Copilot's opaque reasoning handle (`delta.reasoning_opaque`)
+    /// into provider metadata and replay it on prior assistant messages
+    /// (ledger AI-COPILOT-C2; off for every other provider).
+    pub reasoning_opaque: bool,
     pub assistant: Option<AssistantOverlay>,
     pub body: Option<BodyOverlay>,
 }
@@ -105,6 +109,7 @@ impl OpenAiChatExt {
             id: ADAPTER,
             cache_control: false,
             allow_string_error: false,
+            reasoning_opaque: false,
             assistant: None,
             body: None,
         }
@@ -113,6 +118,21 @@ impl OpenAiChatExt {
     #[must_use]
     pub fn with_id(mut self, id: &'static str) -> Self {
         self.id = id;
+        self
+    }
+
+    /// Enable Copilot `reasoning_opaque` capture/replay (AI-COPILOT-C2).
+    #[must_use]
+    pub fn with_reasoning_opaque(mut self) -> Self {
+        self.reasoning_opaque = true;
+        self
+    }
+
+    /// Set the lowered-assistant-message overlay (Copilot replays the
+    /// captured `reasoning_opaque` handle this way).
+    #[must_use]
+    pub fn with_assistant_overlay(mut self, overlay: AssistantOverlay) -> Self {
+        self.assistant = Some(overlay);
         self
     }
 }
@@ -156,6 +176,10 @@ struct ChatDelta {
     reasoning_details: Option<Value>,
     tool_calls: Vec<ChatToolCallDelta>,
     thought_signature: Option<String>,
+    /// Copilot's opaque reasoning handle (`reasoning_opaque:
+    /// z.string().nullish()` — github-copilot/chat
+    /// openai-compatible-chat-language-model.ts:761).
+    reasoning_opaque: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -226,6 +250,7 @@ fn decode_delta(value: &Value) -> DecodeResult<ChatDelta> {
             Some(other) => Some(other.clone()),
         },
         thought_signature: opt_string(object.get("thought_signature"))?,
+        reasoning_opaque: opt_string(object.get("reasoning_opaque"))?,
         tool_calls: Vec::new(),
     };
     match object.get("tool_calls") {
@@ -347,6 +372,11 @@ struct ParserState {
     latest_tool_index: Option<i64>,
     next_tool_index: i64,
     require_finish_reason: bool,
+    /// Copilot `reasoning_opaque` capture (AI-COPILOT-C2): enabled by the
+    /// provider ext; the first delta's handle is kept and replayed onto
+    /// subsequent events' provider metadata.
+    capture_reasoning_opaque: bool,
+    reasoning_opaque: Option<String>,
     /// Mirrors `lifecycle.reasoning.has("reasoning-0")` (the shared lifecycle
     /// keeps its block sets private).
     reasoning_started: bool,
@@ -355,7 +385,7 @@ struct ParserState {
 }
 
 impl ParserState {
-    fn initial(request: &LLMRequest) -> Self {
+    fn initial(request: &LLMRequest, capture_reasoning_opaque: bool) -> Self {
         let compatibility = request.model.compatibility.as_ref();
         Self {
             provider_metadata_key: request
@@ -381,6 +411,8 @@ impl ParserState {
             require_finish_reason: compatibility
                 .and_then(|c| c.require_finish_reason)
                 .unwrap_or(true),
+            capture_reasoning_opaque,
+            reasoning_opaque: None,
             reasoning_started: false,
             provider_label: format!("{}/{}", request.model.provider.0, request.model.route.id),
         }
@@ -676,6 +708,29 @@ fn reasoning_metadata(
     BTreeMap::from([(provider_metadata_key.to_string(), inner)])
 }
 
+/// Merge Copilot's opaque reasoning handle into an event metadata map
+/// (`{copilot: {reasoningOpaque}}` — github-copilot/chat
+/// openai-compatible-chat-language-model.ts:223-253).
+fn with_reasoning_opaque(
+    mut metadata: ProviderMetadata,
+    provider_metadata_key: &str,
+    opaque: &str,
+) -> ProviderMetadata {
+    metadata
+        .entry(provider_metadata_key.to_string())
+        .or_default()
+        .insert("reasoningOpaque".to_string(), Value::String(opaque.to_string()));
+    metadata
+}
+
+/// `{key: {reasoningOpaque}}` alone.
+fn reasoning_opaque_metadata(provider_metadata_key: &str, opaque: &str) -> ProviderMetadata {
+    BTreeMap::from([(
+        provider_metadata_key.to_string(),
+        BTreeMap::from([("reasoningOpaque".to_string(), Value::String(opaque.to_string()))]),
+    )])
+}
+
 /// The scalar reasoning delta in field-priority order: configured field first,
 /// then `reasoning_content`, `reasoning`, `reasoning_text` (port of
 /// `reasoningDelta`).
@@ -796,6 +851,33 @@ fn step_state(
     let raw_delta = event.raw.pointer("/choices/0/delta").filter(|value| value.is_object());
     let tool_deltas: &[ChatToolCallDelta] = delta.map_or(&[], |delta| delta.tool_calls.as_slice());
 
+    // Copilot reasoning_opaque capture (AI-COPILOT-C2): the first delta's
+    // handle wins; a second value is a provider defect (ref throws
+    // InvalidResponseDataError). Captured before event emission so parts of
+    // the same chunk carry it (ref: "reasoning_opaque and content come in
+    // the same chunk").
+    let mut reasoning_opaque = state.reasoning_opaque.clone();
+    if state.capture_reasoning_opaque {
+        if let Some(opaque) = delta.and_then(|delta| delta.reasoning_opaque.clone()) {
+            if reasoning_opaque.is_some() {
+                return Err(AiError::new(AiErrorReason::InvalidProviderOutput {
+                    fields: ReasonFields {
+                        message: "Multiple reasoning_opaque values received in a single response. Only one thinking part per response is supported."
+                            .to_string(),
+                        body: Some(encode_event(event)),
+                        ..Default::default()
+                    },
+                    classification: None,
+                    route: Some(state.provider_label.clone()),
+                }));
+            }
+            reasoning_opaque = Some(opaque);
+        }
+    }
+    let opaque_metadata = reasoning_opaque
+        .as_ref()
+        .map(|opaque| reasoning_opaque_metadata(&state.provider_metadata_key, opaque));
+
     let mut tools = state.tools.clone();
     let mut tool_indices = state.tool_indices.clone();
     let mut pending_tools = state.pending_tools.clone();
@@ -846,8 +928,14 @@ fn step_state(
         append_reasoning_details(&mut reasoning_details, detail_delta);
     }
     let reasoning_details_observed = state.reasoning_details_observed || detail_delta.is_some();
-    let delta_metadata =
-        Some(reasoning_metadata(&state.provider_metadata_key, reasoning_field.as_deref(), None));
+    let delta_metadata = Some(match reasoning_opaque.as_ref() {
+        Some(opaque) => with_reasoning_opaque(
+            reasoning_metadata(&state.provider_metadata_key, reasoning_field.as_deref(), None),
+            &state.provider_metadata_key,
+            opaque,
+        ),
+        None => reasoning_metadata(&state.provider_metadata_key, reasoning_field.as_deref(), None),
+    });
     let text = match &detail_delta {
         Some(details) if !details.is_empty() => detail_text(details, reasoning_text_observed)
             .or_else(|| reasoning.as_ref().map(|(_, text)| text.clone())),
@@ -895,12 +983,22 @@ fn step_state(
     // metadata.
     if let Some(delta) = delta {
         if let Some(content) = delta.content.as_deref().filter(|t| !t.is_empty()) {
-            lifecycle_state =
-                lifecycle::text_delta(&lifecycle_state, &mut events, "text-0", content, None);
+            lifecycle_state = lifecycle::text_delta(
+                &lifecycle_state,
+                &mut events,
+                "text-0",
+                content,
+                opaque_metadata.clone(),
+            );
         }
         if let Some(refusal) = delta.refusal.as_deref().filter(|t| !t.is_empty()) {
-            lifecycle_state =
-                lifecycle::text_delta(&lifecycle_state, &mut events, "text-0", refusal, None);
+            lifecycle_state = lifecycle::text_delta(
+                &lifecycle_state,
+                &mut events,
+                "text-0",
+                refusal,
+                opaque_metadata.clone(),
+            );
         }
     }
 
@@ -965,12 +1063,20 @@ fn step_state(
         if pending.is_some() {
             pending_tools.remove(&index);
         }
-        let provider_metadata = extra_content.map(|extra| {
-            BTreeMap::from([(
-                state.provider_metadata_key.clone(),
-                BTreeMap::from([("extraContent".to_string(), extra)]),
-            )])
-        });
+        let provider_metadata = extra_content
+            .map(|extra| {
+                BTreeMap::from([(
+                    state.provider_metadata_key.clone(),
+                    BTreeMap::from([("extraContent".to_string(), extra)]),
+                )])
+            })
+            .map(|metadata| match reasoning_opaque.as_ref() {
+                Some(opaque) => {
+                    with_reasoning_opaque(metadata, &state.provider_metadata_key, opaque)
+                }
+                None => metadata,
+            })
+            .or_else(|| opaque_metadata.clone());
         let result = tool_stream::append_or_start(
             ADAPTER,
             &tools,
@@ -1045,6 +1151,8 @@ fn step_state(
             latest_tool_index,
             next_tool_index,
             require_finish_reason: state.require_finish_reason,
+            capture_reasoning_opaque: state.capture_reasoning_opaque,
+            reasoning_opaque,
             reasoning_started,
             provider_label: state.provider_label,
         },
@@ -1106,11 +1214,15 @@ fn finish_events(state: ParserState) -> Result<Vec<LLMEvent>, AiError> {
     };
     // Snapshot details at publish time so the emitted event never observes
     // later mutation of the accumulated list.
-    let metadata = Some(reasoning_metadata(
+    let mut metadata = reasoning_metadata(
         &state.provider_metadata_key,
         state.reasoning_field.as_deref(),
         state.reasoning_details_observed.then_some(state.reasoning_details.as_slice()),
-    ));
+    );
+    if let Some(opaque) = &state.reasoning_opaque {
+        metadata = with_reasoning_opaque(metadata, &state.provider_metadata_key, opaque);
+    }
+    let metadata = Some(metadata);
     let started = if state.reasoning_details_observed && !state.reasoning_emitted {
         lifecycle::reasoning_start(
             &state.lifecycle,
@@ -1135,7 +1247,14 @@ fn finish_events(state: ParserState) -> Result<Vec<LLMEvent>, AiError> {
     lifecycle::finish(
         &lifecycle_state,
         &mut events,
-        lifecycle::FinishInput { reason, usage: state.usage.clone(), provider_metadata: None },
+        lifecycle::FinishInput {
+            reason,
+            usage: state.usage.clone(),
+            provider_metadata: state
+                .reasoning_opaque
+                .as_ref()
+                .map(|opaque| reasoning_opaque_metadata(&state.provider_metadata_key, opaque)),
+        },
     );
     Ok(events)
 }
@@ -1166,7 +1285,7 @@ impl Protocol for OpenAiChat {
     }
 
     fn initial(&self, request: &LLMRequest) -> ProtocolState {
-        Box::new(ParserState::initial(request))
+        Box::new(ParserState::initial(request, self.ext.reasoning_opaque))
     }
 
     fn step(
@@ -1252,7 +1371,7 @@ impl Protocol for VeniceChatProtocol {
 
     fn initial(&self, request: &LLMRequest) -> ProtocolState {
         Box::new(VeniceState {
-            shared: ParserState::initial(request),
+            shared: ParserState::initial(request, false),
             pending: String::new(),
             reasoning: String::new(),
             encrypted: false,
@@ -3058,6 +3177,7 @@ fn venice_ext() -> OpenAiChatExt {
         id: "venice-chat",
         cache_control: true,
         allow_string_error: true,
+        reasoning_opaque: false,
         assistant: Some(venice_assistant_overlay),
         body: Some(venice_body_overlay),
     }
@@ -3130,6 +3250,7 @@ pub fn groq_chat_route(transport: SharedTransport, auth: Option<AuthDefinition>)
         id: "groq-chat",
         cache_control: false,
         allow_string_error: false,
+        reasoning_opaque: false,
         assistant: None,
         body: Some(groq_body_overlay),
     };
@@ -3151,6 +3272,7 @@ pub fn openrouter_chat_route(transport: SharedTransport, auth: Option<AuthDefini
         id: "openrouter-chat",
         cache_control: true,
         allow_string_error: false,
+        reasoning_opaque: false,
         assistant: None,
         body: Some(openrouter_body_overlay),
     };
@@ -3186,6 +3308,7 @@ pub fn zai_chat_route(transport: SharedTransport, auth: Option<AuthDefinition>) 
         id: "zai-chat",
         cache_control: false,
         allow_string_error: false,
+        reasoning_opaque: false,
         assistant: None,
         body: Some(zai_body_overlay),
     };
@@ -3208,6 +3331,7 @@ pub fn alibaba_chat_route(transport: SharedTransport, auth: Option<AuthDefinitio
         id: "alibaba-chat",
         cache_control: true,
         allow_string_error: false,
+        reasoning_opaque: false,
         assistant: None,
         body: Some(alibaba_body_overlay),
     };
