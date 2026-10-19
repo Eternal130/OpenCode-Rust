@@ -10,6 +10,7 @@
 //! enforcement.
 
 use std::collections::BTreeMap;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -326,45 +327,22 @@ impl Route {
         // The v2 HTTP timeout budget (AI-TIMEOUT): header wait, chunk idle,
         // and whole-request budget wrap the real transport call + body
         // stream (ref `route/transport/http.ts` execute).
-        let budget = crate::route::transport::timeouts::TimeoutBudget::from_http_options(
+        let frames = execute_http_frames(
+            &self.transport,
+            &self.framing,
+            &transport_request,
             prepared.http.as_ref(),
-        );
-        let started = tokio::time::Instant::now();
-        let response = crate::route::transport::timeouts::execute_with_timeouts(
-            Arc::clone(&self.transport),
-            transport_request.clone(),
-            budget,
         )
-        .await
-        .map_err(map_transport_failure)?;
-
-        // Wrap the body before status classification so error-body reads
-        // run under the same budgets (v2 wraps the stream inside execute).
-        let TransportResponse { status, headers, body } = response;
-        let http_context =
-            HttpContext { url: transport_request.url.clone(), status, headers: headers.clone() };
-        let body = crate::route::transport::timeouts::body_with_timeouts(
-            body,
-            budget,
-            started,
-            &transport_request.url,
-            http_context,
-        );
-        let response = TransportResponse { status, headers, body };
-
-        if response.status >= 400 {
-            return Err(status_failure(self, &transport_request, response).await);
-        }
+        .await?;
 
         let route_label = format!("{}/{}", prepared.model.provider, self.id);
         let initial_state = self.protocol.initial(&prepared);
-        Ok(stream_events(
+        Ok(frames_to_events(
             self.id.clone(),
             route_label,
             Arc::clone(&self.protocol),
-            self.framing.clone(),
             initial_state,
-            response,
+            frames,
         ))
     }
 
@@ -401,26 +379,6 @@ fn map_transport_failure(error: TransportError) -> AiError {
     error.into_ai_error()
 }
 
-async fn status_failure(
-    route: &Route,
-    transport_request: &TransportRequest,
-    response: TransportResponse,
-) -> AiError {
-    let _ = route;
-    let body = read_body_limited(response.body, MAX_BODY_CHARS).await.unwrap_or_default();
-    let message = provider_message(response.status, Some(&body));
-    let response_headers: Vec<(String, String)> =
-        response.headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    http_failure(HttpFailureInput {
-        message: &message,
-        url: Some(&transport_request.url),
-        status: Some(response.status),
-        data: None,
-        response_headers: &response_headers,
-        response_body: Some(&body),
-    })
-}
-
 fn incomplete_stream_error(route: &str) -> AiError {
     AiError::new(AiErrorReason::InvalidProviderOutput {
         fields: ReasonFields::new("The provider response ended unexpectedly."),
@@ -436,8 +394,72 @@ fn event_after_terminal_error(route: &str, event: &LLMEvent) -> AiError {
     )
 }
 
+/// The framed-event stream type shared by the HTTP and WS channel paths.
+pub type RouteFrameStream = Pin<Box<dyn futures::Stream<Item = Result<String, AiError>> + Send>>;
+
+/// Execute one prepared HTTP request through the transport seam under the
+/// v2 timeout budget, classifying non-2xx statuses, and return the framed
+/// event stream (the frame-level core of [`Route::stream`]; the WS
+/// channel's HTTP fallback runs the same path).
+pub(crate) async fn execute_http_frames(
+    transport: &SharedTransport,
+    framing: &Framing,
+    transport_request: &TransportRequest,
+    http_options: Option<&HttpOptions>,
+) -> Result<RouteFrameStream, AiError> {
+    let budget = crate::route::transport::timeouts::TimeoutBudget::from_http_options(http_options);
+    let started = tokio::time::Instant::now();
+    let response = crate::route::transport::timeouts::execute_with_timeouts(
+        Arc::clone(transport),
+        transport_request.clone(),
+        budget,
+    )
+    .await
+    .map_err(map_transport_failure)?;
+
+    // Wrap the body before status classification so error-body reads
+    // run under the same budgets (v2 wraps the stream inside execute).
+    let TransportResponse { status, headers, body } = response;
+    let http_context =
+        HttpContext { url: transport_request.url.clone(), status, headers: headers.clone() };
+    let body = crate::route::transport::timeouts::body_with_timeouts(
+        body,
+        budget,
+        started,
+        &transport_request.url,
+        http_context,
+    );
+    let response = TransportResponse { status, headers, body };
+
+    if response.status >= 400 {
+        return Err(status_failure_transport(transport_request, response).await);
+    }
+    Ok(Box::pin(frame_stream(framing.clone(), response.body)))
+}
+
+/// Status classification without a route (the frame path is route-free).
+async fn status_failure_transport(
+    transport_request: &TransportRequest,
+    response: TransportResponse,
+) -> AiError {
+    let body = read_body_limited(response.body, MAX_BODY_CHARS).await.unwrap_or_default();
+    let message = provider_message(response.status, Some(&body));
+    let response_headers: Vec<(String, String)> =
+        response.headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    http_failure(HttpFailureInput {
+        message: &message,
+        url: Some(&transport_request.url),
+        status: Some(response.status),
+        data: None,
+        response_headers: &response_headers,
+        response_body: Some(&body),
+    })
+}
+
 /// The event stream: frames → protocol state machine → terminal enforcement
-/// (port of `streamPrepared` + `requireTerminalEvent`).
+/// (port of `streamPrepared` + `requireTerminalEvent`). Both the HTTP path
+/// (SSE framing) and the WebSocket channel path (raw event frames) feed
+/// decoded frames through this machine.
 ///
 /// - the terminal frame is processed, then remaining frames are dropped
 ///   (port of `Stream.takeUntil(terminal)`);
@@ -445,18 +467,17 @@ fn event_after_terminal_error(route: &str, event: &LLMEvent) -> AiError {
 /// - events after `finish`/`provider-error` fail with a typed error;
 /// - a stream that ends without a terminal event fails with
 ///   `incomplete-stream`.
-fn stream_events(
+pub(crate) fn frames_to_events(
     route_id: String,
     route_label: String,
     protocol: Arc<dyn Protocol>,
-    framing: Framing,
     initial_state: ProtocolState,
-    response: TransportResponse,
+    frames: RouteFrameStream,
 ) -> impl futures::Stream<Item = Result<LLMEvent, AiError>> + Send + 'static {
     async_stream::stream! {
         let mut state = initial_state;
         let mut terminal = false;
-        let mut frames = Box::pin(frame_stream(framing, response.body));
+        let mut frames = frames;
         while let Some(frame) = frames.next().await {
             let frame = match frame {
                 Ok(frame) => frame,

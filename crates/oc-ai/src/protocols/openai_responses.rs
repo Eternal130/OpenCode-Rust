@@ -4,9 +4,11 @@
 //! route defaults `{store: false, include: ["reasoning.encrypted_content"]}`,
 //! and hosted tools via `ToolDefinition.native.openai`.
 //!
-//! Deferred (per ai-map §10): the WebSocket channel transport with the
-//! `openai-beta` protocol header and rotation — the SSE route is the parity
-//! path here. Per ai-map, hosted-tools support is a partial port: the
+//! The WebSocket channel transport (AI-M1) is [`channel_transport`] — the
+//! same create-message/driver chain with the `openai-beta:
+//! responses_websockets=2026-02-06` handshake header and 55-minute socket
+//! rotation; the SSE route remains the parity path for plain HTTP. Per
+//! ai-map, hosted-tools support is a partial port: the
 //! baseline hosted items (`web_search_call`, `file_search_call`,
 //! `code_interpreter_call`, `mcp_call`, `computer_call`,
 //! `web_search_preview_call`, `image_generation_call`) replay as
@@ -38,6 +40,28 @@ pub const ADAPTER: &str = "openai-responses";
 pub const NAME: &str = "OpenAI Responses";
 pub const PATH: &str = open_responses::PATH;
 pub const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+
+/// The WS channel protocol header (v2 `WEBSOCKET_PROTOCOL_HEADER`).
+pub const WEBSOCKET_PROTOCOL_HEADER: &str = "responses_websockets=2026-02-06";
+
+/// The WS socket rotation age (v2 `WEBSOCKET_ROTATE_AFTER_MS`, 55 minutes).
+pub const WEBSOCKET_ROTATE_AFTER_MS: u64 = 55 * 60 * 1000;
+
+/// The `openai-responses` channel transport options (port of
+/// `OpenAIResponses.transport({id, name, rotateAfterMs, headers})`): the
+/// handshake sets `openai-beta: responses_websockets=2026-02-06` unless the
+/// caller already provided one, and the socket rotates after 55 minutes.
+#[must_use]
+pub fn channel_transport() -> crate::protocols::open_responses_channel::ChannelOptions {
+    crate::protocols::open_responses_channel::ChannelOptions::new(ADAPTER, NAME)
+        .with_rotate_after_ms(WEBSOCKET_ROTATE_AFTER_MS)
+        .with_headers(Arc::new(|mut headers| {
+            if headers.get("openai-beta").is_none() {
+                headers.set("openai-beta", WEBSOCKET_PROTOCOL_HEADER);
+            }
+            headers
+        }))
+}
 
 /// The `OpenAI` adapter: restores `OpenAI`-only hosted items for replay.
 pub struct OpenAIAdapter;

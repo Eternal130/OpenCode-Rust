@@ -21,15 +21,31 @@ pub mod anthropic_messages;
 // openrouter/venice/zai/alibaba) wrap the body builder only.
 pub mod openai_chat;
 
+// Azure OpenAI (provider wiring, ledger AI-AZURE) — URL/api-version/api-key
+// construction over the OpenAI protocols (`providers/azure.ts`).
+pub mod azure;
+
 // Open Responses (provider-neutral baseline, ~8 providers build on this) —
 // input items, hosted tool items, function tools, SSE framing, and the
-// `ProviderAdapter` seam. WebSocket channel/continuation deferred (ai-map §10).
+// `ProviderAdapter` seam. The WebSocket channel/continuation transport
+// lives in `open_responses_channel` / `open_responses_continuation`
+// (AI-M1); this module carries the shared event decoding.
 pub mod open_responses;
+
+// Open Responses channel transport (AI-M1) — the WS form of an Open
+// Responses request: create message, base channel driver, HTTP fallback,
+// and the stream glue over a WebSocketChannelExecutor.
+pub mod open_responses_channel;
+
+// Open Responses continuation (AI-M1) — checkpoint-based incremental sends
+// (`previous_response_id` + input suffix) with provider rejection mapping.
+pub mod open_responses_continuation;
 
 // OpenAI Responses — Open Responses + OpenAI extensions (ContextManagement
 // compaction, CompactionTrigger), defaults
 // {store:false, include:["reasoning.encrypted_content"]}, hosted tools via
-// `ToolDefinition.native.openai`. SSE parity path; WS channel deferred.
+// `ToolDefinition.native.openai`. SSE parity path; the WS channel transport
+// is `channel_transport()` below (AI-M1).
 pub mod openai_responses;
 
 // TODO(protocol-lane): openai-compatible re-badging — pure Route::with()

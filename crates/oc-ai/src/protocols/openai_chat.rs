@@ -3068,7 +3068,7 @@ fn venice_ext() -> OpenAiChatExt {
 // =============================================================================
 
 #[expect(clippy::too_many_arguments, reason = "port of Route.make's parameter set")]
-fn chat_route(
+pub(crate) fn chat_route(
     id: &str,
     provider: Option<&str>,
     provider_metadata_key: Option<&str>,
