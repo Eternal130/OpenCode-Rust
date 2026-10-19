@@ -68,6 +68,8 @@ pub struct BedrockAuthOptions {
     /// Static `SigV4` credentials (region on the credentials wins for the
     /// `SigV4` scope when no explicit region is set).
     pub credentials: Option<Credentials>,
+    /// Shared-config profile for the AWS default chain (AI-M10).
+    pub profile: Option<String>,
 }
 
 /// v2 `ResolveAuthOptions.mode`.
@@ -185,8 +187,9 @@ pub fn sign(
 
 /// The auth definition for a Bedrock route (port of `BedrockAuth.resolveAuth`
 /// and `sigV4`): bearer when an API key resolves, else `SigV4` over static
-/// or env credentials, failing with the typed v2 message when neither is
-/// present.
+/// credentials or the AWS default chain (env → profile/SSO → IMDS, AI-M10 —
+/// a fresh chain runs on every request like v2), failing with the typed v2
+/// message when nothing resolves.
 pub fn resolve_auth(options: &BedrockAuthOptions, service: &str, name: &str) -> Definition {
     let options = options.clone();
     let service = service.to_string();
@@ -212,13 +215,34 @@ pub fn resolve_auth(options: &BedrockAuthOptions, service: &str, name: &str) -> 
                 credentials.region = region;
                 credentials
             }
-            None => env_credentials(&region).map_err(|error| AuthError {
-                source: name.clone(),
-                message: format!(
-                    "{name} requires either route bearer auth or AWS credentials configured on the route ({})"
-                    , error.message
-                ),
-            })?,
+            None => match env_credentials(&region) {
+                Ok(credentials) => credentials,
+                Err(env_error) => {
+                    // The AWS default chain (AI-M10): profile static keys /
+                    // SSO / IMDS, resolved per request. A chain failure is
+                    // the authentication error itself.
+                    let chain_options = super::credentials::DefaultChainOptions {
+                        region: region.clone(),
+                        profile: options.profile.clone(),
+                        ..Default::default()
+                    };
+                    match super::credentials::bridge(super::credentials::resolve_default_chain(
+                        &chain_options,
+                    )) {
+                        Ok(credentials) => credentials,
+                        Err(chain_error) => {
+                            return Err(AuthError {
+                                source: name.clone(),
+                                message: format!(
+                                    "{name} requires either route bearer auth or AWS credentials configured on the route ({}; default chain: {})",
+                                    env_error.message,
+                                    chain_error.message()
+                                ),
+                            });
+                        }
+                    }
+                }
+            },
         };
         match sigv4::sign(input, &credentials, &service, unix_now()) {
             Ok(signed) => {

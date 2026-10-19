@@ -14,6 +14,7 @@
 //!   protocol).
 
 pub mod converse;
+pub mod credentials;
 pub mod event_stream;
 pub mod sigv4;
 
