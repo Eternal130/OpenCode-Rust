@@ -1,6 +1,6 @@
 {
   "guard": "route_validation",
-  "count": 122,
+  "count": 123,
   "violations": [
     "route:DELETE /api/credential/:credentialID",
     "route:DELETE /api/experimental/mcp/:server",
@@ -100,6 +100,7 @@
     "route:POST /api/location/reload",
     "route:POST /api/pair",
     "route:POST /api/plugin/check",
+    "route:POST /api/pty",
     "route:POST /api/pty/:ptyID/connect-token",
     "route:POST /api/rpc/:rpcID/:method",
     "route:POST /api/session/:sessionID/agent",

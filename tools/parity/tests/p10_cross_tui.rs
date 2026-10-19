@@ -32,9 +32,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
-use p10_common::{enabled, read_tool_script, skip, text_script, ScriptedFakeLlm};
+use p10_common::{ScriptedFakeLlm, enabled, read_tool_script, skip, text_script};
 use parity::scenario::ScenarioHost;
 
 const SESSION: &str = "p10tui";
@@ -319,99 +319,100 @@ async fn run_against_rust_server(bun: &std::path::Path) -> Result<()> {
         "[p10-tui] interaction 3 PASS — permission once replied through the TUI, tool proceeded"
     );
 
-// -- orphan-proof TUI session guard (2026-10-19 incident) ------------------
-//
-// The reference TUI used to leak when the test panicked or timed out: the
-// best-effort `tmux kill-session` at the end never ran, and even when it
-// did, `bun run` re-execs a nested bun that survives the pane's death.
-// Four such orphans ran for 15+ hours and contributed to the systemd-oomd
-// incident that killed the user session + system services.
-//
-// The guard stops the session on Drop (panic/timeout included) and then
-// verifies-and-kills any surviving descendant of the tmux pane by EXACT
-// PID with a cmdline identity check (this test's sandbox markers) — no
-// name-based matching, nothing we did not spawn ourselves.
-struct RefTuiGuard {
-    session: &'static str,
-    markers: Vec<String>,
-}
-
-impl RefTuiGuard {
-    fn new(session: &'static str, server_url: &str, cli_dir: &std::path::Path) -> Self {
-        RefTuiGuard {
-            session,
-            markers: vec![
-                "OPENCODE_ARTIFACT=\"cli\"".to_owned(),
-                format!("--server {server_url}"),
-                format!("--cwd {}", cli_dir.display()),
-            ],
-        }
+    // -- orphan-proof TUI session guard (2026-10-19 incident) ------------------
+    //
+    // The reference TUI used to leak when the test panicked or timed out: the
+    // best-effort `tmux kill-session` at the end never ran, and even when it
+    // did, `bun run` re-execs a nested bun that survives the pane's death.
+    // Four such orphans ran for 15+ hours and contributed to the systemd-oomd
+    // incident that killed the user session + system services.
+    //
+    // The guard stops the session on Drop (panic/timeout included) and then
+    // verifies-and-kills any surviving descendant of the tmux pane by EXACT
+    // PID with a cmdline identity check (this test's sandbox markers) — no
+    // name-based matching, nothing we did not spawn ourselves.
+    struct RefTuiGuard {
+        session: &'static str,
+        markers: Vec<String>,
     }
 
-    fn pane_descendants(pane_pid: u32) -> Vec<u32> {
-        // Walk /proc children transitively from the tmux pane process.
-        let mut found = Vec::new();
-        let mut frontier = vec![pane_pid];
-        while let Some(pid) = frontier.pop() {
-            if let Ok(children) = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")) {
-                for tok in children.split_whitespace() {
-                    if let Ok(child) = tok.parse::<u32>() {
-                        if !found.contains(&child) {
-                            found.push(child);
-                            frontier.push(child);
+    impl RefTuiGuard {
+        fn new(session: &'static str, server_url: &str, cli_dir: &std::path::Path) -> Self {
+            RefTuiGuard {
+                session,
+                markers: vec![
+                    "OPENCODE_ARTIFACT=\"cli\"".to_owned(),
+                    format!("--server {server_url}"),
+                    format!("--cwd {}", cli_dir.display()),
+                ],
+            }
+        }
+
+        fn pane_descendants(pane_pid: u32) -> Vec<u32> {
+            // Walk /proc children transitively from the tmux pane process.
+            let mut found = Vec::new();
+            let mut frontier = vec![pane_pid];
+            while let Some(pid) = frontier.pop() {
+                if let Ok(children) =
+                    std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
+                {
+                    for tok in children.split_whitespace() {
+                        if let Ok(child) = tok.parse::<u32>() {
+                            if !found.contains(&child) {
+                                found.push(child);
+                                frontier.push(child);
+                            }
                         }
                     }
                 }
             }
+            found
         }
-        found
-    }
 
-    fn stop(&self) {
-        // 1) Ask tmux to tear the session down (kills the pane shell too).
-        let _ = Command::new("tmux").args(["kill-session", "-t", self.session]).output();
-        // 2) The pane PID: capture it from tmux BEFORE killing (see `boot`),
-        //    stored in the lock file by the launcher below.
-        if let Ok(text) = std::fs::read_to_string("/tmp/opencode/p10-cross-tui-panepid") {
-            if let Ok(pane_pid) = text.trim().parse::<u32>() {
-                for attempt in 0..2 {
-                    let victims: Vec<u32> = std::iter::once(pane_pid)
-                        .chain(Self::pane_descendants(pane_pid))
-                        .filter(|pid| self.cmdline_matches(*pid))
-                        .collect();
-                    if victims.is_empty() {
-                        return;
-                    }
-                    for pid in &victims {
-                        // Precise-PID, identity-verified signal: own test
-                        // children only. TERM first, KILL on the 2nd pass.
-                        #[allow(unsafe_code)]
-                        unsafe {
-                            let _ = libc::kill(*pid as i32, if attempt == 0 {
-                                libc::SIGTERM
-                            } else {
-                                libc::SIGKILL
-                            });
+        fn stop(&self) {
+            // 1) Ask tmux to tear the session down (kills the pane shell too).
+            let _ = Command::new("tmux").args(["kill-session", "-t", self.session]).output();
+            // 2) The pane PID: capture it from tmux BEFORE killing (see `boot`),
+            //    stored in the lock file by the launcher below.
+            if let Ok(text) = std::fs::read_to_string("/tmp/opencode/p10-cross-tui-panepid") {
+                if let Ok(pane_pid) = text.trim().parse::<u32>() {
+                    for attempt in 0..2 {
+                        let victims: Vec<u32> = std::iter::once(pane_pid)
+                            .chain(Self::pane_descendants(pane_pid))
+                            .filter(|pid| self.cmdline_matches(*pid))
+                            .collect();
+                        if victims.is_empty() {
+                            return;
                         }
+                        for pid in &victims {
+                            // Precise-PID, identity-verified signal: own test
+                            // children only. TERM first, KILL on the 2nd pass.
+                            #[allow(unsafe_code)]
+                            unsafe {
+                                let _ = libc::kill(
+                                    *pid as i32,
+                                    if attempt == 0 { libc::SIGTERM } else { libc::SIGKILL },
+                                );
+                            }
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(3));
                     }
-                    std::thread::sleep(std::time::Duration::from_secs(3));
                 }
             }
         }
+
+        fn cmdline_matches(&self, pid: u32) -> bool {
+            let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else { return false };
+            let cmd = String::from_utf8_lossy(&raw);
+            self.markers.iter().all(|m| cmd.contains(m.as_str()))
+        }
     }
 
-    fn cmdline_matches(&self, pid: u32) -> bool {
-        let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else { return false };
-        let cmd = String::from_utf8_lossy(&raw);
-        self.markers.iter().all(|m| cmd.contains(m.as_str()))
+    impl Drop for RefTuiGuard {
+        fn drop(&mut self) {
+            self.stop();
+        }
     }
-}
-
-impl Drop for RefTuiGuard {
-    fn drop(&mut self) {
-        self.stop();
-    }
-}
     let goldens = p10_common::golden_dir().join("tui");
     std::fs::create_dir_all(&goldens)?;
     for entry in std::fs::read_dir(p10_common::artifacts())? {
