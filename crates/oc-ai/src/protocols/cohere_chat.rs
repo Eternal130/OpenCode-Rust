@@ -751,5 +751,85 @@ pub fn cohere_route(transport: SharedTransport) -> Route {
     })
 }
 
+// =============================================================================
+// Provider configuration (port of `providers/cohere.ts` configure)
+// =============================================================================
+
+/// The OpenAI-compatibility base URL of the Cohere chat lane
+/// (`providers/cohere.ts` `COMPATIBILITY_BASE_URL`).
+pub const COMPATIBILITY_BASE_URL: &str = "https://api.cohere.ai/compatibility/v1";
+
+/// The native Cohere package (the v2 `/v2/chat` deployment).
+pub const NATIVE_PACKAGE: &str = "@opencode/ai/providers/cohere";
+/// The OpenAI-compatibility chat package (`cohere/chatRoute`).
+pub const CHAT_COMPAT_PACKAGE: &str = "@opencode/ai/providers/cohere/chat";
+
+/// Cohere provider configuration (port of the `configure` input): the
+/// explicit key over the `COHERE_API_KEY` fallback, and an optional base
+/// URL override (auth is optional — the native API accepts anonymous
+/// trial traffic).
+#[derive(Default)]
+pub struct CohereConfig {
+    pub api_key: Option<crate::route::auth::Secret>,
+    pub base_url: Option<String>,
+}
+
+/// The configured native Cohere route: `POST {base}/chat` with optional
+/// bearer auth (`AuthOptions.bearer(input, "COHERE_API_KEY")`,
+/// providers/cohere.ts:37-44).
+#[must_use]
+pub fn cohere_configured(transport: SharedTransport, config: CohereConfig) -> Route {
+    use crate::route::auth;
+    let auth =
+        auth::or_else(&auth::optional(config.api_key), &auth::config("COHERE_API_KEY")).bearer();
+    cohere_route(transport).with(crate::route::RoutePatch {
+        auth: Some(auth),
+        endpoint: Some(crate::route::endpoint::EndpointPatch {
+            base_url: Some(config.base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string())),
+            path: None,
+            query: None,
+        }),
+        ..Default::default()
+    })
+}
+
+/// Map a Cohere package onto its route (the oc-ai half of the facade's
+/// `family_of` selection — the native package runs this protocol, the
+/// `/chat` compatibility package rides the `OpenAI` chat protocol at the
+/// compatibility base URL). `None` → not a Cohere package.
+#[must_use]
+pub fn cohere_route_for_package(
+    package: &str,
+    transport: SharedTransport,
+    config: CohereConfig,
+) -> Option<Route> {
+    match package {
+        NATIVE_PACKAGE => Some(cohere_configured(transport, config)),
+        CHAT_COMPAT_PACKAGE => {
+            let auth = crate::route::auth::or_else(
+                &crate::route::auth::optional(config.api_key),
+                &crate::route::auth::config("COHERE_API_KEY"),
+            )
+            .bearer();
+            Some(crate::protocols::openai_chat::openai_chat_route(transport).with(
+                crate::route::RoutePatch {
+                    id: Some("cohere-chat-completions".to_string()),
+                    provider: Some("cohere".to_string()),
+                    auth: Some(auth),
+                    endpoint: Some(crate::route::endpoint::EndpointPatch {
+                        base_url: Some(
+                            config.base_url.unwrap_or_else(|| COMPATIBILITY_BASE_URL.to_string()),
+                        ),
+                        path: None,
+                        query: None,
+                    }),
+                    ..Default::default()
+                },
+            ))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests;
