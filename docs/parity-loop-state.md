@@ -3,7 +3,7 @@
 > Orchestrator scratch state for the parity loop (docs/PARITY-LOOP.md).
 > Updated at the end of every iteration. Not a task queue — the ledger is.
 
-- **updated**: 2026-10-19 11:1x — **LOOP RESUMED** (user approval; root-cause fixed @18cfee2)
+- **updated**: 2026-10-19 13:1x — wave 2 MERGED (CONFIG 6 @5b69cd5, H0 spike @9c9c9d4 oracle-approved, AI-PROV-2 @50f2ed0); wave 3 dispatched
 - **batch**: 2 — wave 2 in flight (3 lanes); wave-1 remains: CONFIG continuation
 - **iteration**: 6
 - **baseline**: main @ cfac11e
