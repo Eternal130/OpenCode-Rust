@@ -79,7 +79,6 @@ const ENFORCED_OPS: &[&str] = &[
     "integration.command.connect",
     "plugin.update",
     "project.update",
-    "pty.create",
     "pty.update",
     "server.experimental.persistentPty.create",
     "server.experimental.persistentPty.update",
@@ -90,6 +89,13 @@ const ENFORCED_OPS: &[&str] = &[
     "websearch.query",
     "worktree.create",
 ];
+
+// pty.create is NOT enforced: the generated table marks `env` required
+// (per the pinned spec) but the runtime contract is unprobed — the port
+// handler (and pre-enforcement behavior) accepts an env-less create, and
+// CI caught `parity_pty_frames::resized_checkpoint` 400ing on it
+// (2026-10-19). Re-probe v2 with an env-less payload before re-enabling;
+// tracked as a gap row in the H0 matrix.
 
 /// Every operation whose v2 endpoint carries `sessionLocationMiddleware`
 /// (`protocol/src/groups/session.ts` — 18 — and
