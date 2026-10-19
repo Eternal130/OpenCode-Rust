@@ -6,6 +6,12 @@
 //! the default `reqwest-transport` feature; a subprocess-backed provider
 //! (the `aisdk:` shim, phase 9) can implement the same trait without any
 //! route-layer rework. NO reqwest types leak into protocol/route signatures.
+//!
+//! The WebSocket transport path (channel executors + the connector seam)
+//! lives in [`websocket`] — feature `ws-transport` adds the production
+//! tokio-tungstenite connector.
+
+pub mod websocket;
 
 use std::collections::BTreeMap;
 use std::pin::Pin;
