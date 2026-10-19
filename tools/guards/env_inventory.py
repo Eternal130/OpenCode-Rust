@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+''''exec python3 -- "$0" "$@" # '''
 r"""Guard `env_inventory` (§9.1): reference `OPENCODE_*` env read no Rust claim.
 
 WHAT IT CHECKS
@@ -34,7 +35,6 @@ UPDATE BASELINE (`--update-baseline`) when env vars are ported (shrink)
 or after a deliberate `--refresh` accepting new ref vars as debt (grow —
 one ledger CONFIG entry per var, or one covering entry; README § Updating).
 """
-from __future__ import annotations
 
 import re
 import sys

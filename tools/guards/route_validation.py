@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+''''exec python3 -- "$0" "$@" # '''
 r"""Guard `route_validation` (§9.1): route table vs request-validation coverage.
 
 WHAT IT CHECKS
@@ -40,7 +41,6 @@ UPDATE BASELINE (`--update-baseline`) when a handler gains a validator
 (shrink) or the OpenAPI surface is regenerated and grew (grow — justify
 with the regeneration commit; README § Updating).
 """
-from __future__ import annotations
 
 import re
 import sys

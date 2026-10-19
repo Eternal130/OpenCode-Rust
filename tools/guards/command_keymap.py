@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+''''exec python3 -- "$0" "$@" # '''
 r"""Guard `command_keymap` (§9.1): registered TUI command with a dead/no-op handler.
 
 WHAT IT CHECKS
@@ -37,7 +38,6 @@ UPDATE BASELINE (`--update-baseline`) when commands gain handlers
 (shrink) or the v2 keymap backlog adds palette-only rows deliberately
 (grow — with a ledger TUI entry; README § Updating).
 """
-from __future__ import annotations
 
 import re
 import sys
