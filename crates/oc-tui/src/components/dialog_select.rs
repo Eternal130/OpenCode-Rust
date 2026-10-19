@@ -1119,13 +1119,13 @@ mod tests {
         assert_eq!(ids("LONG NIGHT"), vec!["b".to_owned()]);
         // Fuzzy cross-letter sequences (the E12 divergence: zln)
         // must NOT match.
-        assert!(ids("zln").is_empty());
+        assert_eq!(ids("zln"), [] as [std::string::String; 0]);
         // Trim: surrounding whitespace is insignificant…
         assert_eq!(ids("  café  "), vec!["c".to_owned()]);
         // …and a whitespace-only query is EMPTY = the full list.
         assert_eq!(ids("   ").len(), 3);
         // Byte-exact: no accent folding (cafe ≠ Café).
-        assert!(ids("cafe").is_empty());
+        assert_eq!(ids("cafe"), [] as [std::string::String; 0]);
         // The default (fuzzy) contract is untouched: zln still ranks
         // through fuzzysort for the palette.
         let fuzzy_props = SelectProps::new(
@@ -1135,7 +1135,7 @@ mod tests {
                 SelectOption::titled("Zephyr Long Night", "b"),
             ],
         );
-        assert!(!filter_indices(&fuzzy_props, "zln").is_empty());
+        assert_ne!(filter_indices(&fuzzy_props, "zln"), [] as [usize; 0]);
     }
 
     #[test]

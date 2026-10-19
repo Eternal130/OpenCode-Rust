@@ -142,14 +142,29 @@ const REF_DEPTH_CAP: usize = 8;
 enum Ir {
     Any,
     Str,
-    Int { minimum: Option<f64>, exclusive_minimum: Option<f64> },
+    /// `{"type":"string","pattern":"^literal"}` — an Effect `startsWith`
+    /// filter (message-pinned: `Expected a string starting with "ses"`).
+    /// Only metachar-free `^literal` patterns are representable; every
+    /// other regex degrades to [`Ir::Str`] (accept, no false reject).
+    Pattern {
+        prefix: String,
+    },
+    Int {
+        minimum: Option<f64>,
+        exclusive_minimum: Option<f64>,
+    },
     Num,
     Bool,
     Literal(Vec<String>),
-    Ref { label: String, node: Box<Ir> },
+    Ref {
+        label: String,
+        node: Box<Ir>,
+    },
     Nullable(Box<Ir>),
     Arr(Box<Ir>),
-    Obj { fields: Vec<IrField> },
+    Obj {
+        fields: Vec<IrField>,
+    },
     Record(Box<Ir>),
 }
 
@@ -220,7 +235,13 @@ impl Walker<'_> {
                 Some(values) => Ir::Literal(
                     values.iter().filter_map(Ordered::as_str).map(str::to_owned).collect(),
                 ),
-                None => Ir::Str,
+                None => match value.get("pattern").and_then(Ordered::as_str).and_then(plain_prefix)
+                {
+                    // `^ses` & co: Effect's startsWith filter — pinned
+                    // message; complex regexes degrade to plain Str.
+                    Some(prefix) => Ir::Pattern { prefix: prefix.to_owned() },
+                    None => Ir::Str,
+                },
             },
             Some("integer") => Ir::Int {
                 minimum: value.get("minimum").and_then(Ordered::as_f64),
@@ -287,6 +308,9 @@ impl Arena {
         match ir {
             Ir::Any => "SchemaNode::Any".to_owned(),
             Ir::Str => "SchemaNode::Str".to_owned(),
+            Ir::Pattern { prefix } => {
+                format!("SchemaNode::Pattern {{ prefix: {prefix:?} }}")
+            }
             Ir::Num => "SchemaNode::Num".to_owned(),
             Ir::Bool => "SchemaNode::Bool".to_owned(),
             Ir::Int { minimum, exclusive_minimum } => format!(
@@ -335,6 +359,17 @@ fn fmt_opt_f64(value: Option<&f64>) -> String {
         // Debug formatting keeps float literals well-typed (0.0 not 0).
         Some(v) => format!("Some({v:?})"),
     }
+}
+
+/// `^literal` with no regex metacharacters in `literal` → that literal
+/// (an Effect `startsWith` filter); every other pattern → `None` (the
+/// walker keeps plain `Str` so unknown regexes can never false-reject).
+const REGEX_METACHARS: &[char] =
+    &['\\', '.', '[', ']', '(', ')', '{', '}', '*', '+', '?', '|', '^', '$', '/'];
+
+fn plain_prefix(pattern: &str) -> Option<&str> {
+    let literal = pattern.strip_prefix('^')?;
+    (!literal.is_empty() && !literal.contains(REGEX_METACHARS)).then_some(literal)
 }
 
 /// One row per operation: the body kind (+ arena index for JSON bodies).
@@ -436,6 +471,12 @@ pub enum SchemaNode {
     Any,
     /// JSON string.
     Str,
+    /// JSON string that must start with `prefix` (the spec's `^literal`
+    /// patterns — Effect's `startsWith` filter; message-pinned:
+    /// `Expected a string starting with "ses"`).
+    Pattern {
+        prefix: &'static str,
+    },
     /// JSON number, integral; `minimum`/`exclusive_minimum` bounds.
     Int {
         minimum: Option<f64>,
@@ -518,6 +559,10 @@ mod tests {
     /// Every generated route must have exactly one validation row.
     #[test]
     fn covers_all_operations() {
+        // No schema degraded to `Any` by the generator caps (oracle
+        // condition 3) — any drift here must be reviewed with the
+        // regeneration commit.
+        assert_eq!(CAPPED_NODES, 0);
         assert_eq!(ROUTES.len(), OPERATION_COUNT);
         assert_eq!(ROUTES.len(), crate::routes_gen::ROUTES.len());
         let table: std::collections::BTreeSet<&str> =
@@ -620,10 +665,21 @@ mod tests {
         assert_eq!(size_fields.len(), 2);
         assert!(size_fields.iter().all(|f| f.required));
 
-        // session.create: title nullable string (Effect `| null` label).
+        // session.create: title nullable string (Effect `| null` label);
+        // id/parentID nullable `^ses` startsWith patterns.
         match &NODES[field_of("session.create", "title").ty as usize] {
             SchemaNode::Nullable(inner) => assert_eq!(NODES[*inner as usize], SchemaNode::Str),
             other => panic!("title not nullable: {other:?}"),
+        }
+        for pattern_field in ["id", "parentID"] {
+            match &NODES[field_of("session.create", pattern_field).ty as usize] {
+                SchemaNode::Nullable(inner) => assert_eq!(
+                    NODES[*inner as usize],
+                    SchemaNode::Pattern { prefix: "ses" },
+                    "session.create {pattern_field} must be a nullable ^ses pattern"
+                ),
+                other => panic!("{pattern_field} not nullable: {other:?}"),
+            }
         }
 
         // Routes without JSON bodies stay pass-through.
