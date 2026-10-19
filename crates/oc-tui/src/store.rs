@@ -6520,7 +6520,7 @@ impl Store {
     /// the recency window (`viewed !== previous`).
     pub fn enforce_session_retention(&self, current: Option<&str>, navigated: bool) {
         let root_of = |id: &str| self.session_index.borrow().root_of(id);
-        let current_root = current.map(|id| root_of(id));
+        let current_root = current.map(&root_of);
         // `recent` — newest first, roots re-resolved (metadata may
         // have arrived since the last pass).
         let mut recent: Vec<String> = Vec::new();
