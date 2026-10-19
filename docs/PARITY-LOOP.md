@@ -2,7 +2,7 @@
 
 - **版本**：1.0（2026-10-18）
 - **参考基线**：`/opt/opencode-ref`，opencode v2.0.24，commit `e7a34f09bf`（只读）
-- **目标基线**：`/opt/opencode-rust`，workspace `2.0.24`，本文件落笔时 `main@eb4023d`
+- **目标基线**：`/opt/opencode-rust`，workspace `2.0.24`，本文件落笔时 `main@31ff988`
 - **审计输入**：`docs/parity-scan-2026-10-18/`（`00-MASTER.md` + `01`–`16`，386 条原始记录，去重后约 340 个独立差异）
 - **状态文件**：`docs/parity-ledger.jsonl`（唯一任务队列）；`docs/parity-ledger.md` 若存在，只是生成视图，不可手改
 - **适用期**：从本文件生效起，直到 §12 的退出条件全部满足

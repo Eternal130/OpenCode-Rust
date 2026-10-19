@@ -104,7 +104,7 @@ data-driven (D1/D2/C10/C17 for server; D2/D1 for protocol), or OOC-with-justific
 
 **Verdict: CLEAN.**
 
-- The v8→v9 diff touches NO E-clause (verified by `git diff 5b4e101 f81eab2` — hunks
+- The v8→v9 diff touches NO E-clause (verified by `git diff 564f75d 7732190` — hunks
   land only in header/lineage, integration rule, I10b, A6, C13, C14, C20, round log,
   appendix). All 12 E-clauses re-checked for artifact + threshold markers
   programmatically: every one carries both (E1 stall-burst + histogram JSON; E3

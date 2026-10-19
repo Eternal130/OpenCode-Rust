@@ -1,7 +1,7 @@
 # M-sweep2 — FINAL full-corpus differential sweep (executive summary)
 
 **Scope.** Acceptance evidence for tagging **v2.0.24.beta.12**, run on
-`lane/sweep2` (base a7a71b1, post-M-retire: opentui is the only renderer).
+`lane/sweep2` (base 1788f40, post-M-retire: opentui is the only renderer).
 All 26 corpus scripts of `tools/parity/tui-diff`, FULL live (`--no-ref-cache`,
 fresh bun PTY + ref server per run), both sizes × `--runs 2` (per-script
 `size` overrides honored: click-coverage-* @80x24, sidebar-wide and

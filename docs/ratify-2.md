@@ -232,6 +232,6 @@ registration/label-precision classes the program has consistently ruled sub-mate
 Per docs/scan-program.md's post-final ratification rule — RATIFY-1‴ PASS + RATIFY-2‴
 PASS — the spec now **LOCKs: docs/scan-spec.md v9 is the 扫描细则**, the standing
 instrument for every future dev->scan->fix loop. The locked text is FINAL candidate 4
-(commit f81eab2 text, unchanged by either ratification round); J-a/J-b/I5-n and
+(commit 7732190 text, unchanged by either ratification round); J-a/J-b/I5-n and
 N-a..N-d remain in the ledger for the first post-LOCK maintenance window (pinning them
 is an integration-round act, not a ratification failure — the C13 precedent).

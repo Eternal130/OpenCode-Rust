@@ -17,7 +17,7 @@ never delivered to the parent agent.
 - SPEC-R6: completed with the E3 canary still running (its report #1
   arrived, marked the task complete); the canary finished, the wake
   scheduler revived the child; the child produced its close-out commit
-  (fe80161) and final report — the parent received NO notification; the
+  (fd5cff8) and final report — the parent received NO notification; the
   report was only recovered when the user prompted and the parent called
   task_result manually (the content WAS there — delivery, not storage,
   is what failed).

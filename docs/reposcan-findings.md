@@ -1,6 +1,6 @@
 # REPO-SCAN — full-tree pre-release gap sweep (report-only)
 
-**Lane:** reposcan (worktree `.worktrees/lane-reposcan`, branch `lane/reposcan`, base `fd78b23`,
+**Lane:** reposcan (worktree `.worktrees/lane-reposcan`, branch `lane/reposcan`, base `84df850`,
 post-F-1-clippy main). **Date:** 2026-10-17. **Product code untouched** — this file is the only
 artifact. Scope: marker sweep over `crates/`, deferral reconciliation against every lane log +
 audit register, dead-surface check (dispatch/dialog/keymap/SSE), ROADMAP backlog cross-check.
@@ -265,5 +265,5 @@ most-used); (3) decide session_move (wire the inbox admit or pull the tool from 
 family (history/toggles/model.json/pins) and the polish wave (title/2026/chatter) can ship as
 registered should-fixes for beta.13 without blocking acceptance.
 
-*Verification for this report: read-only greps/reads on the lane/reposcan worktree at fd78b23;
+*Verification for this report: read-only greps/reads on the lane/reposcan worktree at 84df850;
 no builds, no tests, no product-code edits.*

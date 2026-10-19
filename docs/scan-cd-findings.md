@@ -1,6 +1,6 @@
 # SCAN-CD findings — first execution of scan-spec v9 (LOCKED), axes C1-C22 + D1-D11
 
-- **Lane**: SCAN-CD (worktree `lane/scancd` @ `5bcf7f6`, main HEAD of v9-LOCKED spec commit)
+- **Lane**: SCAN-CD (worktree `lane/scancd` @ `a73e183`, main HEAD of v9-LOCKED spec commit)
 - **Ref**: `/opt/opencode-ref` (I10b 35-package pin, verified) + I2b binary `/root/.opencode/bin/opencode` (2.0.25)
 - **Instrument binds honored**: I1 (real oc-server + real child ids; only the upstream LLM is a scripted OpenAI-compatible mock — I9: instrument, declared, never sole evidence), I3 (not C/D-binding except timed behaviors), I5 (standing instruments cited where used), I6 (attribution per finding), I9 (provenance per artifact), I10/I10b (pins above).
 - **Severity scale**: HIGH = behavioral divergence on a real flow; MED = partial/degraded parity or dead-wired surface; LOW = hygiene/dead-code/doc-drift; INFO = verified-parity evidence rows.

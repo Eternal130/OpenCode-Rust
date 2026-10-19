@@ -1,6 +1,6 @@
 # RESCAN — comprehensive divergence re-scan (report + instrument-gap audit)
 
-**Lane:** rescan (worktree `.worktrees/lane-rescan`, branch `lane/rescan`, base `a4431d2` = beta.13).
+**Lane:** rescan (worktree `.worktrees/lane-rescan`, branch `lane/rescan`, base `ae89890` = beta.13).
 **Date:** 2026-10-17. **Product code untouched** — artifacts: this file, `docs/rescan.log`,
 `tools/parity/src/bin/rescan-tui.rs` (the reusable plugin-armed live-capture driver, test scaffolding).
 
