@@ -5,7 +5,7 @@
 //! onto the runtime `connection.status`, and projects console-issued
 //! providers onto custom-provider route material the resolver binds.
 
-use super::types::{ConnectionInfo, ConnectionStatus, CredentialValue, OAuthValue};
+use super::types::{ConnectionInfo, ConnectionStatus, CredentialValue};
 use super::IntegrationHost;
 use crate::provider_catalog::facade::CustomModel;
 use crate::provider_catalog::facade::CustomProvider;
@@ -96,22 +96,44 @@ pub struct ConsoleExperimental {
     pub policies: Option<Vec<oc_schema::config::policy::Policy>>,
 }
 
-fn server_of(credential: &OAuthValue) -> String {
-    credential
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("server"))
-        .and_then(Value::as_str)
-        .filter(|server| !server.is_empty())
-        .map_or_else(|| DEFAULT_SERVER.to_owned(), str::to_owned)
+/// The console-relevant projection of either credential type
+/// (CRED-CONSOLE-KEYAUTH): OAuth tokens and service-account keys both
+/// key the console fetch — the token and the metadata record differ by
+/// type (`credentialHeaders` reads `oauth.access` OR `key`,
+/// opencode.ts:535-541).
+struct ConsoleCredential<'a> {
+    token: &'a str,
+    metadata: Option<&'a BTreeMap<String, Value>>,
 }
 
-/// `credentialHeaders` (opencode.ts:535-541).
-fn credential_headers(credential: &OAuthValue) -> Vec<(String, String)> {
-    let mut headers = vec![("authorization".to_owned(), format!("Bearer {}", credential.access))];
+impl<'a> ConsoleCredential<'a> {
+    fn of(value: &'a CredentialValue) -> Option<Self> {
+        match value {
+            CredentialValue::OAuth(oauth) => Some(Self {
+                token: &oauth.access,
+                metadata: oauth.metadata.as_ref(),
+            }),
+            CredentialValue::Key(key) => Some(Self { token: &key.key, metadata: key.metadata.as_ref() }),
+        }
+    }
+
+    fn server(&self) -> String {
+        self.metadata
+            .and_then(|metadata| metadata.get("server"))
+            .and_then(Value::as_str)
+            .filter(|server| !server.is_empty())
+            .map_or_else(|| DEFAULT_SERVER.to_owned(), str::to_owned)
+    }
+}
+
+/// `credentialHeaders` (opencode.ts:535-541): the bearer token is the
+/// OAuth access token OR the service-account key; `x-org-id` rides the
+/// credential metadata when present.
+fn credential_headers(credential: &ConsoleCredential<'_>) -> Vec<(String, String)> {
+    let mut headers =
+        vec![("authorization".to_owned(), format!("Bearer {}", credential.token))];
     if let Some(org) = credential
         .metadata
-        .as_ref()
         .and_then(|metadata| metadata.get("orgID"))
         .and_then(Value::as_str)
     {
@@ -122,13 +144,16 @@ fn credential_headers(credential: &OAuthValue) -> Vec<(String, String)> {
 
 /// Fetches the console config; `Ok(None)` = 404 (no console config for
 /// this account, opencode.ts:480).
-pub async fn fetch_config(credential: &OAuthValue) -> Result<Option<ConsoleConfig>, ConsoleError> {
-    let server = server_of(credential);
+pub async fn fetch_config(credential: &CredentialValue) -> Result<Option<ConsoleConfig>, ConsoleError> {
+    let view = ConsoleCredential::of(credential).ok_or_else(|| {
+        ConsoleError::Http("unsupported console credential type".to_owned())
+    })?;
+    let server = view.server();
     let client = reqwest::Client::new();
     let mut request = client
         .get(format!("{}/api/v2/config", server.trim_end_matches('/')))
         .header("Accept", "application/json");
-    for (key, value) in credential_headers(credential) {
+    for (key, value) in credential_headers(&view) {
         request = request.header(key, value);
     }
     let response = request.send().await.map_err(|error| ConsoleError::Http(error.to_string()))?;
@@ -328,23 +353,28 @@ impl IntegrationHost {
                 .set(crate::config::managed_policy::ManagedState::default());
             return;
         };
-        let CredentialValue::OAuth(oauth) = &stored.value else {
+        // CRED-CONSOLE-KEYAUTH: BOTH credential types resolve the
+        // console connection — OAuth access tokens and service-account
+        // keys (`credentialHeaders` accepts `oauth.access` OR `key`,
+        // opencode.ts:535-541); the token keys the shared snapshot so
+        // resolvers bind console-issued providers with it.
+        let Some(view) = ConsoleCredential::of(&stored.value) else {
             self.console_providers_shared.set_token(None);
             self.console_providers_shared
                 .managed()
                 .set(crate::config::managed_policy::ManagedState::default());
             return;
         };
-        self.console_providers_shared.set_token(Some(oauth.access.clone()));
+        let token = view.token.to_owned();
         // `organizationName` (opencode.ts:531-533): the credential's
         // `orgName` metadata, when present.
-        let organization = oauth
+        let organization = view
             .metadata
-            .as_ref()
             .and_then(|metadata| metadata.get("orgName"))
             .and_then(Value::as_str)
             .map(str::to_owned);
-        match fetch_config(oauth).await {
+        self.console_providers_shared.set_token(Some(token));
+        match fetch_config(&stored.value).await {
             Ok(Some(config)) => {
                 // `publish` (opencode.ts:244-245): statements ride the
                 // snapshot — `managed.set` REPLACES the state (a load,
