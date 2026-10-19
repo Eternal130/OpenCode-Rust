@@ -82,8 +82,16 @@ pub fn routes() -> Router<SharedState> {
 
 /// The handler table with the state applied (standalone mount; tests and
 /// the shell lane's app builder).
+///
+/// Middleware order (outermost first): the HTTP-H0 schema-error
+/// middleware (v2 `SchemaErrorMiddleware` position — payload validation
+/// before handlers on the enforced validate-first slice), then panic
+/// containment around the handlers themselves.
 pub fn mount(state: SharedState) -> Router {
-    routes().with_state(state).layer(axum::middleware::from_fn(catch_panics))
+    routes()
+        .with_state(state)
+        .layer(axum::middleware::from_fn(catch_panics))
+        .layer(axum::middleware::from_fn(crate::request_validation::schema_error_middleware))
 }
 
 /// Panic containment for every API handler (hotfix BUG-D seam): without
