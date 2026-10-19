@@ -35,6 +35,14 @@ pub enum PluginUiEvent {
     NavigateToSession {
         session_id: String,
     },
+    /// A plugin-route navigation ask (`ctx.ui.router.navigate(
+    /// {type:"plugin", name, data?})` — api.tsx:211-224): the
+    /// registered page becomes the visible screen (content
+    /// materializes through the host's bounded `route.render`).
+    NavigateToPluginRoute {
+        name: String,
+        data: Option<serde_json::Value>,
+    },
     /// One footer hint segment per plugin (empty text removes it).
     FooterHint {
         text: String,
@@ -87,6 +95,9 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
         }
         PluginUiEvent::NavigateToSession { session_id } => {
             store.navigate(crate::store::Route::Session { session_id: session_id.clone() });
+        }
+        PluginUiEvent::NavigateToPluginRoute { name, data } => {
+            store.open_plugin_route(plugin_id, name, data.clone());
         }
         PluginUiEvent::FooterHint { text } => store.set_plugin_footer_hint(plugin_id, text),
         PluginUiEvent::DialogOpen { content } => {

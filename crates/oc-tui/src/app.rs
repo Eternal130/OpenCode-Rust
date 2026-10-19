@@ -2551,6 +2551,19 @@ impl App {
         self.rehover_strip_from_last_pointer();
         let theme = self.store.theme();
         let mut frame = render_app(&self.store, &theme, self.size);
+        // PLUG-TUI-SLOT: the open plugin route page paints OVER the
+        // app (the ref's plugin routes replace the visible screen —
+        // `router.navigate({type:"plugin"})`, api.tsx:211-224; the
+        // native page renders the materialized `{title, rows}`).
+        if let Some(page) = self.store.plugin_route_page() {
+            let overlay = crate::components::plugin_page::render_plugin_page(
+                &page.title,
+                &page.rows,
+                &theme.styles(),
+                self.size,
+            );
+            paste_frame(&mut frame, &overlay, 0);
+        }
         let footer_theme = FooterTheme::from_resolved(&theme.resolved.tokens);
         if let FooterView::Permission { request } = self.store.footer().view.clone() {
             let state = self
@@ -5631,6 +5644,12 @@ pub async fn run_with_size(
         let projection = runtime.attach(&app.store);
         app.set_plugin_commands(projection.owned);
         app.set_plugin_themes(projection.themes);
+        // PLUG-D33: the plugin-declared MCP servers flow into the
+        // REAL server-side registry (`experimental.mcp.add` →
+        // `McpRegistry::add`) — the ref's `ctx.mcp.transform` seam
+        // (host.ts:374-403) over the wire; the refreshed rows land
+        // in the pump below (sidebar + `/mcps` become plugin-aware).
+        runtime.start_mcp_sync(&client);
     }
     // SURF-2: plugins ready (no runtime configured = ready) — flips
     // any live StartupLoading pill to "Finishing startup…" and starts
@@ -5650,6 +5669,19 @@ pub async fn run_with_size(
             };
             runtime.set_current_session(active);
             runtime.drain_ui_requests(&app.store);
+            // PLUG-D33: the post-sync MCP rows replace the store's
+            // table with server truth (the registry now carries the
+            // plugin servers — the sidebar's MCP section + `/mcps`
+            // dialog render them like config-sourced rows).
+            if let Some((rows, pushed)) = runtime.take_mcp_rows() {
+                app.store.set_mcp_servers(rows);
+                runtime.adopt_pushed_mcps(pushed);
+            }
+            // PLUG-TUI-SLOT: dynamic keymap layers (installed by a
+            // claim render mid-flight) re-apply onto the App keymap.
+            if let Some(owned) = runtime.take_owned_updates() {
+                app.set_plugin_commands(owned);
+            }
         }
         // Drain ingest.
         while let Ok(message) = rx.try_recv() {
