@@ -415,10 +415,12 @@ pub fn rows_after(start: usize, budget: usize, len: usize) -> usize {
 
 /// TUI-TD05 — apply the mount window to a rendered transcript
 /// (`hidden()` / `visibleEnd()` / `visibleRows`, index.tsx:407-411):
-/// slice the rows to the effective window and re-base the coordinates
-/// so the mounted slice is the scroll box's whole content (v2's
-/// scrollbox only contains the mounted renderables — the scroll
-/// maximum and offsets are window-relative).
+/// the rows OUTSIDE the window drop from the render set, but every
+/// coordinate stays ABSOLUTE — v2's scrollbox keeps the hidden region
+/// as a spacer (the mount budget saves render work, never reshapes
+/// the scroll math: sticky offsets, pageup walks and reveal growth
+/// all address the SAME document space, so growing the window above
+/// never moves the viewport).
 pub fn apply_mount_window(transcript: &mut Transcript, window: MountWindow) {
     let len = transcript.rows.len();
     if len == 0 {
@@ -429,25 +431,11 @@ pub fn apply_mount_window(transcript: &mut Transcript, window: MountWindow) {
     if hidden == 0 && end >= len {
         return; // the full list is mounted
     }
-    let shift = transcript.rows[hidden].y.saturating_sub(1);
+    // Slice the render set; keep the rows' absolute y (the spacer
+    // above is simply "rows that don't paint" — content_height keeps
+    // measuring the FULL transcript).
     transcript.rows.drain(..hidden);
     transcript.rows.truncate(end - hidden);
-    for row in &mut transcript.rows {
-        row.y -= shift;
-        for item in &mut row.placed {
-            item.y = item.y.saturating_sub(shift);
-        }
-        for fill in &mut row.fills {
-            fill.y = fill.y.saturating_sub(u16::try_from(shift).unwrap_or(fill.y));
-        }
-    }
-    let mounted_height =
-        transcript.rows.last().map_or(0, |row| (row.y + row.height).saturating_sub(shift));
-    transcript.images.retain(|image| usize::from(image.y) > shift);
-    for image in &mut transcript.images {
-        image.y = image.y.saturating_sub(u16::try_from(shift).unwrap_or(image.y));
-    }
-    transcript.content_height = mounted_height;
 }
 
 /// Render one reduced row.

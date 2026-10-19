@@ -608,7 +608,10 @@ fn pty_escape_interrupt_body() {
 }
 
 /// PTY: `<leader>return` queues behind the streaming turn — the dock
-/// row appears and only ONE prompt POST exists.
+/// row appears and the queue submit POSTs IMMEDIATELY with the server
+/// inbox semantics (TUI-TD07: `session.prompt {delivery: "queue"}` —
+/// the queue is the SERVER's pending inbox; the local serial drain
+/// that re-POSTed on idle is retired).
 #[test]
 fn pty_leader_return_queues_behind_the_turn() {
     pty_leader_return_queue_body();
@@ -640,8 +643,8 @@ fn pty_leader_return_queue_body() {
     });
     assert_eq!(
         shared.prompt_posts.load(Ordering::SeqCst),
-        1,
-        "the queued prompt never POSTed (it waits in the local queue)"
+        2,
+        "the streaming turn + the queue submit both POSTed (TUI-TD07: delivery \"queue\", no local drain re-POST)"
     );
 }
 
