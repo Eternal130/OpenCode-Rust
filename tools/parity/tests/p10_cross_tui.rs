@@ -32,9 +32,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 
-use p10_common::{ScriptedFakeLlm, enabled, read_tool_script, skip, text_script};
+use p10_common::{enabled, read_tool_script, skip, text_script, ScriptedFakeLlm};
 use parity::scenario::ScenarioHost;
 
 const SESSION: &str = "p10tui";
