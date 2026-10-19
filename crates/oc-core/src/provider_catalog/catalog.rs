@@ -53,6 +53,20 @@ impl Catalog {
         Ok(Self { providers: normalize(&parse_catalog(text)?) })
     }
 
+    /// Builder seam: one provider's activation (v2's normalize hardcodes
+    /// `auto`; provider plugins — the config provider plugin sets
+    /// `enabled` for every configured provider, the zen plugin for the
+    /// keyless tier — flip it afterwards).
+    #[must_use]
+    pub fn with_activation(mut self, provider_id: &str, activation: Activation) -> Self {
+        if let Some(snapshot) =
+            self.providers.iter_mut().find(|snapshot| snapshot.info.id.0 == provider_id)
+        {
+            snapshot.info.activation = activation;
+        }
+        self
+    }
+
     /// The embedded snapshot, decoded + normalized once per process
     /// (v2 `bundledSnapshot` memo).
     #[must_use]

@@ -1704,7 +1704,10 @@ async fn console_config_fetch_and_provider_projection() {
             ("orgID".to_owned(), Value::String("org_1".into())),
         ])),
     };
-    let config = super::console::fetch_config(&credential).await.expect("fetch").expect("some");
+    let config = super::console::fetch_config(&CredentialValue::OAuth(credential))
+        .await
+        .expect("fetch")
+        .expect("some");
     let providers = super::console::to_custom_providers(&config);
     assert_eq!(providers.len(), 1);
     let provider = &providers[0];
