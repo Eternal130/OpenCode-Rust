@@ -255,6 +255,10 @@ pub async fn run_mini(input: MiniInput, server: &ServerParams) -> i32 {
         version: util::VERSION.to_owned(),
         home: roots.home.display().to_string(),
         state_dir: roots.state,
+        // CONFIG-T4: the runtime resolves the cli.json `mini` section
+        // itself (v2's `resolveRunTuiConfig` default path,
+        // runtime.ts:197-199).
+        settings: None,
     };
     match mini::runtime::run(frontend).await {
         Ok(code) => code,
