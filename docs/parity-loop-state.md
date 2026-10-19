@@ -6,11 +6,15 @@
 - **updated**: 2026-10-19 10:55 — **LOOP HALTED AFTER SECOND HOST INCIDENT** (user approval required to resume)
 - **batch**: 2 — wave 1 partially merged (AI-PROVIDERS @993a6c2, TUI-DAILY @72f7f64 + records @6f64391); CONFIG lane interrupted mid-fix (fixer session died in first restart; worktree `.worktrees/lane-config` at ff7180f — INSPECT before reuse); process_safety baseline refresh interrupted twice (home.rs line-drift still unrefreshed — guard will read 3 NEW violations until refreshed)
 
-## INCIDENT LOG (host outages caused by loop activity)
+## INCIDENT LOG — ROOT CAUSE CORRECTED (2026-10-19 11:0x)
 
-1. **09:12:36** — concurrent gate scopes (10G MemoryMax each) + 4 orphaned ref-TUI bun servers (leaking since ~19h prior from failing cross-TUI runs) exhausted memory → systemd-oomd killed the eternal130 user-session cgroup + system services (caddy dead, docker disrupted, lobehub redis corrupted). User revived manually. Orphans killed (identity-verified precise-PID); hardening applied: dev-gate global flock + MemoryMax 6G + cross-TUI RAII orphan guard (verified on failing path).
-2. **10:46:06** — SECOND systemd-oomd cycle killed the user session again (caddy restarted 10:46:50, gnome/Xorg ~10:45). Occurred during/after a single serialized cross-TUI verification run + guards scan — i.e., even one 6G-capped serialized gate load can push oomd's system-wide pressure logic to sacrifice the desktop session cgroup on this 22G box.
-**Conclusion**: this machine cannot safely host loop test loads while running the user's full service stack under current oomd policy. Resume requires a user decision (see options in halt message).
+**真凶不是内存，是我（orchestrator）的命令错误**：两次主机软重启（09:12:35、10:43:59）都由 `bash tools/guards/process_safety.py --update-baseline` 引起 —— 用 bash 执行 Python 文件时，bash 把源码当 shell 解析，docstring 文档表格里的反引号示例被当作真实命令替换执行：
+- 第 18 行的 `kill ... $(pgrep ...)` 示例 → root 身份对**全机进程**（含 PID 1）发 SIGTERM → systemd 软重启（journal 铁证：`systemd[1]: Received SIGTERM from PID xxxxx (bash)` 两次均为该命令运行时刻）
+- 第 13 行的 `fuser -k 49374/tcp` 示例 → 可能实际执行过（用户 49374 服务中断的另一嫌疑）
+- 连带损害：用户会话/caddy/docker/lobehub-redis 全部来自软重启，非资源耗尽
+**修复（@18cfee2）**：全部 9 个守卫脚本加 bash/python 双解释器哨兵（bash 误执行时第一行即重定向给 python3），文档字符串去武装化；实测 `bash process_safety.py` 现在安全。之前的 oomd/内存归因是错误结论，已废弃（flock/6G 加固保留作为一般性卫生，但非本次根因）。4 个孤儿 bun 服务器是真实但独立的旧泄漏（已修 + 已清）。
+
+历史现场保留：用户手动恢复了 caddy/docker/lobehub；机器 up 7 天未重启（软重启不重置 uptime）。
 
 ## Uncommitted/interrupted items (all safe to leave)
 
