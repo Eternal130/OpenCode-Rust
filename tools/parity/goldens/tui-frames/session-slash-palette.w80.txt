@@ -9,13 +9,13 @@
   ┃ /agents      Switch agent                                                  ┃
   ┃ /cd          Change working directory                                      ┃
   ┃ /clear       Clear session                                                 ┃
+  ┃ /compact     Compact session                                               ┃
   ┃ /connect     Connect an integration                                        ┃
   ┃ /continue    Switch session                                                ┃
   ┃ /debug       View debug info                                               ┃
   ┃ /diff        Open diff viewer                                              ┃
   ┃ /editor      Open editor                                                   ┃
   ┃ /effort      Switch model variant                                          ┃
-  ┃ /exit        Exit the app                                                  ┃
   ┃                                                                             
   ┃  /                                                                          
   ┃                                                                             
