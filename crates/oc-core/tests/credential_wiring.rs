@@ -445,6 +445,67 @@ async fn generic_keyless_downgrades_to_auth_none() {
     );
 }
 
+/// CRED-AUTHNONE-DOWNGRADE v2 delta (ref model-resolver.ts:456): the v2
+/// `usesAPIKeyAuth` list includes the `@opencode/ai/providers/*` npm names
+/// (fireworks, openai-compatible, google at model-resolver.ts:455-457) —
+/// v2-era models.dev ships these, so an A1 refresh can land one live. An
+/// activation-enabled keyless provider under one of those npm names must
+/// downgrade to Auth.none exactly like the generic keyless leg above.
+#[tokio::test]
+async fn v2_npm_openai_compatible_keyless_downgrades_to_auth_none() {
+    let _env = env_guard().await;
+    // SAFETY: test-scoped env scrub — the keyless leg.
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::remove_var("V2_KEYLESS_API_KEY");
+    }
+    let body = r#"{
+        "v2keyless": {
+            "id": "v2keyless",
+            "name": "V2 Keyless Gateway",
+            "env": ["V2_KEYLESS_API_KEY"],
+            "npm": "@opencode/ai/providers/openai-compatible",
+            "api": "https://gw.v2keyless.test/v1",
+            "models": {
+                "v2keyless-1": {
+                    "id": "v2keyless-1",
+                    "name": "V2 Keyless One",
+                    "release_date": "2026-01-01",
+                    "attachment": false,
+                    "reasoning": false,
+                    "tool_call": true,
+                    "limit": {"context": 8192, "output": 1024}
+                }
+            }
+        }
+    }"#;
+    let catalog = Arc::new(
+        Catalog::parse(body)
+            .expect("synthetic catalog parses")
+            .with_activation("v2keyless", oc_schema::provider::Activation::Enabled),
+    );
+    let transport: oc_ai::route::SharedTransport =
+        Arc::new(oc_ai::route::transport::reqwest_transport::ReqwestTransport::new());
+    let resolver = CatalogModelResolver::new(
+        FacadeContext::new(transport),
+        catalog,
+        BTreeMap::new(),
+        Vec::new(),
+        None,
+    );
+
+    let session = session_row();
+    let bound = resolver
+        .resolve_selected(&session, &model_ref("v2keyless", "v2keyless-1"))
+        .expect("activation-enabled v2-npm keyless provider resolves");
+    let header = wire_header(&bound, "authorization")
+        .unwrap_or_else(|error| panic!("v2 keyless request must build anonymously, got: {error}"));
+    assert_eq!(
+        header, None,
+        "v2 npm name + no credential, no env, no configured auth → Auth.none (no authorization header)"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // CRED-A1: catalog refresh propagates to resolver + integrations
 // ---------------------------------------------------------------------------
