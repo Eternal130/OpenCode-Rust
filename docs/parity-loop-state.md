@@ -33,6 +33,12 @@ Queued wave 3: C6b session-route (TD-01/02/03/05/07), C9a SURFACES, C7b remainde
 - 本地靶测：oc-server 3/3（all_routes/resized_checkpoint/cursor）、parity golden_corpus 1/1、oc-tui missing_slashes 1/1。
 - auditd execve 审计已启用（root+eternal130 双 key）。
 
+## CI 推送纪律（2026-10-19 僵尸 run 事故后追加）
+
+- **CI 基础设施调试期间：一个验证周期只推一次**。上一次推送的 run 未到终态前，不推下一个迭代（改动先攒在本地提交里）。
+- 依据：连续 5 推 + 30 分钟级慢步骤 + GitHub 取消服务失同步 = 僵尸 job 堆积（用户 2026-10-19 指出）。cancel-in-progress 是优化不是契约。
+- build-archive 的 job 超时压到 25 分钟（健康构建 <20 分钟，快速失败优于滞留）。
+
 ## EXECUTION PROTOCOL v3 (2026-10-19 晚, user ruling: 本地+CI 混合；auditd execve 监控已启用)
 
 - **本机允许** cargo/fmt/clippy/nextest/PTY —— 一律走 tools/dev-gate.sh（全局 flock 单 scope + MemoryMax 6G）；auditd execve 记录（root+eternal130）提供事后取证。
