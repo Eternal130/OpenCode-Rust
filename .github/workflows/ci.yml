@@ -85,27 +85,34 @@ jobs:
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
 
-      - name: Archive workspace test binaries (debug)
-        # debuginfo is the bulk of test-binary size; stripping it on CI
-        # (env-level profile override — local dev keeps full debug info)
-        # shrinks the archive 3-5x: faster compile, zstd, and upload.
-        # Panic locations are unaffected (#[track_caller] is compiled in).
-        run: cargo nextest archive --workspace --locked --archive-file /tmp/opencode/nextest-debug.tar.zst
+      # Build ALL test binaries once and ship the whole target dir.
+      # (nextest ARCHIVE mode is incompatible with this suite: tests bake
+      # env!("CARGO_BIN_EXE_*") build-time ABSOLUTE paths, which break when
+      # archives extract elsewhere. A same-path target dir preserves every
+      # spawn/compile-time-path semantic with ZERO test changes.)
+      # debuginfo stripped on CI (env profile override — panic locations
+      # unaffected, #[track_caller] is compiled in).
+      - name: Build workspace test binaries (debug)
+        run: cargo nextest run --workspace --locked --no-run
         env:
           CARGO_PROFILE_DEV_DEBUG: "0"
 
-      - name: Archive oc-tui test binaries (release, frame budget)
-        run: cargo nextest archive --release -p oc-tui --locked --archive-file /tmp/opencode/nextest-release.tar.zst
+      - name: Build oc-tui test binaries (release, frame budget)
+        run: cargo build --release -p oc-tui --tests --locked
         env:
           CARGO_PROFILE_RELEASE_DEBUG: "0"
 
+      - name: Prune non-relocatable artifacts
+        # incremental dirs are machine-specific and huge; fingerprints
+        # are kept so consumers do zero recompilation.
+        run: rm -rf target/debug/incremental target/release/incremental
+
       - uses: actions/upload-artifact@v4
         with:
-          name: nextest-archives
-          path: |
-            /tmp/opencode/nextest-debug.tar.zst
-            /tmp/opencode/nextest-release.tar.zst
+          name: build-target
+          path: target/
           retention-days: 1
+          include-hidden-files: false
 
   pty-integration:
     name: nextest (pty, serialized)
@@ -146,8 +153,8 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: nextest-archives
-          path: archives
+          name: build-target
+          path: target
 
       # Tests stage scratch sandboxes under /tmp/opencode (PIDs-unique
       # names). The dev box pre-creates it; runners do not.
@@ -180,7 +187,7 @@ jobs:
         # warns "ignoring unknown configuration key: profile.default.env"
         # (.config/nextest.toml) — the profile env table does not apply
         # on runners, so enforce it here.
-        run: cargo nextest run --archive-file archives/nextest-debug.tar.zst --no-fail-fast --retries 2 -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz) or test(vt_hover) or test(vt_temporal) or binary(pty_daily) or binary(pty_form) or binary(pty_permission))'
+        run: cargo nextest run --workspace --locked --no-fail-fast --retries 2 -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz) or test(vt_hover) or test(vt_temporal) or binary(pty_daily) or binary(pty_form) or binary(pty_permission))'
         env:
           OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
 
@@ -211,7 +218,7 @@ jobs:
         # budget is calibrated for (shared 2-core). The scale widens the
         # regression ceiling for slow machines only; local runs stay
         # strict. See frame_budget_tests.rs::frame_budget_ms.
-        run: cargo nextest run --archive-file archives/nextest-release.tar.zst -E 'test(frame_budget)'
+        run: cargo nextest run --release -p oc-tui --locked -E 'test(frame_budget)'
         env:
           OC_FRAME_BUDGET_SCALE: "2"
           OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
