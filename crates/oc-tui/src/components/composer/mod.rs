@@ -127,6 +127,14 @@ pub struct SubmittedPrompt {
     pub text: String,
     pub files: Vec<FileMention>,
     pub agents: Vec<AgentMention>,
+    /// TUI-TD07 — the submit's inbox delivery ("queue" via
+    /// `<leader>return`; the default "steer" sends None here and the
+    /// wire body carries `delivery: "steer"`, prompt/index.tsx:1092).
+    pub delivery: Option<String>,
+    /// TUI-TD07 — the client-minted inbox id (the queue path's
+    /// optimistic admit; the POST body carries it so the SSE echo
+    /// re-admits under the same id, data.ts:769-787).
+    pub inbox_id: Option<String>,
 }
 
 /// `src/prompt/history.ts` semantics (the golden-relevant subset): a
@@ -750,6 +758,7 @@ impl Composer {
             text: std::mem::take(&mut self.draft.text),
             files: std::mem::take(&mut self.draft.files),
             agents: std::mem::take(&mut self.draft.agents),
+            ..SubmittedPrompt::default()
         };
         self.edit.set_text("");
         self.files_undo.clear();

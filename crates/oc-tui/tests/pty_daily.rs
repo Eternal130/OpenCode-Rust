@@ -504,3 +504,194 @@ fn cost_visible() {
         },
     );
 }
+// ---------------------------------------------------------------------------
+// TUI-TD07 — queue undo/steer server semantics (C6b session-route)
+// ---------------------------------------------------------------------------
+
+#[path = "fixtures/route_server.rs"]
+mod td07_route_server;
+
+use td07_route_server::{
+    message_page_body, session_json, user_row, MessagePage, ServerState as Td07Server,
+};
+
+/// The pty runner over the C6b route server (`pty_session_route`'s
+/// shape, local to this proof).
+#[allow(clippy::type_complexity)]
+fn run_td07_test<T: Send + 'static>(
+    tag: &str,
+    state: Td07Server,
+    drive: impl FnOnce(&mut HarnessHandle) -> Result<T, String> + Send + 'static,
+) -> (T, std::sync::Arc<Td07Server>) {
+    let _lock = pty_lock();
+    let sandbox = sandbox_env(tag);
+    drop(sandbox);
+    let (url, shared, shutdown) = td07_route_server::spawn(state);
+    let harness = LiveHarness::attach(100, 30);
+    let slot: std::sync::Arc<std::sync::Mutex<Option<Result<T, String>>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let result_slot = std::sync::Arc::clone(&slot);
+    let mut driver = harness.handle();
+    std::thread::spawn(move || {
+        let outcome = drive(&mut driver);
+        vt_harness::exit_chord(&mut driver);
+        *result_slot.lock().expect("slot") = Some(outcome);
+    });
+    vt_harness::run_tui_boot(
+        &url,
+        100,
+        30,
+        Duration::from_secs(90),
+        oc_tui::app::BootArgs {
+            continue_last: false,
+            session: Some("ses_route".to_owned()),
+            prompt: None,
+            auto: false,
+        },
+    );
+    shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while slot.lock().expect("slot").is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let outcome = match slot.lock().expect("slot").take() {
+        Some(Ok(value)) => value,
+        Some(Err(error)) => panic!("driver failed: {error}"),
+        None => {
+            let raw = harness.handle().raw_mirror();
+            let tail = String::from_utf8_lossy(&raw[raw.len().saturating_sub(800)..]);
+            panic!("the driver thread never reported (deadlock?); raw TAIL: {tail:?}")
+        }
+    };
+    (outcome, shared)
+}
+
+fn td07_wait_text(h: &HarnessHandle, needle: &str, timeout: Duration) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let grid = h.grid_now();
+        if (0..grid.rows).any(|y| grid.row_text(y).contains(needle)) {
+            return Ok(());
+        }
+        if std::time::Instant::now() > deadline {
+            let dump = (0..grid.rows)
+                .map(|y| format!("{y:2}|{}", grid.row_text(y)))
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(format!("{needle:?} never painted; grid:\n{dump}"));
+        }
+        std::thread::sleep(Duration::from_millis(60));
+    }
+}
+
+/// Wait until `needle` leaves the grid (the post-keypress redraw
+/// settles — an instant absent can race the frame).
+fn td07_wait_absent(h: &HarnessHandle, needle: &str, timeout: Duration) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let grid = h.grid_now();
+        if (0..grid.rows).all(|y| !grid.row_text(y).contains(needle)) {
+            return Ok(());
+        }
+        if std::time::Instant::now() > deadline {
+            let dump = (0..grid.rows)
+                .map(|y| format!("{y:2}|{}", grid.row_text(y)))
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(format!("{needle:?} never left the grid:\n{dump}"));
+        }
+        std::thread::sleep(Duration::from_millis(60));
+    }
+}
+
+/// TUI-TD07: `<leader>return` over a RUNNING turn POSTs with
+/// `delivery: "queue"` + the client-minted id (the server owns the
+/// queue — no local drain re-POST), and the manager's ctrl+u undo
+/// cancels the SAME inbox id server-side (`session.inbox.cancel`)
+/// while `appendPrompt` refills the composer with the payload text
+/// (index.tsx:627-675/2201-2249).
+#[test]
+fn queue_undo_refills() {
+    // A trailing user message with no assistant reply and no idle
+    // marker: the session reads RUNNING (the queue path's gate).
+    let rows = vec![user_row("msg_run", &td07_route_server::json_string("running turn"))];
+    let state = Td07Server {
+        requests: std::sync::Mutex::new(Vec::new()),
+        sse: std::sync::Mutex::new(Vec::new()),
+        events: std::sync::atomic::AtomicU64::new(1),
+        sessions: vec![session_json("ses_route", "Route", None)],
+        pages: vec![MessagePage {
+            session: "ses_route".to_owned(),
+            cursor: None,
+            body: message_page_body(&rows, None),
+        }],
+    };
+    let ((), server) = run_td07_test("td07", state, |h| {
+        // Boot probe: the composer paints + takes keys.
+        td07_wait_text(h, "shift+tab agents", Duration::from_secs(15))?;
+        h.write(b"q1w2e3");
+        td07_wait_text(h, "q1w2e3", Duration::from_secs(15))?;
+        h.write(b"\x7f\x7f\x7f\x7f\x7f\x7f");
+        // The queued submit: the text lands in the SERVER inbox (the
+        // dock renders the optimistic admit).
+        h.write(b"undo me refill");
+        td07_wait_text(h, "undo me refill", Duration::from_secs(10))?;
+        h.write(b"\x18\r"); // <leader>return — prompt.queue
+        td07_wait_text(h, "1 queued", Duration::from_secs(10))?;
+        // The manager: `<leader>q`, then ctrl+u (undo) — the cancel
+        // fires server-side, the payload refills the composer, the
+        // dialog + dock clear.
+        h.write(b"\x18q");
+        td07_wait_text(h, "Queued prompts", Duration::from_secs(10))?;
+        h.write(b"\x15"); // ctrl+u — queued_prompt.undo
+                          // The undo closes the manager (a POSITIVE wait — the composer
+                          // refill paints the payload) and empties the queue (the dock
+                          // leaves after the redraw).
+        td07_wait_absent(h, "Queued prompts", Duration::from_secs(10))?;
+        td07_wait_text(h, "undo me refill", Duration::from_secs(10))?;
+        td07_wait_absent(h, "1 queued", Duration::from_secs(10))?;
+        Ok(())
+    });
+    // The queue submit POST carried the delivery + the minted id.
+    let queue_post = server
+        .requests_with("/prompt")
+        .into_iter()
+        .find(|request| request.body.contains("undo me refill"))
+        .expect("the queue submit POST");
+    assert!(
+        queue_post.body.contains("\"delivery\":\"queue\""),
+        "the queued POST carries the queue delivery: {}",
+        queue_post.body
+    );
+    let inbox_id = queue_post
+        .body
+        .split("\"id\":\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("the minted inbox id in the POST body")
+        .to_owned();
+    assert!(!inbox_id.is_empty(), "the id is non-empty: {inbox_id:?}");
+    // The undo cancelled the SAME id server-side.
+    let cancel_path = format!("/api/session/ses_route/inbox/{inbox_id}");
+    assert!(
+        server.requests_with(&cancel_path).iter().any(|request| request.method == "DELETE"),
+        "the undo cancelled inbox id {inbox_id}: {:?}",
+        server
+            .requests
+            .lock()
+            .expect("requests")
+            .iter()
+            .map(|request| format!("{} {}", request.method, request.path))
+            .collect::<Vec<_>>()
+    );
+    // No drain re-POST: exactly ONE prompt POST for the text.
+    assert_eq!(
+        server
+            .requests_with("/prompt")
+            .iter()
+            .filter(|request| request.body.contains("undo me refill"))
+            .count(),
+        1,
+        "the queued text POSTed exactly once (server-owned queue)"
+    );
+}

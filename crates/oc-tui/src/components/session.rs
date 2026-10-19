@@ -372,7 +372,7 @@ pub fn render_session(
     // row shifts them.
     let content_top = chrome;
 
-    let transcript = render_transcript(
+    let mut transcript = render_transcript(
         &store.messages(session_id),
         &TranscriptOptions {
             // The store's clock drives the running-tool spinner frames
@@ -441,14 +441,56 @@ pub fn render_session(
     // `height: 1` indicator row), so the scroll math sees
     // `transcript_height - 1` — the long-reply corpus pins the page
     // steps (-7/-7/+8 at 24 rows ⇒ viewport 15, not the pane's 16).
+    //
+    // TUI-TD02 — the per-message row geometry records for the
+    // navigation walk (`anchors.messagePositions()`): every message
+    // entry (user blocks + the assistant's first part row + footers)
+    // maps to its row y.
+    {
+        let mut positions: Vec<crate::store::MessagePosition> = Vec::new();
+        for row in &transcript.rows {
+            // The per-message row keys: `message:{mid}` (user/notice
+            // blocks), `part:{mid}:{pid}` (assistant parts — the pid
+            // may contain colons; the mid never does), `footer:{mid}`.
+            let id = if let Some(mid) = row.key.strip_prefix("message:") {
+                Some(mid.to_owned())
+            } else if let Some(rest) = row.key.strip_prefix("part:") {
+                rest.split(':').next().map(str::to_owned)
+            } else {
+                row.key.strip_prefix("footer:").map(str::to_owned)
+            };
+            if let Some(id) = id {
+                if !id.is_empty() && !positions.iter().any(|position| position.id == id) {
+                    positions.push(crate::store::MessagePosition { id, y: row.y });
+                }
+            }
+        }
+        store.set_message_positions(session_id, positions);
+    }
+    // TUI-TD05 — the tail-first mount budget (`visibleRows`,
+    // index.tsx:407-411): slice the measured rows to the store's
+    // window pins. The FULL row count records for the reveal walk
+    // first; the scroll metrics then see the MOUNTED content (v2's
+    // scrollbox contains only the mounted renderables — the offset
+    // math is window-relative, never full-list).
+    let full_rows = transcript.rows.len();
+    crate::components::message::list::apply_mount_window(
+        &mut transcript,
+        store.mount_window(session_id),
+    );
     store.set_transcript_metrics(
         session_id,
         crate::store::TranscriptMetrics {
             viewport: transcript_height.saturating_sub(1),
             content_height: transcript.content_height,
+            rows: full_rows,
         },
     );
     store.scroll_appended(session_id, transcript.content_height);
+    // TUI-TD02 — resolve a staged navigation now that fresh positions
+    // exist (`ensureAllRows`' continuation — the full window mounted
+    // above, so the walk sees every row).
+    store.resolve_pending_navigation(session_id);
     let scroll_offset = store.scroll_offset(session_id);
     // The transcript's click surface (absolute rects from the last
     // render pass — the same content_top shift the rows paint under,

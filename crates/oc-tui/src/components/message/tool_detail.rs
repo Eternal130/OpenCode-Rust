@@ -482,6 +482,53 @@ fn execute_call_summary(tool: &str, input: &serde_json::Value) -> String {
     }
 }
 
+/// TUI-TD01 — the `shell` MESSAGE row (`ShellMessage` →
+/// `ShellDisplay`, session/index.tsx:2166-2186): the same `┃` shell
+/// block the bash tool paints, fed from the message's
+/// command/status/exit/output, with the status error line appended
+/// ("Command cancelled" / "Command timed out" /
+/// "Command exited with code N" — `ShellMessage`'s `error` memo).
+#[must_use]
+pub fn shell_message_row(
+    command: &str,
+    status: &str,
+    exit: Option<i64>,
+    output: Option<&str>,
+    clock_ms: u64,
+    theme: &ThemeStyles,
+    width: usize,
+) -> RowRender {
+    let mut state = ToolState::default();
+    state.input.insert("command".to_owned(), command.to_owned());
+    state.status = match status {
+        "running" => ToolStatus::Running,
+        _ => ToolStatus::Completed,
+    };
+    if let Some(output) = output.map(str::trim).filter(|text| !text.is_empty()) {
+        state.output = Some(output.to_owned());
+    }
+    let error = match status {
+        "killed" => Some("Command cancelled".to_owned()),
+        "timeout" => Some("Command timed out".to_owned()),
+        _ => exit.filter(|exit| *exit != 0).map(|exit| format!("Command exited with code {exit}")),
+    };
+    let mut render = shell_block(&state, false, clock_ms, theme, width);
+    if let Some(error) = error {
+        // `BlockTool`'s error row: the message in the error color
+        // under the content (index.tsx:2694-2710).
+        let muted = theme.text_muted;
+        let height = render.height;
+        let error_row =
+            text_at(3, height, crate::wrap::take_width(&error, width.saturating_sub(3)), muted);
+        render.placed.push(error_row);
+        render.height += 1;
+        if let Some(fill) = render.fills.first_mut() {
+            fill.height = u16::try_from(render.height).unwrap_or(fill.height);
+        }
+    }
+    render
+}
+
 /// One tool detail cell. `expanded` is the INLINE disclosure
 /// (`ShellDisplay`'s toggle / `GenericTool`'s expand).
 #[allow(clippy::too_many_lines)]
