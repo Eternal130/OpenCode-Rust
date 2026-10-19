@@ -62,7 +62,10 @@ jobs:
   build-archive:
     name: build + archive (single compile)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # A healthy archive build is well under 20 min; fail fast instead of
+    # lingering (the 2026-10-19 zombie pile-up: a 30+ min wedged build
+    # step + rapid pushes maximized the cancel-desync window).
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
