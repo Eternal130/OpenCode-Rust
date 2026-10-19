@@ -19,11 +19,15 @@
 //!   `SessionNotFoundError` envelope, 404 empty body on an unknown route).
 //! - **(c) request-validation matrix** — table-driven over the pinned
 //!   openapi document (`p10_openapi.rs` shows the pin): the HTTP-H0
-//!   slice (11 probes over 10 routes — P10-E1/E2 pins + the C4b
-//!   generated-table middleware seam, validate-first routes only) runs
-//!   as real dual-end checks; every remaining operation is an explicit
-//!   `pending` row in the matrix (structured gap, surfaced in the
-//!   artifact — never a silent pass).
+//!   slice + batch-1 (26 probes over 16 routes — P10-E1/E2 pins, the C4b
+//!   generated-table middleware seam with the `^ses` pattern label, and
+//!   the 8 batch-1 validate-first ops) run as real dual-end checks; every
+//!   remaining operation is an explicit `pending` row in the matrix, and
+//!   empty-body/no-content-type behavior is recorded as explicit `gap`
+//!   rows (structured gaps, surfaced in the artifact — never a silent
+//!   pass).
+//! - **(e) auth ordering** — bad payload without credentials must 401 on
+//!   both sides BEFORE any payload validation (byte-equal envelope).
 //! - **(d) public SSE event stream presence** — one subscription per side,
 //!   first event must be `server.connected` with a normalized-equal
 //!   payload.
@@ -38,6 +42,7 @@
 
 mod p10_common;
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
@@ -88,6 +93,82 @@ async fn post_json(base: &str, password: &str, path: &str, body: &str) -> Result
     let text = String::from_utf8_lossy(&response.body).into_owned();
     let value = serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text));
     Ok((response.status, value))
+}
+
+/// One raw HTTP probe with full Content-Type control (`minih` hardcodes
+/// `application/json` whenever a body is present — the gap rows need the
+/// header absent or `text/plain`). Returns `(status, WWW-Authenticate,
+/// content-type, body-bytes)`.
+async fn raw_ct_probe(
+    base: &str,
+    password: Option<&str>,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    content_type: Option<&str>,
+) -> Result<(u16, Option<String>, String, Vec<u8>)> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let authority = base.strip_prefix("http://").context("base must be http://host:port")?;
+    let (host, port) = authority.rsplit_once(':').context("base host:port")?;
+    let mut stream =
+        tokio::net::TcpStream::connect((host, port.parse::<u16>().context("port number")?))
+            .await
+            .context("gap-probe connect")?;
+    let mut head = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {authority}\r\nAccept: application/json\r\n\
+         Accept-Encoding: identity\r\nConnection: close\r\n"
+    );
+    if let Some(password) = password {
+        write!(head, "Authorization: {}\r\n", parity::minih::basic_auth("opencode", password)).ok();
+    }
+    if let Some(body) = body {
+        if let Some(content_type) = content_type {
+            write!(head, "Content-Type: {content_type}\r\n").ok();
+        }
+        write!(head, "Content-Length: {}\r\n", body.len()).ok();
+    }
+    head.push_str("\r\n");
+    let mut request = head.into_bytes();
+    if let Some(body) = body {
+        request.extend_from_slice(body.as_bytes());
+    }
+    stream.write_all(&request).await.context("gap-probe write")?;
+    let mut raw = Vec::new();
+    // No write-side shutdown: `Connection: close` asks the server to end
+    // the exchange; a TCP FIN mid-request makes the port's hyper drop
+    // the connection without responding.
+    stream.read_to_end(&mut raw).await.context("gap-probe read")?;
+    let text = String::from_utf8_lossy(&raw);
+    let status_line = text.split("\r\n").next().unwrap_or_default().to_owned();
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .with_context(|| {
+            format!(
+                "status code in {status_line:?} (raw: {:?})",
+                text.chars().take(200).collect::<String>()
+            )
+        })?
+        .parse()
+        .with_context(|| format!("status code in {status_line:?}"))?;
+    let mut challenge = None;
+    let mut response_content_type = String::new();
+    let mut header_bytes = 0usize;
+    for line in text.split("\r\n") {
+        header_bytes += line.len() + 2;
+        if line.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            match name.trim().to_ascii_lowercase().as_str() {
+                "www-authenticate" => challenge = Some(value.trim().to_string()),
+                "content-type" => response_content_type = value.trim().to_string(),
+                _ => {}
+            }
+        }
+    }
+    let body_bytes = raw.get(header_bytes..).unwrap_or(&[]).to_vec();
+    Ok((status, challenge, response_content_type, body_bytes))
 }
 
 /// `Value::Null` PRESENT at `object[key]` (absent-vs-null is the contract).
@@ -180,10 +261,22 @@ fn pinned_operations() -> Result<Vec<(String, String)>> {
 /// (`oc-server/src/request_validation.rs`), with messages byte-pinned
 /// against a live v2.0.24 boot (evidence:
 /// `/tmp/opencode/parity-evidence/HTTP-H0/ref-validation-messages*.json`).
+/// The `ses_pattern` rows pin the `^ses` startsWith label (oracle
+/// condition 1) and the `b1_` rows are the HTTP-H0 batch-1 rollout (8
+/// ops, wrong-type + missing-key each, expectations regenerated from the
+/// generated table rows and pinned in round 4 BEFORE the `ENFORCED_OPS`
+/// edit landed).
 const VALIDATED_ROUTES: &[(&str, &str, Option<&str>, &str)] = &[
     // (method, path-with-query, invalid body, note)
     ("POST", "/api/session", Some(r#"{"title": 12345}"#), "payload schema reject (P10-E1)"),
     ("GET", "/api/session?limit=notanumber", None, "query schema reject (P10-E2)"),
+    (
+        "POST",
+        "/api/session",
+        Some(r#"{"parentID": "not_ses"}"#),
+        "ses_pattern: ^ses startsWith predicate (no `| null`)",
+    ),
+    ("POST", "/api/session", Some(r#"{"id": 5}"#), "ses_pattern: kind mismatch keeps `| null`"),
     (
         "POST",
         "/api/plugin/update",
@@ -210,9 +303,78 @@ const VALIDATED_ROUTES: &[(&str, &str, Option<&str>, &str)] = &[
         Some(r#"{"command": "ls", "timeout": -1}"#),
         "HTTP-H0 slice: integer minimum bound",
     ),
-    ("POST", "/api/pty", Some(r#"{"command": 5}"#), "HTTP-H0 slice: required string"),
+    // pty.create probe removed 2026-10-19 with the enforcement rollback
+    // (env-requiredness unprobed vs v2 — gap row; ENFORCED_OPS comment in
+    // oc-server/src/request_validation.rs).
     ("PUT", "/api/pty/pty_P10H0", Some(r#"{"title": 5}"#), "HTTP-H0 slice: string type"),
     ("PATCH", "/api/project/prj_P10H0", Some(r#"{"name": 5}"#), "HTTP-H0 slice: string type"),
+    // HTTP-H0 batch 1 (oracle APPROVE WITH CONDITIONS, 2026-10-19).
+    (
+        "POST",
+        "/api/experimental/generate",
+        Some(r#"{"prompt": 5}"#),
+        "b1 generate.text: wrong type",
+    ),
+    ("POST", "/api/experimental/generate", Some(r"{}"), "b1 generate.text: missing key"),
+    (
+        "POST",
+        "/api/experimental/integration/wellknown",
+        Some(r#"{"url": 5}"#),
+        "b1 wellknown.add: wrong type",
+    ),
+    (
+        "POST",
+        "/api/experimental/integration/wellknown",
+        Some(r"{}"),
+        "b1 wellknown.add: missing key",
+    ),
+    (
+        "PATCH",
+        "/api/experimental/config",
+        Some(r#"{"shell": 5}"#),
+        "b1 config.update: required nullable wrong type",
+    ),
+    ("PATCH", "/api/experimental/config", Some(r"{}"), "b1 config.update: missing key"),
+    (
+        "POST",
+        "/api/integration/int_P10H0/connect/command",
+        Some(r#"{"methodID": 5}"#),
+        "b1 command.connect: wrong type",
+    ),
+    (
+        "POST",
+        "/api/integration/int_P10H0/connect/command",
+        Some(r"{}"),
+        "b1 command.connect: missing key",
+    ),
+    (
+        "PUT",
+        "/api/session/ses_P10H0/environment",
+        Some(r#"{"variables": 5}"#),
+        "b1 session.environment: record wrong type",
+    ),
+    (
+        "PUT",
+        "/api/session/ses_P10H0/environment",
+        Some(r"{}"),
+        "b1 session.environment: missing key",
+    ),
+    // persistentPty.create probes removed 2026-10-19 with the enforcement
+    // rollback (same env-requiredness gap class as pty.create).
+    (
+        "PUT",
+        "/api/experimental/persistent-pty/pty_P10H0",
+        Some(r#"{"size": 5}"#),
+        "b1 persistentPty.update: inline struct wrong type",
+    ),
+    (
+        "PUT",
+        "/api/experimental/persistent-pty/pty_P10H0",
+        Some(r"{}"),
+        "b1 persistentPty.update: missing key",
+    ),
+    ("POST", "/api/worktree", Some(r#"{"projectID": 5}"#), "b1 worktree.create: wrong type"),
+    ("POST", "/api/worktree", Some(r"{}"), "b1 worktree.create: missing key"),
 ];
 
 /// (method, template path) of every operation the probes above check —
@@ -226,9 +388,17 @@ const VALIDATED_TEMPLATE_OPS: &[(&str, &str)] = &[
     ("PATCH", "/api/credential/{credentialID}"),
     ("POST", "/api/websearch"),
     ("POST", "/api/shell"),
-    ("POST", "/api/pty"),
+    // POST /api/pty and POST /api/experimental/session/{sessionID}/terminal
+    // removed 2026-10-19 (enforcement rollback; gap rows pending env probes).
     ("PUT", "/api/pty/{ptyID}"),
     ("PATCH", "/api/project/{projectID}"),
+    ("POST", "/api/experimental/generate"),
+    ("POST", "/api/experimental/integration/wellknown"),
+    ("PATCH", "/api/experimental/config"),
+    ("POST", "/api/integration/{integrationID}/connect/command"),
+    ("PUT", "/api/session/{sessionID}/environment"),
+    ("PUT", "/api/experimental/persistent-pty/{ptyID}"),
+    ("POST", "/api/worktree"),
 ];
 
 /// Run one validation probe against one side, normalized like
@@ -537,13 +707,6 @@ async fn run(
         VALIDATED_TEMPLATE_OPS.len(),
         ops.len()
     );
-    report["validation_matrix"] = json!({
-        "pinned_operations": ops.len(),
-        "checked": VALIDATED_ROUTES.len(),
-        "checked_operations": VALIDATED_TEMPLATE_OPS.len(),
-        "pending": pending,
-        "rows": matrix,
-    });
     eprintln!(
         "[gate1] validation matrix: {} probes covering {}/{} operations, {pending} pending \
               (structured gaps)",
@@ -551,6 +714,106 @@ async fn run(
         VALIDATED_TEMPLATE_OPS.len(),
         ops.len()
     );
+
+    // Explicit gap rows: empty-body / no-content-type / non-JSON content
+    // type behavior on an enforced slice op (oracle batch-1 condition).
+    // Recorded per side, NOT asserted equal — the port still hands these
+    // to the extractor path (P10-N1 class; ref answers `Expected object`
+    // for an empty body and 415 `Unsupported content-type: …` for
+    // non-JSON content types; probe evidence ref-validation-messages-4b).
+    let mut gap_rows: Vec<Value> = Vec::new();
+    for (variant, method, path, body, content_type) in [
+        ("empty_body_json_ct", "POST", "/api/session", Some(""), Some("application/json")),
+        ("no_body_no_ct", "POST", "/api/session", None, None),
+        ("bad_payload_no_ct", "POST", "/api/session", Some(r#"{"title": 12345}"#), None),
+        (
+            "bad_payload_text_ct",
+            "POST",
+            "/api/session",
+            Some(r#"{"title": 12345}"#),
+            Some("text/plain"),
+        ),
+    ] {
+        let mut row = json!({"variant": variant, "method": method, "path": path, "state": "gap"});
+        for (target, base, password) in [
+            ("reference", reference.url(), reference.password()),
+            ("port", port.url(), port.password()),
+        ] {
+            let observed = raw_ct_probe(base, Some(password), method, path, body, content_type)
+                .await
+                .with_context(|| format!("gap probe {variant} on {target}"))?;
+            row[target] = json!({
+                "status": observed.0,
+                "www_authenticate": observed.1,
+                "content_type": observed.2,
+                "body": String::from_utf8_lossy(&observed.3),
+            });
+        }
+        matrix.push(row.clone());
+        gap_rows.push(row);
+    }
+    report["validation_matrix"] = json!({
+        "pinned_operations": ops.len(),
+        "checked": VALIDATED_ROUTES.len(),
+        "checked_operations": VALIDATED_TEMPLATE_OPS.len(),
+        "pending": pending,
+        "gap_rows": gap_rows.len(),
+        "rows": matrix,
+    });
+
+    // =====================================================================
+    // (e) auth ordering: bad payload + NO credentials → 401 BEFORE any
+    // payload validation (oracle condition 6). Byte-compare across sides.
+    // =====================================================================
+    let mut unauthorized: Vec<(u16, Option<String>, Vec<u8>)> = Vec::new();
+    for side in &sides {
+        let response = parity::minih::request(
+            &side.base,
+            None,
+            "POST",
+            "/api/session",
+            Some(r#"{"title": 12345}"#),
+            "application/json",
+            TIMEOUT,
+        )
+        .await
+        .with_context(|| format!("[e] {side} no-auth bad payload"))?;
+        ensure!(
+            response.status == 401,
+            "[e] {side} bad payload without credentials must 401 before validation, got {}: {}",
+            response.status,
+            String::from_utf8_lossy(&response.body)
+        );
+        unauthorized.push((
+            response.status,
+            response.header("www-authenticate").map(str::to_owned),
+            response.body.clone(),
+        ));
+    }
+    let ref_side = &unauthorized[0];
+    let port_side = &unauthorized[1];
+    ensure!(ref_side.0 == port_side.0, "[e] 401 status differs: {} vs {}", ref_side.0, port_side.0);
+    ensure!(
+        ref_side.1 == port_side.1,
+        "[e] WWW-Authenticate differs: {:?} vs {:?}",
+        ref_side.1,
+        port_side.1
+    );
+    ensure!(
+        ref_side.2 == port_side.2,
+        "[e] 401 bodies are not byte-equal:\nreference={}\nport={}",
+        String::from_utf8_lossy(&ref_side.2),
+        String::from_utf8_lossy(&port_side.2)
+    );
+    ensure!(
+        ref_side.1.as_deref().is_some_and(|value| value.starts_with("Basic ")),
+        "[e] challenge must be a Basic challenge: {:?}",
+        ref_side.1
+    );
+    report["auth_ordering"] = json!({
+        "noauth_bad_payload": "pass (both sides 401, byte-equal envelope + Basic challenge)",
+        "challenge": ref_side.1,
+    });
 
     // =====================================================================
     // (d) public SSE event stream presence (one subscription per side)
@@ -590,6 +853,12 @@ async fn run(
         "pagination_cursor_token_payload": "opaque cursor payloads carry different field sets \
          (port adds scope keys) — recorded as gap facts, awaiting ledger triage",
         "validation_matrix_pending": format!("{pending} operations structured as pending rows"),
+        "empty_body_and_content_type_gaps": format!(
+            "{} explicit gap rows (empty body / no content-type / text/plain on enforced \
+             ops; ref answers `Expected object` / 415 `Unsupported content-type`, the port \
+             still takes the extractor path — P10-N1 class)",
+            gap_rows.len()
+        ),
     });
     std::fs::create_dir_all(p10_common::artifacts())?;
     std::fs::write(

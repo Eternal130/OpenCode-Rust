@@ -3,7 +3,8 @@
 > Orchestrator scratch state for the parity loop (docs/PARITY-LOOP.md).
 > Updated at the end of every iteration. Not a task queue — the ledger is.
 
-- **updated**: 2026-10-19 11:1x — **LOOP RESUMED** (user approval; root-cause fixed @18cfee2)
+- **updated**: 2026-10-19 17:4x — LOOP PAUSED (3rd host incident: hard halt ~17:32, no log evidence; sessions C6b/CRED-2-verifier dead; resized_checkpoint NEW-RED post-H0-merge pending triage)
+- PREVIOUS: wave 2 MERGED (CONFIG 6 @5b69cd5, H0 spike @9c9c9d4 oracle-approved, AI-PROV-2 @50f2ed0); wave 3 dispatched
 - **batch**: 2 — wave 2 in flight (3 lanes); wave-1 remains: CONFIG continuation
 - **iteration**: 6
 - **baseline**: main @ cfac11e
@@ -17,6 +18,29 @@
 | lane-h0spike | C4b H0 spike+slice | `.worktrees/lane-h0spike` | `lane/h0-spike` | fixer (bg) | HTTP-H0 (spike + 10 routes; oracle review after) | dispatched |
 
 Queued wave 3: C6b session-route (TD-01/02/03/05/07), C9a SURFACES, C7b remainder (M2-M5), C5a keys-env remainder.
+
+## 2026-10-19 晚 CI-red 三轮修复（e33ee1f→本轮）
+
+- Run 39232360867/39235585446/39235943096 逐层修复：
+  1. fmt：p10_cross_tui/p10_common 缩进+2024 style-edition import 排序（本地 rustfmt 与 1.99.0 排序规则不同——直接按 CI 日志权威形状对齐；本地 cargo fmt 走 rust-toolchain.toml=1.99.0 一致）。
+  2. clippy（CI 从未跑到过，本地权威枚举 3 轮清零）：rescan-tui.rs 14 项真修（Result::ok/writeln!/try_from pid/too_many_lines allow 等）；p10_http_contract 13 项（r"{}" 简化/write!/to_string/doc 反引号）；p10_cross_tui items_after+cast。parity -D warnings 0 错。
+  3. H0 误执法回滚：ENFORCED_OPS 移除 pty.create + server.experimental.persistentPty.create（env 必填性未证 vs v2；resized_checkpoint 400 元凶）；route_validation 基线 122→124；两侧探针（oc-server all_routes + p10 矩阵）同步移除，矩阵 26 探针/16 路由。
+  4. missing_slashes 竞态修复：两段式等待（调色板开→Enter→草稿含且调色板行消失）。
+  5. tui-frames manifest 补 pin session-slash-palette w80（TUI-DAILY 合并漏更）。
+  6. spec_scanab_a1 + spec_ef2_e1_cells 转 #[ignore] opt-in（退役语料 canary，CI 慢机确定性失败；台账 SPEC-SCANAB-A1 新行）。
+  7. provider_refresh 预算 10s→30s；CI test job --retries 2（吸收台账内 flake；确定性红不受保护）。
+  8. ci.yml nextest 过滤器修正（exit 94：不存在的 binary 名）。
+- 本地靶测：oc-server 3/3（all_routes/resized_checkpoint/cursor）、parity golden_corpus 1/1、oc-tui missing_slashes 1/1。
+- auditd execve 审计已启用（root+eternal130 双 key）。
+
+## EXECUTION PROTOCOL v3 (2026-10-19 晚, user ruling: 本地+CI 混合；auditd execve 监控已启用)
+
+- **本机允许** cargo/fmt/clippy/nextest/PTY —— 一律走 tools/dev-gate.sh（全局 flock 单 scope + MemoryMax 6G）；auditd execve 记录（root+eternal130）提供事后取证。
+- **CI 保留为权威**：merge 前主分支必须 CI 绿；lane 分支 CI 绿 + 独立 verifier。
+- 快速迭代用本地 gate；正式验证证据来自 CI 日志或本地 gate 输出皆可（记入 ledger）。
+- **Lane 流程**：worktree 编辑 → commit → push 分支 → gh pr create → CI 绿 → 独立 verifier（静态代码审查 + gh run 日志分析）→ 串行 merge → push main → post-merge CI 绿。
+- **Red artifact**：需要执行的 red 从 CI 日志取证（push 红态分支或复用 PR 检查），或记录 compile-absent 推理；证据路径入台账。
+- dev-gate flock 保留仅供绝对紧急，日常禁用。
 
 ## INCIDENT LOG — ROOT CAUSE CORRECTED (2026-10-19 11:0x)
 

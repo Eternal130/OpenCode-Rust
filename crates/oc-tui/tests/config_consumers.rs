@@ -111,7 +111,7 @@ fn session_deleted_clears_cache() {
     let store = Store::new(Runtime::new());
     store.set_messages("ses_g", vec![assistant("msg_g", "g")]);
     store.open_tab("ses_g", None);
-    assert!(!store.messages("ses_g").is_empty());
+    assert_ne!(store.messages("ses_g"), Vec::<oc_tui::components::message::model::Message>::new());
 
     store.ingest_all([Ingest::Event(BusEvent::new(
         "session.deleted",

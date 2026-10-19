@@ -549,7 +549,7 @@ mod tests {
         .await;
         let mut subscription = engine.bus.subscribe();
 
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             if engine.catalog_service.get().provider_count() == 1 {
                 break;

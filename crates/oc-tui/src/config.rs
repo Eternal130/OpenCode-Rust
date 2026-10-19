@@ -129,6 +129,9 @@ impl TabsConfig {
 }
 
 /// The TUI-relevant slice of `cli.json`.
+// The bool count mirrors v2's `cli.json` surface 1:1 (config/index.tsx);
+// grouping them would diverge from the ported shape (HYGIENE-CLIPPY-TUI).
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct TuiConfig {
     pub keybinds: Value,
@@ -230,6 +233,9 @@ impl TuiConfig {
 
     /// Map the decoded `Info` onto the TUI slice (the per-key v2
     /// defaults apply where the section is absent).
+    // One mapping arm per v2 config key — kept whole to mirror the ref
+    // decoder (HYGIENE-CLIPPY-TUI).
+    #[allow(clippy::too_many_lines)]
     #[must_use]
     pub fn from_info(info: &oc_core::cli_config::Info, path: Option<PathBuf>) -> Self {
         let theme = info.theme.as_ref().map_or_else(ThemeConfig::default, |theme| ThemeConfig {

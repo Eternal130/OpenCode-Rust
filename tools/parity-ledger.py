@@ -212,10 +212,20 @@ def cmd_evidence(args: argparse.Namespace) -> int:
         "verified_at": now(),
     }
     target.setdefault("evidence", []).append(record)
-    target["status"] = "verified" if args.verified else "fixed"
-    target["updated"] = now()[:10]
+    previous = target.get("status", "open")
+    if args.keep_status:
+        # Progress evidence for incremental entries (e.g. HTTP-H0's
+        # batched rollout): append the evidence record WITHOUT the
+        # fixed/verified transition the command would otherwise apply.
+        print(
+            f"{args.id}: status={previous} (kept; would have transitioned to "
+            f"{'verified' if args.verified else 'fixed'}) evidence={len(target['evidence'])}"
+        )
+    else:
+        target["status"] = "verified" if args.verified else "fixed"
+        target["updated"] = now()[:10]
+        print(f"{args.id}: status {previous} -> {target['status']} evidence={len(target['evidence'])}")
     save(rows)
-    print(f"{args.id}: status={target['status']} evidence={len(target['evidence'])}")
     return 0
 
 
@@ -271,6 +281,13 @@ def main() -> int:
     p.add_argument("--artifact", action="append", default=[])
     p.add_argument("--verified", action="store_true")
     p.add_argument("--verified-by", default="")
+    p.add_argument(
+        "--keep-status",
+        action="store_true",
+        help="append progress evidence WITHOUT the fixed/verified transition "
+        "(incremental entries, e.g. HTTP-H0 batched rollout); default off "
+        "keeps the historical behavior",
+    )
     p.set_defaults(func=cmd_evidence)
 
     args = parser.parse_args()

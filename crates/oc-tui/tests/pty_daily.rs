@@ -407,11 +407,27 @@ fn missing_slashes() {
             h.write(b"\x1b");
             std::thread::sleep(Duration::from_millis(150));
             // /rename is argument-taking: the popup selection INSERTS the
-            // slash token (never the rename dialog).
-            h.write(b"/rename\r");
+            // slash token (never the rename dialog). Deterministic on slow
+            // runners: the original one-shot `/rename\r` write let the
+            // first grid poll observe the composer draft ("/rename") while
+            // the palette row ("Rename session") was still painted —
+            // the Enter effect had not rendered yet (CI 2026-10-19). Split
+            // the writes and wait for the CLOSED-palette state instead.
+            h.write(b"/rename");
+            if let Err(grid) = wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("Rename session")),
+                Duration::from_secs(5),
+            ) {
+                return Err(format!("/rename palette never opened; grid:\n{grid}"));
+            }
+            h.write(b"\r");
             let grid = match wait_grid(
                 h,
-                |g| (0..g.rows).any(|row| g.row_text(row).contains("/rename")),
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains("/rename"))
+                        && (0..g.rows).all(|row| !g.row_text(row).contains("Rename session"))
+                },
                 Duration::from_secs(5),
             ) {
                 Ok(grid) => grid,
