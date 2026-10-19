@@ -8,13 +8,27 @@
 #   2. CPU CAP: transient systemd scope with CPUQuota=400% (4 of 16 cores).
 #      A forgotten -j4, a parallel lane, or a runaway linker physically cannot
 #      saturate the box (newapi + the live service share it).
-#   3. MEMORY CAP: MemoryMax=10G (box has 22G; gates need well under 10).
+#   3. MEMORY CAP: MemoryMax=6G (box has 22G, shared with production
+#      services; the 2026-10-19 oomd incident cut this from 10G).
 #   4. LOAD BACKSTOP: refuses to start while 1-min load >= 6 (the per-lane
 #      courtesy check remains "< 2 before gates"; this is the hard ceiling).
+#   5. GLOBAL SERIALIZATION: exactly one gate scope on the machine at a
+#      time (2026-10-19 incident: concurrent scopes exhausted memory and
+#      systemd-oomd killed the user session + system services).
 #
 # Usage:   tools/dev-gate.sh '<command to run with cargo on PATH>'
 # Example: tools/dev-gate.sh 'cargo nextest run --workspace --no-fail-fast'
 set -euo pipefail
+
+# --- global serialization (2026-10-19 incident) ---------------------------
+LOCK_DIR=/tmp/opencode
+LOCK="${LOCK_DIR}/dev-gate.lock"
+mkdir -p "$LOCK_DIR"
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  echo "dev-gate: another gate scope is active; waiting on ${LOCK}" >&2
+  flock 9
+fi
 
 if [[ $# -ne 1 ]]; then
   echo "usage: $0 '<command>'" >&2
@@ -41,7 +55,7 @@ exec systemd-run --scope --quiet \
   --unit="opencode-gate-$(date +%s)-$$" \
   --uid=eternal130 --gid=eternal130 \
   -p CPUQuota=400% \
-  -p MemoryMax=10G \
+  -p MemoryMax=6G \
   -p TasksMax=512 \
   --setenv=OPENCODE_DEV_GATE=1 \
   --setenv=HOME=/home/eternal130 \
