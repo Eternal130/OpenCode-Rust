@@ -55,11 +55,11 @@ pub enum NormalizeResult {
     Rejected { diagnostics: Vec<Diagnostic> },
 }
 
-// TODO(schema): v2's policy action literal is "provider.use"; oc-schema's
-// `config::policy::Action` currently serializes kebab-case ("provider-use").
-// Emit the oc-schema spelling so encoded documents decode into `Info`; flip
-// this constant when the schema crate matches the v2 wire format.
-pub const POLICY_ACTION_PROVIDER_USE: &str = "provider-use";
+// v2's policy action literal is "provider.use" (config/policy.ts:8);
+// oc-schema's `config::policy::Action` serializes that literal and
+// accepts the historical kebab-case "provider-use" spelling as an
+// alias, so encoded documents decode into `Info` either way.
+pub const POLICY_ACTION_PROVIDER_USE: &str = "provider.use";
 pub const POLICY_ACTION_PERMISSION: &str = "permission";
 
 const UNSUPPORTED_TOP_LEVEL: [&str; 4] = ["logLevel", "server", "subagent_depth", "layout"];

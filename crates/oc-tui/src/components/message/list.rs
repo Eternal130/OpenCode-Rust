@@ -59,11 +59,31 @@ pub enum ThinkingMode {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GroupExploration(pub bool);
 
+/// `session.verbosity` (config/index.tsx:160-163, default medium —
+/// CONFIG-T3): `low` wraps every run of tools and thoughts in one
+/// activity summary (grouping/session.ts:89-96); `high` opens
+/// exploration and instruction groups by default (index.tsx:237-238).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Verbosity {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
 /// Render options for the transcript.
 #[derive(Debug, Clone)]
 pub struct TranscriptOptions {
     pub thinking_mode: ThinkingMode,
     pub group_exploration: bool,
+    pub verbosity: Verbosity,
+    /// `session.tps` (index.tsx:1892 — `config.data.session.tps &&
+    /// tokensPerSecond()`): the assistant footer's `· X.X tok/s` span.
+    pub tps_enabled: bool,
+    /// `session.markdown === "source"` (message-parts.tsx:184-190):
+    /// assistant text renders as plain wrapped source instead of
+    /// rendered markdown.
+    pub markdown_source: bool,
     /// The injected clock (spinner frames; frozen ⇒ `⠋`).
     pub clock_ms: u64,
     /// Expanded group keys (disclosure state; collapsed by default).
@@ -114,6 +134,9 @@ impl Default for TranscriptOptions {
         Self {
             thinking_mode: ThinkingMode::Hide,
             group_exploration: true,
+            verbosity: Verbosity::default(),
+            tps_enabled: false,
+            markdown_source: false,
             clock_ms: 0,
             expanded_groups: Vec::new(),
             collapsed_thoughts: std::collections::HashSet::new(),
@@ -207,6 +230,7 @@ pub fn render_transcript(
         &std::collections::HashSet::<String>::new(),
         &options.group_rules,
         options.group_exploration,
+        options.verbosity == Verbosity::Low,
     );
     let markdown = MarkdownStyles::from_theme(theme);
     let mut measured: Vec<MeasuredRow> = Vec::new();
@@ -242,7 +266,7 @@ pub fn render_transcript(
         // CELL per tool child (`Children mode="tool"`,
         // group-view.tsx:186-188 — `props.entry(entry, false)`).
         if let Row::Group { kind, .. } = row {
-            let expanded = options.expanded_groups.iter().any(|key| key == &row_key(row));
+            let expanded = group_default_expanded(kind, row, options);
             if matches!(kind, crate::components::message::model::GroupKind::Reasoning) && expanded {
                 let header = render_row(row, messages, options, theme, &markdown, content_width);
                 let height = header.height;
@@ -438,7 +462,16 @@ fn render_row(
                 return RowRender::default();
             };
             match part {
-                Part::Text { text, .. } => text_part_row(text, markdown, width),
+                Part::Text { text, .. } => {
+                    // `session.markdown === "source"` (CONFIG-T3,
+                    // message-parts.tsx:184-190): the raw wrapped text
+                    // instead of rendered markdown.
+                    if options.markdown_source {
+                        source_text_part_row(text, width)
+                    } else {
+                        text_part_row(text, markdown, width)
+                    }
+                }
                 // The subagent tool renders its InlineTool card (#40 —
                 // `Subagent`, session/index.tsx:3087-3120).
                 Part::Tool { name, state, .. } if canonical_tool_name(name) == "subagent" => {
@@ -490,13 +523,17 @@ fn render_row(
             // tok/s (`turnTokensPerSecond`, rows.ts:442-463): the
             // step's output+reasoning tokens over its streamed span —
             // the VALUE is per-run (b); the row + `X.X tok/s` format
-            // is the (a) surface this pins.
+            // is the (a) surface this pins. `session.tps` gates the
+            // span (index.tsx:1892 `config.data.session.tps &&
+            // tokensPerSecond()` — default off).
             let tps = match (tokens, time.created, time.completed) {
-                (Some(tokens), Some(created), Some(completed)) if completed > created => {
+                (Some(tokens), Some(created), Some(created_end))
+                    if created_end > created && options.tps_enabled =>
+                {
                     // Display-rate rounding, not accounting: u64→f64
                     // loss is irrelevant at one decimal.
                     #[allow(clippy::cast_precision_loss)]
-                    let tps = *tokens as f64 * 1000.0 / (completed - created) as f64;
+                    let tps = *tokens as f64 * 1000.0 / (created_end - created) as f64;
                     Some(tps)
                 }
                 _ => None,
@@ -517,10 +554,34 @@ fn render_row(
             )
         }
         Row::Group { kind, children, completed, .. } => {
-            let expanded = options.expanded_groups.iter().any(|key| key == &row_key(row));
+            let expanded = group_default_expanded(kind, row, options);
             group_row(kind.clone(), children, *completed, expanded, messages, options, theme, width)
         }
     }
+}
+
+/// The disclosure's default state (CONFIG-T3, v2's
+/// `groupedKind`/`groupExpanded`, index.tsx:237-241): explicit user
+/// expansion wins; otherwise `high` verbosity opens
+/// exploration/instruction summaries, and a reasoning group under
+/// thinking=show renders its children inline (group-view.tsx:110's
+/// `grouped()` false → normal).
+fn group_default_expanded(
+    kind: &crate::components::message::model::GroupKind,
+    row: &Row,
+    options: &TranscriptOptions,
+) -> bool {
+    options.expanded_groups.iter().any(|key| key == &row_key(row))
+        || match kind {
+            crate::components::message::model::GroupKind::Reasoning => {
+                options.thinking_mode == ThinkingMode::Show
+            }
+            crate::components::message::model::GroupKind::Exploration
+            | crate::components::message::model::GroupKind::Instructions => {
+                options.verbosity == Verbosity::High
+            }
+            _ => false,
+        }
 }
 
 /// The assistant text part (`TextPart`): markdown inside
@@ -540,6 +601,27 @@ fn text_part_row(text: &str, markdown: &MarkdownStyles, width: usize) -> RowRend
         })
         .collect();
     RowRender { placed, fills: Vec::new(), height: lines.len(), images: Vec::new() }
+}
+
+/// The assistant text part under `session.markdown === "source"`: the
+/// raw text, wrapped inside the same `paddingLeft 3` (no markdown
+/// rendering — message-parts.tsx:184-190's plain text node).
+fn source_text_part_row(text: &str, width: usize) -> RowRender {
+    let body = width.saturating_sub(3);
+    let lines: Vec<String> = crate::wrap::wrap_label(text.trim(), body);
+    let placed: Vec<Placed> = lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| Placed {
+            x: 3,
+            y: index,
+            width: body,
+            lines: vec![PlacedLine::plain(line, Style::new())],
+            tag: None,
+        })
+        .collect();
+    let height = placed.len();
+    RowRender { placed, fills: Vec::new(), height, images: Vec::new() }
 }
 
 /// A group row: the collapsed header (exploration/reasoning) or, when

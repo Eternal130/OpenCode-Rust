@@ -276,6 +276,17 @@ impl App {
         self.remerge_keybinds();
         // R-07: the transcript image strip's gate (`session.image_preview`).
         self.store.set_image_preview(config.session_image_preview);
+        // CONFIG-T3 — the session.* display keys (index.tsx:229-241):
+        // thinking/verbosity/tps/markdown reach the store on boot AND
+        // every reload; grouping seeds the exploration toggle (the
+        // runtime toggle flips it afterwards).
+        self.store.set_session_thinking(config.session_thinking);
+        if let Some(verbosity) = &config.session_verbosity {
+            self.store.set_session_verbosity(verbosity);
+        }
+        self.store.set_session_tps(config.session_tps);
+        self.store.set_session_markdown_source(config.session_markdown_source);
+        self.store.restore_session_grouping(config.session_grouping);
     }
 
     fn config_directories() -> Vec<std::path::PathBuf> {
@@ -5327,9 +5338,11 @@ pub async fn run_with_size(
     // `--auto` (v2 permission.tsx:14 `args.auto ? "autoaccept"`):
     // arm the permission auto-answer (every ask replies `once`,
     // session/index.tsx:255-262) + the composer metadata's `auto`
-    // marker.
-    app.autoaccept = boot.auto;
-    app.store.set_permission_autoaccept(boot.auto);
+    // marker. CONFIG-T1: the cli.json `session.permissions` key rides
+    // the same arm (`config.data.session.permissions` — the flag wins,
+    // the key covers the flag-less boot).
+    app.autoaccept = config.permission_autoaccept(boot.auto);
+    app.store.set_permission_autoaccept(app.autoaccept);
 
     // Config reload: mtime check per tick (the reference watches the dir).
     let mut config_mtime = config

@@ -152,6 +152,24 @@ pub struct TuiConfig {
     /// native text selection (v2's documented opt-out; see
     /// `crate::mouse_modes`).
     pub mouse: bool,
+    /// `session.permissions` (config/index.tsx:176 — CONFIG-T1's read
+    /// side): `autoaccept` arms the permission auto-answer at boot
+    /// exactly like `--auto` (context/permission.tsx:14's
+    /// `args.auto ? "autoaccept" : config.data.session.permissions`);
+    /// default/absent = `prompt`.
+    pub session_permissions: Option<String>,
+    /// `session.thinking === "show"` (index.tsx:229 — CONFIG-T3):
+    /// thoughts render inline instead of the collapsed disclosure.
+    pub session_thinking: bool,
+    /// `session.verbosity` (index.tsx:234): `low`/`medium`/`high`.
+    pub session_verbosity: Option<String>,
+    /// `session.tps` (index.tsx:1892): the tok/s footer span.
+    pub session_tps: bool,
+    /// `session.markdown === "source"` (index.tsx:231): raw text parts.
+    pub session_markdown_source: bool,
+    /// `session.grouping !== "none"` (index.tsx:233): exploration
+    /// grouping on (the boot seed of the runtime toggle).
+    pub session_grouping: bool,
     /// The `cursor` section (`cursor.style`/`cursor.blinking` — v2's
     /// config/index.tsx:263-266; lane TAIL's DECSCUSR/OSC 12 emission).
     pub cursor: crate::terminal_proto::CursorConfig,
@@ -175,6 +193,12 @@ impl Default for TuiConfig {
             leader_timeout_ms: None,
             attention: AttentionConfig::default(),
             session_image_preview: false,
+            session_permissions: None,
+            session_thinking: false,
+            session_verbosity: None,
+            session_tps: false,
+            session_markdown_source: false,
+            session_grouping: true,
             tabs: TabsConfig::default(),
             session_sidebar: crate::components::sidebar::SidebarMode::default(),
             mouse: true,
@@ -185,6 +209,14 @@ impl Default for TuiConfig {
 }
 
 impl TuiConfig {
+    /// The boot permission mode (CONFIG-T1, context/permission.tsx:14):
+    /// `autoaccept` when the `--auto` flag is set OR the cli.json
+    /// `session.permissions` key says so; `prompt` otherwise.
+    #[must_use]
+    pub fn permission_autoaccept(&self, auto_flag: bool) -> bool {
+        auto_flag || self.session_permissions.as_deref() == Some("autoaccept")
+    }
+
     /// Load through oc-core's `CliConfig` service (SURF-2, F-1's
     /// registered delegation): JSONC tolerance, the v1→v2 migration
     /// and the `OPENCODE_CLI_CONFIG_CONTENT` env overlay all ride the
@@ -292,6 +324,21 @@ impl TuiConfig {
             tabs,
             session_sidebar,
             mouse,
+            session_permissions: info
+                .session
+                .as_ref()
+                .and_then(|session| session.permissions.clone()),
+            session_thinking: info.session.as_ref().and_then(|session| session.thinking.as_deref())
+                == Some("show"),
+            session_verbosity: info.session.as_ref().and_then(|session| session.verbosity.clone()),
+            session_tps: info.session.as_ref().and_then(|session| session.tps).unwrap_or(false),
+            session_markdown_source: info
+                .session
+                .as_ref()
+                .and_then(|session| session.markdown.as_deref())
+                == Some("source"),
+            session_grouping: info.session.as_ref().and_then(|session| session.grouping.as_deref())
+                != Some("none"),
             cursor,
             path,
         }
@@ -372,6 +419,36 @@ impl TuiConfig {
             tabs,
             session_sidebar,
             mouse,
+            session_permissions: value
+                .get("session")
+                .and_then(|session| session.get("permissions"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            session_thinking: value
+                .get("session")
+                .and_then(|session| session.get("thinking"))
+                .and_then(Value::as_str)
+                == Some("show"),
+            session_verbosity: value
+                .get("session")
+                .and_then(|session| session.get("verbosity"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            session_tps: value
+                .get("session")
+                .and_then(|session| session.get("tps"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            session_markdown_source: value
+                .get("session")
+                .and_then(|session| session.get("markdown"))
+                .and_then(Value::as_str)
+                == Some("source"),
+            session_grouping: value
+                .get("session")
+                .and_then(|session| session.get("grouping"))
+                .and_then(Value::as_str)
+                != Some("none"),
             cursor,
             path,
         }

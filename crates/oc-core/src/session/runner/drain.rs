@@ -124,6 +124,15 @@ impl SessionRunner {
         }
     }
 
+    /// The location's compaction service (CONFIG-C1: the engine's
+    /// `ConfigCompactionPlugin` wiring — `compaction.auto` /
+    /// `keep.tokens` / `buffer` from the location's config documents —
+    /// is observable through `compaction().settings()`).
+    #[must_use]
+    pub fn compaction(&self) -> &Arc<SessionCompaction> {
+        &self.compaction
+    }
+
     /// Attaches the `SessionPrompt.prepare` seam (the engine's
     /// production wiring — `session.prompt` hook dispatch + `@skill`
     /// resolution over the location's skill table; guest hooks ride
