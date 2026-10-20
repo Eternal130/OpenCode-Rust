@@ -649,8 +649,17 @@ function makeCtx(pluginId, options) {
       },
     },
 
-    // -- permission --------------------------------------------------------
+    // -- permission (PLUG-D11: the v2 PermissionDomain —
+    //    list/get/reply over the engine's permission machinery) --------
     permission: {
+      async list(args) {
+        const result = await hostRequest("permission.list", { pluginId, args: args ?? {} });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+      async get(args) {
+        const result = await hostRequest("permission.get", { pluginId, args: args ?? {} });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
       async reply(args) {
         return hostRequest("permission.reply", { pluginId, args: args ?? {} });
       },
