@@ -630,3 +630,142 @@ async fn project_update_fields() {
         other => panic!("expected 404 ProjectNotFoundError, got: {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// DB-D6 — worktree.refresh discovers/prunes rows + worktree.updated
+// (worktree.ts:273-327)
+// ---------------------------------------------------------------------------
+
+async fn worktree_rows(server: &TestServer, project_id: &str) -> Vec<(String, Option<String>)> {
+    let project_id = project_id.to_owned();
+    server
+        .state
+        .engine
+        .db
+        .transaction(move |tx| {
+            let mut statement = tx.conn().prepare(
+                "SELECT directory, strategy FROM worktree WHERE project_id = ?1 ORDER BY directory",
+            )?;
+            let rows = statement
+                .query_map([project_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .expect("worktree rows read")
+}
+
+#[tokio::test]
+async fn worktree_refresh() {
+    let workspace = tempfile::tempdir().expect("workspace").keep();
+    seed_repo(&workspace);
+    let server = boot(workspace.clone()).await;
+    let (project_id, _) = project_id(&server).await;
+
+    // A linked git worktree created behind the server's back.
+    let linked = workspace
+        .parent()
+        .expect("parent")
+        .join(format!("linked-wt-{}", workspace.file_name().unwrap_or_default().to_string_lossy()));
+    git(&workspace, &["worktree", "add", linked.to_str().unwrap(), "-b", "linked"]);
+    let linked_real = std::fs::canonicalize(&linked).expect("linked canonical");
+
+    // Refresh discovers it (strategy `git`) and the canonical main
+    // checkout (unowned), atomically announcing worktree.updated.
+    let mut updated = server.state.engine.bus.subscribe_types(&["worktree.updated"]);
+    let (status, body) = raw_json(
+        server.addr,
+        "POST",
+        "/api/worktree/refresh",
+        &serde_json::json!({ "projectID": project_id }),
+    )
+    .await;
+    assert_eq!(status, 204, "refresh is 204 NoContent: {body}");
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), updated.next())
+        .await
+        .expect("worktree.updated within 5s")
+        .expect("stream open");
+    assert_eq!(event.data["projectID"], project_id);
+
+    let rows = worktree_rows(&server, &project_id).await;
+    let linked_row = rows.iter().find(|(directory, _)| directory == linked_real.to_str().unwrap());
+    assert_eq!(
+        linked_row.and_then(|(_, strategy)| strategy.clone()),
+        Some("git".to_owned()),
+        "linked worktree discovered with the git strategy: {rows:?}"
+    );
+    let canonical_row = rows.iter().find(|(directory, _)| {
+        directory == &std::fs::canonicalize(&workspace).unwrap().to_string_lossy()
+    });
+    assert!(
+        canonical_row.is_some_and(|(_, strategy)| strategy.is_none()),
+        "canonical main checkout listed unowned (root entry): {rows:?}"
+    );
+
+    // The wired list surface mirrors the rows (bare array, strategy?).
+    let query = location_query(&workspace);
+    let (status, body) =
+        raw_get(server.addr, &format!("/api/worktree?{query}&projectID={project_id}")).await;
+    assert_eq!(status, 200, "worktree list: {body}");
+    let listed = body.as_array().cloned().unwrap_or_default();
+    assert!(
+        listed.iter().any(|entry| {
+            entry["directory"].as_str() == Some(linked_real.to_string_lossy().as_ref())
+                && entry["strategy"] == "git"
+        }),
+        "list carries the discovered entry: {listed:?}"
+    );
+
+    // The directory vanishing prunes the row on the next refresh and
+    // announces again; existing directories survive.
+    std::fs::remove_dir_all(&linked).expect("rm linked");
+    let (status, body) = raw_json(
+        server.addr,
+        "POST",
+        "/api/worktree/refresh",
+        &serde_json::json!({ "projectID": project_id }),
+    )
+    .await;
+    assert_eq!(status, 204, "second refresh: {body}");
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), updated.next())
+        .await
+        .expect("prune announces worktree.updated")
+        .expect("stream open");
+    assert_eq!(event.data["projectID"], project_id);
+    let rows = worktree_rows(&server, &project_id).await;
+    assert!(
+        !rows.iter().any(|(directory, _)| directory == linked_real.to_str().unwrap()),
+        "vanished directory pruned: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|(directory, _)| {
+            directory == &std::fs::canonicalize(&workspace).unwrap().to_string_lossy()
+        }),
+        "canonical row survives: {rows:?}"
+    );
+
+    // A no-change refresh stays silent (changed(update=false) — no event).
+    let (status, body) = raw_json(
+        server.addr,
+        "POST",
+        "/api/worktree/refresh",
+        &serde_json::json!({ "projectID": project_id }),
+    )
+    .await;
+    assert_eq!(status, 204, "idempotent refresh: {body}");
+    let quiet = tokio::time::timeout(std::time::Duration::from_millis(300), updated.next()).await;
+    assert!(quiet.is_err(), "no worktree.updated without a change");
+
+    // Unknown project → 404 ProjectNotFoundError.
+    let (status, body) = raw_json(
+        server.addr,
+        "POST",
+        "/api/worktree/refresh",
+        &serde_json::json!({ "projectID": "0000000000000000000000000000000000000000" }),
+    )
+    .await;
+    assert_eq!(status, 404, "unknown project: {body}");
+    assert_eq!(body["_tag"], "ProjectNotFoundError");
+}
