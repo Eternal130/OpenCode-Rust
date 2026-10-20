@@ -92,6 +92,11 @@ pub struct DiffFile {
     /// `Image` instead of `+N/−N` and the body carries the
     /// no-preview fallback copy.
     pub image: bool,
+    /// TUI-10: the working-tree bytes for a previewable image
+    /// (`client.file.read`'s port-side stand-in — the fetch worker
+    /// reads `directory/file` for non-deleted images in non-committed
+    /// modes; `None` keeps the fallback copy).
+    pub image_data: Option<Vec<u8>>,
 }
 
 /// One parsed hunk row.
@@ -387,11 +392,14 @@ pub struct DiffViewerOptions<'a> {
     /// `props.sourceDetail` — the base ref shown after ` · `
     /// (`vs {name}` of the chosen base).
     pub source_detail: &'a str,
+    /// The VIEWPORT height (the inline image's `Math.max(3, Math.min(
+    /// 8, floor(height / 4)))`, diff-viewer-image.tsx:21).
+    pub viewport_height: usize,
 }
 
 impl Default for DiffViewerOptions<'_> {
     fn default() -> Self {
-        Self { source_label: "All", source_detail: "vs v2" }
+        Self { source_label: "All", source_detail: "vs v2", viewport_height: 24 }
     }
 }
 
@@ -406,6 +414,7 @@ pub fn diff_viewer_fixture() -> Vec<DiffFile> {
         status: FileStatus::Modified,
         patch: "--- a/src/file.txt\n+++ b/src/file.txt\n@@ -1,3 +1,3 @@\n const first = true\n-const oldFirst = true\n+const newFirst = true\n const afterFirst = true\n@@ -20,3 +20,3 @@\n const second = true\n-const oldSecond = true\n+const newSecond = true\n const afterSecond = true\n@@ -40,3 +40,3 @@\n const third = true\n-const oldThird = true\n+const newThird = true\n const afterThird = true".into(),
         image: false,
+        image_data: None,
     }]
 }
 
@@ -525,6 +534,23 @@ pub fn render_diff_viewer(
     theme: &ThemeStyles,
     width: usize,
     height: usize,
+) -> Frame {
+    render_diff_viewer_with_hits(files, state, options, theme, width, height, None)
+}
+
+/// [`render_diff_viewer`] plus the inline images' CONTENT-coordinate
+/// hit rects (TUI-10 — a release inside one opens the preview; the
+/// mount maps them through the scroll into screen cells).
+#[must_use]
+#[allow(clippy::too_many_arguments)] // the painter's full geometry
+pub fn render_diff_viewer_with_hits(
+    files: &[DiffFile],
+    state: &DiffViewerState,
+    options: &DiffViewerOptions,
+    theme: &ThemeStyles,
+    width: usize,
+    height: usize,
+    mut image_hits: Option<&mut Vec<crate::components::diff_viewer_mount::DiffImageHit>>,
 ) -> Frame {
     let styles = theme;
     let diff = styles.diff;
@@ -791,6 +817,104 @@ pub fn render_diff_viewer(
         // plain rows, byte-exact.
         let hunks = file.hunks();
         if hunks.is_empty() {
+            // TUI-10: a previewable image renders the inline
+            // DiffViewerImage (diff-viewer-image.tsx:24-80): the
+            // "Working tree preview" label, the blocks-quantized
+            // image (`max(3, min(8, h/4))` rows), the decoded `WxH`
+            // size row. Only non-committed modes with working-tree
+            // bytes (deleted files keep the fallback copy).
+            let label_y = y;
+            let previewable = file.image
+                && options.source_label != "Committed"
+                && file.status != FileStatus::Deleted
+                && file.image_data.is_some();
+            if previewable {
+                let bytes = file.image_data.clone().unwrap_or_default();
+                let decoded = crate::image_blocks::decode_png(&bytes);
+                let image_rows = (options.viewport_height / 4).clamp(3, 8);
+                placed.push(Placed {
+                    x: patch_x + 1,
+                    y,
+                    width: 20,
+                    lines: vec![PlacedLine::plain(
+                        "Working tree preview".to_owned(),
+                        Style::new().fg(fg_muted).bg(diff.background_context),
+                    )],
+                    tag: None,
+                });
+                y += 2; // label + its gap 1
+                if let Some(image) = decoded.as_ref() {
+                    let inner_w = patch_w.saturating_sub(2).max(1);
+                    let (cols, rows) = crate::image_blocks::fit_cells(
+                        image.width,
+                        image.height,
+                        inner_w,
+                        image_rows,
+                    );
+                    let cells = crate::image_blocks::blocks_cells(image, cols, rows);
+                    let offset_x = patch_x + 1 + inner_w.saturating_sub(cols) / 2;
+                    for (line_index, line) in cells.iter().enumerate() {
+                        let runs = line
+                            .iter()
+                            .map(|cell| StyledSpan {
+                                link: None,
+                                text: cell.glyph.to_string(),
+                                style: Style::new()
+                                    .fg(Color::Rgb(cell.fg[0], cell.fg[1], cell.fg[2]))
+                                    .bg(Color::Rgb(cell.bg[0], cell.bg[1], cell.bg[2])),
+                            })
+                            .collect();
+                        placed.push(Placed {
+                            x: offset_x,
+                            y: y + line_index,
+                            width: cols,
+                            lines: vec![PlacedLine { runs }],
+                            tag: None,
+                        });
+                    }
+                    let size = format!("{}x{}", image.width, image.height);
+                    placed.push(Placed {
+                        x: patch_x + 1,
+                        y: y + image_rows,
+                        width: crate::wrap::display_width(&size),
+                        lines: vec![PlacedLine::plain(
+                            size,
+                            Style::new().fg(fg_muted).bg(diff.background_context),
+                        )],
+                        tag: None,
+                    });
+                    if let Some(hits) = image_hits.as_deref_mut() {
+                        // The click payload: the file's bytes as the
+                        // ref's octet-stream data URI (the mention
+                        // carries the path).
+                        let mime = image_mime(&file.file);
+                        let encoded = crate::clipboard::base64_encode::encode(&bytes);
+                        let uri = format!("data:{mime};base64,{encoded}");
+                        hits.push((
+                            patch_x + 1,
+                            label_y,
+                            patch_w.saturating_sub(2),
+                            image_rows + 3,
+                            uri,
+                        ));
+                    }
+                    y += image_rows + 2;
+                } else {
+                    // `image.error` → "Could not load image".
+                    placed.push(Placed {
+                        x: patch_x + 1,
+                        y,
+                        width: 21,
+                        lines: vec![PlacedLine::plain(
+                            "Could not load image".to_owned(),
+                            Style::new().fg(styles.error).bg(diff.background_context),
+                        )],
+                        tag: None,
+                    });
+                    y += 2;
+                }
+                continue;
+            }
             // The no-patch fallback row (diff-viewer.tsx:1012-1024):
             // image files carry their mode-specific copy, anything
             // else the generic notice.
@@ -929,6 +1053,22 @@ pub fn render_diff_viewer(
     }
 
     paint_placed_with_fills(&placed, &fill_rects, (width as u16, height as u16), base)
+}
+
+/// The inline diff image's MIME (isDiffImageFile's extension set).
+fn image_mime(path: &str) -> &'static str {
+    let ends_with = |suffix: &str| {
+        path.len() >= suffix.len() && path[path.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+    };
+    if ends_with(".png") {
+        "image/png"
+    } else if ends_with(".jpg") || ends_with(".jpeg") {
+        "image/jpeg"
+    } else if ends_with(".webp") {
+        "image/webp"
+    } else {
+        "image/gif"
+    }
 }
 
 fn unified_colors(row: &PatchRow, diff: &DiffStyles, line: usize) -> RowColors {
@@ -1209,6 +1349,7 @@ mod tests {
             status: FileStatus::Modified,
             patch: patch.into(),
             image: false,
+            image_data: None,
         }];
         let frame = render_diff_viewer(
             &files,

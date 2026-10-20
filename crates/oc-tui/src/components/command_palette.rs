@@ -222,6 +222,26 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         group: "Prompt",
         bindings: &["ctrl+alt+t"],
     },
+    // TUI-9: the stash family (prompt/index.tsx:874-920 — v2's
+    // palette rows, category Prompt).
+    PaletteCommand {
+        command: "prompt.stash",
+        title: "Stash prompt",
+        group: "Prompt",
+        bindings: &[],
+    },
+    PaletteCommand {
+        command: "prompt.stash.pop",
+        title: "Stash pop",
+        group: "Prompt",
+        bindings: &[],
+    },
+    PaletteCommand {
+        command: "prompt.stash.list",
+        title: "Stash list",
+        group: "Prompt",
+        bindings: &[],
+    },
     PaletteCommand {
         command: "variant.cycle",
         title: "Variant cycle",
@@ -243,6 +263,17 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand {
         command: "opencode.settings",
         title: "Open settings",
+        group: "System",
+        bindings: &[],
+    },
+    // TUI-TD22 (PORT ADDITION — the toast.activate precedent): the
+    // palette row for DialogExperiments. v2's entry is the DevToolsBar
+    // item (devtools-bar.tsx:429-437); the port has no devtools bar
+    // (06 #20 KNOWN — separate ledger row), so the palette carries the
+    // reachable surface.
+    PaletteCommand {
+        command: "opencode.experiments",
+        title: "Experiments",
         group: "System",
         bindings: &[],
     },
@@ -725,32 +756,9 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 .map_or_else(|| "Waiting".to_owned(), |attempt| attempt.title);
             SelectProps::new(title, options)
         }
-        // `DialogConfig` (dialog-config.tsx): the settings rows this
-        // build reads AND persists; the footer carries the current
-        // value, enter cycles it.
-        DialogKind::Settings => {
-            let theme_mode = store.theme_mode_pref().unwrap_or_else(|| "system".to_owned());
-            let sidebar = match store.sidebar_mode() {
-                crate::components::sidebar::SidebarMode::Hide => "hide",
-                crate::components::sidebar::SidebarMode::Auto => "auto",
-            };
-            let grouping = if store.exploration_grouping() { "auto" } else { "none" };
-            let options = vec![
-                SelectOption::titled("Theme", "theme.name")
-                    .categorized("Appearance")
-                    .with_footer(store.theme_name()),
-                SelectOption::titled("Color mode", "theme.mode")
-                    .categorized("Appearance")
-                    .with_footer(theme_mode),
-                SelectOption::titled("Sidebar", "session.sidebar")
-                    .categorized("Session")
-                    .with_footer(sidebar.to_owned()),
-                SelectOption::titled("Tool grouping", "session.grouping")
-                    .categorized("Session")
-                    .with_footer(grouping.to_owned()),
-            ];
-            SelectProps::new("Settings", options)
-        }
+        // (TUI-23: DialogConfig's props moved to the FULL table arm
+        // below — every v2.0.24 settings row through
+        // `crate::components::dialog_config`.)
         // `DialogFork` (dialog-fork.tsx:69-82): "Full session" + the
         // user messages newest-first (text single-lined, the created
         // time in the footer).
@@ -789,6 +797,132 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         DialogKind::ExportResult { path } => {
             SelectProps::new("Session exported", vec![SelectOption::titled(path.clone(), "path")])
         }
+        // -- TUI-8: DialogSkill (dialog-skill.tsx:31-45): the padded
+        // name column + the description; loading / error / empty
+        // render the muted status rows; "No skills found" on a miss.
+        DialogKind::Skill => {
+            let options = match store.skills() {
+                crate::store::ListState::Loading => vec![status_option("Loading skills…")],
+                crate::store::ListState::Failed(error) => {
+                    vec![status_option(&format!("Could not load skills: {error}"))]
+                }
+                crate::store::ListState::Loaded(skills) => {
+                    if skills.is_empty() {
+                        vec![status_option("No skills available")]
+                    } else {
+                        let max_width = skills
+                            .iter()
+                            .map(|skill| skill.name.chars().count())
+                            .max()
+                            .unwrap_or(0);
+                        skills
+                            .iter()
+                            .map(|skill| {
+                                let title = format!("{:width$}", skill.name, width = max_width);
+                                let mut option = SelectOption::titled(title, skill.id.clone());
+                                if let Some(description) = &skill.description {
+                                    let squashed = description
+                                        .split_whitespace()
+                                        .collect::<Vec<_>>()
+                                        .join(" ");
+                                    option = option.described(squashed);
+                                }
+                                option
+                            })
+                            .collect()
+                    }
+                }
+            };
+            SelectProps::new("Skills", options)
+        }
+        // -- TUI-9: DialogStash (dialog-stash.tsx:38-65): the entries
+        // most-recent first, the relative-time description, the line
+        // count footer, the armed row's confirm title.
+        DialogKind::Stash => {
+            let entries = store.stash_entries();
+            let armed = store.stash_delete_armed();
+            let options: Vec<SelectOption> = entries
+                .iter()
+                .enumerate()
+                .rev()
+                .map(|(index, entry)| {
+                    // `value` = the STASH index (v2's `value: index`).
+                    let reverse_position = entries.len() - 1 - index;
+                    let is_deleting = armed == Some(index);
+                    let title = if is_deleting {
+                        "Press ctrl+d again to confirm".to_owned()
+                    } else {
+                        // getStashPreview: the first line, ≤50 chars.
+                        let first = entry.prompt.text.split('\n').next().unwrap_or("").trim();
+                        first.chars().take(50).collect::<String>()
+                    };
+                    let mut option = SelectOption::titled(title, index.to_string());
+                    option = option.described(relative_time(entry.timestamp));
+                    let lines = entry.prompt.text.matches('\n').count() + 1;
+                    if lines > 1 {
+                        option = option.with_footer(format!("~{lines} lines"));
+                    }
+                    let _ = reverse_position;
+                    option
+                })
+                .collect();
+            let mut props = SelectProps::new("Stash", options);
+            if armed.is_some() {
+                props = props.destructive();
+            }
+            props
+        }
+        // -- TUI-23: the full DialogConfig table (dialog-config.tsx)
+        // — every row with its category, the formatted footer, the
+        // keywords as search text.
+        DialogKind::Settings => {
+            let options = crate::components::dialog_config::settings_table()
+                .into_iter()
+                .map(|setting| {
+                    let value = crate::components::dialog_config::current_value(store, &setting);
+                    let footer = if setting.path == "theme.name" {
+                        store.theme_name()
+                    } else {
+                        setting.display(&value)
+                    };
+                    let mut option = SelectOption::titled(setting.title, setting.path)
+                        .categorized(setting.category);
+                    if !setting.keywords.is_empty() {
+                        option = option.with_search(setting.keywords);
+                    }
+                    option.with_footer(footer)
+                })
+                .collect();
+            SelectProps::new("Settings", options)
+        }
+        // -- TUI-TD22: DialogExperiments — v2.0.24's table is EMPTY
+        // (`No experiments available`); rows carry the on/off footer.
+        DialogKind::Experiments => {
+            let experiments = store.experiments();
+            if experiments.is_empty() {
+                SelectProps::new("Experiments", Vec::new())
+                    .with_empty_texts("No experiments available", "No experiments available")
+            } else {
+                let options = experiments
+                    .iter()
+                    .map(|experiment| {
+                        SelectOption::titled(experiment.title.clone(), experiment.id.clone())
+                            .with_search(experiment.description.clone())
+                            .with_footer(
+                                if store.experiment_enabled(&experiment.id) { "on" } else { "off" }
+                                    .to_owned(),
+                            )
+                    })
+                    .collect();
+                SelectProps::new("Experiments", options)
+            }
+        }
+        // -- TUI-10/24/25: the custom-key families render their own
+        // chrome (no select pipeline).
+        DialogKind::ImagePreview
+        | DialogKind::ErrorDetails { .. }
+        | DialogKind::Alert { .. }
+        | DialogKind::Confirm { .. } => SelectProps::new("", Vec::new()),
         // SE-F9: the stub row is DELISTED — only model/agent/session
         // listings ever mount a ServerList now; an unknown picker
         // falls to the shared empty state ("No items available"),
@@ -1318,6 +1452,42 @@ fn locale_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| b.cmp(a))
 }
 
+/// TUI-9: `getRelativeTime` (dialog-stash.ts:11-24) — "just now" /
+/// "Nm ago" / "Nh ago" / "Nd ago" against the wall clock
+/// (`Date.now()`; the stash's timestamps are epoch ms).
+fn relative_time(timestamp_ms: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX));
+    let seconds = now.saturating_sub(timestamp_ms) / 1000;
+    let minutes = seconds / 60;
+    let hours = minutes / 60;
+    let days = hours / 24;
+    if seconds < 60 {
+        "just now".to_owned()
+    } else if minutes < 60 {
+        format!("{minutes}m ago")
+    } else if hours < 24 {
+        format!("{hours}h ago")
+    } else if days < 7 {
+        format!("{days}d ago")
+    } else {
+        // `Locale.datetime` — the fixed-locale date form.
+        let days_since_epoch = timestamp_ms / 1000 / 86_400;
+        let z = i64::try_from(days_since_epoch).unwrap_or(0) + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z.rem_euclid(146_097);
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = if m <= 2 { y + 1 } else { y };
+        format!("{y:04}-{m:02}-{d:02}")
+    }
+}
+
 /// v2 `sortModelOptions` (`dialog-model.tsx:185-211`), verbatim key
 /// order: grouped → `opencode-go` providers first, then `opencode`,
 /// then provider-name collation; then Free-first; then release date
@@ -1788,6 +1958,77 @@ impl CommandDispatcher for StoreDispatcher {
                 // The run loop drains the flag: suspend → $EDITOR →
                 // resume → replace the focused draft (`editor.rs`).
                 store.request_editor();
+                Dispatch::Handled
+            }
+            // -- TUI-8: `/skills` + the palette's "Skills"
+            // (`prompt.skills`, prompt/index.tsx:578-605): the large
+            // DialogSkill over the skill.list state.
+            "prompt.skills" => {
+                store.clear_dialogs();
+                store.open_skills_dialog();
+                Dispatch::Handled
+            }
+            // -- TUI-9: the stash family (prompt/index.tsx:874-920):
+            // push stashes + resets, pop restores, list opens the
+            // DialogStash.
+            "prompt.stash" => {
+                store.stash_push();
+                Dispatch::Handled
+            }
+            "prompt.stash.pop" => {
+                store.stash_pop();
+                Dispatch::Handled
+            }
+            "prompt.stash.list" => {
+                if store.stash_entries().is_empty() {
+                    return Dispatch::Handled;
+                }
+                store.clear_dialogs();
+                store.replace_dialog(DialogKind::Stash, DialogSize::Medium);
+                Dispatch::Handled
+            }
+            // -- TUI-10: `<leader>i` ("View image attachments",
+            // prompt.images.view — prompt/index.tsx:493-498): the
+            // xlarge DialogImagePreview over the focused composer's
+            // data:image attachments (deduplicated,
+            // deduplicatePromptImages).
+            "prompt.images.view" => {
+                let key = match store.route() {
+                    Route::Session { session_id } => session_id,
+                    Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
+                };
+                let composer = store.composer(&key);
+                let mut images: Vec<crate::store::ImagePreviewItem> = Vec::new();
+                for file in &composer.draft.files {
+                    let Some(payload) = &file.payload else { continue };
+                    if !payload.mime.starts_with("image/") {
+                        continue;
+                    }
+                    let uri = payload.to_data_uri();
+                    if images.iter().any(|item| item.uri == uri) {
+                        continue;
+                    }
+                    images.push(crate::store::ImagePreviewItem {
+                        uri,
+                        mention: Some(file.mention_text()),
+                    });
+                }
+                if images.is_empty() {
+                    return Dispatch::Handled;
+                }
+                store.clear_dialogs();
+                store.open_image_preview(images, 0);
+                Dispatch::Handled
+            }
+            // -- TUI-TD22 (PORT ADDITION, the toast.activate
+            // precedent): the palette row opening DialogExperiments —
+            // v2's entry is the DevToolsBar item (06 #20 KNOWN, a
+            // separate ledger row); the dialog itself is the faithful
+            // port (v2.0.24's empty table → "No experiments
+            // available").
+            "opencode.experiments" => {
+                store.clear_dialogs();
+                store.replace_dialog(DialogKind::Experiments, DialogSize::Medium);
                 Dispatch::Handled
             }
             "messages.copy" => {
@@ -3501,14 +3742,18 @@ mod tests {
         assert_eq!(store.top_dialog().unwrap().size, crate::store::DialogSize::Large);
         store.clear_dialogs();
 
-        // opencode.settings → the Settings rows.
+        // opencode.settings → the FULL Settings table (TUI-23 — every
+        // v2.0.24 row, order verbatim).
         dispatcher.dispatch(&store, "opencode.settings", None);
         assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Settings));
         let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
-        assert_eq!(
-            props.options.iter().map(|option| option.value.as_str()).collect::<Vec<_>>(),
-            vec!["theme.name", "theme.mode", "session.sidebar", "session.grouping"]
-        );
+        let ids: Vec<&str> = props.options.iter().map(|option| option.value.as_str()).collect();
+        assert_eq!(ids.len(), crate::components::dialog_config::settings_table().len());
+        for expected in
+            ["theme.name", "theme.mode", "session.sidebar", "session.grouping", "debug.devtools"]
+        {
+            assert!(ids.contains(&expected), "the {expected} row is present");
+        }
         store.clear_dialogs();
 
         // session.share mirrors v2's unavailable toast.

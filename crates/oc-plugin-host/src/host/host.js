@@ -838,6 +838,29 @@ function makeCtx(pluginId, options) {
           });
         },
       },
+      // TUI-25 (v2 api.tsx:344-366): the promise resolves when the
+      // host answers — the TUI's dialog confirm / any close.
+      alert(options) {
+        const opts = options ?? {};
+        return hostRequest("ui.alert", {
+          pluginId,
+          title: String(opts.title ?? ""),
+          message: String(opts.message ?? ""),
+        })
+      },
+      confirm(options) {
+        const opts = options ?? {};
+        const label = opts.label ?? {};
+        return hostRequest("ui.confirm", {
+          pluginId,
+          title: String(opts.title ?? ""),
+          message: String(opts.message ?? ""),
+          label: {
+            confirm: typeof label.confirm === "string" ? label.confirm : null,
+            cancel: typeof label.cancel === "string" ? label.cancel : null,
+          },
+        })
+      },
       sidebar: {
         async setSection(section) {
           const spec = section ?? {};

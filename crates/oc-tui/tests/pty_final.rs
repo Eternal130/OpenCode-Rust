@@ -116,8 +116,11 @@ fn pty_settings_and_share() {
     assert!(driver.wait_for(WORDMARK, Duration::from_secs(20)), "the wordmark rendered");
 
     slash(&mut driver, "settings");
+    // TUI-23: the FULL table's initial window (the scroll viewport is
+    // the pinned dialog geometry — "Animations" rides the first
+    // window; "Tool grouping" now scrolls).
     assert!(
-        wait_row(&driver, "Tool grouping", Duration::from_secs(5)).is_some(),
+        wait_row(&driver, "Animations", Duration::from_secs(5)).is_some(),
         "the settings rows mounted"
     );
 
@@ -128,7 +131,7 @@ fn pty_settings_and_share() {
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         let mut gone = false;
         while std::time::Instant::now() < deadline {
-            if find_row(&driver, "Tool grouping").is_none() {
+            if find_row(&driver, "Animations").is_none() {
                 gone = true;
                 break;
             }

@@ -177,6 +177,21 @@ enum Family {
     /// session-tabs.tsx:449-534): a rows-only column — no title
     /// block, no filter input, no footer.
     Menu,
+    /// TUI-25: `ui/dialog-alert.tsx` — title + muted message + the
+    /// right-justified `ok` pill.
+    Alert,
+    /// TUI-25: `ui/dialog-confirm.tsx` — title + muted message + the
+    /// cancel/confirm pills (the active one carries the focused
+    /// primary background).
+    Confirm,
+    /// TUI-24: `component/dialog-error-details.tsx` — title + source
+    /// path, the 20-row scrollable error body, the reference row, the
+    /// `i investigate / c copy details / ↑/↓ scroll` footer.
+    ErrorDetails,
+    /// TUI-10: `component/dialog-image-preview.tsx` — the `Image N
+    /// of M` header, the image area (the cells paint in the bridge's
+    /// post-pass), the `← previous / caption / next →` footer.
+    ImagePreview,
 }
 
 /// One rendered row of the scroll window — the same walk the old
@@ -244,6 +259,35 @@ struct DialogInputs {
     // -- plugin rows ---------------------------------------------------------
     plugin_title: String,
     plugin_rows: Vec<String>,
+    // -- TUI-25: the alert/confirm message + the confirm pills ------
+    message: String,
+    /// (cancel label, confirm label, the active pill is confirm).
+    confirm_labels: (String, String, bool),
+    // -- TUI-24: the error details' rows --------------------------------
+    /// The source path row ("" hides it).
+    error_source: String,
+    /// The scroll WINDOW of the wrapped error body (already sliced).
+    error_window: Vec<String>,
+    /// The `Reference: …` row ("" hides it).
+    diagnostic: String,
+    // -- TUI-10: the image preview's chrome rows ------------------------
+    /// The `Image N of M` header.
+    preview_title: String,
+    /// (← previous, the caption, next →) — the outer two "" when a
+    /// single image.
+    preview_footer: (String, String, String),
+    /// The image area's row count (`max(3, height - 8)`).
+    preview_rows: usize,
+}
+
+/// TUI-10/24: the custom families' store-side sidecar — the image
+/// preview's live state + the error-details scroll offset. Built by
+/// [`crate::components::dialog::render_overlay`] (which owns the
+/// store); the embedder API path carries the default.
+#[derive(Debug, Default, Clone)]
+pub struct DialogSidecar {
+    pub preview: crate::store::ImagePreviewState,
+    pub error_scroll: usize,
 }
 
 /// The windowed rows — the old renderer's walk (`render_select`),
@@ -317,6 +361,25 @@ fn content_height(inputs: &DialogInputs) -> usize {
         Family::PluginRows => inputs.plugin_rows.len() + 3,
         // rows only (the menu's scrollbox).
         Family::Menu => inputs.window.len(),
+        // TUI-25 (dialog-alert.tsx:37-57): title, gap, message + its
+        // paddingBottom, gap, the ok pill + the row's paddingBottom.
+        Family::Alert | Family::Confirm => 7,
+        // TUI-24 (dialog-error-details.tsx:139-178): header (title +
+        // the optional source row), gap, body window + the optional
+        // reference row, gap, the action footer, root paddingBottom.
+        Family::ErrorDetails => {
+            1 + usize::from(!inputs.error_source.is_empty())
+                + 1
+                + inputs.error_window.len()
+                + usize::from(!inputs.diagnostic.is_empty())
+                + 1
+                + 1
+                + 1
+        }
+        // TUI-10 (dialog-image-preview.tsx:48-72): title, gap, the
+        // image area (max(3, height-8) rows), gap, the footer, root
+        // paddingBottom.
+        Family::ImagePreview => inputs.preview_rows + 5,
     }
 }
 
@@ -1133,6 +1196,390 @@ fn plugin_rows_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementB
 }
 
 // ---------------------------------------------------------------------------
+// TUI-25: the alert / confirm trees (ui/dialog-alert.tsx /
+// ui/dialog-confirm.tsx)
+// ---------------------------------------------------------------------------
+
+/// `DialogAlert` (dialog-alert.tsx:37-57): the root paddingLeft/right
+/// 2 gap 1; the muted message with paddingBottom 1; the right-justed
+/// `ok` pill (padding 3 over the focused primary background).
+fn alert_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    let header = box_().flex_direction("row").justify_content("space-between").children(
+        Children::Static(vec![
+            text()
+                .wrap_mode("none")
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        let clip = i.box_width.saturating_sub(8).max(8);
+                        styled(vec![chunk(
+                            take_width(&i.plugin_title, clip),
+                            i.colors.text,
+                            None,
+                            1,
+                        )])
+                    })),
+                )
+                .into_element(),
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("esc".to_owned(), i.colors.muted, None, 0)])
+                    })),
+                )
+                .into_element(),
+        ]),
+    );
+    let message = text().dyn_prop(
+        "content",
+        dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+            styled(vec![chunk(i.message.clone(), i.colors.muted, None, 0)])
+        })),
+    );
+    let message_box = box_().padding_bottom(1.0).child(message);
+    let ok = box_()
+        .padding_left(3.0)
+        .padding_right(3.0)
+        .dyn_prop(
+            "backgroundColor",
+            dyn_color(map(inputs.clone(), |i: &DialogInputs| i.colors.selected_bg)),
+        )
+        .child(text().dyn_prop(
+            "content",
+            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                styled(vec![chunk("ok".to_owned(), i.colors.selected_fg, None, 0)])
+            })),
+        ));
+    let button_row =
+        box_().flex_direction("row").justify_content("flex-end").padding_bottom(1.0).child(ok);
+    box_().padding_left(2.0).padding_right(2.0).children(Children::Static(vec![
+        header.into_element(),
+        message_box.margin_top(1.0).into_element(),
+        button_row.margin_top(1.0).into_element(),
+    ]))
+}
+
+/// `DialogConfirm` (dialog-confirm.tsx:37-81): the alert shape with
+/// the cancel/confirm pill PAIR — the active one carries the focused
+/// primary background + fg, the inactive stays muted.
+#[allow(clippy::too_many_lines)] // the pill pair's show/hide halves
+fn confirm_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    let header = box_().flex_direction("row").justify_content("space-between").children(
+        Children::Static(vec![
+            text()
+                .wrap_mode("none")
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        let clip = i.box_width.saturating_sub(8).max(8);
+                        styled(vec![chunk(
+                            take_width(&i.plugin_title, clip),
+                            i.colors.text,
+                            None,
+                            1,
+                        )])
+                    })),
+                )
+                .into_element(),
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("esc".to_owned(), i.colors.muted, None, 0)])
+                    })),
+                )
+                .into_element(),
+        ]),
+    );
+    let message = text().dyn_prop(
+        "content",
+        dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+            styled(vec![chunk(i.message.clone(), i.colors.muted, None, 0)])
+        })),
+    );
+    let message_box = box_().padding_bottom(1.0).child(message);
+    // The cancel pill (active when the focus is NOT confirm).
+    let cancel_shown = show(
+        Rc::new(map(inputs.clone(), |i: &DialogInputs| !i.confirm_labels.2))
+            as Rc<dyn Reactive<bool>>,
+        {
+            let inputs = inputs.clone();
+            move || {
+                vec![box_()
+                    .padding_left(1.0)
+                    .padding_right(1.0)
+                    .dyn_prop(
+                        "backgroundColor",
+                        dyn_color(map(inputs.clone(), |i: &DialogInputs| i.colors.selected_bg)),
+                    )
+                    .child(text().dyn_prop(
+                        "content",
+                        dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                            styled(vec![chunk(
+                                i.confirm_labels.0.clone(),
+                                i.colors.selected_fg,
+                                None,
+                                0,
+                            )])
+                        })),
+                    ))
+                    .into_element()]
+            }
+        },
+    );
+    let cancel_hidden = show(
+        Rc::new(map(inputs.clone(), |i: &DialogInputs| i.confirm_labels.2))
+            as Rc<dyn Reactive<bool>>,
+        {
+            let inputs = inputs.clone();
+            move || {
+                vec![box_()
+                    .padding_left(1.0)
+                    .padding_right(1.0)
+                    .child(text().dyn_prop(
+                        "content",
+                        dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                            styled(vec![chunk(i.confirm_labels.0.clone(), i.colors.muted, None, 0)])
+                        })),
+                    ))
+                    .into_element()]
+            }
+        },
+    );
+    let cancel = box_().children(Children::Static(vec![
+        box_().children_dyn(Rc::new(cancel_shown)).into_element(),
+        box_().children_dyn(Rc::new(cancel_hidden)).into_element(),
+    ]));
+    // The confirm pill (active when the focus IS confirm).
+    let confirm_shown = show(
+        Rc::new(map(inputs.clone(), |i: &DialogInputs| i.confirm_labels.2))
+            as Rc<dyn Reactive<bool>>,
+        {
+            let inputs = inputs.clone();
+            move || {
+                vec![box_()
+                    .padding_left(1.0)
+                    .padding_right(1.0)
+                    .dyn_prop(
+                        "backgroundColor",
+                        dyn_color(map(inputs.clone(), |i: &DialogInputs| i.colors.selected_bg)),
+                    )
+                    .child(text().dyn_prop(
+                        "content",
+                        dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                            styled(vec![chunk(
+                                i.confirm_labels.1.clone(),
+                                i.colors.selected_fg,
+                                None,
+                                0,
+                            )])
+                        })),
+                    ))
+                    .into_element()]
+            }
+        },
+    );
+    let confirm_hidden = show(
+        Rc::new(map(inputs.clone(), |i: &DialogInputs| !i.confirm_labels.2))
+            as Rc<dyn Reactive<bool>>,
+        {
+            let inputs = inputs.clone();
+            move || {
+                vec![box_()
+                    .padding_left(1.0)
+                    .padding_right(1.0)
+                    .child(text().dyn_prop(
+                        "content",
+                        dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                            styled(vec![chunk(i.confirm_labels.1.clone(), i.colors.muted, None, 0)])
+                        })),
+                    ))
+                    .into_element()]
+            }
+        },
+    );
+    let confirm = box_().children(Children::Static(vec![
+        box_().children_dyn(Rc::new(confirm_shown)).into_element(),
+        box_().children_dyn(Rc::new(confirm_hidden)).into_element(),
+    ]));
+    let button_row = box_()
+        .flex_direction("row")
+        .justify_content("flex-end")
+        .padding_bottom(1.0)
+        .children(Children::Static(vec![cancel.into_element(), confirm.into_element()]));
+    box_().padding_left(2.0).padding_right(2.0).children(Children::Static(vec![
+        header.into_element(),
+        message_box.margin_top(1.0).into_element(),
+        button_row.margin_top(1.0).into_element(),
+    ]))
+}
+
+// ---------------------------------------------------------------------------
+// TUI-24: the error-details tree (component/dialog-error-details.tsx)
+// ---------------------------------------------------------------------------
+
+/// `DialogErrorDetails`: the header (title + the source `FilePath`
+/// row), the 20-row error body (the window arrives pre-sliced — the
+/// port's scroll is the store's offset), the `Reference:` row, and
+/// the `i investigate  c copy details  ↑/↓ scroll` action footer.
+fn error_details_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    let title_row = box_().flex_direction("row").justify_content("space-between").children(
+        Children::Static(vec![
+            text()
+                .wrap_mode("none")
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        let clip = i.box_width.saturating_sub(8).max(8);
+                        styled(vec![chunk(
+                            take_width(&i.plugin_title, clip),
+                            i.colors.text,
+                            None,
+                            1,
+                        )])
+                    })),
+                )
+                .into_element(),
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("esc".to_owned(), i.colors.muted, None, 0)])
+                    })),
+                )
+                .into_element(),
+        ]),
+    );
+    let mut header_children = vec![title_row.into_element()];
+    let source_row = text()
+        .wrap_mode("none")
+        .dyn_prop(
+            "content",
+            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                styled(vec![chunk(i.error_source.clone(), i.colors.muted, None, 0)])
+            })),
+        )
+        .into_element();
+    header_children.push(source_row);
+    let header = box_().children(Children::Static(header_children));
+    // The body window + the reference row.
+    let body_lines = ForItemSource {
+        source: map(inputs.clone(), |i: &DialogInputs| {
+            i.error_window
+                .iter()
+                .enumerate()
+                .map(|(n, line)| ForItem {
+                    key: format!("E{n}"),
+                    value: PropValue::Str(line.clone()),
+                })
+                .collect::<Vec<ForItem>>()
+        }),
+    };
+    let body_inputs = inputs.clone();
+    let body_for = for_list(Rc::new(body_lines), move |item: &ForItem, _index: usize| {
+        let line = match &item.value {
+            PropValue::Str(line) => line.clone(),
+            _ => String::new(),
+        };
+        let inputs = body_inputs.clone();
+        text()
+            .dyn_prop(
+                "content",
+                dyn_styled(map(inputs, move |i: &DialogInputs| {
+                    styled(vec![chunk(line.clone(), i.colors.text, None, 0)])
+                })),
+            )
+            .into_element()
+    });
+    let mut body_children = vec![box_().children_dyn(Rc::new(body_for)).into_element()];
+    let reference = text()
+        .dyn_prop(
+            "content",
+            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                styled(vec![chunk(format!("Reference: {}", i.diagnostic), i.colors.muted, None, 0)])
+            })),
+        )
+        .into_element();
+    body_children.push(reference);
+    let body = box_().children(Children::Static(body_children));
+    // The action footer: `i investigate`, `c copy details`,
+    // `↑/↓ scroll` (gap 3, wrap).
+    let footer = text().dyn_prop(
+        "content",
+        dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+            styled(vec![
+                chunk("i".to_owned(), i.colors.text, None, 1),
+                chunk(" investigate   ".to_owned(), i.colors.muted, None, 0),
+                chunk("c".to_owned(), i.colors.text, None, 1),
+                chunk(" copy details   ".to_owned(), i.colors.muted, None, 0),
+                chunk("↑/↓ scroll".to_owned(), i.colors.muted, None, 0),
+            ])
+        })),
+    );
+    box_().padding_left(2.0).padding_right(2.0).padding_bottom(1.0).children(Children::Static(
+        vec![
+            header.into_element(),
+            body.margin_top(1.0).into_element(),
+            footer.margin_top(1.0).into_element(),
+        ],
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// TUI-10: the image-preview tree (component/dialog-image-preview.tsx)
+// ---------------------------------------------------------------------------
+
+/// `DialogImagePreview`: the `Image N of M` header, the EMPTY image
+/// area (the pixels paint in the bridge's post-pass over the copied
+/// cells — blocks glyphs or a graphics-protocol placement), and the
+/// `← previous / caption / next →` footer row.
+fn image_preview_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    let title_row = box_().flex_direction("row").justify_content("space-between").children(
+        Children::Static(vec![
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk(i.preview_title.clone(), i.colors.text, None, 1)])
+                    })),
+                )
+                .into_element(),
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("esc".to_owned(), i.colors.muted, None, 0)])
+                    })),
+                )
+                .into_element(),
+        ]),
+    );
+    // The image area: an empty box the post-pass fills.
+    let area =
+        box_().dyn_prop("height", dyn_num(map(inputs.clone(), |i: &DialogInputs| i.preview_rows)));
+    let footer =
+        box_().flex_direction("row").justify_content("space-between").child(text().dyn_prop(
+            "content",
+            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                let (previous, caption, next) = &i.preview_footer;
+                styled(vec![
+                    chunk(previous.clone(), i.colors.muted, None, 0),
+                    chunk(caption.clone(), i.colors.muted, None, 0),
+                    chunk(next.clone(), i.colors.muted, None, 0),
+                ])
+            })),
+        ));
+    box_().padding_left(2.0).padding_right(2.0).padding_bottom(1.0).children(Children::Static(
+        vec![
+            title_row.into_element(),
+            area.margin_top(1.0).into_element(),
+            footer.margin_top(1.0).into_element(),
+        ],
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // the mount
 // ---------------------------------------------------------------------------
 
@@ -1158,6 +1605,10 @@ fn chrome_element(
         Family::Help => help_builder(&family_inputs),
         Family::PluginRows => plugin_rows_builder(&family_inputs),
         Family::Menu => menu_builder(&family_inputs),
+        Family::Alert => alert_builder(&family_inputs),
+        Family::Confirm => confirm_builder(&family_inputs),
+        Family::ErrorDetails => error_details_builder(&family_inputs),
+        Family::ImagePreview => image_preview_builder(&family_inputs),
     };
     box_()
         .width(width as f32)
@@ -1235,6 +1686,7 @@ pub fn render_overlay_solid(
     plugin: Option<&PluginDialogContent>,
     theme: &ThemeState,
     terminal: (u16, u16),
+    sidecar: &DialogSidecar,
 ) -> ((usize, usize, usize, usize), Vec<crate::store::DialogButtonHit>) {
     let styles = DialogStyles::from_theme(theme);
     let colors = DialogColors::of(&styles);
@@ -1272,7 +1724,24 @@ pub fn render_overlay_solid(
         // beneath).
         let box_width = entry.size.width().min(width.saturating_sub(2));
         let box_x = (width - box_width) / 2;
-        let box_y = (height + 2) / 4;
+        // TUI-10: the image preview is CENTERED (`dialog.
+        // setCentered(true)`, dialog-image-preview.tsx:24) — the
+        // content-height walk pins the box's height first.
+        let centered = matches!(entry.kind, DialogKind::ImagePreview);
+        let box_y = if centered {
+            let inputs_probe = build_inputs(
+                entry,
+                props,
+                plugin,
+                DialogColors::of(&DialogStyles::from_theme(theme)),
+                box_width,
+                height,
+                &DialogSidecar::default(),
+            );
+            height.saturating_sub(1 + content_height(&inputs_probe)) / 2
+        } else {
+            (height + 2) / 4
+        };
         (box_width, box_x, box_y, true)
     };
     if dim_backdrop {
@@ -1283,7 +1752,7 @@ pub fn render_overlay_solid(
         }
     }
 
-    let inputs = build_inputs(entry, props, plugin, colors, box_width, height);
+    let inputs = build_inputs(entry, props, plugin, colors, box_width, height, sidecar);
     let box_height = 1 + content_height(&inputs);
 
     DIALOG.with_borrow_mut(|slot| {
@@ -1345,7 +1814,11 @@ fn dialog_chrome_button_hits(
         Family::RenamePrompt
         | Family::WorktreeNamePrompt
         | Family::ConnectPrompt
-        | Family::Menu => ("esc", 2),
+        | Family::Menu
+        | Family::Alert
+        | Family::Confirm
+        | Family::ErrorDetails
+        | Family::ImagePreview => ("esc", 2),
         Family::Help => ("esc/enter", 2),
     };
     let label_width = label.chars().count();
@@ -1382,6 +1855,7 @@ fn build_inputs(
     colors: DialogColors,
     box_width: usize,
     terminal_height: usize,
+    sidecar: &DialogSidecar,
 ) -> DialogInputs {
     let family = match &entry.kind {
         DialogKind::SessionRename { .. } => Family::RenamePrompt,
@@ -1397,6 +1871,11 @@ fn build_inputs(
         DialogKind::Plugin { .. } if plugin.is_some_and(|content| !content.is_select()) => {
             Family::PluginRows
         }
+        // TUI-10/24/25: the custom-key families.
+        DialogKind::ImagePreview => Family::ImagePreview,
+        DialogKind::ErrorDetails { .. } => Family::ErrorDetails,
+        DialogKind::Alert { .. } => Family::Alert,
+        DialogKind::Confirm { .. } => Family::Confirm,
         _ => Family::Select,
     };
     match family {
@@ -1424,6 +1903,14 @@ fn build_inputs(
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
+                message: String::new(),
+                confirm_labels: (String::new(), String::new(), true),
+                error_source: String::new(),
+                error_window: Vec::new(),
+                diagnostic: String::new(),
+                preview_title: String::new(),
+                preview_footer: (String::new(), String::new(), String::new()),
+                preview_rows: 0,
                 plugin_rows: Vec::new(),
             }
         }
@@ -1446,6 +1933,14 @@ fn build_inputs(
             hint_lines: Vec::new(),
             plugin_title: String::new(),
             plugin_rows: Vec::new(),
+            message: String::new(),
+            confirm_labels: (String::new(), String::new(), true),
+            error_source: String::new(),
+            error_window: Vec::new(),
+            diagnostic: String::new(),
+            preview_title: String::new(),
+            preview_footer: (String::new(), String::new(), String::new()),
+            preview_rows: 0,
         },
         // The connect prompts carry their title/placeholder/hints
         // through the props (OAuthCode's description block holds the
@@ -1470,6 +1965,14 @@ fn build_inputs(
             hint_lines: props.hints.clone(),
             plugin_title: String::new(),
             plugin_rows: Vec::new(),
+            message: String::new(),
+            confirm_labels: (String::new(), String::new(), true),
+            error_source: String::new(),
+            error_window: Vec::new(),
+            diagnostic: String::new(),
+            preview_title: String::new(),
+            preview_footer: (String::new(), String::new(), String::new()),
+            preview_rows: 0,
         },
         Family::Help => {
             let content_width = box_width.saturating_sub(4);
@@ -1506,6 +2009,14 @@ fn build_inputs(
                 hint_lines: crate::wrap::wrap_label(&hint, content_width.max(1)),
                 plugin_title: String::new(),
                 plugin_rows: Vec::new(),
+                message: String::new(),
+                confirm_labels: (String::new(), String::new(), true),
+                error_source: String::new(),
+                error_window: Vec::new(),
+                diagnostic: String::new(),
+                preview_title: String::new(),
+                preview_footer: (String::new(), String::new(), String::new()),
+                preview_rows: 0,
             }
         }
         Family::PluginRows => {
@@ -1529,7 +2040,179 @@ fn build_inputs(
                 hint_lines: Vec::new(),
                 plugin_title: content.title,
                 plugin_rows: content.rows,
+                message: String::new(),
+                confirm_labels: (String::new(), String::new(), true),
+                error_source: String::new(),
+                error_window: Vec::new(),
+                diagnostic: String::new(),
+                preview_title: String::new(),
+                preview_footer: (String::new(), String::new(), String::new()),
+                preview_rows: 0,
             }
         }
+        // -- TUI-25: DialogAlert / DialogConfirm --------------------
+        Family::Alert | Family::Confirm => {
+            let (plugin_title, message, confirm_labels) = match &entry.kind {
+                DialogKind::Alert { title, message, .. } => {
+                    (title.clone(), message.clone(), ("ok".to_owned(), "ok".to_owned(), true))
+                }
+                DialogKind::Confirm {
+                    title,
+                    message,
+                    confirm_label,
+                    cancel_label,
+                    active_confirm,
+                    ..
+                } => (
+                    title.clone(),
+                    message.clone(),
+                    (
+                        titlecase(ccancel(cancel_label)),
+                        titlecase(cconfirm(confirm_label)),
+                        *active_confirm,
+                    ),
+                ),
+                _ => (String::new(), String::new(), (String::new(), String::new(), true)),
+            };
+            DialogInputs {
+                family,
+                box_width,
+                colors,
+                title: String::new(),
+                placeholder: String::new(),
+                filter: String::new(),
+                options: Vec::new(),
+                flat: Vec::new(),
+                selected: 0,
+                current: None,
+                flatten: false,
+                destructive: false,
+                window: Vec::new(),
+                actions: Vec::new(),
+                prompt_value: String::new(),
+                hint_lines: Vec::new(),
+                plugin_title,
+                plugin_rows: Vec::new(),
+                message,
+                confirm_labels,
+                error_source: String::new(),
+                error_window: Vec::new(),
+                diagnostic: String::new(),
+                preview_title: String::new(),
+                preview_footer: (String::new(), String::new(), String::new()),
+                preview_rows: 0,
+            }
+        }
+        // -- TUI-24: DialogErrorDetails ------------------------------
+        Family::ErrorDetails => {
+            let DialogKind::ErrorDetails { title, source, error, diagnostic_ref, .. } = &entry.kind
+            else {
+                unreachable!("the ErrorDetails family guard")
+            };
+            // The 20-row scrollbox's window (the store's offset).
+            let content_width = box_width.saturating_sub(4).max(1);
+            let wrapped = crate::wrap::wrap_label(error, content_width);
+            let window: Vec<String> =
+                wrapped.iter().skip(sidecar.error_scroll).take(20).cloned().collect();
+            DialogInputs {
+                family,
+                box_width,
+                colors,
+                title: String::new(),
+                placeholder: String::new(),
+                filter: String::new(),
+                options: Vec::new(),
+                flat: Vec::new(),
+                selected: 0,
+                current: None,
+                flatten: false,
+                destructive: false,
+                window: Vec::new(),
+                actions: Vec::new(),
+                prompt_value: String::new(),
+                hint_lines: Vec::new(),
+                plugin_title: title.clone(),
+                plugin_rows: Vec::new(),
+                message: String::new(),
+                confirm_labels: (String::new(), String::new(), true),
+                error_source: source.clone(),
+                error_window: window,
+                diagnostic: diagnostic_ref.clone(),
+                preview_title: String::new(),
+                preview_footer: (String::new(), String::new(), String::new()),
+                preview_rows: 0,
+            }
+        }
+        // -- TUI-10: DialogImagePreview ------------------------------
+        Family::ImagePreview => {
+            let state = sidecar.preview.clone();
+            let count = state.images.len().max(1);
+            let preview_rows = terminal_height.saturating_sub(8).max(3);
+            let (previous, next) = if state.images.len() > 1 {
+                ("← previous".to_owned(), "next →".to_owned())
+            } else {
+                (String::new(), String::new())
+            };
+            let caption = state
+                .images
+                .get(state.index)
+                .and_then(|image| image.mention.clone())
+                .unwrap_or_else(|| format!("Image {}", state.index + 1));
+            DialogInputs {
+                family,
+                box_width,
+                colors,
+                title: String::new(),
+                placeholder: String::new(),
+                filter: String::new(),
+                options: Vec::new(),
+                flat: Vec::new(),
+                selected: 0,
+                current: None,
+                flatten: false,
+                destructive: false,
+                window: Vec::new(),
+                actions: Vec::new(),
+                prompt_value: String::new(),
+                hint_lines: Vec::new(),
+                plugin_title: String::new(),
+                plugin_rows: Vec::new(),
+                message: String::new(),
+                confirm_labels: (String::new(), String::new(), true),
+                error_source: String::new(),
+                error_window: Vec::new(),
+                diagnostic: String::new(),
+                preview_title: format!("Image {} of {}", state.index + 1, count),
+                preview_footer: (previous, caption, next),
+                preview_rows,
+            }
+        }
+    }
+}
+
+/// `Locale.titlecase` (util/locale.ts) — the first character upper.
+fn titlecase(label: String) -> String {
+    let mut chars = label.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => label,
+    }
+}
+
+/// The cancel pill's default ("cancel" when the caller passed "").
+fn ccancel(label: &str) -> String {
+    if label.is_empty() {
+        "cancel".to_owned()
+    } else {
+        label.to_owned()
+    }
+}
+
+/// The confirm pill's default ("confirm" when the caller passed "").
+fn cconfirm(label: &str) -> String {
+    if label.is_empty() {
+        "confirm".to_owned()
+    } else {
+        label.to_owned()
     }
 }

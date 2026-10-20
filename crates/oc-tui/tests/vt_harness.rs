@@ -568,6 +568,9 @@ pub struct FakeLlm {
     /// Whether `/api/integration` answers (opt-in — lane FINAL's
     /// connect-flow proof): one key-method integration.
     pub integrations: Arc<AtomicBool>,
+    /// Whether `/api/skill` answers (opt-in — TUI-8's `DialogSkill`
+    /// proof): two skills.
+    pub skills: Arc<AtomicBool>,
     /// SSE script played once, after the first prompt POST.
     script: Arc<Mutex<Option<Vec<ScriptEvent>>>>,
 }
@@ -583,6 +586,7 @@ impl FakeLlm {
         let mcp = Arc::new(AtomicBool::new(false));
         let pair = Arc::new(AtomicBool::new(false));
         let integrations = Arc::new(AtomicBool::new(false));
+        let skills = Arc::new(AtomicBool::new(false));
         let script: Arc<Mutex<Option<Vec<ScriptEvent>>>> = Arc::new(Mutex::new(None));
         let flag = Arc::clone(&shutdown);
         let shared_script = Arc::clone(&script);
@@ -591,6 +595,7 @@ impl FakeLlm {
         let shared_mcp = Arc::clone(&mcp);
         let shared_pair = Arc::clone(&pair);
         let shared_integrations = Arc::clone(&integrations);
+        let shared_skills = Arc::clone(&skills);
         std::thread::spawn(move || {
             listener.set_nonblocking(true).expect("nonblocking accept");
             while !flag.load(Ordering::SeqCst) {
@@ -603,6 +608,7 @@ impl FakeLlm {
                         let mcp = Arc::clone(&shared_mcp);
                         let pair = Arc::clone(&shared_pair);
                         let integrations = Arc::clone(&shared_integrations);
+                        let skills = Arc::clone(&shared_skills);
                         std::thread::spawn(move || {
                             handle(
                                 socket,
@@ -613,6 +619,7 @@ impl FakeLlm {
                                 &mcp,
                                 &pair,
                                 &integrations,
+                                &skills,
                             );
                         });
                     }
@@ -631,6 +638,7 @@ impl FakeLlm {
             mcp,
             pair,
             integrations,
+            skills,
             script,
         }
     }
@@ -657,6 +665,12 @@ impl FakeLlm {
         self.integrations.store(true, Ordering::SeqCst);
     }
 
+    /// Answer `/api/skill` with the two-skill fixture (TUI-8's
+    /// `DialogSkill` proof).
+    pub fn arm_skills(&self) {
+        self.skills.store(true, Ordering::SeqCst);
+    }
+
     /// Arm the streaming script (played on the SSE feed after the
     /// first prompt POST). No script = a quiet held-open stream.
     pub fn arm_script(&self, script: Vec<ScriptEvent>) {
@@ -679,6 +693,7 @@ fn handle(
     mcp: &Arc<AtomicBool>,
     pair: &Arc<AtomicBool>,
     integrations: &Arc<AtomicBool>,
+    skills: &Arc<AtomicBool>,
 ) {
     socket.set_read_timeout(Some(Duration::from_secs(10))).ok();
     let mut buffer = [0u8; 8192];
@@ -797,6 +812,11 @@ fn handle(
         // mcp.list (SURF-1: the sidebar MCP section rows) — two
         // connected servers + one failed.
         r#"{"data":[{"name":"github","status":{"status":"connected"}},{"name":"filesystem","status":{"status":"connected"}},{"name":"broken","status":{"error":"connect ECONNREFUSED","status":"failed"}}],"location":{"directory":"/tmp"}}"#.to_owned()
+    } else if skills.load(Ordering::SeqCst) && path.split('?').next().unwrap_or("") == "/api/skill"
+    {
+        // skill.list (TUI-8: DialogSkill's rows — the padded name
+        // column + the description).
+        r#"{"data":[{"id":"greet","name":"greet","description":"Greet the user warmly","content":"greet skill body","path":".opencode/skill/greet.md"},{"id":"lint","name":"lint","description":"Lint the project","content":"lint skill body","path":".opencode/skill/lint.md"}],"location":{"directory":"/tmp"}}"#.to_owned()
     } else if integrations.load(Ordering::SeqCst)
         && path.split('?').next().unwrap_or("") == "/api/integration"
     {
