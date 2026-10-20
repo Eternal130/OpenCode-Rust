@@ -548,6 +548,31 @@ pub fn streaming_thinking_script(session: &str, text: &str) -> Vec<ScriptEvent> 
     ]
 }
 
+/// The persistent-terminal fixture's shared state (TUI-4's PTY proof):
+/// one scripted terminal `pty_fix` whose snapshot checkpoint and WS
+/// replay paint fixed text, plus every inbound WS binary frame the
+/// TUI sends (the interaction-frame roundtrip evidence).
+pub struct TerminalFixture {
+    pub armed: AtomicBool,
+    /// POSTs to the session-terminal create endpoint.
+    pub created: AtomicUsize,
+    /// Completed WS attach handshakes.
+    pub ws_attached: AtomicUsize,
+    /// Inbound WS binary frames (interaction frames), in order.
+    pub input_frames: Mutex<Vec<Vec<u8>>>,
+}
+
+impl TerminalFixture {
+    fn new() -> Self {
+        Self {
+            armed: AtomicBool::new(false),
+            created: AtomicUsize::new(0),
+            ws_attached: AtomicUsize::new(0),
+            input_frames: Mutex::new(Vec::new()),
+        }
+    }
+}
+
 pub struct FakeLlm {
     pub url: String,
     shutdown: Arc<AtomicBool>,
@@ -558,6 +583,15 @@ pub struct FakeLlm {
     /// predate it (the hover sweeps assert off-strip cells do not
     /// respond).
     pub vcs: Arc<AtomicBool>,
+    /// Raw `session.list` rows (opt-in — the TUI-5/6/7 dialog proofs
+    /// need richer SessionInfo wire rows than the title-only fixture:
+    /// time.updated, parentID, directory, projectID). When set, the
+    /// rows REPLACE the fixture pair in the list body.
+    pub session_rows: Arc<Mutex<Option<Vec<String>>>>,
+    /// The `/api/project` body (opt-in — TUI-5/6's projects registry).
+    pub projects: Arc<Mutex<Option<String>>>,
+    /// The persistent-pty fixture family (TUI-4).
+    pub terminals: Arc<TerminalFixture>,
     /// Whether `/api/mcp` answers (opt-in — SURF-1's sidebar MCP
     /// proof): three servers (2 connected + 1 failed) exercise the
     /// collapse toggle AND the error dot.
@@ -587,6 +621,9 @@ impl FakeLlm {
         let pair = Arc::new(AtomicBool::new(false));
         let integrations = Arc::new(AtomicBool::new(false));
         let skills = Arc::new(AtomicBool::new(false));
+        let session_rows: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
+        let projects: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let terminals = Arc::new(TerminalFixture::new());
         let script: Arc<Mutex<Option<Vec<ScriptEvent>>>> = Arc::new(Mutex::new(None));
         let flag = Arc::clone(&shutdown);
         let shared_script = Arc::clone(&script);
@@ -596,6 +633,9 @@ impl FakeLlm {
         let shared_pair = Arc::clone(&pair);
         let shared_integrations = Arc::clone(&integrations);
         let shared_skills = Arc::clone(&skills);
+        let shared_rows = Arc::clone(&session_rows);
+        let shared_projects = Arc::clone(&projects);
+        let shared_terminals = Arc::clone(&terminals);
         std::thread::spawn(move || {
             listener.set_nonblocking(true).expect("nonblocking accept");
             while !flag.load(Ordering::SeqCst) {
@@ -609,6 +649,9 @@ impl FakeLlm {
                         let pair = Arc::clone(&shared_pair);
                         let integrations = Arc::clone(&shared_integrations);
                         let skills = Arc::clone(&shared_skills);
+                        let rows = Arc::clone(&shared_rows);
+                        let projects = Arc::clone(&shared_projects);
+                        let terminals = Arc::clone(&shared_terminals);
                         std::thread::spawn(move || {
                             handle(
                                 socket,
@@ -620,6 +663,9 @@ impl FakeLlm {
                                 &pair,
                                 &integrations,
                                 &skills,
+                                &rows,
+                                &projects,
+                                &terminals,
                             );
                         });
                     }
@@ -639,8 +685,30 @@ impl FakeLlm {
             pair,
             integrations,
             skills,
+            session_rows,
+            projects,
+            terminals,
             script,
         }
+    }
+
+    /// Serve raw `session.list` wire rows (TUI-5/6/7's richer
+    /// SessionInfo fixtures — timestamps, parents, directories,
+    /// projectIDs). When set they REPLACE the fixture pair.
+    pub fn arm_session_rows(&self, rows: Vec<String>) {
+        *self.session_rows.lock().expect("rows") = Some(rows);
+    }
+
+    /// Serve the `/api/project` list body (TUI-5/6's registry).
+    pub fn arm_projects(&self, body: String) {
+        *self.projects.lock().expect("projects") = Some(body);
+    }
+
+    /// Serve the persistent-terminal family (TUI-4): the
+    /// capabilities-bearing `/api/info`, the session-terminal REST
+    /// endpoints, and the WS attach with scripted output.
+    pub fn arm_terminals(&self) {
+        self.terminals.armed.store(true, Ordering::SeqCst);
     }
 
     /// Answer `/api/vcs` (the footer location label's boot lookup —
@@ -694,6 +762,9 @@ fn handle(
     pair: &Arc<AtomicBool>,
     integrations: &Arc<AtomicBool>,
     skills: &Arc<AtomicBool>,
+    session_rows: &Arc<Mutex<Option<Vec<String>>>>,
+    projects: &Arc<Mutex<Option<String>>>,
+    terminals: &Arc<TerminalFixture>,
 ) {
     socket.set_read_timeout(Some(Duration::from_secs(10))).ok();
     let mut buffer = [0u8; 8192];
@@ -714,6 +785,32 @@ fn handle(
     socket.set_read_timeout(Some(Duration::from_millis(200))).ok();
     let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
     let method = head.split_whitespace().next().unwrap_or_default().to_uppercase();
+    // -- TUI-4: the persistent-pty family ---------------------------------
+    //
+    // The WS attach endpoint upgrades BEFORE any JSON response; the
+    // REST endpoints answer below through the shared body walk.
+    let bare_path = path.split('?').next().unwrap_or_default().to_owned();
+    if terminals.armed.load(Ordering::SeqCst)
+        && method == "GET"
+        && bare_path.starts_with("/api/experimental/persistent-pty/")
+        && bare_path.ends_with("/connect")
+    {
+        let pty_id = bare_path
+            .trim_start_matches("/api/experimental/persistent-pty/")
+            .trim_end_matches("/connect")
+            .to_owned();
+        ws_attach(socket, &head, terminals, &pty_id);
+        return;
+    }
+    if terminals.armed.load(Ordering::SeqCst)
+        && (path.starts_with("/api/experimental/persistent-pty/")
+            || path.starts_with("/api/experimental/session/"))
+    {
+        if let Some(response) = pty_rest(&method, &path, terminals) {
+            let _ = socket.write_all(response.as_bytes());
+            return;
+        }
+    }
     if path.starts_with("/api/event") {
         // The SSE connection must stay open for the WHOLE session: a
         // disconnect would make the app reconnect → resync → rebuild
@@ -801,10 +898,44 @@ fn handle(
     {
         // vcs.diff (SURF-2's diff viewer): one modified file fixture.
         r#"{"data":[{"file":"src/lib.rs","additions":1,"deletions":1,"patch":"--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n fn one() {\n-    let old = 1;\n+    let new = 1;\n }\n","status":"modified"}],"location":{"directory":"/tmp"}}"#.to_owned()
-    } else if path.split('?').next().unwrap_or("") == "/api/info" && pair.load(Ordering::SeqCst) {
-        // server.info (SURF-2's DialogPair): one loopback URL.
-        r#"{"paths":{"tmp":"/tmp"},"pid":1,"urls":["http://127.0.0.1:4096"],"version":"2.0.0"}"#
+    } else if path.split('?').next().unwrap_or("") == "/api/info"
+        && (pair.load(Ordering::SeqCst) || terminals.armed.load(Ordering::SeqCst))
+    {
+        // server.info (SURF-2's DialogPair / TUI-4's capability
+        // probe): one loopback URL; the terminals fixture additionally
+        // declares the persistentPty capability (session-terminals.
+        // tsx:66-70's availability gate).
+        let capabilities = if terminals.armed.load(Ordering::SeqCst) {
+            r#","capabilities":{"persistentPty":true}"#
+        } else {
+            ""
+        };
+        format!(r#"{{"paths":{{"tmp":"/tmp"}},"pid":1,"urls":["http://127.0.0.1:4096"],"version":"2.0.0"{capabilities}}}"#)
             .to_owned()
+    } else if path.split('?').next().unwrap_or("") == "/api/project"
+        && projects.lock().expect("projects").is_some()
+    {
+        // project.list (TUI-5/6's projects registry).
+        projects.lock().expect("projects").clone().unwrap_or_default()
+    } else if method == "GET" && path.split('?').next().unwrap_or("") == "/api/session" {
+        // session.list: the armed raw rows when present (the richer
+        // SessionInfo fixtures), else the title-only pair.
+        let rows: Vec<String> = session_rows
+            .lock()
+            .expect("rows")
+            .clone()
+            .unwrap_or_else(|| {
+                sessions
+                    .iter()
+                    .map(|session| {
+                        format!(
+                            r#"{{"id":"{}","title":"{}","time":{{"created":0,"updated":0}},"location":{{"directory":"/tmp"}},"projectID":"p","cost":0,"tokens":{{"cache":{{"read":0,"write":0}},"input":0,"output":0,"read":0,"write":0,"reasoning":0}}}}"#,
+                            session.id, session.title
+                        )
+                    })
+                    .collect()
+            });
+        format!(r#"{{"cursor":{},"data":[{}]}}"#, "{}", rows.join(","))
     } else if path.split('?').next().unwrap_or("") == "/api/pair" && pair.load(Ordering::SeqCst) {
         // server.pair (SURF-2's DialogPair): a 10-minute code.
         r#"{"code":"pair-code-123","expires_in":600}"#.to_owned()
@@ -876,6 +1007,265 @@ fn serde_json_json_string(body: &str) -> String {
         }
     }
     out.push('"');
+    out
+}
+
+// ---------------------------------------------------------------------------
+// TUI-4 — the scripted persistent-pty endpoints + the test-side WS
+// ---------------------------------------------------------------------------
+
+/// One scripted terminal's `PersistentPty.Info` wire row.
+fn pty_info_json(id: &str) -> String {
+    format!(
+        concat!(
+            r#"{{"args":[],"command":"/bin/sh","cwd":"/tmp","foregroundProcess":null,"id":"{id}","#,
+            r#""output":{{"head":0,"tail":0}},"pid":4242,"sessionID":"ses_alpha","#,
+            r#""size":{{"cols":40,"rows":24}},"status":"running","title":"Terminal"}}"#
+        ),
+        id = id
+    )
+}
+
+/// The REST endpoints of the persistent-pty family (the WS attach is
+/// upgraded separately in [`ws_attach`]): session-terminal list /
+/// create, snapshot, connect-token.
+fn pty_rest(method: &str, path: &str, terminals: &TerminalFixture) -> Option<String> {
+    let bare = path.split('?').next().unwrap_or_default();
+    let envelope = |data: &str| {
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{data}",
+            data.len()
+        )
+    };
+    if method == "GET" && bare == "/api/experimental/session/ses_alpha/terminal" {
+        return Some(envelope(&format!(r#"{{"data":[{}]}}"#, pty_info_json("pty_fix"))));
+    }
+    if method == "POST" && bare == "/api/experimental/session/ses_alpha/terminal" {
+        terminals.created.fetch_add(1, Ordering::SeqCst);
+        return Some(envelope(&format!(r#"{{"data":{}}}"#, pty_info_json("pty_new"))));
+    }
+    if method == "GET" && bare.starts_with("/api/experimental/persistent-pty/") && bare.ends_with("/snapshot") {
+        // The checkpoint paints fixed text through the pane's VT
+        // emulator (base64 of "CHECKPOINT-OUT ").
+        let body = format!(
+            r#"{{"data":{{"checkpoint":"Q0hFQ0tQT0lOVC1PVVQg","cursor":{{"x":16,"y":0}},"info":{},"text":"CHECKPOINT-OUT "}}}}"#,
+            pty_info_json("pty_fix")
+        );
+        return Some(envelope(&body));
+    }
+    if method == "POST" && bare.ends_with("/connect-token") {
+        return Some(envelope(r#"{"data":{"ticket":"tick","expires_in":600}}"#));
+    }
+    None
+}
+
+/// The test-side RFC 6455 attach: accept the upgrade, send the
+/// scripted attach/replay frames, then record every inbound binary
+/// interaction frame (the TUI's typed input + resize controls).
+fn ws_attach(mut socket: std::net::TcpStream, head: &str, terminals: &TerminalFixture, pty_id: &str) {
+    let _ = pty_id;
+    let Some(key) = head.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim().eq_ignore_ascii_case("sec-websocket-key").then(|| value.trim().to_owned())
+    }) else {
+        return;
+    };
+    let accept = b64(&sha1(key.as_bytes(), b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"));
+    let response = format!(
+        "HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\nsec-websocket-accept: {accept}\r\n\r\n"
+    );
+    if socket.write_all(response.as_bytes()).is_err() {
+        return;
+    }
+    terminals.ws_attached.fetch_add(1, Ordering::SeqCst);
+    // The attach protocol (handlers/persistent_pty.rs §3): attached →
+    // replay binary → replay_complete; then one LIVE output frame.
+    socket.set_read_timeout(Some(Duration::from_millis(20))).ok();
+    let attached = format!(
+        concat!(
+            r#"{{"type":"attached","attachmentID":"fix-attach","inputProtocol":1,"info":{info},"role":"controller","generation":1,"replay":{{"requestedOffset":0,"availableOffset":0,"endOffset":0,"truncated":false}}}}"#
+        ),
+        info = pty_info_json(pty_id)
+    );
+    if ws_send(&mut socket, 0x1, attached.as_bytes()).is_err() {
+        return;
+    }
+    if ws_send(&mut socket, 0x2, b"REPLAY-OUT ").is_err() {
+        return;
+    }
+    if ws_send(&mut socket, 0x1, br#"{"type":"replay_complete","endOffset":0}"#).is_err() {
+        return;
+    }
+    if ws_send(&mut socket, 0x2, b"LIVE-OUT").is_err() {
+        return;
+    }
+    // Drain inbound frames until the PEER closes (a read timeout is a
+    // quiet socket, not an end — the attach stays open for the test's
+    // lifetime); record every binary frame (the TUI's interaction
+    // frames).
+    let mut buffer = [0u8; 8192];
+    let mut pending: Vec<u8> = Vec::new();
+    loop {
+        match socket.read(&mut buffer) {
+            Ok(0) => return,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => return,
+            Ok(count) => {
+                pending.extend_from_slice(&buffer[..count]);
+                while let Some((opcode, payload, consumed)) = ws_frame(&pending) {
+                    pending.drain(..consumed);
+                    if opcode == 0x2 {
+                        terminals.input_frames.lock().expect("frames").push(payload);
+                    }
+                    if opcode == 0x8 {
+                        let _ = ws_send(&mut socket, 0x8, &[0x03, 0xe8]);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One outbound WS frame (server→client: unmasked).
+fn ws_send(socket: &mut std::net::TcpStream, opcode: u8, payload: &[u8]) -> std::io::Result<()> {
+    let mut frame = vec![0x80 | opcode];
+    if payload.len() < 126 {
+        frame.push(u8::try_from(payload.len()).unwrap_or(126));
+    } else {
+        frame.push(126);
+        frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    }
+    frame.extend_from_slice(payload);
+    socket.write_all(&frame)
+}
+
+/// Decode one inbound WS frame (client→server: masked).
+#[must_use]
+fn ws_frame(bytes: &[u8]) -> Option<(u8, Vec<u8>, usize)> {
+    if bytes.len() < 2 {
+        return None;
+    }
+    let opcode = bytes[0] & 0x0f;
+    let masked = bytes[1] & 0x80 != 0;
+    let mut length = usize::from(bytes[1] & 0x7f);
+    let mut at = 2usize;
+    if length == 126 {
+        if bytes.len() < at + 2 {
+            return None;
+        }
+        length = usize::from(u16::from_be_bytes([bytes[at], bytes[at + 1]]));
+        at += 2;
+    } else if length == 127 {
+        if bytes.len() < at + 8 {
+            return None;
+        }
+        let mut wide = [0u8; 8];
+        wide.copy_from_slice(&bytes[at..at + 8]);
+        length = usize::try_from(u64::from_be_bytes(wide)).unwrap_or(0);
+        at += 8;
+    }
+    let mask = if masked {
+        if bytes.len() < at + 4 {
+            return None;
+        }
+        let mask: [u8; 4] = bytes[at..at + 4].try_into().ok()?;
+        at += 4;
+        mask
+    } else {
+        [0u8; 4]
+    };
+    if bytes.len() < at + length {
+        return None;
+    }
+    let payload = bytes[at..at + length]
+        .iter()
+        .enumerate()
+        .map(|(index, byte)| byte ^ mask[index % 4])
+        .collect();
+    Some((opcode, payload, at + length))
+}
+
+/// SHA-1 (test-only, for the WS accept key).
+#[must_use]
+fn sha1(data: &[u8], suffix: &[u8]) -> [u8; 20] {
+    let mut message = data.to_vec();
+    message.extend_from_slice(suffix);
+    let bit_length = (message.len() as u64) * 8;
+    message.push(0x80);
+    while message.len() % 64 != 56 {
+        message.push(0);
+    }
+    message.extend_from_slice(&bit_length.to_be_bytes());
+    let mut words = [0u32; 80];
+    let mut state: [u32; 5] = [0x6745_2301, 0xEFCD_AB89, 0x98BA_DCFE, 0x1032_5476, 0xC3D2_E1F0];
+    for chunk in message.chunks(64) {
+        for (index, word) in chunk.chunks(4).enumerate() {
+            words[index] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+        }
+        for index in 16..80 {
+            let value = words[index - 3] ^ words[index - 8] ^ words[index - 14] ^ words[index - 16];
+            words[index] = value.rotate_left(1);
+        }
+        let [a0, b0, c0, d0, e0] = state;
+        let (mut a, mut b, mut c, mut d, mut e) = (a0, b0, c0, d0, e0);
+        for (index, word) in words.iter().enumerate() {
+            let (f, k) = match index {
+                0..=19 => ((b & c) | ((!b) & d), 0x5A82_7999),
+                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
+                _ => (b ^ c ^ d, 0xCA62_C1D6),
+            };
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(*word);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+        state[0] = state[0].wrapping_add(a);
+        state[1] = state[1].wrapping_add(b);
+        state[2] = state[2].wrapping_add(c);
+        state[3] = state[3].wrapping_add(d);
+        state[4] = state[4].wrapping_add(e);
+    }
+    let mut digest = [0u8; 20];
+    for (index, word) in state.iter().enumerate() {
+        digest[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+    }
+    digest
+}
+
+/// Standard base64 (test-only, for the WS accept key + checkpoints).
+#[must_use]
+fn b64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let byte = |index: usize| u32::from(chunk.get(index).copied().unwrap_or(0));
+        let group = (byte(0) << 16) | (byte(1) << 8) | byte(2);
+        // One 6-bit group per output char; group i is real while it
+        // overlaps the chunk's n bytes: ceil(n*8/6) chars + padding.
+        let valid = (chunk.len() * 8 + 5) / 6;
+        for (index, shift) in [18u32, 12, 6, 0].iter().enumerate() {
+            if index < valid {
+                let slot = usize::try_from((group >> shift) & 0x3f).unwrap_or(0);
+                out.push(char::from(ALPHABET[slot]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
     out
 }
 // ---------------------------------------------------------------------------
@@ -1248,4 +1638,24 @@ pub fn assert_exit_ack(h: &mut HarnessHandle, from: usize) -> Result<(), String>
         return Err("the app did not tear down on the exit chord (crashed mid-run?)".to_owned());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod ws_probe_tests {
+    use super::*;
+
+    #[test]
+    fn rfc6455_accept_vector() {
+        let digest = sha1(b"dGhlIHNhbXBsZSBub25jZQ==", b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+        assert_eq!(
+            hex(&digest),
+            "b37a4f2cc0624f1690f64606cf385945b2bec4ea",
+            "sha1 matches the RFC vector"
+        );
+        assert_eq!(b64(&digest), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
 }

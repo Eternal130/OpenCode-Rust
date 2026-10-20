@@ -27,6 +27,20 @@ taffy = { version = "0.9", default-features = false, features = ["std", "flexbox
 crossterm = "0.28"
 unicode-width = "0.2"
 uuid = { version = "1", features = ["v4"] }
+# TUI-4 (lane-tui2): the embedded TerminalPane's VT emulator. Already
+# a lock entry (the PTY test harness's parser) — the pane promotes it
+# to a real dependency; no new packages enter the lock.
+vt100 = "0.15"
+# TUI-4: the persistent-pty attach WebSocket (the WS client the
+# generated HTTP client deliberately leaves outside oc-client —
+# "WS clients live outside this crate"). Same pinned version/feature
+# set as oc-ai's dev-dep usage; plain ws:// (the TUI always talks to
+# its local server over loopback http).
+tokio-tungstenite = { version = "0.24", default-features = false, features = [
+    "connect",
+    "handshake",
+] }
+futures = "0.3"
 # Lane M1 (换血 pilot): the opentui trio moves from dev-dependencies
 # to REAL dependencies — session_tabs_solid renders the tab strip on
 # opentui-solid behind OC_TABS_OPENTUI=1 (default off; the hand-rolled
@@ -52,9 +66,7 @@ parity = { path = "../../tools/parity" }
 tokio = { workspace = true }
 oc-plugin-host = { workspace = true }
 # Cell-grid stream harness (tests/vt_harness.rs): parses the PTY's raw
-# ANSI byte stream into styled cell grids over time. Pure Rust (vte +
-# utf8parse, no build scripts) — compiles clean under the pinned
-# toolchain. Pinned to 0.15: vt100 0.16 pulls unicode-width ^0.2.1,
-# which cannot unify with ratatui 0.29's exact "=0.2.0" pin (0.15's
-# unicode-width 0.1 coexists in the lock already, like console's).
-vt100 = "0.15"
+# ANSI byte stream into styled cell grids over time. Pinned to 0.15:
+# vt100 0.16 pulls unicode-width ^0.2.1, which cannot unify with
+# ratatui 0.29's exact "=0.2.0" pin (0.15's unicode-width 0.1 coexists
+# in the lock already, like console's).

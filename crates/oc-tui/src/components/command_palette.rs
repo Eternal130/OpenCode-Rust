@@ -2404,19 +2404,60 @@ impl CommandDispatcher for StoreDispatcher {
                     None => Dispatch::Handled,
                 }
             }
+            // TUI-4 — the pane/terminal family
+            // (session-frame.tsx:173-249 + terminals-tab.tsx:66-79).
+            "terminal.toggle" => {
+                if let Route::Session { session_id } = store.route() {
+                    store.terminal_toggle(&session_id);
+                }
+                Dispatch::Handled
+            }
+            "terminal.select" => {
+                store.terminal_open_picker();
+                Dispatch::Handled
+            }
+            "terminal.close" => {
+                if let Route::Session { session_id } = store.route() {
+                    store.terminal_close(&session_id);
+                }
+                Dispatch::Handled
+            }
+            "pane.focus.left" => {
+                // focusSession (session-frame.tsx:150-157).
+                store.set_terminal_focus_right(false);
+                Dispatch::Handled
+            }
+            "pane.focus.right" => {
+                // focusRightPane — only while a right pane exists.
+                if let Route::Session { session_id } = store.route() {
+                    if store.terminal_pane_mounted(&session_id).is_some() {
+                        store.set_terminal_focus_right(true);
+                    }
+                }
+                Dispatch::Handled
+            }
+            // The picker's terminals tab rows (terminals-tab.tsx:
+            // 66-79): the wrap move + the select (a terminal or the
+            // `+ New terminal` slot).
+            "composer.terminal.up" => {
+                store.picker_move(false);
+                Dispatch::Handled
+            }
+            "composer.terminal.down" => {
+                store.picker_move(true);
+                Dispatch::Handled
+            }
+            "composer.terminal.select" => {
+                store.picker_terminal_select();
+                Dispatch::Handled
+            }
             // The registered-but-surfaceless families (v2 parity: the
             // keymap consumes the stroke; no component answers):
-            // terminal pane trio + pane focus (terminal-pane.tsx),
             // which-key panel (the keymap addon's surface), scrap/
             // debug panel, service restart, aside mode, verbosity
             // model, plugin install flow, the integrations + plugin
-            // dialog actions, the picker's terminals tab.
-            "terminal.toggle"
-            | "terminal.select"
-            | "terminal.close"
-            | "pane.focus.left"
-            | "pane.focus.right"
-            | "app.debug"
+            // dialog actions.
+            "app.debug"
             | "app.scrap"
             | "service.restart"
             | "session.aside"
@@ -2428,9 +2469,6 @@ impl CommandDispatcher for StoreDispatcher {
             | "dialog.plugins.install"
             | "dialog.plugins.update"
             | "dialog.plugins.check"
-            | "composer.terminal.up"
-            | "composer.terminal.down"
-            | "composer.terminal.select"
             | "which-key.toggle"
             | "which-key.layout.toggle"
             | "which-key.pending.toggle"
