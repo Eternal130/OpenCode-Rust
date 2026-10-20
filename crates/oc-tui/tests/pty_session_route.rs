@@ -169,7 +169,13 @@ fn wait_absent(h: &HarnessHandle, needle: &str, timeout: Duration) -> Result<(),
 fn wait_for_composer(h: &mut HarnessHandle) -> Result<(), String> {
     wait_text(h, "shift+tab agents", Duration::from_secs(15))?;
     h.write(b"q1w2e3");
-    wait_text(h, "q1w2e3", Duration::from_secs(15))?;
+    // CI 2026-10-20 (run 39355434955): both tries failed here under
+    // parallel PTY load + the plugeng boot-time registry merge — the
+    // C6b verifier's finding-(b) flake signature recurring. 15s is
+    // marginal on 2-core runners; 40s keeps the probe's meaning
+    // (a booted composer eventually echoes) without masking real
+    // no-boot bugs (they still time out and dump the grid).
+    wait_text(h, "q1w2e3", Duration::from_secs(40))?;
     h.write(b"\x7f\x7f\x7f\x7f\x7f\x7f");
     Ok(())
 }
