@@ -560,6 +560,26 @@ impl LocationPluginSource for HostPluginSource {
         }))
     }
 
+    /// PLUG-ENGINE-MERGE: the plugin-declared MCP servers
+    /// (`ctx.mcp.transform` — the ref registers them IN the server
+    /// process, host.ts:374-403). The engine's `assemble` merges them
+    /// into every location's `McpRegistry` through
+    /// [`oc_core::plugin_apply::apply_location_plugins`], so a
+    /// HEADLESS server lists/serves them (`/api/mcp`, the tool bridge)
+    /// exactly like the ref — the TUI wire seam (PLUG-D33) stays as an
+    /// idempotent re-push of the same rows.
+    fn mcps(&self) -> Vec<oc_core::plugin_apply::PluginMcpDef> {
+        self.host
+            .registrations()
+            .mcps
+            .iter()
+            .map(|mcp| oc_core::plugin_apply::PluginMcpDef {
+                name: mcp.name.clone(),
+                config: mcp.config.clone(),
+            })
+            .collect()
+    }
+
     fn commands(&self) -> Vec<oc_core::plugin_apply::PluginCommandDef> {
         self.host
             .registrations()
