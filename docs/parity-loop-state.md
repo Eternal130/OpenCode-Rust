@@ -2,104 +2,127 @@
 
 > Orchestrator scratch state for the parity loop (docs/PARITY-LOOP.md).
 > Updated at the end of every iteration. Not a task queue — the ledger is.
-> **REBUILT from ledger+git 2026-10-20 ~23:00, finalized ~00:0x** (session-rotated; previous copy was one
-> DB merge + one CI red stale). Ledger + git are authoritative; state.md is a cross-session breadcrumb only.
+> **REBUILT from ledger+git 2026-10-21 05:2x** (recovery round + wave 9).
+> Ledger + git are authoritative; state.md is a cross-session breadcrumb only.
 
-- **updated**: 2026-10-20 ~00:0x — iteration 9 done: CI red root-caused & fixed (merge 063c9e1), 6 entries accepted+ADR, TUI WIP salvaged
-- **baseline**: main @ `063c9e1` (merge: lane-dbfix) + the docs commit on top (ADRs + ledger)
-- **batch**: 3 (wave 8) — Batch 3 clusters: DB, PLUGIN-RESIDUAL, EVENT/TOOL/CORE, PLATFORM, POLICY/RETENTION
-- **iteration**: 9 (driver = tools/loop-driver.sh; previous run died rc=130 at 22:47, this one started 23:00)
+- **updated**: 2026-10-21 05:20 — iteration 10 done: recovery round (lane-cirt collapsed, lane-tui2 adopted),
+  TUI-4/5/6 verified + merged (`6a58662` → L0 fix `ad1ac69`), adjudication batch #2 closed 7 via ADR-0014,
+  3 AI needs-runtime adjudicated to real gaps, TUI-7 blocked by new root cause **TUI-35**
+- **baseline**: main @ `ad1ac69` (merge: lane/tui2 + post-merge clippy fix) on top of `35e6343` (CI-RUNTIME)
+- **batch**: 3 (wave 9) — Batch 3 clusters: DB, PLUGIN-RESIDUAL, EVENT/TOOL/CORE, PLATFORM, POLICY/RETENTION
+- **iteration**: 10 (driver = tools/loop-driver.sh; session started 2026-10-21 00:00, ended ~05:2x)
 
-## Ledger snapshot (`parity-ledger.py summary`, end of iteration 9)
+## Ledger snapshot (`parity-ledger.py summary`, end of iteration 10)
 
-- rows=398 — **verified 92 · accepted 7 · duplicate 2** · needs-runtime 9 · open 288 (fixing 0)
-- open S0/S1 = **32** — unchanged queue: CONFIG 7 (CLI-K1,K2,K8,N1..N4) · TUI 9 (TUI-4..7,12,14..17) · CRED 3 (D6,D8,V3) ·
-  PLUGIN 3 (D13,D30,M02) · SURFACES 3 (BROWSER,LATEX-MERMAID,PLATFORM) · DB 2 (GATE-DB-NULLROWS, GATE-DB-STABLE) ·
-  AI 1 (AI-P06) · RUNTIME 1 (RUNTIME-K01) · TOOLS-EXEC 1 (TOOL-D1) · WIRE 2 (GATE-TUI-RENAME, HTTP-H0)
-- `validate` = 0 errors; `dedupe` = 1 group (DB-R1 → PLUG-R1, correct)
+- rows=402 — **verified 95 · accepted 14 · duplicate 2** · open 284 · needs-runtime 6 · blocked 1
+- **blocking S0/S1 = 33** (was 32; +AI-V1 +AI-VERTEX-V2 +CI-RUNTIME-AI-LIVE +TUI-35, −TUI-4/5/6):
+  AI 4 (AI-P06, AI-V1, AI-VERTEX-V2, CI-RUNTIME-AI-LIVE) · CONFIG 7 (CLI-K1,K2,K8,N1..N4) ·
+  CRED 3 (D6,D8,V3) · TUI 7 (TUI-12,14,15,16,17,35 + TUI-7 blocked) · PLUGIN 3 (D13,D30,M02) ·
+  SURFACES 3 (BROWSER,LATEX-MERMAID,PLATFORM) · DB 2 (GATE-DB-NULLROWS, GATE-DB-STABLE) ·
+  WIRE 2 (GATE-TUI-RENAME, HTTP-H0) · RUNTIME 1 (RUNTIME-K01) · TOOLS-EXEC 1 (TOOL-D1)
+- `validate` = 0 errors; `validate --paths` = 0 errors (one path row corrected, see §CI-RUNTIME below)
 
-## What happened in iteration 9 (read this before touching the DB or PLUGIN cluster)
+## What happened in iteration 10
 
-1. **CI red 39425608284 root-caused and FIXED — and the recovery-round attribution was WRONG, corrected.**
-   - Initial (wrong) hypothesis: the DB merge `bfcddfb` stalls boot via DB-D2/D3/D12.
-   - Fixer reproduced locally (deterministic, both tests 20s-timeout) and DISPROVED it: boot settles <500ms,
-     HTTP 200 throughout, plugin `active`, registrations present for the **boot project** the whole time.
-   - True root cause: the tests poll `/api/command` + `/api/mcp` **location-less**; `resolve_location`
-     (`crates/oc-server/src/handlers/common.rs:254`) falls back to the process cwd (`crates/oc-server`),
-     which declares no plugins; **PLUG-D07** per-location activation (`670c840`, merged `b70f4b0`, wave 7)
-     filters it to `Some([])`. `670c840` is NOT an ancestor of green head `77c3950` — it landed between green
-     and red; the plugin-wave head's CI run (39420967951 @2340f0b) was CANCELLED, so the red surfaced at 482869a.
-   - Fix `2fc1938` (lane/dbfix): TEST-ONLY — both polls now send `location[directory]=<boot project>`;
-     one envelope-location assertion ADDED, none removed; **zero production delta**.
-   - Independent verifier (`ses_ea610cb98ffecHr9NfcKzDEvX3`, own/glm-5.3-flash): **CLEAR TO MERGE** —
-     claims 1–5 CONFIRMED, 2/2 + 6/6 + 1/1 green, artifacts checked (red.log.bak is the honest pre-fix red;
-     repro.sh overwrites red.log by default — known hygiene nit).
-   - Merged `063c9e1` (2-parent); fmt + clippy -D warnings clean. **DB cluster UNFROZEN** — the DB merge was innocent.
-   - Ledger: canonical **PLUG-R1** (verified, merge_commit 063c9e1); **DB-R1** → duplicate of PLUG-R1 with the
-     correction written down; DB-D1..D12 notes corrected (superseded wrong attribution).
-2. **Adjudication batch #1 closed 6 of 10 with ADRs** (oracle `ses_ea62606a9ffe0omNO7zEgocC0`, zero code):
-   - DB-D10 → `docs/adr/0008-kv-scan-consumer-equivalence.md`
-   - DB-D15 → `docs/adr/0009-transaction-begin-immediate-default.md`
-   - RUNTIME-ENVIRONMENT → `docs/adr/0010-environment-seam-not-ported.md`
-   - RUNTIME-E01 → `docs/adr/0011-step-started-pending-delta-mutex.md` (closed by proof)
-   - SURF-P1-SDK → `docs/adr/0012-no-npm-sdk-package.md`
-   - SURF-P1-STORYBOOK → `docs/adr/0013-tui-storybook-not-ported.md`
-   - Stays open with recorded fix scopes in their ledger notes: TUI-19 (sync-2026 wrap), CLI-F13 (stats tz+30s),
-     CLI-F14 (channel build-time stamp; **same fingerprint as DB-D24 — merge rows when fixed**), SURF-P1-VSCODE.
-3. **lane-tui2 salvaged**: dead-session WIP (13 files, +969) committed verbatim as `e74082b` on `lane/tui2`.
-   TUI-4..7 evidence dirs still hold ONLY byte-identical red.log — TUI-4's "6/6 green" claim unproven.
-4. **lane-config collapsed** (0-ahead, clean, zero evidence): CLI-K1/N1..N4 never started; re-dispatch fresh.
-
-## Model policy for subagents (user ruling 2026-10-20 — keep for every future session)
-
-- **fixer = `own/glm-5.3` · oracle = `own/glm-5.3` · verifier = `own/glm-5.3-flash`** (all via the own provider).
-- Do NOT reuse free-gateway (`opencode/*`) models unless the user says so. The loop prompt's "verifier 用
-  glm-5.3-flash" means `own/glm-5.3-flash`. Always look models up with `tools.opencode.models({provider:"own"})`
-  instead of trusting an old filtered query.
+1. **Recovery round (0a).** `lane-cirt` (0-ahead, clean, 0 ledger rows, created 23:54 by a dead session) was
+   removed — worktree + branch. All other lane branches are 0-ahead of main. `lane-tui2` was the only lane with
+   unmerged work (3 commits ahead, quiet since 22:47 on 10-20 → not an active writer); its WIP was mid-edit with
+   only a shared byte-identical red.log as evidence → **打回 fixing** and re-dispatched in place.
+2. **TUI lane (lane-tui2) closed 3 of 4.**
+   - Fixer (`own/glm-5.3`, ses_ea5ed006cffeX7QH3daofRNUsn): finished the salvaged production code —
+     TUI-4 TerminalPane (`terminal_pane.rs` + registry/WS-attach/keys, `pty_terminal_pane.rs` E2E),
+     TUI-5 `open.menu(ctrl+o)` → DialogOpen sessions+projects(+worktrees) (`dialog_open.rs`),
+     TUI-6 session-list rows/grouping + **boot-time `project.list` sync** (`app.rs` `LoopRequest::ProjectList`).
+     Commits: `06f1bcd`, `6337909`, `ad536ce`.
+   - Verifier (`own/glm-5.3-flash`, ses_ea4ddef65ffehscWZOxfAS4sUJ, read-only, independent session):
+     **CLEAR TO MERGE** — 3/3 repro.sh re-runs 1/1 green, per-ID red artifacts honest, production call sites
+     proven, **no removed/weakened assertions**, `crates/oc-tui-core` untouched. Caveats recorded in the ledger:
+     green.log = shared 4-test run; worktrees section (TUI-5) and per-row time/model + ● + pin/delete (TUI-6)
+     are implemented in production but not asserted by the tests.
+   - Merged `6a58662`; **post-merge L0 gate caught 2 clippy errors** (`semicolon_if_nothing_returned`,
+     app.rs:6770 + store.rs:3981) that the lane's earlier clippy run had hidden behind cargo's lint cache.
+     Fixer disclosed the false-positive; fixed in `e79b7a9`, re-linted fresh → `ad1ac69`. Main gate now:
+     `cargo fmt --all -- --check` rc=0 · `cargo clippy -p oc-tui --tests --locked -- -D warnings` rc=0 (fresh
+     `Checking oc-tui`) · `cargo check --workspace --locked` rc=0.
+   - **TUI-7 could not be closed**: its contract IS implemented and wired, but its own regression test never
+     reaches the dialog — the TUI **boot hangs** nondeterministically on a quiet fake server (connection runner's
+     first cycle never completes → "Connection lost" scrim forever → exit chord ignored → 90s harness timeout).
+     New ledger row **TUI-35** (S1, TUI) owns that root cause; TUI-7 = `blocked`.
+3. **Adjudication batch #2 (wave 9, zero code)** — oracle ses_ea5edbb25ffe5wjSBsn037auEY:
+   - **7 accepted via ADR-0014** (`docs/adr/0014-ts-monorepo-nonproduct-artifacts.md`): SURF-P2-SCRIPT,
+     SURF-P2-SIMULATION, SURF-P2-DRIZZLE, SURF-P2-IDENTITY, SURF-P3-CONSOLE, SURF-P3-POSTS, SURF-P1-GHA —
+     all non-product TS-monorepo artifacts (publishing scripts, dev harness, brand assets, hosted console/blog,
+     GitHub Action = distribution channel family per ADR-0012).
+   - **3 needs-runtime → open with recorded fix scope** (static adjudication, no live window needed):
+     AI-V1 + AI-VERTEX-V2 (S1, vertex URL/auth arms missing in `provider_catalog/facade.rs`; ADC token sourcing
+     stays CRED-V3 — same lane, different root cause) · AI-COPILOT-C6 (S2, copilot providerOptions namespace +
+     User-Agent header).
+4. **⚠ Concurrent orchestrator session detected.** While this session ran (00:00–05:2x) **another orchestrator
+   session** committed to `main` and `origin/main`: `c95cf1e` (merge lane-cirt: `.github/workflows/runtime-gates.yml`,
+   828 lines — p10 battery + §12.3 runtime gates + needs-runtime battery + macos build target + opt-in soak) and
+   `35e6343` (merge lane-cirt2: secrets-in-if 422 fix). It left **uncommitted** ledger rows (CI-RUNTIME-TUI-TESTS,
+   CI-RUNTIME-AI-LIVE, CI-RUNTIME-SOAK) and never wrote state.md. Those rows were preserved and committed here
+   (`c07d73b`); CI-RUNTIME-AI-LIVE's wrong rust paths were corrected so `validate --paths` is clean.
+   **Structural hazard for the next session: two orchestrators writing one ledger + one main.** The driver flock
+   only serializes driver fires, not a hand-started session. Next session must re-read main + ledger before
+   dispatching, and must treat the CI-RUNTIME workflow as landed (do not re-implement it).
 
 ## Active lanes
 
 | lane | cluster | worktree | branch | owner | entries | status |
 |---|---|---|---|---|---|---|
-| (none — all worktrees removed post-merge; branches kept) | | | | | | |
+| (none — lane-tui2 merged as ad1ac69; worktree removable, branch lane/tui2 kept) | | | | | | |
 
-- `.worktrees/lane-dbfix` and `.worktrees/lane-db` removed after merge (clean trees). Branches `lane/dbfix`, `lane/db`, `lane/tui2`, `lane/config` kept.
-- **Next dispatches**: (1) lane-tui2 resume — finish TUI-5/6/7 production paths on `lane/tui2` @`e74082b`, then TUI-4 green artifact; (2) fresh CONFIG lane for CLI-K1,N1,N2,N3,N4 (worktree re-create from main); (3) next adjudication batch (wave rule: one per wave — already done for wave 8).
+- `.worktrees/lane-tui2` — merged, tree clean; safe to remove (branch kept for the next TUI lane).
+- Branch `lane/cirt2` still exists (0 ahead of main after merge) — can be deleted.
 
-## needs-runtime (9) — LIVE WINDOW STILL OUTSTANDING (ask the user, don't stall the loop)
+## Model policy for subagents (user ruling 2026-10-20 — keep for every future session)
 
-AI-VERTEX-V2 (S1), AI-V1 (S1), AI-COPILOT-C6, TUI-28, TUI-30, TUI-33, TUI-TD06, TUI-TD15, TUI-TD28.
-**User action needed:** (a) endpoint/credential sandbox for the live provider paths, (b) a time slot,
-(c) whether cassette-only (ADR-0006) still stands for release. Without a window these stay `needs-runtime`
-and §12.1 cannot close.
+- **fixer = `own/glm-5.3` · oracle = `own/glm-5.3` · verifier = `own/glm-5.3-flash`** (all via the own provider).
+- There is **no `verifier` subagent** in this build — the verifier role was played by a `fixer` instance with
+  `own/glm-5.3-flash` and a strict read-only mandate (report only, no writes in the repo).
+- Do NOT reuse free-gateway (`opencode/*`) models unless the user says so. Look models up with
+  `tools.opencode.models({provider:"own"})` instead of trusting an old filtered query.
+
+## needs-runtime (6) — LIVE WINDOW STILL OUTSTANDING (asked of the user; not a loop blocker)
+
+AI-COPILOT-C6 moved to open (adjudicated). Remaining: TUI-28, TUI-30, TUI-33, TUI-TD06, TUI-TD15, TUI-TD28 (all S2)
+plus the CI-RUNTIME-AI-LIVE gap row (S1). **User action needed:** (a) endpoint/credential sandbox for the live
+provider paths (the CI-RUNTIME workflow expects `OC_CI_VERTEX_PROJECT` / `OC_CI_VERTEX_CREDENTIALS` /
+`OC_CI_GEMINI_API_KEY` / `OC_CI_COPILOT_TOKEN`), (b) a time slot, (c) whether cassette-only (ADR-0006) still
+stands for release. Without a window these stay as-is; §12.1 accepts them if each gets an explicit runtime
+conclusion (ADR).
 
 ## Discipline (carry-over, still binding)
 
 - **CI non-blocking (user ruling 2026-10-20):** never wait for CI during development; lane local-green +
   independent verifier PASS ⇒ merge; CI red ⇒ patch lane. Only the §12 exit gate waits for CI.
-  Lesson from this iteration: when a red appears, attribute with `git merge-base --is-ancestor` per suspect
-  commit + the CANCELLED runs list, NOT with "the only merge since green" (that produced the DB misattribution).
-- All cargo/fmt/clippy/nextest via `tools/dev-gate.sh` (eternal130, CPUQuota 400%, MemoryMax 6G, global flock).
-  Never run cargo as root. One gate scope on the box at a time.
-- Process safety: no `kill`/`pkill`/`killall`/`fuser`, no bare PIDs, only owned child handles; group signals
-  via `procutil::signal_group_filtered`. Never touch port 49374; tests bind `127.0.0.1:0`; no real data dirs.
+- All cargo/fmt/clippy/nextest via `tools/dev-gate.sh` (eternal130=uid 1000, CPUQuota 400%, MemoryMax 6G,
+  global flock, `OPENCODE_DEV_GATE_DIR=<worktree>` for lanes). Never run cargo as root.
+  Root-owned files in a worktree break the eternal130 gate → `chown -R 1000:1000 <worktree>` after editing.
+- **Never trust a cached lint pass**: the lane's clippy "clean" was a cache hit; require a fresh `Checking <crate>`
+  line in the output before believing a clippy/fmt result.
+- Process safety: no `kill`/`pkill`/`killall`/`fuser`, no bare PIDs, only owned child handles; group signals via
+  `procutil::signal_group_filtered`. Never touch port 49374; tests bind `127.0.0.1:0`; no real data dirs.
 - Never mark `verified` from a fixer session. No skip/ignore/deleted-assertion greens. `accepted` requires an ADR.
 - Upstream pinned **2.0.24** (`/opt/opencode-ref`, commit `e7a34f09bf`).
-- Evidence per entry under `/tmp/opencode/parity-evidence/<ID>/` (repro.sh + red + green). Fix repro.sh scripts
-  that tee to red.log by default — write the post-fix log elsewhere (PLUG-R1 hygiene nit).
+- Evidence per entry under `/tmp/opencode/parity-evidence/<ID>/` (repro.sh + own red.log + green.log).
+  A shared/copied red.log is NOT acceptable evidence.
 - Known-red registry `tools/parity/goldens/p10/known-red.json`; skip ≠ pass (`OC_GATE_STRICT=1`).
 - **Background subagents die with the session** — foreground for anything that must not be lost.
 
 ## Blockers
 
-- Live window for the 9 `needs-runtime` entries (user).
-- Non-linux-x64 CI build target (SURF-PLATFORM) — workflow work only.
-- CI on the just-pushed head should go green (the red's fix landed); if it is red again, run the §5 protocol
-  with per-commit attribution (see the lesson above).
+- Live window for the 6 `needs-runtime` entries + CI-RUNTIME-AI-LIVE secrets (user).
+- Non-linux-x64 CI build target (SURF-PLATFORM) — the CI leg is now wired in runtime-gates.yml (platform-build
+  job, macos-latest) but the row stays open until the first GREEN run id is recorded.
 
 ## Next
 
-1. Resume lane-tui2 (TUI-5/6/7 then TUI-4 evidence); re-dispatch CONFIG (CLI-K1,N1..N4).
-2. Then PLUGIN residual (D13, D30, M02), TOOL-D1, SURFACES (browser, latex/mermaid), 3 p10 gate reds, CLI-K2/K8.
-3. Next wave's adjudication batch from the S2/S3 pool (288 open; 6 closed this way today).
-4. Check CI on the new main head; record run id here.
+1. **Fresh CONFIG lane** (7 open S1: CLI-K1,K2,K8,N1,N2,N3,N4 — `crates/oc-cli/**` + `crates/oc-server/**`;
+   CLI-K8 also touches `crates/oc-tui/src/storage.rs`, and the TUI cluster is now free since lane-tui2 merged).
+2. **TUI-35** (boot hang) — unblocks TUI-7; same TUI cluster, reuse branch `lane/tui2` or a fresh worktree.
+3. **AI vertex lane** — AI-V1 + AI-VERTEX-V2 (+ CRED-V3 ADC) in one lane; `crates/oc-ai/src/protocols/**` +
+   `crates/oc-core/src/provider_catalog/facade.rs`.
+4. Next adjudication batch (wave 10) from the S2/S3 pool (284 open; 7 closed this way in wave 9).
+5. Check CI on the pushed head; record run ids here.
