@@ -884,3 +884,249 @@ fn image_preview() {
         },
     );
 }
+
+// ---------------------------------------------------------------------------
+// lane-tui2 (wave 7): TUI-5 / TUI-6 / TUI-7 — the open-menu and
+// session-list dialog proofs on the real app loop.
+// ---------------------------------------------------------------------------
+
+/// A rich SessionInfo wire row (the harness's armed `session_rows`).
+/// An empty `title` OMITS the field (the wire's optional — the
+/// timestamped-fallback rows).
+fn rich_session(id: &str, title: &str, updated_secs: f64, directory: &str, project: &str, parent: Option<&str>) -> String {
+    let title_json = if title.is_empty() {
+        String::new()
+    } else {
+        format!(r#""title":"{title}","#)
+    };
+    let parent_json = parent.map(|p| format!(r#","parentID":"{p}""#)).unwrap_or_default();
+    format!(
+        r#"{{"id":"{id}",{title_json}"time":{{"created":0,"updated":{updated_secs}}},"location":{{"directory":"{directory}"}},"projectID":"{project}"{parent_json},"cost":0,"tokens":{{"cache":{{"read":0,"write":0}},"input":0,"output":0,"read":0,"write":0,"reasoning":0}}}}"#
+    )
+}
+
+/// TUI-5: `ctrl+o` (`open.menu`) opens `DialogOpen` — title "Open",
+/// the Sessions recents AND the Projects sections together, the
+/// project row's basename title + abbreviated directory footer
+/// (dialog-open.tsx:197-274), large size.
+#[test]
+fn open_menu_sections() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+    run_daily_test(
+        "tui2-open-menu",
+        120,
+        30,
+        |fake, _sandbox| {
+            fake.arm_session_rows(vec![
+                rich_session("ses_alpha", "Alpha", now - 120.0, "/tmp/proj-a", "prj_a", None),
+                rich_session("ses_recent", "Recent Fix", now - 60.0, "/tmp/proj-a", "prj_a", None),
+                rich_session("ses_old", "Ancient Work", 100_000.0, "/tmp/proj-a", "prj_a", None),
+            ]);
+            fake.arm_projects(
+                r#"[{"canonical":"/tmp/proj-a","id":"prj_a","name":"Proj A","sandboxes":[],"time":{"active":0,"created":0,"updated":0},"vcs":"git"}]"#.to_owned(),
+            );
+        },
+        |h| {
+            if !h.wait_for(WORDMARK, Duration::from_secs(8)) {
+                return Err("the home wordmark never rendered".to_owned());
+            }
+            // ctrl+o — the Open menu (NOT the Sessions list).
+            h.write(b"\x0f");
+            let grid = wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains("Recent Fix"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("Proj A"))
+                },
+                Duration::from_secs(8),
+            )?;
+            // The mounted dialog's title is "Open" (dialog-open.tsx:338)
+            // with the two section headers (category "Sessions" /
+            // "Projects", dialog-open.tsx:225/264).
+            assert!(
+                (0..grid.rows).any(|row| grid.row_text(row).contains("Open")),
+                "the Open title mounted"
+            );
+            assert!(
+                (0..grid.rows).any(|row| grid.row_text(row).contains("Projects")),
+                "the Projects section header lists"
+            );
+            assert!(
+                (0..grid.rows).any(|row| grid.row_text(row).contains("Sessions")),
+                "the Sessions section header lists"
+            );
+            // The session row's footer: the project label + time-ago
+            // (dialog-open.tsx:226 — `{label} · {timeAgo}`, "now" for
+            // a minute-old session).
+            assert!(
+                (0..grid.rows).any(|row| grid.row_text(row).contains("now")),
+                "the recent row's time-ago footer"
+            );
+            // The project row's footer carries the abbreviated
+            // directory (dialog-open.tsx:249).
+            assert!(
+                (0..grid.rows).any(|row| grid.row_text(row).contains("/tmp/proj-a")),
+                "the project row's directory footer"
+            );
+            h.write(b"\x1b");
+            std::thread::sleep(Duration::from_millis(150));
+            Ok(())
+        },
+    );
+}
+
+/// TUI-6: the Sessions dialog's rows carry the date-group headers
+/// ("Today" for same-day sessions — dialog-session-list.tsx:187-189),
+/// the timestamped-fallback title for untitled sessions, the
+/// outside-project footer basename (:152-160) and the footer action
+/// hints (delete/rename, :247-287).
+#[test]
+fn session_list_rows() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+    run_daily_test(
+        "tui2-session-rows",
+        120,
+        30,
+        |fake, _sandbox| {
+            fake.arm_session_rows(vec![
+                rich_session("ses_alpha", "Alpha", now - 120.0, "/tmp/proj-a", "prj_a", None),
+                rich_session("ses_today", "Today Work", now - 300.0, "/tmp/proj-a", "prj_a", None),
+                // Untitled + outside the project: the ISO fallback
+                // title + the directory basename footer.
+                rich_session("ses_fallback", "", 100_000.0, "/elsewhere/scratch", "prj_a", None),
+            ]);
+            fake.arm_projects(
+                r#"[{"canonical":"/tmp/proj-a","id":"prj_a","name":"Proj A","sandboxes":[],"time":{"active":0,"created":0,"updated":0},"vcs":"git"}]"#.to_owned(),
+            );
+        },
+        |h| {
+            boot_to_session(h, b"Alpha")?;
+            h.write(b"\x18l");
+            let grid = wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("Today Work")),
+                Duration::from_secs(8),
+            )?;
+            // The "Today" group header (same-day time.updated).
+            assert!(
+                (0..grid.rows).any(|row| grid.row_text(row).trim().contains("Today")),
+                "the Today group header lists"
+            );
+            // The untitled row shows the timestamped fallback title
+            // ("New session - <ISO>", session-title-fallback.ts:38).
+            assert!(
+                (0..grid.rows).any(|row| grid.row_text(row).contains("New session - ")),
+                "the untitled row's timestamped fallback title"
+            );
+            // The outside-project row's footer basename.
+            assert!(
+                (0..grid.rows).any(|row| grid.row_text(row).contains("scratch")),
+                "the outside-project footer basename"
+            );
+            h.write(b"\x1b");
+            std::thread::sleep(Duration::from_millis(150));
+            Ok(())
+        },
+    );
+}
+
+/// TUI-7 (E12 F1-F6): the session-list filter is trim + case-fold +
+/// byte-exact substring — a whitespace-only query is the FULL list,
+/// fuzzy cross-letter sequences do NOT match, children never row,
+/// and case-insensitive substrings do.
+#[test]
+fn session_filter_semantics() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+    run_daily_test(
+        "tui2-filter",
+        120,
+        30,
+        |fake, _sandbox| {
+            fake.arm_session_rows(vec![
+                rich_session("ses_alpha", "Alpha", now - 600.0, "/tmp", "p", None),
+                rich_session("ses_login", "Login Redirect Flow", now - 60.0, "/tmp", "p", None),
+                rich_session("ses_cafe", "Café notes", now - 90.0, "/tmp", "p", None),
+                rich_session(
+                    "ses_child",
+                    "Login Child Secret",
+                    now - 30.0,
+                    "/tmp",
+                    "p",
+                    Some("ses_login"),
+                ),
+            ]);
+        },
+        |h| {
+            boot_to_session(h, b"Alpha")?;
+            h.write(b"\x18l");
+            wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("Login Redirect Flow")),
+                Duration::from_secs(8),
+            )?;
+            // F6 (empty query): the full list — both parents row…
+            wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains("Café notes"))
+                },
+                Duration::from_secs(5),
+            )?;
+            // …F1 (children NEVER row — the options builder's
+            // parentID filter, dialog-session-list.tsx:145).
+            let grid = h.grid_now();
+            if (0..grid.rows).any(|row| grid.row_text(row).contains("Login Child Secret")) {
+                return Err("the child session rowed in the session list".to_owned());
+            }
+            // F4 (substring, case-folded): "LOGIN RED" matches the
+            // parent; the child stays excluded under a query.
+            h.write(b"LOGIN RED");
+            let grid = wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("Login Redirect Flow")),
+                Duration::from_secs(5),
+            )?;
+            if (0..grid.rows).any(|row| grid.row_text(row).contains("Café notes")) {
+                return Err("a non-matching row stayed visible under the filter".to_owned());
+            }
+            // F4 (no fuzzy): "zln" (cross-letter) matches NOTHING.
+            for _ in 0..8 {
+                h.write(b"\x7f");
+            }
+            h.write(b"zln");
+            let grid = wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("No sessions found")),
+                Duration::from_secs(5),
+            )?;
+            if (0..grid.rows).any(|row| grid.row_text(row).contains("Login Redirect Flow")) {
+                return Err("a fuzzy cross-letter query matched (zln)".to_owned());
+            }
+            // F6 (whitespace-only = trimmed to empty = the full list).
+            for _ in 0..3 {
+                h.write(b"\x7f");
+            }
+            h.write(b"   ");
+            wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains("Login Redirect Flow"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("Café notes"))
+                },
+                Duration::from_secs(5),
+            )?;
+            h.write(b"\x1b");
+            std::thread::sleep(Duration::from_millis(150));
+            Ok(())
+        },
+    );
+}

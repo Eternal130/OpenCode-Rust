@@ -281,6 +281,12 @@ fn paint_hints(
         });
         *x += shortcut.len() + 1;
     };
+    // TUI-4 — the Terminals tab has no activity filter hint
+    // (terminals-tab.tsx carries no ctrl+a binding).
+    if state.tab == PickerTab::Terminals {
+        hint(placed, &mut x, "tabs", "←/→");
+        return;
+    }
     let which = if state.filter_active { "inactive" } else { "active" };
     hint(placed, &mut x, &format!("show {which}"), "ctrl+a");
     x += 2; // gap 2 between hint groups

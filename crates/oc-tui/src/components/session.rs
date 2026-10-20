@@ -273,13 +273,23 @@ pub fn render_session(
     // reads the CONTENT width (v2's `panels.setWidth(total − rail)`,
     // app.tsx:585).
     let content_width = width - shift;
-    let sidebar_shown = store.sidebar_shown(session_id, content_width);
+    // TUI-4 — `rightPane()` (session-frame.tsx:112-118): a SELECTED
+    // terminal takes the right pane over the sidebar (the precedence
+    // chain's `selectedTerminal()` leg).
+    let terminal_pane = store.terminal_pane_mounted(session_id);
+    let terminal_width = terminal_pane.as_ref().map(|_| {
+        clamp_session_pane_width(width.saturating_sub(shift) / 2, content_width)
+    });
+    let sidebar_shown =
+        terminal_pane.is_none() && store.sidebar_shown(session_id, content_width);
     // The session column's padding (v2's prompt mounts inside
     // paddingLeft/Right 2): the composer `┃` and footer paste at x2.
     let inset = 2;
     let sidebar_docked = sidebar_shown && content_width > SIDEBAR_AUTO_BREAKPOINT;
     let sidebar_overlay = sidebar_shown && !sidebar_docked;
-    let column = if sidebar_docked {
+    let column = if let Some(terminal_width) = terminal_width {
+        content_width.saturating_sub(terminal_width)
+    } else if sidebar_docked {
         content_width - crate::components::session_tabs::SESSION_SIDEBAR_WIDTH
     } else {
         content_width
@@ -861,7 +871,28 @@ pub fn render_session(
         // offset resets, no x extent gates the wheel).
         store.set_sidebar_scroll_geometry(0, 0, None);
     }
+    // TUI-4 — the embedded terminal pane (session-frame.tsx:319-344):
+    // the right pane renders the live VT grid at the clamped layout
+    // width (default the equal split), full height under the strip.
+    if let (Some(_pty), Some(terminal_width)) = (&terminal_pane, terminal_width) {
+        let pane_height = height - content_top;
+        let pane_size = (
+            u16::try_from(terminal_width).unwrap_or(u16::MAX),
+            u16::try_from(pane_height).unwrap_or(u16::MAX),
+        );
+        if let Some(pane) = store.terminal_pane_frame(session_id, pane_size) {
+            paste(&mut frame, &pane, column + shift, content_top);
+        }
+    }
     frame
+}
+
+/// `clampSessionPaneWidth` (ui/layout.ts:22-26): the pane keeps the
+/// equal split when both minima cannot fit; `max(min(24, half),
+/// min(width, max(half, total − 44)))`.
+fn clamp_session_pane_width(width: usize, total: usize) -> usize {
+    let half = (total / 2).max(1);
+    width.min(half.max(total.saturating_sub(44))).max(24.min(half))
 }
 
 /// The manual-open scrim (session-frame.tsx:385-397): the whole frame
