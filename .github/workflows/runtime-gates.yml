@@ -210,16 +210,21 @@ jobs:
         with:
           bun-version: 1.3.10
 
-      # The parity harness spawns the reference with a hardcoded child PATH
-      # (/root/.bun/bin:/usr/local/bin:...). setup-bun may install outside
-      # those; make the resolved bun visible at /usr/local/bin.
-      - name: Expose bun on the harness child PATH
+      # The parity harness launches bun by ABSOLUTE path ($PARITY_BUN ->
+      # Command::new(bun), tools/parity/src/reference.rs), and the v2
+      # reference re-spawns itself via process.execPath (also absolute) —
+      # nothing resolves bun by name on the harness child PATH. So instead
+      # of a well-known-path symlink, export the resolved setup-bun binary
+      # for the later steps in this job: PARITY_BUN via $GITHUB_ENV, its
+      # dir via $GITHUB_PATH.
+      - name: Expose bun to the harness (PARITY_BUN + PATH)
         run: |
           set -euo pipefail
           BUN="$(command -v bun)"
           test -n "$BUN"
-          if [ ! -x /usr/local/bin/bun ]; then sudo ln -s "$BUN" /usr/local/bin/bun; fi
-          /usr/local/bin/bun --version
+          echo "$(dirname "$BUN")" >> "$GITHUB_PATH"
+          echo "PARITY_BUN=$BUN" >> "$GITHUB_ENV"
+          "$BUN" --version
 
       - name: Install reference deps
         run: bun install --frozen-lockfile
@@ -242,7 +247,7 @@ jobs:
         env:
           OC_P10: "1"
           PARITY_REF_SOURCE: /tmp/opencode/ref
-          PARITY_BUN: /usr/local/bin/bun
+          # PARITY_BUN arrives via GITHUB_ENV (Expose bun step above).
 
       # Write path verified from tools/parity/tests/p10_db_interop.rs:
       #   :144  let root = PathBuf::from(format!("/tmp/opencode/p10-db-{}", std::process::id()));
@@ -324,10 +329,35 @@ jobs:
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
 
+      # The p10 TUI lanes spawn tmux BY NAME from the test process
+      # (tools/parity/src/termatrix.rs: Command::new("tmux")), which
+      # inherits this step's PATH. ubuntu-latest images ship tmux
+      # preinstalled; the fallback below extracts the .deb set into $HOME
+      # and puts it on PATH (user-level only — the sanctioned privilege
+      # path is tools/dev-gate.sh, nothing here may use it).
       - name: Ensure tmux (p10 TUI lanes)
         run: |
           set -euo pipefail
-          command -v tmux || { sudo apt-get update -y && sudo apt-get install -y tmux; }
+          if command -v tmux >/dev/null 2>&1; then
+            tmux -V
+            exit 0
+          fi
+          echo "::warning::tmux not preinstalled on this image — falling back to a user-level .deb extraction"
+          ROOT="$HOME/.local/opt/tmux"
+          mkdir -p "$ROOT"
+          cd "${RUNNER_TEMP:-/tmp}" || exit 1
+          # shellcheck disable=SC2013
+          for p in $(apt-cache depends --recurse --no-recommends --no-suggests \
+                       --no-conflicts --no-breaks --no-replaces --no-enhances tmux \
+                       | grep -E '^[a-zA-Z0-9]' \
+                       | grep -vE '^(libc6|libgcc-s1|gcc-[0-9.]+-base|libtinfo6)$' | sort -u); do
+            apt-get download "$p" || echo "::warning::could not fetch $p (virtual or absent) — relying on the image copy"
+          done
+          for d in ./*.deb; do dpkg -x "$d" "$ROOT"; done
+          echo "$ROOT/usr/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$ROOT/usr/lib/x86_64-linux-gnu" >> "$GITHUB_ENV"
+          export PATH="$ROOT/usr/bin:$PATH"
+          export LD_LIBRARY_PATH="$ROOT/usr/lib/x86_64-linux-gnu"
           tmux -V
 
       - name: Fetch the pinned v2.0.24 reference source
@@ -348,13 +378,14 @@ jobs:
         with:
           bun-version: 1.3.10
 
-      - name: Expose bun on the harness child PATH
+      - name: Expose bun to the harness (PARITY_BUN + PATH)
         run: |
           set -euo pipefail
           BUN="$(command -v bun)"
           test -n "$BUN"
-          if [ ! -x /usr/local/bin/bun ]; then sudo ln -s "$BUN" /usr/local/bin/bun; fi
-          /usr/local/bin/bun --version
+          echo "$(dirname "$BUN")" >> "$GITHUB_PATH"
+          echo "PARITY_BUN=$BUN" >> "$GITHUB_ENV"
+          "$BUN" --version
 
       - name: Install reference deps
         run: bun install --frozen-lockfile
@@ -379,7 +410,7 @@ jobs:
           # PARITY_V2_DB_FIXTURE arrives via GITHUB_ENV (Wire step above):
           # set when the fixture landed, deliberately unset on GAP.
           PARITY_REF_SOURCE: /tmp/opencode/ref
-          PARITY_BUN: /usr/local/bin/bun
+          # PARITY_BUN arrives via GITHUB_ENV (Expose bun step above).
 
       - name: Summary
         if: ${{ !cancelled() }}
