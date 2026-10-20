@@ -348,7 +348,9 @@ pub struct Engine {
     /// The shared transport every per-location provider overlay binds
     /// onto (the engine resolver and each location overlay share one).
     facade_transport: SharedTransport,
-    projects: Arc<crate::project::SqliteProjectStore>,
+    /// The project store (v2 `Project.Service` persistence): resolve /
+    /// activate / update over the shared database.
+    pub projects: Arc<crate::project::SqliteProjectStore>,
     tool_output: Arc<ToolOutput>,
     /// The v2 location service map (graph lifecycle authority: adopt /
     /// invalidate / reload + the TTL sweeper).

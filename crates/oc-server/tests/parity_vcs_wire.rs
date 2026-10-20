@@ -29,6 +29,8 @@ use oc_util::determinism::{SystemClock, UuidV4IdGen};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
+use futures::StreamExt as _;
+
 struct TestServer {
     client: Client,
     state: Arc<AppState>,
@@ -483,4 +485,148 @@ async fn worktree_error_name_literal() {
     .await;
     assert_eq!(status, 400, "unknown directory rejected: {body}");
     assert_eq!(body["name"], "WorktreeError", "name literal on remove errors: {body}");
+}
+
+// ---------------------------------------------------------------------------
+// DB-D4 — project.update persists canonical/name/icon/commands, returns the
+// REAL row and announces project.updated (project.ts:215-239)
+// ---------------------------------------------------------------------------
+
+/// Raw project row for post-update DB assertions.
+async fn project_row(
+    server: &TestServer,
+    id: &str,
+) -> (String, Option<String>, Option<String>, Option<String>, Option<String>) {
+    let id = id.to_owned();
+    server
+        .state
+        .engine
+        .db
+        .transaction(move |tx| {
+            Ok(tx.conn().query_row(
+                "SELECT worktree, name, icon_url_override, icon_color, commands \
+                 FROM project WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
+                },
+            )?)
+        })
+        .await
+        .expect("project row read")
+}
+
+#[tokio::test]
+async fn project_update_fields() {
+    let workspace = tempfile::tempdir().expect("workspace").keep();
+    seed_repo(&workspace);
+    let server = boot(workspace.clone()).await;
+    let (project_id, _) = project_id(&server).await;
+    let mut project_events = server.state.engine.bus.subscribe_types(&["project.updated"]);
+
+    // Full metadata update incl. canonical + commands.
+    let new_canonical = workspace.join("moved-checkout");
+    let updated = server
+        .client
+        .project()
+        .update(
+            &project_id,
+            &ProjectUpdateBody {
+                canonical: Some(new_canonical.to_string_lossy().into_owned()),
+                name: Some("renamed".to_owned()),
+                icon: Some(ProjectIcon {
+                    override_: Some("cat".to_owned()),
+                    color: Some("#ff0000".to_owned()),
+                    url: None,
+                }),
+                commands: Some(ProjectCommands { start: Some("pnpm dev".to_owned()) }),
+            },
+        )
+        .await
+        .expect("project update");
+    // The REAL row, not a fabricated echo (ledger actual: "响应伪造").
+    assert_eq!(updated.canonical, new_canonical.to_string_lossy());
+    assert_eq!(updated.name.as_deref(), Some("renamed"));
+    assert_eq!(
+        updated.commands.as_ref().and_then(|commands| commands.start.as_deref()),
+        Some("pnpm dev"),
+        "commands.start round-trips: {:?}",
+        updated.commands
+    );
+    assert_eq!(updated.icon.as_ref().and_then(|icon| icon.override_.as_deref()), Some("cat"));
+    assert_eq!(updated.icon.as_ref().and_then(|icon| icon.color.as_deref()), Some("#ff0000"));
+    assert!(updated.time.updated > 0, "real timestamps, not zeros: {:?}", updated.time);
+
+    // The database row actually changed.
+    let (worktree, name, icon_override, icon_color, commands) =
+        project_row(&server, &project_id).await;
+    assert_eq!(worktree, new_canonical.to_string_lossy(), "canonical persisted");
+    assert_eq!(name.as_deref(), Some("renamed"));
+    assert_eq!(icon_override.as_deref(), Some("cat"));
+    assert_eq!(icon_color.as_deref(), Some("#ff0000"));
+    assert_eq!(
+        commands.as_deref().and_then(|raw| serde_json::from_str::<Value>(raw).ok()),
+        Some(serde_json::json!({ "start": "pnpm dev" })),
+        "commands stored as v2 start-object JSON: {commands:?}"
+    );
+
+    // project.updated was announced with the updated row.
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), project_events.next())
+        .await
+        .expect("project.updated within 5s")
+        .expect("stream open");
+    assert_eq!(event.type_, "project.updated");
+    assert_eq!(event.data["id"], project_id);
+    assert_eq!(event.data["name"], "renamed");
+
+    // Empty strings CLEAR (project.ts:219-226): name "" → NULL, absent in Info.
+    let cleared = server
+        .client
+        .project()
+        .update(&project_id, &ProjectUpdateBody { name: Some(String::new()), ..Default::default() })
+        .await
+        .expect("clear name");
+    assert_eq!(cleared.name, None, "cleared name is absent, not empty/null-string");
+    let (_, name, _, _, _) = project_row(&server, &project_id).await;
+    assert_eq!(name, None, "empty string clears the column to NULL");
+
+    // commands with an empty start clears the commands column.
+    let cleared = server
+        .client
+        .project()
+        .update(
+            &project_id,
+            &ProjectUpdateBody {
+                commands: Some(ProjectCommands { start: Some(String::new()) }),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("clear commands");
+    assert_eq!(cleared.commands, None, "cleared commands absent from Info");
+    let (_, _, _, _, commands) = project_row(&server, &project_id).await;
+    assert_eq!(commands, None, "empty start clears commands to NULL");
+
+    // Unknown project → 404 ProjectNotFoundError (v2 NotFoundError).
+    let missing = server
+        .client
+        .project()
+        .update(
+            "0000000000000000000000000000000000000000",
+            &ProjectUpdateBody { name: Some("x".to_owned()), ..Default::default() },
+        )
+        .await;
+    match missing {
+        Err(oc_client::ClientError::Api { status, name, .. }) => {
+            assert_eq!(status, 404);
+            assert_eq!(name, "ProjectNotFoundError");
+        }
+        other => panic!("expected 404 ProjectNotFoundError, got: {other:?}"),
+    }
 }
