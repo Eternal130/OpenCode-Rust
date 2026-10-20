@@ -966,6 +966,11 @@ impl Engine {
         // (code-mode-eligible ones hide behind `execute` exactly like
         // MCP tools).
         if let Some(source) = &self.plugin_source {
+            // PLUG-D07: THIS location's config layers resolve ITS plugin
+            // operations — registrations from plugins not active here
+            // stay out of the graph (v2's per-location activation over
+            // the shared snapshot).
+            let ops = crate::plugin_apply::LocationPluginOp::from_loaded(&loaded);
             let applied = crate::plugin_apply::apply_location_plugins(
                 source.as_ref(),
                 &hooks,
@@ -974,9 +979,17 @@ impl Engine {
                 Some(&commands),
                 &mcp,
                 &skills,
+                &ops,
             )
             .await;
             let _ = applied; // diagnostics only (boot-trace reads the registry)
+                             // The latest activation updates the guest's ctx.location
+                             // view (the one-guest approximation of v2's per-instance
+                             // hosts) — only when plugins are active for this location.
+            let active = source.active_plugins(&ops);
+            if active.as_ref().is_none_or(|ids| !ids.is_empty()) {
+                source.location_activated(&location.as_path().display().to_string(), &project.id);
+            }
         }
 
         // The Code Mode surface (wave 4): with a runtime attached, the

@@ -1491,6 +1491,17 @@ impl Shared {
         self.send_notification("tui.theme", view);
     }
 
+    /// PLUG-D07 — push the LATEST activated location into the guest
+    /// (the `location.update` notification): every live `ctx`'s
+    /// `directory`/`location` view follows, the one-guest approximation
+    /// of v2's per-instance plugin hosts.
+    pub fn push_location(&self, directory: &str, project_id: &str) {
+        self.send_notification(
+            "location.update",
+            json!({ "directory": directory, "project": { "id": project_id } }),
+        );
+    }
+
     /// Push the sidebar's layout budget (the `tui.layout` notification
     /// — SA-F5: the guest's sidebar flattener lays `space-between` /
     /// flexGrow rows out against this width so the plugin's padded
