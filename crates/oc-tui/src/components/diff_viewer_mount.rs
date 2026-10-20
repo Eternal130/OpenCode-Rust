@@ -18,7 +18,7 @@
 //!   deferred (see docs/surf2.log).
 
 use crate::components::diff_viewer::{
-    diff_layout, render_diff_viewer, DiffFile, DiffView, DiffViewerOptions, PatchRow,
+    diff_layout, render_diff_viewer_with_hits, DiffFile, DiffView, DiffViewerOptions, PatchRow,
 };
 use crate::render::{Cell, CellColor, Frame};
 use crate::store::{DiffPhase, DiffSource, DiffViewerLive, Store};
@@ -123,6 +123,11 @@ fn plain_frame(width: usize, height: usize) -> Frame {
     Frame { cells: vec![vec![Cell::default(); width]; height], width, height }
 }
 
+/// TUI-10: the inline diff images' screen hit rects — `(x, y, width,
+/// height, uri)`.
+pub type DiffImageHit = (usize, usize, usize, usize, String);
+pub type DiffImageHits = Vec<DiffImageHit>;
+
 /// The live diff viewer frame (the `diff` plugin route's render):
 /// body states when not loaded, else the scrolled painter output.
 #[must_use]
@@ -145,8 +150,8 @@ pub fn render_diff_mount(
         }
         frame
     };
-    match &live.phase {
-        DiffPhase::Loading => body_line("Loading diff…", false),
+    let (frame, image_hits) = match &live.phase {
+        DiffPhase::Loading => (body_line("Loading diff…", false), Vec::new()),
         DiffPhase::Failed(_) => {
             // Two copy variants (:852-860): a base-needing mode that
             // never resolved one points at the source picker; any
@@ -158,15 +163,24 @@ pub fn render_diff_mount(
             } else {
                 "Could not load diff. Reopen the diff viewer to try again."
             };
-            body_line(text, true)
+            (body_line(text, true), Vec::new())
         }
-        DiffPhase::Unavailable => body_line(
-            "Committed comparison unavailable without base metadata. Choose a base branch from Diff source.",
-            false,
+        DiffPhase::Unavailable => (
+            body_line(
+                "Committed comparison unavailable without base metadata. Choose a base branch from Diff source.",
+                false,
+            ),
+            Vec::new(),
         ),
-        DiffPhase::Loaded(files) if files.is_empty() => body_line("No changes to show", false),
+        DiffPhase::Loaded(files) if files.is_empty() => {
+            (body_line("No changes to show", false), Vec::new())
+        }
         DiffPhase::Loaded(_) => render_diff_scrolled(&live, styles, width, height),
-    }
+    };
+    // TUI-10: the inline diff images' screen rects — the mouse
+    // release path reads them to open the preview dialog.
+    store.set_diff_image_hits(image_hits);
+    frame
 }
 
 /// The loaded viewer: the painter renders the FULL content into an
@@ -178,7 +192,7 @@ fn render_diff_scrolled(
     styles: &ThemeStyles,
     width: usize,
     height: usize,
-) -> Frame {
+) -> (Frame, DiffImageHits) {
     let files = live.visible_files();
     let layout = diff_layout(width, live.viewer.tree_enabled, files.len());
     let view = live.viewer.view(&layout);
@@ -187,9 +201,21 @@ fn render_diff_scrolled(
     // Render into the content-sized frame (toolbar + tree paint at
     // the top; the patch column flows past the viewport).
     let oversized = content_height.max(height) + 2;
-    let options =
-        DiffViewerOptions { source_label: live.mode.label(), source_detail: &live.source_detail() };
-    let content = render_diff_viewer(files, &live.viewer, &options, styles, width, oversized);
+    let options = DiffViewerOptions {
+        source_label: live.mode.label(),
+        source_detail: &live.source_detail(),
+        viewport_height: height,
+    };
+    let mut content_image_hits = Vec::new();
+    let content = render_diff_viewer_with_hits(
+        files,
+        &live.viewer,
+        &options,
+        styles,
+        width,
+        oversized,
+        Some(&mut content_image_hits),
+    );
     // Composite per-column: patch cells shift by `scroll`, the tree
     // pane + the toolbar row stay at their content positions.
     let scroll = clamp_scroll(live.scroll, content_height, height);
@@ -204,6 +230,18 @@ fn render_diff_scrolled(
             }
         }
     }
+    // TUI-10: map the inline images' CONTENT rects into screen cells
+    // (pinned rows never carry images; the patch column shifts by
+    // `scroll`) — the caller records them onto the store for the
+    // mouse release path.
+    let screen_hits = content_image_hits
+        .into_iter()
+        .map(|(x, y, w, h, uri)| {
+            let top = y.saturating_sub(scroll + edge_y);
+            (x, top + edge_y, w, h, uri)
+        })
+        .filter(|(_, top, _, h, _)| *top + *h > edge_y && *top < height)
+        .collect::<Vec<_>>();
     // The tree pane's `? help` footer re-pins to the VIEWPORT bottom
     // (the oversized render placed it at content_height − 3).
     if layout.show_tree && height >= 4 {
@@ -220,7 +258,7 @@ fn render_diff_scrolled(
             }
         }
     }
-    frame
+    (frame, screen_hits)
 }
 
 /// `diff.down/up/page/half/first/last` — the scrollbox commands
@@ -350,13 +388,14 @@ mod tests {
         assert_eq!(cards.len(), 1, "one file card");
         // edge(1) + header(2) + hunk1 (4 rows, header hidden) + 2×(header + 4).
         assert_eq!(content_height, 18, "fixture walk: {content_height}");
-        let frame = render_diff_viewer(
+        let frame = render_diff_viewer_with_hits(
             &files,
             &DiffViewerState::default(),
             &DiffViewerOptions::default(),
             &theme,
             80,
             content_height,
+            None,
         );
         let text = frame.text_grid().join("\n");
         assert!(text.contains("const newFirst"), "content painted");

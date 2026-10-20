@@ -586,6 +586,31 @@ impl TuiPluginRuntime {
                 apply_plugin_ui(store, &plugin_id, &to_ui_event(&request));
             }
         }
+        // TUI-24: the plugin fault table (the plugins dialog's
+        // error-rows) — the host's fault strings, keyed by plugin id.
+        if self.booted.host.enabled() {
+            let faults = self
+                .booted
+                .host
+                .plugin_faults()
+                .into_iter()
+                .map(|fault| {
+                    // The fault strings are "plugin_id: message"-ish;
+                    // key by the leading id when present.
+                    match fault.split_once(':') {
+                        Some((id, message)) => (id.trim().to_owned(), message.trim().to_owned()),
+                        None => (String::new(), fault),
+                    }
+                })
+                .collect();
+            store.set_plugin_faults(faults);
+        }
+        // TUI-25: the ctx.ui.alert/confirm resolutions drain back
+        // into the host (the store's settle-on-close hooks queued
+        // them; the guest promises now settle).
+        for (request_id, result) in store.take_ui_dialog_resolutions() {
+            self.booted.host.resolve_ui_request(request_id, result);
+        }
         // PLUG-TUI-SLOT's pump steps: a freshly navigated plugin route
         // materializes its content (bounded), finished materializations
         // apply, and dynamic keymap layers (installed by a claim's
@@ -865,6 +890,22 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
             PluginUiEvent::NavigateToSession { session_id: session_id.clone() }
         }
         UiRequest::FooterHint { text, .. } => PluginUiEvent::FooterHint { text: text.clone() },
+        // TUI-25: the deferred alert/confirm requests (the guest's
+        // request id settles its promise through the pump).
+        UiRequest::Alert { request_id, title, message, .. } => PluginUiEvent::Alert {
+            request_id: *request_id,
+            title: title.clone(),
+            message: message.clone(),
+        },
+        UiRequest::Confirm { request_id, title, message, confirm_label, cancel_label, .. } => {
+            PluginUiEvent::Confirm {
+                request_id: *request_id,
+                title: title.clone(),
+                message: message.clone(),
+                confirm_label: confirm_label.clone(),
+                cancel_label: cancel_label.clone(),
+            }
+        }
         UiRequest::NavigateToPluginRoute { name, data, .. } => {
             PluginUiEvent::NavigateToPluginRoute { name: name.clone(), data: data.clone() }
         }

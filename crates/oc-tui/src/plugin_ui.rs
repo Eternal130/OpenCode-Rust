@@ -51,6 +51,23 @@ pub enum PluginUiEvent {
     DialogOpen {
         content: PluginDialogContent,
     },
+    /// TUI-25: `ctx.ui.alert({title, message})` — the generic alert
+    /// opens natively; `request_id` settles the guest's promise
+    /// (confirm or any close → null) through the plugin pump.
+    Alert {
+        request_id: u64,
+        title: String,
+        message: String,
+    },
+    /// TUI-25: `ctx.ui.confirm({title, message, label?})` — resolves
+    /// true/false (the active pill) or null (an unresolved close).
+    Confirm {
+        request_id: u64,
+        title: String,
+        message: String,
+        confirm_label: Option<String>,
+        cancel_label: Option<String>,
+    },
 }
 
 impl PluginUiEvent {
@@ -117,6 +134,24 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                         })
                         .collect(),
                 },
+            );
+        }
+        // TUI-25: the generic alert/confirm tones open through the
+        // store's dialog kinds; the guest promise's settle rides the
+        // `request_id` (the close/submit hooks enqueue the resolution
+        // and the plugin pump drains it back into the host).
+        PluginUiEvent::Alert { request_id, title, message } => {
+            store.open_alert(title, message, Some(*request_id), None);
+        }
+        PluginUiEvent::Confirm { request_id, title, message, confirm_label, cancel_label } => {
+            store.open_confirm(
+                title,
+                message,
+                confirm_label.as_deref().unwrap_or("confirm"),
+                cancel_label.as_deref().unwrap_or("cancel"),
+                Some(*request_id),
+                None,
+                None,
             );
         }
     }
