@@ -127,6 +127,15 @@ conclusion (ADR).
 - Known-red registry `tools/parity/goldens/p10/known-red.json`; skip ≠ pass (`OC_GATE_STRICT=1`).
 - **Background subagents die with the session** — foreground for anything that must not be lost.
 
+## CI run ids (async, non-blocking — 2026-10-20 ruling)
+
+| run id | head | workflow | result |
+|---|---|---|---|
+| 39468661905 | 35e6343 (CI-RUNTIME) | ci | **failure** — only `static anti-regression guards` (3 × `sudo` NEW); fmt+clippy/build/nextest/pty/frame ✅ → patched by lane/cirt3 (72b6837) |
+| 39468671027 | 35e6343 (CI-RUNTIME) | runtime-gates (dispatch) | **failure** — p10 battery, §12.3 gates, gates summary, macos build target → row CI-RUNTIME-GATES-RED |
+| 39499419280 | 00bc8e5 (TUI merge + ledger) | ci | `static anti-regression guards` **failure** = the same pre-fix sudo violations (workflow file), fmt+clippy ✅, build ✅ — TUI code itself clean |
+| 39500915503 | 0a0f0c3 (current head) | ci | pending — expected green on the guards job (sudo removed) |
+
 ## Blockers
 
 - Live window for the 6 `needs-runtime` entries + CI-RUNTIME-AI-LIVE secrets (user).
