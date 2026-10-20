@@ -779,6 +779,15 @@ impl PluginHost {
         facade.shared.notify_tui_route(session);
     }
 
+    /// PLUG-D07 — push the latest activated location into the guest
+    /// (`ctx.location`/`ctx.directory` follow; the engine calls this
+    /// through [`crate::LocationPluginSource::location_activated`]
+    /// whenever a location assembles with plugins active).
+    pub fn push_location(&self, directory: &str, project_id: &str) {
+        let Some(facade) = &self.facade else { return };
+        facade.shared.push_location(directory, project_id);
+    }
+
     /// Push the live theme view (the flat `TuiThemeCurrent` sidebar
     /// subset: `{accent, background, borderActive, text, textMuted}`
     /// as `#rrggbb` strings).

@@ -217,7 +217,10 @@ impl PluginBoot {
             router: Arc::clone(&self.router),
             timeout: EXECUTE_TIMEOUT,
         });
-        let source = Arc::new(HostPluginSource { host: Arc::clone(&self.host) });
+        let source = Arc::new(HostPluginSource {
+            host: Arc::clone(&self.host),
+            resolution: self.resolution.clone(),
+        });
         EngineSeams {
             code_mode_runtime: Some(runtime as Arc<dyn CodeModeRuntime>),
             plugin_source: Some(source as Arc<dyn LocationPluginSource>),
@@ -550,11 +553,22 @@ impl ToolPort for RouterToolPort {
 /// snapshot, applied at every location's assembly.
 pub struct HostPluginSource {
     pub host: Arc<PluginHost>,
+    /// The boot-time resolution (target → entry mapping for PLUG-D07's
+    /// per-location activation sets).
+    pub resolution: Resolution,
 }
 
 impl LocationPluginSource for HostPluginSource {
-    fn agents(&self) -> Vec<Value> {
-        self.host.registrations().agents.iter().map(|agent| agent.info.clone()).collect()
+    fn agents(&self) -> Vec<oc_core::plugin_apply::PluginAgentDef> {
+        self.host
+            .registrations()
+            .agents
+            .iter()
+            .map(|agent| oc_core::plugin_apply::PluginAgentDef {
+                plugin_id: agent.plugin_id.clone(),
+                info: agent.info.clone(),
+            })
+            .collect()
     }
 
     fn default_agent(&self) -> Option<String> {
@@ -567,6 +581,7 @@ impl LocationPluginSource for HostPluginSource {
             .tools
             .iter()
             .map(|tool| PluginToolDef {
+                plugin_id: tool.plugin_id.clone(),
                 name: tool.name.clone(),
                 description: tool.description.clone(),
                 input: tool.input.clone(),
@@ -598,6 +613,7 @@ impl LocationPluginSource for HostPluginSource {
             .mcps
             .iter()
             .map(|mcp| oc_core::plugin_apply::PluginMcpDef {
+                plugin_id: mcp.plugin_id.clone(),
                 name: mcp.name.clone(),
                 config: mcp.config.clone(),
             })
@@ -610,6 +626,7 @@ impl LocationPluginSource for HostPluginSource {
             .commands
             .iter()
             .map(|command| oc_core::plugin_apply::PluginCommandDef {
+                plugin_id: command.plugin_id.clone(),
                 name: command.name.clone(),
                 description: command.description.clone(),
             })
@@ -620,8 +637,71 @@ impl LocationPluginSource for HostPluginSource {
     /// the engine seam merges them into every location's
     /// `ConfigSkillTable`, so a bundled skill is listable and
     /// `@skill`-usable exactly like v2's shared `Skill.Service` state.
-    fn skills(&self) -> Vec<Value> {
-        self.host.registrations().skills.iter().map(|skill| skill.info.clone()).collect()
+    fn skills(&self) -> Vec<oc_core::plugin_apply::PluginSkillDef> {
+        self.host
+            .registrations()
+            .skills
+            .iter()
+            .map(|skill| oc_core::plugin_apply::PluginSkillDef {
+                plugin_id: skill.plugin_id.clone(),
+                info: skill.info.clone(),
+            })
+            .collect()
+    }
+
+    /// PLUG-D07: reduce THIS location's operations (the boot pass's
+    /// dedup/remove semantics) and map the surviving targets onto the
+    /// loaded plugins' ids — a location's registrations come only from
+    /// plugins its own config layers activated. A target the boot pass
+    /// never loaded contributes nothing (loading new guests per
+    /// location is the per-instance-host divergence, noted in the
+    /// ledger).
+    fn active_plugins(
+        &self,
+        ops: &[oc_core::plugin_apply::LocationPluginOp],
+    ) -> Option<Vec<String>> {
+        let mut targets: Vec<String> = Vec::new();
+        for op in ops {
+            match op {
+                oc_core::plugin_apply::LocationPluginOp::Add { target } => {
+                    if targets.iter().any(|seen| seen == target) {
+                        continue;
+                    }
+                    targets.push(target.clone());
+                }
+                oc_core::plugin_apply::LocationPluginOp::Remove { target } => {
+                    if target == "*" {
+                        targets.clear();
+                    } else {
+                        targets.retain(|seen| !boot_remove_matches(seen, target));
+                    }
+                }
+            }
+        }
+        let snapshot = self.host.registrations();
+        let mut ids: Vec<String> = Vec::new();
+        for target in targets {
+            // Direct: the boot resolution carries this target.
+            if let Some(plugin) = self.resolution.plugins.iter().find(|p| p.target == target) {
+                if let Some(status) = snapshot.plugins.iter().find(|s| s.entry == plugin.entry) {
+                    if !status.plugin_id.is_empty() {
+                        ids.push(status.plugin_id.clone());
+                        continue;
+                    }
+                }
+            }
+            // Fallback: the loaded plugin's own id matches the target.
+            if let Some(status) = snapshot.plugins.iter().find(|s| s.plugin_id == target) {
+                ids.push(status.plugin_id.clone());
+            }
+        }
+        Some(ids)
+    }
+
+    /// PLUG-D07: push the latest activated location into the guest
+    /// (the host updates `ctx.location`/`ctx.directory`).
+    fn location_activated(&self, directory: &str, project_id: &str) {
+        self.host.push_location(directory, project_id);
     }
 
     /// PLUG-D21: the guest's hook subscriptions (registration order).
@@ -644,6 +724,23 @@ impl LocationPluginSource for HostPluginSource {
     fn hook_dispatcher(&self) -> Option<Arc<dyn GuestHookDispatcher>> {
         Some(Arc::new(HostHookDispatcher { host: Arc::clone(&self.host) }))
     }
+}
+
+/// v2 remove matching over boot targets (mirrors
+/// `oc_plugin_host::resolve`'s reduction): the directive matches the
+/// spec, its package name, or a local path stem.
+fn boot_remove_matches(target: &str, directive: &str) -> bool {
+    if target == directive {
+        return true;
+    }
+    let package = target.rsplit_once('@').map_or(target, |(name, _)| name);
+    if package == directive {
+        return true;
+    }
+    std::path::Path::new(target)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem == directive)
 }
 
 /// The [`GuestHookDispatcher`] over the host's bridge (PLUG-D21): one

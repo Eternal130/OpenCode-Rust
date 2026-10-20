@@ -468,7 +468,7 @@ function makeCtx(pluginId, options) {
     return result && typeof result === "object" && "value" in result ? result.value : result;
   };
 
-  return {
+  const ctx = {
     plugin: { id: pluginId },
     app: { version: domainBase.appVersion },
     directory: domainBase.directory,
@@ -1054,6 +1054,8 @@ function makeCtx(pluginId, options) {
       },
     },
   };
+  liveContexts.add(ctx);
+  return ctx;
 }
 
 // ---------------------------------------------------------------------------
@@ -1535,6 +1537,11 @@ function slotClaimCounter(pluginId) {
 }
 /** The host-pushed current route ({type:"session",sessionID}|{name:"home"}). */
 let tuiRoute = { name: "home" };
+
+// PLUG-D07: the host pushes the LATEST activated location (the one-guest
+// approximation of v2's per-instance hosts); every live ctx object's
+// location view follows it.
+const liveContexts = new Set();
 /** The host-pushed flat v2 theme view (TuiThemeCurrent's sidebar subset). */
 let tuiThemeView = {
   accent: "#8b5cf6",
@@ -2115,6 +2122,26 @@ async function handleLine(line) {
       pendingGuest.delete(message.id);
       if (message.error) entry.reject(new Error(message.error.message ?? "guest error"));
       else entry.resolve(message.result ?? {});
+    }
+    return;
+  }
+  if (message.method === "location.update") {
+    // PLUG-D07: the latest activated location — every live ctx's
+    // location view follows (plugins reading ctx.location at handler
+    // time observe the location whose assembly last activated them).
+    const directory = typeof message.params?.directory === "string" ? message.params.directory : null;
+    const projectId =
+      typeof message.params?.project?.id === "string" ? message.params.project.id : null;
+    if (directory) {
+      domainBase.directory = directory;
+      if (projectId) domainBase.project.id = projectId;
+      for (const ctx of liveContexts) {
+        ctx.directory = directory;
+        if (ctx.location) {
+          ctx.location.directory = directory;
+          if (projectId && ctx.location.project) ctx.location.project.id = projectId;
+        }
+      }
     }
     return;
   }

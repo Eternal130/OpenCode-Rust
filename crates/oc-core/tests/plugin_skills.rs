@@ -15,7 +15,7 @@ use std::sync::Arc;
 use oc_core::engine::skills::ConfigSkillTable;
 use oc_core::hooks::HookRegistry;
 use oc_core::location::{AgentRegistry, ToolRegistryState};
-use oc_core::plugin_apply::{apply_location_plugins, LocationPluginSource};
+use oc_core::plugin_apply::{apply_location_plugins, LocationPluginSource, PluginSkillDef};
 use oc_schema::skill::Skill;
 use serde_json::json;
 
@@ -24,8 +24,11 @@ struct SkillOnlySource {
 }
 
 impl LocationPluginSource for SkillOnlySource {
-    fn skills(&self) -> Vec<serde_json::Value> {
-        self.skills.clone()
+    fn skills(&self) -> Vec<PluginSkillDef> {
+        self.skills
+            .iter()
+            .map(|info| PluginSkillDef { plugin_id: "skillplugin".to_owned(), info: info.clone() })
+            .collect()
     }
 }
 
@@ -120,6 +123,7 @@ async fn apply(source: &SkillOnlySource, table: &Table) {
         None,
         &mcp,
         &table.skills,
+        &[],
     )
     .await;
 }
