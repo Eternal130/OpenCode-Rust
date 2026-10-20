@@ -3960,17 +3960,29 @@ pub enum LoopRequest {
     LocationReload,
     // -- TUI-4: the persistent-terminal family (session-terminals) --
     /// `persistentPty.list` for one session (the registry refresh).
-    TerminalRefresh { session_id: String },
+    TerminalRefresh {
+        session_id: String,
+    },
     /// `persistentPty.create` (+ refresh + select, session-terminals
     /// .tsx:83-92): `{args: [], cwd: session.directory,
     /// title: "Terminal", env: {}}`.
-    TerminalCreate { session_id: String },
+    TerminalCreate {
+        session_id: String,
+    },
     /// The snapshot → connect-token → WS attach chain for one pane.
-    TerminalAttach { session_id: String, pty_id: String },
+    TerminalAttach {
+        session_id: String,
+        pty_id: String,
+    },
     /// Close a pane's attach socket (the selection cleared).
-    TerminalDetach { pty_id: String },
+    TerminalDetach {
+        pty_id: String,
+    },
     /// One interaction frame to the attached pane.
-    TerminalFrame { pty_id: String, frame: Vec<u8> },
+    TerminalFrame {
+        pty_id: String,
+        frame: Vec<u8>,
+    },
     /// `server.info` → the `persistentPty` capability probe.
     TerminalCapability,
 }
@@ -4021,21 +4033,32 @@ pub enum LoopFetch {
         size: (u16, u16),
         checkpoint: Vec<u8>,
     },
-    TerminalOutput { pty_id: String, data: Vec<u8> },
+    TerminalOutput {
+        pty_id: String,
+        data: Vec<u8>,
+    },
     TerminalResized {
         pty_id: String,
         cols: u16,
         rows: u16,
         checkpoint: Option<Vec<u8>>,
     },
-    TerminalReady { pty_id: String },
+    TerminalReady {
+        pty_id: String,
+    },
     TerminalAttached {
         pty_id: String,
         size: (u16, u16),
         controller: bool,
     },
-    TerminalController { pty_id: String, controller: bool },
-    TerminalFailure { pty_id: String, message: String },
+    TerminalController {
+        pty_id: String,
+        controller: bool,
+    },
+    TerminalFailure {
+        pty_id: String,
+        message: String,
+    },
     TerminalCapability(bool),
     LocationVcs {
         directory: String,
@@ -4206,14 +4229,13 @@ pub fn spawn_loop_fetcher(
                             size: None,
                             title: "Terminal".to_owned(),
                         };
-                        let result = client
-                            .persistent_pty()
-                            .create(&session_id, &body)
-                            .await
-                            .map(|info| crate::store::TerminalRecord {
-                                id: info.id,
-                                title: info.title,
-                                foreground_process: info.foreground_process,
+                        let result =
+                            client.persistent_pty().create(&session_id, &body).await.map(|info| {
+                                crate::store::TerminalRecord {
+                                    id: info.id,
+                                    title: info.title,
+                                    foreground_process: info.foreground_process,
+                                }
                             });
                         let _ = tx.send(LoopFetch::TerminalCreated {
                             session_id,
@@ -4229,12 +4251,9 @@ pub fn spawn_loop_fetcher(
                         // predate the field keep offering terminals
                         // (`capabilities?.persistentPty !== false`);
                         // any error leaves terminals unavailable.
-                        let available = client
-                            .server()
-                            .info()
-                            .await
-                            .map(|info| info.capabilities.and_then(|caps| caps.persistent_pty) != Some(false))
-                            .unwrap_or(false);
+                        let available = client.server().info().await.is_ok_and(|info| {
+                            info.capabilities.and_then(|caps| caps.persistent_pty) != Some(false)
+                        });
                         let _ = tx.send(LoopFetch::TerminalCapability(available));
                     });
                 }
@@ -4399,13 +4418,11 @@ pub fn spawn_loop_fetcher(
                             .map(|projects| {
                                 projects
                                     .into_iter()
-                                    .map(|project| {
-                                        crate::components::dialog_open::ProjectRow {
-                                            id: project.id,
-                                            name: project.name,
-                                            canonical: project.canonical,
-                                            vcs: project.vcs.as_deref() == Some("git"),
-                                        }
+                                    .map(|project| crate::components::dialog_open::ProjectRow {
+                                        id: project.id,
+                                        name: project.name,
+                                        canonical: project.canonical,
+                                        vcs: project.vcs.as_deref() == Some("git"),
                                     })
                                     .collect::<Vec<_>>()
                             })
@@ -5087,7 +5104,8 @@ struct TerminalIo {
 /// The per-loop attach registry (pty id → the WS task's handles). A
 /// static: one TUI process owns exactly one loop; the registry lives
 /// for its lifetime.
-fn terminal_io_registry() -> std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, TerminalIo>>> {
+fn terminal_io_registry(
+) -> std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, TerminalIo>>> {
     static REGISTRY: std::sync::OnceLock<
         std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, TerminalIo>>>,
     > = std::sync::OnceLock::new();
@@ -5163,28 +5181,24 @@ impl crate::store::TerminalSink for HttpTerminalSink {
     }
 
     fn select(&self, session_id: &str, pty_id: Option<&str>) {
-        match pty_id {
-            Some(pty) => {
-                *self.attached.lock().expect("attached") = Some(pty.to_owned());
-                let _ = self.tx.send(LoopRequest::TerminalAttach {
-                    session_id: session_id.to_owned(),
-                    pty_id: pty.to_owned(),
-                });
-            }
-            None => {
-                let previous = self.attached.lock().expect("attached").take();
-                if let Some(pty) = previous {
-                    let _ = self.tx.send(LoopRequest::TerminalDetach { pty_id: pty });
-                }
+        if let Some(pty) = pty_id {
+            *self.attached.lock().expect("attached") = Some(pty.to_owned());
+            let _ = self.tx.send(LoopRequest::TerminalAttach {
+                session_id: session_id.to_owned(),
+                pty_id: pty.to_owned(),
+            });
+        } else {
+            let previous = self.attached.lock().expect("attached").take();
+            if let Some(pty) = previous {
+                let _ = self.tx.send(LoopRequest::TerminalDetach { pty_id: pty });
             }
         }
     }
 
     fn send_frame(&self, pty_id: &str, frame: &[u8]) {
-        let _ = self.tx.send(LoopRequest::TerminalFrame {
-            pty_id: pty_id.to_owned(),
-            frame: frame.to_vec(),
-        });
+        let _ = self
+            .tx
+            .send(LoopRequest::TerminalFrame { pty_id: pty_id.to_owned(), frame: frame.to_vec() });
     }
 }
 
@@ -5276,7 +5290,7 @@ async fn attach_terminal(
                 match frame {
                     Some(frame) => {
                         if sink
-                            .send(tokio_tungstenite::tungstenite::Message::Binary(frame.into()))
+                            .send(tokio_tungstenite::tungstenite::Message::Binary(frame))
                             .await
                             .is_err()
                         {
@@ -5354,13 +5368,13 @@ async fn attach_terminal(
                                     controller,
                                 });
                             }
-                            Some("exited") | _ => {}
+                            _ => {}
                         }
                     }
                     Some(Ok(tokio_tungstenite::tungstenite::Message::Binary(data))) => {
                         let _ = tx.send(LoopFetch::TerminalOutput {
                             pty_id: pty_id.clone(),
-                            data: data.into(),
+                            data,
                         });
                     }
                     Some(Ok(_)) => {}
@@ -6116,6 +6130,12 @@ pub async fn run_with_size(
         app.store.set_project_sink(std::rc::Rc::new(HttpProjectSink { tx: loop_fetch_tx.clone() }));
         let tx = loop_fetch_tx.clone();
         app.store.set_session_action_sink(std::rc::Rc::new(HttpSessionActionSink { tx }));
+        // TUI-6 (lane-tui2): v2 syncs the project registry at App
+        // mount (`data.project.sync()`, app.tsx's boot effect) — the
+        // session-list rows' outside-project footers
+        // (dialog-session-list.tsx:152-160) read the WARM registry,
+        // so the boot fetches it once alongside the rest.
+        let _ = loop_fetch_tx.send(LoopRequest::ProjectList);
     }
     let mut fetched_transcripts: std::collections::HashSet<String> =
         app.store.open_session_ids().into_iter().collect();
@@ -6123,11 +6143,10 @@ pub async fn run_with_size(
         .set_session_list_sink(std::rc::Rc::new(HttpSessionListSink { tx: loop_fetch_tx.clone() }));
     // TUI-4 — the terminal IO seam + the capability probe
     // (session-terminals.tsx:59-76's server.connected arm).
-    app.store
-        .set_terminal_sink(std::rc::Rc::new(HttpTerminalSink {
-            tx: loop_fetch_tx.clone(),
-            attached: std::sync::Mutex::new(None),
-        }));
+    app.store.set_terminal_sink(std::rc::Rc::new(HttpTerminalSink {
+        tx: loop_fetch_tx.clone(),
+        attached: std::sync::Mutex::new(None),
+    }));
     let _ = loop_fetch_tx.send(LoopRequest::TerminalCapability);
     let mut persisted_tabs = app.store.tabs().tabs.clone();
 
@@ -6747,25 +6766,22 @@ pub async fn run_with_size(
                 }
                 LoopFetch::TerminalListed { session_id, result } => match result {
                     Ok(terminals) => app.store.set_terminals(&session_id, terminals),
-                    Err(error) => crate::keymap::log_skip(&format!(
-                        "terminal list refresh: {error}"
-                    )),
+                    Err(error) => {
+                        crate::keymap::log_skip(&format!("terminal list refresh: {error}"))
+                    }
                 },
                 LoopFetch::TerminalCreated { session_id, result } => match result {
                     Ok(record) => {
                         // `newTerminal`'s chain: refresh + select
                         // (session-terminals.tsx:88-92).
                         app.store.terminal_pane_drop(&record.id);
-                        app.store.set_terminals(
-                            &session_id,
-                            {
-                                let mut listed = app.store.terminals(&session_id);
-                                if !listed.iter().any(|terminal| terminal.id == record.id) {
-                                    listed.push(record.clone());
-                                }
-                                listed
-                            },
-                        );
+                        app.store.set_terminals(&session_id, {
+                            let mut listed = app.store.terminals(&session_id);
+                            if !listed.iter().any(|terminal| terminal.id == record.id) {
+                                listed.push(record.clone());
+                            }
+                            listed
+                        });
                         app.store.select_terminal(&session_id, Some(&record.id));
                     }
                     Err(error) => {
