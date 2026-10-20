@@ -15,7 +15,8 @@
 # Exit codes: 0 done | 2 blocked | 3 unknown/no marker or max iters | 4 quota
 #             window exhausted | 5 safety refusal (root / missing binary / etc.)
 #
-# Wiring (cron as the dev user, NEVER root; flock prevents overlapping drivers):
+# Wiring (cron for the opencode-owning user — root on this box; flock prevents
+# overlapping drivers):
 #   */30 * * * * flock -n /tmp/opencode/loop-driver.lock \
 #     /opt/opencode-rust/tools/loop-driver.sh >> /tmp/opencode/loop-driver.cron.log 2>&1
 #
@@ -23,8 +24,13 @@
 #   OC_LOOP_RUN_FLAGS     extra flags for `opencode run` (default: --auto --format json)
 #   OC_LOOP_QUOTA_SLEEP   seconds to wait on a suspected quota window (default 1800)
 #   OC_LOOP_QUOTA_RETRIES max quota waits before giving up (default 6)
-# Safety rails: refuses root; wraps each run in systemd-run --scope CPUQuota=400%
-# when available; per-session logs are append-only under /tmp/opencode/loop-driver/.
+# Identity note: run this driver as the user that OWNS the opencode environment
+# (root on this box — providers/config/session DB all live under /root; the
+# eternal130 user has no opencode config). Build/test user isolation, CPU/memory
+# caps, load backstop, and global serialization are enforced STRUCTURALLY by
+# tools/dev-gate.sh (systemd-run --uid=eternal130 CPUQuota=400% MemoryMax=6G),
+# which the orchestrator prompt mandates for every cargo invocation. The driver
+# refuses to start only if that gate script is missing.
 set -uo pipefail
 
 REPO="/opt/opencode-rust"
@@ -35,8 +41,8 @@ RUN_FLAGS="${OC_LOOP_RUN_FLAGS:---auto --format json}"
 QUOTA_SLEEP="${OC_LOOP_QUOTA_SLEEP:-1800}"
 QUOTA_RETRIES_MAX="${OC_LOOP_QUOTA_RETRIES:-6}"
 
-if [ "$(id -u)" -eq 0 ]; then
-  echo "refusing to run as root (project hard rule)" >&2
+if [ ! -x "$REPO/tools/dev-gate.sh" ]; then
+  echo "missing executable $REPO/tools/dev-gate.sh (the structural safety rail)" >&2
   exit 5
 fi
 command -v opencode >/dev/null 2>&1 || { echo "opencode not in PATH" >&2; exit 5; }
