@@ -143,23 +143,96 @@ pub fn cli_binary() -> Result<PathBuf> {
     build_binary("oc-cli", "opencode-rust", &binary)
 }
 
-fn build_binary(package: &str, bin: &str, binary: &std::path::Path) -> Result<PathBuf> {
-    if binary.is_file() {
+/// Whether `path` is a regular file carrying at least one executable
+/// mode bit (unix: any of the `0o111` x-bits).
+///
+/// Regression (CI run 39468671027, legs 2+3): `actions/upload-artifact@v4`
+/// does NOT preserve the executable bit, so an artifact-shipped
+/// `target/debug/oc-server` is a plain 0644 file — present, but every
+/// spawn dies with `Permission denied (os error 13)`. "The file exists"
+/// is therefore NOT a usable-binary predicate.
+#[must_use]
+pub fn is_executable_file(path: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::metadata(path) {
+            Ok(metadata) => metadata.is_file() && metadata.permissions().mode() & 0o111 != 0,
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // The parity harness is unix-first; on other platforms fall back
+        // to plain presence (there is no exec bit to inspect).
+        path.is_file()
+    }
+}
+
+/// Ensure `binary` is a usable executable, invoking `build` when it is
+/// not — and NEVER returning a path that would fail at spawn time.
+///
+/// Contract (the CI-RUNTIME-GATES-RED regression):
+///
+/// - an already-executable file is returned as-is, without building;
+/// - anything else (missing, or present WITHOUT the exec bit) is
+///   REMOVED first, then built. The removal is load-bearing: cargo does
+///   not relink while its fingerprint is fresh and the output file is
+///   present, so the stale 0644 artifact must go or `cargo build` would
+///   "succeed" without ever producing an executable file;
+/// - the post-build result must itself pass [`is_executable_file`] — a
+///   build that leaves a non-executable file is an error, not a path.
+///
+/// The build step is injected so the regression test can pin this
+/// contract hermetically (no cargo, no server rebuild).
+///
+/// # Errors
+/// When the stale file cannot be removed, when `build` fails to run or
+/// exits non-zero, or when its result is not an executable file.
+pub fn ensure_binary(
+    binary: &std::path::Path,
+    build: impl FnOnce() -> std::io::Result<std::process::ExitStatus>,
+) -> Result<PathBuf> {
+    if is_executable_file(binary) {
         return Ok(binary.to_path_buf());
     }
-    let status = std::process::Command::new("cargo")
-        .arg("build")
-        .arg("-p")
-        .arg(package)
-        .arg("--bin")
-        .arg(bin)
-        .current_dir(workspace_root())
-        .status()
-        .with_context(|| format!("cargo build {package}"))?;
-    if !status.success() || !binary.is_file() {
-        return Err(anyhow!("cargo build {package} failed (status {status})"));
+    // Force a real relink instead of trusting cargo's fresh fingerprint
+    // next to the broken output (see the contract above).
+    match std::fs::remove_file(binary) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(anyhow!(
+                "cannot remove stale non-executable {}: {error}",
+                binary.display()
+            ));
+        }
+    }
+    let status = build().context("run cargo build")?;
+    if !status.success() {
+        return Err(anyhow!("cargo build failed (status {status})"));
+    }
+    if !is_executable_file(binary) {
+        return Err(anyhow!(
+            "cargo build succeeded but {} is not an executable file",
+            binary.display()
+        ));
     }
     Ok(binary.to_path_buf())
+}
+
+fn build_binary(package: &str, bin: &str, binary: &std::path::Path) -> Result<PathBuf> {
+    ensure_binary(binary, || {
+        std::process::Command::new("cargo")
+            .arg("build")
+            .arg("-p")
+            .arg(package)
+            .arg("--bin")
+            .arg(bin)
+            .current_dir(workspace_root())
+            .status()
+    })
+    .with_context(|| format!("cargo build {package}"))
 }
 
 /// Test helper: skip when the harness cannot build the Rust server (no

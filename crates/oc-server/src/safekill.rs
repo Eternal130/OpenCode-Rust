@@ -30,6 +30,19 @@
 //!    handed to someone else between the check and the signal.
 //!
 //! Nothing in this module ever signals a process it could not identify.
+//!
+//! ## Platform scope
+//!
+//! The generation/identity machinery and the delivery primitive are
+//! Linux-shaped: `boot_id`/`start_time`/`cmdline` all read `/proc`, and
+//! the signal is pinned through `pidfd_open` + `pidfd_send_signal`
+//! (Linux-only syscall numbers). On other unix targets (e.g.
+//! aarch64-apple-darwin) the module still compiles and stays SAFE:
+//! every `/proc` read degrades to `None`/`false`, so validation refuses
+//! and no signal is sent; the delivery fallback is a SINGLE-pid POSIX
+//! `kill(2)` on a strictly positive pid (see [`safe_signal`]) — never a
+//! process-group id, preserving the incident rule that a group must
+//! never be blind-killed.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -121,6 +134,7 @@ pub fn cmdline_looks_like_opencode(pid: u32) -> bool {
     })
 }
 
+#[cfg(target_os = "linux")]
 fn pidfd_open(pid: u32) -> Option<i32> {
     // SAFETY: plain syscall with integer args; no pointers.
     let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, libc::c_int::from(pid_i32(pid)), 0) };
@@ -135,6 +149,7 @@ fn pid_i32(pid: u32) -> i32 {
     i32::try_from(pid).unwrap_or(-1)
 }
 
+#[cfg(target_os = "linux")]
 fn pidfd_send_signal(pidfd: i32, signal: libc::c_int) -> bool {
     // SAFETY: plain syscall with integer args; no pointers.
     let rc = unsafe { libc::syscall(libc::SYS_pidfd_send_signal, pidfd, signal, 0_usize, 0) };
@@ -187,16 +202,42 @@ pub fn safe_signal(pid: u32, signal: Signal, expect: &Expectation) -> SignalOutc
     }
     // Pin the exact process, then signal through the fd. If the process
     // died between the checks above and here, pidfd_open fails — Gone.
-    let Some(pidfd) = pidfd_open(pid) else {
-        return SignalOutcome::Gone;
-    };
-    let delivered = pidfd_send_signal(pidfd, raw_signal_number(signal));
-    // SAFETY: closing an fd we opened.
-    unsafe { libc::close(pidfd) };
-    if delivered {
-        SignalOutcome::Delivered
-    } else {
-        SignalOutcome::Gone
+    #[cfg(target_os = "linux")]
+    {
+        let Some(pidfd) = pidfd_open(pid) else {
+            return SignalOutcome::Gone;
+        };
+        let delivered = pidfd_send_signal(pidfd, raw_signal_number(signal));
+        // SAFETY: closing an fd we opened.
+        unsafe { libc::close(pidfd) };
+        if delivered {
+            SignalOutcome::Delivered
+        } else {
+            SignalOutcome::Gone
+        }
+    }
+    // Non-Linux unix (e.g. aarch64-apple-darwin): no pidfd API exists,
+    // and in practice the validation above already refused (every
+    // identity check reads /proc, which is absent). If this arm is ever
+    // reached anyway, degrade to a SINGLE-pid POSIX kill(2) on a
+    // strictly positive pid: exactly one process, never a process-group
+    // id and never a broadcast — the incident-2026-10 group-kill class
+    // stays impossible here too.
+    #[cfg(not(target_os = "linux"))]
+    {
+        let pid = pid_i32(pid);
+        if pid <= 0 {
+            // 0 would mean "our own process group"; negative ids are
+            // groups. Both are exactly what this module must never do.
+            return SignalOutcome::Refused("non-positive pid cannot be signalled safely");
+        }
+        // SAFETY: plain kill(2), integer args, one strictly positive pid.
+        let rc = unsafe { libc::kill(pid, raw_signal_number(signal)) };
+        if rc == 0 {
+            SignalOutcome::Delivered
+        } else {
+            SignalOutcome::Gone
+        }
     }
 }
 
