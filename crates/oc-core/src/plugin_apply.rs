@@ -92,6 +92,14 @@ pub trait LocationPluginSource: Send + Sync {
         Vec::new()
     }
 
+    /// Plugin-declared MCP servers (`ctx.mcp.transform` — PLUG-ENGINE-
+    /// MERGE: v2 registers them IN the server process, host.ts:374-403,
+    /// so a headless server sees them too; the TUI wire seam of
+    /// PLUG-D33 stays as an idempotent re-push over the same rows).
+    fn mcps(&self) -> Vec<PluginMcpDef> {
+        Vec::new()
+    }
+
     /// Plugin-registered commands (`command.add` registrations: name +
     /// description; execution dispatches back into the guest through
     /// the host's `command.execute` — CD-34's unsurfaced surface).
@@ -127,6 +135,19 @@ pub trait LocationPluginSource: Send + Sync {
 pub struct PluginCommandDef {
     pub name: String,
     pub description: String,
+}
+
+/// One plugin-declared MCP server as the engine sees it (the host
+/// snapshot's `PluginMcp` mirrored; oc-plugin-host stays dep-light —
+/// the config crosses as the v2 `Mcp.ServerConfig` JSON the guest's
+/// editor produced, and [`apply_location_plugins`] re-validates it
+/// against the schema exactly like the ref's
+/// `Schema.decodeUnknownSync(ServerConfig)` at host.ts:387-397).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginMcpDef {
+    pub name: String,
+    /// v2 `Mcp.ServerConfig` JSON (`{type: "local"|"remote", ...}`).
+    pub config: Value,
 }
 
 /// One guest hook subscription as the engine sees it: the host
@@ -305,21 +326,44 @@ async fn register_guest_hook(
 }
 
 /// Apply one plugin source into a freshly built location graph's
-/// registries (the `assemble` step): agents + default, then the tool
-/// rows + executors, then the plugin command registrations into the
-/// location's command table, then the guest hook subscriptions into the
-/// location's [`HookRegistry`] (the PLUG-D21 seam: every engine
-/// dispatch site — `tool.execute.before` in the tool pipeline,
-/// `session.*` in the model-request preparation — reaches guest
-/// handlers through the bridge forwarder). Returns the applied agent
-/// count.
+/// registries (the `assemble` step): the plugin-declared MCP servers
+/// into the location's [`McpRegistry`] FIRST (PLUG-ENGINE-MERGE —
+/// v2's `ctx.mcp.transform` registers them in the server process,
+/// host.ts:374-403; here each lands as a runtime override through
+/// `McpRegistry::add`, insert-or-replace, exactly like the wire-side
+/// `experimental.mcp.add`, so the async connections start earliest
+/// and the tool bridge + Code Mode surface below see the entries),
+/// then agents + default, the tool rows + executors, the plugin
+/// command registrations into the location's command table, and the
+/// guest hook subscriptions into the location's [`HookRegistry`] (the
+/// PLUG-D21 seam: every engine dispatch site — `tool.execute.before`
+/// in the tool pipeline, `session.*` in the model-request preparation
+/// — reaches guest handlers through the bridge forwarder). Returns
+/// the applied agent count.
 pub async fn apply_location_plugins(
     source: &dyn LocationPluginSource,
     hooks: &Arc<HookRegistry>,
     agents: &Arc<AgentRegistry>,
     tools: &Arc<ToolRegistryState>,
     commands: Option<&Arc<crate::engine::commands::CommandTable>>,
+    mcp: &crate::mcp::McpRegistry,
 ) -> usize {
+    // The MCP merge runs over THIS location's registry (per-location
+    // overlays, like every other arm below). Idempotent by
+    // construction: `add` is insert-or-replace and the reconcile diff
+    // no-ops an unchanged entry — a TUI attach re-pushing the same
+    // declaration over the wire (PLUG-D33) lands on identical rows.
+    // An unparseable config declines THIS server only (contained,
+    // logged) — never the whole pass.
+    for definition in source.mcps() {
+        match serde_json::from_value::<oc_schema::mcp::ServerConfig>(definition.config.clone()) {
+            Ok(config) => mcp.add(&definition.name, config).await,
+            Err(error) => eprintln!(
+                "opencode plugin-apply: skipping malformed mcp config {:?}: {error}",
+                definition.name
+            ),
+        }
+    }
     let snapshot_agents = source.agents();
     let applied =
         if snapshot_agents.is_empty() { 0 } else { apply_plugin_agents(agents, &snapshot_agents) };
@@ -880,5 +924,88 @@ mod tests {
             "request": { "settings": {}, "headers": {}, "body": {} },
             "permissions": []
         })
+    }
+
+    // -- PLUG-ENGINE-MERGE (the mcps arm) ----------------------------------
+
+    /// A location registry over an in-memory database whose connector
+    /// fails fast: the ROW is the seam under test (listing + override
+    /// semantics), so no real server process ever spawns; the failing
+    /// connection settles the entry async and never blocks the apply.
+    async fn test_mcp_registry() -> crate::mcp::McpRegistry {
+        let database = crate::database::Database::open_in_memory().await.expect("database");
+        let bus = crate::bus::Bus::new(database, crate::bus::BusOptions::deterministic());
+        let connector: crate::mcp::Connector = Arc::new(|input: crate::mcp::ConnectInput<'_>| {
+            let server = input.server.to_string();
+            Box::pin(async move {
+                Err(crate::mcp::ConnectFailure::Connect(crate::mcp::ConnectError {
+                    server,
+                    message: "test connector".to_owned(),
+                }))
+            })
+        });
+        crate::mcp::McpRegistry::with_connector(bus, connector, Arc::new(crate::mcp::NoCredentials))
+            .with_directory("/tmp")
+    }
+
+    /// A source declaring only MCP servers (the arm under test).
+    struct McpOnlySource(Vec<PluginMcpDef>);
+
+    impl LocationPluginSource for McpOnlySource {
+        fn mcps(&self) -> Vec<PluginMcpDef> {
+            self.0.clone()
+        }
+    }
+
+    fn local_mcp(name: &str) -> PluginMcpDef {
+        PluginMcpDef {
+            name: name.to_owned(),
+            config: serde_json::json!({
+                "type": "local",
+                "command": ["cat"],
+                "environment": { "OC_PLUGIN_MCP": "1" },
+            }),
+        }
+    }
+
+    /// The plugin-declared servers land in THIS location's registry;
+    /// a malformed config declines its own server only (contained).
+    #[tokio::test]
+    async fn plugin_mcps_merge_into_the_location_registry() {
+        let registry = test_mcp_registry().await;
+        let source = McpOnlySource(vec![
+            local_mcp("plugindemo"),
+            PluginMcpDef {
+                name: "remote-demo".to_owned(),
+                config: serde_json::json!({ "type": "remote", "url": "https://example.invalid" }),
+            },
+            PluginMcpDef { name: "broken".to_owned(), config: serde_json::json!({"type": "?"}) },
+        ]);
+        let hooks = Arc::new(HookRegistry::new());
+        let agents = Arc::new(AgentRegistry::new());
+        let tools = Arc::new(ToolRegistryState::new());
+        apply_location_plugins(&source, &hooks, &agents, &tools, None, &registry).await;
+        let names: Vec<String> = registry.servers().into_iter().map(|s| s.name).collect();
+        assert!(
+            names.contains(&"plugindemo".to_owned()) && names.contains(&"remote-demo".to_owned()),
+            "both valid declarations listed: {names:?}"
+        );
+        assert!(!names.contains(&"broken".to_owned()), "malformed declined containedly: {names:?}");
+    }
+
+    /// The merge is idempotent: re-applying the same declarations (a
+    /// location rebuild, or the TUI seam's wire re-push over the same
+    /// rows — PLUG-D33) leaves exactly one row per server.
+    #[tokio::test]
+    async fn plugin_mcp_merge_is_idempotent() {
+        let registry = test_mcp_registry().await;
+        let source = McpOnlySource(vec![local_mcp("plugindemo")]);
+        let hooks = Arc::new(HookRegistry::new());
+        let agents = Arc::new(AgentRegistry::new());
+        let tools = Arc::new(ToolRegistryState::new());
+        apply_location_plugins(&source, &hooks, &agents, &tools, None, &registry).await;
+        apply_location_plugins(&source, &hooks, &agents, &tools, None, &registry).await;
+        let names: Vec<String> = registry.servers().into_iter().map(|s| s.name).collect();
+        assert_eq!(names, vec!["plugindemo".to_owned()], "insert-or-replace, no duplicates");
     }
 }
