@@ -98,10 +98,24 @@ impl Sandbox {
     }
 }
 
-/// List `/api/mcp` through the real client (any transient assemble
-/// race retries; the deadline bounds it).
-async fn mcp_rows(client: &oc_client::Client) -> Vec<Value> {
-    match client.mcp().list(&oc_client::types::McpListQuery { location: None }).await {
+/// List `/api/mcp` through the real client, addressed at the boot
+/// project's location (any transient assemble race retries; the
+/// deadline bounds it). PLUG-D07: plugin registrations apply only where
+/// the location's config layers activate the plugin — the boot project
+/// (`config_location`, whose `opencode.json` declares the fixture) is
+/// the location under test, NOT the §1 middleware's process-cwd
+/// fallback (`crates/oc-server` under nextest, a plugin-less location
+/// whose activation set is empty by design).
+async fn mcp_rows(client: &oc_client::Client, directory: &str) -> Vec<Value> {
+    match client
+        .mcp()
+        .list(&oc_client::types::McpListQuery {
+            location: Some(oc_client::types::QueryLocation {
+                directory: Some(directory.to_owned()),
+            }),
+        })
+        .await
+    {
         Ok(response) => response
             .data
             .iter()
@@ -150,11 +164,13 @@ async fn headless_boot_lists_the_plugin_declared_mcp_server() {
     assert_eq!(plugin_rows[0]["state"]["status"], "active", "{plugin_rows:?}");
 
     // /api/mcp lists the plugin-declared server (host.ts:374-403 — the
-    // ref registers it server-side, in-process; no TUI carries it).
+    // ref registers it server-side, in-process; no TUI carries it) —
+    // addressed at the boot project's location (PLUG-D07).
+    let project_directory = box_.project.display().to_string();
     let mut rows = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
-        rows = mcp_rows(&client).await;
+        rows = mcp_rows(&client, &project_directory).await;
         if rows.iter().any(|row| row["name"] == "plugindemo") {
             break;
         }
@@ -169,7 +185,7 @@ async fn headless_boot_lists_the_plugin_declared_mcp_server() {
     // per-location merge is insert-or-replace; a TUI attach re-pushing
     // the same declaration over the wire must not duplicate it either).
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let rows = mcp_rows(&client).await;
+    let rows = mcp_rows(&client, &project_directory).await;
     let count = rows.iter().filter(|row| row["name"] == "plugindemo").count();
     assert_eq!(count, 1, "exactly one plugindemo row: {rows:?}");
 
