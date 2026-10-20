@@ -176,9 +176,21 @@ pub fn discover_config_files(config_root: &Path, cwd: &Path) -> Vec<PathBuf> {
 }
 
 /// The merged `plugins[]` ops across the discovered files (JSONC
-/// tolerant; unreadable files log + skip, never brick the TUI).
+/// tolerant; unreadable files log + skip, never brick the TUI) —
+/// PLUG-D01: each config file's parent directory (the v2 config layer
+/// root) contributes its `plugin`/`plugins` drop-in children FIRST, so
+/// an explicit `-name` remove in a document drops a discovered plugin.
 #[must_use]
 pub fn collect_plugin_ops(files: &[PathBuf]) -> Vec<PluginOp> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for file in files {
+        if let Some(parent) = file.parent() {
+            if !roots.contains(&parent.to_path_buf()) {
+                roots.push(parent.to_path_buf());
+            }
+        }
+    }
+    let mut ops = oc_plugin_host::discover_directory_ops(&roots);
     let mut raw: Vec<Value> = Vec::new();
     for path in files {
         let Ok(text) = std::fs::read_to_string(path) else { continue };
@@ -194,12 +206,12 @@ pub fn collect_plugin_ops(files: &[PathBuf]) -> Vec<PluginOp> {
         }
     }
     match oc_plugin_host::parse_ops(&raw) {
-        Ok(ops) => ops,
+        Ok(document_ops) => ops.extend(document_ops),
         Err(error) => {
             crate::keymap::log_skip(&format!("config plugins[] rejected: {error}"));
-            Vec::new()
         }
     }
+    ops
 }
 
 // ---------------------------------------------------------------------------
@@ -1113,6 +1125,7 @@ pub struct HttpSessionPort {
 }
 
 #[async_trait]
+#[allow(clippy::too_many_lines)] // the v2 SessionDomain dispatch mirrors the engine port
 impl SessionPort for HttpSessionPort {
     async fn call(&self, _bridge: &Bridge, method: &str, args: &Value) -> Result<Value, String> {
         let session_id = args.get("sessionID").and_then(Value::as_str).unwrap_or_default();
@@ -1211,13 +1224,127 @@ impl SessionPort for HttpSessionPort {
                     .map_err(|error| error.to_string())?;
                 Ok(Value::Null)
             }
+            // -- PLUG-D10: the remaining v2 SessionDomain methods over
+            //    the generated client (the TUI embedder's port mirrors
+            //    the engine port's surface).
+            "create" => {
+                let mut body = oc_client::types::SessionCreateBody::default();
+                if let Some(title) = args.get("title").and_then(Value::as_str) {
+                    body.title = Some(title.to_owned());
+                }
+                let session =
+                    self.client.session().create(&body).await.map_err(|error| error.to_string())?;
+                serde_json::to_value(&session).map_err(|error| error.to_string())
+            }
+            "switchAgent" => {
+                let body = oc_client::types::SessionSwitchAgentBody {
+                    agent: args.get("agent").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                };
+                self.client
+                    .session()
+                    .switch_agent(session_id, &body)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(Value::Null)
+            }
+            "command" => {
+                let mut body = oc_client::types::SessionCommandBody {
+                    name: args.get("name").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                    text: args.get("text").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                    ..oc_client::types::SessionCommandBody::default()
+                };
+                if let Some(delivery) = args.get("delivery").and_then(Value::as_str) {
+                    body.delivery = Some(match delivery {
+                        "queue" => oc_client::types::SessionInboxDelivery::Queue,
+                        _ => oc_client::types::SessionInboxDelivery::Steer,
+                    });
+                }
+                self.client
+                    .session()
+                    .command(session_id, &body)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(Value::Null)
+            }
+            "compact" => {
+                let compaction = self
+                    .client
+                    .session()
+                    .compact(session_id, &oc_client::types::SessionCompactBody::default())
+                    .await
+                    .map_err(|error| error.to_string())?;
+                serde_json::to_value(&compaction).map_err(|error| error.to_string())
+            }
+            "context" => {
+                let context = self
+                    .client
+                    .session()
+                    .context(session_id)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                serde_json::to_value(&context).map_err(|error| error.to_string())
+            }
+            "generate" => {
+                let generated = self
+                    .client
+                    .session()
+                    .generate(
+                        session_id,
+                        &oc_client::types::SessionGenerateBody {
+                            prompt: args
+                                .get("prompt")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                        },
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                serde_json::to_value(&generated).map_err(|error| error.to_string())
+            }
+            "move" => {
+                let directory =
+                    args.pointer("/location/directory").and_then(Value::as_str).unwrap_or_default();
+                self.client
+                    .session()
+                    .move_(
+                        session_id,
+                        &oc_client::types::SessionMoveBody {
+                            directory: directory.to_owned(),
+                            ..oc_client::types::SessionMoveBody::default()
+                        },
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(Value::Null)
+            }
+            "synthetic" => {
+                let mut body = oc_client::types::SessionSyntheticBody {
+                    text: args.get("text").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                    ..oc_client::types::SessionSyntheticBody::default()
+                };
+                if let Some(description) = args.get("description").and_then(Value::as_str) {
+                    body.description = Some(description.to_owned());
+                }
+                let synthetic = self
+                    .client
+                    .session()
+                    .synthetic(session_id, &body)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                serde_json::to_value(&synthetic).map_err(|error| error.to_string())
+            }
+            "wait" => {
+                self.client.session().wait(session_id).await.map_err(|error| error.to_string())?;
+                Ok(Value::Null)
+            }
             other => Err(format!(
-                "session.{other}: not wired in the TUI HTTP port (seam: prompt/get/list/messages/interrupt)"
+                "session.{other}: not a v2 SessionDomain method (allowlist: {:?})",
+                oc_plugin_host::SESSION_METHODS
             )),
         }
     }
 }
-
 /// One theme token as a `#rrggbb` string (the v2 TUI-plugin theme
 /// view the guest's sidebar render consumes).
 fn hex_color(color: ratatui::style::Color) -> String {
@@ -1242,6 +1369,40 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    /// PLUG-D01: a config file's parent dir (the v2 layer root)
+    /// contributes its `plugin`/`plugins` drop-in children FIRST, and a
+    /// document remove drops a discovered entry.
+    #[test]
+    fn local_plugin_dir_discovery() {
+        let root = temp_root("plugindir");
+        let layer = root.join("layer");
+        std::fs::create_dir_all(layer.join("plugins").join("alpha")).unwrap();
+        std::fs::create_dir_all(layer.join("plugin")).unwrap();
+        std::fs::write(layer.join("plugins").join("alpha").join("index.ts"), "// alpha").unwrap();
+        std::fs::write(layer.join("plugin").join("beta.js"), "// beta").unwrap();
+        std::fs::write(layer.join("opencode.json"), r#"{ "plugins": ["-alpha"] }"#).unwrap();
+
+        let ops = collect_plugin_ops(&[layer.join("opencode.json")]);
+        let targets: Vec<&str> = ops
+            .iter()
+            .map(|op| match op {
+                PluginOp::Add { target, .. } | PluginOp::Remove { target } => target.as_str(),
+            })
+            .collect();
+        assert_eq!(
+            targets,
+            vec![
+                layer.join("plugin").join("beta.js").display().to_string().as_str(),
+                layer.join("plugins").join("alpha").display().to_string().as_str(),
+                "alpha",
+            ],
+            "discovered adds before document ops: {targets:?}"
+        );
+        let resolution = oc_plugin_host::resolve(&ops, None);
+        assert_eq!(resolution.plugins.len(), 1, "remove drops the discovered drop-in");
+        assert!(resolution.plugins[0].target.ends_with("beta.js"));
     }
 
     /// Discovery finds `OPENCODE_CONFIG`, the global root's files, and the
