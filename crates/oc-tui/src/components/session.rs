@@ -277,11 +277,10 @@ pub fn render_session(
     // terminal takes the right pane over the sidebar (the precedence
     // chain's `selectedTerminal()` leg).
     let terminal_pane = store.terminal_pane_mounted(session_id);
-    let terminal_width = terminal_pane.as_ref().map(|_| {
-        clamp_session_pane_width(width.saturating_sub(shift) / 2, content_width)
-    });
-    let sidebar_shown =
-        terminal_pane.is_none() && store.sidebar_shown(session_id, content_width);
+    let terminal_width = terminal_pane
+        .as_ref()
+        .map(|_| clamp_session_pane_width(width.saturating_sub(shift) / 2, content_width));
+    let sidebar_shown = terminal_pane.is_none() && store.sidebar_shown(session_id, content_width);
     // The session column's padding (v2's prompt mounts inside
     // paddingLeft/Right 2): the composer `┃` and footer paste at x2.
     let inset = 2;

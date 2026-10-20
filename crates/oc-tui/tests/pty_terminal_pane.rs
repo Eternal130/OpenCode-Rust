@@ -1,4 +1,4 @@
-//! TUI-4 — the embedded TerminalPane's PTY proofs
+//! TUI-4 — the embedded `TerminalPane`'s PTY proofs
 //! (`component/terminal-pane.tsx` + `context/session-terminals.tsx`):
 //!
 //! * `terminal_pane_roundtrip` — `<leader>t` mounts the pane: the
@@ -130,7 +130,7 @@ fn terminal_pane_roundtrip() {
 /// The typed-input + resize control frames over the live socket —
 /// byte-level roundtrips of `[1][cols u16be][rows u16be][data]` and
 /// the kind-0 `[0][cols][rows]` control (input protocol 1,
-/// handlers/persistent_pty.rs §3).
+/// `handlers/persistent_pty.rs` §3).
 #[test]
 fn terminal_pane_input_frames() {
     run_pane_test("tui4-input", |driver, fixture| {
@@ -170,7 +170,9 @@ fn terminal_pane_input_frames() {
         let mut control = None;
         while std::time::Instant::now() < deadline {
             let frames = fixture.input_frames.lock().expect("frames").clone();
-            if let Some(frame) = frames[before.min(frames.len())..].iter().find(|frame| frame[0] == 0) {
+            if let Some(frame) =
+                frames[before.min(frames.len())..].iter().find(|frame| frame[0] == 0)
+            {
                 control = Some(frame.clone());
                 break;
             }

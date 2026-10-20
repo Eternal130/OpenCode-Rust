@@ -17,8 +17,13 @@
 //! The wire's `time.*` fields are epoch MILLISECONDS (the schema's
 //! `DateTimeUtcFromMillis`); every helper here takes millis.
 
-use crate::store::Store;
+//! The wall-clock helpers port JS `Date` semantics over wire epoch
+//! milliseconds — the integer casts are bounded by the domain
+//! (in-range timestamps, small month/day indices).
+#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+
 use crate::components::dialog_select::{SelectOption, SelectProps};
+use crate::store::Store;
 
 /// One `project.list` row (the Open menu's Projects section + the
 /// session footers' project labels).
@@ -36,13 +41,16 @@ pub struct ProjectRow {
 /// canonical path's basename.
 #[must_use]
 pub fn project_name(name: Option<&str>, canonical: &str) -> String {
-    name.map_or_else(|| basename(canonical), |text| {
-        if text.is_empty() {
-            basename(canonical)
-        } else {
-            text.to_owned()
-        }
-    })
+    name.map_or_else(
+        || basename(canonical),
+        |text| {
+            if text.is_empty() {
+                basename(canonical)
+            } else {
+                text.to_owned()
+            }
+        },
+    )
 }
 
 /// `path.basename` (POSIX): the segment after the final `/`.
@@ -50,8 +58,7 @@ pub fn project_name(name: Option<&str>, canonical: &str) -> String {
 pub fn basename(path: &str) -> String {
     match path.rsplit_once('/') {
         Some((_, last)) if !last.is_empty() => last.to_owned(),
-        Some((_, _)) => path.to_owned(),
-        None => path.to_owned(),
+        _ => path.to_owned(),
     }
 }
 
@@ -62,12 +69,11 @@ pub fn basename(path: &str) -> String {
 pub fn wall_now_ms() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as f64)
-        .unwrap_or_default()
+        .map_or(0.0, |duration| duration.as_millis() as f64)
 }
 
 /// Civil date parts (year, month 1-12, day 1-31) from epoch days
-/// ("civil_from_days", Howard Hinnant's algorithm).
+/// (`civil_from_days`, Howard Hinnant's algorithm).
 #[must_use]
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
@@ -77,8 +83,8 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let year = yoe + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let day = u32::try_from(doy - (153 * mp + 2) / 5 + 1).unwrap_or(1);
+    let month = u32::try_from(if mp < 10 { mp + 3 } else { mp - 9 }).unwrap_or(1);
     (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
@@ -86,7 +92,7 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// (1970-01-01 was a Thursday).
 #[must_use]
 fn weekday_from_days(days: i64) -> u32 {
-    (days + 4).rem_euclid(7) as u32
+    u32::try_from((days + 4).rem_euclid(7)).unwrap_or(0)
 }
 
 const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -94,7 +100,7 @@ const MONTHS: [&str; 12] =
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 fn epoch_days(ms: f64) -> i64 {
-    (ms / 86_400_000.0).floor() as i64
+    (ms / 86_400_000.0).floor() as i64 // bounded: date math on wire timestamps
 }
 
 /// `new Date(ms).toDateString()` — "Thu Jan 01 1970".
@@ -102,7 +108,13 @@ fn epoch_days(ms: f64) -> i64 {
 pub fn date_string(ms: f64) -> String {
     let days = epoch_days(ms);
     let (year, month, day) = civil_from_days(days);
-    format!("{} {} {:02} {}", WEEKDAYS[weekday_from_days(days) as usize], MONTHS[(month - 1) as usize], day, year)
+    format!(
+        "{} {} {:02} {}",
+        WEEKDAYS[weekday_from_days(days) as usize],
+        MONTHS[(month - 1) as usize],
+        day,
+        year
+    )
 }
 
 /// `Date.toDateString() === new Date().toDateString()` — the session
@@ -122,7 +134,9 @@ pub fn date_group(updated_ms: f64, now_ms: f64) -> String {
 #[must_use]
 pub fn iso_utc(ms: f64) -> String {
     let total_seconds = (ms / 1000.0).floor() as i64;
-    let millis = (ms - (total_seconds as f64) * 1000.0).round().rem_euclid(1000.0) as u32;
+    let millis = (ms - (f64::from(i32::try_from(total_seconds).unwrap_or(0)) * 1000.0))
+        .round()
+        .rem_euclid(1000.0) as u32;
     let days = total_seconds.div_euclid(86_400);
     let seconds_of_day = total_seconds.rem_euclid(86_400);
     let (year, month, day) = civil_from_days(days);
@@ -143,21 +157,21 @@ pub fn time_ago(timestamp_ms: f64, now_ms: f64) -> String {
         return "now".to_owned();
     }
     if minutes < 60.0 {
-        return format!("{}m", minutes as u64);
+        return format!("{}m", minutes.max(0.0) as u64);
     }
     let hours = (minutes / 60.0).floor();
     if hours < 24.0 {
-        return format!("{}h", hours as u64);
+        return format!("{}h", hours.max(0.0) as u64);
     }
     let days = (hours / 24.0).floor();
     if days < 30.0 {
-        return format!("{}d", days as u64);
+        return format!("{}d", days.max(0.0) as u64);
     }
     let months = (days / 30.0).floor();
     if months < 12.0 {
-        return format!("{}mo", months as u64);
+        return format!("{}mo", months.max(0.0) as u64);
     }
-    format!("{}y", (days / 365.0).floor() as u64)
+    format!("{}y", (days / 365.0).floor().max(0.0) as u64)
 }
 
 /// `withTimestampedFallback` (util/session-title-fallback.ts): the
@@ -229,7 +243,9 @@ fn path_relative(from: &str, to: &str) -> String {
     let from_parts: Vec<&str> = from.split('/').filter(|part| !part.is_empty()).collect();
     let to_parts: Vec<&str> = to.split('/').filter(|part| !part.is_empty()).collect();
     let mut common = 0;
-    while common < from_parts.len() && common < to_parts.len() && from_parts[common] == to_parts[common]
+    while common < from_parts.len()
+        && common < to_parts.len()
+        && from_parts[common] == to_parts[common]
     {
         common += 1;
     }
@@ -258,6 +274,7 @@ const RECENT_LIMIT: usize = 8;
 /// the refresh placeholder row; the both-empty case is the dialog's
 /// `emptyView`.
 #[must_use]
+#[allow(clippy::too_many_lines)] // one options memo, v2's dialog-open.tsx:197-274 shape
 pub fn open_menu_props(store: &Store) -> SelectProps {
     let now = wall_now_ms();
     let open_tabs: std::collections::HashSet<String> =
@@ -269,12 +286,11 @@ pub fn open_menu_props(store: &Store) -> SelectProps {
 
     // The sessions memo (:160-175): parents only, deduped, newest
     // first; the live registry title wins (data.session.get).
-    let mut sessions: Vec<crate::data::SessionSnapshot> = store
-        .session_history()
-        .into_iter()
-        .filter(|session| session.parent_id.is_none())
-        .collect();
-    sessions.sort_by(|a, b| b.time_updated.unwrap_or_default().total_cmp(&a.time_updated.unwrap_or_default()));
+    let mut sessions: Vec<crate::data::SessionSnapshot> =
+        store.session_history().into_iter().filter(|session| session.parent_id.is_none()).collect();
+    sessions.sort_by(|a, b| {
+        b.time_updated.unwrap_or_default().total_cmp(&a.time_updated.unwrap_or_default())
+    });
 
     // The recents memo (:203-207): an empty filter hides what the tab
     // strip already shows; typing widens to every session. (The
@@ -282,7 +298,9 @@ pub fn open_menu_props(store: &Store) -> SelectProps {
     // tab, not per history row — the recents keep newest-first.)
     let recents: Vec<crate::data::SessionSnapshot> = sessions
         .into_iter()
-        .filter(|session| !open_tabs.contains(&session.id) || Some(&session.id) != current_session.as_ref())
+        .filter(|session| {
+            !open_tabs.contains(&session.id) || Some(&session.id) != current_session.as_ref()
+        })
         .take(RECENT_LIMIT)
         .collect();
 
@@ -310,10 +328,7 @@ pub fn open_menu_props(store: &Store) -> SelectProps {
             (None, _) => String::new(),
         };
         let title = with_timestamped_fallback(
-            store
-                .session_title(&session.id)
-                .as_deref()
-                .or(session.title.as_deref()),
+            store.session_title(&session.id).as_deref().or(session.title.as_deref()),
             session.parent_id.as_deref(),
             session.time_created,
         );
@@ -365,7 +380,11 @@ pub fn open_menu_props(store: &Store) -> SelectProps {
                     SelectOption::titled(title, format!("prj:{}", project.id))
                         .categorized("Projects")
                         .with_footer(footer)
-                        .with_search(format!("{} {}", project.canonical, project.name.clone().unwrap_or_default())),
+                        .with_search(format!(
+                            "{} {}",
+                            project.canonical,
+                            project.name.clone().unwrap_or_default()
+                        )),
                 );
             }
         }
@@ -396,7 +415,9 @@ pub fn open_worktrees_props(
         options.push(
             SelectOption::titled(project_name.to_owned(), format!("dir:{canonical}"))
                 .categorized("Worktrees")
-                .with_footer(crate::components::dialog_worktrees::abbreviate_home(&canonical, home)),
+                .with_footer(crate::components::dialog_worktrees::abbreviate_home(
+                    &canonical, home,
+                )),
         );
     }
     match &state.list {
@@ -420,12 +441,17 @@ pub fn open_worktrees_props(
                     continue;
                 }
                 options.push(
-                    SelectOption::titled(basename(&entry.directory), format!("dir:{}", entry.directory))
-                        .categorized("Worktrees")
-                        .with_footer(crate::components::dialog_worktrees::abbreviate_home(
+                    SelectOption::titled(
+                        basename(&entry.directory),
+                        format!("dir:{}", entry.directory),
+                    )
+                    .categorized("Worktrees")
+                    .with_footer(
+                        crate::components::dialog_worktrees::abbreviate_home(
                             &entry.directory,
                             home,
-                        )),
+                        ),
+                    ),
                 );
             }
         }
@@ -452,7 +478,10 @@ fn project_by_id(store: &Store, id: Option<&str>) -> Option<ProjectRow> {
 
 /// The Open dialog's `onSelect` (dialog-open.tsx:435-446): a session
 /// row navigates the session route; a project row navigates home.
-pub fn execute_open_selection(store: &Store, value: &str) -> crate::components::command_palette::Dispatch {
+pub fn execute_open_selection(
+    store: &Store,
+    value: &str,
+) -> crate::components::command_palette::Dispatch {
     if let Some(session_id) = value.strip_prefix("ses:") {
         store.select_tab(session_id);
         return crate::components::command_palette::Dispatch::Handled;
@@ -471,15 +500,15 @@ pub fn execute_open_selection(store: &Store, value: &str) -> crate::components::
 /// outside-project footer basename, and the armed two-press delete's
 /// confirm title.
 #[must_use]
+#[allow(clippy::too_many_lines)] // one row builder, v2's memo shape
 pub fn session_list_options(store: &Store) -> Vec<SelectOption> {
     let now = wall_now_ms();
     let armed = store.session_delete_armed();
-    let mut sessions: Vec<crate::data::SessionSnapshot> = store
-        .session_history()
-        .into_iter()
-        .filter(|session| session.parent_id.is_none())
-        .collect();
-    sessions.sort_by(|a, b| b.time_updated.unwrap_or_default().total_cmp(&a.time_updated.unwrap_or_default()));
+    let mut sessions: Vec<crate::data::SessionSnapshot> =
+        store.session_history().into_iter().filter(|session| session.parent_id.is_none()).collect();
+    sessions.sort_by(|a, b| {
+        b.time_updated.unwrap_or_default().total_cmp(&a.time_updated.unwrap_or_default())
+    });
     // The Pinned group (dialog-session-list.tsx:148/191): the
     // quick-switch pins, only while multi-tab mode is OFF (v2's
     // `sessionTabs.enabled() ? [] : local.session.pinned()`).
@@ -500,10 +529,7 @@ pub fn session_list_options(store: &Store) -> Vec<SelectOption> {
             "Press ctrl+d again to confirm".to_owned()
         } else {
             with_timestamped_fallback(
-                store
-                    .session_title(&session.id)
-                    .as_deref()
-                    .or(session.title.as_deref()),
+                store.session_title(&session.id).as_deref().or(session.title.as_deref()),
                 session.parent_id.as_deref(),
                 session.time_created,
             )
@@ -527,10 +553,9 @@ pub fn session_list_options(store: &Store) -> Vec<SelectOption> {
         .map(|session| row(session, "Pinned"))
         .collect();
     options.extend(
-        sessions
-            .iter()
-            .filter(|session| !pinned.contains(&session.id))
-            .map(|session| row(session, &date_group(session.time_updated.unwrap_or_default(), now))),
+        sessions.iter().filter(|session| !pinned.contains(&session.id)).map(|session| {
+            row(session, &date_group(session.time_updated.unwrap_or_default(), now))
+        }),
     );
     options
 }

@@ -1138,7 +1138,9 @@ pub struct Store {
     terminal_generation: Signal<u64>,
     /// TUI-4 — the live VT states by pty id (non-Clone emulators;
     /// interior-mutable, redraw-bumped through `terminal_generation`).
-    terminal_panes: std::cell::RefCell<std::collections::HashMap<String, crate::terminal_pane::TerminalPaneState>>,
+    terminal_panes: std::cell::RefCell<
+        std::collections::HashMap<String, crate::terminal_pane::TerminalPaneState>,
+    >,
     /// TUI-4 — the run loop's terminal IO seam.
     terminal_sink: std::cell::RefCell<Rc<dyn TerminalSink>>,
     /// TUI-4 — the attaches already requested (the self-healing
@@ -3074,10 +3076,8 @@ impl Store {
         let picker = Signal::new(&runtime, PickerState::default());
         let reverts = Signal::new(&runtime, HashMap::<String, RevertState>::new());
         let integration_list = Signal::new(&runtime, IntegrationListState::Loading);
-        let project_list = Signal::new(
-            &runtime,
-            ListState::<crate::components::dialog_open::ProjectRow>::Loading,
-        );
+        let project_list =
+            Signal::new(&runtime, ListState::<crate::components::dialog_open::ProjectRow>::Loading);
         let integration_attempt = Signal::new(&runtime, Option::<IntegrationAttempt>::None);
         let integration_error = Signal::new(&runtime, Option::<String>::None);
         let integration_deleting = Signal::new(&runtime, Option::<String>::None);
@@ -3977,10 +3977,9 @@ impl Store {
         self.terminal_registry.update(|registry| {
             match registry.iter_mut().find(|entry| entry.session_id == session_id) {
                 Some(entry) => entry.terminals = terminals,
-                None => registry.push(TerminalListed {
-                    session_id: session_id.to_owned(),
-                    terminals,
-                }),
+                None => {
+                    registry.push(TerminalListed { session_id: session_id.to_owned(), terminals })
+                }
             }
         });
         self.request_redraw();
@@ -4009,14 +4008,31 @@ impl Store {
     /// pick + the attach/detach ride on the sink; the pane takes the
     /// input focus on mount (`shouldFocus`).
     pub fn select_terminal(&self, session_id: &str, pty_id: Option<&str>) {
-        match pty_id {
-            Some(pty) => {
-                self.terminal_selection.set(Some((session_id.to_owned(), pty.to_owned())));
-                self.terminal_focus_right.set(true);
-                // The attach-storm guard: the explicit selection IS the
-                // attach request — the render self-heal must not fire a
-                // second chain before the snapshot lands.
-                self.terminal_pending_attach.borrow_mut().insert(pty.to_owned());
+        if let Some(pty) = pty_id {
+            self.terminal_selection.set(Some((session_id.to_owned(), pty.to_owned())));
+            self.terminal_focus_right.set(true);
+            // The attach-storm guard: the explicit selection IS the
+            // attach request — the render self-heal must not fire a
+            // second chain before the snapshot lands.
+            self.terminal_pending_attach.borrow_mut().insert(pty.to_owned());
+            if let Ok(storage) = crate::storage::ChannelStorage::open_default_migrated() {
+                let mut doc = storage
+                    .read("session-terminal-selection")
+                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                if let Some(sessions) =
+                    doc.get_mut("sessions").and_then(|value| value.as_object_mut())
+                {
+                    sessions
+                        .insert(session_id.to_owned(), serde_json::Value::String(pty.to_owned()));
+                    let _ = storage.write("session-terminal-selection", &doc);
+                }
+            }
+        } else {
+            let was_selected =
+                self.terminal_selection.get().is_some_and(|(session, _)| session == session_id);
+            self.terminal_selection.set(None);
+            self.terminal_focus_right.set(false);
+            if was_selected {
                 if let Ok(storage) = crate::storage::ChannelStorage::open_default_migrated() {
                     let mut doc = storage
                         .read("session-terminal-selection")
@@ -4024,35 +4040,8 @@ impl Store {
                     if let Some(sessions) =
                         doc.get_mut("sessions").and_then(|value| value.as_object_mut())
                     {
-                        sessions.insert(
-                            session_id.to_owned(),
-                            serde_json::Value::String(pty.to_owned()),
-                        );
+                        sessions.insert(session_id.to_owned(), serde_json::Value::Null);
                         let _ = storage.write("session-terminal-selection", &doc);
-                    }
-                }
-            }
-            None => {
-                let was_selected = self
-                    .terminal_selection
-                    .get()
-                    .is_some_and(|(session, _)| session == session_id);
-                self.terminal_selection.set(None);
-                self.terminal_focus_right.set(false);
-                if was_selected {
-                    if let Ok(storage) = crate::storage::ChannelStorage::open_default_migrated() {
-                        let mut doc = storage
-                            .read("session-terminal-selection")
-                            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-                        if let Some(sessions) =
-                            doc.get_mut("sessions").and_then(|value| value.as_object_mut())
-                        {
-                            sessions.insert(
-                                session_id.to_owned(),
-                                serde_json::Value::Null,
-                            );
-                            let _ = storage.write("session-terminal-selection", &doc);
-                        }
                     }
                 }
             }
@@ -4185,7 +4174,13 @@ impl Store {
     }
 
     /// A server resize (+ checkpoint) into the pane's queue.
-    pub fn terminal_pane_resized(&self, pty_id: &str, cols: u16, rows: u16, checkpoint: Option<Vec<u8>>) {
+    pub fn terminal_pane_resized(
+        &self,
+        pty_id: &str,
+        cols: u16,
+        rows: u16,
+        checkpoint: Option<Vec<u8>>,
+    ) {
         if let Some(state) = self.terminal_panes.borrow_mut().get_mut(pty_id) {
             state.push_resize(cols, rows, checkpoint);
         }
@@ -5803,9 +5798,9 @@ impl Store {
         self.project_list.get()
     }
 
-    /// `open.menu`'s run (app.tsx:763-774 + dialog-open.tsx:56-86):
+    /// `open.menu`'s run (`app.tsx:763-774` + `dialog-open.tsx:56-86`):
     /// refetch the sessions recents AND `data.project.sync()`, then
-    /// mount DialogOpen at the large size.
+    /// mount `DialogOpen` at the large size.
     pub fn open_menu_pressed(&self) {
         self.project_list.set(ListState::Loading);
         self.project_sink.borrow().list();
@@ -5813,7 +5808,7 @@ impl Store {
         self.replace_dialog(DialogKind::Open, DialogSize::Large);
     }
 
-    /// Remount DialogOpen WITHOUT refetching (the worktrees view's
+    /// Remount `DialogOpen` WITHOUT refetching (the worktrees view's
     /// `back()` — v2 restores the projects snapshot in place).
     pub fn open_menu_back(&self) {
         self.replace_dialog(DialogKind::Open, DialogSize::Large);
@@ -9072,11 +9067,7 @@ impl Store {
             // terminal list when the server announces one).
             "persistent-pty.added" | "persistent-pty.removed" => {
                 let Some(id) = event.string("sessionID") else { return };
-                let known = self
-                    .terminal_registry
-                    .get()
-                    .iter()
-                    .any(|entry| entry.session_id == id);
+                let known = self.terminal_registry.get().iter().any(|entry| entry.session_id == id);
                 if self.terminal_available.get() && known {
                     self.terminal_sink.borrow().refresh(&id);
                 }
@@ -10605,7 +10596,8 @@ mod tests {
                 parent_id: None,
                 time_idle: None,
                 viewed: None,
-                ..Default::default()}],
+                ..Default::default()
+            }],
             unread: Vec::new(),
             messages: Vec::new(),
             cursors: Vec::new(),
@@ -10642,7 +10634,8 @@ mod tests {
                         parent_id: None,
                         time_idle: None,
                         viewed: None,
-                        ..Default::default()},
+                        ..Default::default()
+                    },
                     SessionSnapshot {
                         model: None,
                         id: "not-open".to_owned(),
@@ -10650,7 +10643,8 @@ mod tests {
                         parent_id: None,
                         time_idle: None,
                         viewed: None,
-                        ..Default::default()},
+                        ..Default::default()
+                    },
                 ],
                 unread: vec!["a".to_owned()],
                 messages: Vec::new(),
@@ -11760,7 +11754,8 @@ mod tests {
                     id: "recorded-model".into(),
                     variant: None,
                 }),
-                ..Default::default()}],
+                ..Default::default()
+            }],
             unread: Vec::new(),
             messages: Vec::new(),
             cursors: Vec::new(),
@@ -12678,7 +12673,8 @@ fn parent_route_resolves_through_the_registry() {
                 time_idle: None,
                 viewed: None,
                 model: None,
-                ..Default::default()},
+                ..Default::default()
+            },
             crate::data::SessionSnapshot {
                 id: "kid".to_owned(),
                 title: None,
@@ -12686,7 +12682,8 @@ fn parent_route_resolves_through_the_registry() {
                 time_idle: None,
                 viewed: None,
                 model: None,
-                ..Default::default()},
+                ..Default::default()
+            },
         ],
         unread: Vec::new(),
         messages: Vec::new(),
