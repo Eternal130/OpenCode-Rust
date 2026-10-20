@@ -197,25 +197,50 @@ async fn project_activate_location_lifecycle_wiring() {
     let location = oc_core::location::LocationRef::new(dir.path().to_path_buf(), None);
     let mut updates = engine.bus.subscribe_types(&["project.updated"]);
 
-    let services = engine.location(location).await.expect("assemble");
+    let services = engine.location(location.clone()).await.expect("assemble");
     let (time_active, time_updated) = project_time(&engine.db, &services.project.id).await;
     assert!(time_active > 0, "location start activated the project (time_active={time_active})");
     assert!(time_updated > 0, "row created with fresh timestamps (time_updated={time_updated})");
 
-    // The activate announcement landed on the bus with the full Info
-    // payload (fromRow: id/canonical/time...).
-    let event = tokio::time::timeout(std::time::Duration::from_secs(5), updates.next())
+    // Assemble itself never publishes the announcement (the server's
+    // announce module owns the location-stamped frame; a second unstamped
+    // copy would duplicate it on the wire).
+    let quiet = tokio::time::timeout(std::time::Duration::from_millis(250), updates.next()).await;
+    assert!(quiet.is_err(), "engine assemble does not publish project.updated");
+
+    // A durable session event for the location re-activates through the
+    // engine listener — suppressed inside the 60 s window, exactly like
+    // v2's `activated` map (no write, no event). A real session creation
+    // publishes the durable `session.created` (projectors included).
+    let store = oc_core::session::SessionStore::new((*engine.db).clone());
+    let schema_location = oc_schema::location::Ref {
+        directory: oc_schema::common::AbsolutePath(
+            resolve_path(dir.path()).to_string_lossy().into_owned(),
+        ),
+        workspace_id: None,
+    };
+    let created = store
+        .create(
+            &engine.bus,
+            oc_core::session::CreateInput {
+                location: Some(schema_location),
+                title: Some("wiring".to_owned()),
+                project: Some(oc_core::session::ResolvedProject {
+                    id: services.project.id.clone(),
+                    directory: services.project.canonical.to_string_lossy().into_owned(),
+                }),
+                version: "test".to_owned(),
+                ..Default::default()
+            },
+        )
         .await
-        .expect("event within 5s")
-        .expect("stream open");
-    assert_eq!(event.type_, "project.updated");
-    assert_eq!(event.data["id"], services.project.id);
-    assert_eq!(
-        event.data["canonical"].as_str(),
-        Some(services.project.canonical.to_string_lossy().as_ref()),
-    );
-    assert!(event.data["time"]["active"].as_i64().unwrap_or(0) > 0);
-    assert!(event.data.get("name").is_none(), "optional members are absent, not null");
+        .expect("create session");
+    assert!(matches!(created, oc_core::session::CreateOutcome::Created(_)));
+    let suppressed =
+        tokio::time::timeout(std::time::Duration::from_millis(300), updates.next()).await;
+    assert!(suppressed.is_err(), "rate-limited re-activation publishes nothing");
+    let (active_after, _) = project_time(&engine.db, &services.project.id).await;
+    assert_eq!(active_after, time_active, "no further write while rate-limited");
 }
 
 // ---------------------------------------------------------------------------

@@ -119,7 +119,6 @@ use crate::location::{
 use crate::location_services::{GlobalServices, LocationServiceMap};
 use crate::mcp::McpRegistry;
 use crate::permission::{Permission, ReplyInput};
-use crate::project::ProjectEvents as _;
 use crate::provider_catalog::facade::{FacadeContext, ModelConnection};
 use crate::provider_catalog::{providers_from_config, Catalog};
 use crate::session::execution::{InterruptOptions, SessionExecution};
@@ -627,14 +626,43 @@ impl Engine {
                     let projects = Arc::clone(&projects);
                     handle.spawn(async move {
                         if let Some(info) = projects.activate(&project_id).await {
-                            let events = crate::project::BusProjectEvents::new(bus);
-                            events.project_updated(&info).await;
+                            // Location-stamped publish (the ref's listener
+                            // activates on the location-scoped bus handle —
+                            // lifecycle.ts:37-45).
+                            if let Some(definition) =
+                                crate::bus::registry::by_type(crate::bus::registry::PROJECT_UPDATED)
+                            {
+                                let options = crate::bus::PublishOptions {
+                                    location: Some(location),
+                                    ..Default::default()
+                                };
+                                let _ = bus.publish(definition, info.to_json(), options).await;
+                            }
                         }
                     });
                     Ok(())
                 })
             };
             engine.bus.listen(listener).detach();
+        }
+        // DB-D12 (v1-migration layer — forkScoped at boot): move legacy v1
+        // content (`session`/`message`/`part`) into `session_v2` /
+        // `session_message` in the background. Fresh v2 databases have no
+        // legacy `session` table and complete immediately; the KV state
+        // machine (`migration.v1-v2`) makes reruns resume or no-op.
+        {
+            let db = Arc::clone(&engine.db);
+            let data_root = engine.data_root.clone();
+            tokio::spawn(async move {
+                let _ = crate::database::v1_migration::run(
+                    &db,
+                    crate::database::v1_migration::RunOptions {
+                        data_root: Some(data_root),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            });
         }
         engine
     }
@@ -712,11 +740,12 @@ impl Engine {
         );
         let project = project_resolver.resolve(location.as_path()).await;
         // DB-D2 (location-lifecycle.ts:34): activating the location's
-        // project records activity for recency ordering (rate-limited;
-        // the bump announces `project.updated` when it fires).
-        if let Some(info) = self.projects.activate(&project.id).await {
-            project_events.project_updated(&info).await;
-        }
+        // project records activity for recency ordering — the WRITE only.
+        // The wire frame (`project.updated`, location-stamped) is owned by
+        // the server announce module (the location-start announcement the
+        // m1 goldens pin); a second unstamped publish here would duplicate
+        // it, so assemble never publishes.
+        let _ = self.projects.activate(&project.id).await;
         let worktree = project.canonical.clone();
 
         // The config snapshot for this location. `OPENCODE_CONFIG` (the
