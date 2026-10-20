@@ -120,6 +120,58 @@ impl Resolution {
     }
 }
 
+/// v2 `PluginSourceDirectory.names` (`plugin/source-directory.ts`): the
+/// subdirectory names every config layer's root scans for drop-in
+/// plugins.
+pub const PLUGIN_SOURCE_DIRECTORIES: &[&str] = &["plugin", "plugins"];
+
+/// Whether a path is a plugin source file (v2 `.ts`/`.js` only).
+fn is_source_file(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "ts" || ext == "js")
+}
+
+/// PLUG-D01 — v2 `PluginSourceDirectory.discover` +
+/// `ConfigPluginSource.scan`: every config directory's
+/// [`PLUGIN_SOURCE_DIRECTORIES`] children auto-add — `.ts`/`.js` files,
+/// subdirectories, and symlinks resolving to either — sorted by target
+/// path. The discovered `Add`s come BEFORE the document `plugins[]`
+/// ops (the caller's ordering) so an explicit remove (`-name`) drops a
+/// discovered plugin exactly like v2's "explicit config is applied
+/// last".
+#[must_use]
+pub fn discover_directory_ops(directories: &[PathBuf]) -> Vec<PluginOp> {
+    let mut targets: Vec<PathBuf> = Vec::new();
+    for directory in directories {
+        for name in PLUGIN_SOURCE_DIRECTORIES {
+            let source = directory.join(name);
+            let Ok(entries) = std::fs::read_dir(&source) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let accepted = match entry.file_type() {
+                    Ok(file_type) if file_type.is_dir() => true,
+                    Ok(file_type) if file_type.is_file() => is_source_file(&path),
+                    Ok(file_type) if file_type.is_symlink() => {
+                        // v2: a symlink counts when it resolves to a
+                        // source file or a directory.
+                        std::fs::metadata(&path).is_ok_and(|resolved| {
+                            resolved.is_dir() || (resolved.is_file() && is_source_file(&path))
+                        })
+                    }
+                    _ => false,
+                };
+                if accepted && !targets.contains(&path) {
+                    targets.push(path);
+                }
+            }
+        }
+    }
+    targets.sort();
+    targets
+        .into_iter()
+        .map(|target| PluginOp::Add { target: target.display().to_string(), options: Value::Null })
+        .collect()
+}
+
 /// Resolve the directive list (applies removes in order — v2 semantics:
 /// explicit removes override auto-discovered/earlier adds; `-*` clears
 /// every previous add). `cache_root` defaults to the install cache.
