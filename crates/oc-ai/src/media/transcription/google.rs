@@ -9,7 +9,7 @@ use crate::media::model::{
     transcription_field_present, Addressed, ResponseContext, TranscriptionEvent,
     TranscriptionRequest, TranscriptionWord,
 };
-use crate::media::protocol::{Identity, MediaProtocolBase, StreamProtocol};
+use crate::media::protocol::{Frame, Identity, MediaProtocolBase, StreamProtocol};
 use crate::media::utils::gemini;
 use crate::schema::{AiError, MediaUsage};
 
@@ -264,6 +264,17 @@ impl StreamProtocol for GoogleTranscription {
         _context: &ResponseContext<TranscriptionRequest>,
     ) -> Result<Vec<TranscriptionEvent>, AiError> {
         finish(state)
+    }
+
+    fn step(
+        &self,
+        state: &mut Self::State,
+        frame: &Frame,
+    ) -> Result<Vec<TranscriptionEvent>, AiError> {
+        match frame {
+            Frame::Text(text) | Frame::Document { document: text, .. } => step(state, text),
+            Frame::Bytes(_) => Ok(Vec::new()),
+        }
     }
 }
 

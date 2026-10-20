@@ -48,6 +48,10 @@ pub enum DialogKeyOutcome {
     /// A select submitted: the selected option's value (the palette's
     /// command id, the theme-list value, …).
     Submitted(String),
+    /// A dialog's own action resolved to a DOT COMMAND (TUI-25: the
+    /// alert/confirm pill's `confirm_command` — the app layer
+    /// dispatches it through the palette dispatcher after the close).
+    CommandSubmitted(String),
     /// A prompt submitted: the typed value.
     PromptSubmitted(String),
     /// Nothing handled the stroke.
@@ -83,10 +87,17 @@ pub fn handle_dialog_key(
     let is_select = match &entry.kind {
         // The rename + worktree-name dialogs + the connect-flow
         // key/code prompts are the prompt-style inputs (not selects).
+        // The prompt-style inputs + TUI-10/24/25's custom-key
+        // families (image preview, error details, alert, confirm)
+        // take per-kind actions, not the select pipeline.
         DialogKind::SessionRename { .. }
         | DialogKind::WorktreeName
         | DialogKind::IntegrationKey { .. }
-        | DialogKind::IntegrationCode { .. } => false,
+        | DialogKind::IntegrationCode { .. }
+        | DialogKind::ImagePreview
+        | DialogKind::ErrorDetails { .. }
+        | DialogKind::Alert { .. }
+        | DialogKind::Confirm { .. } => false,
         // A rows-only plugin dialog is static (like help: printables
         // pass through, only the close bindings act); the rest — the
         // palette, theme list, server lists, worktrees, the
@@ -123,7 +134,12 @@ pub fn handle_dialog_key(
         | DialogKind::Settings
         | DialogKind::ForkPicker { .. }
         | DialogKind::SessionExport { .. }
-        | DialogKind::ExportResult { .. } => true,
+        | DialogKind::ExportResult { .. }
+        // TUI-8/9/TD22: DialogSkill / DialogStash /
+        // DialogExperiments are DialogSelects.
+        | DialogKind::Skill
+        | DialogKind::Stash
+        | DialogKind::Experiments => true,
     };
     let is_help = matches!(entry.kind, DialogKind::Help);
     let is_static = is_help
@@ -137,6 +153,19 @@ pub fn handle_dialog_key(
             );
 
     // -- modal layer (dialog.tsx) -------------------------------------------
+    // TUI-24: DialogErrorDetails binds escape to `onBack`
+    // (dialog-error-details.tsx:89-96) — the plugins role re-seats
+    // the plugin list (v2's `setDetail()` + `setSize("large")`).
+    if let DialogKind::ErrorDetails { back_to_plugins, .. } = &entry.kind {
+        if stroke.key == "escape" && !stroke.ctrl && !stroke.alt {
+            if *back_to_plugins {
+                store.replace_dialog(DialogKind::Plugins, DialogSize::Large);
+            } else {
+                store.close_dialog();
+            }
+            return DialogKeyOutcome::Closed;
+        }
+    }
     if stroke.key == "escape" && !stroke.ctrl && !stroke.alt {
         // Lane FINAL: closing an attempt view cancels it server-side
         // (`onCleanup`'s cancel, dialog-integration.tsx:654-661).
@@ -407,6 +436,154 @@ pub fn handle_dialog_key(
         }
     }
 
+    // -- TUI-25: DialogAlert's return ("Confirm alert",
+    // dialog-alert.tsx:18-27): onConfirm then dialog.clear. ------
+    if let DialogKind::Alert { request_id, confirm_command, .. } = &entry.kind {
+        if stroke.key == "return" && !stroke.ctrl && !stroke.alt {
+            if let Some(id) = request_id {
+                // v2's `done` resolves void; the settle-once guard —
+                // clear the id BEFORE the close so the close hook
+                // never double-resolves (api.tsx:318-325).
+                store.enqueue_ui_dialog_resolution(*id, serde_json::Value::Null);
+                store.update_dialog(|top| {
+                    if let DialogKind::Alert { request_id, .. } = &mut top.kind {
+                        *request_id = None;
+                    }
+                });
+            }
+            let command = confirm_command.clone();
+            store.clear_dialogs();
+            return match command {
+                Some(command) => DialogKeyOutcome::CommandSubmitted(command),
+                None => DialogKeyOutcome::Consumed,
+            };
+        }
+        return DialogKeyOutcome::Consumed;
+    }
+    // -- TUI-25: DialogConfirm's layer (dialog-confirm.tsx:26-51):
+    // return runs the ACTIVE pill, ←/→ swap it. --------------------
+    if let DialogKind::Confirm {
+        active_confirm, request_id, confirm_command, cancel_command, ..
+    } = &entry.kind
+    {
+        if (stroke.key == "left" || stroke.key == "right") && !stroke.ctrl && !stroke.alt {
+            store.confirm_toggle_active();
+            return DialogKeyOutcome::Consumed;
+        }
+        if stroke.key == "return" && !stroke.ctrl && !stroke.alt {
+            let confirm = *active_confirm;
+            if let Some(id) = request_id {
+                store.enqueue_ui_dialog_resolution(*id, serde_json::Value::Bool(confirm));
+                store.update_dialog(|top| {
+                    if let DialogKind::Confirm { request_id, .. } = &mut top.kind {
+                        *request_id = None;
+                    }
+                });
+            }
+            let command = if confirm { confirm_command.clone() } else { cancel_command.clone() };
+            store.clear_dialogs();
+            return match command {
+                Some(command) => DialogKeyOutcome::CommandSubmitted(command),
+                None => DialogKeyOutcome::Consumed,
+            };
+        }
+        return DialogKeyOutcome::Consumed;
+    }
+    // -- TUI-10: DialogImagePreview's ←/→ ("Previous image" /
+    // "Next image", dialog-image-preview.tsx:38-41). ---------------
+    if let DialogKind::ImagePreview = entry.kind {
+        if stroke.key == "left" && !stroke.ctrl && !stroke.alt {
+            store.image_preview_move(-1);
+            return DialogKeyOutcome::Consumed;
+        }
+        if stroke.key == "right" && !stroke.ctrl && !stroke.alt {
+            store.image_preview_move(1);
+            return DialogKeyOutcome::Consumed;
+        }
+        return DialogKeyOutcome::Consumed;
+    }
+    // -- TUI-24: DialogErrorDetails' action layer
+    // (dialog-error-details.tsx:88-96 + the useKeyboard scroller). --
+    if let DialogKind::ErrorDetails { error, context, .. } = &entry.kind {
+        let max = error_details_scroll_max(store, error);
+        let (key, mods) = (stroke.key.as_str(), (stroke.ctrl, stroke.alt));
+        match (key, mods) {
+            ("up", (false, false)) => {
+                store.error_details_scroll_by(-1, max);
+                return DialogKeyOutcome::Consumed;
+            }
+            ("down", (false, false)) => {
+                store.error_details_scroll_by(1, max);
+                return DialogKeyOutcome::Consumed;
+            }
+            ("pageup", (false, false)) => {
+                store.error_details_scroll_by(-20, max);
+                return DialogKeyOutcome::Consumed;
+            }
+            ("pagedown", (false, false)) => {
+                store.error_details_scroll_by(20, max);
+                return DialogKeyOutcome::Consumed;
+            }
+            ("home", (false, false)) => {
+                store.error_details_scroll_by(i64::MIN / 2, 0);
+                return DialogKeyOutcome::Consumed;
+            }
+            ("end", (false, false)) => {
+                store.error_details_scroll_by(i64::MAX / 2, max);
+                return DialogKeyOutcome::Consumed;
+            }
+            ("c", (false, false)) => {
+                // `copy` — the errorDetails text onto the clipboard.
+                let text = format!("{error}\n{context}");
+                let _ = store.clipboard_write(text.trim());
+                store.toast_show(crate::components::toast::ToastOptions {
+                    message: "Copied to clipboard".to_owned(),
+                    variant: "info",
+                    ..crate::components::toast::ToastOptions::info("")
+                });
+                return DialogKeyOutcome::Consumed;
+            }
+            ("i", (false, false)) => {
+                // `investigate` — navigate home with the error prompt
+                // (errorDetails().prompt, util/error-details.ts).
+                store.clear_dialogs();
+                store.navigate(crate::store::Route::Home);
+                let key = crate::app::HOME_PROMPT_KEY.to_owned();
+                let mut composer = store.composer(&key);
+                composer.set_text(&format!("Investigate the following error:\n\n{error}"));
+                store.set_composer(&key, &composer);
+                return DialogKeyOutcome::Consumed;
+            }
+            _ => return DialogKeyOutcome::Consumed,
+        }
+    }
+    // -- TUI-9: DialogStash's action layer — `stash.delete` (ctrl+d,
+    // the two-press remove with the confirm title flip). ------------
+    if let DialogKind::Stash = entry.kind {
+        let selected = entry.select.submit(&props).map(|option| option.value.clone());
+        if keymap.stroke_triggers(&stroke, "stash.delete") {
+            if let Some(value) = selected {
+                if let Ok(index) = value.parse::<usize>() {
+                    if let crate::store::DeleteStep::Confirmed = store.stash_delete_pressed(index) {
+                        store.stash_remove(index);
+                    }
+                }
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+    }
+    // -- TUI-TD22: DialogExperiments' ←/→ (the all-boolean toggle,
+    // dialog-experiments.tsx:59-71). -------------------------------
+    if let DialogKind::Experiments = entry.kind {
+        if (stroke.key == "left" || stroke.key == "right") && !stroke.ctrl && !stroke.alt {
+            if let Some(option) = entry.select.submit(&props) {
+                let id = option.value.clone();
+                store.experiment_toggle(&id);
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+    }
+
     // -- the dialog keymap layer (dialog.select.*) ---------------------------
     let Outcome::Command { command, .. } = keymap.lookup(stroke, clock) else {
         return DialogKeyOutcome::Unhandled;
@@ -437,6 +614,11 @@ pub fn handle_dialog_key(
     // selection move (`onMove: () => setToDelete(undefined)`).
     if matches!(entry.kind, DialogKind::Worktrees) {
         store.clear_worktree_delete();
+    }
+    // TUI-9: the stash dialog's `onMove` clears its armed row too
+    // (dialog-stash.tsx:73-75).
+    if matches!(entry.kind, DialogKind::Stash) {
+        store.stash_delete_disarm();
     }
     // Lane FINAL: the same `onMove` contract for the sessions dialog's
     // `toDelete` (dialog-session-list.tsx:242) and the accounts view's
@@ -477,8 +659,27 @@ pub fn render_overlay(
         DialogKind::Plugin { id } => store.plugin_dialog_content(id),
         _ => None,
     };
-    let (rect, option_rows, button_hits) =
-        render_overlay_with_options(base, &entry, &props, plugin.as_ref(), theme, terminal);
+    // TUI-10/24: the custom families' sidecar — the preview state +
+    // the error scroll (this path owns the store).
+    let sidecar = crate::components::dialog_solid::DialogSidecar {
+        preview: store.image_preview_dialog(),
+        error_scroll: store.error_details_scroll(),
+    };
+    let (rect, option_rows, button_hits) = render_overlay_with_options(
+        base,
+        &entry,
+        &props,
+        plugin.as_ref(),
+        theme,
+        terminal,
+        &sidecar,
+    );
+    // TUI-10: paint the preview image's cells over the copied chrome
+    // (the tree reserves the area; the pixels are the bridge's job —
+    // blocks glyphs now, a graphics placement for kitty/sixel).
+    if matches!(entry.kind, DialogKind::ImagePreview) {
+        paint_preview_image(base, store, &entry, rect, theme, terminal);
+    }
     // The backdrop's dismissal surface: mouseups outside this rect
     // close the dialog (`ui/dialog.tsx:34-63`).
     store.set_dialog_frame_rect(Some(rect));
@@ -502,6 +703,7 @@ pub fn render_overlay_with_options(
     plugin: Option<&crate::store::PluginDialogContent>,
     theme: &crate::theme::ThemeState,
     terminal: (u16, u16),
+    sidecar: &crate::components::dialog_solid::DialogSidecar,
 ) -> OverlayMouseSurface {
     // Select dialogs record their option rows (absolute screen rows,
     // flat-index order); static content records none.
@@ -534,7 +736,11 @@ pub fn render_overlay_with_options(
         | DialogKind::Settings
         | DialogKind::ForkPicker { .. }
         | DialogKind::SessionExport { .. }
-        | DialogKind::ExportResult { .. } => true,
+        | DialogKind::ExportResult { .. }
+        // TUI-8/9/TD22: the three new selects record rows too.
+        | DialogKind::Skill
+        | DialogKind::Stash
+        | DialogKind::Experiments => true,
 
         // A plugin dialog records rows only when its content is a
         // select (rows-only dialogs render statically).
@@ -545,7 +751,12 @@ pub fn render_overlay_with_options(
         | DialogKind::SessionRename { .. }
         | DialogKind::WorktreeName
         | DialogKind::IntegrationKey { .. }
-        | DialogKind::IntegrationCode { .. } => false,
+        | DialogKind::IntegrationCode { .. }
+        // TUI-10/24/25: the custom-key families carry no option rows.
+        | DialogKind::ImagePreview
+        | DialogKind::ErrorDetails { .. }
+        | DialogKind::Alert { .. }
+        | DialogKind::Confirm { .. } => false,
     } {
         crate::components::dialog_select::option_dialog_rows(
             props,
@@ -556,7 +767,7 @@ pub fn render_overlay_with_options(
         Vec::new()
     };
     let (rect, button_hits) = crate::components::dialog_solid::render_overlay_solid(
-        base, entry, props, plugin, theme, terminal,
+        base, entry, props, plugin, theme, terminal, sidecar,
     );
     let (_box_x, box_y, _, _) = rect;
     let option_rows =
@@ -578,11 +789,12 @@ pub fn render_overlay_with(
     theme: &crate::theme::ThemeState,
     terminal: (u16, u16),
 ) -> (usize, usize, usize, usize) {
+    let sidecar = crate::components::dialog_solid::DialogSidecar::default();
     // Lane M2 (retired): the dialog family renders through its
     // opentui-solid tree — the only renderer since the retirement
     // lane deleted the hand-rolled walk.
     crate::components::dialog_solid::render_overlay_solid(
-        base, entry, props, plugin, theme, terminal,
+        base, entry, props, plugin, theme, terminal, &sidecar,
     )
     .0
 }
@@ -632,6 +844,85 @@ pub(crate) fn spec_display(spec: &str) -> String {
         });
     crate::keymap::Chord::parse(spec, &leader)
         .map_or_else(|| spec.to_owned(), |chord| chord.display())
+}
+
+/// TUI-24: the error-details scroller's max offset — the error body
+/// word-wrapped at the dialog's inner width minus the 20-row
+/// scrollbox (`maxHeight={20}`, dialog-error-details.tsx:106-114).
+fn error_details_scroll_max(store: &Store, error: &str) -> usize {
+    let width = usize::from(store.terminal_size().0).max(1);
+    let inner = width.min(60).saturating_sub(6).max(1);
+    let lines = crate::wrap::wrap_label(error, inner).len();
+    lines.saturating_sub(20)
+}
+
+/// TUI-10: paint the image preview's pixels over the copied chrome
+/// tree (`<image fit="fit" protocol="auto">`, dialog-image-preview.
+/// tsx:60-66). The tree reserved the area — the bridge fills it:
+/// * a decodable payload on a DRAWABLE terminal → a graphics
+///   placement (kitty/sixel) recorded onto the frame's image set;
+/// * otherwise the BLOCKS renderer (`resolveImageRenderProtocol`'s
+///   default) — aspect-fit, centered, one block glyph per cell.
+fn paint_preview_image(
+    base: &mut Frame,
+    store: &Store,
+    entry: &crate::store::DialogEntry,
+    rect: (usize, usize, usize, usize),
+    _theme: &crate::theme::ThemeState,
+    terminal: (u16, u16),
+) {
+    let _ = entry;
+    let (box_x, box_y, box_width, _box_height) = rect;
+    let state = store.image_preview_dialog();
+    let Some(item) = state.images.get(state.index) else { return };
+    let Some(payload) = crate::components::composer::AttachmentPayload::from_data_uri(&item.uri)
+    else {
+        return;
+    };
+    let Some(bytes) = crate::clipboard::base64_decode(&payload.data) else { return };
+    let data = crate::image::ImageData::Png(bytes);
+    // The image area's geometry (the tree's `area` box): under the
+    // chrome pad (1) + the header row (1) + the root gap (1), the
+    // full inner width, `max(3, height - 8)` rows.
+    let area_x = box_x + 2;
+    let area_y = box_y + 3;
+    let area_w = box_width.saturating_sub(4);
+    let area_h = usize::from(terminal.1).saturating_sub(8).max(3);
+    let protocol = store.graphics_protocol();
+    if crate::image::drawable(protocol, &data) {
+        let placement = crate::image::ImagePlacement {
+            id: crate::image::image_id(&data),
+            data,
+            x: u16::try_from(area_x).unwrap_or(u16::MAX),
+            y: u16::try_from(area_y).unwrap_or(u16::MAX),
+            cols: u16::try_from(area_w).unwrap_or(u16::MAX),
+            rows: u16::try_from(area_h).unwrap_or(u16::MAX),
+        };
+        let mut images = store.frame_images();
+        images.push(placement);
+        store.set_frame_images(images);
+        return;
+    }
+    let crate::image::ImageData::Png(bytes) = &data else { return };
+    let Some(image) = crate::image_blocks::decode_png(bytes) else { return };
+    let (cols, rows) = crate::image_blocks::fit_cells(image.width, image.height, area_w, area_h);
+    let cells = crate::image_blocks::blocks_cells(&image, cols, rows);
+    let offset_x = area_x + area_w.saturating_sub(cols) / 2;
+    let offset_y = area_y + area_h.saturating_sub(rows) / 2;
+    for (line_index, line) in cells.iter().enumerate() {
+        for (column, cell) in line.iter().enumerate() {
+            if let Some(target) = base
+                .cells
+                .get_mut(offset_y + line_index)
+                .and_then(|row| row.get_mut(offset_x + column))
+            {
+                target.ch = cell.glyph;
+                target.fg = crate::render::CellColor::Rgb(cell.fg[0], cell.fg[1], cell.fg[2]);
+                target.bg = crate::render::CellColor::Rgb(cell.bg[0], cell.bg[1], cell.bg[2]);
+                target.attrs = 0;
+            }
+        }
+    }
 }
 
 /// Convenience: render the full app frame — route content (home /
@@ -747,14 +1038,25 @@ pub fn execute_submission(
         }
         // The rows-only surfaces (diff shortcuts, status, pair,
         // debug): informational submits just close. The plugin
-        // manager's rows are informational too (enable state is not
-        // modeled — lane KM).
+        // manager's rows open the ERROR DETAILS on a failed plugin
+        // (TUI-24 — v2's `enter view error` footer over a faulted
+        // row, plugins.tsx:250-270) and otherwise close.
+        Some(DialogKind::Plugins) => {
+            if let Some(error) = store.plugin_fault(value) {
+                let title = "TUI plugin error".to_owned();
+                let context = format!("Plugin: {value}\nStatus: failed");
+                store.clear_dialogs();
+                store.open_error_details(&title, value, &error, &context, "", true);
+            } else {
+                store.clear_dialogs();
+            }
+            return crate::components::command_palette::Dispatch::Handled;
+        }
         Some(
             DialogKind::DiffHelp
             | DialogKind::Status
             | DialogKind::Pair
             | DialogKind::Debug
-            | DialogKind::Plugins
             | DialogKind::ExportResult { .. },
         ) => {
             store.clear_dialogs();
@@ -1025,6 +1327,44 @@ pub fn execute_submission(
         }
         // The informational pending view: submits are inert.
         Some(DialogKind::IntegrationPending { .. }) => {
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // -- TUI-8: DialogSkill's `onSelect` (dialog-skill.tsx:36-41
+        // + prompt/index.tsx:583-605): insert `@{skill} ` at the
+        // composer's caret and close.
+        Some(DialogKind::Skill) => {
+            let skill = value.to_owned();
+            store.clear_dialogs();
+            let key = match store.route() {
+                crate::store::Route::Session { session_id } => session_id,
+                crate::store::Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
+            };
+            let mut composer = store.composer(&key);
+            composer.insert_text(&format!("@{skill} "));
+            store.set_composer(&key, &composer);
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // -- TUI-9: DialogStash's `onSelect` (dialog-stash.tsx:77-87):
+        // remove the entry, restore it into the focused composer
+        // (`PromptRef.set`), close.
+        Some(DialogKind::Stash) => {
+            let index: usize = value.parse().unwrap_or(usize::MAX);
+            if let Some(entry) = store.stash_remove(index) {
+                let key = match store.route() {
+                    crate::store::Route::Session { session_id } => session_id,
+                    crate::store::Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
+                };
+                let mut composer = store.composer(&key);
+                composer.set(entry.prompt);
+                store.set_composer(&key, &composer);
+            }
+            store.clear_dialogs();
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // -- TUI-TD22: DialogExperiments' `onSelect`
+        // (dialog-experiments.tsx:52): toggle the selected experiment.
+        Some(DialogKind::Experiments) => {
+            store.experiment_toggle(value);
             return crate::components::command_palette::Dispatch::Handled;
         }
         // A sessions-list submit navigates (the shared session.list

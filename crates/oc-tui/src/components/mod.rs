@@ -15,6 +15,7 @@ pub mod composer;
 /// `docs/migration-m1-tabstrip.md`).
 pub mod composer_solid;
 pub mod dialog;
+pub mod dialog_config;
 pub mod dialog_select;
 /// Lane M2: the dialog family on opentui-solid — the DEFAULT
 /// renderer (flipped on after the rig proof; `OC_DIALOGS_OPENTUI=0`

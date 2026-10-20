@@ -101,6 +101,22 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
             PluginUiEvent::NavigateToSession { session_id: session_id.clone() }
         }
         UiRequest::FooterHint { text, .. } => PluginUiEvent::FooterHint { text: text.clone() },
+        // TUI-25: the deferred dialog requests open through the same
+        // conversion as the production pump.
+        UiRequest::Alert { request_id, title, message, .. } => PluginUiEvent::Alert {
+            request_id: *request_id,
+            title: title.clone(),
+            message: message.clone(),
+        },
+        UiRequest::Confirm { request_id, title, message, confirm_label, cancel_label, .. } => {
+            PluginUiEvent::Confirm {
+                request_id: *request_id,
+                title: title.clone(),
+                message: message.clone(),
+                confirm_label: confirm_label.clone(),
+                cancel_label: cancel_label.clone(),
+            }
+        }
         UiRequest::NavigateToPluginRoute { name, data, .. } => {
             PluginUiEvent::NavigateToPluginRoute { name: name.clone(), data: data.clone() }
         }

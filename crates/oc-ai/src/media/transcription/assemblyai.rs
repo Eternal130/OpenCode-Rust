@@ -303,6 +303,59 @@ impl QueuedProtocol for AssemblyAITranscription {
     ) -> Result<TranscriptionResponse, AiError> {
         decode_result(output, context)
     }
+
+    fn encode_token(&self, token: &Token) -> Result<serde_json::Value, AiError> {
+        serde_json::to_value(token).map_err(|error| {
+            identity().frame_error("failed to encode the generation token", error.to_string())
+        })
+    }
+
+    /// `prepare` (assemblyai-transcription.ts:94-101): inline audio
+    /// uploads to `/v2/upload` through the route's own transport before
+    /// the submit body builds; the returned request carries the hosted
+    /// URL.
+    fn prepare(&self) -> Option<crate::media::protocol::PrepareFn<TranscriptionRequest>> {
+        Some(std::sync::Arc::new(
+            |request: &TranscriptionRequest, send: &dyn crate::media::protocol::MediaSend| {
+                Box::pin(async move {
+                    if !matches!(
+                        request.audio.source,
+                        media::Source::Bytes { .. } | media::Source::Base64 { .. }
+                    ) {
+                        return Ok(request.clone());
+                    }
+                    let body = upload_body(request)?;
+                    let uploaded = send.send(UPLOAD_PATH, body).await?;
+                    let upload_url = uploaded
+                        .body
+                        .trim()
+                        .parse::<serde_json::Value>()
+                        .ok()
+                        .and_then(|value| {
+                            value
+                                .get("upload_url")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_string)
+                        })
+                        .ok_or_else(|| {
+                            let output = TextOutput {
+                                identity: &identity(),
+                                body: &uploaded.body,
+                                http: None,
+                            };
+                            output.invalid("AssemblyAI upload returned no upload_url")
+                        })?;
+                    prepare(request, &upload_url)
+                }) as _
+            },
+        ))
+    }
+
+    fn decode_token(&self, raw: &serde_json::Value) -> Result<Token, AiError> {
+        serde_json::from_value(raw.clone()).map_err(|error| {
+            identity().frame_error("failed to decode the generation token", error.to_string())
+        })
+    }
 }
 
 #[cfg(test)]

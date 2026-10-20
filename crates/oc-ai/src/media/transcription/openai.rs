@@ -406,6 +406,14 @@ impl StreamProtocol for OpenAITranscription {
     ) -> Result<Vec<TranscriptionEvent>, AiError> {
         finish(state)
     }
+
+    fn step(
+        &self,
+        state: &mut Self::State,
+        frame: &Frame,
+    ) -> Result<Vec<TranscriptionEvent>, AiError> {
+        step(state, frame)
+    }
 }
 
 #[cfg(test)]

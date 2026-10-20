@@ -13,6 +13,9 @@
 //! branch on `reason` instead of message text.
 
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::media::body::Body;
@@ -315,7 +318,7 @@ pub trait MediaProtocolBase: Send + Sync {
 /// One request, one response. JSON or multipart in; JSON or raw bytes out
 /// (media-protocol.ts:65-78).
 pub trait InlineProtocol: MediaProtocolBase {
-    type Request: Send + Sync;
+    type Request: Send + Sync + 'static;
     type Response: Send + Sync;
 
     /// Request side (the route runs [`Identity::reject_unsupported`]
@@ -338,8 +341,8 @@ pub trait InlineProtocol: MediaProtocolBase {
 /// and `stream` share this state machine; `request.mode` lets a protocol
 /// pick a different body, path, or framing.
 pub trait StreamProtocol: MediaProtocolBase {
-    type Request: Send + Sync;
-    type Event: Send + Sync;
+    type Request: Send + Sync + 'static;
+    type Event: Send + Sync + 'static;
     type State: Default + Send + Sync;
 
     fn body_from(&self, request: &Addressed<Self::Request>) -> Result<Body, AiError>;
@@ -348,6 +351,11 @@ pub trait StreamProtocol: MediaProtocolBase {
     /// How the raw response bytes frame into [`Frame`]s (the TS `frames`
     /// combinator picked per request/body).
     fn framing(&self, request: &Addressed<Self::Request>, body: &Body) -> Framing;
+
+    /// One decoded frame → (`state`, events) (media-protocol.ts:179). The
+    /// route driver calls this per frame after [`Self::framing`] decoding;
+    /// parser state is local to one response.
+    fn step(&self, state: &mut Self::State, frame: &Frame) -> Result<Vec<Self::Event>, AiError>;
 
     /// Emit exactly one terminal event, or fail when the provider stopped
     /// before completing (media-protocol.ts:180-181).
@@ -358,11 +366,45 @@ pub trait StreamProtocol: MediaProtocolBase {
     ) -> Result<Vec<Self::Event>, AiError>;
 }
 
+/// The response of one [`MediaSend`] call: the decoded read side plus the
+/// auth headers the route sent (only what auth added or changed).
+pub struct SendResponse {
+    pub status: u16,
+    pub headers: BTreeMap<String, String>,
+    /// The whole response body as text (upload decoders read JSON).
+    pub body: String,
+    /// Headers the auth definition added or changed on this call
+    /// (route/media.ts:340).
+    pub auth: BTreeMap<String, String>,
+}
+
+/// `MediaProtocol.Send` (media-protocol.ts:50): POST one body to a path
+/// relative to the route base URL, through the route's transport plumbing.
+pub trait MediaSend: Send + Sync {
+    fn send(
+        &self,
+        path: &str,
+        body: Body,
+    ) -> Pin<Box<dyn Future<Output = Result<SendResponse, AiError>> + Send + '_>>;
+}
+
+/// A queued protocol's `prepare` hook as a route-callable value
+/// (media-protocol.ts:52-53): runs after unsupported-field rejection and
+/// before `body.from`, for providers that need an upload first.
+pub type PrepareFn<Request> = Arc<
+    dyn for<'a> Fn(
+            &'a Request,
+            &'a dyn MediaSend,
+        ) -> Pin<Box<dyn Future<Output = Result<Request, AiError>> + Send + 'a>>
+        + Send
+        + Sync,
+>;
+
 /// Submit, then poll (media-protocol.ts:109-148). `start` posts the body to
 /// the route endpoint; `status`, `result`, and `cancel` are follow-up
 /// calls addressed by the token.
 pub trait QueuedProtocol: MediaProtocolBase {
-    type Request: Send + Sync;
+    type Request: Send + Sync + 'static;
     type Response: Send + Sync;
     type Token: Send + Sync + Clone;
 
@@ -390,6 +432,30 @@ pub trait QueuedProtocol: MediaProtocolBase {
     fn cancel(&self) -> Option<CancelSpec> {
         None
     }
+
+    /// The cancel endpoint's path for one token (only meaningful when
+    /// [`Self::cancel`] is `Some`; the fal family hands back absolute
+    /// URLs, used verbatim by the route).
+    fn cancel_path(&self, token: &Self::Token) -> String {
+        let _ = token;
+        String::new()
+    }
+
+    /// `prepare` (media-protocol.ts:52-53): runs after unsupported-field
+    /// rejection and before `body_from`, for providers that need an upload
+    /// first. `None` (the default) skips the step.
+    fn prepare(&self) -> Option<PrepareFn<Self::Request>> {
+        None
+    }
+
+    /// Encode the serializable token (`Schema.encodeSync(protocol.token)`):
+    /// `Generation.token` carries this form so it can be persisted and
+    /// resumed elsewhere (media-protocol.ts:115-116).
+    fn encode_token(&self, token: &Self::Token) -> Result<serde_json::Value, AiError>;
+
+    /// Decode a persisted token; a value this protocol's codec rejects
+    /// fails typed at the resume boundary (route/media.ts:224-242).
+    fn decode_token(&self, raw: &serde_json::Value) -> Result<Self::Token, AiError>;
 }
 
 /// A queued protocol's cancel endpoint (media-protocol.ts:139-147).

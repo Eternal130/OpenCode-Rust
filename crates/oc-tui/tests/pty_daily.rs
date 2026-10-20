@@ -711,3 +711,176 @@ fn queue_undo_refills() {
         "the queued text POSTed exactly once (server-owned queue)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// lane-dialogs (wave 5): TUI-8 / TUI-9 / TUI-10 — the keyboard-visible
+// dialog proofs on the real app loop.
+// ---------------------------------------------------------------------------
+
+/// TUI-8: `/skills` opens the `DialogSkill` (large, the padded name
+/// column + the description); enter inserts `@{skill} ` into the
+/// composer (prompt/index.tsx:583-605).
+#[test]
+fn skills_dialog() {
+    run_daily_test(
+        "lane-dialogs-skills",
+        120,
+        30,
+        |fake, _sandbox| {
+            fake.arm_skills();
+        },
+        |h| {
+            boot_to_session(h, b"Alpha")?;
+            // `/skills` in the composer: the slash popup offers the
+            // entry; enter RUNS it (the no-arguments rule).
+            h.write(b"/skills");
+            wait_text(h, "Skills", Duration::from_secs(5))?;
+            h.write(b"\r");
+            // The dialog mounts: the title + the skill rows.
+            let grid = wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains("greet"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("Greet the user"))
+                },
+                Duration::from_secs(8),
+            )?;
+            assert!(
+                (0..grid.rows).any(|row| grid.row_text(row).contains("lint")),
+                "the second skill row lists"
+            );
+            // Enter selects the filtered row (greet) → the composer
+            // carries the @mention.
+            h.write(b"\r");
+            wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("@greet")),
+                Duration::from_secs(8),
+            )?;
+            Ok(())
+        },
+    );
+}
+
+/// TUI-9: the stash workflow — Stash prompt clears the composer,
+/// Stash pop restores it, Stash list opens the `DialogStash` with the
+/// entry row (prompt/index.tsx:874-920 + dialog-stash.tsx).
+#[test]
+fn stash_dialog() {
+    run_daily_test("lane-dialogs-stash", 120, 30, |_fake, _sandbox| {}, stash_driver);
+}
+
+/// The stash flow body (extracted so failures can dump the raw tail).
+fn stash_driver(h: &mut HarnessHandle) -> Result<(), String> {
+    boot_to_session(h, b"Alpha")?;
+    // Type a draft.
+    for chunk in [b"stash me once".as_slice(), b" and twice".as_slice()] {
+        h.write(chunk);
+        std::thread::sleep(Duration::from_millis(120));
+    }
+    wait_grid(
+        h,
+        |g| (0..g.rows).any(|row| g.row_text(row).contains("and twice")),
+        Duration::from_secs(5),
+    )?;
+    // Palette → "Stash prompt" (prompt.stash): the draft stashes +
+    // the composer resets. Filter FIRST (the unfiltered list scrolls
+    // past the Prompt group at this height).
+    h.write(b"\x10");
+    wait_text(h, "Commands", Duration::from_secs(5))?;
+    for key in b"stash prompt" {
+        h.write(&[*key]);
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    wait_text(h, "Stash prompt", Duration::from_secs(5))?;
+    h.write(b"\r");
+    wait_grid(
+        h,
+        |g| !(0..g.rows).any(|row| g.row_text(row).contains("and twice")),
+        Duration::from_secs(5),
+    )?;
+    // Palette → "Stash list" (prompt.stash.list): the dialog lists
+    // the stashed preview.
+    h.write(b"\x10");
+    wait_text(h, "Commands", Duration::from_secs(5))?;
+    for key in b"stash list" {
+        h.write(&[*key]);
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    wait_text(h, "Stash list", Duration::from_secs(5))?;
+    h.write(b"\r");
+    wait_grid(
+        h,
+        |g| {
+            (0..g.rows).any(|row| g.row_text(row).contains("Stash"))
+                && (0..g.rows).any(|row| g.row_text(row).contains("stash me once"))
+        },
+        Duration::from_secs(8),
+    )?;
+    // Enter pops + restores the draft (PromptRef.set).
+    h.write(b"\r");
+    wait_grid(
+        h,
+        |g| (0..g.rows).any(|row| g.row_text(row).contains("and twice")),
+        Duration::from_secs(8),
+    )?;
+    Ok(())
+}
+
+/// TUI-10: `<leader>i` opens the `DialogImagePreview` over the
+/// composer's pasted image attachment — the `Image 1 of 1` header,
+/// the blocks-quantized pixels, the caption footer
+/// (dialog-image-preview.tsx + prompt/index.tsx:493-498).
+#[test]
+fn image_preview() {
+    run_daily_test(
+        "lane-dialogs-image",
+        120,
+        30,
+        |_fake, sandbox| {
+            // A real decodable PNG into the sandbox: the paste path
+            // reads the file and stages the `[Image 1]` chip.
+            let png: &[u8] = include_bytes!("fixtures/r07-tiny-4x2.png");
+            std::fs::write(sandbox.join("tiny.png"), png).expect("seed the png");
+        },
+        |h| {
+            boot_to_session(h, b"Alpha")?;
+            // Bracketed-paste the image's absolute path: the
+            // composer stages the attachment chip.
+            let sandbox = std::env::var("OPENCODE_TEST_HOME").expect("the sandbox env");
+            let pasted = format!("{sandbox}/tiny.png");
+            h.write(b"\x1b[200~");
+            h.write(pasted.as_bytes());
+            h.write(b"\x1b[201~");
+            wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("[Image 1]")),
+                Duration::from_secs(8),
+            )?;
+            // `<leader>i` (prompt.images.view): the preview mounts.
+            h.write(b"\x18i");
+            wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("Image 1 of 1")),
+                Duration::from_secs(8),
+            )?;
+            // The blocks pixels painted (the block-glyph family).
+            wait_grid(
+                h,
+                |g| {
+                    (0..g.rows)
+                        .any(|row| g.row_text(row).chars().any(|ch| "▀▄█▌▐▘▝▖▗▚▞▙▛▜▟".contains(ch)))
+                },
+                Duration::from_secs(5),
+            )?;
+            // Escape closes.
+            h.write(b"\x1b");
+            wait_grid(
+                h,
+                |g| !(0..g.rows).any(|row| g.row_text(row).contains("Image 1 of 1")),
+                Duration::from_secs(5),
+            )?;
+            Ok(())
+        },
+    );
+}
