@@ -5,7 +5,7 @@
 //! regular 0644 file. `build_binary()` only checked `is_file()`, handed
 //! that stale file to `Command::new`, and every spawn died with
 //! `spawn .../target/debug/oc-server: Permission denied (os error 13)`
-//! (p10 battery leg + the §12.3 real_db_null_census leg; the gates
+//! (p10 battery leg + the §12.3 `real_db_null_census` leg; the gates
 //! summary leg was red purely downstream of these).
 //!
 //! These tests pin the [`parity::rust_server::ensure_binary`] contract
@@ -52,10 +52,7 @@ fn server_binary_exec_bit_classification() {
     assert!(!is_executable_file(&path), "a directory is never executable");
     fs::remove_dir(&path).expect("remove dir");
     write_with_mode(&path, 0o644);
-    assert!(
-        !is_executable_file(&path),
-        "0644 — the upload-artifact v4 shape — is NOT executable"
-    );
+    assert!(!is_executable_file(&path), "0644 — the upload-artifact v4 shape — is NOT executable");
     write_with_mode(&path, 0o755);
     assert!(is_executable_file(&path), "0755 is executable");
     write_with_mode(&path, 0o700);
@@ -66,10 +63,9 @@ fn server_binary_exec_bit_classification() {
 fn server_binary_exec_bit_reused_when_already_executable() {
     let path = scratch("reuse");
     write_with_mode(&path, 0o755);
-    let returned = ensure_binary(&path, || {
-        panic!("an already-executable binary must not trigger a build")
-    })
-    .expect("reuse the existing executable");
+    let returned =
+        ensure_binary(&path, || panic!("an already-executable binary must not trigger a build"))
+            .expect("reuse the existing executable");
     assert_eq!(returned, path);
 }
 
@@ -109,10 +105,7 @@ fn server_binary_exec_bit_never_returns_an_unexecutable_path() {
         Ok(ok_status())
     })
     .expect_err("an unexecutable build result must be an error, not a path");
-    assert!(
-        error.to_string().contains("is not an executable file"),
-        "unexpected error: {error}"
-    );
+    assert!(error.to_string().contains("is not an executable file"), "unexpected error: {error}");
 }
 
 #[test]
