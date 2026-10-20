@@ -2081,6 +2081,23 @@ impl App {
                 return;
             }
         }
+        // 0b. TUI-4 — the embedded terminal's key intercept
+        //     (terminal-pane.tsx:140-150, priority 100): while the
+        //     mounted pane is FOCUSED, every non-leader stroke types
+        //     into the pty (preventDefault + stopPropagation); leader
+        //     chords and pending sequences fall through to the base
+        //     layer below (`keymap.isLeader(event) || leader()`).
+        if let Route::Session { session_id } = self.store.route() {
+            if self.store.terminal_pane_mounted(&session_id).is_some()
+                && self.store.terminal_focus_right()
+                && !self.keymap.is_leader(stroke)
+                && self.keymap.pending_display().is_none()
+                && self.store.terminal_pane_input(&session_id, stroke)
+            {
+                self.store.request_redraw();
+                return;
+            }
+        }
         let key = self.prompt_key();
         let draft_empty = self.store.prompt_draft(&key).is_empty();
         self.keymap.set_command_enabled("app.exit", draft_empty);
@@ -3870,6 +3887,9 @@ pub enum LoopRequest {
     // -- Lane FINAL: the integration connect machine -------------------
     /// `integration.list` (the `DialogIntegration` open refetch).
     IntegrationList,
+    /// TUI-5 (lane-tui2): `project.list` (the `DialogOpen` open
+    /// refetch — v2's `data.project.sync()`).
+    ProjectList,
     /// `integration.connect.key` (+ the connected refetch chain).
     IntegrationConnectKey {
         integration_id: String,
@@ -3938,6 +3958,33 @@ pub enum LoopRequest {
     },
     /// `location.reload`.
     LocationReload,
+    // -- TUI-4: the persistent-terminal family (session-terminals) --
+    /// `persistentPty.list` for one session (the registry refresh).
+    TerminalRefresh {
+        session_id: String,
+    },
+    /// `persistentPty.create` (+ refresh + select, session-terminals
+    /// .tsx:83-92): `{args: [], cwd: session.directory,
+    /// title: "Terminal", env: {}}`.
+    TerminalCreate {
+        session_id: String,
+    },
+    /// The snapshot → connect-token → WS attach chain for one pane.
+    TerminalAttach {
+        session_id: String,
+        pty_id: String,
+    },
+    /// Close a pane's attach socket (the selection cleared).
+    TerminalDetach {
+        pty_id: String,
+    },
+    /// One interaction frame to the attached pane.
+    TerminalFrame {
+        pty_id: String,
+        frame: Vec<u8>,
+    },
+    /// `server.info` → the `persistentPty` capability probe.
+    TerminalCapability,
 }
 
 /// One resolved [`LoopRequest`].
@@ -3967,6 +4014,52 @@ pub enum LoopFetch {
         result: Result<(Vec<crate::components::message::model::Message>, Option<String>), String>,
     },
     SessionList(Result<Vec<crate::data::SessionSnapshot>, String>),
+    /// TUI-5 (lane-tui2): the `project.list` result (the Open menu's
+    /// Projects section).
+    ProjectList(Result<Vec<crate::components::dialog_open::ProjectRow>, String>),
+    // -- TUI-4: the terminal registry + the attach stream's events --
+    TerminalListed {
+        session_id: String,
+        result: Result<Vec<crate::store::TerminalRecord>, String>,
+    },
+    TerminalCreated {
+        session_id: String,
+        result: Result<crate::store::TerminalRecord, String>,
+    },
+    /// The snapshot's fast-forward (the pane state seeds).
+    TerminalSnapshot {
+        session_id: String,
+        pty_id: String,
+        size: (u16, u16),
+        checkpoint: Vec<u8>,
+    },
+    TerminalOutput {
+        pty_id: String,
+        data: Vec<u8>,
+    },
+    TerminalResized {
+        pty_id: String,
+        cols: u16,
+        rows: u16,
+        checkpoint: Option<Vec<u8>>,
+    },
+    TerminalReady {
+        pty_id: String,
+    },
+    TerminalAttached {
+        pty_id: String,
+        size: (u16, u16),
+        controller: bool,
+    },
+    TerminalController {
+        pty_id: String,
+        controller: bool,
+    },
+    TerminalFailure {
+        pty_id: String,
+        message: String,
+    },
+    TerminalCapability(bool),
     LocationVcs {
         directory: String,
         branch: Result<Option<String>, String>,
@@ -4101,6 +4194,92 @@ pub fn spawn_loop_fetcher(
                         let _ = tx.send(LoopFetch::SessionList(result));
                     });
                 }
+                // -- TUI-4: the persistent-terminal family -------------
+                LoopRequest::TerminalRefresh { session_id } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client.persistent_pty().list(&session_id).await.map(|list| {
+                            list.into_iter()
+                                .map(|info| crate::store::TerminalRecord {
+                                    id: info.id,
+                                    title: info.title,
+                                    foreground_process: info.foreground_process,
+                                })
+                                .collect::<Vec<_>>()
+                        });
+                        let _ = tx.send(LoopFetch::TerminalListed {
+                            session_id,
+                            result: result.map_err(|error| error.to_string()),
+                        });
+                    });
+                }
+                LoopRequest::TerminalCreate { session_id } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        // `newTerminal` (session-terminals.tsx:83-92):
+                        // the session's own directory as the cwd.
+                        let cwd = app_shared_sessions_directory(&client, &session_id).await;
+                        let body = oc_client::types::PersistentPtyCreateInput {
+                            args: Vec::new(),
+                            command: None,
+                            cwd,
+                            env: std::collections::BTreeMap::new(),
+                            size: None,
+                            title: "Terminal".to_owned(),
+                        };
+                        let result =
+                            client.persistent_pty().create(&session_id, &body).await.map(|info| {
+                                crate::store::TerminalRecord {
+                                    id: info.id,
+                                    title: info.title,
+                                    foreground_process: info.foreground_process,
+                                }
+                            });
+                        let _ = tx.send(LoopFetch::TerminalCreated {
+                            session_id,
+                            result: result.map_err(|error| error.to_string()),
+                        });
+                    });
+                }
+                LoopRequest::TerminalCapability => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        // session-terminals.tsx:66-70 — servers that
+                        // predate the field keep offering terminals
+                        // (`capabilities?.persistentPty !== false`);
+                        // any error leaves terminals unavailable.
+                        let available = client.server().info().await.is_ok_and(|info| {
+                            info.capabilities.and_then(|caps| caps.persistent_pty) != Some(false)
+                        });
+                        let _ = tx.send(LoopFetch::TerminalCapability(available));
+                    });
+                }
+                LoopRequest::TerminalAttach { session_id, pty_id } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    let io = terminal_io_registry();
+                    let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+                    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+                    io.lock().expect("terminal io registry").attach(
+                        pty_id.clone(),
+                        input_tx,
+                        cancel_tx,
+                    );
+                    tokio::spawn(async move {
+                        attach_terminal(client, tx, session_id, pty_id, input_rx, cancel_rx).await;
+                    });
+                }
+                LoopRequest::TerminalDetach { pty_id } => {
+                    let io = terminal_io_registry();
+                    io.lock().expect("terminal io registry").detach(&pty_id);
+                }
+                LoopRequest::TerminalFrame { pty_id, frame } => {
+                    let io = terminal_io_registry();
+                    io.lock().expect("terminal io registry").send_frame(&pty_id, frame);
+                }
                 LoopRequest::LocationVcs(directory) => {
                     let client = client.clone();
                     let tx = tx.clone();
@@ -4225,6 +4404,30 @@ pub fn spawn_loop_fetcher(
                             .map(|response| shape_integration_rows(response.data))
                             .map_err(|error| error.to_string());
                         let _ = tx.send(LoopFetch::IntegrationList(result));
+                    });
+                }
+                // -- TUI-5 (lane-tui2): the Open menu's project refetch.
+                LoopRequest::ProjectList => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .project()
+                            .list()
+                            .await
+                            .map(|projects| {
+                                projects
+                                    .into_iter()
+                                    .map(|project| crate::components::dialog_open::ProjectRow {
+                                        id: project.id,
+                                        name: project.name,
+                                        canonical: project.canonical,
+                                        vcs: project.vcs.as_deref() == Some("git"),
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::ProjectList(result));
                     });
                 }
                 LoopRequest::IntegrationConnectKey { integration_id, key } => {
@@ -4775,6 +4978,18 @@ impl crate::store::IntegrationSink for HttpIntegrationSink {
     }
 }
 
+/// TUI-5 (lane-tui2): the production project-list sink — the Open
+/// menu's mount refetch (`data.project.sync()` → `project.list`).
+struct HttpProjectSink {
+    tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+}
+
+impl crate::store::ProjectSink for HttpProjectSink {
+    fn list(&self) {
+        let _ = self.tx.send(LoopRequest::ProjectList);
+    }
+}
+
 /// The production session-action sink.
 struct HttpSessionActionSink {
     tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
@@ -4876,6 +5091,301 @@ fn format_session_transcript(
         session.time.updated,
         body.join("\n\n---\n\n")
     )
+}
+
+// -- TUI-4: the terminal attach registry + the IO seam -------------
+
+/// One attached pane's task handles (the loop's registry entry).
+struct TerminalIo {
+    input_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    cancel: tokio::sync::watch::Sender<bool>,
+}
+
+/// The per-loop attach registry (pty id → the WS task's handles). A
+/// static: one TUI process owns exactly one loop; the registry lives
+/// for its lifetime.
+fn terminal_io_registry(
+) -> std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, TerminalIo>>> {
+    static REGISTRY: std::sync::OnceLock<
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, TerminalIo>>>,
+    > = std::sync::OnceLock::new();
+    std::sync::Arc::clone(REGISTRY.get_or_init(|| {
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()))
+    }))
+}
+
+/// The extension trait over the registry map (insert/forward/cancel).
+trait TerminalIoRegistry {
+    fn attach(
+        &mut self,
+        pty_id: String,
+        input_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+        cancel: tokio::sync::watch::Sender<bool>,
+    );
+    fn detach(&mut self, pty_id: &str);
+    fn send_frame(&mut self, pty_id: &str, frame: Vec<u8>);
+}
+
+impl TerminalIoRegistry for std::collections::HashMap<String, TerminalIo> {
+    fn attach(
+        &mut self,
+        pty_id: String,
+        input_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+        cancel: tokio::sync::watch::Sender<bool>,
+    ) {
+        // A re-attach replaces the previous task's handles (its
+        // cancel sender drops → the old task's watch fires on close).
+        if let Some(previous) = self.insert(pty_id, TerminalIo { input_tx, cancel }) {
+            let _ = previous.cancel.send(true);
+        }
+    }
+
+    fn detach(&mut self, pty_id: &str) {
+        if let Some(handles) = self.remove(pty_id) {
+            let _ = handles.cancel.send(true);
+        }
+    }
+
+    fn send_frame(&mut self, pty_id: &str, frame: Vec<u8>) {
+        if let Some(handles) = self.get(pty_id) {
+            let _ = handles.input_tx.send(frame);
+        }
+    }
+}
+
+/// The session's directory (the create cwd — the resync snapshot's
+/// `location.directory`, session-terminals.tsx:87).
+async fn app_shared_sessions_directory(
+    client: &oc_client::Client,
+    session_id: &str,
+) -> Option<String> {
+    let session = client.session().get(session_id).await.ok()?;
+    Some(session.location.directory)
+}
+
+/// The TUI-4 store→loop seam: registry refreshes, creates, attaches
+/// and typed frames ride the loop's request channel. The currently
+/// ATTACHED pane is tracked so a deselect detaches the right socket.
+struct HttpTerminalSink {
+    tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+    attached: std::sync::Mutex<Option<String>>,
+}
+
+impl crate::store::TerminalSink for HttpTerminalSink {
+    fn refresh(&self, session_id: &str) {
+        let _ = self.tx.send(LoopRequest::TerminalRefresh { session_id: session_id.to_owned() });
+    }
+
+    fn create(&self, session_id: &str) {
+        let _ = self.tx.send(LoopRequest::TerminalCreate { session_id: session_id.to_owned() });
+    }
+
+    fn select(&self, session_id: &str, pty_id: Option<&str>) {
+        if let Some(pty) = pty_id {
+            *self.attached.lock().expect("attached") = Some(pty.to_owned());
+            let _ = self.tx.send(LoopRequest::TerminalAttach {
+                session_id: session_id.to_owned(),
+                pty_id: pty.to_owned(),
+            });
+        } else {
+            let previous = self.attached.lock().expect("attached").take();
+            if let Some(pty) = previous {
+                let _ = self.tx.send(LoopRequest::TerminalDetach { pty_id: pty });
+            }
+        }
+    }
+
+    fn send_frame(&self, pty_id: &str, frame: &[u8]) {
+        let _ = self
+            .tx
+            .send(LoopRequest::TerminalFrame { pty_id: pty_id.to_owned(), frame: frame.to_vec() });
+    }
+}
+
+/// The attach chain (`connect()`, terminal-pane.tsx:175-279): the
+/// snapshot fast-forward, the connect-token, then the WS stream —
+/// output/replay/resize/controller events map onto [`LoopFetch`]
+/// terminal variants; the input pump forwards interaction frames.
+#[allow(clippy::too_many_lines)] // the attach protocol's full chain
+async fn attach_terminal(
+    client: oc_client::Client,
+    tx: tokio::sync::mpsc::UnboundedSender<LoopFetch>,
+    session_id: String,
+    pty_id: String,
+    mut input_rx: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    mut cancel_rx: tokio::sync::watch::Receiver<bool>,
+) {
+    use futures::{SinkExt as _, StreamExt as _};
+    let fail = |message: String| {
+        let _ = tx.send(LoopFetch::TerminalFailure { pty_id: pty_id.clone(), message });
+    };
+    // 1. The snapshot (the checkpoint fast-forward + the cursor).
+    let snapshot = match client.persistent_pty().snapshot(&pty_id).await {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            fail(format!("Terminal connection failed: {error}"));
+            return;
+        }
+    };
+    let size = (
+        u16::try_from(snapshot.info.size.cols.max(1)).unwrap_or(80),
+        u16::try_from(snapshot.info.size.rows.max(1)).unwrap_or(24),
+    );
+    let checkpoint = crate::clipboard::base64_decode(snapshot.checkpoint.trim_end_matches('='))
+        .unwrap_or_default();
+    let _ = tx.send(LoopFetch::TerminalSnapshot {
+        session_id: session_id.clone(),
+        pty_id: pty_id.clone(),
+        size,
+        checkpoint,
+    });
+    // 2. The connect token (the SDK's `x-opencode-ticket: 1` hop).
+    let token = match client
+        .persistent_pty()
+        .connect_token(
+            &pty_id,
+            &oc_client::types::ServerExperimentalPersistentPtyConnectTokenQuery {
+                x_opencode_ticket: Some("1".to_owned()),
+            },
+        )
+        .await
+    {
+        Ok(token) => token,
+        Err(error) => {
+            fail(format!("Terminal connection failed: {error}"));
+            return;
+        }
+    };
+    // 3. The WS URL (the SDK's query set, packages/client solid/pty).
+    let base = client.base_url().trim_end_matches('/');
+    let ws_base = if let Some(rest) = base.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = base.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        fail("Terminal connection failed: unsupported server URL".to_owned());
+        return;
+    };
+    let attachment = uuid::Uuid::new_v4().to_string();
+    let url = format!(
+        "{ws_base}/api/experimental/persistent-pty/{pty_id}/connect?ticket={ticket}&cursor={cursor}&attachment_id={attachment}&takeover=true&input_protocol=1",
+        ticket = token.ticket,
+        cursor = snapshot.info.output.tail,
+    );
+    let (socket, _response) = match tokio_tungstenite::connect_async(url).await {
+        Ok(pair) => pair,
+        Err(error) => {
+            fail(format!("Terminal connection failed: {error}"));
+            return;
+        }
+    };
+    let (mut sink, mut stream) = socket.split();
+    loop {
+        tokio::select! {
+            _ = cancel_rx.changed() => {
+                let _ = sink.send(tokio_tungstenite::tungstenite::Message::Close(None)).await;
+                return;
+            }
+            frame = input_rx.recv() => {
+                match frame {
+                    Some(frame) => {
+                        if sink
+                            .send(tokio_tungstenite::tungstenite::Message::Binary(frame))
+                            .await
+                            .is_err()
+                        {
+                            fail("Terminal disconnected".to_owned());
+                            return;
+                        }
+                    }
+                    None => return,
+                }
+            }
+            message = stream.next() => {
+                match message {
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
+                        let Ok(message) = serde_json::from_str::<serde_json::Value>(&text) else {
+                            continue;
+                        };
+                        match message.get("type").and_then(serde_json::Value::as_str) {
+                            Some("attached") => {
+                                let info_size = message
+                                    .pointer("/info/size")
+                                    .and_then(|size| {
+                                        Some((
+                                            u16::try_from(
+                                                size.get("cols")?.as_i64()?.max(1),
+                                            )
+                                            .ok()?,
+                                            u16::try_from(
+                                                size.get("rows")?.as_i64()?.max(1),
+                                            )
+                                            .ok()?,
+                                        ))
+                                    })
+                                    .unwrap_or(size);
+                                let controller = message.get("role").and_then(|role| role.as_str())
+                                    == Some("controller");
+                                let _ = tx.send(LoopFetch::TerminalAttached {
+                                    pty_id: pty_id.clone(),
+                                    size: info_size,
+                                    controller,
+                                });
+                            }
+                            Some("resized") => {
+                                let cols = message
+                                    .get("cols")
+                                    .and_then(serde_json::Value::as_i64)
+                                    .unwrap_or(i64::from(size.0));
+                                let rows = message
+                                    .get("rows")
+                                    .and_then(serde_json::Value::as_i64)
+                                    .unwrap_or(i64::from(size.1));
+                                let checkpoint = message
+                                    .get("checkpoint")
+                                    .and_then(serde_json::Value::as_str)
+                                    .and_then(|encoded| {
+                                        crate::clipboard::base64_decode(
+                                            encoded.trim_end_matches('='),
+                                        )
+                                    });
+                                let _ = tx.send(LoopFetch::TerminalResized {
+                                    pty_id: pty_id.clone(),
+                                    cols: u16::try_from(cols.max(1)).unwrap_or(size.0),
+                                    rows: u16::try_from(rows.max(1)).unwrap_or(size.1),
+                                    checkpoint,
+                                });
+                            }
+                            Some("replay_complete") => {
+                                let _ = tx.send(LoopFetch::TerminalReady { pty_id: pty_id.clone() });
+                            }
+                            Some("controller_changed") => {
+                                let controller = message.get("attachmentID").and_then(
+                                    |value| value.as_str(),
+                                ) == Some(attachment.as_str());
+                                let _ = tx.send(LoopFetch::TerminalController {
+                                    pty_id: pty_id.clone(),
+                                    controller,
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Binary(data))) => {
+                        let _ = tx.send(LoopFetch::TerminalOutput {
+                            pty_id: pty_id.clone(),
+                            data,
+                        });
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) | None => {
+                        fail("Terminal disconnected".to_owned());
+                        return;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// The F13 production seam: the session-list dialog's open fires a
@@ -5501,6 +6011,21 @@ pub async fn run_with_size(
                     .unwrap_or(crate::components::session_tabs_rail::SESSION_SIDEBAR_WIDTH),
             );
         }
+        // TUI-4 — the persisted per-session terminal selection
+        // (`useStorage().store("session-terminal-selection")`,
+        // session-terminals.tsx:22-25): restore the picks; the pane
+        // mounts (and attaches) when the session routes.
+        if let Some(sessions) = storage
+            .read("session-terminal-selection")
+            .as_ref()
+            .and_then(|doc| doc.get("sessions"))
+            .and_then(serde_json::Value::as_object)
+        {
+            for (session_id, value) in sessions {
+                let pty = value.as_str();
+                app.store.restore_terminal_selection(session_id, pty);
+            }
+        }
     }
     // The CLI checker's notice file (the TUI-mode channel —
     // autoupdate.rs appends `update available`/`update installed`
@@ -5601,13 +6126,28 @@ pub async fn run_with_size(
     {
         let tx = loop_fetch_tx.clone();
         app.store.set_integration_sink(std::rc::Rc::new(HttpIntegrationSink { tx }));
+        // TUI-5 (lane-tui2): the Open menu's project refetch.
+        app.store.set_project_sink(std::rc::Rc::new(HttpProjectSink { tx: loop_fetch_tx.clone() }));
         let tx = loop_fetch_tx.clone();
         app.store.set_session_action_sink(std::rc::Rc::new(HttpSessionActionSink { tx }));
+        // TUI-6 (lane-tui2): v2 syncs the project registry at App
+        // mount (`data.project.sync()`, app.tsx's boot effect) — the
+        // session-list rows' outside-project footers
+        // (dialog-session-list.tsx:152-160) read the WARM registry,
+        // so the boot fetches it once alongside the rest.
+        let _ = loop_fetch_tx.send(LoopRequest::ProjectList);
     }
     let mut fetched_transcripts: std::collections::HashSet<String> =
         app.store.open_session_ids().into_iter().collect();
     app.store
         .set_session_list_sink(std::rc::Rc::new(HttpSessionListSink { tx: loop_fetch_tx.clone() }));
+    // TUI-4 — the terminal IO seam + the capability probe
+    // (session-terminals.tsx:59-76's server.connected arm).
+    app.store.set_terminal_sink(std::rc::Rc::new(HttpTerminalSink {
+        tx: loop_fetch_tx.clone(),
+        attached: std::sync::Mutex::new(None),
+    }));
+    let _ = loop_fetch_tx.send(LoopRequest::TerminalCapability);
     let mut persisted_tabs = app.store.tabs().tabs.clone();
 
     // Lane/chrome #4: the footer location's vcs lookup — one request
@@ -6214,6 +6754,66 @@ pub async fn run_with_size(
                 }
                 LoopFetch::SessionList(Err(error)) => {
                     crate::keymap::log_skip(&format!("session list refresh: {error}"));
+                }
+                // -- TUI-5 (lane-tui2): the Open menu's project rows.
+                LoopFetch::ProjectList(result) => match result {
+                    Ok(rows) => app.store.project_list_loaded(rows),
+                    Err(error) => app.store.project_list_failed(error),
+                },
+                // -- TUI-4: the terminal registry + pane stream ------
+                LoopFetch::TerminalCapability(available) => {
+                    app.store.set_terminal_available(available);
+                }
+                LoopFetch::TerminalListed { session_id, result } => match result {
+                    Ok(terminals) => app.store.set_terminals(&session_id, terminals),
+                    Err(error) => {
+                        crate::keymap::log_skip(&format!("terminal list refresh: {error}"))
+                    }
+                },
+                LoopFetch::TerminalCreated { session_id, result } => match result {
+                    Ok(record) => {
+                        // `newTerminal`'s chain: refresh + select
+                        // (session-terminals.tsx:88-92).
+                        app.store.terminal_pane_drop(&record.id);
+                        app.store.set_terminals(&session_id, {
+                            let mut listed = app.store.terminals(&session_id);
+                            if !listed.iter().any(|terminal| terminal.id == record.id) {
+                                listed.push(record.clone());
+                            }
+                            listed
+                        });
+                        app.store.select_terminal(&session_id, Some(&record.id));
+                    }
+                    Err(error) => {
+                        app.store.toast_show(crate::components::toast::ToastOptions {
+                            title: None,
+                            message: format!("Unable to load terminal: {error}"),
+                            variant: "error",
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    }
+                },
+                LoopFetch::TerminalSnapshot { session_id, pty_id, size, checkpoint } => {
+                    app.store.terminal_pane_snapshot(&pty_id, size, &checkpoint);
+                    let _ = session_id;
+                }
+                LoopFetch::TerminalOutput { pty_id, data } => {
+                    app.store.terminal_pane_output(&pty_id, &data);
+                }
+                LoopFetch::TerminalResized { pty_id, cols, rows, checkpoint } => {
+                    app.store.terminal_pane_resized(&pty_id, cols, rows, checkpoint);
+                }
+                LoopFetch::TerminalReady { pty_id } => {
+                    app.store.terminal_pane_ready(&pty_id);
+                }
+                LoopFetch::TerminalAttached { pty_id, size, controller } => {
+                    app.store.terminal_pane_attached(&pty_id, size, controller);
+                }
+                LoopFetch::TerminalController { pty_id, controller } => {
+                    app.store.terminal_pane_controller(&pty_id, controller);
+                }
+                LoopFetch::TerminalFailure { pty_id, message } => {
+                    app.store.terminal_pane_failure(&pty_id, &message);
                 }
                 // #4: the footer location label — `abbreviateHome(cwd)`
                 // plus `:{branch}` when vcs resolves one

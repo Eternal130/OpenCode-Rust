@@ -67,6 +67,7 @@ pub mod spike;
 pub mod stderr_redirect;
 pub mod storage;
 pub mod store;
+pub mod terminal_pane;
 pub mod terminal_proto;
 pub mod theme;
 pub mod wrap;

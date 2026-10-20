@@ -47,9 +47,9 @@ fn snapshot(id: &str, parent: Option<&str>) -> SessionSnapshot {
         parent_id: parent.map(str::to_owned),
         time_idle: None,
         viewed: None,
+        ..Default::default()
     }
 }
-
 fn permission(id: &str, session: &str) -> PermissionRequest {
     serde_json::from_value(serde_json::json!({
         "id": id,

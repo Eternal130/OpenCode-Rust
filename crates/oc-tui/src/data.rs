@@ -123,7 +123,12 @@ impl BusEvent {
 /// model selection (`SessionInfo.model`) — the TUI selection chain's
 /// per-session restore input (v2 `durableSelection`,
 /// context/local.tsx:258-266).
-#[derive(Debug, Clone, PartialEq)]
+/// `time_updated` / `time_created` / `directory` / `project_id` carry
+/// the wire's `time.updated` / `time.created` / `location.directory` /
+/// `projectID` — TUI-5/6's `DialogOpen` and the
+/// session-list date groups / fallback titles / footers read them
+/// (`None` when an older snapshot path omits them).
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SessionSnapshot {
     pub id: String,
     pub title: Option<String>,
@@ -137,6 +142,17 @@ pub struct SessionSnapshot {
     pub viewed: Option<f64>,
     /// The session record's model (`{providerID, id, variant?}`).
     pub model: Option<SessionModelRef>,
+    /// `time.updated` (epoch seconds) — the list ORDER + the date
+    /// groups / time-ago footers (TUI-5/6).
+    pub time_updated: Option<f64>,
+    /// `time.created` (epoch seconds) — the untitled fallback title's
+    /// timestamp (`withTimestampedFallback`, TUI-6).
+    pub time_created: Option<f64>,
+    /// `location.directory` — the row footer's project-relative
+    /// basename source (TUI-6).
+    pub directory: Option<String>,
+    /// `projectID` — the `DialogOpen` footer's project label (TUI-5).
+    pub project_id: Option<String>,
 }
 
 /// The durable model off a session record (`ModelRef` subset).
@@ -364,6 +380,10 @@ impl ResyncSource for HttpResync {
                     id: model.id,
                     variant: model.variant,
                 }),
+                time_updated: Some(session.time.updated),
+                time_created: Some(session.time.created),
+                directory: Some(session.location.directory),
+                project_id: Some(session.project_id),
             })
             .collect())
     }
@@ -1087,6 +1107,7 @@ mod tests {
             parent_id: None,
             time_idle: idle,
             viewed,
+            ..Default::default()
         };
         let sessions = vec![
             session("fresh", Some(100.0), Some(50.0)), // idle > viewed → unread
