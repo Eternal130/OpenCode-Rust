@@ -101,7 +101,10 @@ pub use registrations::{
     PluginKeymapCommand, PluginMcp, PluginRoute, PluginRpc, PluginSkill, PluginSlotClaim,
     PluginState, PluginStatus, PluginTheme, PluginTool, RegistrationSnapshot,
 };
-pub use resolve::{parse_ops, resolve, PluginOp, PluginSourceKind, Resolution, ResolvedPlugin};
+pub use resolve::{
+    discover_directory_ops, parse_ops, resolve, PluginOp, PluginSourceKind, Resolution,
+    ResolvedPlugin, PLUGIN_SOURCE_DIRECTORIES,
+};
 pub use supervisor::{HostError, StoragePort, StorageScanQuery, SupervisorConfig};
 pub use tap::{BroadcastTap, TapEvent};
 pub use ui::{PluginDialogOption, PluginDialogSpec, PluginSectionSpec, UiRequest};
