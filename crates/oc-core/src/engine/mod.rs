@@ -347,7 +347,9 @@ pub struct Engine {
     /// The shared transport every per-location provider overlay binds
     /// onto (the engine resolver and each location overlay share one).
     facade_transport: SharedTransport,
-    projects: Arc<crate::project::SqliteProjectStore>,
+    /// The project store (v2 `Project.Service` persistence): resolve /
+    /// activate / update over the shared database.
+    pub projects: Arc<crate::project::SqliteProjectStore>,
     tool_output: Arc<ToolOutput>,
     /// The v2 location service map (graph lifecycle authority: adopt /
     /// invalidate / reload + the TTL sweeper).
@@ -596,6 +598,72 @@ impl Engine {
             plugin_source: options.plugin_source.clone(),
             app: options.app,
         };
+        // DB-D2 (location-lifecycle.ts:36-45): every durable session
+        // event re-activates its location's project (`Project.activate`,
+        // 60 s rate-limited inside the store). v2 forks the activate off
+        // the listener so the write never blocks publish — the spawn
+        // mirrors that. Registered once at the engine level: per-location
+        // listeners would each activate their own project id, and the
+        // rate limiter dedupes exactly like v2's `activated` map.
+        {
+            let projects = Arc::clone(&engine.projects);
+            let services = engine.services.clone();
+            let handle = tokio::runtime::Handle::current();
+            let listener: crate::bus::Listener = {
+                let bus = (*engine.bus).clone();
+                Arc::new(move |event| {
+                    if event.durable.is_none() || !event.type_.starts_with("session.") {
+                        return Ok(());
+                    }
+                    let Some(location) = event.location.clone() else {
+                        return Ok(());
+                    };
+                    let Some(services) = services.get(&LocationRef::from(&location)) else {
+                        return Ok(());
+                    };
+                    let project_id = services.project.id.clone();
+                    let bus = bus.clone();
+                    let projects = Arc::clone(&projects);
+                    handle.spawn(async move {
+                        if let Some(info) = projects.activate(&project_id).await {
+                            // Location-stamped publish (the ref's listener
+                            // activates on the location-scoped bus handle —
+                            // lifecycle.ts:37-45).
+                            if let Some(definition) =
+                                crate::bus::registry::by_type(crate::bus::registry::PROJECT_UPDATED)
+                            {
+                                let options = crate::bus::PublishOptions {
+                                    location: Some(location),
+                                    ..Default::default()
+                                };
+                                let _ = bus.publish(definition, info.to_json(), options).await;
+                            }
+                        }
+                    });
+                    Ok(())
+                })
+            };
+            engine.bus.listen(listener).detach();
+        }
+        // DB-D12 (v1-migration layer — forkScoped at boot): move legacy v1
+        // content (`session`/`message`/`part`) into `session_v2` /
+        // `session_message` in the background. Fresh v2 databases have no
+        // legacy `session` table and complete immediately; the KV state
+        // machine (`migration.v1-v2`) makes reruns resume or no-op.
+        {
+            let db = Arc::clone(&engine.db);
+            let data_root = engine.data_root.clone();
+            tokio::spawn(async move {
+                let _ = crate::database::v1_migration::run(
+                    &db,
+                    crate::database::v1_migration::RunOptions {
+                        data_root: Some(data_root),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            });
+        }
         engine
     }
 
@@ -661,12 +729,23 @@ impl Engine {
     // -------------------------------------------------------------------
 
     async fn assemble(&self, location: &LocationRef) -> Result<Arc<LocationServices>, BootError> {
-        // Project identity: worktree + project id.
+        // Project identity: worktree + project id. DB-D3: resolution
+        // publishes onto the engine bus (`worktree.resolved` durable
+        // facts + `project.updated`), not into the void — the session
+        // projector re-owns adopted sessions off those events.
+        let project_events = Arc::new(crate::project::BusProjectEvents::new((*self.bus).clone()));
         let project_resolver = crate::project::Resolver::new(
             Arc::clone(&self.projects) as Arc<dyn crate::project::ProjectStore>,
-            Arc::new(crate::project::NoEvents),
+            Arc::clone(&project_events) as Arc<dyn crate::project::ProjectEvents>,
         );
         let project = project_resolver.resolve(location.as_path()).await;
+        // DB-D2 (location-lifecycle.ts:34): activating the location's
+        // project records activity for recency ordering — the WRITE only.
+        // The wire frame (`project.updated`, location-stamped) is owned by
+        // the server announce module (the location-start announcement the
+        // m1 goldens pin); a second unstamped publish here would duplicate
+        // it, so assemble never publishes.
+        let _ = self.projects.activate(&project.id).await;
         let worktree = project.canonical.clone();
 
         // The config snapshot for this location. `OPENCODE_CONFIG` (the
@@ -1756,6 +1835,7 @@ fn opencode_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
     InternalPlugin::new("opencode.tool.opencode", move |hooks, ports| {
         let db = inputs.tool_services.db.clone().expect("tool services db");
         let bus = inputs.tool_services.bus.clone().expect("tool services bus");
+        let bus_events = Arc::new(crate::project::BusProjectEvents::new(bus.clone()));
         tool::register_builtin(
             ports.tools,
             hooks,
@@ -1773,10 +1853,7 @@ fn opencode_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
                     services: inputs.services(),
                     location: inputs.location(),
                 }),
-                projects: crate::project::Resolver::new(
-                    Arc::clone(&inputs.projects),
-                    Arc::new(crate::project::NoEvents),
-                ),
+                projects: crate::project::Resolver::new(Arc::clone(&inputs.projects), bus_events),
                 home: inputs.home.clone(),
                 ids: Arc::clone(&inputs.ids),
             }),

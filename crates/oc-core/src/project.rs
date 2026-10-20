@@ -17,15 +17,15 @@ use std::process::Command;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use sha2::{Digest, Sha256};
+use sha1::{Digest as _, Sha1};
 
-/// `Hash.fast` (v2 uses sha1; any stable content hash preserves identity
-/// semantics — v2 cross-language ids are never persisted across hosts).
+/// `Hash.fast` (util/hash.ts:4-7): SHA-1 hex (40 chars). DB-D1: the
+/// project id format is v2's exact `Hash.fast` output — v2 databases
+/// shared with (or imported into) the port must land on the SAME project
+/// row per repo, never a SHA-256 twin row.
 #[must_use]
 pub fn hash_fast(input: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_bytes());
-    let digest = hasher.finalize();
+    let digest = Sha1::digest(input.as_bytes());
     let mut out = String::with_capacity(digest.len() * 2);
     for byte in digest {
         use std::fmt::Write as _;
@@ -72,6 +72,92 @@ pub struct ProjectRow {
     pub vcs: Option<String>,
 }
 
+/// `Project.Icon` (schema/project.ts:24-28) — optional triple.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProjectIcon {
+    pub url: Option<String>,
+    pub r#override: Option<String>,
+    pub color: Option<String>,
+}
+
+/// `Project.Info` (schema/project.ts:40-49) — the full `project` row in
+/// its wire shape. Event payloads (`project.updated`) and update
+/// responses carry this, not the resolution subset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectInfo {
+    pub id: String,
+    pub canonical: PathBuf,
+    pub vcs: Option<String>,
+    pub name: Option<String>,
+    pub icon: Option<ProjectIcon>,
+    /// Decoded `commands` JSON (`{start?}`), when set.
+    pub commands: Option<serde_json::Value>,
+    pub sandboxes: Vec<String>,
+    pub time_created: i64,
+    pub time_updated: i64,
+    pub time_active: i64,
+}
+
+impl ProjectInfo {
+    /// The v2 `Project.Info` wire JSON — optional members are ABSENT
+    /// when unset (never explicit `null`; HTTP-H2 semantics).
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        let icon = self.icon.as_ref().map(|icon| {
+            let mut value = json!({});
+            if let Some(url) = &icon.url {
+                value["url"] = json!(url);
+            }
+            if let Some(override_) = &icon.r#override {
+                value["override"] = json!(override_);
+            }
+            if let Some(color) = &icon.color {
+                value["color"] = json!(color);
+            }
+            value
+        });
+        let mut value = json!({
+            "id": self.id,
+            "canonical": self.canonical.to_string_lossy(),
+            "time": {
+                "created": self.time_created,
+                "updated": self.time_updated,
+                "active": self.time_active,
+            },
+            "sandboxes": self.sandboxes,
+        });
+        if let Some(vcs) = &self.vcs {
+            value["vcs"] = json!(vcs);
+        }
+        if let Some(name) = &self.name {
+            value["name"] = json!(name);
+        }
+        if let Some(icon) = icon {
+            value["icon"] = icon;
+        }
+        if let Some(commands) = &self.commands {
+            value["commands"] = commands.clone();
+        }
+        value
+    }
+}
+
+/// `Project.UpdateInput` (schema/project.ts:52-58): `None` leaves a
+/// column untouched; an empty string (or a `commands` object without a
+/// non-empty `start`) CLEARS it (project.ts:219-226).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct UpdateInput {
+    pub project_id: String,
+    pub canonical: Option<PathBuf>,
+    pub name: Option<String>,
+    pub icon_override: Option<String>,
+    pub icon_color: Option<String>,
+    /// `Some` when the request carried `commands`: the inner value is
+    /// `Some({start})` for a non-empty start, `None` to clear.
+    pub commands: Option<Option<serde_json::Value>>,
+}
+
 /// Persisted worktree row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeRow {
@@ -86,6 +172,10 @@ pub struct WorktreeResolved {
     pub project_id: String,
     pub directory: PathBuf,
     pub previous: String,
+    /// Markerless directory-keyed projects nested under `directory`
+    /// whose nearest VCS marker resolves to it — their sessions are
+    /// re-owned by this event's project (project.ts:175-192).
+    pub adopted: Option<Vec<String>>,
 }
 
 /// Persistence boundary for project resolution. Async since the sqlite
@@ -102,6 +192,15 @@ pub trait ProjectStore: Send + Sync {
     async fn insert_worktree(&self, row: &WorktreeRow);
     async fn list_projects(&self) -> Vec<ProjectRow>;
     async fn list_worktrees(&self) -> Vec<WorktreeRow>;
+    /// Full-row read (`Project.Info`) for event payloads and updates.
+    async fn project_info(&self, id: &str) -> Option<ProjectInfo>;
+    /// Markerless (`vcs IS NULL`) project rows whose canonical directory
+    /// falls under `directory` (the string range `dir .. dir+"\uffff"`)
+    /// — candidates for the adoption scan (project.ts:178-186).
+    async fn markerless_projects_under(&self, directory: &Path) -> Vec<(String, PathBuf)> {
+        let _ = directory;
+        Vec::new()
+    }
 }
 
 /// In-memory store (tests).
@@ -166,8 +265,40 @@ impl ProjectStore for MemoryProjectStore {
         self.projects.lock().unwrap_or_else(unpoison).clone()
     }
 
+    async fn project_info(&self, id: &str) -> Option<ProjectInfo> {
+        self.projects.lock().unwrap_or_else(unpoison).iter().find(|row| row.id == id).map(|row| {
+            ProjectInfo {
+                id: row.id.clone(),
+                canonical: row.canonical.clone(),
+                vcs: row.vcs.clone(),
+                name: None,
+                icon: None,
+                commands: None,
+                sandboxes: Vec::new(),
+                time_created: 0,
+                time_updated: 0,
+                time_active: 0,
+            }
+        })
+    }
+
     async fn list_worktrees(&self) -> Vec<WorktreeRow> {
         self.worktrees.lock().unwrap_or_else(unpoison).clone()
+    }
+
+    async fn markerless_projects_under(&self, directory: &Path) -> Vec<(String, PathBuf)> {
+        let prefix = directory.to_string_lossy().into_owned();
+        self.projects
+            .lock()
+            .unwrap_or_else(unpoison)
+            .iter()
+            .filter(|row| row.vcs.is_none())
+            .filter(|row| {
+                let worktree = row.canonical.to_string_lossy();
+                worktree.starts_with(&prefix)
+            })
+            .map(|row| (row.id.clone(), row.canonical.clone()))
+            .collect()
     }
 }
 
@@ -187,13 +318,33 @@ impl ProjectStore for MemoryProjectStore {
 /// clones share the id).
 pub struct SqliteProjectStore {
     db: crate::database::Database,
+    /// DB-D2 rate limiter: last `activate` write per project id
+    /// (`activated` map, project.ts:237).
+    last_activated: std::sync::Mutex<std::collections::HashMap<String, i64>>,
+    /// `ACTIVATE_INTERVAL` (project.ts:70) in ms.
+    activate_interval_ms: i64,
 }
 
+/// `ACTIVATE_INTERVAL = 60_000` (project.ts:70).
+pub const ACTIVATE_INTERVAL_MS: i64 = 60_000;
+
 impl SqliteProjectStore {
-    /// Store over an open database.
+    /// Store over an open database with the v2 activate interval.
     #[must_use]
     pub fn new(db: crate::database::Database) -> Self {
-        Self { db }
+        Self::new_with_activate_interval(db, ACTIVATE_INTERVAL_MS)
+    }
+
+    /// Store with an explicit activate interval (the v2 constant in
+    /// production; tests collapse it to exercise the two sides of the
+    /// rate limit deterministically).
+    #[must_use]
+    pub fn new_with_activate_interval(db: crate::database::Database, interval_ms: i64) -> Self {
+        Self {
+            db,
+            last_activated: std::sync::Mutex::new(std::collections::HashMap::new()),
+            activate_interval_ms: interval_ms,
+        }
     }
 
     fn db_worktree(row: &ProjectRow) -> Result<crate::database::schema::ProjectRow, String> {
@@ -204,6 +355,132 @@ impl SqliteProjectStore {
         )
         .map_err(|error| error.to_string())
     }
+
+    /// `Project.activate` (project.ts:241-255): bump `time_active` to
+    /// now, at most once per [`ACTIVATE_INTERVAL_MS`] per project, and
+    /// return the updated row for the `project.updated` announcement.
+    /// `None` = suppressed by the rate limit, or no such project. The
+    /// bump deliberately keeps `time_updated` out (activity is not a
+    /// metadata edit).
+    pub async fn activate(&self, id: &str) -> Option<ProjectInfo> {
+        let now = crate::database::migrations::now_ms();
+        {
+            let mut last = self.last_activated.lock().unwrap_or_else(unpoison);
+            if now - last.get(id).copied().unwrap_or(0) < self.activate_interval_ms {
+                return None;
+            }
+            last.insert(id.to_string(), now);
+        }
+        let id = id.to_string();
+        self.db
+            .transaction(move |tx| {
+                let row = tx.conn().query_row(
+                    "UPDATE project SET time_active = ?2, time_updated = time_updated \
+                     WHERE id = ?1 \
+                     RETURNING id, worktree, vcs, name, icon_url, icon_url_override, \
+                     icon_color, commands, sandboxes, time_created, time_updated, time_active",
+                    rusqlite::params![id, now],
+                    read_project_info,
+                );
+                Ok(row.ok())
+            })
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// `Project.update` (project.ts:215-239, DB-D4): update
+    /// canonical/name/icon/commands — `None` input fields stay
+    /// untouched, empty strings (and a `commands` without a non-empty
+    /// `start`) CLEAR the column — then return the REAL updated row
+    /// (`Err` = `Project.NotFoundError`).
+    pub async fn update(&self, input: &UpdateInput) -> Result<ProjectInfo, String> {
+        let canonical = match &input.canonical {
+            Some(path) => Some(
+                crate::database::schema::absolute_storage(&path.to_string_lossy())
+                    .map_err(|error| error.to_string())?,
+            ),
+            None => None,
+        };
+        let id = input.project_id.clone();
+        let now = crate::database::migrations::now_ms();
+        let mut assignments: Vec<String> = Vec::new();
+        let mut params: Vec<Box<dyn rusqlite::ToSql + Send>> = Vec::new();
+        // v2 drizzle `set`: an `undefined` field keeps the column (no set
+        // key); a present value writes it, with the empty string CLEARING
+        // to NULL (`input.name || null` — project.ts:219-226).
+        let clear = |value: Option<String>| value.filter(|value| !value.is_empty());
+        let mut push = |column: &str,
+                        value: Option<String>,
+                        params: &mut Vec<Box<dyn rusqlite::ToSql + Send>>| {
+            params.push(Box::new(value));
+            assignments.push(format!("{column} = ?{}", params.len()));
+        };
+        if let Some(canonical) = canonical {
+            push("worktree", Some(canonical), &mut params);
+        }
+        if input.name.is_some() {
+            push("name", clear(input.name.clone()), &mut params);
+        }
+        if input.icon_override.is_some() {
+            push("icon_url_override", clear(input.icon_override.clone()), &mut params);
+        }
+        if input.icon_color.is_some() {
+            push("icon_color", clear(input.icon_color.clone()), &mut params);
+        }
+        if let Some(commands) = &input.commands {
+            let encoded = commands
+                .as_ref()
+                .map(|value| serde_json::to_string(value).unwrap_or_else(|_| "{}".into()));
+            push("commands", encoded, &mut params);
+        }
+        push("time_updated", Some(now.to_string()), &mut params);
+        params.push(Box::new(id.clone()));
+        let sql = format!(
+            "UPDATE project SET {} WHERE id = ?{} \
+             RETURNING id, worktree, vcs, name, icon_url, icon_url_override, \
+             icon_color, commands, sandboxes, time_created, time_updated, time_active",
+            assignments.join(", "),
+            params.len()
+        );
+        self.db
+            .transaction(move |tx| {
+                let placeholders: Vec<&dyn rusqlite::ToSql> =
+                    params.iter().map(|value| value.as_ref() as &dyn rusqlite::ToSql).collect();
+                let row = tx.conn().query_row(&sql, placeholders.as_slice(), read_project_info);
+                match row {
+                    Ok(info) => Ok(Some(info)),
+                    Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                    Err(error) => Err(crate::database::DbError::Sqlite(error)),
+                }
+            })
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("project not found: {id}"))
+    }
+}
+
+/// Row reader building the full [`ProjectInfo`] (column order fixed by
+/// the SELECT/RETURNING lists above).
+fn read_project_info(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectInfo> {
+    let icon_url: Option<String> = row.get(4)?;
+    let icon_override: Option<String> = row.get(5)?;
+    let icon_color: Option<String> = row.get(6)?;
+    let commands: Option<String> = row.get(7)?;
+    let sandboxes: String = row.get(8)?;
+    Ok(ProjectInfo {
+        id: row.get(0)?,
+        canonical: PathBuf::from(row.get::<_, String>(1)?),
+        vcs: row.get(2)?,
+        name: row.get(3)?,
+        icon: (icon_url.is_some() || icon_override.is_some() || icon_color.is_some())
+            .then_some(ProjectIcon { url: icon_url, r#override: icon_override, color: icon_color }),
+        commands: commands.as_deref().and_then(|raw| serde_json::from_str(raw).ok()),
+        sandboxes: serde_json::from_str(&sandboxes).unwrap_or_default(),
+        time_created: row.get(9)?,
+        time_updated: row.get(10)?,
+        time_active: row.get(11)?,
+    })
 }
 
 #[async_trait]
@@ -222,6 +499,24 @@ impl ProjectStore for SqliteProjectStore {
                             vcs: row.get(2)?,
                         })
                     },
+                );
+                Ok(row.ok())
+            })
+            .await
+            .ok()
+            .flatten()
+    }
+
+    async fn project_info(&self, id: &str) -> Option<ProjectInfo> {
+        let id = id.to_string();
+        self.db
+            .transaction(move |tx| {
+                let row = tx.conn().query_row(
+                    "SELECT id, worktree, vcs, name, icon_url, icon_url_override, icon_color, \
+                     commands, sandboxes, time_created, time_updated, time_active \
+                     FROM project WHERE id = ?1",
+                    rusqlite::params![id],
+                    read_project_info,
                 );
                 Ok(row.ok())
             })
@@ -373,6 +668,27 @@ impl ProjectStore for SqliteProjectStore {
             .await
             .unwrap_or_default()
     }
+
+    async fn markerless_projects_under(&self, directory: &Path) -> Vec<(String, PathBuf)> {
+        let prefix = crate::database::schema::absolute_storage(&directory.to_string_lossy())
+            .unwrap_or_default();
+        let upper = format!("{prefix}\u{ffff}");
+        self.db
+            .transaction(move |tx| {
+                let mut statement = tx.conn().prepare(
+                    "SELECT id, worktree FROM project \
+                     WHERE vcs IS NULL AND worktree >= ?1 AND worktree <= ?2",
+                )?;
+                let rows = statement
+                    .query_map(rusqlite::params![prefix, upper], |row| {
+                        Ok((row.get::<_, String>(0)?, PathBuf::from(row.get::<_, String>(1)?)))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .unwrap_or_default()
+    }
 }
 
 impl SqliteProjectStore {
@@ -442,16 +758,76 @@ impl SqliteProjectStore {
 }
 
 /// Resolution events (bus integration lands later).
+///
+/// DB-D3: async because the production implementation publishes onto
+/// the engine bus.
+#[async_trait]
 pub trait ProjectEvents: Send + Sync {
-    fn project_updated(&self, _row: &ProjectRow) {}
-    fn worktree_resolved(&self, _event: &WorktreeResolved) {}
+    async fn project_updated(&self, _row: &ProjectInfo) {}
+    async fn worktree_resolved(&self, _event: &WorktreeResolved) {}
 }
 
 /// No-op events.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoEvents;
 
+#[async_trait]
+#[allow(
+    clippy::unused_async,
+    clippy::unused_async_trait_impl,
+    reason = "async surface parity with the bus-backed producer; no-op body"
+)]
 impl ProjectEvents for NoEvents {}
+
+/// Bus-backed [`ProjectEvents`] (DB-D3): the production producer.
+///
+/// - `project_updated` → ephemeral `project.updated` (registry
+///   [`registry::PROJECT_UPDATED`]) with the full `Project.Info` payload
+///   (`fromRow(row)`, project.ts:60-61 + 129). v2's Project service is
+///   global, so the publish carries no location — exactly like the ref.
+/// - `worktree_resolved` → durable `worktree.resolved` (aggregate
+///   `projectID`, version 1) with `{projectID, directory, previous,
+///   adopted?}` — the session projector's re-own trigger
+///   (session/projector.rs `project_worktree`).
+pub struct BusProjectEvents {
+    bus: crate::bus::Bus,
+}
+
+impl BusProjectEvents {
+    #[must_use]
+    pub fn new(bus: crate::bus::Bus) -> Self {
+        Self { bus }
+    }
+}
+
+#[async_trait]
+impl ProjectEvents for BusProjectEvents {
+    async fn project_updated(&self, row: &ProjectInfo) {
+        let Some(definition) = crate::bus::registry::by_type(crate::bus::registry::PROJECT_UPDATED)
+        else {
+            return;
+        };
+        let _ = self
+            .bus
+            .publish(definition, row.to_json(), crate::bus::PublishOptions::default())
+            .await;
+    }
+
+    async fn worktree_resolved(&self, event: &WorktreeResolved) {
+        let Some(definition) = crate::bus::registry::by_type("worktree.resolved") else {
+            return;
+        };
+        let mut data = serde_json::json!({
+            "projectID": event.project_id,
+            "directory": event.directory.to_string_lossy(),
+            "previous": event.previous,
+        });
+        if let Some(adopted) = &event.adopted {
+            data["adopted"] = serde_json::json!(adopted);
+        }
+        let _ = self.bus.publish(definition, data, crate::bus::PublishOptions::default()).await;
+    }
+}
 
 /// `Project.root` — nearest `.git`/`.hg` ancestor directory (filesystem only;
 /// permission checks rely on this never executing VCS commands).
@@ -561,8 +937,8 @@ impl Resolver {
         if let Some(previous) = &previous_canonical {
             if *previous != project.canonical && !previous.exists() {
                 self.store.reassign_canonical(&project.id, &project.canonical).await;
-                if let Some(row) = self.store.project(&project.id).await {
-                    self.events.project_updated(&row);
+                if let Some(row) = self.store.project_info(&project.id).await {
+                    self.events.project_updated(&row).await;
                 }
             }
         }
@@ -584,17 +960,62 @@ impl Resolver {
             self.store
                 .insert_worktree(&WorktreeRow {
                     project_id: project.id.clone(),
-                    directory: resolved_directory,
+                    directory: resolved_directory.clone(),
                     strategy,
                 })
                 .await;
-            self.events.worktree_resolved(&WorktreeResolved {
-                project_id: project.id.clone(),
-                directory,
-                previous: project.previous.clone().unwrap_or_else(|| "global".to_string()),
-            });
+            // Adoption scan (project.ts:175-192): markerless
+            // directory-keyed projects nested under the newly resolved
+            // directory whose nearest VCS marker IS this directory's
+            // marker — their sessions get re-owned by the event below.
+            let adopted: Vec<String> = self
+                .store
+                .markerless_projects_under(&resolved_directory)
+                .await
+                .into_iter()
+                .filter(|(id, candidate)| {
+                    id != &project.id
+                        && contains_path(&resolved_directory, candidate)
+                        && marker_resolves_to(candidate, &resolved_directory)
+                })
+                .map(|(id, _)| id)
+                .collect();
+            self.events
+                .worktree_resolved(&WorktreeResolved {
+                    project_id: project.id.clone(),
+                    directory,
+                    previous: project.previous.clone().unwrap_or_else(|| "global".to_string()),
+                    adopted: (!adopted.is_empty()).then_some(adopted),
+                })
+                .await;
         }
         project
+    }
+}
+
+/// `FSUtil.contains` (util/fs-util.ts:280-283): equal or nested under.
+fn contains_path(parent: &Path, child: &Path) -> bool {
+    child.starts_with(parent)
+}
+
+/// project.ts:184-190: walking up from `candidate` (stop inclusive at
+/// `directory`), the first `.git`/`.hg` marker sits in `directory`
+/// itself — the candidate has no nearer repository of its own.
+fn marker_resolves_to(candidate: &Path, directory: &Path) -> bool {
+    let mut current = candidate.to_path_buf();
+    loop {
+        for marker in [".git", ".hg"] {
+            if current.join(marker).exists() {
+                return crate::config::resolve_path(&current) == directory;
+            }
+        }
+        if current == directory {
+            return false;
+        }
+        let Some(parent) = current.parent() else {
+            return false;
+        };
+        current = parent.to_path_buf();
     }
 }
 
@@ -912,8 +1333,9 @@ mod tests {
         struct Recorder {
             resolved: std::sync::Mutex<Vec<WorktreeResolved>>,
         }
+        #[async_trait]
         impl ProjectEvents for Recorder {
-            fn worktree_resolved(&self, event: &WorktreeResolved) {
+            async fn worktree_resolved(&self, event: &WorktreeResolved) {
                 self.resolved.lock().unwrap().push(event.clone());
             }
         }
@@ -939,8 +1361,9 @@ mod tests {
         struct Updated {
             count: std::sync::Mutex<usize>,
         }
+        #[async_trait]
         impl ProjectEvents for Updated {
-            fn project_updated(&self, _row: &ProjectRow) {
+            async fn project_updated(&self, _row: &ProjectInfo) {
                 *self.count.lock().unwrap() += 1;
             }
         }
