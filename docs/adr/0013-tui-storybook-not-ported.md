@@ -1,0 +1,11 @@
+# ADR-0013: TUI storybook feature-plugin 不移植（上游自 declared 开发工具，正常启动不注册）
+- 状态：accepted
+- 日期：2026-10-20
+- 上游版本：2.0.24
+- 背景：ledger SURF-P1-STORYBOOK（10-surfaces.md P1-storybook；报告自注"仅开发可见（严格说 P2，列 P1 备查）"）。v2 TUI 有内建 storybook feature-plugin，`builtins.ts` 注册。
+- 决定：不移植。判据（v2 自身不要求）：上游源码把 Storybook 排除在正常启动之外——`builtins.ts:24-29` 仅当 `process.env.OPENCODE_STORY` 为真才并入注册表，且带上游注释："The storybook is a development tool; keep its route and palette commands out of normal launches and register it only for OPENCODE_STORY runs."（其余 11 个内件 Stats/Merman/Latex 等为无条件注册，属各自条目）。因此生产行为两侧等价：无 env 时 ref 不注册、rust 不存在。storybook 本体（`packages/storybook` + feature-plugin）是上游 TS 组件的开发沙盒；Rust TUI 的组件开发工具链是自有的 golden/PTY/tui-diff 差分机架（ROADMAP §4），移植上游组件画廊对 Rust 端无对应物可挂载。
+- 后果：`OPENCODE_STORY=1` 下 Rust TUI 不出现 storybook 路由/命令；TUI-22（OPENCODE_ROUTE/OPENCODE_STORY 路由缝 + stats/plugins 面板）是独立条目、不受本 ADR 影响、维持 open。SURF-P2-STORYBOOK（packages/storybook 包）同样不因本 ADR 结案（其自身状态由该条目另行裁定）。
+- 证据（path:line / 测试）：
+  - ref `packages/tui/src/plugin/builtins.ts:15`（import）、`:24-29`（`...(process.env.OPENCODE_STORY ? [Storybook] : [])` + 开发工具注释）
+  - rust `crates/oc-tui/src`、`crates/oc-plugin-host/src` 全文 grep `OPENCODE_STORY|storybook|Storybook` 零命中（生产注册表与 ref 无 env 时一致）
+- 复审日期：2027-04-20

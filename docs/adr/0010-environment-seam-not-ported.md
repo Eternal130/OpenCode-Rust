@@ -1,0 +1,11 @@
+# ADR-0010: environment 执行平面缝不移植（v2.0.24 自身零 workspace driver）
+- 状态：accepted
+- 日期：2026-10-20
+- 上游版本：2.0.24
+- 背景：ledger RUNTIME-ENVIRONMENT（11-core-misc.md #15，别名 map-5/6/7）。ref 有 `environment/`（Files+spawner 抽象缝：environment/files/local/exec-defaults/memory/unavailable），14 个 fs 消费者经缝访问；Rust 工具直用 `std::fs`。条目自述"两侧均无 driver，本地行为等价；远程工作区就绪度差异"。
+- 决定：不移植该缝。判据（v2 自身不要求任何我们缺失的行为）：① v2.0.24 的 workspace driver 注册表为空——`workspace/driver.ts:88` 即 `registryNode({})`，任何 `workspace.connect` 都会 ProviderNotFound/orDie；② `environment.ts:24-32` 仅在 `location.workspaceID` 非空时走远程分支，而主线（CLI/TUI/server）没有任何 workspaceID 生产者（DB 列仅为透传，workspace 生命周期服务本身是 DB-WORKSPACE/DB-D13 另案的休眠表）；③ `unavailable.ts` 仅 workerd 目标使用（`server/src/workerd.ts:79`），Rust 无 workerd 目标；④ `memory.ts` 为测试设施。因此 v2 可达行为 = 本地 fs+本地 spawn，与 Rust 直用 std::fs 逐点等价。
+- 后果：不为"架构就绪度"预铺缝；若未来 v2 版本注册了真实远程 driver 或 workspaceID 获得主产线（届时属上游 >2.0.24 或休眠子系统激活），按新证据重开新条目。DB-WORKSPACE / DB-D13（workspace 生命周期服务与表）不受本 ADR 影响，维持各自状态。
+- 证据（path:line / 测试）：
+  - ref `packages/core/src/workspace/driver.ts:88`（空注册表）、`packages/core/src/environment/environment.ts:24-32`（workspaceID 条件绑定本地驱动）、`packages/server/src/workerd.ts:79`（unavailable 仅 workerd）
+  - rust `crates/oc-core/src/tool/read.rs:178-182`（直用 `std::fs::read_dir`，与 makeLocalDriver 路径等价）
+- 复审日期：2027-04-20

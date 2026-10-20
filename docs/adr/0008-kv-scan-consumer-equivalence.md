@@ -1,0 +1,12 @@
+# ADR-0008: KV.scan 以消费者等价覆盖结案（不移植通用 scan 原语）
+- 状态：accepted
+- 日期：2026-10-20
+- 上游版本：2.0.24
+- 背景：ledger DB-D10（09-database.md D10）称 KV.scan（前缀分页）未移植。ref 的 `KV.scan`（prefix/after/limit，limit 夹 1..1000 默认 100，prefixEnd 码点递增，limit+1 探测 next 游标）在树内唯一消费者是 `Job.pendingBackground`（重启恢复：循环分页直到取尽全部 background 记录）；另一潜在消费者 repository-cache 属 DB-D11（另案，open）。
+- 决定：不移植通用 `KV.scan` 原语。判据：scan 是 core 内部服务接口，不经 HTTP/openapi 暴露；其唯一在树消费者的可观察契约是"返回全部 background 恢复记录（按 key 序）"，Rust 用单条 `SELECT … WHERE key LIKE 'job.background/%' ORDER BY key`（无分页、全量列出）得到逐字节等价的返回集合——ref 的分页只是 DB 读批处理实现细节，不是行为契约。插件 guest 的 `ctx.storage.scan` 是另一子系统，由 open 条目 PLUG-KVSCAN-CURSOR 单独跟踪，不在本 ADR 范围。
+- 后果：不为"原语完整性"补通用 scan；若未来移植 repository-cache（DB-D11）或其他需要流式分页的消费者，按新条目重开并届时实现 scan（含 prefixEnd/limit 夹逼/limit+1 游标语义）。
+- 证据（path:line / 测试）：
+  - ref `packages/core/src/kv.ts:60-81`（scan 实现）、`packages/core/src/kv.ts:84-90`（prefixEnd）；唯一消费者 `packages/core/src/job.ts:443-451`（do/while 取尽分页）
+  - rust `crates/oc-core/src/jobs.rs:561-578`（pending_background：LIKE + ORDER BY key 全量）；`crates/oc-core/src/database/schema.rs:665-690`（kv_set/kv_get/kv_delete 在位）
+  - 全仓 grep（ref，排除测试）：core 内 `.scan(` 仅 `job.ts:445` 与 guest 存储 `plugin/host.ts:613`
+- 复审日期：2027-04-20

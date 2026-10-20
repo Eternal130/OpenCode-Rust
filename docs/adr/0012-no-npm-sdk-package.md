@@ -1,0 +1,11 @@
+# ADR-0012: 不发布 npm @opencode-ai/sdk 包（SDK 形态按 ADR-0003 由 CLI standalone + oc-client 承担）
+- 状态：accepted
+- 日期：2026-10-20
+- 上游版本：2.0.24
+- 背景：ledger SURF-P1-SDK（10-surfaces.md P1-sdk）。v2 的 npm SDK = 进程内嵌服务器（`internal/host.ts` 的 `createEmbeddedRoutes` ManagedRuntime）+ 生成的 `@opencode/client` 客户端 + 插件注册回调。Rust 侧仅有自用 `oc-client`。
+- 决定：不发布 JS/TS npm SDK 包。依据 ADR-0003（SDK 内嵌服务器形态由 CLI lifecycle 的 standalone service 承担）：SDK 的两个功能半体在 Rust 侧均有等价物——① 内嵌服务器形态 = `oc-cli/src/services/standalone.rs`（spawn `serve --stdio --port 0` + stdin 租约 + 随机口令，ADR-0003 已固化）；② 编程接入面 = `oc-client`（与 v2 `packages/client` 同源的 openapi 契约生成客户端）与 `oc-server/src/routes.gen.rs` 钉死的 HTTP/SSE 契约。剩余缺口仅是"npm 打包形态"这一分发渠道决策（与 npm/AUR/Homebrew 渠道同族，属发布管线而非行为 parity），v2 的行为契约（HTTP 面）我们已逐路由对齐，v2 自带的 @opencode-ai/sdk 客户端对我们服务器仍然线兼容可用。
+- 后果：不保证存在 Rust 侧维护的 npm SDK 包及其版本节奏；JS 生态消费者经 HTTP 契约接入（可用 v2 官方 SDK 指向本服务器）。若用户另行要求 npm 分发渠道，与 SURF 渠道族（npm/AUR/Homebrew）一并作为发布决策重评。
+- 证据（path:line / 测试）：
+  - ref `packages/sdk/src/opencode.ts:11`（create 透传）、`packages/sdk/src/promise.ts:43-61`（EmbeddedHost + `@opencode/client` 包装）、`packages/sdk/src/internal/host.ts:27-40`（进程内 createEmbeddedRoutes）
+  - rust `docs/adr/0003-sdk-embedded-server.md`；`crates/oc-cli/src/services/standalone.rs:100-118`（spawn/租约）；`crates/oc-client/Cargo.toml:3`（"generated Rust HTTP/SSE client SDK"）；契约锚 `crates/oc-server/src/routes.gen.rs`
+- 复审日期：2027-04-20

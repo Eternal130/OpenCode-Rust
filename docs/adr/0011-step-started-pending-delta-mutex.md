@@ -1,0 +1,11 @@
+# ADR-0011: Step.Started 与 pending delta 先后差以互斥性证明结案
+- 状态：accepted
+- 日期：2026-10-20
+- 上游版本：2.0.24
+- 背景：ledger RUNTIME-E01（01-session.md E-01，自述"理论性；两条件不可能同时成立"）。text-start 处理中 ref 先 `publishPendingDeltas()`（:408）后 `startAssistant()`（:411，惰性求值于 Text.Started 载荷）；Rust 先 `start_assistant()`（:577）后 `publish_pending_delta_batches()`（:578）。差异仅在"step 尚未开始 且 存在未 flush 的 delta 批"时才会在事件流上露出（ref 会把 delta 排在 Step.Started 之前，Rust 排在之后）。
+- 决定：以证明结案（同 ROADMAP D-07 "closed by proof" 模式）。互斥论证：① `startAssistant` 带 exactly-once 守卫并发布 Step.Started（ref :100-112）；② pending delta 批只能来自先前 fragment 的 Delta 累积；③ 任何 fragment Start（text/reasoning）臂都会先调 `startAssistant`（ref :405-414/:425-433；rust :574-580/:582-588），且每个 LLM 流以 step-start 打头（ref :402-404；rust :571-573）。故"首个 fragment Start"时刻 stepStarted 必为 false 且 pending 批必为空——两个条件无法同时成立；其后所有时刻 stepStarted 恒为 true，startAssistant 两侧均为 no-op。两侧可观察事件序列逐事件等价。
+- 后果：不发布仅理论上可达的排序补丁；若未来事件臂重构（如允许无 step-start 的流、或 delta 早于任何 fragment start 到达）须重开。T-01/T-03（进度/批处理）是独立条目，不受本 ADR 影响。
+- 证据（path:line / 测试）：
+  - ref `packages/core/src/session/runner/publish-llm-event.ts:100-112`（守卫）、`:402-414`（step-start / text-start 两臂的求值顺序）
+  - rust `crates/oc-core/src/session/runner/publisher.rs:568-580`（publish switch：StepStart :571-573；TextStart :574-580）
+- 复审日期：2027-04-20

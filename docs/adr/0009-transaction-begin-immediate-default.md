@@ -1,0 +1,11 @@
+# ADR-0009: 事务默认 BEGIN IMMEDIATE（v2 桥默认 deferred）为注册分歧
+- 状态：accepted
+- 日期：2026-10-20
+- 上游版本：2.0.24
+- 背景：ledger DB-D15（09-database.md D15）。ref 的 drizzle/effect 桥顶层事务默认 `begin deferred`（仅 `bus.ts:433,652` 两处显式 `behavior:"immediate"`）；Rust `Database::transaction` 默认 `BEGIN IMMEDIATE`，且 `database/mod.rs:44-47` 注释声称 "every opencode call site passes immediate"——与事实不符（14 个事务调用点仅 2 处 immediate）。注释失实是本条目的实际缺陷。
+- 决定：接受 IMMEDIATE-everywhere 为注册分歧并以此 ADR 取代失实注释。判据：BEGIN 模式是桥/驱动层加锁时机策略，不出现在任何 HTTP 契约、事件负载或 DB 行格式中；immediate 在 BEGIN 即取写锁，消除了 deferred 升级点 SQLITE_BUSY（无法安全重试的一类）——Rust 更保守而非更缺。v2 不要求 deferred 语义：它只是桥的缺省值。`transaction_deferred`（mod.rs:203-210）保留给需要 v2 同构的场合。
+- 后果：单进程主线（server 独占连接，`shared.conn` 互斥串行）无任何可观察差异；多进程共享库的边缘场景下，Rust 读事务（如 `schema.rs:795` kv_get 包在事务内）会提前持写锁、与写者串行——接受该代价换取无升级死锁。`mod.rs:44-47` 注释以本 ADR 为准（后续触碰该文件时可顺手改写，不单独立项）。
+- 证据（path:line / 测试）：
+  - ref `packages/core/src/database/drizzle/effect-sqlite/session.ts:168`（`begin ${config?.behavior ?? "deferred"}`）；immediate 仅 `packages/core/src/bus.ts:433`、`bus.ts:652`
+  - rust `crates/oc-core/src/database/mod.rs:191-201`（默认 Immediate）、`:203-210`（deferred 变体）、`:44-47`（被取代的注释）
+- 复审日期：2027-04-20
