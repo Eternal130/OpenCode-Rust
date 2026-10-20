@@ -45,7 +45,20 @@ if [ ! -x "$REPO/tools/dev-gate.sh" ]; then
   echo "missing executable $REPO/tools/dev-gate.sh (the structural safety rail)" >&2
   exit 5
 fi
-command -v opencode >/dev/null 2>&1 || { echo "opencode not in PATH" >&2; exit 5; }
+command -v opencode >/dev/null 2>&1 || true
+OC_BIN="${OC_LOOP_OPENCODE_BIN:-}"
+if [ -z "$OC_BIN" ]; then
+  for cand in "$(command -v opencode 2>/dev/null)" \
+              "$HOME/.opencode/bin/opencode" \
+              "/root/.opencode/bin/opencode" \
+              "$HOME/.local/share/opencode/bin/opencode"; do
+    if [ -n "$cand" ] && [ -x "$cand" ]; then OC_BIN="$cand"; break; fi
+  done
+fi
+if [ -z "$OC_BIN" ] || [ ! -x "$OC_BIN" ]; then
+  echo "opencode binary not found (cron PATH is minimal; set OC_LOOP_OPENCODE_BIN)" >&2
+  exit 5
+fi
 [ -f "$PROMPT_FILE" ] || { echo "missing $PROMPT_FILE" >&2; exit 5; }
 cd "$REPO" || exit 5
 mkdir -p "$LOG_DIR"
@@ -82,7 +95,7 @@ quota_retries=0
 for i in $(seq 1 "$MAX_ITERS"); do
   out="$LOG_DIR/session-$(date '+%Y%m%d-%H%M%S').log"
   log "iteration $i: fresh orchestrator session (log: $out)"
-  run_scope opencode run $RUN_FLAGS "$PROMPT" >"$out" 2>&1
+  run_scope "$OC_BIN" run $RUN_FLAGS "$PROMPT" >"$out" 2>&1
   rc=$?
   # Strip NULs; search only the tail window — markers are emitted at the end.
   tail_view="$(tail -c 200000 "$out" | tr -d '\000')"

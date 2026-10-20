@@ -20,7 +20,9 @@ BATCH_HANDOFF / PARITY_LOOP_DONE / PARITY_LOOP_BLOCKED），不要加引号或�
    - 对每个 .worktrees/lane-*：git -C <wt> log --oneline main..HEAD 与 status --short
 2) 孤儿 lane 收养（恢复轮不派发任何新 lane）：
    - 有 commit、树干净的 lane：按 §2G 派 verifier 复核 → 通过则 §2H 合并；不通过打回 fixing。
-   - 有脏文件、无 commit 的 lane：先读 diff 对照其 ledger scope——
+   - 有脏文件、无 commit 的 lane：先检查 worktree 内最新 mtime——
+     <30 分钟视为仍有活跃 writer（上一个会话可能还在收尾），本轮跳过只登记，
+     下一轮再查；确认安静后读 diff 对照 ledger scope——
      可救则 WIP 提交并继续原 lane；不可救则 git 舍弃，ledger 记 blocked 附原因。
    - 其余 0-ahead、0-dirty lane：确认后 git worktree remove 收缩。
 3) 用重建结果重写 docs/parity-loop-state.md（标注 "rebuilt from ledger+git"）。
