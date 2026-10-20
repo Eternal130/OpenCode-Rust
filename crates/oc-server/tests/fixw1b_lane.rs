@@ -483,20 +483,40 @@ async fn cd34_plugin_commands_surface_and_execute_through_the_real_boot() {
     let client = Client::new(&format!("http://{}/", handle.addr)).expect("client");
 
     // The plugin's registrations surface (the host load settles
-    // asynchronously — poll for the command rows).
+    // asynchronously — poll for the command rows). PLUG-D07: a
+    // location's plugin registrations apply only where that location's
+    // config layers activate the plugin, so the poll ADDRESSES the
+    // boot project (`config_location`, whose `opencode.json` declares
+    // the fixture) through the `location[directory]` query — the same
+    // location `create_session` below pins — instead of the §1
+    // middleware's process-cwd fallback (`crates/oc-server` under
+    // nextest, a plugin-less location whose activation set is empty by
+    // design).
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut names: Option<Vec<String>> = None;
+    let project_query = oc_client::types::CommandListQuery {
+        location: Some(oc_client::types::QueryLocation {
+            directory: Some(project.display().to_string()),
+        }),
+    };
     loop {
-        let listed_names: Vec<String> = client
-            .command()
-            .list(&oc_client::types::CommandListQuery::default())
-            .await
-            .ok()
-            .map(|listed| listed.data.into_iter().map(|command| command.name).collect())
-            .unwrap_or_default();
+        let listed = client.command().list(&project_query).await.ok();
+        let listed_names: Vec<String> = listed
+            .iter()
+            .flat_map(|listed| listed.data.iter().map(|command| command.name.clone()))
+            .collect();
         if listed_names.contains(&"plug.hello".to_owned())
             && listed_names.contains(&"plug.quiet".to_owned())
         {
+            // The response addressed the boot project, not the cwd
+            // fallback (guards the poll against silently regressing
+            // back to the plugin-less location).
+            let addressed = client.command().list(&project_query).await.expect("re-list");
+            assert_eq!(
+                addressed.location.directory,
+                project.display().to_string(),
+                "the poll addressed the boot project location"
+            );
             names = Some(listed_names);
             break;
         }
