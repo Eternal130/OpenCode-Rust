@@ -3185,7 +3185,8 @@ mod tests {
                     parent_id: None,
                     time_idle: None,
                     viewed: None,
-                    ..Default::default()},
+                    ..Default::default()
+                },
                 SessionSnapshot {
                     model: None,
                     id: "s_open".into(),
@@ -3193,7 +3194,8 @@ mod tests {
                     parent_id: None,
                     time_idle: None,
                     viewed: None,
-                    ..Default::default()},
+                    ..Default::default()
+                },
             ],
             unread: Vec::new(),
             messages: Vec::new(),
@@ -3784,13 +3786,11 @@ mod tests {
         store.set_open_url_sink(Some(std::rc::Rc::new(|_url: String| {})));
         let mut dispatcher = StoreDispatcher;
 
-        // open.menu → the (large) sessions list over the shared
-        // session.list routing.
+        // open.menu → DialogOpen (TUI-5, lane-tui2): the Sessions
+        // recents + Projects sections select at the large size
+        // (dialog-open.tsx:338's `size: "large"`).
         dispatcher.dispatch(&store, "open.menu", None);
-        assert!(matches!(
-            store.top_dialog().unwrap().kind,
-            DialogKind::ServerList { command: "session.list", title: "Open session or project" }
-        ));
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Open));
         assert_eq!(store.top_dialog().unwrap().size, crate::store::DialogSize::Large);
         store.clear_dialogs();
 
