@@ -244,17 +244,22 @@ pub mod builtin {
 }
 
 /// The config-driven skill table: discovered once per location boot from
-/// the loaded config snapshot.
+/// the loaded config snapshot. The table is interior-mutable so the
+/// engine's plugin seam (PLUG-D35 — `apply_location_plugins`) can merge
+/// `ctx.skill.transform` results AFTER discovery, exactly like v2's
+/// plugins run after the config skill plugin and share the same
+/// `Skill.Service` editor state.
 #[derive(Debug, Default)]
 pub struct ConfigSkillTable {
-    skills: Vec<Skill>,
+    /// Id-keyed rows (insertion replaces — v2 `editor.add` overwrite).
+    skills: parking_lot::RwLock<Vec<Skill>>,
 }
 
 impl ConfigSkillTable {
     /// No skills.
     #[must_use]
     pub fn empty() -> Self {
-        Self { skills: Vec::new() }
+        Self { skills: parking_lot::RwLock::new(Vec::new()) }
     }
 
     /// Discovers skills from a loaded config snapshot for `location`
@@ -313,19 +318,33 @@ impl ConfigSkillTable {
                 by_id.insert(skill.id.as_str().to_string(), skill);
             }
         }
-        Self { skills: by_id.into_values().collect() }
+        Self { skills: parking_lot::RwLock::new(by_id.into_values().collect()) }
     }
 
-    /// Every discovered skill.
+    /// Every discovered skill (snapshot clone — the table is small and
+    /// shared behind the engine's `Arc`).
     #[must_use]
-    pub fn list(&self) -> &[Skill] {
-        &self.skills
+    pub fn list(&self) -> Vec<Skill> {
+        self.skills.read().clone()
+    }
+
+    /// PLUG-D35: merge ONE plugin-registered skill (a `ctx.skill.transform`
+    /// `editor.add` materialization). Insert-or-replace by id — plugins
+    /// run after the config plugin in v2's activation order, so the
+    /// plugin entry wins an id collision.
+    pub fn merge_plugin_skill(&self, skill: Skill) {
+        let mut skills = self.skills.write();
+        match skills.iter_mut().find(|row| row.id == skill.id) {
+            Some(row) => *row = skill,
+            None => skills.push(skill),
+        }
     }
 
     /// The discovery sources the table loaded from (diagnostics).
     #[must_use]
     pub fn source_keys(&self) -> Vec<String> {
         self.skills
+            .read()
             .iter()
             .map(|skill| SkillSource::Directory { path: skill.path.clone() }.key())
             .collect()
@@ -334,7 +353,7 @@ impl ConfigSkillTable {
 
 impl SkillTable for ConfigSkillTable {
     fn get(&self, id: &str) -> Option<Skill> {
-        self.skills.iter().find(|skill| skill.id.as_str() == id).cloned()
+        self.skills.read().iter().find(|skill| skill.id.as_str() == id).cloned()
     }
 }
 
