@@ -274,6 +274,17 @@ pub enum DialogKind {
     /// tsx`): the experiment select over the (v2.0.24-empty) table;
     /// ←/→/enter toggle `config.experimental.<id>`.
     Experiments,
+    /// TUI-5 (lane-tui2): `DialogOpen` (`component/dialog-open.tsx`)
+    /// — the Open menu (`open.menu`, ctrl+o): the Sessions recents +
+    /// Projects sections (right-arrow on a project row opens the
+    /// [`DialogKind::OpenWorktrees`] view).
+    Open,
+    /// TUI-5: the Open menu's worktrees view
+    /// (`{Project} / Worktrees`, dialog-open.tsx:276-322): the
+    /// canonical root + the project's worktree directories; left
+    /// returns to [`DialogKind::Open`], ctrl+n seeds the
+    /// new-worktree prompt.
+    OpenWorktrees { project_id: String, project_name: String },
 }
 
 /// One stack entry: the dialog kind, chrome size and content state.
@@ -778,6 +789,61 @@ impl SessionListSink for NoSessionListRefresh {
     fn refresh(&self) {}
 }
 
+// -- TUI-4: the session-terminals registry (context/session-terminals) --
+
+/// One listed terminal (`PersistentPty.Info`, the picker row's label
+/// source — `foregroundProcess ?? title`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalRecord {
+    pub id: String,
+    pub title: String,
+    pub foreground_process: Option<String>,
+}
+
+impl TerminalRecord {
+    /// The picker row's label (terminals-tab.tsx:105:
+    /// `terminal?.foregroundProcess ?? terminal?.title`).
+    #[must_use]
+    pub fn label(&self) -> &str {
+        self.foreground_process.as_deref().unwrap_or(&self.title)
+    }
+}
+
+/// One session's terminal list (the registry's per-session entry).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalListed {
+    pub session_id: String,
+    pub terminals: Vec<TerminalRecord>,
+}
+
+/// The terminal pane's IO seam (the run loop's WS attach task): typed
+/// input frames, resize controls, and lifecycle requests ride it.
+/// Tests record; production pumps the attach socket.
+pub trait TerminalSink {
+    /// `refresh(sessionID)` — `persistentPty.list` (the registry
+    /// reload, session-terminals.tsx:29).
+    fn refresh(&self, session_id: &str);
+    /// `newTerminal(sessionID)` — `persistentPty.create` + refresh +
+    /// select (session-terminals.tsx:83-92).
+    fn create(&self, session_id: &str);
+    /// `selectTerminal(sessionID, ptyID|null)` — the persisted
+    /// selection; `Some` mounts + attaches the pane.
+    fn select(&self, session_id: &str, pty_id: Option<&str>);
+    /// One encoded input frame for the attached pane.
+    fn send_frame(&self, pty_id: &str, frame: &[u8]);
+}
+
+/// The no-op sink (no loop fetcher attached).
+#[derive(Debug, Default)]
+pub struct NoTerminals;
+
+impl TerminalSink for NoTerminals {
+    fn refresh(&self, _session_id: &str) {}
+    fn create(&self, _session_id: &str) {}
+    fn select(&self, _session_id: &str, _pty_id: Option<&str>) {}
+    fn send_frame(&self, _pty_id: &str, _frame: &[u8]) {}
+}
+
 /// The recording sink (tests assert the dialog open fired a refresh).
 #[derive(Debug, Default)]
 pub struct RecordingSessionListSink {
@@ -1053,6 +1119,34 @@ pub struct Store {
     /// session-list dialog's data source (v2 lists history there,
     /// never the tab strip).
     session_history: Signal<Vec<crate::data::SessionSnapshot>>,
+    /// TUI-4 — `sessions.available()` (session-terminals.tsx:59-76):
+    /// the server's `persistentPty` capability; the toggle trio is a
+    /// no-op while false.
+    terminal_available: Signal<bool>,
+    /// TUI-4 — the per-session terminal registry
+    /// (`terminals[sessionID]`, session-terminals.tsx:23).
+    terminal_registry: Signal<Vec<TerminalListed>>,
+    /// TUI-4 — the selected terminal (`(sessionID, ptyID)`; the
+    /// right pane mounts it, session-frame.tsx:118-122).
+    terminal_selection: Signal<Option<(String, String)>>,
+    /// TUI-4 — the ACTIVE pane (`activePane === "right"`): keys type
+    /// into the embedded terminal while true
+    /// (session-frame.tsx:72/171).
+    terminal_focus_right: Signal<bool>,
+    /// TUI-4 — the pane grids' change bump (the VT states live in
+    /// [`Store::terminal_panes`], outside the signal graph).
+    terminal_generation: Signal<u64>,
+    /// TUI-4 — the live VT states by pty id (non-Clone emulators;
+    /// interior-mutable, redraw-bumped through `terminal_generation`).
+    terminal_panes: std::cell::RefCell<
+        std::collections::HashMap<String, crate::terminal_pane::TerminalPaneState>,
+    >,
+    /// TUI-4 — the run loop's terminal IO seam.
+    terminal_sink: std::cell::RefCell<Rc<dyn TerminalSink>>,
+    /// TUI-4 — the attaches already requested (the self-healing
+    /// mount's storm guard: one attach per selection until the
+    /// snapshot lands).
+    terminal_pending_attach: std::cell::RefCell<std::collections::HashSet<String>>,
     route: Signal<Route>,
     dialogs: Signal<Vec<DialogEntry>>,
     theme: Signal<ThemeState>,
@@ -1311,6 +1405,12 @@ pub struct Store {
     /// Lane FINAL: the integration connect state (`DialogIntegration`
     /// over `integration.list`).
     integration_list: Signal<IntegrationListState>,
+    /// TUI-5 (lane-tui2): the Open menu's project registry
+    /// (`project.list`) — the Projects section + the session footers'
+    /// project labels.
+    project_list: Signal<ListState<crate::components::dialog_open::ProjectRow>>,
+    /// The project-list API seam.
+    project_sink: std::cell::RefCell<Rc<dyn ProjectSink>>,
     /// The live oauth/command attempt (code entry + the pending poll
     /// view) — `None` when no attempt is open.
     integration_attempt: Signal<Option<IntegrationAttempt>>,
@@ -1585,6 +1685,41 @@ impl IntegrationSink for RecordingIntegrationSink {
     }
     fn credential_remove(&self, credential_id: &str) {
         self.calls.borrow_mut().push(IntegrationCall::Remove(credential_id.to_owned()));
+    }
+}
+
+// -- TUI-5 (lane-tui2): the Open menu's project seam --------------------------
+
+/// The project-list API seam (v2's `data.project.sync()` over
+/// `project.list`, dialog-open.tsx:81-86): the Open menu's mount
+/// fetch. Tests record; production round-trips the loop fetcher.
+pub trait ProjectSink {
+    fn list(&self);
+}
+
+/// The no-op sink (no loop fetcher attached).
+#[derive(Debug, Default)]
+pub struct NoProjectSink;
+
+impl ProjectSink for NoProjectSink {
+    fn list(&self) {}
+}
+
+/// One recorded [`ProjectSink`] call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectCall {
+    List,
+}
+
+/// The recording sink (tests assert the dialog drove the API).
+#[derive(Default)]
+pub struct RecordingProjectSink {
+    pub calls: std::cell::RefCell<Vec<ProjectCall>>,
+}
+
+impl ProjectSink for RecordingProjectSink {
+    fn list(&self) {
+        self.calls.borrow_mut().push(ProjectCall::List);
     }
 }
 
@@ -2525,6 +2660,11 @@ struct StoreSignals {
     vertical_tabs_width: Signal<usize>,
     session_costs: Signal<HashMap<String, f64>>,
     session_history: Signal<Vec<crate::data::SessionSnapshot>>,
+    terminal_available: Signal<bool>,
+    terminal_registry: Signal<Vec<TerminalListed>>,
+    terminal_selection: Signal<Option<(String, String)>>,
+    terminal_focus_right: Signal<bool>,
+    terminal_generation: Signal<u64>,
     route: Signal<Route>,
     dialogs: Signal<Vec<DialogEntry>>,
     theme: Signal<ThemeState>,
@@ -2593,6 +2733,8 @@ struct StoreSignals {
     title_pending: Signal<HashMap<String, u64>>,
     update_notice: Signal<Option<crate::components::update::UpdateNotice>>,
     update_dialog: Signal<crate::components::update::UpdateDialogState>,
+    /// TUI-5 (lane-tui2): the Open menu's project registry.
+    project_list: Signal<ListState<crate::components::dialog_open::ProjectRow>>,
 }
 
 impl Store {
@@ -2645,6 +2787,7 @@ impl Store {
                 watchers.sidebar_mcp_open.get(),
                 watchers.diff_viewer.get(),
                 watchers.pair.get(),
+                watchers.project_list.get(),
                 watch_clock.get(),
             );
             bump.set(bump.get() + 1);
@@ -2669,6 +2812,11 @@ impl Store {
             vertical_tabs_width,
             session_costs,
             session_history,
+            terminal_available,
+            terminal_registry,
+            terminal_selection,
+            terminal_focus_right,
+            terminal_generation,
             route,
             dialogs,
             theme,
@@ -2707,6 +2855,7 @@ impl Store {
             picker,
             reverts,
             integration_list,
+            project_list,
             integration_attempt,
             integration_error,
             integration_deleting,
@@ -2731,6 +2880,14 @@ impl Store {
             vertical_tabs_width,
             session_costs,
             session_history,
+            terminal_available,
+            terminal_registry,
+            terminal_selection,
+            terminal_focus_right,
+            terminal_generation,
+            terminal_panes: std::cell::RefCell::new(std::collections::HashMap::new()),
+            terminal_sink: std::cell::RefCell::new(Rc::new(NoTerminals)),
+            terminal_pending_attach: std::cell::RefCell::new(std::collections::HashSet::new()),
             route,
             dialogs,
             theme,
@@ -2821,6 +2978,7 @@ impl Store {
             picker,
             reverts,
             integration_list,
+            project_list,
             integration_attempt,
             integration_error,
             integration_deleting,
@@ -2850,6 +3008,7 @@ impl Store {
             model_ring_dirty: Cell::new(false),
             revert_sink: std::cell::RefCell::new(Rc::new(RecordingRevertSink::default())),
             integration_sink: std::cell::RefCell::new(Rc::new(NoIntegrationSink)),
+            project_sink: std::cell::RefCell::new(Rc::new(NoProjectSink)),
             session_action_sink: std::cell::RefCell::new(Rc::new(
                 RecordingSessionActionSink::default(),
             )),
@@ -2866,6 +3025,11 @@ impl Store {
         let tabs = Signal::new(&runtime, TabsState::default());
         let tabs_enabled = Signal::new(&runtime, true);
         let session_history = Signal::new(&runtime, Vec::new());
+        let terminal_available = Signal::new(&runtime, false);
+        let terminal_registry = Signal::new(&runtime, Vec::<TerminalListed>::new());
+        let terminal_selection = Signal::new(&runtime, Option::<(String, String)>::None);
+        let terminal_focus_right = Signal::new(&runtime, false);
+        let terminal_generation = Signal::new(&runtime, 0u64);
         let route = Signal::new(&runtime, Route::Home);
         let dialogs = Signal::new(&runtime, Vec::<DialogEntry>::new());
         let theme = Signal::new(&runtime, ThemeState::v2_dark());
@@ -2912,6 +3076,8 @@ impl Store {
         let picker = Signal::new(&runtime, PickerState::default());
         let reverts = Signal::new(&runtime, HashMap::<String, RevertState>::new());
         let integration_list = Signal::new(&runtime, IntegrationListState::Loading);
+        let project_list =
+            Signal::new(&runtime, ListState::<crate::components::dialog_open::ProjectRow>::Loading);
         let integration_attempt = Signal::new(&runtime, Option::<IntegrationAttempt>::None);
         let integration_error = Signal::new(&runtime, Option::<String>::None);
         let integration_deleting = Signal::new(&runtime, Option::<String>::None);
@@ -2945,6 +3111,11 @@ impl Store {
                 vertical_tabs_width,
                 session_costs,
                 session_history,
+                terminal_available,
+                terminal_registry,
+                terminal_selection,
+                terminal_focus_right,
+                terminal_generation,
                 route,
                 dialogs,
                 theme,
@@ -2998,6 +3169,7 @@ impl Store {
                 title_pending,
                 update_notice,
                 update_dialog,
+                project_list,
             },
         )
     }
@@ -3664,6 +3836,12 @@ impl Store {
         self.worktree_sink.borrow().refresh(project_id);
     }
 
+    /// `worktree.list` through the sink (the Open menu's worktrees
+    /// view mount — dialog-open.tsx:121-126's `worktree.list`).
+    pub fn worktree_sink_list(&self, project_id: &str) {
+        self.worktree_sink.borrow().list(project_id);
+    }
+
     /// A confirmed delete: `worktree.remove` (fire-and-forget; the
     /// result lands through `apply_worktree_removed` /
     /// `apply_worktree_remove_failed`).
@@ -3748,6 +3926,390 @@ impl Store {
     /// `DialogSessionList` mount sync).
     pub fn request_session_list_refresh(&self) {
         self.session_list_sink.borrow().refresh();
+    }
+
+    // -- TUI-4: the session-terminals registry + the pane states ------
+
+    /// Install the terminal IO seam (the run loop's attach pump).
+    pub fn set_terminal_sink(&self, sink: Rc<dyn TerminalSink>) {
+        *self.terminal_sink.borrow_mut() = sink;
+    }
+
+    /// `sessions.available()` — the server's persistent-pty capability
+    /// (server.info `capabilities.persistentPty !== false`,
+    /// session-terminals.tsx:66-70).
+    pub fn set_terminal_available(&self, available: bool) {
+        self.terminal_available.set(available);
+    }
+
+    #[must_use]
+    pub fn terminal_available(&self) -> bool {
+        self.terminal_available.get()
+    }
+
+    /// The session's terminal list (the registry entry,
+    /// session-terminals.tsx:79-82).
+    #[must_use]
+    pub fn terminals(&self, session_id: &str) -> Vec<TerminalRecord> {
+        self.terminal_registry
+            .get()
+            .iter()
+            .find(|entry| entry.session_id == session_id)
+            .map(|entry| entry.terminals.clone())
+            .unwrap_or_default()
+    }
+
+    /// Replace one session's registry entry (`refresh`,
+    /// session-terminals.tsx:29-34 — an unknown selection clears).
+    pub fn set_terminals(&self, session_id: &str, terminals: Vec<TerminalRecord>) {
+        let selection_valid = terminals.iter().any(|terminal| {
+            self.terminal_selection
+                .get()
+                .is_some_and(|(session, pty)| session == session_id && pty == terminal.id)
+        });
+        if !selection_valid {
+            if let Some((session, _)) = self.terminal_selection.get() {
+                if session == session_id {
+                    self.terminal_selection.set(None);
+                }
+            }
+        }
+        self.terminal_registry.update(|registry| {
+            match registry.iter_mut().find(|entry| entry.session_id == session_id) {
+                Some(entry) => entry.terminals = terminals,
+                None => {
+                    registry.push(TerminalListed { session_id: session_id.to_owned(), terminals })
+                }
+            }
+        });
+        self.request_redraw();
+    }
+
+    /// `selectedTerminalID` (the persisted per-session pick).
+    #[must_use]
+    pub fn selected_terminal(&self, session_id: &str) -> Option<String> {
+        self.terminal_selection
+            .get()
+            .filter(|(session, _)| session == session_id)
+            .map(|(_, pty)| pty)
+    }
+
+    /// The MOUNTED pane's pty (session-frame's `rightPane() ===
+    /// "terminal"` — the selection with the availability gate).
+    #[must_use]
+    pub fn terminal_pane_mounted(&self, session_id: &str) -> Option<String> {
+        if !self.terminal_available.get() {
+            return None;
+        }
+        self.selected_terminal(session_id)
+    }
+
+    /// `selectTerminal` (session-terminals.tsx:52-58): the persisted
+    /// pick + the attach/detach ride on the sink; the pane takes the
+    /// input focus on mount (`shouldFocus`).
+    pub fn select_terminal(&self, session_id: &str, pty_id: Option<&str>) {
+        if let Some(pty) = pty_id {
+            self.terminal_selection.set(Some((session_id.to_owned(), pty.to_owned())));
+            self.terminal_focus_right.set(true);
+            // The attach-storm guard: the explicit selection IS the
+            // attach request — the render self-heal must not fire a
+            // second chain before the snapshot lands.
+            self.terminal_pending_attach.borrow_mut().insert(pty.to_owned());
+            if let Ok(storage) = crate::storage::ChannelStorage::open_default_migrated() {
+                let mut doc = storage
+                    .read("session-terminal-selection")
+                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                if let Some(sessions) =
+                    doc.get_mut("sessions").and_then(|value| value.as_object_mut())
+                {
+                    sessions
+                        .insert(session_id.to_owned(), serde_json::Value::String(pty.to_owned()));
+                    let _ = storage.write("session-terminal-selection", &doc);
+                }
+            }
+        } else {
+            let was_selected =
+                self.terminal_selection.get().is_some_and(|(session, _)| session == session_id);
+            self.terminal_selection.set(None);
+            self.terminal_focus_right.set(false);
+            if was_selected {
+                if let Ok(storage) = crate::storage::ChannelStorage::open_default_migrated() {
+                    let mut doc = storage
+                        .read("session-terminal-selection")
+                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                    if let Some(sessions) =
+                        doc.get_mut("sessions").and_then(|value| value.as_object_mut())
+                    {
+                        sessions.insert(session_id.to_owned(), serde_json::Value::Null);
+                        let _ = storage.write("session-terminal-selection", &doc);
+                    }
+                }
+            }
+        }
+        self.terminal_sink.borrow().select(session_id, pty_id);
+        self.request_redraw();
+    }
+
+    /// Restore a persisted selection at boot (the storage doc's
+    /// `sessions[sessionID]` — session-terminals.tsx:22-25).
+    pub fn restore_terminal_selection(&self, session_id: &str, pty_id: Option<&str>) {
+        if let Some(pty) = pty_id {
+            self.terminal_selection.set(Some((session_id.to_owned(), pty.to_owned())));
+        }
+    }
+
+    /// `terminal.toggle` (session-frame.tsx:207-226): open → the last
+    /// listed terminal or a fresh one; open already → focus session +
+    /// deselect.
+    pub fn terminal_toggle(&self, session_id: &str) {
+        if self.terminal_pane_mounted(session_id).is_some() {
+            self.select_terminal(session_id, None);
+            return;
+        }
+        if !self.terminal_available.get() {
+            return;
+        }
+        // v2's toggle refreshes the registry first, then picks the
+        // last terminal or creates (`refresh().then(...at(-1) ||
+        // newTerminal)`); the port's synchronous store picks from the
+        // local registry and always fires the refresh alongside.
+        self.terminal_sink.borrow().refresh(session_id);
+        let listed = self.terminals(session_id);
+        if listed.is_empty() {
+            self.terminal_sink.borrow().create(session_id);
+            return;
+        }
+        let last = listed.last().map(|terminal| terminal.id.clone());
+        match last {
+            Some(pty) => self.select_terminal(session_id, Some(&pty)),
+            None => self.terminal_sink.borrow().create(session_id),
+        }
+    }
+
+    /// `terminal.close` (`<leader>up`) — deselect only.
+    pub fn terminal_close(&self, session_id: &str) {
+        if self.terminal_pane_mounted(session_id).is_some() {
+            self.select_terminal(session_id, None);
+        }
+    }
+
+    /// `terminal.select` (`<leader>down`) — the composer's Terminals
+    /// tab + the registry refresh (session-frame.tsx:221-233).
+    pub fn terminal_open_picker(&self) {
+        if let Route::Session { session_id } = self.route.get() {
+            let mut picker = self.picker.get();
+            picker.open = true;
+            picker.tab = PickerTab::Terminals;
+            self.picker.set(picker);
+            self.terminal_focus_right.set(false);
+            self.terminal_sink.borrow().refresh(&session_id);
+            self.request_redraw();
+        }
+    }
+
+    /// The active-pane flag (`activePane`, session-frame.tsx:72).
+    #[must_use]
+    pub fn terminal_focus_right(&self) -> bool {
+        self.terminal_focus_right.get()
+    }
+
+    /// `focusSession` / `focusRightPane` (the pane focus pair).
+    pub fn set_terminal_focus_right(&self, focused: bool) {
+        self.terminal_focus_right.set(focused);
+        self.request_redraw();
+    }
+
+    /// The pane-grid redraw bump.
+    pub fn terminal_bump(&self) {
+        self.terminal_generation.update(|generation| generation.wrapping_add(1));
+        self.request_redraw();
+    }
+
+    /// The mounted pane's rendered frame at `size` (the box's own
+    /// width/height; the content grid is `width-2` —
+    /// terminal-pane.tsx:289). A selection without a live state
+    /// re-requests the attach (the self-healing mount).
+    #[must_use]
+    pub fn terminal_pane_frame(
+        &self,
+        session_id: &str,
+        size: (u16, u16),
+    ) -> Option<crate::render::Frame> {
+        let pty = self.terminal_pane_mounted(session_id)?;
+        let mut panes = self.terminal_panes.borrow_mut();
+        if !panes.contains_key(&pty) {
+            drop(panes);
+            let requested = self.terminal_pending_attach.borrow_mut().insert(pty.clone());
+            if requested {
+                self.terminal_sink.borrow().select(session_id, Some(&pty));
+            }
+            return None;
+        }
+        let state = panes.get_mut(&pty)?;
+        let content_cols = size.0.saturating_sub(2).max(1);
+        if let Some(frame) = state.resize_pane(content_cols, size.1) {
+            self.terminal_sink.borrow().send_frame(&pty, &frame);
+        }
+        let frame = crate::terminal_pane::render_terminal_pane(state, size.0, size.1);
+        Some(frame)
+    }
+
+    /// The snapshot's fast-forward (`connect()`'s first hop,
+    /// terminal-pane.tsx:175-182): seed the pane state.
+    pub fn terminal_pane_snapshot(&self, pty_id: &str, size: (u16, u16), checkpoint: &[u8]) {
+        self.terminal_pending_attach.borrow_mut().remove(pty_id);
+        self.terminal_panes.borrow_mut().insert(
+            pty_id.to_owned(),
+            crate::terminal_pane::TerminalPaneState::from_snapshot(size, checkpoint),
+        );
+        self.terminal_bump();
+    }
+
+    /// One WS output chunk into the pane's grid.
+    pub fn terminal_pane_output(&self, pty_id: &str, data: &[u8]) {
+        if let Some(state) = self.terminal_panes.borrow_mut().get_mut(pty_id) {
+            state.push_output(data);
+        }
+        self.terminal_bump();
+    }
+
+    /// A server resize (+ checkpoint) into the pane's queue.
+    pub fn terminal_pane_resized(
+        &self,
+        pty_id: &str,
+        cols: u16,
+        rows: u16,
+        checkpoint: Option<Vec<u8>>,
+    ) {
+        if let Some(state) = self.terminal_panes.borrow_mut().get_mut(pty_id) {
+            state.push_resize(cols, rows, checkpoint);
+        }
+        self.terminal_bump();
+    }
+
+    /// `replay_complete` — the input gate opens; the backlog flushes
+    /// and the controller's opening interact rides along.
+    pub fn terminal_pane_ready(&self, pty_id: &str) {
+        let mut to_send: Vec<Vec<u8>> = Vec::new();
+        {
+            let mut panes = self.terminal_panes.borrow_mut();
+            if let Some(state) = panes.get_mut(pty_id) {
+                to_send = state.mark_ready();
+                if let Some(frame) = state.interact() {
+                    to_send.push(frame);
+                }
+            }
+        }
+        for frame in &to_send {
+            self.terminal_sink.borrow().send_frame(pty_id, frame);
+        }
+        self.terminal_bump();
+    }
+
+    /// `attached` — the info size + the controller role.
+    pub fn terminal_pane_attached(&self, pty_id: &str, size: (u16, u16), controller: bool) {
+        if let Some(state) = self.terminal_panes.borrow_mut().get_mut(pty_id) {
+            state.attached(size, controller);
+        }
+        self.terminal_bump();
+    }
+
+    /// `controller_changed` (takeover).
+    pub fn terminal_pane_controller(&self, pty_id: &str, controller: bool) {
+        if let Some(state) = self.terminal_panes.borrow_mut().get_mut(pty_id) {
+            state.set_controller(controller);
+        }
+        self.terminal_bump();
+    }
+
+    /// The failure surface (connection failed / disconnected).
+    pub fn terminal_pane_failure(&self, pty_id: &str, message: &str) {
+        if let Some(state) = self.terminal_panes.borrow_mut().get_mut(pty_id) {
+            state.set_failure(message.to_owned());
+        }
+        self.terminal_bump();
+    }
+
+    /// Drop a detached pane's state.
+    pub fn terminal_pane_drop(&self, pty_id: &str) {
+        self.terminal_panes.borrow_mut().remove(pty_id);
+        self.terminal_bump();
+    }
+
+    /// Route one stroke into the mounted pane (`handleKeyPress`):
+    /// `true` when consumed (the encoder produced bytes for a pane
+    /// that accepts input).
+    pub fn terminal_pane_input(&self, session_id: &str, stroke: &crate::keymap::KeyStroke) -> bool {
+        let Some(pty) = self.terminal_pane_mounted(session_id) else { return false };
+        if !self.terminal_focus_right.get() {
+            return false;
+        }
+        let Some(bytes) = crate::terminal_pane::encode_stroke(stroke) else { return false };
+        let frames = {
+            let mut panes = self.terminal_panes.borrow_mut();
+            match panes.get_mut(&pty) {
+                Some(state) => state.push_input(&bytes),
+                None => Vec::new(),
+            }
+        };
+        let consumed = !frames.is_empty();
+        for frame in frames {
+            self.terminal_sink.borrow().send_frame(&pty, &frame);
+        }
+        consumed
+    }
+
+    /// The Terminals tab's rows (terminals-tab.tsx:79-108): one entry
+    /// per listed terminal (`foregroundProcess ?? title`, the visible
+    /// pane `▪`-marked current) + the trailing `+ New terminal` slot.
+    #[must_use]
+    pub fn picker_terminals(&self, session_id: &str) -> Vec<PickerEntry> {
+        let visible = self.terminal_pane_mounted(session_id);
+        let mut entries: Vec<PickerEntry> = self
+            .terminals(session_id)
+            .into_iter()
+            .map(|terminal| {
+                let current = visible.as_deref() == Some(terminal.id.as_str());
+                let title = terminal.label().to_owned();
+                PickerEntry {
+                    session_id: terminal.id,
+                    agent: "Terminals".to_owned(),
+                    title,
+                    running: false,
+                    current,
+                    prefix: String::new(),
+                }
+            })
+            .collect();
+        entries.push(PickerEntry {
+            session_id: String::new(),
+            agent: "Terminals".to_owned(),
+            title: "+ New terminal".to_owned(),
+            running: false,
+            current: false,
+            prefix: String::new(),
+        });
+        entries
+    }
+
+    /// `composer.terminal.select` (terminals-tab.tsx:51-64): the
+    /// selected row — a terminal mounts, the add slot creates; either
+    /// way the composer closes.
+    pub fn picker_terminal_select(&self) {
+        if let Route::Session { session_id } = self.route.get() {
+            let entries = self.picker_terminals(&session_id);
+            let selected = self.picker_selection(&session_id, entries.len());
+            let entry = entries.get(selected).cloned();
+            self.picker_close();
+            match entry {
+                Some(entry) if !entry.session_id.is_empty() => {
+                    self.select_terminal(&session_id, Some(&entry.session_id));
+                }
+                _ => {
+                    self.terminal_sink.borrow().create(&session_id);
+                }
+            }
+        }
     }
 
     // -- the model selection chain (F8/F10/F22) ------------------------------
@@ -5221,6 +5783,60 @@ impl Store {
     /// A failed `integration.list`.
     pub fn integration_list_failed(&self, error: String) {
         self.integration_list.set(IntegrationListState::Failed(error));
+    }
+
+    // -- TUI-5 (lane-tui2): the Open menu's project registry -------
+
+    /// Swap the project-list sink.
+    pub fn set_project_sink(&mut self, sink: Rc<dyn ProjectSink>) {
+        *self.project_sink.borrow_mut() = sink;
+    }
+
+    /// The project registry (the Open menu's Projects section).
+    #[must_use]
+    pub fn project_list(&self) -> ListState<crate::components::dialog_open::ProjectRow> {
+        self.project_list.get()
+    }
+
+    /// `open.menu`'s run (`app.tsx:763-774` + `dialog-open.tsx:56-86`):
+    /// refetch the sessions recents AND `data.project.sync()`, then
+    /// mount `DialogOpen` at the large size.
+    pub fn open_menu_pressed(&self) {
+        self.project_list.set(ListState::Loading);
+        self.project_sink.borrow().list();
+        self.request_session_list_refresh();
+        self.replace_dialog(DialogKind::Open, DialogSize::Large);
+    }
+
+    /// Remount `DialogOpen` WITHOUT refetching (the worktrees view's
+    /// `back()` — v2 restores the projects snapshot in place).
+    pub fn open_menu_back(&self) {
+        self.replace_dialog(DialogKind::Open, DialogSize::Large);
+    }
+
+    /// The right-arrow view swap (`Show project worktrees`,
+    /// dialog-open.tsx:388-405): scope the worktree state + fetch the
+    /// project's list, then mount the `{Project} / Worktrees` view.
+    pub fn open_menu_worktrees(&self, project_id: &str, project_name: &str) {
+        self.set_worktree_project(project_id, None);
+        self.worktree_sink_list(project_id);
+        self.replace_dialog(
+            DialogKind::OpenWorktrees {
+                project_id: project_id.to_owned(),
+                project_name: project_name.to_owned(),
+            },
+            DialogSize::Large,
+        );
+    }
+
+    /// The loop fetcher's `project.list` result.
+    pub fn project_list_loaded(&self, rows: Vec<crate::components::dialog_open::ProjectRow>) {
+        self.project_list.set(ListState::Loaded(rows));
+    }
+
+    /// A failed `project.list`.
+    pub fn project_list_failed(&self, error: String) {
+        self.project_list.set(ListState::Failed(error));
     }
 
     /// One list row (the downstream dialogs' source).
@@ -7656,6 +8272,12 @@ impl Store {
     /// the tab's activity filter (subagents-tab.tsx:39-63).
     #[must_use]
     pub fn picker_entries(&self, session_id: &str) -> Vec<PickerEntry> {
+        // TUI-4 — the Terminals tab lists the registry rows + the
+        // `+ New terminal` slot (terminals-tab.tsx:79-108), no
+        // activity filter.
+        if self.picker.get().tab == PickerTab::Terminals {
+            return self.picker_terminals(session_id);
+        }
         let index = self.session_index.borrow();
         // Registry order: insertion (first-seen) order like the client
         // cache — `ids()` is sorted, a stable deterministic stand-in.
@@ -8440,6 +9062,16 @@ impl Store {
     #[allow(clippy::too_many_lines)] // the SSE reducer table (one arm per event)
     fn reduce_event(&self, event: &BusEvent) {
         match event.type_.as_str() {
+            // TUI-4 — the registry refresh triggers
+            // (session-terminals.tsx:48-58: refresh the session's
+            // terminal list when the server announces one).
+            "persistent-pty.added" | "persistent-pty.removed" => {
+                let Some(id) = event.string("sessionID") else { return };
+                let known = self.terminal_registry.get().iter().any(|entry| entry.session_id == id);
+                if self.terminal_available.get() && known {
+                    self.terminal_sink.borrow().refresh(&id);
+                }
+            }
             "session.updated" | "session.renamed" => {
                 let Some(id) = event.string("sessionID") else { return };
                 let title = event.string("title");
@@ -9964,6 +10596,7 @@ mod tests {
                 parent_id: None,
                 time_idle: None,
                 viewed: None,
+                ..Default::default()
             }],
             unread: Vec::new(),
             messages: Vec::new(),
@@ -10001,6 +10634,7 @@ mod tests {
                         parent_id: None,
                         time_idle: None,
                         viewed: None,
+                        ..Default::default()
                     },
                     SessionSnapshot {
                         model: None,
@@ -10009,6 +10643,7 @@ mod tests {
                         parent_id: None,
                         time_idle: None,
                         viewed: None,
+                        ..Default::default()
                     },
                 ],
                 unread: vec!["a".to_owned()],
@@ -11119,6 +11754,7 @@ mod tests {
                     id: "recorded-model".into(),
                     variant: None,
                 }),
+                ..Default::default()
             }],
             unread: Vec::new(),
             messages: Vec::new(),
@@ -12037,6 +12673,7 @@ fn parent_route_resolves_through_the_registry() {
                 time_idle: None,
                 viewed: None,
                 model: None,
+                ..Default::default()
             },
             crate::data::SessionSnapshot {
                 id: "kid".to_owned(),
@@ -12045,6 +12682,7 @@ fn parent_route_resolves_through_the_registry() {
                 time_idle: None,
                 viewed: None,
                 model: None,
+                ..Default::default()
             },
         ],
         unread: Vec::new(),

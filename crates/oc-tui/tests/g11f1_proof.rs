@@ -247,6 +247,7 @@ impl Harness {
                 parent_id: None,
                 time_idle: None,
                 viewed: None,
+                ..Default::default()
             }],
             unread: Vec::new(),
             messages: vec![(SESSION.to_owned(), snapshot)],

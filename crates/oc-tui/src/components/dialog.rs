@@ -139,7 +139,11 @@ pub fn handle_dialog_key(
         // DialogExperiments are DialogSelects.
         | DialogKind::Skill
         | DialogKind::Stash
-        | DialogKind::Experiments => true,
+        | DialogKind::Experiments
+        // TUI-5 (lane-tui2): DialogOpen + its worktrees view are
+        // DialogSelects (dialog-open.tsx's DialogSelect mounts).
+        | DialogKind::Open
+        | DialogKind::OpenWorktrees { .. } => true,
     };
     let is_help = matches!(entry.kind, DialogKind::Help);
     let is_static = is_help
@@ -584,6 +588,50 @@ pub fn handle_dialog_key(
         }
     }
 
+    // -- TUI-5 (lane-tui2): DialogOpen's view bindings --------------
+    // `right` on a project row swaps to the worktrees view
+    // (`Show project worktrees`, dialog-open.tsx:384-406); the
+    // worktrees view binds `left` to `back()` (:407-417) and ctrl+n
+    // to the new-worktree prompt (DialogWorktreeName).
+    if let DialogKind::Open = entry.kind {
+        if stroke.key == "right" && !stroke.ctrl && !stroke.alt {
+            if let Some(option) = entry.select.submit(&props) {
+                if let Some(project_id) = option.value.strip_prefix("prj:") {
+                    let name = match store.project_list() {
+                        crate::store::ListState::Loaded(projects) => projects
+                            .iter()
+                            .find(|project| project.id == project_id)
+                            .map(|project| {
+                                crate::components::dialog_open::project_name(
+                                    project.name.as_deref(),
+                                    &project.canonical,
+                                )
+                            }),
+                        _ => None,
+                    };
+                    store.open_menu_worktrees(
+                        project_id,
+                        &name.unwrap_or_else(|| "Project".to_owned()),
+                    );
+                }
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+    }
+    if let DialogKind::OpenWorktrees { .. } = &entry.kind {
+        if stroke.key == "left" && !stroke.ctrl && !stroke.alt {
+            store.open_menu_back();
+            return DialogKeyOutcome::Consumed;
+        }
+        if stroke.ctrl && stroke.key == "n" {
+            // `New worktree` seeds the name prompt (the worktree
+            // state stays scoped to the view's project from the
+            // right-arrow swap).
+            store.replace_dialog(DialogKind::WorktreeName, DialogSize::Medium);
+            return DialogKeyOutcome::Consumed;
+        }
+    }
+
     // -- the dialog keymap layer (dialog.select.*) ---------------------------
     let Outcome::Command { command, .. } = keymap.lookup(stroke, clock) else {
         return DialogKeyOutcome::Unhandled;
@@ -740,7 +788,10 @@ pub fn render_overlay_with_options(
         // TUI-8/9/TD22: the three new selects record rows too.
         | DialogKind::Skill
         | DialogKind::Stash
-        | DialogKind::Experiments => true,
+        | DialogKind::Experiments
+        // TUI-5 (lane-tui2): the Open menu + its worktrees view.
+        | DialogKind::Open
+        | DialogKind::OpenWorktrees { .. } => true,
 
         // A plugin dialog records rows only when its content is a
         // select (rows-only dialogs render statically).
@@ -1026,6 +1077,23 @@ pub fn execute_submission(
             return crate::components::command_palette::execute_server_list_selection(
                 store, picker, &selection,
             );
+        }
+        // TUI-5 (lane-tui2): DialogOpen's `onSelect`
+        // (dialog-open.tsx:435-446): a session row navigates the
+        // session route (the tab effect opens it); a project row
+        // navigates home.
+        Some(DialogKind::Open) => {
+            let selection = value.to_owned();
+            store.clear_dialogs();
+            return crate::components::dialog_open::execute_open_selection(store, &selection);
+        }
+        // TUI-5: a worktrees-view row navigates home at the directory
+        // (the port's home route keeps the process cwd — the row's
+        // `dir:` value is intentionally not consumed here).
+        Some(DialogKind::OpenWorktrees { .. }) => {
+            let _ = value;
+            store.clear_dialogs();
+            return crate::components::command_palette::Dispatch::Handled;
         }
         // The diff source select's `onSelect` (`props.onSwitchSource`,
         // diff-viewer.tsx:748-751): close + switch (a refetch rides

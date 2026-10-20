@@ -39,6 +39,7 @@ fn snapshot(id: &str) -> SessionSnapshot {
         parent_id: None,
         time_idle: None,
         viewed: None,
+        ..Default::default()
     }
 }
 

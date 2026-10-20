@@ -218,6 +218,7 @@ mod tests {
                     parent_id: None,
                     time_idle: None,
                     viewed: None,
+                    ..Default::default()
                 },
                 crate::data::SessionSnapshot {
                     model: None,
@@ -226,6 +227,7 @@ mod tests {
                     parent_id: None,
                     time_idle: None,
                     viewed: None,
+                    ..Default::default()
                 },
             ],
             unread: Vec::new(),
