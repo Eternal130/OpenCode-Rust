@@ -3887,6 +3887,9 @@ pub enum LoopRequest {
     // -- Lane FINAL: the integration connect machine -------------------
     /// `integration.list` (the `DialogIntegration` open refetch).
     IntegrationList,
+    /// TUI-5 (lane-tui2): `project.list` (the `DialogOpen` open
+    /// refetch — v2's `data.project.sync()`).
+    ProjectList,
     /// `integration.connect.key` (+ the connected refetch chain).
     IntegrationConnectKey {
         integration_id: String,
@@ -3999,6 +4002,9 @@ pub enum LoopFetch {
         result: Result<(Vec<crate::components::message::model::Message>, Option<String>), String>,
     },
     SessionList(Result<Vec<crate::data::SessionSnapshot>, String>),
+    /// TUI-5 (lane-tui2): the `project.list` result (the Open menu's
+    /// Projects section).
+    ProjectList(Result<Vec<crate::components::dialog_open::ProjectRow>, String>),
     // -- TUI-4: the terminal registry + the attach stream's events --
     TerminalListed {
         session_id: String,
@@ -4379,6 +4385,32 @@ pub fn spawn_loop_fetcher(
                             .map(|response| shape_integration_rows(response.data))
                             .map_err(|error| error.to_string());
                         let _ = tx.send(LoopFetch::IntegrationList(result));
+                    });
+                }
+                // -- TUI-5 (lane-tui2): the Open menu's project refetch.
+                LoopRequest::ProjectList => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .project()
+                            .list()
+                            .await
+                            .map(|projects| {
+                                projects
+                                    .into_iter()
+                                    .map(|project| {
+                                        crate::components::dialog_open::ProjectRow {
+                                            id: project.id,
+                                            name: project.name,
+                                            canonical: project.canonical,
+                                            vcs: project.vcs.as_deref() == Some("git"),
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::ProjectList(result));
                     });
                 }
                 LoopRequest::IntegrationConnectKey { integration_id, key } => {
@@ -4926,6 +4958,18 @@ impl crate::store::IntegrationSink for HttpIntegrationSink {
     fn credential_remove(&self, credential_id: &str) {
         let _ =
             self.tx.send(LoopRequest::CredentialRemove { credential_id: credential_id.to_owned() });
+    }
+}
+
+/// TUI-5 (lane-tui2): the production project-list sink — the Open
+/// menu's mount refetch (`data.project.sync()` → `project.list`).
+struct HttpProjectSink {
+    tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+}
+
+impl crate::store::ProjectSink for HttpProjectSink {
+    fn list(&self) {
+        let _ = self.tx.send(LoopRequest::ProjectList);
     }
 }
 
@@ -6068,6 +6112,8 @@ pub async fn run_with_size(
     {
         let tx = loop_fetch_tx.clone();
         app.store.set_integration_sink(std::rc::Rc::new(HttpIntegrationSink { tx }));
+        // TUI-5 (lane-tui2): the Open menu's project refetch.
+        app.store.set_project_sink(std::rc::Rc::new(HttpProjectSink { tx: loop_fetch_tx.clone() }));
         let tx = loop_fetch_tx.clone();
         app.store.set_session_action_sink(std::rc::Rc::new(HttpSessionActionSink { tx }));
     }
@@ -6690,6 +6736,11 @@ pub async fn run_with_size(
                 LoopFetch::SessionList(Err(error)) => {
                     crate::keymap::log_skip(&format!("session list refresh: {error}"));
                 }
+                // -- TUI-5 (lane-tui2): the Open menu's project rows.
+                LoopFetch::ProjectList(result) => match result {
+                    Ok(rows) => app.store.project_list_loaded(rows),
+                    Err(error) => app.store.project_list_failed(error),
+                },
                 // -- TUI-4: the terminal registry + pane stream ------
                 LoopFetch::TerminalCapability(available) => {
                     app.store.set_terminal_available(available);

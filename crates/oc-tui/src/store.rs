@@ -274,6 +274,17 @@ pub enum DialogKind {
     /// tsx`): the experiment select over the (v2.0.24-empty) table;
     /// ←/→/enter toggle `config.experimental.<id>`.
     Experiments,
+    /// TUI-5 (lane-tui2): `DialogOpen` (`component/dialog-open.tsx`)
+    /// — the Open menu (`open.menu`, ctrl+o): the Sessions recents +
+    /// Projects sections (right-arrow on a project row opens the
+    /// [`DialogKind::OpenWorktrees`] view).
+    Open,
+    /// TUI-5: the Open menu's worktrees view
+    /// (`{Project} / Worktrees`, dialog-open.tsx:276-322): the
+    /// canonical root + the project's worktree directories; left
+    /// returns to [`DialogKind::Open`], ctrl+n seeds the
+    /// new-worktree prompt.
+    OpenWorktrees { project_id: String, project_name: String },
 }
 
 /// One stack entry: the dialog kind, chrome size and content state.
@@ -1392,6 +1403,12 @@ pub struct Store {
     /// Lane FINAL: the integration connect state (`DialogIntegration`
     /// over `integration.list`).
     integration_list: Signal<IntegrationListState>,
+    /// TUI-5 (lane-tui2): the Open menu's project registry
+    /// (`project.list`) — the Projects section + the session footers'
+    /// project labels.
+    project_list: Signal<ListState<crate::components::dialog_open::ProjectRow>>,
+    /// The project-list API seam.
+    project_sink: std::cell::RefCell<Rc<dyn ProjectSink>>,
     /// The live oauth/command attempt (code entry + the pending poll
     /// view) — `None` when no attempt is open.
     integration_attempt: Signal<Option<IntegrationAttempt>>,
@@ -1666,6 +1683,41 @@ impl IntegrationSink for RecordingIntegrationSink {
     }
     fn credential_remove(&self, credential_id: &str) {
         self.calls.borrow_mut().push(IntegrationCall::Remove(credential_id.to_owned()));
+    }
+}
+
+// -- TUI-5 (lane-tui2): the Open menu's project seam --------------------------
+
+/// The project-list API seam (v2's `data.project.sync()` over
+/// `project.list`, dialog-open.tsx:81-86): the Open menu's mount
+/// fetch. Tests record; production round-trips the loop fetcher.
+pub trait ProjectSink {
+    fn list(&self);
+}
+
+/// The no-op sink (no loop fetcher attached).
+#[derive(Debug, Default)]
+pub struct NoProjectSink;
+
+impl ProjectSink for NoProjectSink {
+    fn list(&self) {}
+}
+
+/// One recorded [`ProjectSink`] call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectCall {
+    List,
+}
+
+/// The recording sink (tests assert the dialog drove the API).
+#[derive(Default)]
+pub struct RecordingProjectSink {
+    pub calls: std::cell::RefCell<Vec<ProjectCall>>,
+}
+
+impl ProjectSink for RecordingProjectSink {
+    fn list(&self) {
+        self.calls.borrow_mut().push(ProjectCall::List);
     }
 }
 
@@ -2679,6 +2731,8 @@ struct StoreSignals {
     title_pending: Signal<HashMap<String, u64>>,
     update_notice: Signal<Option<crate::components::update::UpdateNotice>>,
     update_dialog: Signal<crate::components::update::UpdateDialogState>,
+    /// TUI-5 (lane-tui2): the Open menu's project registry.
+    project_list: Signal<ListState<crate::components::dialog_open::ProjectRow>>,
 }
 
 impl Store {
@@ -2731,6 +2785,7 @@ impl Store {
                 watchers.sidebar_mcp_open.get(),
                 watchers.diff_viewer.get(),
                 watchers.pair.get(),
+                watchers.project_list.get(),
                 watch_clock.get(),
             );
             bump.set(bump.get() + 1);
@@ -2798,6 +2853,7 @@ impl Store {
             picker,
             reverts,
             integration_list,
+            project_list,
             integration_attempt,
             integration_error,
             integration_deleting,
@@ -2920,6 +2976,7 @@ impl Store {
             picker,
             reverts,
             integration_list,
+            project_list,
             integration_attempt,
             integration_error,
             integration_deleting,
@@ -2949,6 +3006,7 @@ impl Store {
             model_ring_dirty: Cell::new(false),
             revert_sink: std::cell::RefCell::new(Rc::new(RecordingRevertSink::default())),
             integration_sink: std::cell::RefCell::new(Rc::new(NoIntegrationSink)),
+            project_sink: std::cell::RefCell::new(Rc::new(NoProjectSink)),
             session_action_sink: std::cell::RefCell::new(Rc::new(
                 RecordingSessionActionSink::default(),
             )),
@@ -3016,6 +3074,10 @@ impl Store {
         let picker = Signal::new(&runtime, PickerState::default());
         let reverts = Signal::new(&runtime, HashMap::<String, RevertState>::new());
         let integration_list = Signal::new(&runtime, IntegrationListState::Loading);
+        let project_list = Signal::new(
+            &runtime,
+            ListState::<crate::components::dialog_open::ProjectRow>::Loading,
+        );
         let integration_attempt = Signal::new(&runtime, Option::<IntegrationAttempt>::None);
         let integration_error = Signal::new(&runtime, Option::<String>::None);
         let integration_deleting = Signal::new(&runtime, Option::<String>::None);
@@ -3107,6 +3169,7 @@ impl Store {
                 title_pending,
                 update_notice,
                 update_dialog,
+                project_list,
             },
         )
     }
@@ -3771,6 +3834,12 @@ impl Store {
     /// refetch lands through the list setter).
     pub fn worktree_sink_refresh(&self, project_id: &str) {
         self.worktree_sink.borrow().refresh(project_id);
+    }
+
+    /// `worktree.list` through the sink (the Open menu's worktrees
+    /// view mount — dialog-open.tsx:121-126's `worktree.list`).
+    pub fn worktree_sink_list(&self, project_id: &str) {
+        self.worktree_sink.borrow().list(project_id);
     }
 
     /// A confirmed delete: `worktree.remove` (fire-and-forget; the
@@ -5719,6 +5788,60 @@ impl Store {
     /// A failed `integration.list`.
     pub fn integration_list_failed(&self, error: String) {
         self.integration_list.set(IntegrationListState::Failed(error));
+    }
+
+    // -- TUI-5 (lane-tui2): the Open menu's project registry -------
+
+    /// Swap the project-list sink.
+    pub fn set_project_sink(&mut self, sink: Rc<dyn ProjectSink>) {
+        *self.project_sink.borrow_mut() = sink;
+    }
+
+    /// The project registry (the Open menu's Projects section).
+    #[must_use]
+    pub fn project_list(&self) -> ListState<crate::components::dialog_open::ProjectRow> {
+        self.project_list.get()
+    }
+
+    /// `open.menu`'s run (app.tsx:763-774 + dialog-open.tsx:56-86):
+    /// refetch the sessions recents AND `data.project.sync()`, then
+    /// mount DialogOpen at the large size.
+    pub fn open_menu_pressed(&self) {
+        self.project_list.set(ListState::Loading);
+        self.project_sink.borrow().list();
+        self.request_session_list_refresh();
+        self.replace_dialog(DialogKind::Open, DialogSize::Large);
+    }
+
+    /// Remount DialogOpen WITHOUT refetching (the worktrees view's
+    /// `back()` — v2 restores the projects snapshot in place).
+    pub fn open_menu_back(&self) {
+        self.replace_dialog(DialogKind::Open, DialogSize::Large);
+    }
+
+    /// The right-arrow view swap (`Show project worktrees`,
+    /// dialog-open.tsx:388-405): scope the worktree state + fetch the
+    /// project's list, then mount the `{Project} / Worktrees` view.
+    pub fn open_menu_worktrees(&self, project_id: &str, project_name: &str) {
+        self.set_worktree_project(project_id, None);
+        self.worktree_sink_list(project_id);
+        self.replace_dialog(
+            DialogKind::OpenWorktrees {
+                project_id: project_id.to_owned(),
+                project_name: project_name.to_owned(),
+            },
+            DialogSize::Large,
+        );
+    }
+
+    /// The loop fetcher's `project.list` result.
+    pub fn project_list_loaded(&self, rows: Vec<crate::components::dialog_open::ProjectRow>) {
+        self.project_list.set(ListState::Loaded(rows));
+    }
+
+    /// A failed `project.list`.
+    pub fn project_list_failed(&self, error: String) {
+        self.project_list.set(ListState::Failed(error));
     }
 
     /// One list row (the downstream dialogs' source).
@@ -10482,7 +10605,7 @@ mod tests {
                 parent_id: None,
                 time_idle: None,
                 viewed: None,
-            }],
+                ..Default::default()}],
             unread: Vec::new(),
             messages: Vec::new(),
             cursors: Vec::new(),
@@ -10519,7 +10642,7 @@ mod tests {
                         parent_id: None,
                         time_idle: None,
                         viewed: None,
-                    },
+                        ..Default::default()},
                     SessionSnapshot {
                         model: None,
                         id: "not-open".to_owned(),
@@ -10527,7 +10650,7 @@ mod tests {
                         parent_id: None,
                         time_idle: None,
                         viewed: None,
-                    },
+                        ..Default::default()},
                 ],
                 unread: vec!["a".to_owned()],
                 messages: Vec::new(),
@@ -11637,7 +11760,7 @@ mod tests {
                     id: "recorded-model".into(),
                     variant: None,
                 }),
-            }],
+                ..Default::default()}],
             unread: Vec::new(),
             messages: Vec::new(),
             cursors: Vec::new(),
@@ -12555,7 +12678,7 @@ fn parent_route_resolves_through_the_registry() {
                 time_idle: None,
                 viewed: None,
                 model: None,
-            },
+                ..Default::default()},
             crate::data::SessionSnapshot {
                 id: "kid".to_owned(),
                 title: None,
@@ -12563,7 +12686,7 @@ fn parent_route_resolves_through_the_registry() {
                 time_idle: None,
                 viewed: None,
                 model: None,
-            },
+                ..Default::default()},
         ],
         unread: Vec::new(),
         messages: Vec::new(),

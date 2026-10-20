@@ -588,31 +588,52 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         DialogKind::ServerList { command: "session.list", title } => {
             // The session list dialog renders the HISTORY (v2's
             // `data.session.list()` — every session the resync
-            // reported, newest first), NOT the open tabs; selecting a
-            // row navigates and the route effect opens its tab.
-            // Rows resolve the live registry title first (v2's list
-            // memo re-derives from `session.info`, which the renamed
-            // handler writes — data.ts:687-699).
-            let history = store.session_history();
-            let options: Vec<SelectOption> = history
-                .iter()
-                // SE-F4: parents only — the ref's session list never
-                // rows a subagent child branch.
-                .filter(|session| session.parent_id.is_none())
-                .map(|session| {
-                    SelectOption::titled(
-                        store
-                            .session_title(&session.id)
-                            .or_else(|| session.title.clone())
-                            .unwrap_or_else(|| session.id.clone()),
-                        session.id.clone(),
-                    )
-                    .categorized("Sessions")
-                })
-                .collect();
-            // SE-F4: the ref's filter semantics — trimmed, case-folded,
-            // byte-exact substring (whitespace-only = the full list).
-            SelectProps::new(*title, options).substring_filter()
+            // reported), NOT the open tabs; selecting a row navigates
+            // and the route effect opens its tab. TUI-6 (lane-tui2):
+            // the rows carry v2's shapes — date-group categories
+            // ("Today" / the day string), the timestamped fallback
+            // title, the outside-project footer basename, and the
+            // armed two-press delete's confirm title
+            // (dialog-session-list.tsx:141-192).
+            let options = crate::components::dialog_open::session_list_options(store);
+            // SE-F4 + TUI-7: the ref's filter semantics — trimmed,
+            // case-folded, byte-exact substring (whitespace-only = the
+            // full list); the empty + no-match copy is the dialog's
+            // `searchState` (:110-121).
+            let mut props = SelectProps::new(*title, options)
+                .substring_filter()
+                .with_empty_texts("No sessions available", "No sessions found");
+            // The current session row carries the `●` focus mark
+            // (`current={currentSessionID()}`, :211).
+            if let crate::store::Route::Session { session_id } = store.route() {
+                props = props.with_current(Some(session_id));
+            }
+            props = props
+                .with_action(crate::components::dialog_select::SelectAction::new(
+                    "session.pin.toggle",
+                    "pin/unpin",
+                    "ctrl+f",
+                ))
+                .with_action(crate::components::dialog_select::SelectAction::new(
+                    "session.delete",
+                    "delete",
+                    "ctrl+d",
+                ));
+            props
+        }
+        // TUI-5 (lane-tui2): `DialogOpen` — the Sessions recents +
+        // Projects sections over the store's project registry
+        // (dialog-open.tsx:197-274).
+        DialogKind::Open => crate::components::dialog_open::open_menu_props(store),
+        // TUI-5: the `{Project} / Worktrees` view (dialog-open.tsx
+        // :276-322).
+        DialogKind::OpenWorktrees { project_id, project_name } => {
+            crate::components::dialog_open::open_worktrees_props(
+                store,
+                project_id,
+                project_name,
+                &home_directory(),
+            )
         }
         // -- Lane FINAL: the integration connect surface ---------------
         // `DialogIntegration` (dialog-integration.tsx:102-145): one row
@@ -2044,20 +2065,13 @@ impl CommandDispatcher for StoreDispatcher {
                 store.integration_dialog_open();
                 Dispatch::Handled
             }
-            // `open.menu` (app.tsx:763-774): DialogOpen — the session
-            // half is the Sessions list (navigate + open tab); the
-            // project half is the Worktrees dialog (select navigates
-            // home at the directory). Large size (dialog-open.tsx's
-            // `size: "large"`).
+            // `open.menu` (app.tsx:763-774): DialogOpen (dialog-open.
+            // tsx) — the Sessions recents + the Projects sections in
+            // one large select; right-arrow on a project row opens
+            // the project's worktrees view. The mount refetches both
+            // halves (`session.list` + `project.list`).
             "open.menu" => {
-                store.request_session_list_refresh();
-                store.replace_dialog(
-                    DialogKind::ServerList {
-                        command: "session.list",
-                        title: "Open session or project",
-                    },
-                    DialogSize::Large,
-                );
+                store.open_menu_pressed();
                 Dispatch::Handled
             }
             // `opencode.settings` (app.tsx:959-968): DialogConfig — the
@@ -3171,7 +3185,7 @@ mod tests {
                     parent_id: None,
                     time_idle: None,
                     viewed: None,
-                },
+                    ..Default::default()},
                 SessionSnapshot {
                     model: None,
                     id: "s_open".into(),
@@ -3179,7 +3193,7 @@ mod tests {
                     parent_id: None,
                     time_idle: None,
                     viewed: None,
-                },
+                    ..Default::default()},
             ],
             unread: Vec::new(),
             messages: Vec::new(),
