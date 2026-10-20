@@ -55,48 +55,74 @@ use serde_json::Value;
 /// same budget the handlers' `Json` extractors apply after pass-through.
 const BODY_LIMIT: usize = 2 * 1024 * 1024;
 
-/// The HTTP-H0 rollout (batch 1 after the oracle's APPROVE WITH
-/// CONDITIONS): validate-first operations whose JSON payloads are enforced
-/// in middleware (sorted; mirrors the generated table). This is the
-/// incremental rollout valve — it grows toward the full validate-first
-/// set; LOC-MW routes get their post-session seam in a follow-up lane.
+/// The HTTP-H0 rollout: validate-first operations whose JSON payloads
+/// are enforced in middleware (sorted; mirrors the generated table). This
+/// is the incremental rollout valve — it grows toward the full
+/// validate-first set; LOC-MW routes get their post-session seam in a
+/// follow-up lane.
 ///
 /// Batch 1 (2026-10-19, lane-h0roll) added 8 ops — wrong-type +
 /// missing-key probes per route byte-pinned against a live v2.0.24 boot
 /// (`ref-validation-messages-4.json`) and dual-end verified via the
-/// `OC_P10` gate before this list grew. Still excluded: the oracle's
-/// deferred trio (`session.form.create`, `experimental.session.import`,
-/// `experimental.mcp.add`) and the Bool/Num routes whose labels are now
-/// pinned but whose enforcement lands with a later batch
-/// (`credential.create`, `worktree.remove`, `session.view`,
-/// `session.form.reply`, `integration.connect.key`,
-/// `integration.oauth.connect`).
+/// `OC_P10` gate before this list grew.
+///
+/// Batch 2 (2026-10-20, lane-h0b) added 10 ops — every message
+/// probe-pinned against a live v2.0.24 boot BEFORE this list grew
+/// (`env-requiredness-probe.json`: wrong-type + missing-key per route,
+/// plus pass-through checks). Two of the ten are the 2026-10-19 rollback
+/// pair, re-enabled on probe evidence: v2 400s env-less persistentPty
+/// creates (`Missing key\n  at ["env"]` — spec-strict; its own tests
+/// always send `env: {}`, `packages/server/test/persistent-pty.test.ts`)
+/// while `pty.create`'s table row is all-optional and v2 tolerates
+/// env-less creates (200) — the rollback's `env`-requiredness fear only
+/// ever applied to the persistent variant. The other eight are the
+/// simple-schema families (credential/integration/plugin/session-view/
+/// worktree) whose Bool/Num labels were pinned in round 4. Still
+/// excluded: the oracle's deferred trio (`session.form.create`,
+/// `experimental.session.import`, `experimental.mcp.add`) and
+/// `session.form.reply` (carries v2 `formLocationMiddleware` — form
+/// resolution precedes payload decode, same class as LOC-MW; it was
+/// wrongly parked on the Bool/Num list).
 const ENFORCED_OPS: &[&str] = &[
+    "credential.create",
     "credential.update",
     "experimental.config.update",
     "experimental.generate.text",
     "experimental.integration.wellknown.add",
     "integration.command.connect",
+    "integration.connect.key",
+    "integration.oauth.complete",
+    "integration.oauth.connect",
+    "plugin.check",
     "plugin.update",
     "project.update",
+    "pty.create",
     "pty.update",
+    "server.experimental.persistentPty.create",
     "server.experimental.persistentPty.update",
     "session.create",
     "session.environment",
     "session.move",
+    "session.view",
     "shell.create",
     "websearch.query",
     "worktree.create",
+    "worktree.refresh",
+    "worktree.remove",
 ];
 
-// pty.create and server.experimental.persistentPty.create are NOT
-// enforced: the generated tables mark `env` required (per the pinned
-// spec) but the runtime contract is unprobed — the port handlers (and
-// pre-enforcement behavior) accept env-less creates, and CI caught
-// `parity_pty_frames::resized_checkpoint` 400ing on the persistentPty
-// create (2026-10-19, same class as pty.create). Re-probe v2 with
-// env-less payloads before re-enabling either; tracked as gap rows in
-// the H0 matrix.
+// Env-requiredness adjudication (RESOLVED 2026-10-20, lane-h0b; probe
+// evidence `env-requiredness-probe.json`, byte-level request/response):
+// the 2026-10-19 rollback pulled BOTH create ops because the generated
+// table marked `env` required and the runtime contract was unprobed.
+// The probe split the verdict — v2 is SPEC-STRICT for
+// server.experimental.persistentPty.create (env-less create → 400
+// `Missing key\n  at ["env"]`; v2's own tests always send `env: {}`),
+// and RUNTIME-LENIENT for pty.create (all-optional row; env-less create
+// → 200, spawns the default shell). Both ops are enforced again above:
+// the persistent variant's 400 matches v2 byte-for-byte (the CI payload
+// that caught the "false"-400 was itself divergent from v2 and now sends
+// `env: {}`), and the ephemeral variant never had a requiredness gap.
 
 /// Every operation whose v2 endpoint carries `sessionLocationMiddleware`
 /// (`protocol/src/groups/session.ts` — 18 — and
@@ -638,8 +664,10 @@ mod tests {
     }
 
     /// Bool/Num labels pinned vs live v2.0.24 (round-4 probe; oracle
-    /// condition 2): these routes stay OUT of `ENFORCED_OPS` until their
-    /// batch, but the interpreter's labels are already byte-pinned.
+    /// condition 2): enforcement for these routes landed with batch 2
+    /// (2026-10-20) — except `session.form.reply`, which carries v2
+    /// `formLocationMiddleware` (form resolution precedes payload decode)
+    /// and stays out until the post-location seam.
     #[test]
     fn pinned_boolean_and_number_labels() {
         assert_eq!(
@@ -728,6 +756,82 @@ mod tests {
         assert_eq!(err("worktree.create", json!({})), "Missing key\n  at [\"projectID\"]");
     }
 
+    /// Batch-2 ops (2026-10-20 probe, `env-requiredness-probe.json`):
+    /// wrong-type + missing-key per route, byte-pinned against a live
+    /// v2.0.24 boot BEFORE the `ENFORCED_OPS` edit landed. Includes the
+    /// env-requiredness adjudication rows for the re-enabled rollback
+    /// pair (v2: persistent variant SPEC-STRICT — env-less create 400s;
+    /// ephemeral variant lenient — env-less create 200s).
+    #[test]
+    fn pinned_batch2_messages() {
+        // pty.create (no required fields — wrong-type probes only)
+        assert_eq!(err("pty.create", json!({"command": 5})), "Expected string\n  at [\"command\"]");
+        assert_eq!(err("pty.create", json!({"args": [5]})), "Expected string\n  at [\"args\"][0]");
+        // server.experimental.persistentPty.create: the adjudication
+        // rows (declaration order args → title → env; env-less create
+        // is the CI-rollback case).
+        assert_eq!(
+            err(
+                "server.experimental.persistentPty.create",
+                json!({"args": ["-c", "exit 0"], "title": "t"})
+            ),
+            "Missing key\n  at [\"env\"]"
+        );
+        assert_eq!(
+            err(
+                "server.experimental.persistentPty.create",
+                json!({"args": ["-c", "exit 0"], "title": "t", "env": 5})
+            ),
+            "Expected object\n  at [\"env\"]"
+        );
+        // credential.create (declaration order id? → integrationID! →
+        // label? → value! → activate?)
+        assert_eq!(
+            err("credential.create", json!({"integrationID": 5})),
+            "Expected string\n  at [\"integrationID\"]"
+        );
+        assert_eq!(err("credential.create", json!({})), "Missing key\n  at [\"integrationID\"]");
+        assert_eq!(
+            err("credential.create", json!({"integrationID": "int_h0b"})),
+            "Missing key\n  at [\"value\"]"
+        );
+        // integration.connect.key / integration.oauth.connect
+        assert_eq!(
+            err("integration.connect.key", json!({"key": 5})),
+            "Expected string\n  at [\"key\"]"
+        );
+        assert_eq!(err("integration.connect.key", json!({})), "Missing key\n  at [\"key\"]");
+        assert_eq!(
+            err("integration.oauth.connect", json!({"methodID": 5})),
+            "Expected string\n  at [\"methodID\"]"
+        );
+        assert_eq!(err("integration.oauth.connect", json!({})), "Missing key\n  at [\"methodID\"]");
+        // integration.oauth.complete (nullable optional `code`)
+        assert_eq!(
+            err("integration.oauth.complete", json!({"code": 5})),
+            "Expected string | null\n  at [\"code\"]"
+        );
+        // plugin.check (nullable optional `target`)
+        assert_eq!(
+            err("plugin.check", json!({"target": 5})),
+            "Expected string | null\n  at [\"target\"]"
+        );
+        // worktree.refresh / worktree.remove
+        assert_eq!(
+            err("worktree.refresh", json!({"projectID": 5})),
+            "Expected string\n  at [\"projectID\"]"
+        );
+        assert_eq!(err("worktree.refresh", json!({})), "Missing key\n  at [\"projectID\"]");
+        assert_eq!(
+            err("worktree.remove", json!({"projectID": 5})),
+            "Expected string\n  at [\"projectID\"]"
+        );
+        assert_eq!(
+            err("worktree.remove", json!({"projectID": "prj_h0b"})),
+            "Missing key\n  at [\"directory\"]"
+        );
+    }
+
     /// Effect strips unknown fields (additionalProperties: false is NOT a
     /// rejection) and nulls pass nullable fields only.
     #[test]
@@ -751,6 +855,23 @@ mod tests {
             ("shell.create", json!({"command": "ls", "timeout": 5, "metadata": {"k": 1}})),
             ("pty.update", json!({"title": "t", "size": {"cols": 2, "rows": 1}})),
             ("websearch.query", json!({"query": "q"})),
+            // Batch-2 pass-through pins (probe: v2 accepts all of these
+            // — including the env-less pty.create, the adjudication's
+            // lenient half).
+            ("pty.create", json!({"command": "sh", "args": ["-c", "exit 0"]})),
+            ("pty.create", json!({})),
+            ("pty.create", json!({"env": {"K": "v"}})),
+            (
+                "server.experimental.persistentPty.create",
+                json!({"args": ["-c", "exit 0"], "title": "t", "env": {}}),
+            ),
+            ("credential.create", json!({"integrationID": "int_h0b", "value": {"k": 1}})),
+            ("integration.connect.key", json!({"key": "k"})),
+            ("integration.oauth.connect", json!({"methodID": "m"})),
+            ("integration.oauth.complete", json!({})),
+            ("integration.oauth.complete", json!({"code": null})),
+            ("plugin.check", json!({})),
+            ("worktree.refresh", json!({"projectID": "prj_h0b"})),
         ] {
             assert!(validate_payload(op, &body).is_ok(), "{op} rejected valid payload {body}");
         }
@@ -786,5 +907,14 @@ mod tests {
         for op in ["session.form.create", "experimental.session.import", "experimental.mcp.add"] {
             assert!(!enforces(op), "{op} is deferred by oracle review");
         }
+        // session.form.reply carries v2 `formLocationMiddleware`
+        // (groups/session.ts:846: form resolution → 404 precedes payload
+        // decode) — same exclusion class as LOC-MW; found during the
+        // batch-2 survey (it was wrongly parked on the round-4 Bool/Num
+        // list). Stays out until the post-location seam.
+        assert!(
+            !enforces("session.form.reply"),
+            "session.form.reply is form-location-first: 404 must precede its payload 400"
+        );
     }
 }
