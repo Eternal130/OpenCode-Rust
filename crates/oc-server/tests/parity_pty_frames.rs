@@ -473,7 +473,12 @@ async fn resized_checkpoint() {
         "POST",
         &format!("/api/experimental/session/{session_id}/terminal"),
         &[("content-type", "application/json")],
-        serde_json::json!({ "title": "f3", "command": "sh", "args": ["-c", "sleep 30"] })
+        // `env` is REQUIRED by PersistentPty.CreateInput (probe-pinned
+        // 2026-10-20: v2.0.24 400s env-less creates with `Missing key
+        // at ["env"]`; its own tests always send `env: {}` —
+        // packages/server/test/persistent-pty.test.ts:47,168,196). The
+        // pre-batch-2 payload here was divergent from v2.
+        serde_json::json!({ "title": "f3", "command": "sh", "args": ["-c", "sleep 30"], "env": {} })
             .to_string()
             .as_bytes(),
     )

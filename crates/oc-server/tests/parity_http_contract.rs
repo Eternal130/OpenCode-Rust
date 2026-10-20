@@ -583,7 +583,7 @@ async fn session_stats_shape() {
 /// resolve the session (404) BEFORE payload decode — the middleware must
 /// NOT fire for them (see the LOC-MW control at the end).
 #[tokio::test]
-#[allow(clippy::too_many_lines)] // one pinned probe table (slice + batch 1), one test
+#[allow(clippy::too_many_lines)] // one pinned probe table (slice + batches 1-2), one test
 async fn all_routes_reject_wrong_payload() {
     let server = boot().await;
     let probes: &[(&str, &str, &str, &str)] = &[
@@ -623,10 +623,13 @@ async fn all_routes_reject_wrong_payload() {
             r#"{"command": "ls", "timeout": -1}"#,
             "Expected a value greater than or equal to 0\n  at [\"timeout\"]",
         ),
-        // pty.create probe REMOVED 2026-10-19: enforcement rolled back pending
-        // an env-requiredness probe against v2 (gap row; see request_validation
-        // ENFORCED_OPS comment) — the wrong-payload probe otherwise spawned a
-        // real terminal (200) on every run.
+        // pty.create (re-enabled 2026-10-20 on probe evidence: v2 is
+        // RUNTIME-LENIENT here — env-less creates 200 — and the generated
+        // row is all-optional, so wrong-type probes are the only class;
+        // they 400 in middleware BEFORE any terminal spawns).
+        ("POST", "/api/pty", r#"{"command": 5}"#, "Expected string\n  at [\"command\"]"),
+        ("POST", "/api/pty", r#"{"args": [5]}"#, "Expected string\n  at [\"args\"][0]"),
+        ("POST", "/api/pty", r#"{"env": 5}"#, "Expected object\n  at [\"env\"]"),
         ("PUT", "/api/pty/pty_H0PROBE", r#"{"title": 5}"#, "Expected string\n  at [\"title\"]"),
         ("PATCH", "/api/project/prj_H0PROBE", r#"{"name": 5}"#, "Expected string\n  at [\"name\"]"),
         (
@@ -693,9 +696,34 @@ async fn all_routes_reject_wrong_payload() {
             "Expected object\n  at [\"variables\"]",
         ),
         ("PUT", "/api/session/ses_H0PROBE/environment", r"{}", "Missing key\n  at [\"variables\"]"),
-        // persistentPty.create probes removed 2026-10-19 with the
-        // enforcement rollback (env-requiredness gap class; see the
-        // ENFORCED_OPS comment in src/request_validation.rs).
+        // server.experimental.persistentPty.create (re-enabled 2026-10-20:
+        // probe-pinned v2 SPEC-STRICT — env-less create 400s
+        // `Missing key at ["env"]`; validate-first, so a fake session id
+        // is fine and no terminal ever spawns).
+        (
+            "POST",
+            "/api/experimental/session/ses_H0PROBE/terminal",
+            r#"{"args": 5}"#,
+            "Expected array\n  at [\"args\"]",
+        ),
+        (
+            "POST",
+            "/api/experimental/session/ses_H0PROBE/terminal",
+            r"{}",
+            "Missing key\n  at [\"args\"]",
+        ),
+        (
+            "POST",
+            "/api/experimental/session/ses_H0PROBE/terminal",
+            r#"{"args": ["-c", "exit 0"], "title": "t"}"#,
+            "Missing key\n  at [\"env\"]",
+        ),
+        (
+            "POST",
+            "/api/experimental/session/ses_H0PROBE/terminal",
+            r#"{"args": ["-c", "exit 0"], "title": "t", "env": 5}"#,
+            "Expected object\n  at [\"env\"]",
+        ),
         (
             "PUT",
             "/api/experimental/persistent-pty/pty_H0PROBE",
@@ -710,6 +738,74 @@ async fn all_routes_reject_wrong_payload() {
         ),
         ("POST", "/api/worktree", r#"{"projectID": 5}"#, "Expected string\n  at [\"projectID\"]"),
         ("POST", "/api/worktree", r"{}", "Missing key\n  at [\"projectID\"]"),
+        // HTTP-H0 batch 2 (8 ops, wrong-type + missing-key per route —
+        // messages byte-pinned against live v2.0.24 before enforcement;
+        // `env-requiredness-probe.json`, 2026-10-20).
+        (
+            "POST",
+            "/api/credential",
+            r#"{"integrationID": 5}"#,
+            "Expected string\n  at [\"integrationID\"]",
+        ),
+        ("POST", "/api/credential", r"{}", "Missing key\n  at [\"integrationID\"]"),
+        (
+            "POST",
+            "/api/credential",
+            r#"{"integrationID": "int_H0PROBE"}"#,
+            "Missing key\n  at [\"value\"]",
+        ),
+        (
+            "POST",
+            "/api/integration/int_H0PROBE/connect/key",
+            r#"{"key": 5}"#,
+            "Expected string\n  at [\"key\"]",
+        ),
+        ("POST", "/api/integration/int_H0PROBE/connect/key", r"{}", "Missing key\n  at [\"key\"]"),
+        (
+            "POST",
+            "/api/integration/int_H0PROBE/connect/oauth",
+            r#"{"methodID": 5}"#,
+            "Expected string\n  at [\"methodID\"]",
+        ),
+        (
+            "POST",
+            "/api/integration/int_H0PROBE/connect/oauth",
+            r"{}",
+            "Missing key\n  at [\"methodID\"]",
+        ),
+        (
+            "POST",
+            "/api/integration/int_H0PROBE/connect/oauth/att_H0PROBE/complete",
+            r#"{"code": 5}"#,
+            "Expected string | null\n  at [\"code\"]",
+        ),
+        (
+            "POST",
+            "/api/plugin/check",
+            r#"{"target": 5}"#,
+            "Expected string | null\n  at [\"target\"]",
+        ),
+        (
+            "POST",
+            "/api/session/ses_H0PROBE/view",
+            r#"{"idle": "x"}"#,
+            "Expected number\n  at [\"idle\"]",
+        ),
+        ("POST", "/api/session/ses_H0PROBE/view", r"{}", "Missing key\n  at [\"idle\"]"),
+        (
+            "POST",
+            "/api/worktree/refresh",
+            r#"{"projectID": 5}"#,
+            "Expected string\n  at [\"projectID\"]",
+        ),
+        ("POST", "/api/worktree/refresh", r"{}", "Missing key\n  at [\"projectID\"]"),
+        ("DELETE", "/api/worktree", r#"{"projectID": 5}"#, "Expected string\n  at [\"projectID\"]"),
+        (
+            "DELETE",
+            "/api/worktree",
+            r#"{"projectID": "prj_H0PROBE"}"#,
+            "Missing key\n  at [\"directory\"]",
+        ),
     ];
     for (method, target, body, message) in probes {
         let headers: &[(&str, &str)] =

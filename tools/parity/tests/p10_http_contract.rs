@@ -19,10 +19,12 @@
 //!   `SessionNotFoundError` envelope, 404 empty body on an unknown route).
 //! - **(c) request-validation matrix** — table-driven over the pinned
 //!   openapi document (`p10_openapi.rs` shows the pin): the HTTP-H0
-//!   slice + batch-1 (26 probes over 16 routes — P10-E1/E2 pins, the C4b
-//!   generated-table middleware seam with the `^ses` pattern label, and
-//!   the 8 batch-1 validate-first ops) run as real dual-end checks; every
-//!   remaining operation is an explicit `pending` row in the matrix, and
+//!   slice + batches 1-2 (47 probes over 26 routes — P10-E1/E2 pins, the
+//!   C4b generated-table middleware seam with the `^ses` pattern label,
+//!   the 8 batch-1 validate-first ops, the 2026-10-19 rollback pair
+//!   re-enabled on env-requiredness probe evidence, and the 8 batch-2
+//!   simple-schema ops) run as real dual-end checks; every remaining
+//!   operation is an explicit `pending` row in the matrix, and
 //!   empty-body/no-content-type behavior is recorded as explicit `gap`
 //!   rows (structured gaps, surfaced in the artifact — never a silent
 //!   pass).
@@ -265,7 +267,9 @@ fn pinned_operations() -> Result<Vec<(String, String)>> {
 /// condition 1) and the `b1_` rows are the HTTP-H0 batch-1 rollout (8
 /// ops, wrong-type + missing-key each, expectations regenerated from the
 /// generated table rows and pinned in round 4 BEFORE the `ENFORCED_OPS`
-/// edit landed).
+/// edit landed). The `b2_` rows are batch 2 (2026-10-20): the re-enabled
+/// rollback pair (env-requiredness adjudication,
+/// `env-requiredness-probe.json`) + 8 simple-schema ops.
 const VALIDATED_ROUTES: &[(&str, &str, Option<&str>, &str)] = &[
     // (method, path-with-query, invalid body, note)
     ("POST", "/api/session", Some(r#"{"title": 12345}"#), "payload schema reject (P10-E1)"),
@@ -303,9 +307,12 @@ const VALIDATED_ROUTES: &[(&str, &str, Option<&str>, &str)] = &[
         Some(r#"{"command": "ls", "timeout": -1}"#),
         "HTTP-H0 slice: integer minimum bound",
     ),
-    // pty.create probe removed 2026-10-19 with the enforcement rollback
-    // (env-requiredness unprobed vs v2 — gap row; ENFORCED_OPS comment in
-    // oc-server/src/request_validation.rs).
+    // pty.create (re-enabled 2026-10-20: probe evidence — v2 tolerates
+    // env-less creates (200) and the generated row is all-optional, so
+    // only wrong-type probes exist; they 400 in middleware before any
+    // terminal spawns).
+    ("POST", "/api/pty", Some(r#"{"command": 5}"#), "b2 pty.create: wrong type (env-lenient op)"),
+    ("POST", "/api/pty", Some(r#"{"args": [5]}"#), "b2 pty.create: array item wrong type"),
     ("PUT", "/api/pty/pty_P10H0", Some(r#"{"title": 5}"#), "HTTP-H0 slice: string type"),
     ("PATCH", "/api/project/prj_P10H0", Some(r#"{"name": 5}"#), "HTTP-H0 slice: string type"),
     // HTTP-H0 batch 1 (oracle APPROVE WITH CONDITIONS, 2026-10-19).
@@ -359,8 +366,34 @@ const VALIDATED_ROUTES: &[(&str, &str, Option<&str>, &str)] = &[
         Some(r"{}"),
         "b1 session.environment: missing key",
     ),
-    // persistentPty.create probes removed 2026-10-19 with the enforcement
-    // rollback (same env-requiredness gap class as pty.create).
+    // server.experimental.persistentPty.create (re-enabled 2026-10-20:
+    // probe evidence — v2 is SPEC-STRICT, env-less create 400s
+    // `Missing key at ["env"]`; validate-first, fake session id, no
+    // terminal spawns).
+    (
+        "POST",
+        "/api/experimental/session/ses_P10H0/terminal",
+        Some(r#"{"args": 5}"#),
+        "b1 persistentPty.create: array wrong type",
+    ),
+    (
+        "POST",
+        "/api/experimental/session/ses_P10H0/terminal",
+        Some(r"{}"),
+        "b1 persistentPty.create: missing key",
+    ),
+    (
+        "POST",
+        "/api/experimental/session/ses_P10H0/terminal",
+        Some(r#"{"args": ["-c", "exit 0"], "title": "t"}"#),
+        "b2 persistentPty.create: env required (adjudication row)",
+    ),
+    (
+        "POST",
+        "/api/experimental/session/ses_P10H0/terminal",
+        Some(r#"{"args": ["-c", "exit 0"], "title": "t", "env": 5}"#),
+        "b2 persistentPty.create: env wrong type",
+    ),
     (
         "PUT",
         "/api/experimental/persistent-pty/pty_P10H0",
@@ -375,6 +408,69 @@ const VALIDATED_ROUTES: &[(&str, &str, Option<&str>, &str)] = &[
     ),
     ("POST", "/api/worktree", Some(r#"{"projectID": 5}"#), "b1 worktree.create: wrong type"),
     ("POST", "/api/worktree", Some(r"{}"), "b1 worktree.create: missing key"),
+    // HTTP-H0 batch 2 (2026-10-20, lane-h0b — 8 simple-schema ops,
+    // wrong-type + missing-key each, probe-pinned BEFORE enforcement:
+    // env-requiredness-probe.json).
+    (
+        "POST",
+        "/api/credential",
+        Some(r#"{"integrationID": 5}"#),
+        "b2 credential.create: wrong type",
+    ),
+    ("POST", "/api/credential", Some(r"{}"), "b2 credential.create: missing key"),
+    (
+        "POST",
+        "/api/credential",
+        Some(r#"{"integrationID": "int_P10H0"}"#),
+        "b2 credential.create: value missing",
+    ),
+    (
+        "POST",
+        "/api/integration/int_P10H0/connect/key",
+        Some(r#"{"key": 5}"#),
+        "b2 connect.key: wrong type",
+    ),
+    ("POST", "/api/integration/int_P10H0/connect/key", Some(r"{}"), "b2 connect.key: missing key"),
+    (
+        "POST",
+        "/api/integration/int_P10H0/connect/oauth",
+        Some(r#"{"methodID": 5}"#),
+        "b2 oauth.connect: wrong type",
+    ),
+    (
+        "POST",
+        "/api/integration/int_P10H0/connect/oauth",
+        Some(r"{}"),
+        "b2 oauth.connect: missing key",
+    ),
+    (
+        "POST",
+        "/api/integration/int_P10H0/connect/oauth/att_P10H0/complete",
+        Some(r#"{"code": 5}"#),
+        "b2 oauth.complete: nullable wrong type",
+    ),
+    ("POST", "/api/plugin/check", Some(r#"{"target": 5}"#), "b2 plugin.check: nullable wrong type"),
+    (
+        "POST",
+        "/api/session/ses_P10H0/view",
+        Some(r#"{"idle": "x"}"#),
+        "b2 session.view: number wrong type",
+    ),
+    ("POST", "/api/session/ses_P10H0/view", Some(r"{}"), "b2 session.view: missing key"),
+    (
+        "POST",
+        "/api/worktree/refresh",
+        Some(r#"{"projectID": 5}"#),
+        "b2 worktree.refresh: wrong type",
+    ),
+    ("POST", "/api/worktree/refresh", Some(r"{}"), "b2 worktree.refresh: missing key"),
+    ("DELETE", "/api/worktree", Some(r#"{"projectID": 5}"#), "b2 worktree.remove: wrong type"),
+    (
+        "DELETE",
+        "/api/worktree",
+        Some(r#"{"projectID": "prj_P10H0"}"#),
+        "b2 worktree.remove: directory missing",
+    ),
 ];
 
 /// (method, template path) of every operation the probes above check —
@@ -389,7 +485,8 @@ const VALIDATED_TEMPLATE_OPS: &[(&str, &str)] = &[
     ("POST", "/api/websearch"),
     ("POST", "/api/shell"),
     // POST /api/pty and POST /api/experimental/session/{sessionID}/terminal
-    // removed 2026-10-19 (enforcement rollback; gap rows pending env probes).
+    // restored 2026-10-20 (re-enabled on env-requiredness probe evidence).
+    ("POST", "/api/pty"),
     ("PUT", "/api/pty/{ptyID}"),
     ("PATCH", "/api/project/{projectID}"),
     ("POST", "/api/experimental/generate"),
@@ -397,8 +494,18 @@ const VALIDATED_TEMPLATE_OPS: &[(&str, &str)] = &[
     ("PATCH", "/api/experimental/config"),
     ("POST", "/api/integration/{integrationID}/connect/command"),
     ("PUT", "/api/session/{sessionID}/environment"),
+    ("POST", "/api/experimental/session/{sessionID}/terminal"),
     ("PUT", "/api/experimental/persistent-pty/{ptyID}"),
     ("POST", "/api/worktree"),
+    // HTTP-H0 batch 2 (2026-10-20).
+    ("POST", "/api/credential"),
+    ("POST", "/api/integration/{integrationID}/connect/key"),
+    ("POST", "/api/integration/{integrationID}/connect/oauth"),
+    ("POST", "/api/integration/{integrationID}/connect/oauth/{attemptID}/complete"),
+    ("POST", "/api/plugin/check"),
+    ("POST", "/api/session/{sessionID}/view"),
+    ("POST", "/api/worktree/refresh"),
+    ("DELETE", "/api/worktree"),
 ];
 
 /// Run one validation probe against one side, normalized like
