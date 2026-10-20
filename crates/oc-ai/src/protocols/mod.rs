@@ -71,6 +71,11 @@ pub mod mistral_chat;
 // the Converse protocol (+ anthropic-on-bedrock invoke-stream composition).
 pub mod bedrock;
 
+// Google Interactions (AI-M3) — the Gemini Interactions lane:
+// thought-signature stateless replay, previous_interaction_id
+// continuation, native function_call/function_result steps.
+pub mod google_interactions;
+
 // Google Vertex native — the Gemini generateContent protocol on Vertex with
 // project/location routing, tuned endpoints, Express Mode keys, ADC bearer.
 pub mod vertex;

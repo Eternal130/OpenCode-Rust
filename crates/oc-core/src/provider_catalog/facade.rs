@@ -39,6 +39,7 @@ use oc_ai::protocols::bedrock::{self as bedrock_lane, BedrockAuthOptions};
 use oc_ai::protocols::cohere_chat::{cohere_route_for_package, CohereConfig};
 use oc_ai::protocols::copilot::{copilot_chat_route, CopilotConfig};
 use oc_ai::protocols::gemini::{google_route, GoogleConfig};
+use oc_ai::protocols::google_interactions::{google_interactions_route, GoogleInteractionsConfig};
 use oc_ai::protocols::mistral_chat::{mistral_route_for_package, MistralConfig};
 use oc_ai::protocols::openai_chat::{
     alibaba_chat_route, deepseek_chat_route, groq_chat_route, openai_chat_route,
@@ -168,6 +169,10 @@ pub enum ProtocolFamily {
     BedrockMantleResponses,
     /// Vertex native: Gemini generateContent on aiplatform.
     VertexGemini,
+    /// Google Interactions (AI-M3): the Gemini Interactions lane on
+    /// generativelanguage — thought-signature stateless replay and
+    /// `previous_interaction_id` continuation.
+    GoogleInteractions,
     /// GitHub Copilot: openai-compatible chat + the Copilot header policy.
     CopilotChat,
 }
@@ -229,6 +234,10 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         "@opencode/ai/providers/mistral" => ProtocolFamily::MistralChat,
 
         "@opencode/ai/providers/google" => ProtocolFamily::Gemini,
+        // Google Interactions (AI-M3): the pinned interactions package —
+        // the native `google-interactions` protocol (provider.ts:77
+        // registry entry, model-resolver.ts:458 auth list).
+        "@opencode/ai/providers/google/interactions" => ProtocolFamily::GoogleInteractions,
         // Vertex native (BE-4): the Gemini protocol deployed on aiplatform.
         "@opencode/ai/providers/google-vertex" => ProtocolFamily::VertexGemini,
         "@opencode/ai/providers/openai-compatible" => ProtocolFamily::OpenAICompatible,
@@ -433,6 +442,21 @@ fn build_route(
             );
             Ok(route
                 .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }))
+        }
+        ProtocolFamily::GoogleInteractions => {
+            // AI-M3: the native interactions lane with the Google
+            // api-key auth chain (`Google.configure(...).interactions`).
+            let access_token =
+                api_key.or_else(|| env_first(env, "GOOGLE_OAUTH_ACCESS_TOKEN").map(Secret::Env));
+            Ok(google_interactions_route(
+                transport,
+                GoogleInteractionsConfig {
+                    api_key: access_token
+                        .or_else(|| env.first().map(|name| Secret::Env(name.clone()))),
+                    base_url,
+                },
+            )
+            .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }))
         }
         ProtocolFamily::CopilotChat => Ok(copilot_chat_route(
             transport,
@@ -1009,6 +1033,48 @@ mod tests {
             route.endpoint.base_url.as_deref(),
             Some("https://api.cohere.ai/compatibility/v1")
         );
+    }
+
+    /// AI-M3: the pinned `google/interactions` package binds the native
+    /// `google-interactions` protocol at `/interactions` with the Google
+    /// api-key auth chain (provider.ts:77 registry entry).
+    #[test]
+    fn provider_facade_google_interactions_family() {
+        assert_eq!(
+            family_of("@opencode/ai/providers/google/interactions"),
+            Some(ProtocolFamily::GoogleInteractions),
+            "the interactions package maps to its native family"
+        );
+        assert_eq!(
+            family_of("@opencode/ai/providers/google"),
+            Some(ProtocolFamily::Gemini),
+            "the plain google package stays on Gemini"
+        );
+        let route = google_interactions_route(
+            Arc::new(oc_ai::route::transport::FailingTransport { message: "facade unit test" }),
+            GoogleInteractionsConfig {
+                api_key: Some(oc_ai::route::auth::Secret::Value("g-key".into())),
+                base_url: None,
+            },
+        );
+        assert_eq!(route.id, "google-interactions");
+        assert_eq!(route.protocol.id(), "google-interactions");
+        assert_eq!(
+            route.endpoint.base_url.as_deref(),
+            Some(oc_ai::protocols::google_interactions::DEFAULT_BASE_URL)
+        );
+        let mut request = oc_ai::schema::LLMRequest::new(
+            route.model("gemini-3.8-flash", None).expect("model binds"),
+        );
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let prepared = route.prepare_request(&request);
+        let body = route.build_body(&prepared).expect("body");
+        let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
+        assert_eq!(
+            transport_request.url,
+            "https://generativelanguage.googleapis.com/v1beta/interactions"
+        );
+        assert_eq!(transport_request.header("x-goog-api-key"), Some("g-key"));
     }
 
     #[test]
