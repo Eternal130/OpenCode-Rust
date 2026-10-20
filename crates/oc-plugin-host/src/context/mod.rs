@@ -229,6 +229,32 @@ impl ToolPort for NoToolEngine {
     }
 }
 
+/// `ctx.permission.*` routing target (PLUG-D11 — the v2
+/// `PermissionDomain`: `list`/`get`/`reply`). The implementation owns
+/// the real permission machinery (the oc-core engine seam: pending
+/// asks per session, `Reply` resolution); calls arrive spawned off the
+/// IO reader exactly like [`SessionPort::call`].
+#[async_trait]
+pub trait PermissionPort: Send + Sync {
+    /// The pending requests for one session (v2
+    /// `permission.forSession`) as `Permission.Request` JSON.
+    async fn list(&self, session_id: &str) -> Result<Value, String>;
+
+    /// One pending request (v2 errors `Permission request not found`
+    /// when the id is unknown or belongs to another session).
+    async fn get(&self, session_id: &str, request_id: &str) -> Result<Value, String>;
+
+    /// Resolve one pending request (`decision`: `once` | `always` |
+    /// `reject`, v2 `Permission.Reply`).
+    async fn reply(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        decision: &str,
+        message: Option<String>,
+    ) -> Result<(), String>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

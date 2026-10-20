@@ -86,6 +86,8 @@ pub struct PluginBoot {
     /// The session-port slot (filled with the engine handle after
     /// `Engine::boot`).
     pub session_slot: Arc<EngineSessionSlot>,
+    /// The permission-port slot (PLUG-D11; filled after `Engine::boot`).
+    pub permission_slot: Arc<EnginePermissionSlot>,
 }
 
 /// One `/api/rpc` call's failure (PLUG-D14): the v2 error channel —
@@ -125,6 +127,7 @@ impl PluginBoot {
             ready: false,
             router: Arc::new(TokenRouter::default()),
             session_slot: Arc::new(EngineSessionSlot::default()),
+            permission_slot: Arc::new(EnginePermissionSlot::default()),
         }
     }
 
@@ -289,6 +292,7 @@ pub fn boot(
     let detected = PluginHost::detect();
     let router = Arc::new(TokenRouter::default());
     let session_slot = Arc::new(EngineSessionSlot::default());
+    let permission_slot = Arc::new(EnginePermissionSlot::default());
     if !detected.enabled() && resolution.entries().is_empty() {
         eprintln!(
             "opencode plugin: no plugins configured and bun is unavailable; staying flat (no Code Mode runtime)"
@@ -299,6 +303,7 @@ pub fn boot(
             ready: false,
             router,
             session_slot,
+            permission_slot,
         });
     }
 
@@ -364,6 +369,9 @@ pub fn boot(
         host_state,
         session_port: Some(Arc::clone(&session_slot) as Arc<dyn SessionPort>),
         tool_port: Some(Arc::new(RouterToolPort { router: Arc::clone(&router) })),
+        permission_port: Some(
+            Arc::clone(&permission_slot) as Arc<dyn oc_plugin_host::PermissionPort>
+        ),
         storage_port,
         entry_options: resolution.entry_options(),
         // The registration pass spans bun cold start + every entry's
@@ -379,7 +387,7 @@ pub fn boot(
             host.start_error()
         );
     }
-    Arc::new(PluginBoot { host, resolution, ready, router, session_slot })
+    Arc::new(PluginBoot { host, resolution, ready, router, session_slot, permission_slot })
 }
 
 /// Extract the merged `plugins[]` ops from a loaded config (every
@@ -1250,5 +1258,122 @@ mod tests {
             resolution.failures
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The permission port (PLUG-D11: ctx.permission.* → the engine)
+// ---------------------------------------------------------------------------
+
+/// The engine-backed [`oc_plugin_host::PermissionPort`]: v2's
+/// `PermissionDomain` — `list`/`get`/`reply` over THIS location's
+/// permission machinery (the same `Permission` service the tool
+/// pipeline's asks park on).
+pub struct EnginePermissionPort {
+    pub engine: Arc<Engine>,
+    pub location: LocationRef,
+}
+
+impl EnginePermissionPort {
+    /// The pending requests for one session, serialized in the v2
+    /// `Permission.Request` wire shape.
+    fn pending(&self, session_id: &str) -> Vec<Value> {
+        self.engine
+            .permission_pending(&self.location, &oc_schema::id::SessionId(session_id.to_owned()))
+            .into_iter()
+            .map(|request| serde_json::to_value(&request).unwrap_or(Value::Null))
+            .collect()
+    }
+
+    /// One pending request (v2: unknown id or wrong session →
+    /// `Permission request not found`).
+    fn one(&self, session_id: &str, request_id: &str) -> Result<Value, String> {
+        self.pending(session_id)
+            .into_iter()
+            .find(|request| request.get("id").and_then(Value::as_str) == Some(request_id))
+            .ok_or_else(|| format!("Permission request not found: {request_id}"))
+    }
+}
+
+#[async_trait]
+impl oc_plugin_host::PermissionPort for EnginePermissionPort {
+    async fn list(&self, session_id: &str) -> Result<Value, String> {
+        Ok(Value::Array(self.pending(session_id)))
+    }
+
+    async fn get(&self, session_id: &str, request_id: &str) -> Result<Value, String> {
+        self.one(session_id, request_id)
+    }
+
+    async fn reply(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        decision: &str,
+        message: Option<String>,
+    ) -> Result<(), String> {
+        // v2 validates the request exists AND belongs to the session
+        // before replying (host.ts permission.reply).
+        self.one(session_id, request_id)?;
+        let reply = match decision {
+            "once" => oc_schema::permission::Reply::Once,
+            "always" => oc_schema::permission::Reply::Always,
+            "reject" => oc_schema::permission::Reply::Reject,
+            other => return Err(format!("Invalid permission decision: {other}")),
+        };
+        self.engine
+            .permission_reply(
+                &self.location,
+                oc_core::permission::ReplyInput {
+                    request_id: oc_schema::id::PermissionId(request_id.to_owned()),
+                    reply,
+                    message,
+                },
+            )
+            .await
+    }
+}
+
+/// The pre-engine permission-port placeholder (the same slot pattern
+/// as [`EngineSessionSlot`]): empty until `boot_and_serve` fills it.
+#[derive(Default)]
+pub struct EnginePermissionSlot(std::sync::RwLock<Option<Arc<EnginePermissionPort>>>);
+
+impl EnginePermissionSlot {
+    /// Fill the slot (idempotent; the first engine wins).
+    pub fn fill(&self, port: Arc<EnginePermissionPort>) {
+        let mut slot = self.0.write().expect("permission slot poisoned");
+        if slot.is_none() {
+            *slot = Some(port);
+        }
+    }
+}
+
+#[async_trait]
+impl oc_plugin_host::PermissionPort for EnginePermissionSlot {
+    async fn list(&self, session_id: &str) -> Result<Value, String> {
+        self.port()?.list(session_id).await
+    }
+
+    async fn get(&self, session_id: &str, request_id: &str) -> Result<Value, String> {
+        self.port()?.get(session_id, request_id).await
+    }
+
+    async fn reply(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        decision: &str,
+        message: Option<String>,
+    ) -> Result<(), String> {
+        self.port()?.reply(session_id, request_id, decision, message).await
+    }
+}
+
+impl EnginePermissionSlot {
+    fn port(&self) -> Result<Arc<EnginePermissionPort>, String> {
+        self.0.read().expect("permission slot poisoned").clone().ok_or_else(|| {
+            "permission: the engine is not attached to the plugin host yet".to_owned()
+        })
     }
 }

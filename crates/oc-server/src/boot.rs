@@ -273,6 +273,12 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
         location: LocationRef::new(config_location.clone(), None),
         host: Some(Arc::clone(&plugin_boot.host)),
     }));
+    // PLUG-D11: ctx.permission.list/get/reply over the engine's
+    // permission machinery.
+    plugin_boot.permission_slot.fill(Arc::new(crate::plugins::EnginePermissionPort {
+        engine: Arc::clone(&app_state.engine),
+        location: LocationRef::new(config_location.clone(), None),
+    }));
     app_state.plugins = Some(plugin_boot);
     let state = Arc::new(app_state);
     // RUNTIME-L01 — restart continuity (`installRestartContinuity`,
