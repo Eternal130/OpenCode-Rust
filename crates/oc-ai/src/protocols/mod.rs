@@ -80,6 +80,11 @@ pub mod google_interactions;
 // project/location routing, tuned endpoints, Express Mode keys, ADC bearer.
 pub mod vertex;
 
+// xAI Responses (AI-M5) — the Open Responses baseline with the Grok
+// hosted tool vocabulary (x_search_call, image_generation_call) and an
+// explicit in-band-compaction rejection.
+pub mod xai_responses;
+
 // GitHub Copilot chat — the openai-compatible chat protocol with the
 // Copilot client header policy over the credential-bound transport.
 pub mod copilot;
