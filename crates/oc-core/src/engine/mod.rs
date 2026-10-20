@@ -119,6 +119,7 @@ use crate::location::{
 use crate::location_services::{GlobalServices, LocationServiceMap};
 use crate::mcp::McpRegistry;
 use crate::permission::{Permission, ReplyInput};
+use crate::project::ProjectEvents as _;
 use crate::provider_catalog::facade::{FacadeContext, ModelConnection};
 use crate::provider_catalog::{providers_from_config, Catalog};
 use crate::session::execution::{InterruptOptions, SessionExecution};
@@ -596,6 +597,43 @@ impl Engine {
             plugin_source: options.plugin_source.clone(),
             app: options.app,
         };
+        // DB-D2 (location-lifecycle.ts:36-45): every durable session
+        // event re-activates its location's project (`Project.activate`,
+        // 60 s rate-limited inside the store). v2 forks the activate off
+        // the listener so the write never blocks publish — the spawn
+        // mirrors that. Registered once at the engine level: per-location
+        // listeners would each activate their own project id, and the
+        // rate limiter dedupes exactly like v2's `activated` map.
+        {
+            let projects = Arc::clone(&engine.projects);
+            let services = engine.services.clone();
+            let handle = tokio::runtime::Handle::current();
+            let listener: crate::bus::Listener = {
+                let bus = (*engine.bus).clone();
+                Arc::new(move |event| {
+                    if event.durable.is_none() || !event.type_.starts_with("session.") {
+                        return Ok(());
+                    }
+                    let Some(location) = event.location.clone() else {
+                        return Ok(());
+                    };
+                    let Some(services) = services.get(&LocationRef::from(&location)) else {
+                        return Ok(());
+                    };
+                    let project_id = services.project.id.clone();
+                    let bus = bus.clone();
+                    let projects = Arc::clone(&projects);
+                    handle.spawn(async move {
+                        if let Some(info) = projects.activate(&project_id).await {
+                            let events = crate::project::BusProjectEvents::new(bus);
+                            events.project_updated(&info).await;
+                        }
+                    });
+                    Ok(())
+                })
+            };
+            engine.bus.listen(listener).detach();
+        }
         engine
     }
 
@@ -661,12 +699,22 @@ impl Engine {
     // -------------------------------------------------------------------
 
     async fn assemble(&self, location: &LocationRef) -> Result<Arc<LocationServices>, BootError> {
-        // Project identity: worktree + project id.
+        // Project identity: worktree + project id. DB-D3: resolution
+        // publishes onto the engine bus (`worktree.resolved` durable
+        // facts + `project.updated`), not into the void — the session
+        // projector re-owns adopted sessions off those events.
+        let project_events = Arc::new(crate::project::BusProjectEvents::new((*self.bus).clone()));
         let project_resolver = crate::project::Resolver::new(
             Arc::clone(&self.projects) as Arc<dyn crate::project::ProjectStore>,
-            Arc::new(crate::project::NoEvents),
+            Arc::clone(&project_events) as Arc<dyn crate::project::ProjectEvents>,
         );
         let project = project_resolver.resolve(location.as_path()).await;
+        // DB-D2 (location-lifecycle.ts:34): activating the location's
+        // project records activity for recency ordering (rate-limited;
+        // the bump announces `project.updated` when it fires).
+        if let Some(info) = self.projects.activate(&project.id).await {
+            project_events.project_updated(&info).await;
+        }
         let worktree = project.canonical.clone();
 
         // The config snapshot for this location. `OPENCODE_CONFIG` (the
@@ -1742,6 +1790,7 @@ fn opencode_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
     InternalPlugin::new("opencode.tool.opencode", move |hooks, ports| {
         let db = inputs.tool_services.db.clone().expect("tool services db");
         let bus = inputs.tool_services.bus.clone().expect("tool services bus");
+        let bus_events = Arc::new(crate::project::BusProjectEvents::new(bus.clone()));
         tool::register_builtin(
             ports.tools,
             hooks,
@@ -1759,10 +1808,7 @@ fn opencode_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
                     services: inputs.services(),
                     location: inputs.location(),
                 }),
-                projects: crate::project::Resolver::new(
-                    Arc::clone(&inputs.projects),
-                    Arc::new(crate::project::NoEvents),
-                ),
+                projects: crate::project::Resolver::new(Arc::clone(&inputs.projects), bus_events),
                 home: inputs.home.clone(),
                 ids: Arc::clone(&inputs.ids),
             }),
