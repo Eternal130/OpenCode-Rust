@@ -22,8 +22,8 @@ use oc_ai::schema::{LLMRequest, Message};
 fn store_include() {
     let transport: oc_ai::route::transport::SharedTransport =
         Arc::new(FailingTransport { message: "defaults only" });
-    let route = openai_compatible_responses_route(Arc::clone(&transport))
-        .with(oc_ai::route::RoutePatch {
+    let route =
+        openai_compatible_responses_route(Arc::clone(&transport)).with(oc_ai::route::RoutePatch {
             id: Some("bedrock-mantle-responses".to_string()),
             provider: Some("amazon-bedrock".to_string()),
             provider_metadata_key: Some("mantle".to_string()),
@@ -38,10 +38,7 @@ fn store_include() {
     // The route defaults survive the mantle patch (merged, not replaced).
     let defaults = route.defaults.provider_options.as_ref().expect("providerOptions defaults");
     assert_eq!(defaults.get("store"), Some(&serde_json::json!(false)));
-    assert_eq!(
-        defaults.get("include"),
-        Some(&serde_json::json!(["reasoning.encrypted_content"]))
-    );
+    assert_eq!(defaults.get("include"), Some(&serde_json::json!(["reasoning.encrypted_content"])));
 
     // And they reach the built body of a plain request.
     let mut request = LLMRequest::new(route.model("claude-opus-4-6", None).expect("model binds"));
