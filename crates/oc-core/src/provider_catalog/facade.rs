@@ -50,6 +50,7 @@ use oc_ai::protocols::openai_compatible::{
 };
 use oc_ai::protocols::openai_responses::{openai_responses_route, OpenAIResponsesRouteSpec};
 use oc_ai::protocols::vertex::{vertex_route_for_model, VertexConfig};
+use oc_ai::protocols::xai_responses::{xai_auth, xai_responses_route, XaiResponsesRouteSpec};
 use oc_ai::route::auth::{self, Secret};
 use oc_ai::route::client::{Route, RouteDefaults, RoutePatch};
 use oc_ai::route::endpoint::EndpointPatch;
@@ -169,6 +170,10 @@ pub enum ProtocolFamily {
     BedrockMantleResponses,
     /// Vertex native: Gemini generateContent on aiplatform.
     VertexGemini,
+    /// xAI Responses (AI-M5): the Open Responses baseline with the Grok
+    /// hosted tool vocabulary and explicit compaction-only context
+    /// management.
+    XaiResponses,
     /// Google Interactions (AI-M3): the Gemini Interactions lane on
     /// generativelanguage — thought-signature stateless replay and
     /// `previous_interaction_id` continuation.
@@ -195,8 +200,13 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         | "@opencode/ai/providers/meta/responses"
         | "@opencode/ai/providers/minimax/responses"
         | "@opencode/ai/providers/moonshot/responses"
-        | "@opencode/ai/providers/zai-coding-plan/responses"
-        | "@opencode/ai/providers/xai" => ProtocolFamily::OpenAIResponses,
+        | "@opencode/ai/providers/zai-coding-plan/responses" => ProtocolFamily::OpenAIResponses,
+
+        // xAI (AI-M5): the native `xai-responses` protocol — the Open
+        // Responses baseline with the Grok hosted tool vocabulary and the
+        // `xai` metadata namespace (previously misrouted to the plain
+        // OpenAI Responses family).
+        "@opencode/ai/providers/xai" => ProtocolFamily::XaiResponses,
 
         "@opencode/ai/providers/azure/chat"
         | "@opencode/ai/providers/google-vertex/chat"
@@ -442,6 +452,17 @@ fn build_route(
             );
             Ok(route
                 .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }))
+        }
+        ProtocolFamily::XaiResponses => {
+            // AI-M5: the native xai-responses lane at api.x.ai/v1 with the
+            // optional XAI_API_KEY bearer chain (providers/xai.ts:36-49).
+            Ok(xai_responses_route(XaiResponsesRouteSpec {
+                base_url,
+                auth: Some(xai_auth(api_key)),
+                transport,
+                defaults: RouteDefaults::default(),
+            })
+            .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }))
         }
         ProtocolFamily::GoogleInteractions => {
             // AI-M3: the native interactions lane with the Google
@@ -1033,6 +1054,40 @@ mod tests {
             route.endpoint.base_url.as_deref(),
             Some("https://api.cohere.ai/compatibility/v1")
         );
+    }
+
+    /// AI-M5: the `xai` package binds the native `xai-responses` protocol
+    /// at api.x.ai/v1/responses with the store/include defaults and the
+    /// XAI_API_KEY bearer chain (providers/xai.ts:36-49).
+    #[test]
+    fn provider_facade_xai_responses_family() {
+        assert_eq!(
+            family_of("@opencode/ai/providers/xai"),
+            Some(ProtocolFamily::XaiResponses),
+            "xai maps to its native responses family, not the plain OpenAI one"
+        );
+        let route = xai_responses_route(XaiResponsesRouteSpec {
+            base_url: None,
+            auth: Some(xai_auth(Some(oc_ai::route::auth::Secret::Value("x-key".into())))),
+            transport: Arc::new(oc_ai::route::transport::FailingTransport {
+                message: "facade unit test",
+            }),
+            defaults: RouteDefaults::default(),
+        });
+        assert_eq!(route.id, "xai-responses");
+        assert_eq!(route.protocol.id(), "xai-responses");
+        assert_eq!(route.provider_metadata_key.as_deref(), Some("xai"));
+        assert_eq!(route.endpoint.base_url.as_deref(), Some("https://api.x.ai/v1"));
+        let mut request =
+            oc_ai::schema::LLMRequest::new(route.model("grok-4", None).expect("model binds"));
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let prepared = route.prepare_request(&request);
+        let body = route.build_body(&prepared).expect("body");
+        assert_eq!(body["store"], serde_json::json!(false));
+        assert_eq!(body["include"], serde_json::json!(["reasoning.encrypted_content"]));
+        let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
+        assert_eq!(transport_request.url, "https://api.x.ai/v1/responses");
+        assert_eq!(transport_request.header("authorization"), Some("Bearer x-key"));
     }
 
     /// AI-M3: the pinned `google/interactions` package binds the native
