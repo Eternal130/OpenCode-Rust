@@ -5,21 +5,22 @@
 > **REBUILT from ledger+git 2026-10-21 05:2x** (recovery round + wave 9).
 > Ledger + git are authoritative; state.md is a cross-session breadcrumb only.
 
-- **updated**: 2026-10-21 05:20 — iteration 10 done: recovery round (lane-cirt collapsed, lane-tui2 adopted),
+- **updated**: 2026-10-21 05:50 — iteration 10 done: recovery round (lane-cirt collapsed, lane-tui2 adopted),
   TUI-4/5/6 verified + merged (`6a58662` → L0 fix `ad1ac69`), adjudication batch #2 closed 7 via ADR-0014,
-  3 AI needs-runtime adjudicated to real gaps, TUI-7 blocked by new root cause **TUI-35**
-- **baseline**: main @ `ad1ac69` (merge: lane/tui2 + post-merge clippy fix) on top of `35e6343` (CI-RUNTIME)
+  3 AI needs-runtime adjudicated to real gaps, TUI-7 blocked by new root cause **TUI-35**,
+  CI red on the `ci` workflow attributed + patched (lane/cirt3 → `72b6837`)
+- **baseline**: main @ `72b6837` (merge: lane/cirt3, CI sudo patch) on top of `ad1ac69` (merge: lane/tui2) on `35e6343`
 - **batch**: 3 (wave 9) — Batch 3 clusters: DB, PLUGIN-RESIDUAL, EVENT/TOOL/CORE, PLATFORM, POLICY/RETENTION
 - **iteration**: 10 (driver = tools/loop-driver.sh; session started 2026-10-21 00:00, ended ~05:2x)
 
 ## Ledger snapshot (`parity-ledger.py summary`, end of iteration 10)
 
-- rows=402 — **verified 95 · accepted 14 · duplicate 2** · open 284 · needs-runtime 6 · blocked 1
-- **blocking S0/S1 = 33** (was 32; +AI-V1 +AI-VERTEX-V2 +CI-RUNTIME-AI-LIVE +TUI-35, −TUI-4/5/6):
+- rows=403 — **verified 95 · accepted 14 · duplicate 2** · open 285 · needs-runtime 6 · blocked 1
+- **blocking S0/S1 = 34** (was 32; +AI-V1 +AI-VERTEX-V2 +CI-RUNTIME-AI-LIVE +TUI-35 +CI-RUNTIME-GATES-RED, −TUI-4/5/6):
   AI 4 (AI-P06, AI-V1, AI-VERTEX-V2, CI-RUNTIME-AI-LIVE) · CONFIG 7 (CLI-K1,K2,K8,N1..N4) ·
   CRED 3 (D6,D8,V3) · TUI 7 (TUI-12,14,15,16,17,35 + TUI-7 blocked) · PLUGIN 3 (D13,D30,M02) ·
   SURFACES 3 (BROWSER,LATEX-MERMAID,PLATFORM) · DB 2 (GATE-DB-NULLROWS, GATE-DB-STABLE) ·
-  WIRE 2 (GATE-TUI-RENAME, HTTP-H0) · RUNTIME 1 (RUNTIME-K01) · TOOLS-EXEC 1 (TOOL-D1)
+  WIRE 3 (GATE-TUI-RENAME, HTTP-H0, CI-RUNTIME-GATES-RED) · RUNTIME 1 (RUNTIME-K01) · TOOLS-EXEC 1 (TOOL-D1)
 - `validate` = 0 errors; `validate --paths` = 0 errors (one path row corrected, see §CI-RUNTIME below)
 
 ## What happened in iteration 10
@@ -66,14 +67,29 @@
    **Structural hazard for the next session: two orchestrators writing one ledger + one main.** The driver flock
    only serializes driver fires, not a hand-started session. Next session must re-read main + ledger before
    dispatching, and must treat the CI-RUNTIME workflow as landed (do not re-implement it).
+5. **CI red attributed + patched (the `ci` workflow was red on main).**
+   - CI run **39468661905** (head 35e6343): every job green **except** `static anti-regression guards`
+     (fmt+clippy ✅, build ✅, **nextest ✅**, frame budget ✅, pty ✅). Guard log: 3 × `NEW process_safety:
+     .github/workflows/runtime-gates.yml:{221,330,356}: sudo outside tools/dev-gate.sh` — i.e. the red came from
+     the **concurrent session's** runtime-gates.yml, NOT from the TUI lane (TUI's own run 39499419280 covers
+     `ad1ac69`/`00bc8e5`).
+   - Patch lane `lane/cirt3` (75362b5): the 2 `sudo ln -s … /usr/local/bin/bun` steps → `GITHUB_PATH`/`GITHUB_ENV`
+     (`PARITY_BUN`), the `sudo apt-get install tmux` step → preinstalled-binary assert with a user-level
+     `.deb` extraction fallback. **No allowlist entry used.** Merged `72b6837`; local `tools/guards/run.sh`
+     all green (exit 0) both in the lane and on main.
+   - **Still red (not yet attributed):** runtime-gates run **39468671027** — 4 legs red
+     (`build target (macos-latest, aarch64-apple-darwin)`, `p10 battery (§12.2 exit gate)`, `§12.3 runtime gates`,
+     `gates summary`), while `stage v2-written library db` + both `needs-runtime` batteries were green and
+     `release smoke` / `30m soak` were **skipped** (skip ≠ pass). New ledger row **CI-RUNTIME-GATES-RED** (S1, WIRE)
+     owns it; next unit must read the job logs and fix one leg at a time — no guessing.
 
 ## Active lanes
 
 | lane | cluster | worktree | branch | owner | entries | status |
 |---|---|---|---|---|---|---|
-| (none — lane-tui2 merged as ad1ac69; worktree removable, branch lane/tui2 kept) | | | | | | |
+| (none — lane-tui2 merged as ad1ac69, lane-cirt3 merged as 72b6837; worktrees removable, branches kept) | | | | | | |
 
-- `.worktrees/lane-tui2` — merged, tree clean; safe to remove (branch kept for the next TUI lane).
+- `.worktrees/lane-tui2` and `.worktrees/lane-cirt3` — merged, trees clean; safe to remove (branches kept).
 - Branch `lane/cirt2` still exists (0 ahead of main after merge) — can be deleted.
 
 ## Model policy for subagents (user ruling 2026-10-20 — keep for every future session)
@@ -116,13 +132,18 @@ conclusion (ADR).
 - Live window for the 6 `needs-runtime` entries + CI-RUNTIME-AI-LIVE secrets (user).
 - Non-linux-x64 CI build target (SURF-PLATFORM) — the CI leg is now wired in runtime-gates.yml (platform-build
   job, macos-latest) but the row stays open until the first GREEN run id is recorded.
+- **runtime-gates workflow 4 legs red** (CI-RUNTIME-GATES-RED): p10 battery (§12.2), §12.3 runtime gates,
+  gates summary, macos build target. Blocks the §12 exit gates until green.
 
 ## Next
 
-1. **Fresh CONFIG lane** (7 open S1: CLI-K1,K2,K8,N1,N2,N3,N4 — `crates/oc-cli/**` + `crates/oc-server/**`;
+1. **CI-RUNTIME-GATES-RED** — read the job logs of run 39468671027, fix one leg at a time (p10 battery first:
+   it is the §12.2 exit gate), never let a leg silently become a skip. Also re-check the `ci` workflow's
+   `static anti-regression guards` job on the new head (should be green now — CI run for 72b6837).
+2. **Fresh CONFIG lane** (7 open S1: CLI-K1,K2,K8,N1,N2,N3,N4 — `crates/oc-cli/**` + `crates/oc-server/**`;
    CLI-K8 also touches `crates/oc-tui/src/storage.rs`, and the TUI cluster is now free since lane-tui2 merged).
-2. **TUI-35** (boot hang) — unblocks TUI-7; same TUI cluster, reuse branch `lane/tui2` or a fresh worktree.
-3. **AI vertex lane** — AI-V1 + AI-VERTEX-V2 (+ CRED-V3 ADC) in one lane; `crates/oc-ai/src/protocols/**` +
+3. **TUI-35** (boot hang) — unblocks TUI-7; same TUI cluster, reuse branch `lane/tui2` or a fresh worktree.
+4. **AI vertex lane** — AI-V1 + AI-VERTEX-V2 (+ CRED-V3 ADC) in one lane; `crates/oc-ai/src/protocols/**` +
    `crates/oc-core/src/provider_catalog/facade.rs`.
-4. Next adjudication batch (wave 10) from the S2/S3 pool (284 open; 7 closed this way in wave 9).
-5. Check CI on the pushed head; record run ids here.
+5. Next adjudication batch (wave 10) from the S2/S3 pool (285 open; 7 closed this way in wave 9).
+6. Record CI run ids here as they land.
