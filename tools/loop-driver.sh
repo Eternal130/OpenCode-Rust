@@ -50,6 +50,21 @@ command -v opencode >/dev/null 2>&1 || { echo "opencode not in PATH" >&2; exit 5
 cd "$REPO" || exit 5
 mkdir -p "$LOG_DIR"
 
+# Terminal-state marker: once DONE/BLOCKED (or the breaker trips), cron must not
+# resurrect the loop. Remove the file (or the cron line) to re-enable.
+STOP_FILE="$LOG_DIR/STOPPED"
+if [ -f "$STOP_FILE" ]; then
+  echo "stop marker present ($(cat "$STOP_FILE")); remove $STOP_FILE to re-enable" >&2
+  exit 0
+fi
+
+# Circuit breaker: 3 consecutive failed fires (no marker / hard rc!=0) stop the
+# cron loop instead of burning tokens on a broken prompt forever.
+FAIL_FILE="$LOG_DIR/consecutive-fails"
+fail_count() { cat "$FAIL_FILE" 2>/dev/null || echo 0; }
+bump_fail()    { echo $(( $(fail_count) + 1 )) > "$FAIL_FILE"; }
+trip_breaker() { echo "$1" > "$STOP_FILE"; rm -f "$FAIL_FILE"; }
+
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" >> "$LOG_DIR/driver.log"; }
 
 # CPU cap (4 cores) when systemd is available; plain exec otherwise.
@@ -76,7 +91,7 @@ for i in $(seq 1 "$MAX_ITERS"); do
     if printf '%s' "$tail_view" | grep -qiE 'usage limit|quota|rate.?limit|429'; then
       quota_retries=$((quota_retries + 1))
       if [ "$quota_retries" -gt "$QUOTA_RETRIES_MAX" ]; then
-        log "quota retries exhausted ($QUOTA_RETRIES_MAX); giving up"
+        log "quota retries exhausted ($QUOTA_RETRIES_MAX); giving up (next cron fire retries after window reset)"
         exit 4
       fi
       log "rc=$rc looks like a quota window; sleeping ${QUOTA_SLEEP}s (retry $quota_retries/$QUOTA_RETRIES_MAX)"
@@ -84,21 +99,31 @@ for i in $(seq 1 "$MAX_ITERS"); do
       continue
     fi
     log "opencode run failed rc=$rc; stopping for manual inspection ($out)"
+    bump_fail
+    [ "$(fail_count)" -ge 3 ] && trip_breaker "breaker: 3 consecutive failed fires"
     exit 3
   fi
 
   if   printf '%s' "$tail_view" | grep -q 'PARITY_LOOP_DONE'; then
+    echo "DONE $(date '+%F %T')" > "$STOP_FILE"
+    rm -f "$FAIL_FILE"
     log "DONE"; exit 0
   elif printf '%s' "$tail_view" | grep -q 'PARITY_LOOP_BLOCKED'; then
+    echo "BLOCKED $(date '+%F %T')" > "$STOP_FILE"
+    rm -f "$FAIL_FILE"
     log "BLOCKED (see $out)"; exit 2
   elif printf '%s' "$tail_view" | grep -q 'BATCH_HANDOFF'; then
+    rm -f "$FAIL_FILE"
     log "batch handoff; next session in 60s"
     sleep 60
   elif printf '%s' "$tail_view" | grep -q 'PARITY_LOOP_CONTINUE'; then
+    rm -f "$FAIL_FILE"
     log "continue; fresh session in 10s"
     sleep 10
   else
     log "rc=0 but no marker found; stopping for manual inspection ($out)"
+    bump_fail
+    [ "$(fail_count)" -ge 3 ] && trip_breaker "breaker: 3 consecutive no-marker fires"
     exit 3
   fi
 done
