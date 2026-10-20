@@ -386,8 +386,24 @@ pub fn boot(
 /// document's array, priority order — later documents' entries land
 /// later so their removes override earlier adds; a rejected list is
 /// logged and ignored, never a boot failure).
+///
+/// PLUG-D01: every DIRECTORY entry's `plugin`/`plugins` children
+/// auto-discover FIRST (v2 `ConfigPluginSource.scan` —
+/// `[...discovered, ...configured]`), so an explicit document remove
+/// drops a discovered drop-in.
 #[must_use]
 pub fn config_plugin_ops(loaded: &Loaded) -> Vec<oc_plugin_host::PluginOp> {
+    let directories: Vec<std::path::PathBuf> = loaded
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            oc_schema::config::Entry::Directory(directory) => {
+                Some(std::path::PathBuf::from(&directory.path))
+            }
+            oc_schema::config::Entry::Document(_) => None,
+        })
+        .collect();
+    let mut ops = oc_plugin_host::discover_directory_ops(&directories);
     let mut raw: Vec<Value> = Vec::new();
     for entry in &loaded.entries {
         if let oc_schema::config::Entry::Document(document) = entry {
@@ -401,12 +417,12 @@ pub fn config_plugin_ops(loaded: &Loaded) -> Vec<oc_plugin_host::PluginOp> {
         }
     }
     match oc_plugin_host::parse_ops(&raw) {
-        Ok(ops) => ops,
+        Ok(document_ops) => ops.extend(document_ops),
         Err(error) => {
             eprintln!("opencode plugin: config plugins[] rejected: {error}");
-            Vec::new()
         }
     }
+    ops
 }
 
 // ---------------------------------------------------------------------------
@@ -848,5 +864,68 @@ impl SessionPort for EngineSessionSlot {
                 "session.{method}: the session engine is not attached to the plugin host yet"
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oc_schema::config::{Directory, Entry, Plugin};
+
+    /// PLUG-D01: the server boot's ops assembly discovers `plugin`/
+    /// `plugins` drop-ins from every config DIRECTORY entry first, then
+    /// appends the document `plugins[]` ops (explicit removes drop
+    /// discovered entries — v2 `ConfigPluginSource.scan` ordering).
+    #[test]
+    fn config_plugin_ops_discover_directories_before_documents() {
+        let root = std::env::temp_dir().join(format!(
+            "oc-server-plugin-ops-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.subsec_nanos())
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let layer = root.join("layer");
+        std::fs::create_dir_all(layer.join("plugins").join("dropin")).expect("dropin dir");
+        std::fs::write(layer.join("plugins").join("dropin").join("index.ts"), "// dropin")
+            .expect("dropin entry");
+        std::fs::create_dir_all(&layer).expect("layer");
+
+        let info = oc_schema::config::Info {
+            plugins: Some(vec![Plugin::Spec("-dropin".to_owned())]),
+            ..oc_schema::config::Info::default()
+        };
+        let loaded = Loaded {
+            sources: oc_core::config::discovery::Sources::default(),
+            entries: vec![
+                Entry::Directory(Directory { path: layer.display().to_string() }),
+                Entry::Document(Box::new(oc_schema::config::Document {
+                    info,
+                    path: Some(layer.join("opencode.json").display().to_string()),
+                })),
+            ],
+            diagnostics: Vec::new(),
+        };
+        let ops = config_plugin_ops(&loaded);
+        let targets: Vec<&str> = ops
+            .iter()
+            .map(|op| match op {
+                oc_plugin_host::PluginOp::Add { target, .. }
+                | oc_plugin_host::PluginOp::Remove { target } => target.as_str(),
+            })
+            .collect();
+        assert_eq!(
+            targets,
+            vec![layer.join("plugins").join("dropin").display().to_string().as_str(), "dropin"],
+            "discovered first, document remove last: {targets:?}"
+        );
+        let resolution = oc_plugin_host::resolve(&ops, None);
+        assert!(
+            resolution.plugins.is_empty(),
+            "the explicit remove drops the discovered drop-in (failures: {:?})",
+            resolution.failures
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
