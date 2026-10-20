@@ -22,6 +22,7 @@ pub mod dialog_select;
 /// is the hand-rolled fallback for one release — see the module doc
 /// + the M2 section of `docs/migration-m1-tabstrip.md`).
 pub mod dialog_solid;
+pub mod dialog_open;
 pub mod dialog_worktrees;
 pub mod diff_viewer;
 pub mod diff_viewer_mount;

@@ -785,6 +785,9 @@ fn handle(
     socket.set_read_timeout(Some(Duration::from_millis(200))).ok();
     let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
     let method = head.split_whitespace().next().unwrap_or_default().to_uppercase();
+    if std::env::var("DBG_FAKE_LOG").is_ok() || std::env::var("DBG_FAKE_LOG2").is_ok() || true {
+        eprintln!("DBG fake: {method} {path}");
+    }
     // -- TUI-4: the persistent-pty family ---------------------------------
     //
     // The WS attach endpoint upgrades BEFORE any JSON response; the
