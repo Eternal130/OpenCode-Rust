@@ -368,6 +368,11 @@ impl Shared {
             "ui.toast.show" | "ui.sidebar.section" | "ui.footer.hint" | "ui.dialog.open" => {
                 Some(answer_ui_runtime(self, id, method, params))
             }
+            // -- TUI-25: `ctx.ui.alert` / `ctx.ui.confirm` — the
+            // reply is DEFERRED until the embedder resolves the
+            // dialog (the guest's promise settles on it); the request
+            // id rides the queue.
+            "ui.alert" | "ui.confirm" => answer_ui_dialog(self, id, method, params),
             // -- the v2 TUI-plugin slot surface (beta.13 bug 1): the
             //    flagship's sidebar_content registration + its
             //    rerender asks. Both spawn the bounded materialize
@@ -862,6 +867,35 @@ fn answer_ui_runtime(shared: &Shared, id: u64, method: &str, params: &Value) -> 
     };
     shared.ui_requests.lock().expect("ui request queue poisoned").push_back(request);
     protocol::response(id, Value::Null)
+}
+
+/// TUI-25: the deferred `ui.alert` / `ui.confirm` arms — push the
+/// [`UiRequest`] carrying the GUEST's request id and return `None`
+/// (the reply goes out later through [`Shared::resolve_ui_request`],
+/// when the TUI's dialog settles).
+fn answer_ui_dialog(shared: &Shared, id: u64, method: &str, params: &Value) -> Option<String> {
+    let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
+    let title = params.get("title").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let message = params.get("message").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let label_at = |key: &str| {
+        params.pointer(&format!("/label/{key}")).and_then(Value::as_str).map(str::to_owned)
+    };
+    let request = match method {
+        "ui.alert" => UiRequest::Alert { request_id: id, plugin_id, title, message },
+        "ui.confirm" => UiRequest::Confirm {
+            request_id: id,
+            plugin_id,
+            title,
+            message,
+            confirm_label: label_at("confirm"),
+            cancel_label: label_at("cancel"),
+        },
+        other => {
+            return Some(protocol::error_response(id, &format!("unknown ui method {other:?}")));
+        }
+    };
+    shared.ui_requests.lock().expect("ui request queue poisoned").push_back(request);
+    None
 }
 
 /// The registration-time `ui.*` arms: dialog-provider coverage, group
@@ -1365,6 +1399,18 @@ impl Shared {
     pub fn drain_ui_requests(&self) -> Vec<UiRequest> {
         let mut queue = self.ui_requests.lock().expect("ui request queue poisoned");
         queue.drain(..).collect()
+    }
+
+    /// TUI-25: settle a deferred `ctx.ui.alert`/`ctx.ui.confirm` —
+    /// send the stored guest request id its reply (the promise's
+    /// resolution value; `null` for an unresolved close). Idempotent
+    /// per settle-once semantics only through the TUI's queue; a
+    /// second resolve for the same id just answers an already-settled
+    /// guest request (the JS side ignores it).
+    pub fn resolve_ui_request(&self, request_id: u64, result: Value) {
+        let frame = protocol::response(request_id, result);
+        let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+        let _ = outbound.send(frame);
     }
 
     /// Push the TUI's live route to the guest (the `tui.route`

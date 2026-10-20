@@ -71,9 +71,19 @@ pub mod mistral_chat;
 // the Converse protocol (+ anthropic-on-bedrock invoke-stream composition).
 pub mod bedrock;
 
+// Google Interactions (AI-M3) — the Gemini Interactions lane:
+// thought-signature stateless replay, previous_interaction_id
+// continuation, native function_call/function_result steps.
+pub mod google_interactions;
+
 // Google Vertex native — the Gemini generateContent protocol on Vertex with
 // project/location routing, tuned endpoints, Express Mode keys, ADC bearer.
 pub mod vertex;
+
+// xAI Responses (AI-M5) — the Open Responses baseline with the Grok
+// hosted tool vocabulary (x_search_call, image_generation_call) and an
+// explicit in-band-compaction rejection.
+pub mod xai_responses;
 
 // GitHub Copilot chat — the openai-compatible chat protocol with the
 // Copilot client header policy over the credential-bound transport.

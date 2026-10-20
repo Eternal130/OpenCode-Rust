@@ -397,6 +397,10 @@ impl StreamProtocol for OpenAiImages {
     ) -> Result<Vec<ImageEvent>, AiError> {
         finish(state)
     }
+
+    fn step(&self, state: &mut Self::State, frame: &Frame) -> Result<Vec<ImageEvent>, AiError> {
+        step(state, frame)
+    }
 }
 
 #[cfg(test)]
